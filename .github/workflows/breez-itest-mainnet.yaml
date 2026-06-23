@@ -1,8 +1,9 @@
 name: Breez mainnet conversion tests
 
-# Runs the token-conversion / stable-balance integration tests against MAINNET,
-# using real Flashnet pool liquidity. Gated on the MAINNET_TEST_MNEMONIC /
-# BREEZ_API_KEY secrets; the tests skip if those are unset. Triggered manually
+# Runs the token-conversion / stable-balance / cross-chain integration tests
+# against MAINNET, using real Flashnet pool liquidity (and, for cross-chain, real
+# Orchestra/Boltz routes to external EVM chains). Gated on the MAINNET_TEST_MNEMONIC
+# / BREEZ_API_KEY secrets; the tests skip if those are unset. Triggered manually
 # (workflow_dispatch) or by another workflow (workflow_call), e.g. on release.
 
 on:
@@ -23,6 +24,7 @@ on:
           - mainnet_token_conversion
           - mainnet_stable_balance
           - mainnet_server_mode_conversion
+          - mainnet_cross_chain
   workflow_call:
     inputs:
       token_id:
@@ -31,7 +33,7 @@ on:
         type: string
         default: ''
       tests:
-        description: 'Which tests to run (all | mainnet_token_conversion | mainnet_stable_balance | mainnet_server_mode_conversion)'
+        description: 'Which tests to run (all | mainnet_token_conversion | mainnet_stable_balance | mainnet_server_mode_conversion | mainnet_cross_chain)'
         required: false
         type: string
         default: all
@@ -66,7 +68,7 @@ jobs:
           TESTS: ${{ inputs.tests }}
         run: |
           case "$TESTS" in
-            mainnet_token_conversion|mainnet_stable_balance|mainnet_server_mode_conversion)
+            mainnet_token_conversion|mainnet_stable_balance|mainnet_server_mode_conversion|mainnet_cross_chain)
               cargo xtask test --package breez-sdk-itest --test "$TESTS" -- --test-threads=1
               ;;
             *)

@@ -566,8 +566,17 @@ async fn test_stable_balance_send_lightning_address() -> Result<()> {
     // Step 2: ensure Bob has enough tokens for the auto-fill to source from.
     let to_btc_min_token = tobtc_min_token_input(&alice.sdk, &token_id).await?;
     let min_required_tokens = to_btc_min_token.saturating_mul(2);
-    let seed_amount = to_btc_min_token.saturating_mul(3);
-    if !ensure_bob_has_tokens(&alice, &bob, &token_id, min_required_tokens, seed_amount).await? {
+    let topup_amount = to_btc_min_token.saturating_mul(3);
+    if !ensure_wallet_has_tokens(
+        &alice,
+        &bob,
+        "Bob",
+        &token_id,
+        min_required_tokens,
+        topup_amount,
+    )
+    .await?
+    {
         return Ok(());
     }
 

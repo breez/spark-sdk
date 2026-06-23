@@ -65,12 +65,16 @@ pub async fn build_mainnet_sdk_from_mnemonic(
     api_key: String,
     temp_dir: Option<TempDir>,
     stable_balance_config: Option<StableBalanceConfig>,
+    cross_chain_config: Option<CrossChainConfig>,
 ) -> Result<SdkInstance> {
     let mut config = default_config(Network::Mainnet);
     config.api_key = Some(api_key);
     config.prefer_spark_over_lightning = true;
     config.sync_interval_secs = 5;
     config.stable_balance_config = stable_balance_config;
+    // Required for the cross-chain providers (Orchestra/Boltz) to register;
+    // without it the registry is empty and `get_cross_chain_routes` returns none.
+    config.cross_chain_config = cross_chain_config;
 
     let seed = Seed::Mnemonic {
         mnemonic,
@@ -142,6 +146,7 @@ pub async fn mainnet_alice_bob(
         api_key.to_string(),
         Some(alice_dir),
         None,
+        None,
     )
     .await?;
 
@@ -157,6 +162,7 @@ pub async fn mainnet_alice_bob(
         api_key.to_string(),
         Some(bob_dir),
         bob_stable,
+        None,
     )
     .await?;
 
@@ -434,6 +440,55 @@ pub async fn mainnet_test_setup(
     Ok(Some((alice, bob, token_id, snapshot)))
 }
 
+/// Cross-chain test preamble: gate on credentials, then build a **funded** Alice
+/// with `cross_chain_config` enabled (required for the Orchestra/Boltz providers
+/// to register; without it `get_cross_chain_routes` is empty and the tests would
+/// skip). Returns `None` to skip (logged) when creds are absent or Alice has 0
+/// sats; otherwise `(alice, token_id, mnemonic)`.
+///
+/// Only Alice is built — the cross-chain flow is entirely Alice → external
+/// chain, so there's no second Spark wallet. The mnemonic is returned so the
+/// caller can derive the deterministic EVM recipient
+/// ([`crate::mainnet_evm_recipient`]) from the same seed.
+pub async fn mainnet_cross_chain_setup() -> Result<Option<(SdkInstance, String, String)>> {
+    let Some((mnemonic, api_key)) = mainnet_test_creds() else {
+        warn!(
+            "Skipping mainnet cross-chain test: set MAINNET_TEST_MNEMONIC and BREEZ_API_KEY to run it"
+        );
+        return Ok(None);
+    };
+
+    let alice_dir = tempfile::Builder::new()
+        .prefix("breez-sdk-mainnet-cc-alice")
+        .tempdir()?;
+    let alice_path = alice_dir.path().to_string_lossy().to_string();
+    info!("Initializing mainnet cross-chain Alice (cross_chain_config enabled) at: {alice_path}");
+    let alice = build_mainnet_sdk_from_mnemonic(
+        alice_path,
+        mnemonic.clone(),
+        None,
+        api_key.clone(),
+        Some(alice_dir),
+        None,
+        Some(CrossChainConfig::default()),
+    )
+    .await?;
+
+    let alice_sats = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    if alice_sats == 0 {
+        warn!("Skipping mainnet cross-chain test: test account (Alice) has 0 sats");
+        return Ok(None);
+    }
+
+    Ok(Some((alice, mainnet_test_token_id(), mnemonic)))
+}
+
 /// Format a signed token base-unit amount with the token's `decimals` and
 /// `ticker`, e.g. `+0.999342 USDB` or `-2.890307 USDB`. Falls back to raw base
 /// units when `decimals == 0`.
@@ -506,22 +561,25 @@ pub async fn log_test_diff(
     Ok(())
 }
 
-/// Ensures Bob holds at least `min_required` units of `token_id`. If he
-/// doesn't, runs a Bitcoin→Token conversion from Alice for `seed_amount` to
-/// top him up.
+/// Ensures `recipient` holds at least `min_required` units of `token_id`,
+/// topping up `topup_amount` via a `FromBitcoin` conversion funded by `funder`
+/// (the wallet that pays the sats) if it falls short. `funder` and `recipient`
+/// may be the same wallet for a self top-up (e.g. Alice funding her own token
+/// balance for the cross-chain tests). `recipient_label` is used only in logs.
 ///
-/// Returns `Ok(true)` when Bob has enough tokens (already, or freshly seeded).
-/// Returns `Ok(false)` when seeding was required but Alice's sat balance can't
-/// cover the conversion — callers should skip the test.
-pub async fn ensure_bob_has_tokens(
-    alice: &SdkInstance,
-    bob: &SdkInstance,
+/// Returns `Ok(true)` when the recipient has enough tokens (already, or freshly
+/// topped up). Returns `Ok(false)` when a top-up was required but the funder's
+/// sat balance can't cover the conversion — callers should skip the test.
+pub async fn ensure_wallet_has_tokens(
+    funder: &SdkInstance,
+    recipient: &SdkInstance,
+    recipient_label: &str,
     token_id: &str,
     min_required: u128,
-    seed_amount: u128,
+    topup_amount: u128,
 ) -> Result<bool> {
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    let bob_tokens_before = bob
+    recipient.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let before = recipient
         .sdk
         .get_info(GetInfoRequest {
             ensure_synced: Some(false),
@@ -531,25 +589,27 @@ pub async fn ensure_bob_has_tokens(
         .get(token_id)
         .map(|b| b.balance)
         .unwrap_or(0);
-    info!("Bob token balance: {bob_tokens_before}");
+    info!("{recipient_label} token balance: {before}");
 
-    if bob_tokens_before >= min_required {
+    if before >= min_required {
         return Ok(true);
     }
 
-    info!("Seeding Bob with {seed_amount} units of {token_id} via Bitcoin→Token");
-    let bob_spark = bob
+    info!("Topping up {recipient_label} with {topup_amount} units of {token_id} via Bitcoin→Token");
+    let recipient_spark = recipient
         .sdk
         .receive_payment(ReceivePaymentRequest {
             payment_method: ReceivePaymentMethod::SparkAddress,
         })
         .await?
         .payment_request;
-    let seed_prepare = alice
+    let topup_prepare = funder
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Input { input: bob_spark },
-            amount: Some(seed_amount),
+            payment_request: PaymentRequest::Input {
+                input: recipient_spark,
+            },
+            amount: Some(topup_amount),
             token_identifier: Some(token_id.to_string()),
             conversion_options: Some(ConversionOptions {
                 conversion_type: ConversionType::FromBitcoin,
@@ -559,32 +619,35 @@ pub async fn ensure_bob_has_tokens(
             fee_policy: None,
         })
         .await?;
-    let estimate = seed_prepare
+    let estimate = topup_prepare
         .conversion_estimate
         .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("seed conversion estimate missing"))?;
-    let seed_cost = estimate.amount_in.saturating_add(estimate.fee);
+        .ok_or_else(|| anyhow::anyhow!("top-up conversion estimate missing"))?;
+    let topup_cost = estimate.amount_in.saturating_add(estimate.fee);
 
-    let alice_balance = alice
+    let funder_balance = funder
         .sdk
         .get_info(GetInfoRequest {
             ensure_synced: Some(false),
         })
         .await?
         .balance_sats;
-    if u128::from(alice_balance) < seed_cost {
-        warn!("Cannot seed Bob: Alice balance {alice_balance} sats < seed cost ~{seed_cost} sats");
+    if u128::from(funder_balance) < topup_cost {
+        warn!(
+            "Cannot top up {recipient_label}: funder balance {funder_balance} sats \
+             < top-up cost ~{topup_cost} sats"
+        );
         return Ok(false);
     }
 
-    alice
+    funder
         .sdk
         .send_payment(SendPaymentRequest {
-            prepare_response: seed_prepare,
+            prepare_response: topup_prepare,
             options: None,
             idempotency_key: None,
         })
         .await?;
-    wait_for_token_balance_increase(&bob.sdk, token_id, bob_tokens_before, 120).await?;
+    wait_for_token_balance_increase(&recipient.sdk, token_id, before, 120).await?;
     Ok(true)
 }

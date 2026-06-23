@@ -51,3 +51,11 @@ uuid.workspace = true
 futures.workspace = true
 axum = "0.7"
 bech32.workspace = true
+
+# EVM tooling for the mainnet cross-chain send itests: derive the deterministic
+# recipient from the test mnemonic (alloy-signer-local `mnemonic` feature) and
+# read ERC-20 balances over JSON-RPC (reqwest). The alloy crates are already in
+# the workspace lock via boltz-client; the `mnemonic` feature adds coins-bip39.
+alloy-signer-local = { version = "1.8.3", features = ["mnemonic"] }
+alloy-primitives = "1.6.0"
+reqwest.workspace = true
