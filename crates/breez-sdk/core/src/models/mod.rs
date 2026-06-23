@@ -1270,6 +1270,21 @@ pub enum ReceivePaymentMethod {
         /// `claim_htlc_payment` or the HTLC expires.
         payment_hash: Option<String>,
     },
+    CrossChain {
+        /// The selected cross-chain route in the receive direction.
+        route: crate::cross_chain::CrossChainRoutePair,
+        /// Amount the sender will deposit, in source-asset base units
+        /// (e.g. USDC base units when the source asset is USDC).
+        amount: u128,
+        /// Spark-side asset the receiver wants delivered. When absent, the
+        /// SDK auto-selects: the wallet's active stable-balance token if
+        /// the route supports it, otherwise Bitcoin (sats). When set, the
+        /// value must appear in the route's `spark_assets`.
+        destination: Option<crate::cross_chain::SparkAsset>,
+        /// Maximum slippage in basis points. When absent, the SDK default
+        /// (100 bps) is used.
+        max_slippage_bps: Option<u32>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1376,6 +1391,8 @@ pub struct ReceivePaymentResponse {
     /// Fee to pay to receive the payment
     /// Denominated in sats or token base units
     pub fee: u128,
+    /// Optional information populated only for cross-chain receives.
+    pub cross_chain_info: Option<crate::cross_chain::CrossChainReceiveInfo>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

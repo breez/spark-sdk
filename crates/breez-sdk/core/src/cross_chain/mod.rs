@@ -8,6 +8,7 @@ pub(crate) mod boltz_event_listener;
 pub(crate) mod boltz_storage_adapter;
 mod cached_fiat;
 mod orchestra;
+mod orchestra_storage_adapter;
 
 pub(crate) use boltz::BoltzService;
 pub(crate) use cached_fiat::{CachedFiatService, DEFAULT_FIAT_CACHE_TTL};
@@ -79,10 +80,10 @@ impl std::fmt::Display for CrossChainProvider {
     }
 }
 
-/// The source asset a cross-chain route accepts as input on the Spark side.
+/// The asset a cross-chain route accepts on the Spark side.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum SourceAsset {
+pub enum SparkAsset {
     /// Native BTC (sats).
     Bitcoin,
     /// A Spark token, identified by its bech32m `token_identifier` (e.g. `btkn1...`).
@@ -147,12 +148,11 @@ pub struct CrossChainRoutePair {
     pub decimals: u8,
     /// Whether the route supports exact-out mode.
     pub exact_out_eligible: bool,
-    /// The source assets this route accepts on the Spark side.
+    /// The assets this route accepts on the Spark side.
     ///
-    /// Boltz routes accept `[SourceAsset::Bitcoin]`. Orchestra routes accept
-    /// one or more of `Bitcoin` / `Token(...)` (a given destination endpoint
-    /// may be fronted by multiple source variants on Orchestra).
-    pub supported_sources: Vec<SourceAsset>,
+    /// Boltz routes accept `[SparkAsset::Bitcoin]`. Orchestra routes accept
+    /// one or more of `Bitcoin` / `Token(...)`.
+    pub spark_assets: Vec<SparkAsset>,
 }
 
 impl CrossChainRoutePair {
@@ -239,10 +239,40 @@ pub enum CrossChainProviderContext {
     },
 }
 
+/// Output of [`CrossChainService::prepare_receive`]: just what the SDK
+/// dispatch needs to populate [`crate::ReceivePaymentResponse`]. The
+/// provider has already persisted its row through its own adapter by the
+/// time this returns.
+#[derive(Debug, Clone)]
+pub(crate) struct CrossChainReceivePrepared {
+    /// External deposit address the sender pays to.
+    pub deposit_address: String,
+    pub info: CrossChainReceiveInfo,
+}
+
+/// Information about the cross-chain receive quote.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CrossChainReceiveInfo {
+    /// Amount the sender must deposit, in source-asset base units. Equal
+    /// to the request's `amount`.
+    pub deposit_amount: u128,
+    /// Amount the receiver will see, net of provider fees, in
+    /// destination-asset base units. Sats when receiving BTC into Spark;
+    /// token base units when receiving a Spark token (e.g. USDB). The
+    /// final delivered amount may move within the slippage tolerance.
+    pub expected_received_amount: u128,
+    /// Spark token identifier when the destination is a token. Absent when
+    /// the destination is BTC and the receiver will see sats.
+    pub token_identifier: Option<String>,
+    /// Quote expiry as a unix timestamp in seconds.
+    pub expires_at: u64,
+}
+
 /// Data stashed on the prepared send payment so the provider can resume
 /// the send stage without re-quoting.
 #[derive(Debug, Clone)]
-pub(crate) struct CrossChainPrepared {
+pub(crate) struct CrossChainSendPrepared {
     pub amount_in: u128,
     /// `amount_in` expressed in the cross-chain (destination) asset's base
     /// units, via the fiat rate or decimal rescale the SDK used at prepare
@@ -299,7 +329,7 @@ pub(crate) trait CrossChainService: Send + Sync {
     ) -> Result<Vec<CrossChainRoutePair>, SdkError>;
 
     /// Fetch a quote for a cross-chain send.
-    async fn prepare(
+    async fn prepare_send(
         &self,
         recipient_address: &str,
         route: &CrossChainRoutePair,
@@ -307,7 +337,20 @@ pub(crate) trait CrossChainService: Send + Sync {
         source_token_identifier: Option<String>,
         max_slippage_bps: u32,
         fee_mode: CrossChainFeeMode,
-    ) -> Result<CrossChainPrepared, SdkError>;
+    ) -> Result<CrossChainSendPrepared, SdkError>;
+
+    /// Fetch a quote for a cross-chain receive.
+    async fn prepare_receive(
+        &self,
+        route: &CrossChainRoutePair,
+        recipient_address: &str,
+        amount: u128,
+        max_slippage_bps: u32,
+        // Pre-validated Spark-side destination: the SDK dispatch has
+        // checked this against `route.spark_assets` and resolved any
+        // wallet-level defaults (e.g. active stable balance).
+        destination: &SparkAsset,
+    ) -> Result<CrossChainReceivePrepared, SdkError>;
 
     /// Execute the send: transfer funds to the deposit address, submit to
     /// the provider, persist metadata, monitor to terminal, and return the
@@ -326,7 +369,7 @@ pub(crate) trait CrossChainService: Send + Sync {
     /// SDK dispatcher does not wrap this with an additional wait.
     async fn send(
         &self,
-        prepared: &CrossChainPrepared,
+        prepared: &CrossChainSendPrepared,
         idempotency_key: Option<String>,
     ) -> Result<crate::Payment, SdkError>;
 }
@@ -651,7 +694,7 @@ mod tests {
 
     /// Regression: `CrossChainProviderContext::Boltz.invoice_amount_sats` must
     /// be the source of truth for the LN-leg amount, distinct from
-    /// `CrossChainPrepared::amount_in` (which can carry a user-facing display
+    /// `CrossChainSendPrepared::amount_in` (which can carry a user-facing display
     /// value such as token base units after the dispatcher's conversion-path
     /// override). Conflating the two persisted USDB base units into the
     /// `invoice_amount_sats` field of `ConversionInfo::Boltz`, showing a
@@ -708,7 +751,7 @@ mod tests {
 
     /// Same invariant for Orchestra: `deposit_amount` is the source of truth
     /// for the deposit transfer size and is distinct from
-    /// `CrossChainPrepared::amount_in`.
+    /// `CrossChainSendPrepared::amount_in`.
     #[test_all]
     fn orchestra_provider_context_deposit_amount_is_independent_of_amount_in() {
         let ctx = CrossChainProviderContext::Orchestra {

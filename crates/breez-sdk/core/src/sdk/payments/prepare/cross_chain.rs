@@ -5,7 +5,7 @@ use crate::{
     FeePolicy, SendPaymentMethod,
     cross_chain::{
         DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS, DEFAULT_TARGET_OVERPAY_BPS, MAX_CROSS_CHAIN_SLIPPAGE_BPS,
-        MAX_TARGET_OVERPAY_BPS, MIN_CROSS_CHAIN_SLIPPAGE_BPS, MIN_TARGET_OVERPAY_BPS, SourceAsset,
+        MAX_TARGET_OVERPAY_BPS, MIN_CROSS_CHAIN_SLIPPAGE_BPS, MIN_TARGET_OVERPAY_BPS, SparkAsset,
         convert_destination_amount_to_sats, fetch_btc_usd_rate, rescale_decimals,
     },
     error::SdkError,
@@ -87,7 +87,7 @@ fn validate_request(
 
 /// Post-resolution check: the effective source asset (the one the wallet
 /// actually pays on, after the source-selection decision tree) must be in
-/// the route's `supported_sources`.
+/// the route's `spark_assets`.
 fn validate_route_supports_effective_source(
     route: &CrossChainRoutePair,
     token_identifier: Option<&String>,
@@ -95,23 +95,23 @@ fn validate_route_supports_effective_source(
 ) -> Result<(), SdkError> {
     let effective_source = if effective_conversion_options.is_some() {
         // Conversion runs before the provider leg → source is always sats.
-        SourceAsset::Bitcoin
+        SparkAsset::Bitcoin
     } else {
         match token_identifier {
-            Some(tid) => SourceAsset::Token {
+            Some(tid) => SparkAsset::Token {
                 token_identifier: tid.clone(),
             },
-            None => SourceAsset::Bitcoin,
+            None => SparkAsset::Bitcoin,
         }
     };
 
-    if !route.supported_sources.contains(&effective_source) {
+    if !route.spark_assets.contains(&effective_source) {
         let supported_list = route
-            .supported_sources
+            .spark_assets
             .iter()
             .map(|s| match s {
-                SourceAsset::Bitcoin => "sats".to_string(),
-                SourceAsset::Token {
+                SparkAsset::Bitcoin => "sats".to_string(),
+                SparkAsset::Token {
                     token_identifier: t,
                 } => t.clone(),
             })
@@ -350,7 +350,7 @@ async fn prepare_sats_denominated(
 
     let service = sdk.cross_chain_context.get(route.provider)?;
     let prepared = service
-        .prepare(
+        .prepare_send(
             address,
             route,
             provider_amount,
@@ -422,7 +422,7 @@ async fn prepare_token_denominated_fees_included(
 
     let service = sdk.cross_chain_context.get(route.provider)?;
     let prepared = service
-        .prepare(
+        .prepare_send(
             address,
             route,
             sats,
@@ -519,7 +519,7 @@ async fn prepare_token_denominated_fees_excluded(
 
     let service = sdk.cross_chain_context.get(route.provider)?;
     let prepared = service
-        .prepare(
+        .prepare_send(
             address,
             route,
             sats_for_provider,
@@ -654,7 +654,7 @@ fn compute_conversion_overrides(
 }
 
 fn build_response(
-    prepared: crate::cross_chain::CrossChainPrepared,
+    prepared: crate::cross_chain::CrossChainSendPrepared,
     response_amount: u128,
     response_token_identifier: Option<String>,
     conversion_estimate: Option<ConversionEstimate>,
@@ -769,15 +769,15 @@ fn decide_cross_chain_source(
         // 2) Caller specified a token.
         Some(token_id) => {
             let route_accepts_token = route
-                .supported_sources
+                .spark_assets
                 .iter()
-                .any(|s| matches!(s, SourceAsset::Token { token_identifier: t } if t == token_id));
+                .any(|s| matches!(s, SparkAsset::Token { token_identifier: t } if t == token_id));
             if route_accepts_token {
                 // Direct token send — no conversion needed.
                 return CrossChainSourceDecision::UseAsIs(None);
             }
 
-            let route_accepts_bitcoin = route.supported_sources.contains(&SourceAsset::Bitcoin);
+            let route_accepts_bitcoin = route.spark_assets.contains(&SparkAsset::Bitcoin);
             if !route_accepts_bitcoin {
                 // Neither direct nor auto-inject; caller must handle.
                 return CrossChainSourceDecision::UseAsIs(None);
@@ -798,7 +798,7 @@ fn decide_cross_chain_source(
         }
         // 3) No token specified.
         None => {
-            if route.supported_sources.contains(&SourceAsset::Bitcoin) {
+            if route.spark_assets.contains(&SparkAsset::Bitcoin) {
                 // Defer to stable_balance auto-inject: fires when the sats
                 // balance is insufficient to cover `amount`.
                 CrossChainSourceDecision::DeferToStableBalance
@@ -967,7 +967,7 @@ mod tests {
             contract_address: contract.map(str::to_string),
             decimals: 6,
             exact_out_eligible: false,
-            supported_sources: vec![SourceAsset::Bitcoin],
+            spark_assets: vec![SparkAsset::Bitcoin],
         }
     }
 
@@ -1020,7 +1020,7 @@ mod tests {
 
     // ---- decide_cross_chain_source ----
 
-    fn route_with_sources(sources: Vec<SourceAsset>) -> CrossChainRoutePair {
+    fn route_with_sources(sources: Vec<SparkAsset>) -> CrossChainRoutePair {
         CrossChainRoutePair {
             provider: CrossChainProvider::Orchestra,
             chain: "base".to_string(),
@@ -1029,7 +1029,7 @@ mod tests {
             contract_address: None,
             decimals: 6,
             exact_out_eligible: false,
-            supported_sources: sources,
+            spark_assets: sources,
         }
     }
 
@@ -1040,7 +1040,7 @@ mod tests {
             max_slippage_bps: None,
             completion_timeout_secs: None,
         };
-        let route = route_with_sources(vec![SourceAsset::Bitcoin]);
+        let route = route_with_sources(vec![SparkAsset::Bitcoin]);
         let result = decide_cross_chain_source(&route, None, Some(&opts), None, None);
         assert!(matches!(result, CrossChainSourceDecision::UseAsIs(Some(_))));
     }
@@ -1048,7 +1048,7 @@ mod tests {
     #[test_all]
     fn source_resolution_token_directly_supported() {
         let token = "USDB".to_string();
-        let route = route_with_sources(vec![SourceAsset::Token {
+        let route = route_with_sources(vec![SparkAsset::Token {
             token_identifier: "USDB".to_string(),
         }]);
         let result = decide_cross_chain_source(&route, Some(&token), None, None, None);
@@ -1058,7 +1058,7 @@ mod tests {
     #[test_all]
     fn source_resolution_auto_inject_to_bitcoin_for_active_stable_token() {
         let token = "USDB".to_string();
-        let route = route_with_sources(vec![SourceAsset::Bitcoin]);
+        let route = route_with_sources(vec![SparkAsset::Bitcoin]);
         let result = decide_cross_chain_source(&route, Some(&token), None, Some(&token), Some(150));
         match result {
             CrossChainSourceDecision::UseAsIs(Some(opts)) => {
@@ -1075,7 +1075,7 @@ mod tests {
     #[test_all]
     fn source_resolution_token_not_supported_no_stable() {
         let token = "USDC".to_string();
-        let route = route_with_sources(vec![SourceAsset::Bitcoin]);
+        let route = route_with_sources(vec![SparkAsset::Bitcoin]);
         // Active stable is a different token → don't auto-inject.
         let other = "USDB".to_string();
         let result = decide_cross_chain_source(&route, Some(&token), None, Some(&other), None);
@@ -1084,14 +1084,14 @@ mod tests {
 
     #[test_all]
     fn source_resolution_no_token_route_accepts_bitcoin_defers_to_stable() {
-        let route = route_with_sources(vec![SourceAsset::Bitcoin]);
+        let route = route_with_sources(vec![SparkAsset::Bitcoin]);
         let result = decide_cross_chain_source(&route, None, None, None, None);
         assert_eq!(result, CrossChainSourceDecision::DeferToStableBalance);
     }
 
     #[test_all]
     fn source_resolution_no_token_route_token_only() {
-        let route = route_with_sources(vec![SourceAsset::Token {
+        let route = route_with_sources(vec![SparkAsset::Token {
             token_identifier: "USDB".to_string(),
         }]);
         let result = decide_cross_chain_source(&route, None, None, None, None);
@@ -1111,10 +1111,10 @@ mod tests {
             completion_timeout_secs: None,
         };
         let route = route_with_sources(vec![
-            SourceAsset::Token {
+            SparkAsset::Token {
                 token_identifier: "USDB".to_string(),
             },
-            SourceAsset::Bitcoin,
+            SparkAsset::Bitcoin,
         ]);
         let result =
             decide_cross_chain_source(&route, Some(&token), Some(&explicit), Some(&token), None);
@@ -1134,15 +1134,15 @@ mod tests {
 
     #[test_all]
     fn source_resolution_token_directly_supported_wins_over_stable_auto_inject() {
-        // When the token is in the route's supported_sources AND it's the
+        // When the token is in the route's spark_assets AND it's the
         // active stable token, prefer the direct token path over auto-injecting
         // ToBitcoin.
         let token = "USDB".to_string();
         let route = route_with_sources(vec![
-            SourceAsset::Token {
+            SparkAsset::Token {
                 token_identifier: "USDB".to_string(),
             },
-            SourceAsset::Bitcoin,
+            SparkAsset::Bitcoin,
         ]);
         let result = decide_cross_chain_source(&route, Some(&token), None, Some(&token), Some(150));
         assert_eq!(
@@ -1159,7 +1159,7 @@ mod tests {
         // doesn't accept sats. Falls through to UseAsIs(None) and the
         // post-validation will surface the route-mismatch error.
         let token = "USDB".to_string();
-        let route = route_with_sources(vec![SourceAsset::Token {
+        let route = route_with_sources(vec![SparkAsset::Token {
             token_identifier: "USDC".to_string(),
         }]);
         let result = decide_cross_chain_source(&route, Some(&token), None, Some(&token), Some(150));
@@ -1170,13 +1170,13 @@ mod tests {
 
     #[test_all]
     fn validate_effective_source_no_token_no_conversion_route_accepts_bitcoin() {
-        let route = route_with_sources(vec![SourceAsset::Bitcoin]);
+        let route = route_with_sources(vec![SparkAsset::Bitcoin]);
         assert!(validate_route_supports_effective_source(&route, None, None).is_ok());
     }
 
     #[test_all]
     fn validate_effective_source_no_token_no_conversion_route_token_only_errors() {
-        let route = route_with_sources(vec![SourceAsset::Token {
+        let route = route_with_sources(vec![SparkAsset::Token {
             token_identifier: "USDB".to_string(),
         }]);
         let err = validate_route_supports_effective_source(&route, None, None).unwrap_err();
@@ -1192,7 +1192,7 @@ mod tests {
     #[test_all]
     fn validate_effective_source_token_supported_directly() {
         let token = "USDB".to_string();
-        let route = route_with_sources(vec![SourceAsset::Token {
+        let route = route_with_sources(vec![SparkAsset::Token {
             token_identifier: "USDB".to_string(),
         }]);
         assert!(validate_route_supports_effective_source(&route, Some(&token), None).is_ok());
@@ -1202,10 +1202,10 @@ mod tests {
     fn validate_effective_source_token_unsupported_errors() {
         let token = "USDC".to_string();
         let route = route_with_sources(vec![
-            SourceAsset::Token {
+            SparkAsset::Token {
                 token_identifier: "USDB".to_string(),
             },
-            SourceAsset::Bitcoin,
+            SparkAsset::Bitcoin,
         ]);
         let err = validate_route_supports_effective_source(&route, Some(&token), None).unwrap_err();
         let SdkError::InvalidInput(msg) = err else {
@@ -1229,7 +1229,7 @@ mod tests {
             max_slippage_bps: None,
             completion_timeout_secs: None,
         };
-        let route = route_with_sources(vec![SourceAsset::Bitcoin]);
+        let route = route_with_sources(vec![SparkAsset::Bitcoin]);
         assert!(
             validate_route_supports_effective_source(&route, Some(&token), Some(&opts)).is_ok(),
             "conversion → sats should pass when route accepts sats"
@@ -1248,7 +1248,7 @@ mod tests {
             max_slippage_bps: None,
             completion_timeout_secs: None,
         };
-        let route = route_with_sources(vec![SourceAsset::Token {
+        let route = route_with_sources(vec![SparkAsset::Token {
             token_identifier: "USDC".to_string(),
         }]);
         let err = validate_route_supports_effective_source(&route, Some(&token), Some(&opts))
@@ -1337,8 +1337,8 @@ mod tests {
     fn mk_prepared(
         amount_in: u128,
         source_transfer_fee_sats: u64,
-    ) -> crate::cross_chain::CrossChainPrepared {
-        crate::cross_chain::CrossChainPrepared {
+    ) -> crate::cross_chain::CrossChainSendPrepared {
+        crate::cross_chain::CrossChainSendPrepared {
             amount_in,
             asset_amount_in: amount_in,
             estimated_out: amount_in.saturating_sub(30),
@@ -1356,7 +1356,7 @@ mod tests {
                 contract_address: None,
                 decimals: 6,
                 exact_out_eligible: false,
-                supported_sources: vec![],
+                spark_assets: vec![],
             },
             recipient_address: "0xabc".to_string(),
             token_identifier: None,

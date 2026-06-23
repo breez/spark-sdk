@@ -10,7 +10,7 @@ use tracing::debug;
 
 use super::models::{
     EstimateRequest, EstimateResponse, QuoteRequest, QuoteResponse, Route, RoutesResponse,
-    StatusResponse, SubmitRequestSpark, SubmitResponse,
+    StatusResponse, SubmitRequest, SubmitResponse,
 };
 use crate::cache::CacheStore;
 use crate::config::OrchestraConfig;
@@ -84,8 +84,11 @@ impl OrchestraClient {
     /// Return routes where Spark is involved as source or destination.
     ///
     /// When `is_send` is `true`, returns routes with `source_chain == "spark"`
-    /// (sending from Spark to another chain). When `false`, returns routes with
-    /// `destination_chain == "spark"` (receiving into Spark from another chain).
+    /// and a non-Spark destination (sending from Spark to another chain). When
+    /// `false`, returns routes with `destination_chain == "spark"` and a
+    /// non-Spark source (receiving into Spark from another chain). Spark-to-Spark
+    /// routes (on-Spark AMM conversions like USDB↔BTC) are excluded from both
+    /// directions: they are not cross-chain.
     ///
     /// Driven by the cached [`Self::routes`] response — cheap to call
     /// repeatedly from the parser / UI layer.
@@ -95,10 +98,12 @@ impl OrchestraClient {
             .routes
             .into_iter()
             .filter(|r| {
+                let source_is_spark = r.source_chain.eq_ignore_ascii_case("spark");
+                let dest_is_spark = r.destination_chain.eq_ignore_ascii_case("spark");
                 if is_send {
-                    r.source_chain.eq_ignore_ascii_case("spark")
+                    source_is_spark && !dest_is_spark
                 } else {
-                    r.destination_chain.eq_ignore_ascii_case("spark")
+                    dest_is_spark && !source_is_spark
                 }
             })
             .collect())
@@ -127,29 +132,35 @@ impl OrchestraClient {
             .await
     }
 
-    /// Transfer the quoted `amount_in` to `deposit_address` via the Spark
-    /// wallet, then submit the resulting tx hash to Orchestra. Mirrors the
-    /// AMM client's `execute_swap` shape: the caller supplies the prepared
-    /// quote and Orchestra returns a processing order id.
+    /// Submit a quote.
     ///
-    /// * `quote_id` / `deposit_address` / `amount_in` come from the
-    ///   [`QuoteResponse`] returned by [`Self::quote`].
+    /// `idempotency_key` is sent as `X-Idempotency-Key` and the call site
+    /// picks the policy:
     ///
-    /// Submit an already-sent deposit tx hash for an existing quote.
-    ///
-    /// Requires auth and an idempotency key. The key is derived
-    /// deterministically from the quote id so retries are safe.
-    pub async fn submit_spark(
+    /// * **Send** passes a deterministic key (`derive_idempotency_key("submit",
+    ///   quote_id)`) so retries collide on the same order.
+    /// * **Receive** passes a fresh key on every call (e.g. a UUID). Reusing
+    ///   one replays the cached response, so a poller that wants to see the
+    ///   "deposit detected" transition must vary the key per tick. The
+    ///   request omits `spark_tx_hash`: until the deposit arrives Orchestra
+    ///   returns 400, once it does the same call returns
+    ///   `{ orderId, readToken }` (and does not create a duplicate order).
+    pub async fn submit(
         &self,
-        request: SubmitRequestSpark,
+        request: SubmitRequest,
+        idempotency_key: String,
     ) -> Result<SubmitResponse, FlashnetError> {
-        let idem = derive_idempotency_key("submit", &request.quote_id);
         debug!(
             "Orchestra: POST /v1/orchestration/submit quoteId={} idem={}",
-            request.quote_id, idem
+            request.quote_id, idempotency_key
         );
-        self.post("v1/orchestration/submit", &request, true, Some(idem))
-            .await
+        self.post(
+            "v1/orchestration/submit",
+            &request,
+            true,
+            Some(idempotency_key),
+        )
+        .await
     }
 
     /// Send `amount_in` sats (or tokens) to the Orchestra-provided `deposit_address`
@@ -368,7 +379,7 @@ impl OrchestraClient {
 
 /// Build a deterministic idempotency key so that retrying the same logical
 /// request (same endpoint + scope) is safe.
-fn derive_idempotency_key(scope: &str, key_input: &str) -> String {
+pub fn derive_idempotency_key(scope: &str, key_input: &str) -> String {
     let hash = sha256::Hash::hash(format!("orchestra:{scope}:{key_input}").as_bytes());
     hash.to_string()
 }
@@ -386,4 +397,31 @@ fn extract_error_message(body: &str) -> String {
                 .map(String::from)
         })
         .unwrap_or_else(|| body.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The send-side path retries by hashing the quote id into the same
+    /// idempotency key so duplicate submits collide on the first order.
+    /// Same scope + same input must always produce the same key.
+    #[test]
+    fn derive_idempotency_key_is_deterministic() {
+        let a = derive_idempotency_key("submit", "q_abc");
+        let b = derive_idempotency_key("submit", "q_abc");
+        assert_eq!(a, b);
+    }
+
+    /// Different inputs (or scopes) must produce different keys: a single
+    /// collision would conflate two logically distinct requests.
+    #[test]
+    fn derive_idempotency_key_disambiguates_inputs_and_scopes() {
+        let by_input = derive_idempotency_key("submit", "q_abc");
+        let other_input = derive_idempotency_key("submit", "q_xyz");
+        assert_ne!(by_input, other_input);
+
+        let other_scope = derive_idempotency_key("refund", "q_abc");
+        assert_ne!(by_input, other_scope);
+    }
 }

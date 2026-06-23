@@ -1,6 +1,6 @@
 use crate::{
     ConversionOptions, SendPaymentMethod, SendPaymentResponse,
-    cross_chain::CrossChainPrepared,
+    cross_chain::CrossChainSendPrepared,
     error::SdkError,
     sdk::{BreezSdk, SyncType},
     token_conversion::{ConversionAmount, ConversionPurpose, TokenConversionResponse},
@@ -9,7 +9,7 @@ use crate::{
 /// Dispatches a `SendPaymentMethod::CrossChainAddress` to its provider.
 ///
 /// The caller passes the variant by reference rather than destructured fields;
-/// this fn rebuilds the [`CrossChainPrepared`] internally and hands it to the
+/// this fn rebuilds the [`CrossChainSendPrepared`] internally and hands it to the
 /// provider's `send`, which polls to terminal and returns the [`Payment`].
 pub(in crate::sdk) async fn send(
     sdk: &BreezSdk,
@@ -37,7 +37,7 @@ pub(in crate::sdk) async fn send(
         ));
     };
 
-    let prepared = CrossChainPrepared {
+    let prepared = CrossChainSendPrepared {
         amount_in: *amount_in,
         asset_amount_in: *asset_amount_in,
         estimated_out: *estimated_out,
