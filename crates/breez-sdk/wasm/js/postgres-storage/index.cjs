@@ -660,7 +660,10 @@ class PostgresStorage {
 
   async insertPaymentMetadata(paymentId, metadata) {
     try {
-      await this.pool.query(
+      // The `WHERE` arm on `DO UPDATE` skips the write when every column
+      // the caller is trying to set already matches the stored value, so
+      // `rowCount` is 0 for a no-op replay.
+      const result = await this.pool.query(
         `INSERT INTO brz_payment_metadata (user_id, payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT(user_id, payment_id) DO UPDATE SET
@@ -669,24 +672,29 @@ class PostgresStorage {
            lnurl_withdraw_info = COALESCE(EXCLUDED.lnurl_withdraw_info, brz_payment_metadata.lnurl_withdraw_info),
            lnurl_description = COALESCE(EXCLUDED.lnurl_description, brz_payment_metadata.lnurl_description),
            conversion_info = COALESCE(EXCLUDED.conversion_info, brz_payment_metadata.conversion_info),
-           conversion_status = COALESCE(EXCLUDED.conversion_status, brz_payment_metadata.conversion_status)`,
+           conversion_status = COALESCE(EXCLUDED.conversion_status, brz_payment_metadata.conversion_status)
+         WHERE (EXCLUDED.parent_payment_id IS NOT NULL AND EXCLUDED.parent_payment_id IS DISTINCT FROM brz_payment_metadata.parent_payment_id)
+            OR (EXCLUDED.lnurl_pay_info IS NOT NULL AND EXCLUDED.lnurl_pay_info IS DISTINCT FROM brz_payment_metadata.lnurl_pay_info)
+            OR (EXCLUDED.lnurl_withdraw_info IS NOT NULL AND EXCLUDED.lnurl_withdraw_info IS DISTINCT FROM brz_payment_metadata.lnurl_withdraw_info)
+            OR (EXCLUDED.lnurl_description IS NOT NULL AND EXCLUDED.lnurl_description IS DISTINCT FROM brz_payment_metadata.lnurl_description)
+            OR (EXCLUDED.conversion_info IS NOT NULL AND EXCLUDED.conversion_info IS DISTINCT FROM brz_payment_metadata.conversion_info)
+            OR (EXCLUDED.conversion_status IS NOT NULL AND EXCLUDED.conversion_status IS DISTINCT FROM brz_payment_metadata.conversion_status)`,
         [
           this.identity,
           paymentId,
-          metadata.parentPaymentId,
-          metadata.lnurlPayInfo
-            ? JSON.stringify(metadata.lnurlPayInfo)
-            : null,
+          metadata.parentPaymentId ?? null,
+          metadata.lnurlPayInfo ? JSON.stringify(metadata.lnurlPayInfo) : null,
           metadata.lnurlWithdrawInfo
             ? JSON.stringify(metadata.lnurlWithdrawInfo)
             : null,
-          metadata.lnurlDescription,
+          metadata.lnurlDescription ?? null,
           metadata.conversionInfo
             ? JSON.stringify(metadata.conversionInfo)
             : null,
           metadata.conversionStatus ?? null,
         ]
       );
+      return result.rowCount > 0;
     } catch (error) {
       throw new StorageError(
         `Failed to set payment metadata for '${paymentId}': ${error.message}`,

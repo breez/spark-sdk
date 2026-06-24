@@ -389,17 +389,16 @@ impl StableBalance {
         match self.per_receive_convert(&payment_id).await {
             Ok(converted) => {
                 if converted
-                    && let Err(e) = self
-                        .core
-                        .storage
-                        .insert_payment_metadata(
-                            payment_id.clone(),
-                            PaymentMetadata {
-                                conversion_status: Some(ConversionStatus::Completed),
-                                ..Default::default()
-                            },
-                        )
-                        .await
+                    && let Err(e) = crate::utils::payments::record_payment_metadata_update_by_id(
+                        &self.core.storage,
+                        &self.event_emitter,
+                        payment_id.clone(),
+                        PaymentMetadata {
+                            conversion_status: Some(ConversionStatus::Completed),
+                            ..Default::default()
+                        },
+                    )
+                    .await
                 {
                     warn!("Failed to persist Completed status for {payment_id}: {e:?}");
                 }

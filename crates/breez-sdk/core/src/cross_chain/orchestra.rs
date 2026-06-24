@@ -151,6 +151,7 @@ pub(crate) struct OrchestraService {
     spark_wallet: Arc<SparkWallet>,
     storage: Arc<dyn Storage>,
     fiat_service: Arc<dyn FiatService>,
+    event_emitter: Arc<crate::EventEmitter>,
     monitor_trigger: broadcast::Sender<()>,
 }
 
@@ -161,6 +162,7 @@ impl OrchestraService {
         storage: Arc<dyn Storage>,
         fiat_service: Arc<dyn FiatService>,
         http_client: Arc<dyn platform_utils::HttpClient>,
+        event_emitter: Arc<crate::EventEmitter>,
         shutdown_receiver: watch::Receiver<()>,
     ) -> Self {
         let client = Arc::new(OrchestraClient::new(
@@ -175,6 +177,7 @@ impl OrchestraService {
             spark_wallet,
             storage,
             fiat_service,
+            event_emitter,
             monitor_trigger: monitor_trigger.clone(),
         };
         info!("Orchestra service initialized");
@@ -196,6 +199,7 @@ impl OrchestraService {
         let client = Arc::clone(&self.client);
         let spark_wallet = Arc::clone(&self.spark_wallet);
         let fiat_service = Arc::clone(&self.fiat_service);
+        let event_emitter = Arc::clone(&self.event_emitter);
         let mut trigger_receiver = monitor_trigger.subscribe();
         let span = tracing::Span::current();
 
@@ -208,7 +212,8 @@ impl OrchestraService {
                 let mut probe_clock: HashMap<String, u64> = HashMap::new();
                 loop {
                     if let Err(e) =
-                        Self::poll_in_flight_sends(&storage, &client, &spark_wallet).await
+                        Self::poll_in_flight_sends(&storage, &client, &spark_wallet, &event_emitter)
+                            .await
                     {
                         error!("Orchestra send-monitor poll failed: {e:?}");
                     }
@@ -219,6 +224,7 @@ impl OrchestraService {
                         &spark_wallet,
                         fiat_service.as_ref(),
                         &mut probe_clock,
+                        &event_emitter,
                     )
                     .await
                     {
@@ -310,6 +316,7 @@ impl OrchestraService {
         storage: &Arc<dyn Storage>,
         client: &Arc<OrchestraClient>,
         spark_wallet: &Arc<SparkWallet>,
+        event_emitter: &crate::EventEmitter,
     ) -> Result<(), SdkError> {
         let pending = storage
             .list_payments(StorageListPaymentsRequest {
@@ -377,15 +384,17 @@ impl OrchestraService {
             // status, not the payment's, so nothing else clears this row.
             if payment.status == PaymentStatus::Failed {
                 if let Some(metadata) = with_status(conversion_info, ConversionStatus::Failed)
-                    && let Err(e) = storage
-                        .insert_payment_metadata(
-                            payment.id.clone(),
-                            crate::PaymentMetadata {
-                                conversion_info: Some(metadata),
-                                ..Default::default()
-                            },
-                        )
-                        .await
+                    && let Err(e) = crate::utils::payments::record_payment_metadata_update(
+                        storage,
+                        event_emitter,
+                        payment.id.clone(),
+                        crate::utils::payments::payment_metadata_cache_key(payment),
+                        crate::PaymentMetadata {
+                            conversion_info: Some(metadata),
+                            ..Default::default()
+                        },
+                    )
+                    .await
                 {
                     warn!("Failed to mark {} conversion failed: {e}", payment.id);
                 }
@@ -483,19 +492,22 @@ impl OrchestraService {
                 payment.id
             );
 
-            if let Err(e) = storage
-                .insert_payment_metadata(payment.id.clone(), updated_metadata)
-                .await
+            let payment_id = payment.id.clone();
+            match crate::utils::payments::record_payment_metadata_update(
+                storage,
+                event_emitter,
+                payment_id.clone(),
+                crate::utils::payments::payment_metadata_cache_key(payment),
+                updated_metadata,
+            )
+            .await
             {
-                error!(
-                    "Failed to update Orchestra status for payment {}: {e}",
-                    payment.id
-                );
-            } else {
-                info!(
-                    "Orchestra order for payment {} reached terminal state",
-                    payment.id
-                );
+                Ok(()) => {
+                    info!("Orchestra order for payment {payment_id} reached terminal state");
+                }
+                Err(e) => {
+                    error!("Failed to update Orchestra status for payment {payment_id}: {e}");
+                }
             }
         }
 
@@ -513,6 +525,7 @@ impl OrchestraService {
         spark_wallet: &Arc<SparkWallet>,
         fiat_service: &dyn FiatService,
         probe_clock: &mut HashMap<String, u64>,
+        event_emitter: &crate::EventEmitter,
     ) -> Result<(), SdkError> {
         let active = swap_storage.list_active().await?;
         debug!(
@@ -548,6 +561,7 @@ impl OrchestraService {
                 client,
                 spark_wallet,
                 fiat_service,
+                event_emitter,
                 row,
                 data,
                 &order_id,
@@ -651,6 +665,7 @@ impl OrchestraService {
         client: &Arc<OrchestraClient>,
         spark_wallet: &Arc<SparkWallet>,
         fiat_service: &dyn FiatService,
+        event_emitter: &crate::EventEmitter,
         row: crate::StoredCrossChainSwap,
         data: OrchestraSwapData,
         order_id: &str,
@@ -688,6 +703,7 @@ impl OrchestraService {
                     storage,
                     spark_wallet,
                     fiat_service,
+                    event_emitter,
                     &data,
                     &order,
                 )
@@ -1518,12 +1534,13 @@ impl CrossChainService for OrchestraService {
             ..Default::default()
         };
 
-        let payment_id = crate::utils::conversions::resolve_and_insert_payment_metadata_for_transfer(
+        let payment_id = crate::utils::conversions::record_payment_metadata_update_for_transfer(
             &asset_transfer,
             metadata,
             &self.spark_wallet,
             &self.storage,
             true,
+            &self.event_emitter,
         )
         .await
         .unwrap_or_else(|e| {
@@ -1828,6 +1845,7 @@ async fn attach_receive_metadata(
     storage: &Arc<dyn Storage>,
     spark_wallet: &SparkWallet,
     fiat_service: &dyn FiatService,
+    event_emitter: &crate::EventEmitter,
     data: &OrchestraSwapData,
     order: &Order,
 ) -> Result<ReceiveMetadataOutcome, SdkError> {
@@ -1850,7 +1868,17 @@ async fn attach_receive_metadata(
             .insert_payment_metadata(payment_id.clone(), metadata.clone())
             .await
         {
-            Ok(()) => return Ok(ReceiveMetadataOutcome::Attached),
+            Ok(changed) => {
+                if changed {
+                    crate::utils::payments::emit_payment_updated_if_terminal(
+                        storage,
+                        event_emitter,
+                        payment_id,
+                    )
+                    .await;
+                }
+                return Ok(ReceiveMetadataOutcome::Attached);
+            }
             Err(e) => warn!(
                 "Orchestra receive {}: failed to write metadata onto payment {payment_id} ({e}), \
                  caching it",
