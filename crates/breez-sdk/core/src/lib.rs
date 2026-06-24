@@ -44,7 +44,8 @@ pub use logger::DEFAULT_FILTER;
 pub use models::*;
 pub use persist::{
     ConversionFilter, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,
-    StorageListPaymentsRequest, StoragePaymentDetailsFilter, UpdateDepositPayload,
+    StorageListPaymentsRequest, StoragePaymentDetailsFilter, StoredCrossChainSwap,
+    UpdateDepositPayload,
     backend::{PrebuiltBackend, ResolvedStores, StorageBackend, custom_storage},
     path::default_storage_path,
 };

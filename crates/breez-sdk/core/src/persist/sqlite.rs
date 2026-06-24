@@ -14,7 +14,8 @@ use crate::{
     error::DepositClaimError,
     persist::{
         PaymentMetadata, SetLnurlMetadataItem, StorageListPaymentsRequest,
-        StoragePaymentDetailsFilter, UpdateDepositPayload, parse_payment_status,
+        StoragePaymentDetailsFilter, StoredCrossChainSwap, UpdateDepositPayload,
+        parse_payment_status,
     },
     sync_storage::{
         IncomingChange, OutgoingChange, Record, RecordChange, RecordId, UnversionedRecordChange,
@@ -354,8 +355,35 @@ impl SqliteStorage {
              SET conversion_info = json_set(conversion_info, '$.type', 'amm')
              WHERE conversion_info IS NOT NULL
                AND json_extract(conversion_info, '$.type') IS NULL;",
+            // Cross-chain swap rows, synced for cross-instance recovery. Shared
+            // across providers, discriminated by the `provider` column. `data`
+            // is provider-opaque JSON; `secrets` is provider-opaque ciphertext
+            // (empty when the provider has none).
+            "CREATE TABLE cross_chain_swaps (
+                provider TEXT NOT NULL,
+                id TEXT NOT NULL,
+                is_terminal INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                data TEXT NOT NULL,
+                secrets TEXT NOT NULL,
+                PRIMARY KEY (provider, id)
+            );
+            CREATE INDEX idx_cross_chain_swaps_provider_is_terminal
+                ON cross_chain_swaps(provider, is_terminal);",
         ]
     }
+}
+
+/// Maps a `cross_chain_swaps` row to a [`StoredCrossChainSwap`].
+fn parse_cross_chain_swap_row(row: &Row) -> rusqlite::Result<StoredCrossChainSwap> {
+    Ok(StoredCrossChainSwap {
+        provider: row.get(0)?,
+        id: row.get(1)?,
+        is_terminal: row.get(2)?,
+        updated_at: row.get(3)?,
+        data: row.get(4)?,
+        secrets: row.get(5)?,
+    })
 }
 
 /// Maps a rusqlite error to the appropriate `StorageError`.
@@ -1081,6 +1109,60 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
         connection.execute("DELETE FROM contacts WHERE id = ?", params![id])?;
         Ok(())
+    }
+
+    async fn set_cross_chain_swap(&self, swap: StoredCrossChainSwap) -> Result<(), StorageError> {
+        let connection = self.get_connection()?;
+        connection.execute(
+            "INSERT INTO cross_chain_swaps (provider, id, is_terminal, updated_at, data, secrets)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(provider, id) DO UPDATE SET
+               is_terminal = excluded.is_terminal,
+               updated_at = excluded.updated_at,
+               data = excluded.data,
+               secrets = excluded.secrets",
+            params![
+                swap.provider,
+                swap.id,
+                swap.is_terminal,
+                swap.updated_at,
+                swap.data,
+                swap.secrets
+            ],
+        )?;
+        Ok(())
+    }
+
+    async fn get_cross_chain_swap(
+        &self,
+        provider: String,
+        id: String,
+    ) -> Result<Option<StoredCrossChainSwap>, StorageError> {
+        let connection = self.get_connection()?;
+        let mut stmt = connection.prepare(
+            "SELECT provider, id, is_terminal, updated_at, data, secrets
+               FROM cross_chain_swaps WHERE provider = ? AND id = ?",
+        )?;
+        match stmt.query_row(params![provider, id], parse_cross_chain_swap_row) {
+            Ok(swap) => Ok(Some(swap)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn list_active_cross_chain_swaps(
+        &self,
+        provider: String,
+    ) -> Result<Vec<StoredCrossChainSwap>, StorageError> {
+        let connection = self.get_connection()?;
+        let mut stmt = connection.prepare(
+            "SELECT provider, id, is_terminal, updated_at, data, secrets
+               FROM cross_chain_swaps WHERE provider = ? AND is_terminal = 0",
+        )?;
+        let swaps = stmt
+            .query_map(params![provider], parse_cross_chain_swap_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(swaps)
     }
 
     async fn add_outgoing_change(
@@ -2392,6 +2474,14 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_cross_chain_swaps_crud() {
+        let temp_dir = create_temp_dir("cross_chain_swaps_crud");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        crate::persist::tests::test_cross_chain_swaps_crud(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
     async fn test_contacts_crud() {
         let temp_dir = create_temp_dir("contacts_crud");
         let storage = SqliteStorage::new(&temp_dir).unwrap();
@@ -2415,7 +2505,12 @@ mod tests {
         // Step 1: bring the database up to the state before the discriminator
         // backfill — the conversion_info column exists, but no `"type"` tag has
         // been backfilled yet.
-        let backfill_index = SqliteStorage::current_migrations().len() - 1;
+        // Locate it by content so later appended migrations don't shift it off
+        // the end.
+        let backfill_index = SqliteStorage::current_migrations()
+            .iter()
+            .position(|s| s.contains("'$.type', 'amm'"))
+            .expect("conversion_info backfill migration present");
         {
             let mut conn = Connection::open(&db_path).unwrap();
             let migrations_before_backfill: Vec<_> = SqliteStorage::current_migrations()

@@ -1,173 +1,169 @@
 //! Adapter exposing the SDK [`Storage`] as a [`boltz_client::BoltzStorage`].
 //!
-//! Canonical Boltz swap state lives in a dedicated cache KV namespace
-//! rather than on payment metadata rows. The adapter is payment-row
-//! agnostic: it can run at prepare time, before any [`crate::Payment`]
-//! has been written.
+//! Boltz rows live in the provider-agnostic `cross_chain_swaps` table under
+//! `provider = "boltz"`.
 //!
-//! # Retention
+//! boltz-client runs in seedless mode: each swap carries its own random preimage
+//! and gas/claim key under `key_source` ([`boltz_client::models::SwapKeySource::Stored`]).
+//! Those secrets are money-critical, so before a swap row reaches local storage
+//! this adapter lifts `key_source` out of the swap JSON, ECIES-encrypts it via
+//! the SDK signer, and persists only the ciphertext in
+//! [`StoredCrossChainSwap::secrets`]. The rest of the swap is stored as
+//! plaintext JSON in [`StoredCrossChainSwap::data`]. On read the ciphertext is
+//! decrypted and `key_source` spliced back, reconstructing the full
+//! [`BoltzSwap`].
 //!
-//! Terminal swap rows are intentionally **not** removed from the cache:
-//! only the `boltz_active_swap_ids` list is pruned on terminal transitions
-//! (see [`BoltzStorage::upsert_swap`]). This keeps terminal swaps queryable
-//! by id for the lifetime of the wallet — aligned with payment-history
-//! retention, and lets `boltz-client` re-inspect a completed swap (e.g.
-//! during debug/recovery) without a separate archive. Growth is bounded by
-//! swap volume; no TTL in v1.
+//! The encryption key is derived from the wallet identity at a fixed path (see
+//! [`BOLTZ_SECRETS_ENCRYPTION_PATH`]), so it is deterministic across every
+//! instance restored from the same mnemonic. That is what lets a second instance
+//! decrypt a swap synced to it and drive it to terminal (see the realtime-sync
+//! `CrossChainSwap` record). Correctness and cross-instance convergence are
+//! boltz-client's job: the SDK just persists and syncs rows with plain
+//! last-writer-wins.
+//!
+//! Terminal swap rows are retained (only excluded from `list_active_swaps`),
+//! keeping a completed swap queryable by id for the wallet's lifetime.
 
 use std::sync::Arc;
 
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use bitcoin::bip32::DerivationPath;
 use boltz_client::{BoltzError, BoltzStorage, models::BoltzSwap};
-use platform_utils::tokio::sync::Mutex;
+use tracing::warn;
 
-use crate::Storage;
+use crate::{Storage, persist::StoredCrossChainSwap, signer::BreezSigner};
 
-/// Cache KV key for a serialized [`BoltzSwap`] row.
-fn swap_row_key(swap_id: &str) -> String {
-    format!("boltz_swap_row_{swap_id}")
-}
+/// Provider tag this adapter writes into `StoredCrossChainSwap::provider`.
+const PROVIDER_TAG_BOLTZ: &str = "boltz";
 
-/// Cache KV key for the JSON array of currently-non-terminal swap ids.
-const ACTIVE_SWAP_IDS_KEY: &str = "boltz_active_swap_ids";
+/// JSON key under which a swap's secrets live before they are lifted out.
+const KEY_SOURCE_FIELD: &str = "key_source";
 
-/// Cache KV key for the per-instance claim-key counter.
-fn key_index_cache_key(instance_id: &str) -> String {
-    format!("boltz_key_index_{instance_id}")
-}
+/// Hardened derivation path for the at-rest encryption of Boltz swap secrets.
+/// `1112493140` == ASCII "BOLT", distinct from the other SDK subsystems deriving
+/// from the same identity master key. The derived key is deterministic per
+/// mnemonic+network (the signer's master is derived under a network-specific
+/// account), so every instance of the same wallet encrypts and decrypts swap
+/// secrets under the same key: a swap synced to a second instance is decryptable
+/// there. Never change it: altering the path makes every existing encrypted
+/// `secrets` blob undecryptable.
+const BOLTZ_SECRETS_ENCRYPTION_PATH: &str = "m/1112493140'/0'/0'/0/0";
 
 /// Bridge between breez-sdk [`Storage`] and [`boltz_client::BoltzStorage`].
-///
-/// `instance_id` namespaces the local claim-key counter so two concurrent
-/// SDK instances on the same wallet cannot collide on the same HD index. It
-/// is also the forward-compat anchor for v2 (submarine swaps), which will
-/// introduce a `BoltzInstance` rtsync record type and publish the existing
-/// local seed retroactively for cross-device recovery. Nothing outside this
-/// crate references the field in v1.
 pub(crate) struct BoltzStorageAdapter {
     storage: Arc<dyn Storage>,
-    instance_id: String,
-    key_index_mutex: Arc<Mutex<()>>,
-    /// Serializes read-modify-write of `boltz_active_swap_ids` across
-    /// concurrent `upsert_swap` calls. Without it, two concurrent swap
-    /// transitions can race on the load → mutate → save cycle and lose one
-    /// another's update.
-    active_ids_mutex: Arc<Mutex<()>>,
+    signer: Arc<dyn BreezSigner>,
+    encryption_path: DerivationPath,
 }
 
 impl BoltzStorageAdapter {
-    pub(crate) fn new(storage: Arc<dyn Storage>, instance_id: String) -> Self {
-        Self {
+    pub(crate) fn new(
+        storage: Arc<dyn Storage>,
+        signer: Arc<dyn BreezSigner>,
+    ) -> Result<Self, BoltzError> {
+        let encryption_path: DerivationPath = BOLTZ_SECRETS_ENCRYPTION_PATH
+            .parse()
+            .map_err(|e| BoltzError::Store(format!("Invalid Boltz secrets path: {e}")))?;
+        Ok(Self {
             storage,
-            instance_id,
-            key_index_mutex: Arc::new(Mutex::new(())),
-            active_ids_mutex: Arc::new(Mutex::new(())),
-        }
+            signer,
+            encryption_path,
+        })
     }
 
-    async fn load_active_ids(&self) -> Result<Vec<String>, BoltzError> {
-        let raw = self
-            .storage
-            .get_cached_item(ACTIVE_SWAP_IDS_KEY.to_string())
+    /// Lifts `key_source` out of the swap JSON, encrypts it, and assembles the
+    /// persisted row.
+    async fn to_stored(&self, swap: &BoltzSwap) -> Result<StoredCrossChainSwap, BoltzError> {
+        let mut value = serde_json::to_value(swap)
+            .map_err(|e| BoltzError::Store(format!("Failed to serialize swap: {e}")))?;
+        let key_source = value
+            .as_object_mut()
+            .and_then(|map| map.remove(KEY_SOURCE_FIELD))
+            .ok_or_else(|| BoltzError::Store("Swap JSON missing key_source".to_string()))?;
+        let plaintext = serde_json::to_vec(&key_source)
+            .map_err(|e| BoltzError::Store(format!("Failed to serialize swap secrets: {e}")))?;
+        let ciphertext = self
+            .signer
+            .encrypt_ecies(&plaintext, &self.encryption_path)
             .await
-            .map_err(|e| BoltzError::Store(format!("Failed to read active swap ids: {e}")))?;
-        match raw {
-            Some(json) => serde_json::from_str::<Vec<String>>(&json).map_err(|e| {
-                BoltzError::Store(format!("Failed to deserialize active swap ids: {e}"))
-            }),
-            None => Ok(Vec::new()),
-        }
+            .map_err(|e| BoltzError::Store(format!("Failed to encrypt swap secrets: {e}")))?;
+        let data = serde_json::to_string(&value)
+            .map_err(|e| BoltzError::Store(format!("Failed to serialize swap data: {e}")))?;
+        Ok(StoredCrossChainSwap {
+            provider: PROVIDER_TAG_BOLTZ.to_string(),
+            id: swap.id.clone(),
+            is_terminal: swap.status.is_terminal(),
+            updated_at: swap.updated_at,
+            data,
+            secrets: BASE64.encode(ciphertext),
+        })
     }
 
-    async fn save_active_ids(&self, ids: &[String]) -> Result<(), BoltzError> {
-        let json = serde_json::to_string(ids)
-            .map_err(|e| BoltzError::Store(format!("Failed to serialize active swap ids: {e}")))?;
-        self.storage
-            .set_cached_item(ACTIVE_SWAP_IDS_KEY.to_string(), json)
+    /// Decrypts the secrets, splices `key_source` back into the data JSON, and
+    /// deserializes the full swap.
+    async fn swap_from_stored(
+        &self,
+        stored: StoredCrossChainSwap,
+    ) -> Result<BoltzSwap, BoltzError> {
+        let ciphertext = BASE64
+            .decode(stored.secrets.as_bytes())
+            .map_err(|e| BoltzError::Store(format!("Invalid base64 swap secrets: {e}")))?;
+        let plaintext = self
+            .signer
+            .decrypt_ecies(&ciphertext, &self.encryption_path)
             .await
-            .map_err(|e| BoltzError::Store(format!("Failed to write active swap ids: {e}")))
+            .map_err(|e| BoltzError::Store(format!("Failed to decrypt swap secrets: {e}")))?;
+        let key_source: serde_json::Value = serde_json::from_slice(&plaintext)
+            .map_err(|e| BoltzError::Store(format!("Failed to deserialize swap secrets: {e}")))?;
+        let mut value: serde_json::Value = serde_json::from_str(&stored.data)
+            .map_err(|e| BoltzError::Store(format!("Failed to deserialize swap data: {e}")))?;
+        value
+            .as_object_mut()
+            .ok_or_else(|| BoltzError::Store("Stored swap data is not a JSON object".to_string()))?
+            .insert(KEY_SOURCE_FIELD.to_string(), key_source);
+        serde_json::from_value(value)
+            .map_err(|e| BoltzError::Store(format!("Failed to deserialize swap: {e}")))
     }
 }
 
 #[macros::async_trait]
 impl BoltzStorage for BoltzStorageAdapter {
     async fn upsert_swap(&self, swap: &BoltzSwap) -> Result<(), BoltzError> {
-        let serialized = serde_json::to_string(swap)
-            .map_err(|e| BoltzError::Store(format!("Failed to serialize swap: {e}")))?;
+        let stored = self.to_stored(swap).await?;
         self.storage
-            .set_cached_item(swap_row_key(&swap.id), serialized)
+            .set_cross_chain_swap(stored)
             .await
-            .map_err(|e| BoltzError::Store(format!("Failed to persist swap row: {e}")))?;
-
-        // Reconcile the active-id index against the swap's status. A terminal
-        // swap is removed (its row stays queryable by id); a non-terminal swap
-        // is added. Both branches are idempotent, so replaying the same write
-        // (crash/retry) is a no-op.
-        let _guard = self.active_ids_mutex.lock().await;
-        let mut ids = self.load_active_ids().await?;
-        let contained = ids.contains(&swap.id);
-        if swap.status.is_terminal() {
-            if contained {
-                ids.retain(|id| id != &swap.id);
-                self.save_active_ids(&ids).await?;
-            }
-        } else if !contained {
-            ids.push(swap.id.clone());
-            self.save_active_ids(&ids).await?;
-        }
-        Ok(())
+            .map_err(|e| BoltzError::Store(format!("Failed to persist swap row: {e}")))
     }
 
     async fn get_swap(&self, id: &str) -> Result<Option<BoltzSwap>, BoltzError> {
-        let raw = self
+        let stored = self
             .storage
-            .get_cached_item(swap_row_key(id))
+            .get_cross_chain_swap(PROVIDER_TAG_BOLTZ.to_string(), id.to_string())
             .await
             .map_err(|e| BoltzError::Store(format!("Failed to read swap row: {e}")))?;
-        match raw {
-            Some(json) => serde_json::from_str::<BoltzSwap>(&json)
-                .map(Some)
-                .map_err(|e| BoltzError::Store(format!("Failed to deserialize swap row: {e}"))),
+        match stored {
+            Some(stored) => Ok(Some(self.swap_from_stored(stored).await?)),
             None => Ok(None),
         }
     }
 
     async fn list_active_swaps(&self) -> Result<Vec<BoltzSwap>, BoltzError> {
-        let ids = self.load_active_ids().await?;
-        let mut swaps = Vec::with_capacity(ids.len());
-        for id in ids {
-            if let Some(swap) = self.get_swap(&id).await? {
-                swaps.push(swap);
+        let rows = self
+            .storage
+            .list_active_cross_chain_swaps(PROVIDER_TAG_BOLTZ.to_string())
+            .await
+            .map_err(|e| BoltzError::Store(format!("Failed to list active swaps: {e}")))?;
+        let mut swaps = Vec::with_capacity(rows.len());
+        for stored in rows {
+            let id = stored.id.clone();
+            // Skip row on error (bad base64/json, decryption).
+            match self.swap_from_stored(stored).await {
+                Ok(swap) => swaps.push(swap),
+                Err(e) => warn!("Skipping Boltz swap '{id}': failed to load from storage: {e}"),
             }
         }
         Ok(swaps)
-    }
-
-    async fn increment_key_index(&self) -> Result<u32, BoltzError> {
-        let _guard = self.key_index_mutex.lock().await;
-        let key = key_index_cache_key(&self.instance_id);
-        // A regressed counter re-derives an already-used preimage, which is a
-        // fund-theft vector (see BoltzStorage::increment_key_index docs). Treat
-        // an absent key as a legitimate first-use 0, but hard-fail on a present-
-        // but-unparseable value rather than silently resetting to 0.
-        let current = match self
-            .storage
-            .get_cached_item(key.clone())
-            .await
-            .map_err(|e| BoltzError::Store(format!("Failed to read key index: {e}")))?
-        {
-            None => 0,
-            Some(v) => v
-                .parse::<u32>()
-                .map_err(|e| BoltzError::Store(format!("Corrupt key index {v:?}: {e}")))?,
-        };
-        let next = current
-            .checked_add(1)
-            .ok_or_else(|| BoltzError::Store("Key index overflow".to_string()))?;
-        self.storage
-            .set_cached_item(key, next.to_string())
-            .await
-            .map_err(|e| BoltzError::Store(format!("Failed to persist key index: {e}")))?;
-        Ok(current)
     }
 }
 
@@ -176,10 +172,13 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use boltz_client::models::{Asset, BoltzSwap, BoltzSwapStatus, BridgeKind};
+    use bitcoin::Network;
+    use bitcoin::bip32::Xpriv;
+    use boltz_client::models::{Asset, BoltzSwap, BoltzSwapStatus, BridgeKind, SwapKeySource};
 
     use super::*;
     use crate::persist::sqlite::SqliteStorage;
+    use crate::signer::breez::BreezSignerImpl;
 
     fn create_temp_dir(name: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
@@ -188,12 +187,16 @@ mod tests {
         path
     }
 
+    // The seedless `SwapKeySource::Stored` variant wraps `SwapSecrets`, whose
+    // fields are crate-private to boltz-client and so not constructible here.
+    // `Derived` exercises the same lift/encrypt/splice path (it is key-source
+    // agnostic), so the round-trip is covered regardless.
     fn make_swap(id: &str, status: BoltzSwapStatus) -> BoltzSwap {
         BoltzSwap {
             id: id.to_string(),
             status,
             bridge_kind: BridgeKind::Oft,
-            claim_key_index: 0,
+            key_source: SwapKeySource::Derived { claim_key_index: 7 },
             chain_id: 42161,
             claim_address: "0xclaim".to_string(),
             destination_address: "0xdest".to_string(),
@@ -218,21 +221,28 @@ mod tests {
         }
     }
 
-    fn make_adapter() -> BoltzStorageAdapter {
+    fn make_adapter() -> (BoltzStorageAdapter, Arc<dyn Storage>) {
         let dir = create_temp_dir("boltz_storage_adapter");
         let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&dir).unwrap());
-        BoltzStorageAdapter::new(storage, "instance-test".to_string())
+        let master = Xpriv::new_master(Network::Regtest, &[7u8; 32]).unwrap();
+        let signer: Arc<dyn BreezSigner> = Arc::new(BreezSignerImpl::new(master));
+        let adapter = BoltzStorageAdapter::new(Arc::clone(&storage), signer).unwrap();
+        (adapter, storage)
     }
 
     #[tokio::test]
     async fn upsert_get_list_active_roundtrip() {
-        let adapter = make_adapter();
+        let (adapter, _storage) = make_adapter();
         let swap = make_swap("s1", BoltzSwapStatus::Created);
         adapter.upsert_swap(&swap).await.unwrap();
 
         let fetched = adapter.get_swap("s1").await.unwrap().unwrap();
         assert_eq!(fetched.id, "s1");
         assert_eq!(fetched.status, BoltzSwapStatus::Created);
+        match fetched.key_source {
+            SwapKeySource::Derived { claim_key_index } => assert_eq!(claim_key_index, 7),
+            SwapKeySource::Stored(_) => panic!("key_source variant must round-trip"),
+        }
 
         let active = adapter.list_active_swaps().await.unwrap();
         assert_eq!(active.len(), 1);
@@ -240,41 +250,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn concurrent_upserts_do_not_drop_active_ids() {
-        // Spawn many concurrent `upsert_swap` calls. Without the active_ids
-        // mutex the load → mutate → save cycle would race and drop entries.
-        const N: usize = 32;
+    async fn secrets_are_encrypted_and_absent_from_plaintext_data() {
+        let (adapter, storage) = make_adapter();
+        adapter
+            .upsert_swap(&make_swap("s1", BoltzSwapStatus::Created))
+            .await
+            .unwrap();
 
-        let dir = create_temp_dir("boltz_storage_adapter_concurrent");
-        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&dir).unwrap());
-        let adapter = Arc::new(BoltzStorageAdapter::new(
-            storage,
-            "concurrent-test".to_string(),
-        ));
-
-        let mut handles = Vec::with_capacity(N);
-        for i in 0..N {
-            let adapter = Arc::clone(&adapter);
-            handles.push(tokio::spawn(async move {
-                let swap = make_swap(&format!("race_{i}"), BoltzSwapStatus::Created);
-                adapter.upsert_swap(&swap).await.unwrap();
-            }));
-        }
-        for h in handles {
-            h.await.unwrap();
-        }
-
-        let active = adapter.list_active_swaps().await.unwrap();
-        assert_eq!(
-            active.len(),
-            N,
-            "all concurrent upsert_swap calls must land in active_ids"
+        let stored = storage
+            .get_cross_chain_swap(PROVIDER_TAG_BOLTZ.to_string(), "s1".to_string())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.provider, PROVIDER_TAG_BOLTZ);
+        // key_source was lifted out of the plaintext data.
+        assert!(
+            !stored.data.contains("key_source"),
+            "key_source must not remain in plaintext data"
         );
+        // The encrypted blob does not reveal the claim_key_index in cleartext.
+        assert!(!stored.secrets.is_empty());
+        let ciphertext = BASE64.decode(stored.secrets.as_bytes()).unwrap();
+        assert!(!ciphertext.is_empty());
     }
 
     #[tokio::test]
-    async fn update_to_terminal_removes_from_active() {
-        let adapter = make_adapter();
+    async fn terminal_swaps_excluded_from_active() {
+        let (adapter, _storage) = make_adapter();
         adapter
             .upsert_swap(&make_swap("s1", BoltzSwapStatus::Created))
             .await
@@ -284,28 +286,17 @@ mod tests {
             .await
             .unwrap();
 
-        let terminal = make_swap("s1", BoltzSwapStatus::Completed);
-        adapter.upsert_swap(&terminal).await.unwrap();
+        // Drive s1 terminal; it leaves the active set but stays queryable by id.
+        adapter
+            .upsert_swap(&make_swap("s1", BoltzSwapStatus::Completed))
+            .await
+            .unwrap();
 
         let active = adapter.list_active_swaps().await.unwrap();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].id, "s2");
 
-        // terminal swap is still retrievable by id
         let fetched = adapter.get_swap("s1").await.unwrap().unwrap();
         assert_eq!(fetched.status, BoltzSwapStatus::Completed);
-    }
-
-    #[tokio::test]
-    async fn increment_key_index_persists_and_is_monotonic() {
-        let adapter = make_adapter();
-
-        let first = adapter.increment_key_index().await.unwrap();
-        let second = adapter.increment_key_index().await.unwrap();
-        let third = adapter.increment_key_index().await.unwrap();
-
-        assert_eq!(first, 0);
-        assert_eq!(second, 1);
-        assert_eq!(third, 2);
     }
 }

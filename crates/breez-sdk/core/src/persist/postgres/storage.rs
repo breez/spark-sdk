@@ -21,8 +21,8 @@ use crate::{
     error::DepositClaimError,
     persist::{
         Payment, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,
-        StorageListPaymentsRequest, StoragePaymentDetailsFilter, UpdateDepositPayload,
-        parse_payment_status,
+        StorageListPaymentsRequest, StoragePaymentDetailsFilter, StoredCrossChainSwap,
+        UpdateDepositPayload, parse_payment_status,
     },
     sync_storage::{
         IncomingChange, OutgoingChange, Record, RecordChange, RecordId, UnversionedRecordChange,
@@ -449,8 +449,39 @@ impl PostgresStorage {
                SET conversion_info = conversion_info::jsonb || '{\"type\": \"amm\"}'::jsonb
                WHERE conversion_info IS NOT NULL
                  AND (conversion_info::jsonb->>'type') IS NULL".to_string()],
+            // Migration 19: Cross-chain swap rows, synced for cross-instance
+            // recovery. Shared across providers, discriminated by `provider`.
+            // `data` is provider-opaque JSON; `secrets` is provider-opaque
+            // ciphertext (empty when the provider has none).
+            vec![
+                "CREATE TABLE IF NOT EXISTS brz_cross_chain_swaps (
+                    user_id BYTEA NOT NULL,
+                    provider TEXT NOT NULL,
+                    id TEXT NOT NULL,
+                    is_terminal BOOLEAN NOT NULL,
+                    updated_at BIGINT NOT NULL,
+                    data TEXT NOT NULL,
+                    secrets TEXT NOT NULL,
+                    PRIMARY KEY (user_id, provider, id)
+                 )".to_string(),
+                "CREATE INDEX IF NOT EXISTS brz_idx_cross_chain_swaps_user_provider_is_terminal
+                    ON brz_cross_chain_swaps (user_id, provider, is_terminal)".to_string(),
+            ],
         ]
     }
+}
+
+/// Maps a `brz_cross_chain_swaps` row (columns `provider, id, is_terminal,
+/// updated_at, data, secrets`) to a [`StoredCrossChainSwap`].
+fn cross_chain_swap_from_row(row: &Row) -> Result<StoredCrossChainSwap, StorageError> {
+    Ok(StoredCrossChainSwap {
+        provider: row.get(0),
+        id: row.get(1),
+        is_terminal: row.get(2),
+        updated_at: u64::try_from(row.get::<_, i64>(3))?,
+        data: row.get(4),
+        secrets: row.get(5),
+    })
 }
 
 /// Builds the multi-tenant scoping migration. The `identity` is a 33-byte
@@ -1394,6 +1425,76 @@ impl Storage for PostgresStorage {
         Ok(())
     }
 
+    async fn set_cross_chain_swap(&self, swap: StoredCrossChainSwap) -> Result<(), StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        let result = client
+            .execute(
+                "INSERT INTO brz_cross_chain_swaps
+                   (user_id, provider, id, is_terminal, updated_at, data, secrets)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)
+                 ON CONFLICT (user_id, provider, id) DO UPDATE SET
+                   is_terminal = EXCLUDED.is_terminal,
+                   updated_at = EXCLUDED.updated_at,
+                   data = EXCLUDED.data,
+                   secrets = EXCLUDED.secrets",
+                &[
+                    &self.identity,
+                    &swap.provider,
+                    &swap.id,
+                    &swap.is_terminal,
+                    &i64::try_from(swap.updated_at)?,
+                    &swap.data,
+                    &swap.secrets,
+                ],
+            )
+            .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(e) => Err(map_db_error(e)),
+        }
+    }
+
+    async fn get_cross_chain_swap(
+        &self,
+        provider: String,
+        id: String,
+    ) -> Result<Option<StoredCrossChainSwap>, StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        let row = client
+            .query_opt(
+                "SELECT provider, id, is_terminal, updated_at, data, secrets
+                 FROM brz_cross_chain_swaps
+                 WHERE user_id = $1 AND provider = $2 AND id = $3",
+                &[&self.identity, &provider, &id],
+            )
+            .await?;
+        match row {
+            Some(row) => Ok(Some(cross_chain_swap_from_row(&row)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn list_active_cross_chain_swaps(
+        &self,
+        provider: String,
+    ) -> Result<Vec<StoredCrossChainSwap>, StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        let rows = client
+            .query(
+                "SELECT provider, id, is_terminal, updated_at, data, secrets
+                 FROM brz_cross_chain_swaps
+                 WHERE user_id = $1 AND provider = $2 AND is_terminal = FALSE",
+                &[&self.identity, &provider],
+            )
+            .await?;
+        let mut swaps = Vec::with_capacity(rows.len());
+        for row in rows {
+            swaps.push(cross_chain_swap_from_row(&row)?);
+        }
+        Ok(swaps)
+    }
+
     async fn add_outgoing_change(
         &self,
         record: UnversionedRecordChange,
@@ -2159,6 +2260,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_cross_chain_swaps_crud() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_cross_chain_swaps_crud(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
     async fn test_conversion_status_persistence() {
         let fixture = PostgresTestFixture::new().await;
         crate::persist::tests::test_conversion_status_persistence(Box::new(fixture.storage)).await;
@@ -2856,8 +2963,13 @@ mod tests {
         );
 
         // Bring the DB up to the state right before the discriminator backfill.
+        // Locate it by content so later appended migrations don't shift it off
+        // the end.
         let migrations = PostgresStorage::migrations(&TEST_IDENTITY_A);
-        let backfill_index = migrations.len() - 1;
+        let backfill_index = migrations
+            .iter()
+            .position(|m| m.iter().any(|s| s.contains("\"type\": \"amm\"")))
+            .expect("conversion_info backfill migration present");
         {
             let (client, conn) = tokio_postgres::connect(&connection_string, tokio_postgres::NoTls)
                 .await
@@ -3075,7 +3187,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 18, "migration version must advance to 18");
+        assert_eq!(version, 19, "migration version must advance to 19");
 
         // Seed payment row is preserved on the renamed table — proves the
         // table + PK constraint rename worked and the columns line up.
@@ -3365,13 +3477,13 @@ mod tests {
 
         // Migration version advanced from 15 through 18 (16: multi-tenant scope,
         // 17: brz_payment_details_deposit table, 18: conversion_info
-        // type-discriminator backfill).
+        // type-discriminator backfill, 19: brz_cross_chain_swaps table).
         let version: i32 = client
             .query_one("SELECT MAX(version) FROM brz_schema_migrations", &[])
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 18, "migration must advance to 18");
+        assert_eq!(version, 19, "migration must advance to 19");
 
         // Seed data preserved (multi-tenant backfilled user_id to current tenant).
         let payment_count: i64 = client

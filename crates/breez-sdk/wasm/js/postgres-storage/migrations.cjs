@@ -497,6 +497,27 @@ class PostgresMigrationManager {
           `UPDATE brz_payment_metadata SET conversion_info = conversion_info::jsonb || '{"type": "amm"}'::jsonb WHERE conversion_info IS NOT NULL AND conversion_info::jsonb->>'type' IS NULL`,
         ],
       },
+      {
+        // Cross-chain swap rows, synced for cross-instance recovery. Shared
+        // across providers, discriminated by `provider`. Born multi-tenant
+        // (user_id in the PK). `data` is provider-opaque JSON; `secrets` is
+        // provider-opaque ciphertext (empty when the provider has none).
+        name: "Create brz_cross_chain_swaps table",
+        sql: [
+          `CREATE TABLE IF NOT EXISTS brz_cross_chain_swaps (
+              user_id BYTEA NOT NULL,
+              provider TEXT NOT NULL,
+              id TEXT NOT NULL,
+              is_terminal BOOLEAN NOT NULL,
+              updated_at BIGINT NOT NULL,
+              data TEXT NOT NULL,
+              secrets TEXT NOT NULL,
+              PRIMARY KEY (user_id, provider, id)
+          )`,
+          `CREATE INDEX brz_idx_cross_chain_swaps_user_provider_is_terminal
+             ON brz_cross_chain_swaps(user_id, provider, is_terminal)`,
+        ],
+      },
     ];
   }
 }

@@ -340,6 +340,35 @@ where
     }
 }
 
+/// A cross-chain swap row as persisted and synced. Shared across providers
+/// (Boltz, Orchestra, future) so each provider's adapter writes opaque
+/// JSON into `data` and (optionally) opaque ciphertext into `secrets`.
+///
+/// For providers with money-critical secrets, the adapter lifts them out of
+/// the swap JSON, ECIES-encrypts them, and carries only the ciphertext in
+/// `secrets`. The storage layer treats both fields as opaque, so it needs
+/// no signer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[serde(rename_all = "camelCase")]
+pub struct StoredCrossChainSwap {
+    /// Provider tag (e.g. `"boltz"`, `"orchestra"`).
+    pub provider: String,
+    /// Provider-scoped swap id (boltz swap id, orchestra quote-or-order id).
+    pub id: String,
+    /// Lifted from the underlying swap's terminal flag into an indexed column
+    /// so `list_active_cross_chain_swaps` filters without parsing `data`.
+    pub is_terminal: bool,
+    /// Lifted from the underlying swap's `updated_at` into a column so the
+    /// row's freshness is inspectable without parsing `data`.
+    pub updated_at: u64,
+    /// Serialized JSON owned by the cross-chain provider's storage adapter.
+    pub data: String,
+    /// Base64 of the ECIES ciphertext of the provider's lifted secrets.
+    /// Empty for providers with no money-critical secrets to protect at rest.
+    pub secrets: String,
+}
+
 /// Trait for persistent storage
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[async_trait]
@@ -497,6 +526,23 @@ pub trait Storage: Send + Sync {
 
     /// Deletes a contact by its ID
     async fn delete_contact(&self, id: String) -> Result<(), StorageError>;
+
+    /// Inserts or overwrites a cross-chain swap row (upsert by `(provider, id)`).
+    async fn set_cross_chain_swap(&self, swap: StoredCrossChainSwap) -> Result<(), StorageError>;
+
+    /// Gets a single cross-chain swap row by its `(provider, id)`, or `None` if absent.
+    async fn get_cross_chain_swap(
+        &self,
+        provider: String,
+        id: String,
+    ) -> Result<Option<StoredCrossChainSwap>, StorageError>;
+
+    /// Lists all non-terminal cross-chain swap rows for a single provider
+    /// (`provider = ? AND is_terminal = false`).
+    async fn list_active_cross_chain_swaps(
+        &self,
+        provider: String,
+    ) -> Result<Vec<StoredCrossChainSwap>, StorageError>;
 
     // Sync storage methods
     async fn add_outgoing_change(

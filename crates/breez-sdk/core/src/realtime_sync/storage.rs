@@ -20,7 +20,7 @@ use crate::{
     lnurl::LnurlServerClient,
     persist::{
         LIGHTNING_ADDRESS_KEY, ObjectCacheRepository, StorageListPaymentsRequest,
-        parse_cached_lightning_address,
+        StoredCrossChainSwap, parse_cached_lightning_address,
     },
     sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
 };
@@ -33,6 +33,7 @@ enum RecordType {
     PaymentMetadata,
     Contact,
     LightningAddress,
+    CrossChainSwap,
 }
 
 impl RecordType {
@@ -42,6 +43,7 @@ impl RecordType {
             Self::PaymentMetadata => SchemaVersion::new(1, 0, 0),
             Self::Contact => SchemaVersion::new(1, 0, 0),
             Self::LightningAddress => SchemaVersion::new(1, 0, 0),
+            Self::CrossChainSwap => SchemaVersion::new(1, 0, 0),
         }
     }
 }
@@ -52,6 +54,7 @@ impl Display for RecordType {
             RecordType::PaymentMetadata => "PaymentMetadata",
             RecordType::Contact => "Contact",
             RecordType::LightningAddress => "LightningAddress",
+            RecordType::CrossChainSwap => "CrossChainSwap",
         };
         write!(f, "{s}")
     }
@@ -65,6 +68,7 @@ impl FromStr for RecordType {
             "PaymentMetadata" => Ok(RecordType::PaymentMetadata),
             "Contact" => Ok(RecordType::Contact),
             "LightningAddress" => Ok(RecordType::LightningAddress),
+            "CrossChainSwap" => Ok(RecordType::CrossChainSwap),
             _ => Err(format!("Unknown record type: {s}")),
         }
     }
@@ -320,6 +324,10 @@ impl SyncedRecordHandler {
             RecordType::LightningAddress => {
                 return Ok(self.handle_lightning_address_change());
             }
+            RecordType::CrossChainSwap => {
+                self.handle_cross_chain_swap_change(change.new_state.data)
+                    .await
+            }
         }?;
         Ok(RecordOutcome::Completed)
     }
@@ -355,6 +363,10 @@ impl SyncedRecordHandler {
                     .await
             }
             RecordType::LightningAddress => Ok(()),
+            RecordType::CrossChainSwap => {
+                self.handle_cross_chain_swap_change(change.change.updated_fields)
+                    .await
+            }
         }
     }
 
@@ -401,6 +413,19 @@ impl SyncedRecordHandler {
         };
         self.storage.insert_contact(contact).await?;
 
+        Ok(())
+    }
+
+    async fn handle_cross_chain_swap_change(
+        &self,
+        fields: HashMap<String, Value>,
+    ) -> anyhow::Result<()> {
+        let swap: StoredCrossChainSwap = serde_json::from_value(
+            serde_json::to_value(&fields)
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+        )
+        .map_err(|e| StorageError::Serialization(e.to_string()))?;
+        self.storage.set_cross_chain_swap(swap).await?;
         Ok(())
     }
 
@@ -637,6 +662,38 @@ impl Storage for SyncedStorage {
             .await
             .map_err(|e| StorageError::Implementation(e.to_string()))?;
         self.inner.delete_contact(id).await
+    }
+
+    async fn set_cross_chain_swap(&self, swap: StoredCrossChainSwap) -> Result<(), StorageError> {
+        let data_id = format!("{}:{}", swap.provider, swap.id);
+        self.sync_service
+            .set_outgoing_record(&RecordChangeRequest {
+                id: RecordId::new(RecordType::CrossChainSwap.to_string(), &data_id),
+                schema_version: RecordType::CrossChainSwap.schema_version(),
+                updated_fields: serde_json::from_value(
+                    serde_json::to_value(&swap)
+                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
+                )
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+            })
+            .await
+            .map_err(|e| StorageError::Implementation(e.to_string()))?;
+        self.inner.set_cross_chain_swap(swap).await
+    }
+
+    async fn get_cross_chain_swap(
+        &self,
+        provider: String,
+        id: String,
+    ) -> Result<Option<StoredCrossChainSwap>, StorageError> {
+        self.inner.get_cross_chain_swap(provider, id).await
+    }
+
+    async fn list_active_cross_chain_swaps(
+        &self,
+        provider: String,
+    ) -> Result<Vec<StoredCrossChainSwap>, StorageError> {
+        self.inner.list_active_cross_chain_swaps(provider).await
     }
 
     async fn add_outgoing_change(
@@ -1139,6 +1196,82 @@ mod tests {
         assert!(result.is_ok());
 
         assert!(storage.get_contact("c3".to_string()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_cross_chain_swap_sync_round_trip_boltz() {
+        run_cross_chain_swap_round_trip("boltz", "swap-1").await;
+    }
+
+    #[tokio::test]
+    async fn test_cross_chain_swap_sync_round_trip_orchestra() {
+        run_cross_chain_swap_round_trip("orchestra", "quote-1").await;
+    }
+
+    async fn run_cross_chain_swap_round_trip(provider: &str, id: &str) {
+        // Instance A: set_cross_chain_swap emits an outgoing record and writes
+        // locally.
+        let writer_dir = create_temp_dir(&format!("cross_chain_sync_writer_{provider}"));
+        let writer_inner: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&writer_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&writer_inner));
+
+        let stored = StoredCrossChainSwap {
+            provider: provider.to_string(),
+            id: id.to_string(),
+            is_terminal: false,
+            updated_at: 1700,
+            data: format!(r#"{{"id":"{id}","status":"Created"}}"#),
+            secrets: "c2VjcmV0".to_string(),
+        };
+        synced.set_cross_chain_swap(stored.clone()).await.unwrap();
+
+        let expected_data_id = format!("{provider}:{id}");
+
+        // Exactly the fields the writer emitted are replayed (not re-serialized
+        // here), so the test catches any emit/apply field mismatch.
+        let emitted = writer_inner
+            .get_pending_outgoing_changes(100)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|c| {
+                c.change.id.r#type == RecordType::CrossChainSwap.to_string()
+                    && c.change.id.data_id == expected_data_id
+            })
+            .expect("set_cross_chain_swap must queue a CrossChainSwap outgoing record");
+        let fields: HashMap<String, Value> = emitted
+            .change
+            .updated_fields
+            .into_iter()
+            .map(|(k, v)| (k, serde_json::from_str(&v).unwrap()))
+            .collect();
+
+        // Instance B: apply the emitted record as an incoming change.
+        let reader_dir = create_temp_dir(&format!("cross_chain_sync_reader_{provider}"));
+        let reader_inner: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&reader_dir).unwrap());
+        let handler = create_test_record_handler(Arc::clone(&reader_inner));
+
+        let change = make_incoming_change(
+            &RecordType::CrossChainSwap.to_string(),
+            &expected_data_id,
+            RecordType::CrossChainSwap.schema_version(),
+            fields,
+        );
+        let outcome = handler.handle_incoming_change(change).await.unwrap();
+        assert_eq!(outcome, RecordOutcome::Completed);
+
+        // Instance B's local store now holds an identical row.
+        let fetched = reader_inner
+            .get_cross_chain_swap(provider.to_string(), id.to_string())
+            .await
+            .unwrap()
+            .expect("swap applied to reader store");
+        assert_eq!(fetched.provider, stored.provider);
+        assert_eq!(fetched.id, stored.id);
+        assert_eq!(fetched.is_terminal, stored.is_terminal);
+        assert_eq!(fetched.updated_at, stored.updated_at);
+        assert_eq!(fetched.data, stored.data);
+        assert_eq!(fetched.secrets, stored.secrets);
     }
 
     /// Helper: returns the number of pending outgoing sync changes with record type

@@ -1412,6 +1412,78 @@ class SqliteStorage {
       );
     }
   }
+
+  // ===== Cross-Chain Swap Operations =====
+
+  setCrossChainSwap(swap) {
+    try {
+      const stmt = this.db.prepare(`
+        INSERT INTO cross_chain_swaps (provider, id, is_terminal, updated_at, data, secrets)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(provider, id) DO UPDATE SET
+          is_terminal = excluded.is_terminal,
+          updated_at = excluded.updated_at,
+          data = excluded.data,
+          secrets = excluded.secrets
+      `);
+      stmt.run(
+        swap.provider,
+        swap.id,
+        swap.isTerminal ? 1 : 0,
+        swap.updatedAt,
+        swap.data,
+        swap.secrets
+      );
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(`Failed to set cross-chain swap: ${error.message}`, error)
+      );
+    }
+  }
+
+  getCrossChainSwap(provider, id) {
+    try {
+      const stmt = this.db.prepare(
+        `SELECT provider, id, is_terminal, updated_at, data, secrets
+         FROM cross_chain_swaps WHERE provider = ? AND id = ?`
+      );
+      const row = stmt.get(provider, id);
+      return Promise.resolve(row ? crossChainSwapFromRow(row) : null);
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(`Failed to get cross-chain swap: ${error.message}`, error)
+      );
+    }
+  }
+
+  listActiveCrossChainSwaps(provider) {
+    try {
+      const stmt = this.db.prepare(
+        `SELECT provider, id, is_terminal, updated_at, data, secrets
+         FROM cross_chain_swaps WHERE provider = ? AND is_terminal = 0`
+      );
+      const rows = stmt.all(provider);
+      return Promise.resolve(rows.map(crossChainSwapFromRow));
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(`Failed to list active cross-chain swaps: ${error.message}`, error)
+      );
+    }
+  }
+}
+
+/// Maps a `cross_chain_swaps` row to a StoredCrossChainSwap, parsing `data` and
+/// the is_terminal flag back into the camelCase shape the SDK expects.
+function crossChainSwapFromRow(row) {
+  return {
+    provider: row.provider,
+    id: row.id,
+    isTerminal: row.is_terminal !== 0,
+    updatedAt: Number(row.updated_at),
+    data: row.data,
+    secrets: row.secrets,
+  };
 }
 
 async function createDefaultStorage(dataDir, logger = null) {

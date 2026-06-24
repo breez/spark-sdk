@@ -460,6 +460,26 @@ class MigrationManager {
         name: "Backfill conversion_info type discriminator",
         sql: `UPDATE payment_metadata SET conversion_info = json_set(conversion_info, '$.type', 'amm') WHERE conversion_info IS NOT NULL AND json_extract(conversion_info, '$.type') IS NULL`,
       },
+      {
+        // Cross-chain swap rows, synced for cross-instance recovery. Shared
+        // across providers, discriminated by `provider`. `data` is
+        // provider-opaque JSON; `secrets` is provider-opaque ciphertext (empty
+        // when the provider has none).
+        name: "Create cross_chain_swaps table",
+        sql: [
+          `CREATE TABLE cross_chain_swaps (
+              provider TEXT NOT NULL,
+              id TEXT NOT NULL,
+              is_terminal INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL,
+              data TEXT NOT NULL,
+              secrets TEXT NOT NULL,
+              PRIMARY KEY (provider, id)
+          )`,
+          `CREATE INDEX idx_cross_chain_swaps_provider_is_terminal
+            ON cross_chain_swaps(provider, is_terminal)`,
+        ],
+      },
     ];
   }
 }

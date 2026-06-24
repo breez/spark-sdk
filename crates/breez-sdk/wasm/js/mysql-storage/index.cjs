@@ -105,6 +105,21 @@ function toBool(value) {
   return value === 1 || value === "1" || value === true;
 }
 
+/**
+ * Maps a brz_cross_chain_swaps row to the camelCase StoredCrossChainSwap shape
+ * the SDK expects, coercing TINYINT(1) to a boolean.
+ */
+function crossChainSwapFromRow(row) {
+  return {
+    provider: row.provider,
+    id: row.id,
+    isTerminal: toBool(row.is_terminal),
+    updatedAt: Number(row.updated_at),
+    data: row.data,
+    secrets: row.secrets,
+  };
+}
+
 class MysqlStorage {
   /**
    * @param {import('mysql2/promise').Pool} pool - Connection pool (may be shared with other tenants).
@@ -1057,6 +1072,74 @@ class MysqlStorage {
     } catch (error) {
       throw new StorageError(
         `Failed to delete contact: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  // ===== Cross-Chain Swap Operations =====
+
+  async setCrossChainSwap(swap) {
+    try {
+      await this.pool.query(
+        `INSERT INTO brz_cross_chain_swaps
+           (user_id, provider, id, is_terminal, updated_at, data, secrets)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           is_terminal = VALUES(is_terminal),
+           updated_at = VALUES(updated_at),
+           data = VALUES(data),
+           secrets = VALUES(secrets)`,
+        [
+          this.identity,
+          swap.provider,
+          swap.id,
+          swap.isTerminal ? 1 : 0,
+          swap.updatedAt,
+          swap.data,
+          swap.secrets,
+        ]
+      );
+    } catch (error) {
+      throw new StorageError(
+        `Failed to set cross-chain swap: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  async getCrossChainSwap(provider, id) {
+    try {
+      const [rows] = await this.pool.query(
+        `SELECT provider, id, is_terminal, updated_at, data, secrets
+         FROM brz_cross_chain_swaps
+         WHERE user_id = ? AND provider = ? AND id = ?`,
+        [this.identity, provider, id]
+      );
+      if (rows.length === 0) {
+        return null;
+      }
+      return crossChainSwapFromRow(rows[0]);
+    } catch (error) {
+      throw new StorageError(
+        `Failed to get cross-chain swap: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  async listActiveCrossChainSwaps(provider) {
+    try {
+      const [rows] = await this.pool.query(
+        `SELECT provider, id, is_terminal, updated_at, data, secrets
+         FROM brz_cross_chain_swaps
+         WHERE user_id = ? AND provider = ? AND is_terminal = FALSE`,
+        [this.identity, provider]
+      );
+      return rows.map(crossChainSwapFromRow);
+    } catch (error) {
+      throw new StorageError(
+        `Failed to list active cross-chain swaps: ${error.message}`,
         error
       );
     }

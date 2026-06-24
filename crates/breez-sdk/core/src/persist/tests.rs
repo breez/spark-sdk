@@ -3393,6 +3393,121 @@ pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
     assert_ne!(page1[0].id, page2[0].id);
 }
 
+/// Storage-layer CRUD for cross-chain swap rows. Exercises the opaque
+/// [`StoredCrossChainSwap`] shape; the encrypt/lift logic is each adapter's
+/// job and is tested there.
+pub async fn test_cross_chain_swaps_crud(storage: Box<dyn Storage>) {
+    use crate::persist::StoredCrossChainSwap;
+
+    let make =
+        |provider: &str, id: &str, is_terminal: bool, updated_at: u64| StoredCrossChainSwap {
+            provider: provider.to_string(),
+            id: id.to_string(),
+            is_terminal,
+            updated_at,
+            data: format!(r#"{{"id":"{id}","status":"Created","extra":1}}"#),
+            secrets: format!("c2VjcmV0-{provider}-{id}"),
+        };
+
+    storage
+        .set_cross_chain_swap(make("boltz", "s1", false, 1000))
+        .await
+        .unwrap();
+    let fetched = storage
+        .get_cross_chain_swap("boltz".to_string(), "s1".to_string())
+        .await
+        .unwrap()
+        .expect("s1 present");
+    assert_eq!(fetched.provider, "boltz");
+    assert_eq!(fetched.id, "s1");
+    assert!(!fetched.is_terminal);
+    assert_eq!(fetched.updated_at, 1000);
+    assert_eq!(fetched.data, r#"{"id":"s1","status":"Created","extra":1}"#);
+    assert_eq!(fetched.secrets, "c2VjcmV0-boltz-s1");
+
+    // Missing (provider, id) returns None (not an error).
+    assert!(
+        storage
+            .get_cross_chain_swap("boltz".to_string(), "nope".to_string())
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Upsert overwrites every mutable column.
+    storage
+        .set_cross_chain_swap(make("boltz", "s1", true, 2000))
+        .await
+        .unwrap();
+    let updated = storage
+        .get_cross_chain_swap("boltz".to_string(), "s1".to_string())
+        .await
+        .unwrap()
+        .expect("s1 still present");
+    assert!(updated.is_terminal);
+    assert_eq!(updated.updated_at, 2000);
+
+    // list_active filters out terminal rows for the given provider.
+    storage
+        .set_cross_chain_swap(make("boltz", "s2", false, 1500))
+        .await
+        .unwrap();
+    storage
+        .set_cross_chain_swap(make("boltz", "s3", true, 1500))
+        .await
+        .unwrap();
+    let mut active = storage
+        .list_active_cross_chain_swaps("boltz".to_string())
+        .await
+        .unwrap();
+    active.sort_by(|a, b| a.id.cmp(&b.id));
+    let active_ids: Vec<_> = active.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(active_ids, vec!["s2"], "only non-terminal rows are active");
+
+    let s3 = storage
+        .get_cross_chain_swap("boltz".to_string(), "s3".to_string())
+        .await
+        .unwrap()
+        .expect("terminal row retained");
+    assert!(s3.is_terminal);
+
+    // Composite primary key: same id under a different provider is a distinct
+    // row, not a collision.
+    storage
+        .set_cross_chain_swap(make("orchestra", "s1", false, 3000))
+        .await
+        .unwrap();
+    let boltz_s1 = storage
+        .get_cross_chain_swap("boltz".to_string(), "s1".to_string())
+        .await
+        .unwrap()
+        .expect("boltz/s1 still present");
+    assert!(boltz_s1.is_terminal, "boltz/s1 unchanged by orchestra/s1");
+    assert_eq!(boltz_s1.updated_at, 2000);
+    let orchestra_s1 = storage
+        .get_cross_chain_swap("orchestra".to_string(), "s1".to_string())
+        .await
+        .unwrap()
+        .expect("orchestra/s1 present");
+    assert!(!orchestra_s1.is_terminal);
+    assert_eq!(orchestra_s1.updated_at, 3000);
+
+    // list_active is provider-scoped: a non-terminal orchestra row does not
+    // appear in the boltz list, and vice versa.
+    let boltz_active = storage
+        .list_active_cross_chain_swaps("boltz".to_string())
+        .await
+        .unwrap();
+    let boltz_ids: Vec<_> = boltz_active.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(boltz_ids, vec!["s2"]);
+    let orchestra_active = storage
+        .list_active_cross_chain_swaps("orchestra".to_string())
+        .await
+        .unwrap();
+    let orchestra_ids: Vec<_> = orchestra_active.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(orchestra_ids, vec!["s1"]);
+}
+
 /// Tests that `conversion_status` in `PaymentMetadata` is correctly persisted and
 /// read back as `conversion_details` on the `Payment`. Also verifies COALESCE
 /// behavior preserves it across partial metadata updates, and that all

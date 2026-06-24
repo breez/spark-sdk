@@ -1044,6 +1044,74 @@ class PostgresStorage {
     }
   }
 
+  // ===== Cross-Chain Swap Operations =====
+
+  async setCrossChainSwap(swap) {
+    try {
+      await this.pool.query(
+        `INSERT INTO brz_cross_chain_swaps
+           (user_id, provider, id, is_terminal, updated_at, data, secrets)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT(user_id, provider, id) DO UPDATE SET
+           is_terminal = EXCLUDED.is_terminal,
+           updated_at = EXCLUDED.updated_at,
+           data = EXCLUDED.data,
+           secrets = EXCLUDED.secrets`,
+        [
+          this.identity,
+          swap.provider,
+          swap.id,
+          swap.isTerminal,
+          swap.updatedAt,
+          swap.data,
+          swap.secrets,
+        ]
+      );
+    } catch (error) {
+      throw new StorageError(
+        `Failed to set cross-chain swap: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  async getCrossChainSwap(provider, id) {
+    try {
+      const result = await this.pool.query(
+        `SELECT provider, id, is_terminal, updated_at, data, secrets
+         FROM brz_cross_chain_swaps
+         WHERE user_id = $1 AND provider = $2 AND id = $3`,
+        [this.identity, provider, id]
+      );
+      if (result.rows.length === 0) {
+        return null;
+      }
+      return crossChainSwapFromRow(result.rows[0]);
+    } catch (error) {
+      throw new StorageError(
+        `Failed to get cross-chain swap: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  async listActiveCrossChainSwaps(provider) {
+    try {
+      const result = await this.pool.query(
+        `SELECT provider, id, is_terminal, updated_at, data, secrets
+         FROM brz_cross_chain_swaps
+         WHERE user_id = $1 AND provider = $2 AND is_terminal = FALSE`,
+        [this.identity, provider]
+      );
+      return result.rows.map(crossChainSwapFromRow);
+    } catch (error) {
+      throw new StorageError(
+        `Failed to list active cross-chain swaps: ${error.message}`,
+        error
+      );
+    }
+  }
+
   // ===== Sync Operations =====
 
   async syncAddOutgoingChange(record) {
@@ -1468,6 +1536,21 @@ class PostgresStorage {
       );
     }
   }
+}
+
+/**
+ * Maps a brz_cross_chain_swaps row to the camelCase StoredCrossChainSwap shape
+ * the SDK expects.
+ */
+function crossChainSwapFromRow(row) {
+  return {
+    provider: row.provider,
+    id: row.id,
+    isTerminal: row.is_terminal,
+    updatedAt: Number(row.updated_at),
+    data: row.data,
+    secrets: row.secrets,
+  };
 }
 
 /**

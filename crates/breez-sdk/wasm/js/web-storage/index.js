@@ -575,6 +575,17 @@ class MigrationManager {
           }
         },
       },
+      {
+        // listActiveCrossChainSwaps scans and filters.
+        name: "Create cross_chain_swaps store",
+        upgrade: (db) => {
+          if (!db.objectStoreNames.contains("cross_chain_swaps")) {
+            db.createObjectStore("cross_chain_swaps", {
+              keyPath: ["provider", "id"],
+            });
+          }
+        },
+      },
     ];
   }
 }
@@ -603,7 +614,7 @@ class IndexedDBStorage {
     // so existing databases depend on indices never shifting. Never insert,
     // reorder, or delete a migration — only append. dbVersion MUST equal the
     // number of migrations (enforced by the guard in initialize()).
-    this.dbVersion = 19; // Current schema version (= migration count)
+    this.dbVersion = 20; // Current schema version (= migration count)
   }
 
   /**
@@ -2213,6 +2224,77 @@ class IndexedDBStorage {
         reject(
           new StorageError(
             `Failed to delete contact '${id}': ${request.error?.message || "Unknown error"}`,
+            request.error
+          )
+        );
+      };
+    });
+  }
+
+  // ===== Cross-Chain Swap Operations =====
+
+  async setCrossChainSwap(swap) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("cross_chain_swaps", "readwrite");
+      const store = transaction.objectStore("cross_chain_swaps");
+      // IndexedDB stores nested objects natively, so `data` is kept as-is.
+      const request = store.put(swap);
+      request.onsuccess = () => resolve();
+      request.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to set cross-chain swap '${swap.provider}:${swap.id}': ${request.error?.message || "Unknown error"}`,
+            request.error
+          )
+        );
+      };
+    });
+  }
+
+  async getCrossChainSwap(provider, id) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("cross_chain_swaps", "readonly");
+      const store = transaction.objectStore("cross_chain_swaps");
+      const request = store.get([provider, id]);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to get cross-chain swap '${provider}:${id}': ${request.error?.message || "Unknown error"}`,
+            request.error
+          )
+        );
+      };
+    });
+  }
+
+  async listActiveCrossChainSwaps(provider) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("cross_chain_swaps", "readonly");
+      const store = transaction.objectStore("cross_chain_swaps");
+      const request = store.getAll();
+      request.onsuccess = () => {
+        const all = request.result || [];
+        resolve(
+          all.filter((swap) => swap.provider === provider && !swap.isTerminal)
+        );
+      };
+      request.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to list active cross-chain swaps for '${provider}': ${request.error?.message || "Unknown error"}`,
             request.error
           )
         );
