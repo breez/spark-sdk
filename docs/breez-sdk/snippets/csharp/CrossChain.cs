@@ -1,3 +1,4 @@
+using System.Numerics;
 using Breez.Sdk.Spark;
 
 namespace BreezSdkSnippets
@@ -71,6 +72,58 @@ namespace BreezSdkSnippets
             var sendResponse = await sdk.SendPayment(request: request);
             Console.WriteLine($"Payment: {sendResponse.payment}");
             // ANCHOR_END: cross-chain-send
+        }
+
+        async Task GetCrossChainReceiveRoutes(BreezSdk sdk)
+        {
+            // ANCHOR: cross-chain-get-receive-routes
+            var filter = new CrossChainRouteFilter.Receive(contractAddress: null);
+            var routes = await sdk.GetCrossChainRoutes(filter: filter);
+
+            foreach (var route in routes)
+            {
+                Console.WriteLine(
+                    $"Route via {route.provider}: {route.chain}/{route.asset} -> Spark"
+                );
+            }
+            // ANCHOR_END: cross-chain-get-receive-routes
+        }
+
+        async Task ReceivePaymentCrossChain(BreezSdk sdk, CrossChainRoutePair route)
+        {
+            // ANCHOR: cross-chain-receive
+            // amount is in source-asset base units
+            // (e.g. USDC base units when source is USDC)
+            var amount = new BigInteger(1_000_000);
+            // Optionally set the destination Spark-side asset. null = auto:
+            // active stable-balance token if the route supports it, otherwise BTC.
+            SparkAsset? optionalDestination = null;
+            // Optionally set the maximum slippage in basis points (10 to 500)
+            uint? optionalMaxSlippageBps = 100;
+
+            var request = new ReceivePaymentRequest(
+                paymentMethod: new ReceivePaymentMethod.CrossChain(
+                    route: route,
+                    amount: amount,
+                    destination: optionalDestination,
+                    maxSlippageBps: optionalMaxSlippageBps
+                )
+            );
+            var response = await sdk.ReceivePayment(request: request);
+
+            Console.WriteLine(
+                $"Share this deposit address with the sender: {response.paymentRequest}"
+            );
+            if (response.crossChainInfo is { } info)
+            {
+                Console.WriteLine($"Sender deposits: {info.depositAmount}");
+                var denom = info.tokenIdentifier is null ? "BTC" : "USDB";
+                Console.WriteLine(
+                    $"Receiver gets ~{info.expectedReceivedAmount} {denom}"
+                );
+                Console.WriteLine($"Quote expires at: {info.expiresAt}");
+            }
+            // ANCHOR_END: cross-chain-receive
         }
     }
 }

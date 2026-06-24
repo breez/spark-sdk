@@ -8,6 +8,8 @@ from breez_sdk_spark import (
     PaymentRequest,
     PrepareSendPaymentRequest,
     PrepareSendPaymentResponse,
+    ReceivePaymentMethod,
+    ReceivePaymentRequest,
     SendPaymentMethod,
     SendPaymentRequest,
 )
@@ -93,3 +95,58 @@ async def send_payment_cross_chain(
         logging.error(error)
         raise
     # ANCHOR_END: cross-chain-send
+
+
+async def get_cross_chain_receive_routes(sdk: BreezSdk):
+    # ANCHOR: cross-chain-get-receive-routes
+    try:
+        routes = await sdk.get_cross_chain_routes(
+            filter=CrossChainRouteFilter.RECEIVE(contract_address=None)
+        )
+
+        for route in routes:
+            logging.debug(
+                f"Route via {route.provider}: {route.chain}/{route.asset} -> Spark"
+            )
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: cross-chain-get-receive-routes
+
+
+async def receive_payment_cross_chain(sdk: BreezSdk, route: CrossChainRoutePair):
+    # ANCHOR: cross-chain-receive
+    # amount is in source-asset base units
+    # (e.g. USDC base units when source is USDC)
+    amount = 1_000_000
+    # Optionally set the destination Spark-side asset. None = auto: active
+    # stable-balance token if the route supports it, otherwise BTC.
+    optional_destination = None
+    # Optionally set the maximum slippage in basis points (10 to 500)
+    optional_max_slippage_bps = 100
+    try:
+        request = ReceivePaymentRequest(
+            payment_method=ReceivePaymentMethod.CROSS_CHAIN(
+                route=route,
+                amount=amount,
+                destination=optional_destination,
+                max_slippage_bps=optional_max_slippage_bps,
+            )
+        )
+        response = await sdk.receive_payment(request=request)
+        deposit_address = response.payment_request
+        logging.debug(
+            f"Share this deposit address with the sender: {deposit_address}"
+        )
+        info = response.cross_chain_info
+        if info is not None:
+            logging.debug(f"Sender deposits: {info.deposit_amount}")
+            denom = "USDB" if info.token_identifier else "BTC"
+            logging.debug(
+                f"Receiver gets ~{info.expected_received_amount} {denom}"
+            )
+            logging.debug(f"Quote expires at: {info.expires_at}")
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: cross-chain-receive

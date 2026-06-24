@@ -97,3 +97,68 @@ func SendPaymentCrossChain(
 	// ANCHOR_END: cross-chain-send
 	return &response, nil
 }
+
+func GetCrossChainReceiveRoutes(sdk *breez_sdk_spark.BreezSdk) ([]breez_sdk_spark.CrossChainRoutePair, error) {
+	// ANCHOR: cross-chain-get-receive-routes
+	filter := breez_sdk_spark.CrossChainRouteFilterReceive{ContractAddress: nil}
+	routes, err := sdk.GetCrossChainRoutes(filter)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, route := range routes {
+		log.Printf(
+			"Route via %v: %s/%s -> Spark",
+			route.Provider, route.Chain, route.Asset,
+		)
+	}
+	// ANCHOR_END: cross-chain-get-receive-routes
+	return routes, nil
+}
+
+func ReceivePaymentCrossChain(
+	sdk *breez_sdk_spark.BreezSdk,
+	route breez_sdk_spark.CrossChainRoutePair,
+) (*breez_sdk_spark.ReceivePaymentResponse, error) {
+	// ANCHOR: cross-chain-receive
+	// amount is in source-asset base units
+	// (e.g. USDC base units when source is USDC)
+	amount := new(big.Int).SetInt64(1_000_000)
+	// Optionally set the destination Spark-side asset. nil = auto: active
+	// stable-balance token if the route supports it, otherwise BTC.
+	var optionalDestination *breez_sdk_spark.SparkAsset = nil
+	// Optionally set the maximum slippage in basis points (10 to 500)
+	optionalMaxSlippageBps := uint32(100)
+
+	request := breez_sdk_spark.ReceivePaymentRequest{
+		PaymentMethod: breez_sdk_spark.ReceivePaymentMethodCrossChain{
+			Route:          route,
+			Amount:         amount,
+			Destination:    optionalDestination,
+			MaxSlippageBps: &optionalMaxSlippageBps,
+		},
+	}
+	response, err := sdk.ReceivePayment(request)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf(
+		"Share this deposit address with the sender: %s",
+		response.PaymentRequest,
+	)
+	if info := response.CrossChainInfo; info != nil {
+		log.Printf("Sender deposits: %v", info.DepositAmount)
+		denom := "BTC"
+		if info.TokenIdentifier != nil {
+			denom = "USDB"
+		}
+		log.Printf(
+			"Receiver gets ~%v %s",
+			info.ExpectedReceivedAmount, denom,
+		)
+		log.Printf("Quote expires at: %d", info.ExpiresAt)
+	}
+	// ANCHOR_END: cross-chain-receive
+	return &response, nil
+}

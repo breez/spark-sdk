@@ -68,3 +68,44 @@ func sendPaymentCrossChain(sdk: BreezSdk, prepareResponse: PrepareSendPaymentRes
     print(payment)
     // ANCHOR_END: cross-chain-send
 }
+
+func getCrossChainReceiveRoutes(sdk: BreezSdk) async throws {
+    // ANCHOR: cross-chain-get-receive-routes
+    let routes = try await sdk.getCrossChainRoutes(
+        filter: .receive(contractAddress: nil))
+
+    for route in routes {
+        print("Route via \(route.provider): \(route.chain)/\(route.asset) -> Spark")
+    }
+    // ANCHOR_END: cross-chain-get-receive-routes
+}
+
+func receivePaymentCrossChain(sdk: BreezSdk, route: CrossChainRoutePair) async throws {
+    // ANCHOR: cross-chain-receive
+    // amount is in source-asset base units (e.g. USDC base units when source is USDC)
+    let amount = BInt(1_000_000)
+    // Optionally set the destination Spark-side asset. nil = auto: active
+    // stable-balance token if the route supports it, otherwise BTC.
+    let optionalDestination: SparkAsset? = nil
+    // Optionally set the maximum slippage in basis points (10 to 500)
+    let optionalMaxSlippageBps: UInt32? = 100
+
+    let response = try await sdk.receivePayment(
+        request: ReceivePaymentRequest(
+            paymentMethod: .crossChain(
+                route: route,
+                amount: amount,
+                destination: optionalDestination,
+                maxSlippageBps: optionalMaxSlippageBps
+            )
+        ))
+
+    print("Share this deposit address with the sender: \(response.paymentRequest)")
+    if let info = response.crossChainInfo {
+        let denom = info.tokenIdentifier != nil ? "USDB" : "BTC"
+        print("Sender deposits: \(info.depositAmount)")
+        print("Receiver gets ~\(info.expectedReceivedAmount) \(denom)")
+        print("Quote expires at: \(info.expiresAt)")
+    }
+    // ANCHOR_END: cross-chain-receive
+}

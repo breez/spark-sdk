@@ -85,3 +85,57 @@ async fn send_payment_cross_chain(
     // ANCHOR_END: cross-chain-send
     Ok(())
 }
+
+async fn get_cross_chain_receive_routes(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: cross-chain-get-receive-routes
+    let routes = sdk
+        .get_cross_chain_routes(&CrossChainRouteFilter::Receive {
+            contract_address: None,
+        })
+        .await?;
+
+    for route in &routes {
+        info!(
+            "Route via {:?}: {}/{} -> Spark",
+            route.provider, route.chain, route.asset
+        );
+    }
+    // ANCHOR_END: cross-chain-get-receive-routes
+    Ok(())
+}
+
+async fn receive_payment_cross_chain(sdk: &BreezSdk, route: CrossChainRoutePair) -> Result<()> {
+    // ANCHOR: cross-chain-receive
+    // amount is in source-asset base units (e.g. USDC base units when source is USDC)
+    let amount = 1_000_000u128;
+    // Optionally set the destination Spark-side asset. None = auto: active
+    // stable-balance token if the route supports it, otherwise BTC.
+    let optional_destination: Option<SparkAsset> = None;
+    // Optionally set the maximum slippage in basis points (10 to 500)
+    let optional_max_slippage_bps = Some(100);
+
+    let response = sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::CrossChain {
+                route,
+                amount,
+                destination: optional_destination,
+                max_slippage_bps: optional_max_slippage_bps,
+            },
+        })
+        .await?;
+
+    let deposit_address = response.payment_request;
+    info!("Share this deposit address with the sender: {deposit_address}");
+    if let Some(info) = response.cross_chain_info {
+        info!("Sender deposits: {}", info.deposit_amount);
+        let denom = if info.token_identifier.is_some() { "USDB" } else { "BTC" };
+        info!(
+            "Receiver gets ~{} {denom}",
+            info.expected_received_amount
+        );
+        info!("Quote expires at: {}", info.expires_at);
+    }
+    // ANCHOR_END: cross-chain-receive
+    Ok(())
+}
