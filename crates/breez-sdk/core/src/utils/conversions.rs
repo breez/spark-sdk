@@ -83,7 +83,7 @@ pub(crate) async fn resolve_and_insert_payment_metadata_for_transfer(
     spark_wallet: &SparkWallet,
     storage: &Arc<dyn Storage>,
     tx_inputs_are_ours: bool,
-) -> Result<String, SdkError> {
+) -> Result<(String, bool), SdkError> {
     let payment_id = match transfer {
         AssetTransfer::Spark(wallet_transfer) => wallet_transfer.id.to_string(),
         AssetTransfer::Token(token_tx) => {
@@ -106,7 +106,7 @@ pub(crate) async fn resolve_and_insert_payment_metadata_for_transfer(
     // Cache key is the sync-time identifier (`transfer.id()`), not the resolved
     // `payment_id`: token payment ids carry a `:vout` suffix that
     // `apply_payment_metadata` does not key on.
-    crate::utils::payments::insert_payment_metadata_with_cache_fallback(
+    let changed = crate::utils::payments::insert_payment_metadata_with_cache_fallback(
         storage,
         payment_id.clone(),
         &transfer.id(),
@@ -114,7 +114,40 @@ pub(crate) async fn resolve_and_insert_payment_metadata_for_transfer(
     )
     .await?;
 
-    Ok(payment_id)
+    Ok((payment_id, changed))
+}
+
+/// Mirror of [`resolve_and_insert_payment_metadata_for_transfer`] that also
+/// emits `PaymentUpdated` when the persisted row actually changed and the
+/// payment is terminal.
+pub(crate) async fn record_payment_metadata_update_for_transfer(
+    transfer: &AssetTransfer,
+    metadata: PaymentMetadata,
+    spark_wallet: &SparkWallet,
+    storage: &Arc<dyn Storage>,
+    tx_inputs_are_ours: bool,
+    event_emitter: &crate::EventEmitter,
+    emit_event: bool,
+) -> Result<(String, bool), SdkError> {
+    let (payment_id, changed) = resolve_and_insert_payment_metadata_for_transfer(
+        transfer,
+        metadata,
+        spark_wallet,
+        storage,
+        tx_inputs_are_ours,
+    )
+    .await?;
+
+    if !emit_event || !changed {
+        return Ok((payment_id, false));
+    }
+    let emitted = crate::utils::payments::emit_payment_updated_if_terminal(
+        storage,
+        event_emitter,
+        payment_id.clone(),
+    )
+    .await;
+    Ok((payment_id, emitted))
 }
 
 /// Extract `ConversionInfo` from whichever [`PaymentDetails`] variant carries

@@ -486,6 +486,7 @@ impl SdkBuilder {
             &signers.base,
             &lightning_sender,
             Arc::clone(&fiat_service),
+            Arc::clone(&event_emitter),
             shutdown_sender.subscribe(),
         )
         .await;
@@ -917,6 +918,7 @@ async fn build_cross_chain_context(
     signer: &Arc<dyn crate::signer::BreezSigner>,
     lightning_sender: &Arc<crate::sdk::LightningSender>,
     fiat_service: Arc<dyn breez_sdk_common::fiat::FiatService>,
+    event_emitter: Arc<EventEmitter>,
     shutdown_receiver: watch::Receiver<()>,
 ) -> crate::cross_chain::CrossChainContext {
     // Cache scoped to cross-chain: providers + dispatcher share one TTL window.
@@ -945,6 +947,7 @@ async fn build_cross_chain_context(
                 Arc::clone(spark_wallet),
                 Arc::clone(storage),
                 Arc::clone(&cached_fiat),
+                Arc::clone(&event_emitter),
                 shutdown_receiver,
             )),
         );
@@ -957,6 +960,7 @@ async fn build_cross_chain_context(
         Arc::clone(signer),
         cached_fiat,
         Arc::clone(lightning_sender),
+        event_emitter,
     )
     .await
     {

@@ -77,6 +77,9 @@ pub enum SdkEvent {
     PaymentFailed {
         payment: Payment,
     },
+    PaymentUpdated {
+        payment: Payment,
+    },
     AutoOptimization {
         optimization_event: AutoOptimizationEvent,
     },

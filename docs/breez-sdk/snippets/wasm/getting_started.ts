@@ -108,6 +108,13 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
           const failedPayment = event.payment
           break
         }
+        case 'paymentUpdated': {
+          // Metadata on an already-settled payment changed (e.g. cross-chain
+          // conversion info attached after the payment succeeded). Re-render
+          // the payment to surface the updated details.
+          const updatedPayment = event.payment
+          break
+        }
         case 'autoOptimization': {
           // An auto-optimization event occurred
           const optimizationEvent = event.optimizationEvent

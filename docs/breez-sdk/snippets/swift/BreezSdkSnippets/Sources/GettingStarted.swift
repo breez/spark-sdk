@@ -74,6 +74,11 @@ class SdkEventListener: EventListener {
         case .paymentFailed(let paymentFailed):
             // A payment failed
             let _ = paymentFailed
+        case .paymentUpdated(let payment):
+            // Metadata on an already-settled payment changed (e.g. cross-chain
+            // conversion info attached after the payment succeeded). Re-render
+            // the payment to surface the updated details.
+            let _ = payment
         case .autoOptimization(let optimizationEvent):
             // An auto-optimization event occurred
             let _ = optimizationEvent

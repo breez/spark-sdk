@@ -3084,6 +3084,83 @@ pub async fn test_payment_metadata_merge(storage: Box<dyn Storage>) {
     ));
 }
 
+/// `insert_payment_metadata` returns `true` when the persisted row mutates and
+/// `false` when the call is a no-op against the existing row. Storage backends
+/// implement the no-op check via pre-read + structural compare, so callers can
+/// gate event emission on the bool without firing duplicate `PaymentUpdated`
+/// events on idempotent monitor replays.
+pub async fn test_insert_payment_metadata_returns_false_for_noop(storage: Box<dyn Storage>) {
+    let payment_id = "noop_test_payment".to_string();
+
+    let payment = Payment {
+        id: payment_id.clone(),
+        payment_type: PaymentType::Send,
+        status: PaymentStatus::Completed,
+        amount: 1000,
+        fees: 10,
+        timestamp: 1_700_000_000,
+        method: PaymentMethod::Spark,
+        details: Some(PaymentDetails::Spark {
+            invoice_details: None,
+            htlc_details: None,
+            conversion_info: None,
+        }),
+        conversion_details: None,
+    };
+    storage.apply_payment_update(payment).await.unwrap();
+
+    let metadata = PaymentMetadata {
+        conversion_info: Some(crate::ConversionInfo::Amm {
+            pool_id: "pool_noop".to_string(),
+            conversion_id: "conv_noop".to_string(),
+            status: crate::ConversionStatus::Completed,
+            fee: Some(50),
+            purpose: None,
+            amount_adjustment: None,
+        }),
+        ..Default::default()
+    };
+
+    // First write into an empty row → true.
+    let changed = storage
+        .insert_payment_metadata(payment_id.clone(), metadata.clone())
+        .await
+        .unwrap();
+    assert!(changed, "first insert should report row changed");
+
+    // Identical re-write → false.
+    let changed = storage
+        .insert_payment_metadata(payment_id.clone(), metadata.clone())
+        .await
+        .unwrap();
+    assert!(!changed, "idempotent re-write should report no change");
+
+    // Flipping conversion_status (a previously-unset column) → true.
+    let metadata_flipped = PaymentMetadata {
+        conversion_status: Some(crate::ConversionStatus::Pending),
+        ..Default::default()
+    };
+    let changed = storage
+        .insert_payment_metadata(payment_id.clone(), metadata_flipped)
+        .await
+        .unwrap();
+    assert!(changed, "differing field should report row changed");
+
+    // And once more identical → false again.
+    let metadata_idempotent = PaymentMetadata {
+        conversion_status: Some(crate::ConversionStatus::Pending),
+        ..Default::default()
+    };
+    let changed = storage
+        .insert_payment_metadata(payment_id, metadata_idempotent)
+        .await
+        .unwrap();
+    assert!(
+        !changed,
+        "idempotent replay of flipped field should report no change"
+    );
+}
+
 #[allow(clippy::too_many_lines)]
 pub async fn test_lightning_htlc_details_and_status_filtering(storage: Box<dyn Storage>) {
     // Lightning payment with htlc_details WaitingForPreimage

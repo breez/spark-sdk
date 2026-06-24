@@ -30,10 +30,7 @@ use crate::{
     PaymentStatus, Storage,
     error::SdkError,
     sdk::LightningSender,
-    utils::{
-        payments::resolve_and_insert_payment_metadata,
-        polling::{PollSchedule, poll_until},
-    },
+    utils::polling::{PollSchedule, poll_until},
 };
 
 // Polling cadence for the outbound LN payment leg waiting for terminal status
@@ -53,6 +50,7 @@ pub(crate) struct BoltzService {
     /// by this provider so Boltz hold-invoice pays behave identically to
     /// direct LN sends.
     lightning_sender: Arc<LightningSender>,
+    event_emitter: Arc<crate::EventEmitter>,
 }
 
 impl BoltzService {
@@ -65,6 +63,7 @@ impl BoltzService {
         storage: Arc<dyn Storage>,
         fiat_service: Arc<dyn FiatService>,
         lightning_sender: Arc<LightningSender>,
+        event_emitter: Arc<crate::EventEmitter>,
     ) -> Self {
         info!("Boltz service initialized");
         Self {
@@ -73,6 +72,7 @@ impl BoltzService {
             storage,
             fiat_service,
             lightning_sender,
+            event_emitter,
         }
     }
 
@@ -100,6 +100,7 @@ impl BoltzService {
         signer: Arc<dyn crate::signer::BreezSigner>,
         fiat_service: Arc<dyn FiatService>,
         lightning_sender: Arc<LightningSender>,
+        event_emitter: Arc<crate::EventEmitter>,
     ) -> Result<Option<Arc<dyn CrossChainService>>, SdkError> {
         let Some(client_config) = Self::default_client_config(network) else {
             return Ok(None);
@@ -123,6 +124,7 @@ impl BoltzService {
 
         let listener = Box::new(super::boltz_event_listener::BoltzSdkEventListener::new(
             Arc::clone(&storage),
+            Arc::clone(&event_emitter),
         ));
         client.add_event_listener(listener).await;
 
@@ -137,9 +139,14 @@ impl BoltzService {
         platform_utils::tokio::spawn({
             let client = Arc::clone(&client);
             let storage = Arc::clone(&storage);
+            let event_emitter = Arc::clone(&event_emitter);
             async move {
-                super::boltz_event_listener::reconcile_pending_boltz_conversions(&client, &storage)
-                    .await;
+                super::boltz_event_listener::reconcile_pending_boltz_conversions(
+                    &client,
+                    &storage,
+                    &event_emitter,
+                )
+                .await;
             }
         });
 
@@ -149,6 +156,7 @@ impl BoltzService {
             storage,
             fiat_service,
             lightning_sender,
+            event_emitter,
         ))))
     }
 
@@ -680,18 +688,21 @@ impl CrossChainService for BoltzService {
             ..Default::default()
         };
 
-        let payment_id = resolve_and_insert_payment_metadata(
-            &spark_payment_id,
-            metadata,
-            &self.spark_wallet,
-            &self.storage,
-            true,
-        )
-        .await
-        .unwrap_or_else(|e| {
-            error!("Failed to persist Boltz metadata for payment {spark_payment_id}: {e:?}");
-            spark_payment_id.clone()
-        });
+        let (payment_id, _emitted) =
+            crate::utils::payments::resolve_record_payment_metadata_update(
+                &spark_payment_id,
+                metadata,
+                &self.spark_wallet,
+                &self.storage,
+                true,
+                &self.event_emitter,
+                true,
+            )
+            .await
+            .unwrap_or_else(|e| {
+                error!("Failed to persist Boltz metadata for payment {spark_payment_id}: {e:?}");
+                (spark_payment_id.clone(), false)
+            });
 
         // Read-after-write reconcile. The boltz-client WS task drives the swap
         // independently and may have reached a terminal state before (or
@@ -708,19 +719,19 @@ impl CrossChainService for BoltzService {
                 if let Some(updated) =
                     super::boltz_event_listener::boltz_metadata_from_swap(conversion_info, &swap)
                 {
-                    match self
-                        .storage
-                        .insert_payment_metadata(payment_id.clone(), updated)
-                        .await
-                    {
-                        Ok(()) => info!(
-                            "Boltz: swap {swap_id} already terminal at send; applied {:?} to payment {payment_id}",
-                            swap.status
-                        ),
-                        Err(e) => error!(
-                            "Boltz: failed to persist send-time terminal update for {payment_id}: {e:?}"
-                        ),
-                    }
+                    crate::utils::payments::record_payment_metadata_update(
+                        &self.storage,
+                        &self.event_emitter,
+                        payment_id.clone(),
+                        &payment_id,
+                        updated,
+                        true,
+                    )
+                    .await;
+                    info!(
+                        "Boltz: swap {swap_id} already terminal at send; applied {:?} to payment {payment_id}",
+                        swap.status
+                    );
                 }
             }
             Ok(_) => {}

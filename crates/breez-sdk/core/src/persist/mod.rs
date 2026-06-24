@@ -409,12 +409,16 @@ pub trait Storage: Send + Sync {
     ///
     /// # Returns
     ///
-    /// Success or a `StorageError`
+    /// `true` if the persisted row actually changed (an upsert that mutated at
+    /// least one column), `false` if the call was a no-op against the existing
+    /// row, or a `StorageError`. Implementations should compare incoming
+    /// metadata against the merged result before persisting (the
+    /// `COALESCE`-based upsert can otherwise report rows-affected on a no-op).
     async fn insert_payment_metadata(
         &self,
         payment_id: String,
         metadata: PaymentMetadata,
-    ) -> Result<(), StorageError>;
+    ) -> Result<bool, StorageError>;
 
     /// Gets a payment by its ID
     /// # Arguments

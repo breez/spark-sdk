@@ -29,6 +29,7 @@ use tracing::warn;
 use super::{Payment, Storage, StorageError};
 
 const DEFAULT_DB_FILENAME: &str = "storage.sql";
+
 /// SQLite-based storage implementation
 pub struct SqliteStorage {
     db_dir: PathBuf,
@@ -812,10 +813,35 @@ impl Storage for SqliteStorage {
         &self,
         payment_id: String,
         metadata: PaymentMetadata,
-    ) -> Result<(), StorageError> {
+    ) -> Result<bool, StorageError> {
         let connection = self.get_connection()?;
 
-        connection.execute(
+        let parent_payment_id = metadata.parent_payment_id.clone();
+        let lnurl_pay_info = metadata
+            .lnurl_pay_info
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+        let lnurl_withdraw_info = metadata
+            .lnurl_withdraw_info
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+        let lnurl_description = metadata.lnurl_description.clone();
+        let conversion_info = metadata
+            .conversion_info
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+        let conversion_status = metadata
+            .conversion_status
+            .as_ref()
+            .map(std::string::ToString::to_string);
+
+        // The `WHERE` arm on `DO UPDATE` skips the write when every column
+        // the caller is trying to set already matches the stored value, so
+        // `Connection::execute` returns 0 for a no-op replay.
+        let changed = connection.execute(
             "INSERT INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
              VALUES (?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(payment_id) DO UPDATE SET
@@ -824,19 +850,25 @@ impl Storage for SqliteStorage {
                 lnurl_withdraw_info = COALESCE(excluded.lnurl_withdraw_info, lnurl_withdraw_info),
                 lnurl_description = COALESCE(excluded.lnurl_description, lnurl_description),
                 conversion_info = COALESCE(excluded.conversion_info, conversion_info),
-                conversion_status = COALESCE(excluded.conversion_status, conversion_status)",
+                conversion_status = COALESCE(excluded.conversion_status, conversion_status)
+             WHERE (excluded.parent_payment_id IS NOT NULL AND excluded.parent_payment_id IS NOT parent_payment_id)
+                OR (excluded.lnurl_pay_info IS NOT NULL AND excluded.lnurl_pay_info IS NOT lnurl_pay_info)
+                OR (excluded.lnurl_withdraw_info IS NOT NULL AND excluded.lnurl_withdraw_info IS NOT lnurl_withdraw_info)
+                OR (excluded.lnurl_description IS NOT NULL AND excluded.lnurl_description IS NOT lnurl_description)
+                OR (excluded.conversion_info IS NOT NULL AND excluded.conversion_info IS NOT conversion_info)
+                OR (excluded.conversion_status IS NOT NULL AND excluded.conversion_status IS NOT conversion_status)",
             params![
                 payment_id,
-                metadata.parent_payment_id,
-                metadata.lnurl_pay_info,
-                metadata.lnurl_withdraw_info,
-                metadata.lnurl_description,
-                metadata.conversion_info.as_ref().map(serde_json::to_string).transpose()?,
-                metadata.conversion_status.as_ref().map(std::string::ToString::to_string),
+                parent_payment_id,
+                lnurl_pay_info,
+                lnurl_withdraw_info,
+                lnurl_description,
+                conversion_info,
+                conversion_status,
             ],
         )?;
 
-        Ok(())
+        Ok(changed > 0)
     }
 
     async fn set_cached_item(&self, key: String, value: String) -> Result<(), StorageError> {
@@ -2061,6 +2093,17 @@ mod tests {
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_payment_metadata_merge(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_insert_payment_metadata_returns_false_for_noop() {
+        let temp_dir = create_temp_dir("sqlite_payment_metadata_noop");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        crate::persist::tests::test_insert_payment_metadata_returns_false_for_noop(Box::new(
+            storage,
+        ))
+        .await;
     }
 
     #[tokio::test]

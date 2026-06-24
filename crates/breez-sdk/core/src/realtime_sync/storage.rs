@@ -537,7 +537,7 @@ impl Storage for SyncedStorage {
         &self,
         payment_id: String,
         metadata: PaymentMetadata,
-    ) -> Result<(), StorageError> {
+    ) -> Result<bool, StorageError> {
         // Set the outgoing record for sync before updating local storage.
         self.sync_service
             .set_outgoing_record(&RecordChangeRequest {

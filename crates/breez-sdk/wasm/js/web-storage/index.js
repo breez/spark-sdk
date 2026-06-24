@@ -1342,33 +1342,48 @@ class IndexedDBStorage {
     }
 
     return new Promise((resolve, reject) => {
+      // The get and put share a single readwrite transaction so the no-op
+      // compare runs against a snapshot that cannot change beneath us.
       const transaction = this.db.transaction("payment_metadata", "readwrite");
       const store = transaction.objectStore("payment_metadata");
 
       // First get existing record to merge with
       const getRequest = store.get(paymentId);
       getRequest.onsuccess = () => {
-        const existing = getRequest.result || {};
+        const existing = getRequest.result || null;
 
         // Use COALESCE-like behavior: new value if non-null, otherwise keep existing
         const metadataToStore = {
           paymentId,
-          parentPaymentId: metadata.parentPaymentId ?? existing.parentPaymentId ?? null,
+          parentPaymentId: metadata.parentPaymentId ?? existing?.parentPaymentId ?? null,
           lnurlPayInfo: metadata.lnurlPayInfo
             ? JSON.stringify(metadata.lnurlPayInfo)
-            : existing.lnurlPayInfo ?? null,
+            : existing?.lnurlPayInfo ?? null,
           lnurlWithdrawInfo: metadata.lnurlWithdrawInfo
             ? JSON.stringify(metadata.lnurlWithdrawInfo)
-            : existing.lnurlWithdrawInfo ?? null,
-          lnurlDescription: metadata.lnurlDescription ?? existing.lnurlDescription ?? null,
+            : existing?.lnurlWithdrawInfo ?? null,
+          lnurlDescription: metadata.lnurlDescription ?? existing?.lnurlDescription ?? null,
           conversionInfo: metadata.conversionInfo
             ? JSON.stringify(metadata.conversionInfo)
-            : existing.conversionInfo ?? null,
-          conversionStatus: metadata.conversionStatus ?? existing.conversionStatus ?? null,
+            : existing?.conversionInfo ?? null,
+          conversionStatus: metadata.conversionStatus ?? existing?.conversionStatus ?? null,
         };
 
+        if (
+          existing &&
+          (existing.parentPaymentId ?? null) === metadataToStore.parentPaymentId &&
+          (existing.lnurlPayInfo ?? null) === metadataToStore.lnurlPayInfo &&
+          (existing.lnurlWithdrawInfo ?? null) === metadataToStore.lnurlWithdrawInfo &&
+          (existing.lnurlDescription ?? null) === metadataToStore.lnurlDescription &&
+          (existing.conversionInfo ?? null) === metadataToStore.conversionInfo &&
+          (existing.conversionStatus ?? null) === metadataToStore.conversionStatus
+        ) {
+          resolve(false);
+          return;
+        }
+
         const putRequest = store.put(metadataToStore);
-        putRequest.onsuccess = () => resolve();
+        putRequest.onsuccess = () => resolve(true);
         putRequest.onerror = () => {
           reject(
             new StorageError(

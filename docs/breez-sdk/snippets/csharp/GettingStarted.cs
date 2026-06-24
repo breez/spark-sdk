@@ -94,6 +94,13 @@ namespace BreezSdkSnippets
                         var failedPayment = paymentFailedEvent.payment;
                         break;
 
+                    case SdkEvent.PaymentUpdated paymentUpdatedEvent:
+                        // Metadata on an already-settled payment changed (e.g. cross-chain
+                        // conversion info attached after the payment succeeded). Re-render
+                        // the payment to surface the updated details.
+                        var updatedPayment = paymentUpdatedEvent.payment;
+                        break;
+
                     case SdkEvent.AutoOptimization optimizationEvent:
                         // An auto-optimization event occurred
                         var optimization = optimizationEvent.optimizationEvent;
