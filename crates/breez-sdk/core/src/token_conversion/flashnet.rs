@@ -20,6 +20,7 @@ use crate::{
         payments::{
             fetch_and_process_payment, insert_payment_metadata_with_cache_fallback,
             insert_payment_with_metadata, resolve_and_insert_payment_metadata, resolve_payment_id,
+            resolve_record_payment_metadata_update,
         },
         polling::{PollSchedule, poll_until},
         time::now_secs,
@@ -916,6 +917,7 @@ impl FlashnetTokenConverter {
         sent_identifier: &str,
         swap: &Swap,
         purpose: &ConversionPurpose,
+        event_emitter: &Arc<crate::EventEmitter>,
     ) -> Result<TokenConversionResponse, ConversionError> {
         let info = ConversionInfo::Amm {
             // The pool that ran it, which need not be the one just selected.
@@ -931,7 +933,7 @@ impl FlashnetTokenConverter {
             degradation: None,
         };
         let (sent, received) = split_legs(&info, swap.asset_in_address == BTC_ASSET_ADDRESS);
-        let sent_payment_id = resolve_and_insert_payment_metadata(
+        let sent_payment_id = resolve_record_payment_metadata_update(
             sent_identifier,
             PaymentMetadata {
                 conversion_info: Some(sent),
@@ -940,10 +942,11 @@ impl FlashnetTokenConverter {
             &self.spark_wallet,
             &self.storage,
             true,
+            event_emitter,
         )
         .await
         .map_err(ConversionError::Sdk)?;
-        let received_payment_id = resolve_and_insert_payment_metadata(
+        let received_payment_id = resolve_record_payment_metadata_update(
             &swap.outbound_transfer_id,
             PaymentMetadata {
                 conversion_info: Some(received),
@@ -952,6 +955,7 @@ impl FlashnetTokenConverter {
             &self.spark_wallet,
             &self.storage,
             false,
+            event_emitter,
         )
         .await
         .map_err(ConversionError::Sdk)?;
@@ -976,7 +980,7 @@ impl FlashnetTokenConverter {
     /// Returns:
     /// * The sent payment id of the conversion.
     /// * The received payment id of the conversion.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     async fn update_payment_conversion_info(
         &self,
         pool_id: &PublicKey,
@@ -988,6 +992,7 @@ impl FlashnetTokenConverter {
         purpose: &ConversionPurpose,
         amount_adjustment: Option<AmountAdjustmentReason>,
         degradation: Option<SwapDegradation>,
+        event_emitter: &Arc<crate::EventEmitter>,
     ) -> Result<(String, Option<String>), ConversionError> {
         let (sent_fee, received_fee) = match &fee_split {
             Some(FeeSplit::Sent(fee)) => (Some(*fee), None),
@@ -1013,28 +1018,31 @@ impl FlashnetTokenConverter {
         // helper because the SDK never holds those transfers in hand
         // (they're produced by the pool, not by us).
         let sent_fut = async {
-            crate::utils::conversions::resolve_and_insert_payment_metadata_for_transfer(
-                outbound_asset_transfer,
-                PaymentMetadata {
-                    conversion_info: Some(ConversionInfo::Amm {
-                        pool_id: pool_id_str.clone(),
-                        conversion_id: conversion_id.clone(),
-                        status: status.clone(),
-                        fee: sent_fee,
-                        purpose: Some(purpose.clone()),
-                        amount_adjustment: amount_adjustment.clone(),
-                        // On the sent leg, which exists even when the response
-                        // named no delivery.
-                        degradation,
-                    }),
-                    ..Default::default()
-                },
-                &self.spark_wallet,
-                &self.storage,
-                true,
-            )
-            .await
-            .map_err(ConversionError::Sdk)
+            let payment_id =
+                crate::utils::conversions::record_payment_metadata_update_for_transfer(
+                    outbound_asset_transfer,
+                    PaymentMetadata {
+                        conversion_info: Some(ConversionInfo::Amm {
+                            pool_id: pool_id_str.clone(),
+                            conversion_id: conversion_id.clone(),
+                            status: status.clone(),
+                            fee: sent_fee,
+                            purpose: Some(purpose.clone()),
+                            amount_adjustment: amount_adjustment.clone(),
+                            // On the sent leg, which exists even when the response
+                            // named no delivery.
+                            degradation,
+                        }),
+                        ..Default::default()
+                    },
+                    &self.spark_wallet,
+                    &self.storage,
+                    true,
+                    event_emitter,
+                )
+                .await
+                .map_err(ConversionError::Sdk)?;
+            Ok::<_, ConversionError>(payment_id)
         };
 
         // Only a completed conversion has a received leg. `RefundNeeded` on an
@@ -1042,7 +1050,7 @@ impl FlashnetTokenConverter {
         let received_fut = async {
             if let (Some(identifier), ConversionStatus::Completed) = (&inbound_identifier, &status)
             {
-                let payment_id = crate::utils::payments::resolve_and_insert_payment_metadata(
+                let payment_id = crate::utils::payments::resolve_record_payment_metadata_update(
                     identifier,
                     PaymentMetadata {
                         conversion_info: Some(ConversionInfo::Amm {
@@ -1059,6 +1067,7 @@ impl FlashnetTokenConverter {
                     &self.spark_wallet,
                     &self.storage,
                     false,
+                    event_emitter,
                 )
                 .await
                 .map_err(ConversionError::Sdk)?;
@@ -1082,12 +1091,13 @@ impl FlashnetTokenConverter {
                     }),
                     ..Default::default()
                 };
-                crate::utils::payments::resolve_and_insert_payment_metadata(
+                crate::utils::payments::resolve_record_payment_metadata_update(
                     identifier,
                     metadata,
                     &self.spark_wallet,
                     &self.storage,
                     false,
+                    event_emitter,
                 )
                 .await
                 .map_err(ConversionError::Sdk)?;
@@ -1385,7 +1395,7 @@ impl TokenConverter for FlashnetTokenConverter {
                     swap.pool_lp_public_key, swap.amount_out, swap.outbound_transfer_id
                 );
                 return self
-                    .record_completed_legs(&sent_identifier, &swap, purpose)
+                    .record_completed_legs(&sent_identifier, &swap, purpose, &event_emitter)
                     .await;
             }
         }
@@ -1459,6 +1469,7 @@ impl TokenConverter for FlashnetTokenConverter {
                             }
                             _ => None,
                         },
+                        &event_emitter,
                     ))
                     .await?;
 
@@ -1514,6 +1525,7 @@ impl TokenConverter for FlashnetTokenConverter {
                         amount_adjustment.clone(),
                         // The listing states that a swap ran, not how it went.
                         None,
+                        &event_emitter,
                     ),
                 )
                 .await;

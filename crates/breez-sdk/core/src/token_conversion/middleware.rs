@@ -18,6 +18,7 @@ impl EventMiddleware for TokenConversionMiddleware {
             SdkEvent::PaymentSucceeded { payment }
             | SdkEvent::PaymentPending { payment }
             | SdkEvent::PaymentFailed { payment }
+            | SdkEvent::PaymentUpdated { payment }
                 if payment.is_conversion_child() =>
             {
                 info!(

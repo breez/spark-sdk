@@ -10,6 +10,7 @@ The SDK emits several events to provide the application with an up-to-date state
 | {{#enum SdkEvent::PaymentSucceeded}} | {{#name Payment}} | A payment completed. The SDK refreshes its cached balance before emitting this, so {{#name get_info}} returns the new value. |
 | {{#enum SdkEvent::PaymentPending}} | {{#name Payment}} | A payment is in flight. The same payment is emitted again as succeeded or failed once it settles. |
 | {{#enum SdkEvent::PaymentFailed}} | {{#name Payment}} | A payment failed. Its {{#name details}} carry the method-specific context to show the user. |
+| {{#enum SdkEvent::PaymentUpdated}} | {{#name Payment}} | Metadata on an already-settled payment changed, most often when cross-chain conversion details attach after the transfer completed. The status itself did not change. |
 | {{#enum SdkEvent::NewDeposits}} | {{#name DepositInfo}} list | On-chain deposits were detected. Only deposits whose {{#name is_mature}} is true can be claimed, so show the rest as pending. |
 | {{#enum SdkEvent::ClaimedDeposits}} | {{#name DepositInfo}} list | Deposits were claimed into the wallet. The matching payment is emitted separately as {{#enum SdkEvent::PaymentSucceeded}}. |
 | {{#enum SdkEvent::UnclaimedDeposits}} | {{#name DepositInfo}} list | The SDK could not claim these. Read {{#name claim_error}} for the reason, then claim manually or refund. See [claiming on-chain deposits](onchain_claims.md). |

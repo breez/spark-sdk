@@ -382,9 +382,20 @@ impl SyncedRecordHandler {
         )
         .map_err(|e| StorageError::Serialization(e.to_string()))?;
 
-        self.storage
-            .insert_payment_metadata(data_id, metadata)
-            .await?;
+        // Written to the raw inner storage, so this is the only place the
+        // receiving device learns the metadata changed.
+        if self
+            .storage
+            .insert_payment_metadata(data_id.clone(), metadata)
+            .await?
+        {
+            crate::utils::payments::emit_payment_updated_if_terminal(
+                &self.storage,
+                &self.event_emitter,
+                data_id,
+            )
+            .await;
+        }
         Ok(())
     }
 
@@ -538,7 +549,7 @@ impl Storage for SyncedStorage {
         &self,
         payment_id: String,
         metadata: PaymentMetadata,
-    ) -> Result<(), StorageError> {
+    ) -> Result<bool, StorageError> {
         // Set the outgoing record for sync before updating local storage.
         self.sync_service
             .set_outgoing_record(&RecordChangeRequest {
@@ -769,8 +780,28 @@ mod tests {
     }
 
     fn create_test_record_handler(storage: Arc<dyn Storage>) -> SyncedRecordHandler {
+        create_test_record_handler_with_emitter(storage).0
+    }
+
+    fn create_test_record_handler_with_emitter(
+        storage: Arc<dyn Storage>,
+    ) -> (SyncedRecordHandler, Arc<EventEmitter>) {
         let event_emitter = Arc::new(EventEmitter::new(true));
-        SyncedRecordHandler::new(storage, event_emitter, None)
+        (
+            SyncedRecordHandler::new(storage, Arc::clone(&event_emitter), None),
+            event_emitter,
+        )
+    }
+
+    struct RecordingListener {
+        events: Arc<tokio::sync::Mutex<Vec<crate::SdkEvent>>>,
+    }
+
+    #[macros::async_trait]
+    impl crate::EventListener for RecordingListener {
+        async fn on_event(&self, event: crate::SdkEvent) {
+            self.events.lock().await.push(event);
+        }
     }
 
     fn make_incoming_change(
@@ -1351,5 +1382,66 @@ mod tests {
         cache.delete_lightning_address(true).await.unwrap();
 
         assert_eq!(lightning_address_outgoing_count(&storage).await, 0);
+    }
+
+    /// Metadata synced from another device lands on a payment that already
+    /// settled here, so this device surfaces it as `PaymentUpdated`. A replay
+    /// of the same record writes nothing and stays silent.
+    #[tokio::test]
+    async fn test_incoming_payment_metadata_emits_payment_updated_once() {
+        let temp_dir = create_temp_dir("incoming_pm_emits_updated");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let (handler, event_emitter) =
+            create_test_record_handler_with_emitter(Arc::clone(&storage));
+
+        let events = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        event_emitter
+            .add_external_listener(Box::new(RecordingListener {
+                events: Arc::clone(&events),
+            }))
+            .await;
+
+        storage
+            .apply_payment_update(make_test_lightning_payment("synced-pay"))
+            .await
+            .unwrap();
+
+        let mut data = HashMap::new();
+        data.insert(
+            "lnurl_pay_info".to_string(),
+            serde_json::json!({"ln_address": "synced@example.com"}),
+        );
+        let change = make_incoming_change(
+            "PaymentMetadata",
+            "synced-pay",
+            RecordType::PaymentMetadata.schema_version(),
+            data.clone(),
+        );
+        let _ = handler.handle_incoming_change(change).await.unwrap();
+
+        {
+            let seen = events.lock().await;
+            assert_eq!(seen.len(), 1, "expected exactly one event, got {seen:?}");
+            match &seen[0] {
+                crate::SdkEvent::PaymentUpdated { payment } => {
+                    assert_eq!(payment.id, "synced-pay");
+                }
+                other => panic!("expected PaymentUpdated, got {other:?}"),
+            }
+        }
+
+        // Replaying the same record is a no-op write, so nothing is emitted.
+        let replay = make_incoming_change(
+            "PaymentMetadata",
+            "synced-pay",
+            RecordType::PaymentMetadata.schema_version(),
+            data,
+        );
+        let _ = handler.handle_incoming_change(replay).await.unwrap();
+        assert_eq!(
+            events.lock().await.len(),
+            1,
+            "replay of an identical record must not re-emit"
+        );
     }
 }
