@@ -272,11 +272,11 @@ impl PasskeyClient {
     /// register path; every other error (`Cancel`, `Timeout`, ...) propagates
     /// unchanged.
     ///
-    /// Mobile-only: meant for iOS 18+ / Android 9+ where
-    /// `preferImmediatelyAvailableCredentials` is honored. The web
-    /// equivalent (`mediation: 'immediate'`) is not yet stable
-    /// cross-browser, so this is not surfaced on WASM; web hosts call
-    /// [`Self::sign_in`] and catch `CredentialNotFound` themselves.
+    /// Not surfaced on WASM: web hosts drive the same flow via
+    /// [`Self::sign_in`] with `prefer_immediately_available_credentials =
+    /// true` and catch `CredentialNotFound`. The web provider maps the flag
+    /// to `mediation: 'immediate'` where `getClientCapabilities().immediateGet`
+    /// advertises it, falling back to the standard picker elsewhere.
     pub async fn connect_with_passkey(
         &self,
         request: ConnectWithPasskeyRequest,
