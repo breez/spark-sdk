@@ -47,27 +47,6 @@ function randomBytes(length) {
 }
 
 /**
- * Whether this browser honors WebAuthn immediate UI mode
- * (`uiMode: 'immediate'`), probed via `getClientCapabilities().immediateGet`.
- * The gate is mandatory: immediate mode is discoverable-only and fast-fails
- * with no UI, so it must not run where unsupported. Uncached: the probe is
- * cheap and runs at most once per assertion.
- * @returns {Promise<boolean>}
- */
-async function supportsImmediateMediation() {
-    try {
-        if (typeof PublicKeyCredential === 'undefined'
-            || typeof PublicKeyCredential.getClientCapabilities !== 'function') {
-            return false;
-        }
-        const caps = await PublicKeyCredential.getClientCapabilities();
-        return caps?.immediateGet === true;
-    } catch {
-        return false;
-    }
-}
-
-/**
  * Extract AAGUID + BE flag from a create response via WebAuthn L2
  * `getAuthenticatorData()`. authData layout once the AT flag is set:
  * byte 32 = flags (BE=bit3, AT=bit6), bytes 37 to 53 = AAGUID.
@@ -308,6 +287,28 @@ export class PasskeyProvider {
     }
 
     /**
+     * Whether the silent single-CTA flow works in this browser: WebAuthn
+     * immediate UI mode (`uiMode: 'immediate'`), probed via
+     * `getClientCapabilities().immediateGet`. The SDK surfaces this on
+     * `checkAvailability().immediateMediationSupported`; hosts gate single-
+     * vs two-button onboarding on it.
+     *
+     * @returns {Promise<boolean>}
+     */
+    async supportsImmediateMediation() {
+        try {
+            if (typeof PublicKeyCredential === 'undefined'
+                || typeof PublicKeyCredential.getClientCapabilities !== 'function') {
+                return false;
+            }
+            const caps = await PublicKeyCredential.getClientCapabilities();
+            return caps?.immediateGet === true;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
      * Check whether the configured rpId is a valid WebAuthn scope for
      * the current origin (must be a registrable suffix of
      * `window.location.hostname`, or equal to it). Mirrors the browser's
@@ -469,7 +470,7 @@ export class PasskeyProvider {
         // the fast NotAllowedError it raises on no-credential is classified as
         // CredentialNotFound below.
         if (options.preferImmediatelyAvailableCredentials && allowList.length === 0) {
-            if (await supportsImmediateMediation()) {
+            if (await this.supportsImmediateMediation()) {
                 requestOptions.uiMode = 'immediate';
             } else {
                 // Surface the fallback: silently using standard mediation

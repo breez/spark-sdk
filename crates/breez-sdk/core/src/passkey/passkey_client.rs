@@ -21,7 +21,12 @@ use super::{LabelStore, LabelStoreBuilder};
 pub enum PasskeyAvailability {
     /// PRF is supported and the platform's domain-association check
     /// (when present) passed. Safe to proceed with register / sign-in.
-    Available,
+    ///
+    /// `immediate_mediation_supported` is whether the silent single-CTA
+    /// flow ([`PasskeyClient::connect_with_passkey`]) works here: `true`
+    /// on native, and on web only where the browser advertises immediate
+    /// mediation. Web hosts pick single- vs two-button onboarding on it.
+    Available { immediate_mediation_supported: bool },
     /// The authenticator does not implement the `WebAuthn` PRF
     /// extension. Hosts gate the passkey UX path off this value.
     PrfUnsupported,
@@ -140,11 +145,18 @@ pub struct ConnectWithPasskeyRequest {
 /// registered, when the provider surfaces it. The register path also
 /// populates the attestation fields (`aaguid`, `backup_eligible`); the
 /// sign-in path sets only `credential_id`.
+///
+/// `labels` is the user's discovered label set when `request.label` was
+/// `None` (the returning-user multi-wallet case): `wallet` is the default
+/// label, and a host showing more than one entry lets the user pick
+/// another via [`PasskeyClient::sign_in`]. Empty on the register path (a
+/// new user has no other labels) and when a specific label was requested.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConnectWithPasskeyResponse {
     pub wallet: Wallet,
     pub credential: Option<PasskeyCredential>,
+    pub labels: Vec<String>,
 }
 
 /// High-level orchestration over a [`PrfProvider`] and the internal
@@ -262,8 +274,7 @@ impl PasskeyClient {
     }
 
     /// Single-CTA onboarding: silent sign-in, falling through to
-    /// registration when no credential exists on the device. The returned
-    /// [`ConnectFlow`] tells the caller which path ran.
+    /// registration when no credential exists on the device.
     ///
     /// The silent sign-in pins `prefer_immediately_available_credentials =
     /// true` regardless of [`SignInRequest`]: the fallback depends on the OS
@@ -272,11 +283,12 @@ impl PasskeyClient {
     /// register path; every other error (`Cancel`, `Timeout`, ...) propagates
     /// unchanged.
     ///
-    /// Not surfaced on WASM: web hosts drive the same flow via
-    /// [`Self::sign_in`] with `prefer_immediately_available_credentials =
-    /// true` and catch `CredentialNotFound`. The web provider maps the flag
-    /// to `uiMode: 'immediate'` where `getClientCapabilities().immediateGet`
-    /// advertises it, falling back to the standard picker elsewhere.
+    /// On WASM the silent sign-in maps to `WebAuthn` `uiMode: 'immediate'`
+    /// where the browser advertises it. Web hosts gate on
+    /// `immediate_mediation_supported` from [`Self::check_availability`]:
+    /// without it the probe shows the standard picker and a dismiss is a
+    /// cancel, not `CredentialNotFound`, so it never reaches register.
+    /// Present an explicit create / sign-in choice there instead.
     pub async fn connect_with_passkey(
         &self,
         request: ConnectWithPasskeyRequest,
@@ -293,6 +305,9 @@ impl PasskeyClient {
             Ok(response) => Ok(ConnectWithPasskeyResponse {
                 wallet: response.wallet,
                 credential: response.credential,
+                // Discovery labels (populated when `label` was None) so a
+                // returning multi-wallet user can be offered a picker.
+                labels: response.labels,
             }),
             Err(PasskeyError::Prf(PrfProviderError::CredentialNotFound(_))) => {
                 let register_response = self
@@ -304,6 +319,8 @@ impl PasskeyClient {
                 Ok(ConnectWithPasskeyResponse {
                     wallet: register_response.wallet,
                     credential: register_response.credential,
+                    // New user: nothing to pick from.
+                    labels: Vec::new(),
                 })
             }
             Err(e) => Err(e),
