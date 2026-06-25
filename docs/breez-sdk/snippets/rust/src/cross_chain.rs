@@ -125,16 +125,16 @@ async fn receive_payment_cross_chain(sdk: &BreezSdk, route: CrossChainRoutePair)
         })
         .await?;
 
-    let deposit_address = response.payment_request;
-    info!("Share this deposit address with the sender: {deposit_address}");
+    info!("Payment request: {}", response.payment_request);
     if let Some(info) = response.cross_chain_info {
-        info!("Sender deposits: {}", info.deposit_amount);
+        info!("Deposit address: {}", info.deposit_address);
+        info!("Deposit amount: {}", info.deposit_amount);
         let denom = if info.token_identifier.is_some() { "USDB" } else { "BTC" };
         info!(
-            "Receiver gets ~{} {denom}",
+            "Expected received: {} {denom}",
             info.expected_received_amount
         );
-        info!("Quote expires at: {}", info.expires_at);
+        info!("Expires at: {}", info.expires_at);
     }
     // ANCHOR_END: cross-chain-receive
     Ok(())

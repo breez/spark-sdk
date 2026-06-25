@@ -65,7 +65,7 @@ Call {{#name get_cross_chain_routes}} with {{#enum CrossChainRouteFilter::Receiv
 
 Build {{#enum ReceivePaymentMethod::CrossChain}} with the chosen route and an `amount` denominated in the source-asset base units (e.g. USDC base units when the source is USDC). The optional {{#name destination}} picks which Spark-side asset the receiver wants delivered: when unset, the SDK auto-picks the wallet's active stable-balance token if the route supports it, otherwise BTC. An optional {{#name max_slippage_bps}} accepts 10 to 500.
 
-The response carries the provider-controlled deposit address as {{#name payment_request}} (share it with the sender) and a {{#name cross_chain_info}} block with the deposit amount, expected receive amount, destination denomination, and quote {{#name expires_at}}. The receiver doesn't pay a fee directly — the sender's deposit covers it.
+The {{#name payment_request}} field carries an EIP-681 URI for EVM routes and the bare deposit address for Solana and Tron. The {{#name cross_chain_info}} block surfaces the bare deposit address, deposit amount, expected receive amount, destination denomination, and quote {{#name expires_at}}. The receiver pays no fee; the sender's deposit covers it.
 
 {{#tabs cross_chain:cross-chain-receive}}
 

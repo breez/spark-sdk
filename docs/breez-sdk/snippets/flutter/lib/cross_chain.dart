@@ -110,15 +110,14 @@ Future<ReceivePaymentResponse> receivePaymentCrossChain(
   );
   final response = await sdk.receivePayment(request: request);
 
-  print(
-    "Share this deposit address with the sender: ${response.paymentRequest}",
-  );
+  print("Payment request: ${response.paymentRequest}");
   final info = response.crossChainInfo;
   if (info != null) {
     final denom = info.tokenIdentifier != null ? "USDB" : "BTC";
-    print("Sender deposits: ${info.depositAmount}");
-    print("Receiver gets ~${info.expectedReceivedAmount} $denom");
-    print("Quote expires at: ${info.expiresAt}");
+    print("Deposit address: ${info.depositAddress}");
+    print("Deposit amount: ${info.depositAmount}");
+    print("Expected received: ${info.expectedReceivedAmount} $denom");
+    print("Expires at: ${info.expiresAt}");
   }
   // ANCHOR_END: cross-chain-receive
   return response;

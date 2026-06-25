@@ -993,6 +993,7 @@ pub struct ReceivePaymentResponse {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainReceiveInfo)]
 pub struct CrossChainReceiveInfo {
+    pub deposit_address: String,
     #[tsify(type = "string")]
     #[serde(with = "serde_u128_as_string")]
     pub deposit_amount: u128,

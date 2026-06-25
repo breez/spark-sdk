@@ -124,14 +124,14 @@ async fn receive_cross_chain(
         })?;
 
     let CrossChainReceivePrepared {
-        deposit_address,
+        payment_request,
         info,
     } = service
         .prepare_receive(&route, &recipient, amount, slippage, &resolved_destination)
         .await?;
 
     Ok(ReceivePaymentResponse {
-        payment_request: deposit_address,
+        payment_request,
         fee: 0,
         cross_chain_info: Some(info),
     })

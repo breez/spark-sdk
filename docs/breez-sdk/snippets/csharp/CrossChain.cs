@@ -111,17 +111,16 @@ namespace BreezSdkSnippets
             );
             var response = await sdk.ReceivePayment(request: request);
 
-            Console.WriteLine(
-                $"Share this deposit address with the sender: {response.paymentRequest}"
-            );
+            Console.WriteLine($"Payment request: {response.paymentRequest}");
             if (response.crossChainInfo is { } info)
             {
-                Console.WriteLine($"Sender deposits: {info.depositAmount}");
+                Console.WriteLine($"Deposit address: {info.depositAddress}");
+                Console.WriteLine($"Deposit amount: {info.depositAmount}");
                 var denom = info.tokenIdentifier is null ? "BTC" : "USDB";
                 Console.WriteLine(
-                    $"Receiver gets ~{info.expectedReceivedAmount} {denom}"
+                    $"Expected received: {info.expectedReceivedAmount} {denom}"
                 );
-                Console.WriteLine($"Quote expires at: {info.expiresAt}");
+                Console.WriteLine($"Expires at: {info.expiresAt}");
             }
             // ANCHOR_END: cross-chain-receive
         }

@@ -100,12 +100,13 @@ func receivePaymentCrossChain(sdk: BreezSdk, route: CrossChainRoutePair) async t
             )
         ))
 
-    print("Share this deposit address with the sender: \(response.paymentRequest)")
+    print("Payment request: \(response.paymentRequest)")
     if let info = response.crossChainInfo {
         let denom = info.tokenIdentifier != nil ? "USDB" : "BTC"
-        print("Sender deposits: \(info.depositAmount)")
-        print("Receiver gets ~\(info.expectedReceivedAmount) \(denom)")
-        print("Quote expires at: \(info.expiresAt)")
+        print("Deposit address: \(info.depositAddress)")
+        print("Deposit amount: \(info.depositAmount)")
+        print("Expected received: \(info.expectedReceivedAmount) \(denom)")
+        print("Expires at: \(info.expiresAt)")
     }
     // ANCHOR_END: cross-chain-receive
 }

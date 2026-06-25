@@ -245,8 +245,9 @@ pub enum CrossChainProviderContext {
 /// time this returns.
 #[derive(Debug, Clone)]
 pub(crate) struct CrossChainReceivePrepared {
-    /// External deposit address the sender pays to.
-    pub deposit_address: String,
+    /// Canonical cross-chain URI the sender can paste/scan to pay.
+    /// Surfaced as [`crate::ReceivePaymentResponse::payment_request`].
+    pub payment_request: String,
     pub info: CrossChainReceiveInfo,
 }
 
@@ -254,6 +255,8 @@ pub(crate) struct CrossChainReceivePrepared {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct CrossChainReceiveInfo {
+    /// Bare external deposit address the sender pays to.
+    pub deposit_address: String,
     /// Amount the sender must deposit, in source-asset base units. Equal
     /// to the request's `amount`.
     pub deposit_amount: u128,
@@ -422,6 +425,37 @@ pub(crate) fn is_usd_stable_asset(asset: &str) -> bool {
     USD_STABLE_ASSETS
         .iter()
         .any(|a| asset.eq_ignore_ascii_case(a))
+}
+
+/// Builds the value surfaced as
+/// [`crate::ReceivePaymentResponse::payment_request`] on a cross-chain
+/// receive. Shared across providers (Orchestra today; Boltz when it
+/// gains a receive path).
+///
+/// EVM destinations get an EIP-681 URI so wallets like `MetaMask` auto-fill
+/// recipient/token/chain/amount. Solana and Tron destinations fall back
+/// to the bare `deposit_address` — current wallets don't honor those
+/// schemes' parameters reliably (see
+/// [`breez_sdk_common::input::format_cross_chain_uri`] for the details).
+pub(crate) fn build_receive_payment_request(
+    deposit_address: &str,
+    chain_id: Option<&str>,
+    contract_address: Option<&str>,
+    amount: u128,
+) -> Result<String, SdkError> {
+    let family =
+        breez_sdk_common::input::detect_address_family(deposit_address).ok_or_else(|| {
+            SdkError::Generic(format!(
+                "Cross-chain provider returned unrecognised deposit address: {deposit_address}",
+            ))
+        })?;
+    Ok(breez_sdk_common::input::format_cross_chain_uri(
+        family,
+        deposit_address,
+        contract_address,
+        chain_id,
+        amount,
+    ))
 }
 
 /// Best-available fee: realized `asset_amount_in − delivered_amount` on

@@ -915,9 +915,17 @@ impl CrossChainService for OrchestraService {
         let adapter = OrchestraStorageAdapter::new(Arc::clone(&self.storage));
         adapter.upsert(&data).await?;
 
+        let payment_request = super::build_receive_payment_request(
+            &quote.deposit_address,
+            route.chain_id.as_deref(),
+            route.contract_address.as_deref(),
+            deposit_amount,
+        )?;
+
         Ok(CrossChainReceivePrepared {
-            deposit_address: quote.deposit_address,
+            payment_request,
             info: CrossChainReceiveInfo {
+                deposit_address: quote.deposit_address,
                 deposit_amount,
                 expected_received_amount,
                 token_identifier: destination_token_identifier,

@@ -143,21 +143,19 @@ func ReceivePaymentCrossChain(
 		return nil, err
 	}
 
-	log.Printf(
-		"Share this deposit address with the sender: %s",
-		response.PaymentRequest,
-	)
+	log.Printf("Payment request: %s", response.PaymentRequest)
 	if info := response.CrossChainInfo; info != nil {
-		log.Printf("Sender deposits: %v", info.DepositAmount)
+		log.Printf("Deposit address: %s", info.DepositAddress)
+		log.Printf("Deposit amount: %v", info.DepositAmount)
 		denom := "BTC"
 		if info.TokenIdentifier != nil {
 			denom = "USDB"
 		}
 		log.Printf(
-			"Receiver gets ~%v %s",
+			"Expected received: %v %s",
 			info.ExpectedReceivedAmount, denom,
 		)
-		log.Printf("Quote expires at: %d", info.ExpiresAt)
+		log.Printf("Expires at: %d", info.ExpiresAt)
 	}
 	// ANCHOR_END: cross-chain-receive
 	return &response, nil

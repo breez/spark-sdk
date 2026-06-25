@@ -111,16 +111,20 @@ const exampleReceivePaymentCrossChain = async (
     }
   })
 
-  const depositAddress = response.paymentRequest
-  console.debug(`Share this deposit address with the sender: ${depositAddress}`)
-  if (response.crossChainInfo) {
-    const { depositAmount, expectedReceivedAmount, tokenIdentifier, expiresAt } =
-      response.crossChainInfo
-    console.debug(`Sender deposits: ${depositAmount}`)
-    console.debug(
-      `Receiver gets ~${expectedReceivedAmount} ${tokenIdentifier ? 'USDB' : 'BTC'}`
-    )
-    console.debug(`Quote expires at: ${expiresAt}`)
+  console.debug(`Payment request: ${response.paymentRequest}`)
+  if (response.crossChainInfo !== undefined) {
+    const {
+      depositAddress,
+      depositAmount,
+      expectedReceivedAmount,
+      tokenIdentifier,
+      expiresAt
+    } = response.crossChainInfo
+    const denom = tokenIdentifier !== undefined ? 'USDB' : 'BTC'
+    console.debug(`Deposit address: ${depositAddress}`)
+    console.debug(`Deposit amount: ${depositAmount}`)
+    console.debug(`Expected received: ${expectedReceivedAmount} ${denom}`)
+    console.debug(`Expires at: ${expiresAt}`)
   }
   // ANCHOR_END: cross-chain-receive
 }

@@ -130,17 +130,19 @@ class CrossChain {
                 ),
             )
             val response = sdk.receivePayment(req)
-            val depositAddress = response.paymentRequest
-            // Log.v("Breez", "Share this deposit address with the sender: $depositAddress")
+            val paymentRequest = response.paymentRequest
+            // Log.v("Breez", "Payment request: $paymentRequest")
             val info = response.crossChainInfo
             if (info != null) {
+                val depositAddress = info.depositAddress
                 val depositAmount = info.depositAmount
                 val expected = info.expectedReceivedAmount
                 val denom = if (info.tokenIdentifier != null) "USDB" else "BTC"
                 val expiresAt = info.expiresAt
-                // Log.v("Breez", "Sender deposits: $depositAmount")
-                // Log.v("Breez", "Receiver gets ~$expected $denom")
-                // Log.v("Breez", "Quote expires at: $expiresAt")
+                // Log.v("Breez", "Deposit address: $depositAddress")
+                // Log.v("Breez", "Deposit amount: $depositAmount")
+                // Log.v("Breez", "Expected received: $expected $denom")
+                // Log.v("Breez", "Expires at: $expiresAt")
             }
         } catch (e: Exception) {
             // handle error

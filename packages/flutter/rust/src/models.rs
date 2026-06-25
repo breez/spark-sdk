@@ -283,6 +283,7 @@ pub struct _CrossChainRoutePair {
 
 #[frb(mirror(CrossChainReceiveInfo))]
 pub struct _CrossChainReceiveInfo {
+    pub deposit_address: String,
     pub deposit_amount: u128,
     pub expected_received_amount: u128,
     pub token_identifier: Option<String>,
