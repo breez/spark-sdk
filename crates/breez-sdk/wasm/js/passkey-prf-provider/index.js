@@ -23,10 +23,11 @@ const BREEZ_RP_ID = 'keys.breez.technology';
 const DEFAULT_RP_NAME = 'Breez';
 
 // A no-credential reject resolves before any UI shows; a dismiss takes
-// seconds. This fast-fail window only applies under `mediation:
-// 'immediate'`: that is the only path where a no-credential reject shows
-// no UI. On the modal path the OS always shows a picker first, so a
-// NotAllowedError there is a dismiss/timeout, never a fast no-credential.
+// seconds. This fast-fail window only applies under immediate UI mode
+// (`uiMode: 'immediate'`): that is the only path where a no-credential
+// reject shows no UI. On the modal path the OS always shows a picker
+// first, so a NotAllowedError there is a dismiss/timeout, never a fast
+// no-credential.
 const NO_CRED_FAST_FAIL_MS = 250;
 
 // iOS and Android tear the biometric sheet down around 55s of inactivity
@@ -46,11 +47,11 @@ function randomBytes(length) {
 }
 
 /**
- * Whether this browser honors `mediation: 'immediate'`, probed via
- * `getClientCapabilities().immediateGet`. The gate is mandatory: the
- * unknown `mediation` enum throws a `TypeError` on browsers without
- * WebAuthn L3 support. Uncached: the probe is cheap and runs at most once
- * per assertion.
+ * Whether this browser honors WebAuthn immediate UI mode
+ * (`uiMode: 'immediate'`), probed via `getClientCapabilities().immediateGet`.
+ * The gate is mandatory: immediate mode is discoverable-only and fast-fails
+ * with no UI, so it must not run where unsupported. Uncached: the probe is
+ * cheap and runs at most once per assertion.
  * @returns {Promise<boolean>}
  */
 async function supportsImmediateMediation() {
@@ -456,18 +457,20 @@ export class PasskeyProvider {
         }
 
         const requestOptions = { publicKey };
-        // Immediate mediation: fast-fail with no UI when no credential is
+        // Immediate UI mode: fast-fail with no UI when no credential is
         // present so a single-CTA host can fall through to register. Only
-        // where the browser advertises it (else `get()` throws on the
-        // unknown `mediation` enum). The fast NotAllowedError this raises
-        // on no-credential is classified as CredentialNotFound below.
+        // where the browser advertises it (`getClientCapabilities().immediateGet`).
+        // The fast NotAllowedError it raises on no-credential is classified
+        // as CredentialNotFound below. Immediate mode is discoverable-only:
+        // a non-empty allowCredentials throws, so clear the pin here.
         if (options.preferImmediatelyAvailableCredentials) {
             if (await supportsImmediateMediation()) {
-                requestOptions.mediation = 'immediate';
+                requestOptions.uiMode = 'immediate';
+                publicKey.allowCredentials = [];
             } else {
                 // Surface the fallback: silently using standard mediation
                 // hides why a single-CTA probe still shows a sheet.
-                console.debug('breez-sdk: preferImmediatelyAvailableCredentials set but immediate mediation is unsupported by this browser; using standard mediation');
+                console.debug('breez-sdk: preferImmediatelyAvailableCredentials set but immediate UI mode is unsupported by this browser; using standard mediation');
             }
         }
 
@@ -481,7 +484,7 @@ export class PasskeyProvider {
             const elapsed = ((typeof performance !== 'undefined' && performance.now)
                 ? performance.now()
                 : Date.now()) - startedAt;
-            throw this._mapAssertionError(error, elapsed, requestOptions.mediation === 'immediate');
+            throw this._mapAssertionError(error, elapsed, requestOptions.uiMode === 'immediate');
         }
         if (!credential) {
             throw new PasskeyCredentialNotFoundError();
