@@ -1817,7 +1817,7 @@ pub struct _PasskeyConfig {
 
 #[frb(mirror(PasskeyAvailability))]
 pub enum _PasskeyAvailability {
-    Available,
+    Available { immediate_mediation_supported: bool },
     PrfUnsupported,
     NotAssociated { source: String, reason: String },
     Skipped { reason: String },
@@ -1887,4 +1887,5 @@ pub struct _ConnectWithPasskeyRequest {
 pub struct _ConnectWithPasskeyResponse {
     pub wallet: Wallet,
     pub credential: Option<PasskeyCredential>,
+    pub labels: Vec<String>,
 }

@@ -39,6 +39,9 @@ pub struct WasmPrfProvider {
     /// Cached `createPasskey` presence probe: JS providers may omit
     /// it (only platform passkey backends implement registration).
     supports_create: OnceLock<bool>,
+    /// Cached `supportsImmediateMediation` presence probe: custom
+    /// providers may omit it and inherit the `true` trait default.
+    supports_immediate: OnceLock<bool>,
 }
 
 impl WasmPrfProvider {
@@ -46,6 +49,7 @@ impl WasmPrfProvider {
         Self {
             inner,
             supports_create: OnceLock::new(),
+            supports_immediate: OnceLock::new(),
         }
     }
 
@@ -60,6 +64,25 @@ impl WasmPrfProvider {
                     .map(|v| v.is_function())
                     .unwrap_or(false)
         })
+    }
+
+    /// Whether the browser advertises WebAuthn immediate mediation, the
+    /// signal the WASM `PasskeyClient` folds into
+    /// `checkAvailability().immediateMediationSupported`. A provider that
+    /// omits the method is assumed native-like (`true`); a present but
+    /// failing probe is treated as unsupported.
+    pub async fn supports_immediate_mediation(&self) -> bool {
+        if !self.js_has_method("supportsImmediateMediation", &self.supports_immediate) {
+            return true;
+        }
+        let Ok(promise) = self.inner.supports_immediate_mediation() else {
+            return false;
+        };
+        JsFuture::from(promise)
+            .await
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
     }
 }
 
@@ -282,6 +305,14 @@ export interface PrfProvider {
      * device. Hosts gate UX on the result.
      */
     isSupported(): Promise<boolean>;
+
+    /**
+     * Optional. Whether the silent single-CTA flow works here (a
+     * no-credential sign-in fast-fails with no UI). Omit to inherit the
+     * `true` default; the built-in browser provider returns the WebAuthn
+     * immediate-mediation capability.
+     */
+    supportsImmediateMediation?(): Promise<boolean>;
 }
 
 /**
@@ -337,4 +368,9 @@ extern "C" {
         this: &PrfProvider,
         exclude_credentials: JsValue,
     ) -> Result<Promise, JsValue>;
+
+    // Optional method. Custom providers may omit it and inherit the
+    // `true` default; probed with `js_has_method` before invoking.
+    #[wasm_bindgen(structural, method, js_name = "supportsImmediateMediation", catch)]
+    pub fn supports_immediate_mediation(this: &PrfProvider) -> Result<Promise, JsValue>;
 }

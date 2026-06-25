@@ -322,7 +322,13 @@ impl Passkey {
         }
         let association = self.prf_provider.check_domain_association().await?;
         Ok(match association {
-            DomainAssociation::Associated => PasskeyAvailability::Available,
+            DomainAssociation::Associated => PasskeyAvailability::Available {
+                // Native authenticators always support the silent single-CTA
+                // probe (a no-credential sign-in fast-fails with no UI). Only
+                // the browser varies, so the WASM client overrides this from
+                // its immediate-mediation capability.
+                immediate_mediation_supported: true,
+            },
             DomainAssociation::NotAssociated { source, reason } => {
                 PasskeyAvailability::NotAssociated { source, reason }
             }
@@ -428,7 +434,7 @@ mod tests {
         let availability = passkey.check_availability().await.unwrap();
         assert!(matches!(
             availability,
-            PasskeyAvailability::Available | PasskeyAvailability::Skipped { .. }
+            PasskeyAvailability::Available { .. } | PasskeyAvailability::Skipped { .. }
         ));
     }
 
