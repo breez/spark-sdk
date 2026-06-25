@@ -90,13 +90,20 @@ const connectWithPasskey = async () => {
   )
 
   // ANCHOR: connect-with-passkey
-  // Silent sign-in, fall through to register.
+  // Silent sign-in, fall through to register. No label: a returning user's
+  // wallets come back in `response.labels` (the default is signed in).
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
   const response = await passkey.connectWithPasskey({
-    label: 'personal',
+    label: undefined,
     allowCredentials: undefined,
     excludeCredentials: undefined
   })
+
+  if (response.labels.length > 1) {
+    // Returning multi-wallet user: let them pick a label and sign in to it.
+    // const chosen = await pickLabel(response.labels)
+    // return await passkey.signIn({ label: chosen, allowCredentials: undefined, preferImmediatelyAvailableCredentials: undefined })
+  }
 
   const sdk = await connect({ config, seed: response.wallet.seed, storageDir: './.data' })
   // ANCHOR_END: connect-with-passkey

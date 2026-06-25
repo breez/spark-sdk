@@ -49,8 +49,16 @@ async fn check_availability() -> Result<()> {
 
     // ANCHOR: check-availability
     match passkey.check_availability().await? {
-        PasskeyAvailability::Available => {
-            // Show passkey as primary option.
+        PasskeyAvailability::Available {
+            immediate_mediation_supported,
+        } => {
+            // On web, immediate_mediation_supported chooses single- vs
+            // two-button onboarding (always true on native).
+            if immediate_mediation_supported {
+                // Single button: connect_with_passkey.
+            } else {
+                // Two buttons: register / sign_in.
+            }
         }
         PasskeyAvailability::PrfUnsupported => {
             // Fall back to mnemonic flow.
@@ -79,12 +87,15 @@ async fn connect_with_passkey_unified() -> Result<breez_sdk_spark::BreezSdk> {
 
     // ANCHOR: connect-with-passkey
     // Single-CTA onboarding: silent sign-in, fall through to register.
+    // Without a label, a returning user's wallets are discovered in
+    // `response.labels` (the response wallet is the default); a new user
+    // gets a freshly registered default wallet.
     let response = passkey
-        .connect_with_passkey(ConnectWithPasskeyRequest {
-            label: Some("personal".to_string()),
-            ..Default::default()
-        })
+        .connect_with_passkey(ConnectWithPasskeyRequest::default())
         .await?;
+    if response.labels.len() > 1 {
+        // Multiple wallets: let the user pick, then sign_in to the chosen label.
+    }
 
     let config = default_config(Network::Mainnet);
     let sdk = connect(ConnectRequest {

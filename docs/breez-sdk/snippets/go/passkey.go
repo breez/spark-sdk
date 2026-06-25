@@ -77,12 +77,15 @@ func ConnectWithPasskey() (*breez_sdk_spark.BreezSdk, error) {
 
 	// ANCHOR: connect-with-passkey
 	// Silent sign-in for a returning user, fall-through to register on a fresh device.
-	label := "personal"
-	response, err := passkey.ConnectWithPasskey(breez_sdk_spark.ConnectWithPasskeyRequest{
-		Label: &label,
-	})
+	// No label: derives the default wallet and discovers this passkey's full label set.
+	response, err := passkey.ConnectWithPasskey(breez_sdk_spark.ConnectWithPasskeyRequest{})
 	if err != nil {
 		return nil, err
+	}
+
+	if len(response.Labels) > 1 {
+		// Returning multi-wallet user: let them pick a label and SignIn to it.
+		// passkey.SignIn(breez_sdk_spark.SignInRequest{Label: &chosenLabel})
 	}
 
 	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)

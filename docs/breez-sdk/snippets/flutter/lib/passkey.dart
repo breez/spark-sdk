@@ -69,8 +69,14 @@ Future<BreezSdk> connectWithPasskey() async {
   final config = defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: '<breez api key>');
   final response = await passkey.connectWithPasskey(
-    request: ConnectWithPasskeyRequest(label: 'personal'),
+    request: ConnectWithPasskeyRequest(),
   );
+
+  if (response.labels.length > 1) {
+    // Returning multi-wallet user: let them pick a label, then sign in to it.
+    // final chosen = await showWalletPicker(response.labels);
+    // return (await passkey.signIn(request: SignInRequest(label: chosen))).wallet;
+  }
 
   final sdk = await connect(
       request: ConnectRequest(
