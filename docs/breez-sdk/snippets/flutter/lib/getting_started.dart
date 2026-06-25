@@ -142,6 +142,12 @@ class BreezSdkSpark {
           // A payment failed
           final _ = payment;
           break;
+        case SdkEvent_PaymentUpdated(:final payment):
+          // Metadata on an already-settled payment changed (e.g. cross-chain
+          // conversion info attached after the payment succeeded). Re-render
+          // the payment to surface the updated details.
+          final _ = payment;
+          break;
         case SdkEvent_AutoOptimization(:final optimizationEvent):
           // An auto-optimization event occurred
           final _ = optimizationEvent;

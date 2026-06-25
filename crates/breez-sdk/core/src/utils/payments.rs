@@ -443,29 +443,36 @@ pub(crate) async fn resolve_payment_id(
 /// `tx_hash`, or Spark `payment.id`), not necessarily `payment_id` itself: token
 /// payment ids carry a `:vout` suffix that `apply_payment_metadata` does not key
 /// on. Errors only if both the insert and the cache write fail.
+///
+/// Returns `true` if the storage row actually mutated. The cache-fallback path
+/// returns `false`: no payment row was written, so no `PaymentUpdated` event
+/// should fire yet — the next sync's reapply will surface any change.
 pub(crate) async fn insert_payment_metadata_with_cache_fallback(
     storage: &Arc<dyn Storage>,
     payment_id: String,
     cache_key: &str,
     metadata: PaymentMetadata,
-) -> Result<(), SdkError> {
-    if let Err(insert_err) = storage
+) -> Result<bool, SdkError> {
+    match storage
         .insert_payment_metadata(payment_id.clone(), metadata.clone())
         .await
     {
-        warn!(
-            "Failed to insert payment metadata for {payment_id}: {insert_err}; caching under {cache_key} for reapplication on next sync"
-        );
-        ObjectCacheRepository::new(Arc::clone(storage))
-            .save_payment_metadata(cache_key, &metadata)
-            .await
-            .map_err(|cache_err| {
-                SdkError::Generic(format!(
-                    "Failed to insert payment metadata ({insert_err}) and failed to cache it ({cache_err})"
-                ))
-            })?;
+        Ok(changed) => Ok(changed),
+        Err(insert_err) => {
+            warn!(
+                "Failed to insert payment metadata for {payment_id}: {insert_err}; caching under {cache_key} for reapplication on next sync"
+            );
+            ObjectCacheRepository::new(Arc::clone(storage))
+                .save_payment_metadata(cache_key, &metadata)
+                .await
+                .map_err(|cache_err| {
+                    SdkError::Generic(format!(
+                        "Failed to insert payment metadata ({insert_err}) and failed to cache it ({cache_err})"
+                    ))
+                })?;
+            Ok(false)
+        }
     }
-    Ok(())
 }
 
 /// Inserts payment metadata by first resolving the identifier to a payment ID.
@@ -474,25 +481,27 @@ pub(crate) async fn insert_payment_metadata_with_cache_fallback(
 /// the row write fails, also falls back to caching (see
 /// [`insert_payment_metadata_with_cache_fallback`]).
 ///
-/// Returns the resolved payment ID, or the raw identifier if it was cached.
+/// Returns the resolved payment ID (or the raw identifier if it was cached),
+/// paired with `true` when the persisted row actually mutated. The cache-miss
+/// and cache-fallback paths return `false`.
 pub(crate) async fn resolve_and_insert_payment_metadata(
     identifier: &str,
     metadata: PaymentMetadata,
     spark_wallet: &SparkWallet,
     storage: &Arc<dyn Storage>,
     tx_inputs_are_ours: bool,
-) -> Result<String, SdkError> {
+) -> Result<(String, bool), SdkError> {
     match resolve_payment_id(identifier, spark_wallet, storage, tx_inputs_are_ours).await {
         Ok(payment_id) => {
             debug!("Resolved payment id {payment_id} for identifier {identifier}");
-            insert_payment_metadata_with_cache_fallback(
+            let changed = insert_payment_metadata_with_cache_fallback(
                 storage,
                 payment_id.clone(),
                 identifier,
                 metadata,
             )
             .await?;
-            Ok(payment_id)
+            Ok((payment_id, changed))
         }
         Err(e) => {
             debug!("Could not resolve payment id for {identifier}: {e}, caching metadata");
@@ -501,9 +510,104 @@ pub(crate) async fn resolve_and_insert_payment_metadata(
                 .save_payment_metadata(identifier, &metadata)
                 .await
                 .map_err(|e| SdkError::Generic(format!("Failed to cache payment metadata: {e}")))?;
-            Ok(identifier.to_string())
+            Ok((identifier.to_string(), false))
         }
     }
+}
+
+/// Insert payment metadata via [`insert_payment_metadata_with_cache_fallback`]
+/// and emit `PaymentUpdated` when the row actually changed and the payment is
+/// already in a terminal status (`Completed` or `Failed`). Pre-terminal rows
+/// are skipped here: their next status transition will emit through
+/// [`record_payment_update`].
+///
+/// Returns `true` when the event was emitted.
+pub(crate) async fn record_payment_metadata_update(
+    storage: &Arc<dyn Storage>,
+    event_emitter: &EventEmitter,
+    payment_id: String,
+    cache_key: &str,
+    metadata: PaymentMetadata,
+    emit_event: bool,
+) -> bool {
+    let metadata_changed = match insert_payment_metadata_with_cache_fallback(
+        storage,
+        payment_id.clone(),
+        cache_key,
+        metadata,
+    )
+    .await
+    {
+        Ok(changed) => changed,
+        Err(err) => {
+            error!("Failed to insert payment metadata for {payment_id}: {err:?}");
+            return false;
+        }
+    };
+
+    if !emit_event || !metadata_changed {
+        return false;
+    }
+    emit_payment_updated_if_terminal(storage, event_emitter, payment_id).await
+}
+
+/// Resolve `identifier` to a payment id, insert metadata (with cache fallback),
+/// and emit `PaymentUpdated` when the persisted row changed and is terminal.
+///
+/// Returns the resolved id (or the raw identifier on a cache miss) and whether
+/// `PaymentUpdated` fired.
+pub(crate) async fn resolve_record_payment_metadata_update(
+    identifier: &str,
+    metadata: PaymentMetadata,
+    spark_wallet: &SparkWallet,
+    storage: &Arc<dyn Storage>,
+    tx_inputs_are_ours: bool,
+    event_emitter: &EventEmitter,
+    emit_event: bool,
+) -> Result<(String, bool), SdkError> {
+    let (payment_id, metadata_changed) = resolve_and_insert_payment_metadata(
+        identifier,
+        metadata,
+        spark_wallet,
+        storage,
+        tx_inputs_are_ours,
+    )
+    .await?;
+
+    if !emit_event || !metadata_changed {
+        return Ok((payment_id, false));
+    }
+    let emitted =
+        emit_payment_updated_if_terminal(storage, event_emitter, payment_id.clone()).await;
+    Ok((payment_id, emitted))
+}
+
+/// Fetch the enriched payment view and emit `PaymentUpdated` when the row is in
+/// a terminal status. Returns whether the event was emitted.
+pub(crate) async fn emit_payment_updated_if_terminal(
+    storage: &Arc<dyn Storage>,
+    event_emitter: &EventEmitter,
+    payment_id: String,
+) -> bool {
+    let payment =
+        match get_payment_with_conversion_details(payment_id.clone(), Arc::clone(storage)).await {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("PaymentUpdated re-read failed for {payment_id}: {e:?}");
+                return false;
+            }
+        };
+    if !matches!(
+        payment.status,
+        PaymentStatus::Completed | PaymentStatus::Failed,
+    ) {
+        return false;
+    }
+    info!("Emitting PaymentUpdated event: {payment:?}");
+    event_emitter
+        .emit(&SdkEvent::PaymentUpdated { payment })
+        .await;
+    true
 }
 
 #[cfg(test)]

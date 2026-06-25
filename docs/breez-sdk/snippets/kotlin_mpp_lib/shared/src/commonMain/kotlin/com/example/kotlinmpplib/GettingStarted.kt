@@ -87,6 +87,12 @@ class GettingStarted {
                     // A payment failed
                     val failedPayment = e.payment
                 }
+                is SdkEvent.PaymentUpdated -> {
+                    // Metadata on an already-settled payment changed (e.g. cross-chain
+                    // conversion info attached after the payment succeeded). Re-render
+                    // the payment to surface the updated details.
+                    val updatedPayment = e.payment
+                }
                 is SdkEvent.AutoOptimization -> {
                     // An auto-optimization event occurred
                     val optimizationEvent = e.optimizationEvent

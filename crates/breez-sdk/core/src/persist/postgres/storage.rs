@@ -1058,7 +1058,7 @@ impl Storage for PostgresStorage {
         &self,
         payment_id: String,
         metadata: PaymentMetadata,
-    ) -> Result<(), StorageError> {
+    ) -> Result<bool, StorageError> {
         let client = self.pool.get().await.map_err(map_pool_error)?;
 
         let lnurl_pay_info_json = to_json_opt(metadata.lnurl_pay_info.as_ref())?;
@@ -1069,7 +1069,10 @@ impl Storage for PostgresStorage {
             .as_ref()
             .map(std::string::ToString::to_string);
 
-        client
+        // The `WHERE` arm on `DO UPDATE` skips the write when every column
+        // the caller is trying to set already matches the stored value, so
+        // `execute` returns 0 for a no-op replay.
+        let changed = client
             .execute(
                 "INSERT INTO brz_payment_metadata (user_id, payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -1079,7 +1082,13 @@ impl Storage for PostgresStorage {
                     lnurl_withdraw_info = COALESCE(EXCLUDED.lnurl_withdraw_info, brz_payment_metadata.lnurl_withdraw_info),
                     lnurl_description = COALESCE(EXCLUDED.lnurl_description, brz_payment_metadata.lnurl_description),
                     conversion_info = COALESCE(EXCLUDED.conversion_info, brz_payment_metadata.conversion_info),
-                    conversion_status = COALESCE(EXCLUDED.conversion_status, brz_payment_metadata.conversion_status)",
+                    conversion_status = COALESCE(EXCLUDED.conversion_status, brz_payment_metadata.conversion_status)
+                 WHERE (EXCLUDED.parent_payment_id IS NOT NULL AND EXCLUDED.parent_payment_id IS DISTINCT FROM brz_payment_metadata.parent_payment_id)
+                    OR (EXCLUDED.lnurl_pay_info IS NOT NULL AND EXCLUDED.lnurl_pay_info IS DISTINCT FROM brz_payment_metadata.lnurl_pay_info)
+                    OR (EXCLUDED.lnurl_withdraw_info IS NOT NULL AND EXCLUDED.lnurl_withdraw_info IS DISTINCT FROM brz_payment_metadata.lnurl_withdraw_info)
+                    OR (EXCLUDED.lnurl_description IS NOT NULL AND EXCLUDED.lnurl_description IS DISTINCT FROM brz_payment_metadata.lnurl_description)
+                    OR (EXCLUDED.conversion_info IS NOT NULL AND EXCLUDED.conversion_info IS DISTINCT FROM brz_payment_metadata.conversion_info)
+                    OR (EXCLUDED.conversion_status IS NOT NULL AND EXCLUDED.conversion_status IS DISTINCT FROM brz_payment_metadata.conversion_status)",
                 &[
                     &self.identity,
                     &payment_id,
@@ -1093,7 +1102,7 @@ impl Storage for PostgresStorage {
             )
             .await?;
 
-        Ok(())
+        Ok(changed > 0)
     }
 
     async fn set_cached_item(&self, key: String, value: String) -> Result<(), StorageError> {
@@ -2245,6 +2254,15 @@ mod tests {
     async fn test_payment_metadata_merge() {
         let fixture = PostgresTestFixture::new().await;
         crate::persist::tests::test_payment_metadata_merge(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_insert_payment_metadata_returns_false_for_noop() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_insert_payment_metadata_returns_false_for_noop(Box::new(
+            fixture.storage,
+        ))
+        .await;
     }
 
     #[tokio::test]

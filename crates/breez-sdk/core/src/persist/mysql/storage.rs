@@ -729,6 +729,17 @@ fn to_json_string_opt<T: serde::Serialize>(
         .map_err(|e| StorageError::Serialization(e.to_string()))
 }
 
+/// Converts an optional serializable value to a `serde_json::Value` for
+/// comparison-friendly handling alongside `JSON` column storage.
+fn to_json_value_opt<T: serde::Serialize>(
+    value: Option<&T>,
+) -> Result<Option<serde_json::Value>, StorageError> {
+    value
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|e| StorageError::Serialization(e.to_string()))
+}
+
 /// Converts an optional JSON string to an optional deserialized type.
 fn from_json_string_opt<T: serde::de::DeserializeOwned>(
     value: Option<String>,
@@ -1178,18 +1189,90 @@ impl Storage for MysqlStorage {
         &self,
         payment_id: String,
         metadata: PaymentMetadata,
-    ) -> Result<(), StorageError> {
+    ) -> Result<bool, StorageError> {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
 
-        let lnurl_pay_info_json = to_json_string_opt(metadata.lnurl_pay_info.as_ref())?;
-        let lnurl_withdraw_info_json = to_json_string_opt(metadata.lnurl_withdraw_info.as_ref())?;
-        let conversion_info_json = to_json_string_opt(metadata.conversion_info.as_ref())?;
+        let lnurl_pay_info_value = to_json_value_opt(metadata.lnurl_pay_info.as_ref())?;
+        let lnurl_withdraw_info_value = to_json_value_opt(metadata.lnurl_withdraw_info.as_ref())?;
+        let conversion_info_value = to_json_value_opt(metadata.conversion_info.as_ref())?;
         let conversion_status_str = metadata
             .conversion_status
             .as_ref()
             .map(std::string::ToString::to_string);
 
-        conn.exec_drop(
+        let lnurl_pay_info_json = lnurl_pay_info_value
+            .as_ref()
+            .map(serde_json::Value::to_string);
+        let lnurl_withdraw_info_json = lnurl_withdraw_info_value
+            .as_ref()
+            .map(serde_json::Value::to_string);
+        let conversion_info_json = conversion_info_value
+            .as_ref()
+            .map(serde_json::Value::to_string);
+
+        // Pre-read the row under `FOR UPDATE`, compute the COALESCE merge,
+        // and skip the write when nothing changes. MySQL's
+        // `ON DUPLICATE KEY UPDATE` does not accept a `WHERE` clause, so the
+        // no-op check cannot live inside the upsert as it does for
+        // Postgres/SQLite.
+        let parse_json = |s: &Option<String>| -> Option<serde_json::Value> {
+            s.as_ref().and_then(|raw| serde_json::from_str(raw).ok())
+        };
+        let mut tx = conn
+            .start_transaction(mysql_async::TxOpts::default())
+            .await
+            .map_err(map_db_error)?;
+        let existing: Option<(
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        )> = tx
+            .exec_first(
+                "SELECT parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status
+                 FROM brz_payment_metadata WHERE user_id = ? AND payment_id = ? FOR UPDATE",
+                (self.identity.clone(), payment_id.clone()),
+            )
+            .await
+            .map_err(map_db_error)?;
+        let existing_norm = existing.as_ref().map(|r| {
+            (
+                r.0.clone(),
+                parse_json(&r.1),
+                parse_json(&r.2),
+                r.3.clone(),
+                parse_json(&r.4),
+                r.5.clone(),
+            )
+        });
+        let incoming_norm = (
+            metadata.parent_payment_id.clone(),
+            lnurl_pay_info_value.clone(),
+            lnurl_withdraw_info_value.clone(),
+            metadata.lnurl_description.clone(),
+            conversion_info_value.clone(),
+            conversion_status_str.clone(),
+        );
+        let merged_norm = if let Some(existing) = existing_norm.as_ref() {
+            (
+                incoming_norm.0.clone().or_else(|| existing.0.clone()),
+                incoming_norm.1.clone().or_else(|| existing.1.clone()),
+                incoming_norm.2.clone().or_else(|| existing.2.clone()),
+                incoming_norm.3.clone().or_else(|| existing.3.clone()),
+                incoming_norm.4.clone().or_else(|| existing.4.clone()),
+                incoming_norm.5.clone().or_else(|| existing.5.clone()),
+            )
+        } else {
+            incoming_norm
+        };
+        if existing_norm.as_ref() == Some(&merged_norm) {
+            tx.commit().await.map_err(map_db_error)?;
+            return Ok(false);
+        }
+
+        tx.exec_drop(
             "INSERT INTO brz_payment_metadata (user_id, payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
@@ -1212,8 +1295,9 @@ impl Storage for MysqlStorage {
         )
         .await
         .map_err(map_db_error)?;
+        tx.commit().await.map_err(map_db_error)?;
 
-        Ok(())
+        Ok(true)
     }
 
     async fn set_cached_item(&self, key: String, value: String) -> Result<(), StorageError> {
@@ -2410,6 +2494,15 @@ mod tests {
     async fn test_payment_metadata_merge() {
         let fixture = MysqlTestFixture::new().await;
         crate::persist::tests::test_payment_metadata_merge(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_insert_payment_metadata_returns_false_for_noop() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_insert_payment_metadata_returns_false_for_noop(Box::new(
+            fixture.storage,
+        ))
+        .await;
     }
 
     #[tokio::test]

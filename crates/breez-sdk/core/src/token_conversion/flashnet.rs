@@ -363,7 +363,7 @@ impl FlashnetTokenConverter {
     /// Returns:
     /// * The sent payment id of the conversion.
     /// * The received payment id of the conversion.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     async fn update_payment_conversion_info(
         &self,
         pool_id: &PublicKey,
@@ -373,6 +373,7 @@ impl FlashnetTokenConverter {
         fee_split: Option<FeeSplit>,
         purpose: &ConversionPurpose,
         amount_adjustment: Option<AmountAdjustmentReason>,
+        event_emitter: &Arc<crate::EventEmitter>,
     ) -> Result<(String, Option<String>), ConversionError> {
         let (sent_fee, received_fee) = match &fee_split {
             Some(FeeSplit::Sent(fee)) => (Some(*fee), None),
@@ -398,48 +399,55 @@ impl FlashnetTokenConverter {
         // helper because the SDK never holds those transfers in hand
         // (they're produced by the pool, not by us).
         let sent_fut = async {
-            crate::utils::conversions::resolve_and_insert_payment_metadata_for_transfer(
-                outbound_asset_transfer,
-                PaymentMetadata {
-                    conversion_info: Some(ConversionInfo::Amm {
-                        pool_id: pool_id_str.clone(),
-                        conversion_id: conversion_id.clone(),
-                        status: status.clone(),
-                        fee: sent_fee,
-                        purpose: Some(purpose.clone()),
-                        amount_adjustment: amount_adjustment.clone(),
-                    }),
-                    ..Default::default()
-                },
-                &self.spark_wallet,
-                &self.storage,
-                true,
-            )
-            .await
-            .map_err(ConversionError::Sdk)
-        };
-
-        let received_fut = async {
-            if let Some(identifier) = &inbound_identifier {
-                let payment_id = crate::utils::payments::resolve_and_insert_payment_metadata(
-                    identifier,
+            let (payment_id, _emitted) =
+                crate::utils::conversions::record_payment_metadata_update_for_transfer(
+                    outbound_asset_transfer,
                     PaymentMetadata {
                         conversion_info: Some(ConversionInfo::Amm {
                             pool_id: pool_id_str.clone(),
                             conversion_id: conversion_id.clone(),
                             status: status.clone(),
-                            fee: received_fee,
+                            fee: sent_fee,
                             purpose: Some(purpose.clone()),
-                            amount_adjustment: None,
+                            amount_adjustment: amount_adjustment.clone(),
                         }),
                         ..Default::default()
                     },
                     &self.spark_wallet,
                     &self.storage,
-                    false,
+                    true,
+                    event_emitter,
+                    true,
                 )
                 .await
                 .map_err(ConversionError::Sdk)?;
+            Ok::<_, ConversionError>(payment_id)
+        };
+
+        let received_fut = async {
+            if let Some(identifier) = &inbound_identifier {
+                let (payment_id, _emitted) =
+                    crate::utils::payments::resolve_record_payment_metadata_update(
+                        identifier,
+                        PaymentMetadata {
+                            conversion_info: Some(ConversionInfo::Amm {
+                                pool_id: pool_id_str.clone(),
+                                conversion_id: conversion_id.clone(),
+                                status: status.clone(),
+                                fee: received_fee,
+                                purpose: Some(purpose.clone()),
+                                amount_adjustment: None,
+                            }),
+                            ..Default::default()
+                        },
+                        &self.spark_wallet,
+                        &self.storage,
+                        false,
+                        event_emitter,
+                        true,
+                    )
+                    .await
+                    .map_err(ConversionError::Sdk)?;
                 Ok::<_, ConversionError>(Some(payment_id))
             } else {
                 Ok(None)
@@ -459,12 +467,14 @@ impl FlashnetTokenConverter {
                     }),
                     ..Default::default()
                 };
-                crate::utils::payments::resolve_and_insert_payment_metadata(
+                crate::utils::payments::resolve_record_payment_metadata_update(
                     identifier,
                     metadata,
                     &self.spark_wallet,
                     &self.storage,
                     false,
+                    event_emitter,
+                    true,
                 )
                 .await
                 .map_err(ConversionError::Sdk)?;
@@ -757,6 +767,7 @@ impl TokenConverter for FlashnetTokenConverter {
                         fee_split,
                         purpose,
                         amount_adjustment.clone(),
+                        &event_emitter,
                     ))
                     .await?;
 
@@ -798,6 +809,7 @@ impl TokenConverter for FlashnetTokenConverter {
                         None,
                         purpose,
                         amount_adjustment.clone(),
+                        &event_emitter,
                     ))
                     .await;
                     let _ = self.refund_trigger.send(());

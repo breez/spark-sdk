@@ -28,11 +28,15 @@ use crate::{
 
 pub(crate) struct BoltzSdkEventListener {
     storage: Arc<dyn Storage>,
+    event_emitter: Arc<crate::EventEmitter>,
 }
 
 impl BoltzSdkEventListener {
-    pub(crate) fn new(storage: Arc<dyn Storage>) -> Self {
-        Self { storage }
+    pub(crate) fn new(storage: Arc<dyn Storage>, event_emitter: Arc<crate::EventEmitter>) -> Self {
+        Self {
+            storage,
+            event_emitter,
+        }
     }
 
     async fn handle_swap_updated(
@@ -83,10 +87,15 @@ impl BoltzSdkEventListener {
             return Ok(());
         };
 
-        self.storage
-            .insert_payment_metadata(payment_id.clone(), updated)
-            .await
-            .map_err(|e| format!("persist updated metadata for {payment_id}: {e}"))?;
+        crate::utils::payments::record_payment_metadata_update(
+            &self.storage,
+            &self.event_emitter,
+            payment_id.clone(),
+            &payment_id,
+            updated,
+            true,
+        )
+        .await;
         Ok(())
     }
 
@@ -163,10 +172,15 @@ impl BoltzSdkEventListener {
             }),
             ..Default::default()
         };
-        self.storage
-            .insert_payment_metadata(payment_id, updated)
-            .await
-            .map_err(|e| format!("persist degraded-flag update: {e}"))?;
+        crate::utils::payments::record_payment_metadata_update(
+            &self.storage,
+            &self.event_emitter,
+            payment_id.clone(),
+            &payment_id,
+            updated,
+            true,
+        )
+        .await;
         Ok(())
     }
 }
@@ -292,6 +306,7 @@ pub(crate) fn boltz_metadata_from_swap(
 pub(crate) async fn reconcile_pending_boltz_conversions(
     client: &BoltzService,
     storage: &Arc<dyn Storage>,
+    event_emitter: &Arc<crate::EventEmitter>,
 ) {
     // Bound the scan to Lightning payments carrying a non-terminal Boltz
     // conversion (the swap's hold-invoice leg), so history size doesn't matter.
@@ -342,22 +357,21 @@ pub(crate) async fn reconcile_pending_boltz_conversions(
         let Some(updated) = boltz_metadata_from_swap(conversion_info, &swap) else {
             continue;
         };
-        match storage
-            .insert_payment_metadata(payment_id.clone(), updated)
-            .await
-        {
-            Ok(()) => info!(
-                payment_id = %payment_id,
-                swap_id = %swap_id,
-                status = ?swap.status,
-                "Boltz reconcile: applied terminal swap state to stale pending conversion"
-            ),
-            Err(e) => error!(
-                payment_id = %payment_id,
-                swap_id = %swap_id,
-                "Boltz reconcile: failed to persist reconciled metadata: {e}"
-            ),
-        }
+        crate::utils::payments::record_payment_metadata_update(
+            storage,
+            event_emitter,
+            payment_id.clone(),
+            &payment_id,
+            updated,
+            true,
+        )
+        .await;
+        info!(
+            payment_id = %payment_id,
+            swap_id = %swap_id,
+            status = ?swap.status,
+            "Boltz reconcile: applied terminal swap state to stale pending conversion"
+        );
     }
 }
 
@@ -572,7 +586,8 @@ mod tests {
         async fn missing_payment_is_silent_noop() {
             let dir = create_temp_dir("boltz_event_missing_payment");
             let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&dir).unwrap());
-            let listener = BoltzSdkEventListener::new(Arc::clone(&storage));
+            let event_emitter = Arc::new(crate::EventEmitter::new(false));
+            let listener = BoltzSdkEventListener::new(Arc::clone(&storage), event_emitter);
 
             // No payment row carrying this invoice — the listener should
             // short-circuit without erroring.

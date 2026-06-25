@@ -730,34 +730,112 @@ class MysqlStorage {
   }
 
   async insertPaymentMetadata(paymentId, metadata) {
+    // MySQL's binary JSON storage reorders object keys; both incoming and
+    // stored JSON are normalised through a key-sorting stringify so equal
+    // values compare equal.
+    const stableStringify = (value) =>
+      JSON.stringify(value, (_key, val) => {
+        if (val !== null && typeof val === "object" && !Array.isArray(val)) {
+          const sorted = {};
+          for (const k of Object.keys(val).sort()) {
+            sorted[k] = val[k];
+          }
+          return sorted;
+        }
+        return val;
+      });
+    const incoming = {
+      parent_payment_id: metadata.parentPaymentId ?? null,
+      lnurl_pay_info: metadata.lnurlPayInfo
+        ? stableStringify(metadata.lnurlPayInfo)
+        : null,
+      lnurl_withdraw_info: metadata.lnurlWithdrawInfo
+        ? stableStringify(metadata.lnurlWithdrawInfo)
+        : null,
+      lnurl_description: metadata.lnurlDescription ?? null,
+      conversion_info: metadata.conversionInfo
+        ? stableStringify(metadata.conversionInfo)
+        : null,
+      conversion_status: metadata.conversionStatus ?? null,
+    };
+    // Pre-read the row under `FOR UPDATE`, compute the COALESCE merge in JS,
+    // and skip the write when nothing changes. MySQL's `ON DUPLICATE KEY
+    // UPDATE` does not accept a `WHERE` clause, so the no-op check cannot
+    // live inside the upsert as it does for Postgres/SQLite.
     try {
-      await this.pool.query(
-        `INSERT INTO brz_payment_metadata (user_id, payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-           parent_payment_id = COALESCE(VALUES(parent_payment_id), parent_payment_id),
-           lnurl_pay_info = COALESCE(VALUES(lnurl_pay_info), lnurl_pay_info),
-           lnurl_withdraw_info = COALESCE(VALUES(lnurl_withdraw_info), lnurl_withdraw_info),
-           lnurl_description = COALESCE(VALUES(lnurl_description), lnurl_description),
-           conversion_info = COALESCE(VALUES(conversion_info), conversion_info),
-           conversion_status = COALESCE(VALUES(conversion_status), conversion_status)`,
-        [
-          this.identity,
-          paymentId,
-          metadata.parentPaymentId,
-          metadata.lnurlPayInfo
-            ? JSON.stringify(metadata.lnurlPayInfo)
-            : null,
-          metadata.lnurlWithdrawInfo
-            ? JSON.stringify(metadata.lnurlWithdrawInfo)
-            : null,
-          metadata.lnurlDescription,
-          metadata.conversionInfo
-            ? JSON.stringify(metadata.conversionInfo)
-            : null,
-          metadata.conversionStatus ?? null,
-        ]
-      );
+      return await this._withTransaction(async (conn) => {
+        const normalizeJson = (raw) =>
+          raw == null
+            ? null
+            : typeof raw === "string"
+              ? stableStringify(JSON.parse(raw))
+              : stableStringify(raw);
+        const [existingRows] = await conn.query(
+          `SELECT parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status
+           FROM brz_payment_metadata WHERE user_id = ? AND payment_id = ? FOR UPDATE`,
+          [this.identity, paymentId]
+        );
+        const existingRaw = existingRows[0] ?? null;
+        const existing = existingRaw
+          ? {
+              parent_payment_id: existingRaw.parent_payment_id ?? null,
+              lnurl_pay_info: normalizeJson(existingRaw.lnurl_pay_info),
+              lnurl_withdraw_info: normalizeJson(existingRaw.lnurl_withdraw_info),
+              lnurl_description: existingRaw.lnurl_description ?? null,
+              conversion_info: normalizeJson(existingRaw.conversion_info),
+              conversion_status: existingRaw.conversion_status ?? null,
+            }
+          : null;
+        const merged = existing
+          ? {
+              parent_payment_id:
+                incoming.parent_payment_id ?? existing.parent_payment_id,
+              lnurl_pay_info:
+                incoming.lnurl_pay_info ?? existing.lnurl_pay_info,
+              lnurl_withdraw_info:
+                incoming.lnurl_withdraw_info ?? existing.lnurl_withdraw_info,
+              lnurl_description:
+                incoming.lnurl_description ?? existing.lnurl_description,
+              conversion_info:
+                incoming.conversion_info ?? existing.conversion_info,
+              conversion_status:
+                incoming.conversion_status ?? existing.conversion_status,
+            }
+          : incoming;
+        if (
+          existing &&
+          existing.parent_payment_id === merged.parent_payment_id &&
+          existing.lnurl_pay_info === merged.lnurl_pay_info &&
+          existing.lnurl_withdraw_info === merged.lnurl_withdraw_info &&
+          existing.lnurl_description === merged.lnurl_description &&
+          existing.conversion_info === merged.conversion_info &&
+          existing.conversion_status === merged.conversion_status
+        ) {
+          return false;
+        }
+        await conn.query(
+          `INSERT INTO brz_payment_metadata (user_id, payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE
+             parent_payment_id = COALESCE(VALUES(parent_payment_id), parent_payment_id),
+             lnurl_pay_info = COALESCE(VALUES(lnurl_pay_info), lnurl_pay_info),
+             lnurl_withdraw_info = COALESCE(VALUES(lnurl_withdraw_info), lnurl_withdraw_info),
+             lnurl_description = COALESCE(VALUES(lnurl_description), lnurl_description),
+             conversion_info = COALESCE(VALUES(conversion_info), conversion_info),
+             conversion_status = COALESCE(VALUES(conversion_status), conversion_status)`,
+          [
+            this.identity,
+            paymentId,
+            incoming.parent_payment_id,
+            incoming.lnurl_pay_info,
+            incoming.lnurl_withdraw_info,
+            incoming.lnurl_description,
+            incoming.conversion_info,
+            incoming.conversion_status,
+          ]
+        );
+        return true;
+      });
     } catch (error) {
       throw new StorageError(
         `Failed to set payment metadata for '${paymentId}': ${error.message}`,

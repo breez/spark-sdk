@@ -115,6 +115,15 @@ async fn test_payment_metadata_merge() {
 }
 
 #[wasm_bindgen_test]
+async fn test_insert_payment_metadata_returns_false_for_noop() {
+    let storage = create_test_storage("pg_payment_metadata_noop").await;
+    breez_sdk_spark::storage_tests::test_insert_payment_metadata_returns_false_for_noop(Box::new(
+        storage,
+    ))
+    .await;
+}
+
+#[wasm_bindgen_test]
 async fn test_payment_details_update_persistence() {
     let storage = create_test_storage("pg_payment_details_update").await;
     breez_sdk_spark::storage_tests::test_payment_details_update_persistence(Box::new(storage))
