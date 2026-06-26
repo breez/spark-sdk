@@ -3,7 +3,8 @@ use tracing::instrument;
 
 use crate::{
     ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, FetchConversionLimitsRequest,
-    FetchConversionLimitsResponse, GetPaymentRequest, GetPaymentResponse, WaitForPaymentIdentifier,
+    FetchConversionLimitsResponse, GetPaymentRequest, GetPaymentResponse,
+    RefundPendingConversionsResponse, WaitForPaymentIdentifier,
     error::SdkError,
     models::{
         ListPaymentsRequest, ListPaymentsResponse, Payment, PaymentRequest,
@@ -107,7 +108,9 @@ impl BreezSdk {
     /// disabled the periodic refunder does not run, and this method is the
     /// explicit entry point for driving the pass; when background tasks are
     /// enabled, it can be called to force an immediate refund pass.
-    pub async fn refund_pending_conversions(&self) -> Result<(), SdkError> {
+    pub async fn refund_pending_conversions(
+        &self,
+    ) -> Result<RefundPendingConversionsResponse, SdkError> {
         self.token_converter
             .refund_pending()
             .await

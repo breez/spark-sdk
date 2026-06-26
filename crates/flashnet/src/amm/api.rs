@@ -9,8 +9,9 @@ use tracing::debug;
 use super::models::{
     ClawbackIntent, ClawbackRequest, ClawbackResponse, ExecuteSwapIntent, ExecuteSwapRequest,
     ExecuteSwapResponse, FeatureName, FeatureStatus, FlashnetExecuteSwapResponse,
-    GetMinAmountsRequest, GetMinAmountsResponse, ListPoolsRequest, ListPoolsResponse,
-    ListUserSwapsRequest, ListUserSwapsResponse, MinAmount, PingResponse, SignedClawbackRequest,
+    GetMinAmountsRequest, GetMinAmountsResponse, ListClawbackTransfersRequest,
+    ListClawbackTransfersResponse, ListPoolsRequest, ListPoolsResponse, ListUserSwapsRequest,
+    ListUserSwapsResponse, MinAmount, PingResponse, SignedClawbackRequest,
     SignedExecuteSwapRequest, SignedExecuteSwapResponse, SimulateSwapRequest, SimulateSwapResponse,
 };
 use super::utils::generate_nonce;
@@ -66,6 +67,15 @@ impl FlashnetClient {
         self.ensure_ping_ok().await?;
 
         self.sign_clawback(request).await
+    }
+
+    pub async fn list_clawback_transfers(
+        &self,
+        request: ListClawbackTransfersRequest,
+    ) -> Result<ListClawbackTransfersResponse, FlashnetError> {
+        debug!("List clawback transfers request: {request:?}");
+        self.get_request("v1/clawback-transfers/list", Some(request))
+            .await
     }
 
     pub async fn get_min_amounts(
