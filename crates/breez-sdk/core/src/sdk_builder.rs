@@ -785,9 +785,13 @@ async fn build_spark_wallet(params: BuildSparkWalletParams) -> Result<Arc<SparkW
         wallet_builder = wallet_builder.with_cancellation_token(receiver);
     }
     if let Some(provider) = &params.context.jwt_header_provider {
-        wallet_builder = wallet_builder.with_so_extra_header_provider(
-            Arc::clone(provider) as Arc<dyn spark_wallet::HeaderProvider>
-        );
+        wallet_builder = wallet_builder
+            .with_so_extra_header_provider(
+                Arc::clone(provider) as Arc<dyn spark_wallet::HeaderProvider>
+            )
+            .with_ssp_extra_header_provider(
+                Arc::clone(provider) as Arc<dyn spark_wallet::HeaderProvider>
+            );
     }
     if let Some(observer) = params.payment_observer {
         let observer: Arc<dyn spark_wallet::TransferObserver> =
