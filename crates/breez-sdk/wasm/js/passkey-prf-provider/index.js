@@ -458,15 +458,19 @@ export class PasskeyProvider {
 
         const requestOptions = { publicKey };
         // Immediate UI mode: fast-fail with no UI when no credential is
-        // present so a single-CTA host can fall through to register. Only
-        // where the browser advertises it (`getClientCapabilities().immediateGet`).
-        // The fast NotAllowedError it raises on no-credential is classified
-        // as CredentialNotFound below. Immediate mode is discoverable-only:
-        // a non-empty allowCredentials throws, so clear the pin here.
-        if (options.preferImmediatelyAvailableCredentials) {
+        // present so a single-CTA host can fall through to register. Only on
+        // the first, unpinned probe (`allowList` empty): immediate mode is
+        // discoverable-only (rejects a non-empty allowCredentials) and spends
+        // the transient activation, which the pinned later ceremonies of a
+        // multi-salt derive no longer have. Once a credential is pinned we
+        // already know one exists, so the modal path (which keeps the pin) is
+        // correct and avoids a second, credential-substituting chooser. Only
+        // where the browser advertises it (`getClientCapabilities().immediateGet`);
+        // the fast NotAllowedError it raises on no-credential is classified as
+        // CredentialNotFound below.
+        if (options.preferImmediatelyAvailableCredentials && allowList.length === 0) {
             if (await supportsImmediateMediation()) {
                 requestOptions.uiMode = 'immediate';
-                publicKey.allowCredentials = [];
             } else {
                 // Surface the fallback: silently using standard mediation
                 // hides why a single-CTA probe still shows a sheet.
