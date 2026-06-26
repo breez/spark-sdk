@@ -49,13 +49,13 @@ One "Use Passkey" button: a silent sign-in for returning users, with automatic f
 
 The response's {{#name credential}} field carries whichever credential signed in or was registered. See [Credential metadata](./passkey_credential_metadata.md) for using it.
 
-Call it without a label to support multiple wallets per passkey: `labels` then holds the returning user's full set (the response wallet is the default label). Show a picker when it has more than one entry and {{#name PasskeyClient.sign_in}} to the chosen label.
+Call it without a label to support multiple wallets per passkey: {{#name labels}} then holds the returning user's full set (the response wallet is the default label). Show a picker when it has more than one entry and {{#name PasskeyClient.sign_in}} to the chosen label.
 
 {{#tabs passkey:connect-with-passkey}}
 
 ### Web flow
 
-{{#name PasskeyClient.connect_with_passkey}} works on web too, **where the browser supports immediate mediation** (recent Chromium). Check `immediate_mediation_supported` on {{#name PasskeyClient.check_availability}} and use the same single-button unified flow.
+{{#name PasskeyClient.connect_with_passkey}} works on web too, **where the browser supports immediate mediation** (recent Chromium). Check {{#name immediate_mediation_supported}} on {{#name PasskeyClient.check_availability}} and use the same single-button unified flow.
 
 Where it isn't supported (Safari, Firefox, older browsers), present two buttons: **Create a new passkey** (calls {{#name PasskeyClient.register}}) and **Sign in with a passkey** (calls {{#name PasskeyClient.sign_in}}). Without immediate mediation, WebAuthn reports "no credential" and "user cancelled" identically, so the SDK can't auto-detect the flow.
 
