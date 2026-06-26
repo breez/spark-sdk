@@ -30,6 +30,7 @@ impl BreezSdk {
             lnurl_client: params.lnurl_client,
             lnurl_server_client: params.lnurl_server_client,
             lnurl_auth_signer: params.lnurl_auth_signer,
+            encryption_available: params.encryption_available,
             event_emitter: params.event_emitter,
             shutdown_sender: params.shutdown_sender,
             runtime: params.runtime,

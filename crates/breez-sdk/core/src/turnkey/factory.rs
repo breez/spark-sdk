@@ -12,6 +12,7 @@ use crate::signer::{ExternalBreezSigner, ExternalSparkSigner};
 use super::accounts::xpriv_from_secret;
 use super::breez_signer::TurnkeyBreezSigner;
 use super::config::TurnkeyConfig;
+use super::error::TurnkeyError;
 use super::spark_signer::TurnkeySparkSigner;
 use super::transport::TurnkeyClient;
 use super::types::ADDRESS_FORMAT_COMPRESSED;
@@ -63,12 +64,26 @@ pub async fn create_turnkey_signer(config: TurnkeyConfig) -> Result<ExternalSign
         .await
         .map_err(to_signer_err)?;
     // Export a dedicated, non-Spark key to seed the local ECIES/HMAC signer, so
-    // no Spark key ever leaves the enclave.
-    let encryption_key = client
+    // no Spark key ever leaves the enclave. A policy that denies the export
+    // (HTTP 403) is not fatal: the signer runs without local encryption, so the
+    // SDK falls back to an unencrypted session store and features that depend on
+    // local ECIES/HMAC become unavailable; Spark and Lightning stay usable. Any
+    // other error is propagated.
+    let encryption = match client
         .export_secret_key(encryption_key_path(account), ADDRESS_FORMAT_COMPRESSED)
         .await
-        .map_err(to_signer_err)?;
-    let encryption = BreezSignerImpl::new(xpriv_from_secret(encryption_key, network));
+    {
+        Ok(key) => Some(BreezSignerImpl::new(xpriv_from_secret(key, network))),
+        Err(TurnkeyError::Http { status: 403, .. }) => {
+            tracing::warn!(
+                "Turnkey denied the encryption-key export (403): running without local \
+                 encryption (unencrypted session store; features that depend on local \
+                 ECIES/HMAC are unavailable)"
+            );
+            None
+        }
+        Err(e) => return Err(to_signer_err(e)),
+    };
     let breez_signer: Arc<dyn ExternalBreezSigner> = Arc::new(TurnkeyBreezSigner::new(
         client.clone(),
         network,

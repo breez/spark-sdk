@@ -184,6 +184,16 @@ pub(crate) async fn get_deposit_address(
     spark_wallet: &SparkWallet,
     new_address: bool,
 ) -> Result<String, SdkError> {
+    // Never hand out a static deposit address the signer cannot later claim or
+    // refund: both require exporting the static-deposit key, so if that export
+    // is denied, funds sent here would be stuck.
+    if !spark_wallet.static_deposit_export_available().await? {
+        return Err(SdkError::Signer(
+            "On-chain deposits cannot be claimed or refunded with the current signer, \
+             so no deposit address can be issued"
+                .to_string(),
+        ));
+    }
     if new_address {
         Ok(spark_wallet
             .rotate_static_deposit_address()

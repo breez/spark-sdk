@@ -116,4 +116,9 @@ pub trait ExternalBreezSigner: Send + Sync {
         message: Vec<u8>,
         path: String,
     ) -> Result<HashedMessageBytes, SignerError>;
+
+    /// Whether the signer can perform local ECIES/HMAC.
+    async fn encryption_available(&self) -> bool {
+        true
+    }
 }

@@ -304,3 +304,46 @@ async fn token_mint(#[case] backend: SignerBackend) -> Result<()> {
     info!("[{backend:?}] minted token {token_id}: {before} -> {after}");
     Ok(())
 }
+
+/// No-export end-to-end: under a Turnkey policy that denies
+/// `EXPORT_WALLET_ACCOUNT`, the wallet still connects (no 403 at construction;
+/// the session store falls back to unencrypted) and Spark receive works, but
+/// on-chain Bitcoin receive is refused — the static-deposit key can't be
+/// exported, so an address that could never be claimed or refunded is not issued.
+///
+/// Requires the `TURNKEY_*` user to carry an `EFFECT_DENY` policy on
+/// `EXPORT_WALLET_ACCOUNT` (see the no-export policy setup), so it is `#[ignore]`
+/// by default — the normal Turnkey CI creds allow export. Run explicitly:
+/// `cargo test -p breez-sdk-itest --features turnkey -- --ignored
+/// turnkey_no_export_gates_onchain_receive`.
+#[cfg(feature = "turnkey")]
+#[test_log::test(tokio::test)]
+#[ignore = "requires a Turnkey policy denying EXPORT_WALLET_ACCOUNT; run with --ignored"]
+async fn turnkey_no_export_gates_onchain_receive() -> Result<()> {
+    // `build_backend_sdk` syncs via `get_info(ensure_synced)`, so reaching here
+    // proves the wallet connected despite the denied encryption-key export.
+    let sdk = build_backend_sdk(SignerBackend::Turnkey).await?;
+
+    // Spark receive needs no export, so it still works.
+    let spark = sdk
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+    assert!(!spark.is_empty(), "expected a Spark address");
+
+    // On-chain Bitcoin receive is gated: a denied static-deposit export means a
+    // deposit could never be claimed or refunded, so issuing an address is
+    // refused.
+    let err = sdk
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
+        })
+        .await
+        .expect_err("on-chain receive must be gated under a no-export policy");
+    info!("on-chain receive correctly rejected under no-export: {err}");
+    Ok(())
+}

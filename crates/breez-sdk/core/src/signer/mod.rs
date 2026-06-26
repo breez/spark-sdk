@@ -52,6 +52,11 @@ pub trait BreezSigner: Send + Sync {
         key_path: &DerivationPath,
         input: &[u8],
     ) -> Result<Hmac<sha256::Hash>, SdkError>;
+
+    /// Whether the signer can perform local ECIES/HMAC.
+    async fn encryption_available(&self) -> bool {
+        true
+    }
 }
 
 // External signer support - private adapter

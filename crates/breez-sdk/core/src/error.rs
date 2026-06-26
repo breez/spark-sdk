@@ -330,6 +330,12 @@ pub enum SignerError {
     #[error("Decryption error: {0}")]
     Decryption(String),
 
+    #[error("Encryption unavailable: {0}")]
+    EncryptionUnavailable(String),
+
+    #[error("Permission denied: {0}")]
+    PermissionDenied(String),
+
     #[error("FROST error: {0}")]
     Frost(String),
 

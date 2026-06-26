@@ -34,11 +34,16 @@ fn to_signer_err<E: std::fmt::Display>(e: E) -> SignerError {
 
 /// SDK-layer signer backed by Turnkey. Sign/derive go to Turnkey; ECIES/HMAC
 /// delegate to `encryption`, an inner signer rooted at a single exported key.
+///
+/// `encryption` is `None` when the Turnkey policy denied the encryption-key
+/// export (`EXPORT_WALLET_ACCOUNT` 403). ECIES/HMAC then return
+/// `SignerError::EncryptionUnavailable`, and `encryption_available()` reports
+/// `false` so the SDK can run without an encrypted session store.
 pub(crate) struct TurnkeyBreezSigner {
     client: Arc<TurnkeyClient>,
     network: Network,
     account: u32,
-    encryption: BreezSignerImpl,
+    encryption: Option<BreezSignerImpl>,
 }
 
 impl TurnkeyBreezSigner {
@@ -46,7 +51,7 @@ impl TurnkeyBreezSigner {
         client: Arc<TurnkeyClient>,
         network: Network,
         account: u32,
-        encryption: BreezSignerImpl,
+        encryption: Option<BreezSignerImpl>,
     ) -> Self {
         Self {
             client,
@@ -54,6 +59,16 @@ impl TurnkeyBreezSigner {
             account,
             encryption,
         }
+    }
+
+    /// The local ECIES/HMAC backend, or `EncryptionUnavailable` when the
+    /// encryption-key export was denied at construction.
+    fn encryption(&self) -> Result<&BreezSignerImpl, SignerError> {
+        self.encryption.as_ref().ok_or_else(|| {
+            SignerError::EncryptionUnavailable(
+                "Turnkey policy denied the encryption-key export".to_string(),
+            )
+        })
     }
 
     /// Roots a caller-supplied path at the wallet identity master
@@ -146,7 +161,7 @@ impl ExternalBreezSigner for TurnkeyBreezSigner {
 
     async fn encrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
         let path = string_to_derivation_path(&path).map_err(to_signer_err)?;
-        self.encryption
+        self.encryption()?
             .encrypt_ecies(&message, &path)
             .await
             .map_err(to_signer_err)
@@ -154,7 +169,7 @@ impl ExternalBreezSigner for TurnkeyBreezSigner {
 
     async fn decrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
         let path = string_to_derivation_path(&path).map_err(to_signer_err)?;
-        self.encryption
+        self.encryption()?
             .decrypt_ecies(&message, &path)
             .await
             .map_err(to_signer_err)
@@ -191,10 +206,15 @@ impl ExternalBreezSigner for TurnkeyBreezSigner {
     ) -> Result<HashedMessageBytes, SignerError> {
         let path = string_to_derivation_path(&path).map_err(to_signer_err)?;
         let hmac = self
-            .encryption
+            .encryption()?
             .hmac_sha256(&path, &message)
             .await
             .map_err(to_signer_err)?;
         Ok(HashedMessageBytes::from_hmac(&hmac))
+    }
+
+    /// Whether the signer can perform local ECIES/HMAC.
+    async fn encryption_available(&self) -> bool {
+        self.encryption.is_some()
     }
 }

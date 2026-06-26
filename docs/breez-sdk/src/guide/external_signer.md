@@ -29,6 +29,13 @@ If you need full control over the signing process, you can implement the [Extern
 
 The default implementations of the two interfaces, [DefaultExternalSigner](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/core/src/signer/default_external.rs) and [DefaultExternalSparkSigner](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/core/src/signer/default_external_spark.rs), can be used as a reference for what's expected.
 
+### Signers That Can't Encrypt or Export Keys
+
+Both signer interfaces expose optional capability methods that default to `true`. Override them when your signer (for example, a hardware or policy-restricted enclave) cannot perform a given operation:
+
+- {{#name encryption_available}} on `ExternalBreezSigner` — return `false` when the signer cannot perform ECIES/HMAC (for example, a backend that offers no operation for it, or an enclave/policy that won't expose a key for it).
+- {{#name static_deposit_export_available}} on `ExternalSparkSigner` — return `false` when the signer cannot export the static-deposit key. The SDK then refuses to issue an on-chain Bitcoin deposit address, since funds sent to it could not be claimed or refunded.
+
 <div class="warning">
 <h4>Developer note</h4>
 

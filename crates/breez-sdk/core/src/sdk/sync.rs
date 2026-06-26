@@ -317,9 +317,29 @@ impl BreezSdk {
             .map(|(u, _)| u)
             .collect();
 
+        // Both claiming and refunding a static deposit require exporting the
+        // static-deposit key. When the signer denies that export (e.g. a Turnkey
+        // policy), neither is possible, so surface the mature UTXOs as
+        // unclaimable instead of retry-storming the export on every sync. The
+        // probe is memoized, and only runs when a mature UTXO exists, so a
+        // deposit-free wallet never triggers an export.
+        let export_available = if to_claim.is_empty() {
+            true
+        } else {
+            self.spark_wallet.static_deposit_export_available().await?
+        };
+
         let mut claimed_deposits: Vec<DepositInfo> = Vec::new();
         let mut unclaimed_deposits: Vec<DepositInfo> = Vec::new();
         for detailed_utxo in to_claim {
+            if !export_available {
+                let error = SdkError::Signer(
+                    "Deposit cannot be claimed or refunded with the current signer".to_string(),
+                );
+                unclaimed_deposits
+                    .push(self.record_unclaimed_deposit(&detailed_utxo, error).await?);
+                continue;
+            }
             match self
                 .claim_utxo(&detailed_utxo, self.config.max_deposit_claim_fee.clone())
                 .await
@@ -336,18 +356,8 @@ impl BreezSdk {
                         "Failed to claim utxo {}:{}: {e}",
                         detailed_utxo.txid, detailed_utxo.vout
                     );
-                    self.storage
-                        .update_deposit(
-                            detailed_utxo.txid.to_string(),
-                            detailed_utxo.vout,
-                            UpdateDepositPayload::ClaimError {
-                                error: e.clone().into(),
-                            },
-                        )
-                        .await?;
-                    let mut unclaimed_deposit = detailed_utxo.into_deposit_info(true);
-                    unclaimed_deposit.claim_error = Some(e.into());
-                    unclaimed_deposits.push(unclaimed_deposit);
+                    unclaimed_deposits
+                        .push(self.record_unclaimed_deposit(&detailed_utxo, e).await?);
                 }
             }
         }
@@ -365,6 +375,27 @@ impl BreezSdk {
                 .await;
         }
         Ok(())
+    }
+
+    /// Persists a claim failure on the deposit and returns the matching
+    /// `DepositInfo` (with `claim_error` set) for the `UnclaimedDeposits` event.
+    async fn record_unclaimed_deposit(
+        &self,
+        utxo: &DetailedUtxo,
+        error: SdkError,
+    ) -> Result<DepositInfo, SdkError> {
+        self.storage
+            .update_deposit(
+                utxo.txid.to_string(),
+                utxo.vout,
+                UpdateDepositPayload::ClaimError {
+                    error: error.clone().into(),
+                },
+            )
+            .await?;
+        let mut info = utxo.clone().into_deposit_info(true);
+        info.claim_error = Some(error.into());
+        Ok(info)
     }
 
     pub(super) async fn sync_lnurl_metadata(&self) -> Result<(), SdkError> {

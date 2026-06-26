@@ -112,4 +112,10 @@ pub trait ExternalSparkSigner: Send + Sync {
         &self,
         request: ExternalPrepareStaticDepositClaimRequest,
     ) -> Result<ExternalPreparedStaticDepositClaim, SignerError>;
+
+    /// Whether the signer can export the static-deposit secret key (required to
+    /// claim or refund an on-chain static deposit).
+    async fn static_deposit_export_available(&self) -> Result<bool, SignerError> {
+        Ok(true)
+    }
 }

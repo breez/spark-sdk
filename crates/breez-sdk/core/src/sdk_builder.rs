@@ -398,6 +398,9 @@ impl SdkBuilder {
         validate_server_mode(&self.config, background_services_enabled)?;
 
         let signers = build_signers(&self.config, self.signer_source)?;
+        let encryption_available = signers.base.encryption_available().await;
+        validate_signer_capabilities(&self.config, encryption_available)?;
+
         let context = resolve_context(self.context, &self.config).await?;
         let stores = resolve_storage(self.storage, &context, &signers.spark, &self.config).await?;
         let chain_service = resolve_chain_service(
@@ -425,6 +428,7 @@ impl SdkBuilder {
             stores.session_store.clone(),
             &signers.base,
             self.config.network,
+            encryption_available,
         )?;
 
         let spark_wallet = build_spark_wallet(BuildSparkWalletParams {
@@ -513,6 +517,7 @@ impl SdkBuilder {
             lnurl_client,
             lnurl_server_client,
             lnurl_auth_signer: signers.lnurl_auth,
+            encryption_available,
             shutdown_sender,
             runtime,
             spark_wallet,
@@ -566,6 +571,33 @@ fn validate_server_mode(
     if config.cross_chain_config.is_some() {
         return Err(SdkError::InvalidInput(
             "Cross-chain config must be unset when background tasks are disabled".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Rejects configs that require local encryption when the signer cannot provide
+/// it (e.g. a Turnkey policy denied the encryption-key export). Session-token
+/// persistence stays fine unencrypted (see `wrap_session_store`); these features
+/// are not, because they encrypt genuinely sensitive data with no safe plaintext
+/// fallback (sync records go to a remote server; Boltz swap secrets are claim
+/// keys/preimages that control funds).
+fn validate_signer_capabilities(
+    config: &Config,
+    encryption_available: bool,
+) -> Result<(), SdkError> {
+    if encryption_available {
+        return Ok(());
+    }
+    if config.real_time_sync_server_url.is_some() {
+        return Err(SdkError::InvalidInput(
+            "Real-time sync requires encryption that the current signer cannot provide".to_string(),
+        ));
+    }
+    if config.cross_chain_config.is_some() {
+        return Err(SdkError::InvalidInput(
+            "Cross-chain payments require encryption that the current signer cannot provide"
+                .to_string(),
         ));
     }
     Ok(())
@@ -759,21 +791,31 @@ fn finalize_spark_wallet_config(
     Ok(spark_wallet_config)
 }
 
-/// Wraps the resolved session store (or an in-memory default) in the encrypting
-/// + caching layers used by the SDK.
+/// Wraps the resolved session store (or an in-memory default) in the caching
+/// layer, plus the encrypting layer when the signer can encrypt.
+///
+/// When `encryption_available` is `false` (e.g. a Turnkey policy denied the
+/// encryption-key export), the encrypting layer is skipped and the provided
+/// store holds the bearer tokens in plaintext.
 fn wrap_session_store(
     session_store: Option<Arc<dyn SessionStore>>,
     signer: &Arc<dyn crate::signer::BreezSigner>,
     network: Network,
+    encryption_available: bool,
 ) -> Result<Arc<dyn SessionStore>, SdkError> {
     let inner = session_store.unwrap_or_else(|| Arc::new(InMemorySessionStore::default()));
-    let encrypting: Arc<dyn SessionStore> = Arc::new(
-        crate::session_store::EncryptingSessionStore::new(inner, signer.clone(), network).map_err(
-            |e| SdkError::Generic(format!("failed to set up session token encryption: {e}")),
-        )?,
-    );
+    let store: Arc<dyn SessionStore> = if encryption_available {
+        Arc::new(
+            crate::session_store::EncryptingSessionStore::new(inner, signer.clone(), network)
+                .map_err(|e| {
+                    SdkError::Generic(format!("failed to set up session token encryption: {e}"))
+                })?,
+        )
+    } else {
+        inner
+    };
     Ok(Arc::new(crate::session_store::CachingSessionStore::new(
-        encrypting,
+        store,
     )))
 }
 
@@ -999,6 +1041,124 @@ mod tests {
                 },
             );
         }
+    }
+
+    #[test]
+    fn validate_signer_capabilities_gates_encryption_features() {
+        // Encryption available: encryption-dependent features are allowed.
+        let mut config = default_config(Network::Regtest);
+        config.real_time_sync_server_url = Some("https://example.com".to_string());
+        assert!(super::validate_signer_capabilities(&config, true).is_ok());
+
+        // Encryption unavailable + real-time sync: rejected with a clear error.
+        let mut config = default_config(Network::Regtest);
+        config.real_time_sync_server_url = Some("https://example.com".to_string());
+        config.cross_chain_config = None;
+        match super::validate_signer_capabilities(&config, false) {
+            Err(SdkError::InvalidInput(m)) => {
+                assert!(m.contains("Real-time sync"), "got: {m}");
+            }
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+
+        // Encryption unavailable + no encryption-dependent feature: allowed, so a
+        // payments-only wallet still builds.
+        let mut config = default_config(Network::Regtest);
+        config.real_time_sync_server_url = None;
+        config.cross_chain_config = None;
+        assert!(super::validate_signer_capabilities(&config, false).is_ok());
+    }
+
+    #[tokio::test]
+    async fn wrap_session_store_skips_encryption_when_unavailable() {
+        use crate::Seed;
+        use crate::signer::BreezSigner;
+        use crate::signer::breez::BreezSignerImpl;
+        use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+        use spark_wallet::{Session, SessionStore, SessionStoreError};
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        // Inner store that exposes the raw bytes the wrapper writes through.
+        #[derive(Default)]
+        struct InspectableInner {
+            sessions: Mutex<HashMap<PublicKey, Session>>,
+        }
+        #[macros::async_trait]
+        impl SessionStore for InspectableInner {
+            async fn get_session(&self, key: &PublicKey) -> Result<Session, SessionStoreError> {
+                self.sessions
+                    .lock()
+                    .unwrap()
+                    .get(key)
+                    .cloned()
+                    .ok_or(SessionStoreError::NotFound)
+            }
+            async fn set_session(
+                &self,
+                key: &PublicKey,
+                session: Session,
+            ) -> Result<(), SessionStoreError> {
+                self.sessions.lock().unwrap().insert(*key, session);
+                Ok(())
+            }
+        }
+
+        fn seed_signer() -> Arc<dyn BreezSigner> {
+            let seed_bytes = Seed::Entropy(vec![7u8; 32]).to_bytes().unwrap();
+            let master =
+                spark_wallet::identity_master_key(&seed_bytes, Network::Regtest.into(), None)
+                    .unwrap();
+            Arc::new(BreezSignerImpl::new(master))
+        }
+        fn key() -> PublicKey {
+            let secp = Secp256k1::new();
+            PublicKey::from_secret_key(&secp, &SecretKey::from_slice(&[3u8; 32]).unwrap())
+        }
+
+        let token = "bearer-token".to_string();
+
+        // Encryption unavailable: the inner store holds the plaintext token.
+        let inner = Arc::new(InspectableInner::default());
+        let store =
+            super::wrap_session_store(Some(inner.clone()), &seed_signer(), Network::Regtest, false)
+                .unwrap();
+        store
+            .set_session(
+                &key(),
+                Session {
+                    token: token.clone(),
+                    expiration: 1,
+                },
+            )
+            .await
+            .unwrap();
+        let raw = inner.sessions.lock().unwrap().get(&key()).cloned().unwrap();
+        assert_eq!(
+            raw.token, token,
+            "unencrypted fallback must persist the plaintext token"
+        );
+
+        // Encryption available: the inner store holds ciphertext, not plaintext.
+        let inner = Arc::new(InspectableInner::default());
+        let store =
+            super::wrap_session_store(Some(inner.clone()), &seed_signer(), Network::Regtest, true)
+                .unwrap();
+        store
+            .set_session(
+                &key(),
+                Session {
+                    token: token.clone(),
+                    expiration: 1,
+                },
+            )
+            .await
+            .unwrap();
+        let raw = inner.sessions.lock().unwrap().get(&key()).cloned().unwrap();
+        assert_ne!(
+            raw.token, token,
+            "encrypted store must not persist the plaintext token"
+        );
     }
 
     #[tokio::test]
