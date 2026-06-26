@@ -69,11 +69,12 @@ impl WasmPrfProvider {
     /// Whether the browser advertises WebAuthn immediate mediation, the
     /// signal the WASM `PasskeyClient` folds into
     /// `checkAvailability().immediateMediationSupported`. A provider that
-    /// omits the method is assumed native-like (`true`); a present but
-    /// failing probe is treated as unsupported.
+    /// omits the method is treated as unsupported (`false`); a custom
+    /// provider opts in by implementing it. (Native reports `true` from the
+    /// core; only the WASM path consults this override.)
     pub async fn supports_immediate_mediation(&self) -> bool {
         if !self.js_has_method("supportsImmediateMediation", &self.supports_immediate) {
-            return true;
+            return false;
         }
         let Ok(promise) = self.inner.supports_immediate_mediation() else {
             return false;
