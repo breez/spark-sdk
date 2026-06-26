@@ -328,7 +328,9 @@ export interface DeriveSeedOptions {
     allowCredentials?: Uint8Array[];
     /**
      * Fast-fail when no local credential is available. On the web this maps
-     * to WebAuthn `mediation: 'immediate'`: `true` opts in where the browser
+     * to WebAuthn `uiMode: 'immediate'`, used only on the unpinned probe (a
+     * non-empty allowCredentials keeps the standard picker, since a pin means
+     * a credential is already known): `true` opts in where the browser
      * advertises support, `false` uses the standard picker. Unset uses the
      * provider default.
      */
