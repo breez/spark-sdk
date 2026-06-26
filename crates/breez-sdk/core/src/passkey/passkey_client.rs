@@ -124,10 +124,11 @@ pub struct ConnectWithPasskeyRequest {
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub label: Option<String>,
 
-    /// Optional credential IDs to restrict the silent sign-in
-    /// attempt to (reauthentication path). See
-    /// [`SignInRequest::allow_credentials`]. Ignored on the fallback
-    /// registration path.
+    /// Optional credential IDs to restrict the sign-in attempt to
+    /// (reauthentication path). A non-empty list runs the modal sign-in
+    /// rather than the immediate probe (a pin means a credential is already
+    /// known). See [`SignInRequest::allow_credentials`]. Ignored on the
+    /// fallback registration path.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub allow_credentials: Option<Vec<Vec<u8>>>,
 
