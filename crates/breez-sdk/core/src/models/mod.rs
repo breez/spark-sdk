@@ -1272,7 +1272,7 @@ pub enum ReceivePaymentMethod {
     },
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SendPaymentMethod {
     BitcoinAddress {
@@ -1342,7 +1342,7 @@ pub enum SendPaymentMethod {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendOnchainFeeQuote {
     pub id: String,
     pub expires_at: u64,
@@ -1352,7 +1352,7 @@ pub struct SendOnchainFeeQuote {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendOnchainSpeedFeeQuote {
     pub user_fee_sat: u64,
     pub l1_broadcast_fee_sat: u64,
@@ -1561,6 +1561,56 @@ pub enum PaymentRequest {
     },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum UnsignedTransferPackage {
+    Swap {
+        prepare_transfer: crate::signer::ExternalPrepareTransferRequest,
+        target_amounts: Vec<u64>,
+    },
+    Transfer {
+        prepare_transfer: crate::signer::ExternalPrepareTransferRequest,
+    },
+    Token {
+        prepare_token_transaction: crate::signer::ExternalPrepareTokenTransactionRequest,
+        token_context: Vec<u8>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum SignedTransferPackage {
+    Transfer {
+        prepare_transfer: crate::signer::ExternalPrepareTransferRequest,
+        signed: crate::signer::ExternalPreparedTransfer,
+    },
+    Token {
+        prepare_token_transaction: crate::signer::ExternalPrepareTokenTransactionRequest,
+        token_context: Vec<u8>,
+        signed: crate::signer::ExternalPreparedTokenTransaction,
+    },
+    Swap {
+        prepare_transfer: crate::signer::ExternalPrepareTransferRequest,
+        target_amounts: Vec<u64>,
+        signed: crate::signer::ExternalPreparedTransfer,
+    },
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum BuildTransferPackageOptions {
+    BitcoinAddress {
+        confirmation_speed: OnchainConfirmationSpeed,
+    },
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct BuildUnsignedTransferPackageRequest {
+    pub prepare_response: PrepareSendPaymentResponse,
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub options: Option<BuildTransferPackageOptions>,
+}
+
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentRequest {
     pub payment_request: PaymentRequest,
@@ -1588,7 +1638,7 @@ pub struct PrepareSendPaymentRequest {
     pub fee_policy: Option<FeePolicy>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
@@ -1648,6 +1698,20 @@ pub struct SendPaymentRequest {
     /// The idempotency key must be a valid UUID.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub idempotency_key: Option<String>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PublishSignedTransferPackageRequest {
+    pub prepare_response: PrepareSendPaymentResponse,
+    pub signed_package: SignedTransferPackage,
+}
+
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum PublishSignedTransferPackageResponse {
+    SwapCompleted,
+    PaymentSent { payment: Payment },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2145,4 +2209,32 @@ pub struct RegisterWebhookResponse {
 pub struct UnregisterWebhookRequest {
     /// The unique identifier of the webhook to unregister.
     pub webhook_id: String,
+}
+
+#[cfg(test)]
+mod client_signing_tests {
+    use super::*;
+
+    #[test]
+    fn prepare_response_json_round_trips() {
+        let resp = PrepareSendPaymentResponse {
+            payment_method: SendPaymentMethod::SparkAddress {
+                address: "spark1...".to_string(),
+                fee: 0,
+                token_identifier: None,
+            },
+            amount: 1000,
+            token_identifier: None,
+            conversion_estimate: None,
+            fee_policy: FeePolicy::FeesExcluded,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let back: PrepareSendPaymentResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.amount, 1000);
+        assert!(matches!(
+            back.payment_method,
+            SendPaymentMethod::SparkAddress { fee: 0, .. }
+        ));
+        assert!(matches!(back.fee_policy, FeePolicy::FeesExcluded));
+    }
 }

@@ -8,11 +8,94 @@ use crate::{
     ConversionEstimate, SendPaymentMethod,
     error::SdkError,
     events::SdkEvent,
-    models::{SendPaymentRequest, SendPaymentResponse},
+    models::{
+        PrepareSendPaymentResponse, PublishSignedTransferPackageResponse, SendPaymentRequest,
+        SendPaymentResponse, SignedTransferPackage,
+    },
     sdk::BreezSdk,
+    signer::{ExternalPrepareTransferRequest, ExternalPreparedTransfer},
 };
 
 use super::conversion;
+
+pub(in crate::sdk::payments) async fn publish_signed_transfer_package(
+    sdk: &BreezSdk,
+    prepare_response: &PrepareSendPaymentResponse,
+    signed_package: &SignedTransferPackage,
+) -> Result<PublishSignedTransferPackageResponse, SdkError> {
+    let res = match signed_package {
+        SignedTransferPackage::Swap { .. } => {
+            super::client_signing::submit_swap(sdk, signed_package).await?;
+            return Ok(PublishSignedTransferPackageResponse::SwapCompleted);
+        }
+        SignedTransferPackage::Transfer {
+            prepare_transfer,
+            signed,
+        } => deferred_transfer_send(sdk, prepare_response, prepare_transfer, signed).await,
+        SignedTransferPackage::Token {
+            token_context,
+            signed,
+            ..
+        } => spark_address::send_token_signed(sdk, token_context, signed).await,
+    }?;
+    sdk.event_emitter
+        .emit(&SdkEvent::from_payment(res.payment.clone()))
+        .await;
+    Ok(PublishSignedTransferPackageResponse::PaymentSent {
+        payment: res.payment,
+    })
+}
+
+async fn deferred_transfer_send(
+    sdk: &BreezSdk,
+    prepare_response: &PrepareSendPaymentResponse,
+    prepare_transfer: &ExternalPrepareTransferRequest,
+    signed: &ExternalPreparedTransfer,
+) -> Result<SendPaymentResponse, SdkError> {
+    if let Ok(payment) = sdk
+        .storage
+        .get_payment_by_id(prepare_transfer.transfer_id.clone())
+        .await
+    {
+        return Ok(SendPaymentResponse { payment });
+    }
+
+    match &prepare_response.payment_method {
+        SendPaymentMethod::SparkAddress { .. } => {
+            spark_address::send_signed(sdk, prepare_transfer, signed, None).await
+        }
+        SendPaymentMethod::SparkInvoice {
+            spark_invoice_details,
+            ..
+        } => {
+            spark_address::send_signed(
+                sdk,
+                prepare_transfer,
+                signed,
+                Some(spark_invoice_details.invoice.clone()),
+            )
+            .await
+        }
+        SendPaymentMethod::Bolt11Invoice {
+            invoice_details, ..
+        } => {
+            bolt11::send_signed(
+                sdk,
+                prepare_transfer,
+                signed,
+                invoice_details,
+                prepare_response,
+            )
+            .await
+        }
+        SendPaymentMethod::BitcoinAddress { .. } => {
+            bitcoin_address::send_signed(sdk, prepare_transfer, signed, prepare_response).await
+        }
+        SendPaymentMethod::CrossChainAddress { .. } => Err(SdkError::InvalidInput(
+            "client signing send is not supported for cross-chain sends".to_string(),
+        )),
+    }
+}
 
 // Top-level dispatcher for `send_payment`: routes between the convert-then-send
 // pipeline and the direct send, then emits the payment event.

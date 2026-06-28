@@ -61,7 +61,7 @@ pub(super) async fn prepare(
     let response_token_identifier =
         conversion::response_token_identifier(conversion_estimate.as_ref(), token_identifier);
 
-    Ok(PrepareSendPaymentResponse {
+    let response = PrepareSendPaymentResponse {
         payment_method: SendPaymentMethod::SparkAddress {
             address: details.address.clone(),
             fee: 0,
@@ -71,7 +71,9 @@ pub(super) async fn prepare(
         token_identifier: response_token_identifier,
         conversion_estimate,
         fee_policy,
-    })
+    };
+
+    Ok(response)
 }
 
 #[cfg(test)]

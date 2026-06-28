@@ -146,7 +146,7 @@ pub(super) async fn prepare(
         effective_token_identifier,
     );
 
-    Ok(PrepareSendPaymentResponse {
+    let response = PrepareSendPaymentResponse {
         payment_method: SendPaymentMethod::SparkInvoice {
             spark_invoice_details: details.clone(),
             fee: 0,
@@ -156,7 +156,9 @@ pub(super) async fn prepare(
         token_identifier: response_token_identifier,
         conversion_estimate,
         fee_policy,
-    })
+    };
+
+    Ok(response)
 }
 
 #[cfg(test)]

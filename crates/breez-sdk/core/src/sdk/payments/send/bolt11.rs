@@ -6,8 +6,9 @@ use tracing::info;
 use crate::{
     Bolt11InvoiceDetails, ConversionOptions, ConversionPurpose, FeePolicy, SendPaymentOptions,
     error::SdkError,
-    models::{SendPaymentRequest, SendPaymentResponse},
+    models::{PrepareSendPaymentResponse, SendPaymentRequest, SendPaymentResponse},
     sdk::BreezSdk,
+    signer::{ExternalPrepareTransferRequest, ExternalPreparedTransfer},
     token_conversion::{ConversionAmount, TokenConversionResponse},
     utils::fees::fee_overpayment,
 };
@@ -94,6 +95,30 @@ pub(super) async fn send(
         )
         .await?;
 
+    Ok(SendPaymentResponse { payment })
+}
+
+pub(super) async fn send_signed(
+    sdk: &BreezSdk,
+    prepare_transfer: &ExternalPrepareTransferRequest,
+    signed: &ExternalPreparedTransfer,
+    invoice_details: &Bolt11InvoiceDetails,
+    prepare_response: &PrepareSendPaymentResponse,
+) -> Result<SendPaymentResponse, SdkError> {
+    let amount_to_send = Some(u64::try_from(prepare_response.amount)?);
+    let result = Box::pin(sdk.spark_wallet.publish_lightning_send_package(
+        prepare_transfer.transfer_id()?,
+        prepare_transfer.leaf_ids()?,
+        invoice_details.invoice.bolt11.clone(),
+        amount_to_send,
+        signed.to_prepared_transfer()?,
+    ))
+    .await?;
+
+    let payment = sdk
+        .lightning_sender
+        .payment_from_pay_result(result, prepare_response.amount, 0)
+        .await?;
     Ok(SendPaymentResponse { payment })
 }
 
