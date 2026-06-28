@@ -65,9 +65,7 @@ impl BreezSdk {
         &self,
         filter: CrossChainRouteFilter,
     ) -> Result<Vec<CrossChainRoutePair>, SdkError> {
-        self.inner
-            .get_cross_chain_routes(&filter)
-            .await
+        self.inner.get_cross_chain_routes(&filter).await
     }
 
     pub async fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {
@@ -120,11 +118,25 @@ impl BreezSdk {
         self.inner.prepare_send_payment(request).await
     }
 
+    pub async fn build_unsigned_transfer_package(
+        &self,
+        request: BuildUnsignedTransferPackageRequest,
+    ) -> Result<UnsignedTransferPackage, SdkError> {
+        self.inner.build_unsigned_transfer_package(request).await
+    }
+
     pub async fn send_payment(
         &self,
         request: SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
         self.inner.send_payment(request).await
+    }
+
+    pub async fn publish_signed_transfer_package(
+        &self,
+        request: PublishSignedTransferPackageRequest,
+    ) -> Result<PublishSignedTransferPackageResponse, SdkError> {
+        self.inner.publish_signed_transfer_package(request).await
     }
 
     pub async fn sync_wallet(
