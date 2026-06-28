@@ -69,7 +69,10 @@ const MAX_LEAF_SPENT_RETRIES: usize = 3;
 
 pub enum SendPackagePreparation {
     Ready(PrepareTransferRequest),
-    SwapRequired(PrepareTransferRequest),
+    SwapRequired {
+        prepare_transfer: PrepareTransferRequest,
+        target_amounts: Vec<u64>,
+    },
 }
 
 /// Backoff for transient operator errors that clear on their own: rate limiting

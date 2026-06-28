@@ -32,10 +32,14 @@ impl SparkWallet {
                 Ok(SendPackagePreparation::Ready(prepare_transfer))
             }
             LeafSelection::SwapNeeded(leaves) => {
+                let swap_targets = vec![amount_sat];
                 let prepare_transfer = self
                     .swap_service
-                    .prepare_swap(&leaves, Some(vec![amount_sat]))?;
-                Ok(SendPackagePreparation::SwapRequired(prepare_transfer))
+                    .prepare_swap(&leaves, Some(swap_targets.clone()))?;
+                Ok(SendPackagePreparation::SwapRequired {
+                    prepare_transfer,
+                    target_amounts: swap_targets,
+                })
             }
         }
     }
@@ -138,10 +142,14 @@ impl SparkWallet {
                 Ok(SendPackagePreparation::Ready(prepare_transfer))
             }
             LeafSelection::SwapNeeded(leaves) => {
+                let swap_targets = vec![total_amount_sat];
                 let prepare_transfer = self
                     .swap_service
-                    .prepare_swap(&leaves, Some(vec![total_amount_sat]))?;
-                Ok(SendPackagePreparation::SwapRequired(prepare_transfer))
+                    .prepare_swap(&leaves, Some(swap_targets.clone()))?;
+                Ok(SendPackagePreparation::SwapRequired {
+                    prepare_transfer,
+                    target_amounts: swap_targets,
+                })
             }
         }
     }
@@ -214,10 +222,14 @@ impl SparkWallet {
                 Ok(SendPackagePreparation::Ready(prepare_transfer))
             }
             LeafSelection::SwapNeeded(leaves) => {
+                let swap_targets = vec![amount_sats, fee_sats];
                 let prepare_transfer = self
                     .swap_service
-                    .prepare_swap(&leaves, Some(vec![amount_sats, fee_sats]))?;
-                Ok(SendPackagePreparation::SwapRequired(prepare_transfer))
+                    .prepare_swap(&leaves, Some(swap_targets.clone()))?;
+                Ok(SendPackagePreparation::SwapRequired {
+                    prepare_transfer,
+                    target_amounts: swap_targets,
+                })
             }
         }
     }

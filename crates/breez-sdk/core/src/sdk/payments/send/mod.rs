@@ -79,14 +79,18 @@ async fn deferred_transfer_send(
         SendPaymentMethod::Bolt11Invoice {
             invoice_details, ..
         } => {
-            bolt11::send_signed(
-                sdk,
-                prepare_transfer,
-                signed,
-                invoice_details,
-                prepare_response,
-            )
-            .await
+            if super::client_signing::prefers_bolt11_spark_route(sdk, prepare_response) {
+                spark_address::send_signed(sdk, prepare_transfer, signed, None).await
+            } else {
+                bolt11::send_signed(
+                    sdk,
+                    prepare_transfer,
+                    signed,
+                    invoice_details,
+                    prepare_response,
+                )
+                .await
+            }
         }
         SendPaymentMethod::BitcoinAddress { .. } => {
             bitcoin_address::send_signed(sdk, prepare_transfer, signed, prepare_response).await

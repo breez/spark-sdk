@@ -16,19 +16,35 @@ use crate::{
     },
 };
 
-fn to_unsigned_package(
-    prep: SendPackagePreparation,
-    swap_target_amounts: Vec<u64>,
-) -> Result<UnsignedTransferPackage, SdkError> {
+fn to_unsigned_package(prep: SendPackagePreparation) -> Result<UnsignedTransferPackage, SdkError> {
     Ok(match prep {
         SendPackagePreparation::Ready(pt) => UnsignedTransferPackage::Transfer {
             prepare_transfer: ExternalPrepareTransferRequest::from_prepare_transfer_request(&pt)?,
         },
-        SendPackagePreparation::SwapRequired(pt) => UnsignedTransferPackage::Swap {
-            prepare_transfer: ExternalPrepareTransferRequest::from_prepare_transfer_request(&pt)?,
-            target_amounts: swap_target_amounts,
+        SendPackagePreparation::SwapRequired {
+            prepare_transfer,
+            target_amounts,
+        } => UnsignedTransferPackage::Swap {
+            prepare_transfer: ExternalPrepareTransferRequest::from_prepare_transfer_request(
+                &prepare_transfer,
+            )?,
+            target_amounts,
         },
     })
+}
+
+pub(in crate::sdk::payments) fn prefers_bolt11_spark_route(
+    sdk: &BreezSdk,
+    prepare_response: &PrepareSendPaymentResponse,
+) -> bool {
+    sdk.config.prefer_spark_over_lightning
+        && matches!(
+            &prepare_response.payment_method,
+            SendPaymentMethod::Bolt11Invoice {
+                spark_transfer_fee_sats: Some(_),
+                ..
+            }
+        )
 }
 
 fn reject_conversion(response: &PrepareSendPaymentResponse) -> Result<(), SdkError> {
@@ -59,17 +75,29 @@ pub(in crate::sdk::payments) async fn build_unsigned_transfer_package(
             lightning_fee_sats,
             ..
         } => {
+            if prefers_bolt11_spark_route(sdk, prepare_response) {
+                let spark_address = sdk
+                    .spark_wallet
+                    .extract_spark_address(&invoice_details.invoice.bolt11)?
+                    .ok_or_else(|| {
+                        SdkError::Generic("invoice expected to carry a spark address".to_string())
+                    })?;
+                let receiver = spark_address
+                    .to_address_string()
+                    .map_err(|e| SdkError::Generic(e.to_string()))?;
+                return build_spark_package(sdk, prepare_response, &receiver).await;
+            }
             let amount_sat: u64 = prepare_response.amount.try_into()?;
             let prep = sdk
                 .spark_wallet
                 .prepare_lightning_send_package(
                     &invoice_details.invoice.bolt11,
                     Some(amount_sat),
-                    None,
+                    Some(*lightning_fee_sats),
                     None,
                 )
                 .await?;
-            to_unsigned_package(prep, vec![amount_sat.saturating_add(*lightning_fee_sats)])
+            to_unsigned_package(prep)
         }
         SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
             build_coop_exit_package(sdk, prepare_response, address, fee_quote, options).await
@@ -96,7 +124,7 @@ async fn build_spark_package(
         .spark_wallet
         .prepare_transfer_package(amount_sat, &spark_address, None)
         .await?;
-    to_unsigned_package(prep, vec![amount_sat])
+    to_unsigned_package(prep)
 }
 
 async fn build_token_package(
@@ -148,7 +176,6 @@ async fn build_coop_exit_package(
     let amount_sat: u64 = prepare_response.amount.try_into()?;
     let exit_speed: ExitSpeed = confirmation_speed.clone().into();
     let coop_fee_quote: CoopExitFeeQuote = fee_quote.clone().into();
-    let fee_sats = coop_fee_quote.fee_sats(&exit_speed);
     let prep = sdk
         .spark_wallet
         .prepare_coop_exit_package(
@@ -159,7 +186,7 @@ async fn build_coop_exit_package(
             None,
         )
         .await?;
-    to_unsigned_package(prep, vec![amount_sat, fee_sats])
+    to_unsigned_package(prep)
 }
 
 pub(in crate::sdk::payments) async fn submit_swap(
