@@ -579,6 +579,39 @@ class MysqlTreeStore {
     }
   }
 
+  async tryReserveLeavesByIds(leafIds, purpose) {
+    try {
+      return await this._withWriteTransaction(async (conn) => {
+        if (!leafIds || leafIds.length === 0) {
+          throw new TreeStoreError("NonReservableLeaves");
+        }
+        // Every requested leaf must be available and unreserved; otherwise
+        // reserve nothing (the transaction rolls back).
+        const placeholders = leafIds.map(() => "?").join(", ");
+        const [availableRows] = await conn.query(
+          `SELECT id FROM brz_tree_leaves
+           WHERE user_id = ? AND id IN (${placeholders})
+             AND status = 'Available' AND is_missing_from_operators = 0
+             AND reservation_id IS NULL`,
+          [this.identity, ...leafIds]
+        );
+        if (availableRows.length !== leafIds.length) {
+          throw new TreeStoreError("NonReservableLeaves");
+        }
+        const fullLeaves = await this._fetchFullLeavesByIds(conn, leafIds);
+        const reservationId = this._generateId();
+        await this._createReservation(conn, reservationId, fullLeaves, purpose, 0);
+        return { id: reservationId, leaves: fullLeaves };
+      });
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to try reserve leaves by ids: ${error.message}`,
+        error
+      );
+    }
+  }
+
   async now() {
     try {
       const [rows] = await this.pool.query("SELECT UTC_TIMESTAMP(6) AS now");

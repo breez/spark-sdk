@@ -13,7 +13,7 @@ use deadpool_postgres::Pool;
 use macros::async_trait;
 use spark_wallet::{
     LeafLike, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
-    TargetAmounts, TreeNode, TreeNodeStatus, TreeServiceError, TreeStore,
+    TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore,
     select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
 };
 use tokio::sync::watch;
@@ -767,6 +767,50 @@ impl TreeStore for PostgresTreeStore {
         result
     }
 
+    async fn try_reserve_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        if leaf_ids.is_empty() {
+            return Err(TreeServiceError::NonReservableLeaves);
+        }
+        let reservation_id = Uuid::now_v7().to_string();
+        let ids: Vec<String> = leaf_ids.iter().map(ToString::to_string).collect();
+
+        let mut client = self.pool.get().await.map_err(map_err)?;
+        let tx = client.transaction().await.map_err(map_err)?;
+        self.acquire_write_lock(&tx).await?;
+
+        // Every requested leaf must be available and unreserved; otherwise
+        // reserve nothing (the transaction is dropped without commit).
+        let available = tx
+            .query(
+                r"
+                SELECT id FROM brz_tree_leaves
+                WHERE user_id = $1
+                  AND id = ANY($2)
+                  AND status = 'Available'
+                  AND is_missing_from_operators = FALSE
+                  AND reservation_id IS NULL
+                ",
+                &[&self.identity, &ids],
+            )
+            .await
+            .map_err(map_err)?;
+        if available.len() != ids.len() {
+            return Err(TreeServiceError::NonReservableLeaves);
+        }
+
+        let selected_leaves = self.resolve_full_leaves(&tx, &ids).await?;
+        self.create_reservation(&tx, &reservation_id, &selected_leaves, purpose, 0)
+            .await?;
+        tx.commit().await.map_err(map_err)?;
+        self.notify_balance_change();
+
+        Ok(LeavesReservation::new(selected_leaves, reservation_id))
+    }
+
     async fn now(&self) -> Result<SystemTime, TreeServiceError> {
         let client = self.pool.get().await.map_err(map_err)?;
         let row = client
@@ -1472,6 +1516,18 @@ mod tests {
     async fn test_reserve_leaves() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_reserve_leaves(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_leaves_by_ids() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_reserve_leaves_by_ids(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_leaves_by_ids_not_available() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_reserve_leaves_by_ids_not_available(&fixture.store).await;
     }
 
     #[tokio::test]

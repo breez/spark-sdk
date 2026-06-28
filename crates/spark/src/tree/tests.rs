@@ -282,6 +282,60 @@ pub async fn test_reserve_leaves(store: &dyn TreeStore) {
     assert!(!reservation.id.is_empty());
 }
 
+pub async fn test_reserve_leaves_by_ids(store: &dyn TreeStore) {
+    let leaves = vec![
+        create_test_tree_node("node1", 100),
+        create_test_tree_node("node2", 200),
+        create_test_tree_node("node3", 300),
+    ];
+    store.add_leaves(&leaves).await.unwrap();
+
+    let ids = vec![leaves[0].id.clone(), leaves[2].id.clone()];
+    let reservation = store
+        .try_reserve_leaves_by_ids(&ids, ReservationPurpose::Payment)
+        .await
+        .unwrap();
+
+    assert_eq!(reservation.leaves.len(), 2);
+    assert!(reservation.leaves.iter().any(|l| l.id == leaves[0].id));
+    assert!(reservation.leaves.iter().any(|l| l.id == leaves[2].id));
+    assert!(!reservation.id.is_empty());
+
+    let all = get_all(store).await;
+    assert_eq!(all.reserved_for_payment.len(), 2);
+    assert_eq!(all.available.len(), 1);
+    assert_eq!(all.available[0].id, leaves[1].id);
+}
+
+pub async fn test_reserve_leaves_by_ids_not_available(store: &dyn TreeStore) {
+    let leaves = vec![create_test_tree_node("node1", 100)];
+    store.add_leaves(&leaves).await.unwrap();
+
+    let ids = vec![leaves[0].id.clone()];
+    store
+        .try_reserve_leaves_by_ids(&ids, ReservationPurpose::Payment)
+        .await
+        .unwrap();
+
+    // Already reserved: no longer available, so reserving it again must fail
+    // and reserve nothing.
+    assert!(matches!(
+        store
+            .try_reserve_leaves_by_ids(&ids, ReservationPurpose::Payment)
+            .await,
+        Err(TreeServiceError::NonReservableLeaves)
+    ));
+
+    // A nonexistent id is not reservable.
+    let missing = vec![TreeNodeId::from_str("missing_node").unwrap()];
+    assert!(matches!(
+        store
+            .try_reserve_leaves_by_ids(&missing, ReservationPurpose::Payment)
+            .await,
+        Err(TreeServiceError::NonReservableLeaves)
+    ));
+}
+
 pub async fn test_cancel_reservation(store: &dyn TreeStore) {
     let leaves = vec![
         create_test_tree_node("node1", 100),

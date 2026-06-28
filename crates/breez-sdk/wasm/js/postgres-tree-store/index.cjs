@@ -594,6 +594,42 @@ class PostgresTreeStore {
     }
   }
 
+  async tryReserveLeavesByIds(leafIds, purpose) {
+    try {
+      return await this._withWriteTransaction(async (client) => {
+        if (!leafIds || leafIds.length === 0) {
+          throw new TreeStoreError("NonReservableLeaves");
+        }
+        // Every requested leaf must be available and unreserved; otherwise
+        // reserve nothing (the transaction rolls back).
+        const availableResult = await client.query(
+          `
+          SELECT id FROM brz_tree_leaves
+          WHERE user_id = $1
+            AND id = ANY($2)
+            AND status = 'Available'
+            AND is_missing_from_operators = FALSE
+            AND reservation_id IS NULL
+        `,
+          [this.identity, leafIds]
+        );
+        if (availableResult.rows.length !== leafIds.length) {
+          throw new TreeStoreError("NonReservableLeaves");
+        }
+        const fullLeaves = await this._fetchFullLeavesByIds(client, leafIds);
+        const reservationId = this._generateId();
+        await this._createReservation(client, reservationId, fullLeaves, purpose, 0);
+        return { id: reservationId, leaves: fullLeaves };
+      });
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to try reserve leaves by ids: ${error.message}`,
+        error
+      );
+    }
+  }
+
   _maxTargetForPrefilter(targetAmounts) {
     if (!targetAmounts) return Number.MAX_SAFE_INTEGER;
     if (targetAmounts.type === "amountAndFee") {

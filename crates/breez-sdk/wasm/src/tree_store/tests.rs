@@ -93,6 +93,18 @@ async fn test_reserve_leaves() {
 }
 
 #[wasm_bindgen_test]
+async fn test_reserve_leaves_by_ids() {
+    let store = create_test_tree_store("pg_tree_reserve_by_ids").await;
+    breez_sdk_spark::tree_store_tests::test_reserve_leaves_by_ids(&store).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_reserve_leaves_by_ids_not_available() {
+    let store = create_test_tree_store("pg_tree_reserve_by_ids_na").await;
+    breez_sdk_spark::tree_store_tests::test_reserve_leaves_by_ids_not_available(&store).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_cancel_reservation() {
     let store = create_test_tree_store("pg_tree_cancel_res").await;
     breez_sdk_spark::tree_store_tests::test_cancel_reservation(&store).await;

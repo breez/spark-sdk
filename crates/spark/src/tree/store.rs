@@ -1043,6 +1043,16 @@ mod tests {
     }
 
     #[async_test_all]
+    async fn test_reserve_leaves_by_ids() {
+        shared_tests::test_reserve_leaves_by_ids(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_reserve_leaves_by_ids_not_available() {
+        shared_tests::test_reserve_leaves_by_ids_not_available(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
     async fn test_cancel_reservation() {
         shared_tests::test_cancel_reservation(&InMemoryTreeStore::new()).await;
     }

@@ -27,7 +27,7 @@ use mysql_async::{Conn, Params, Pool, Value};
 use platform_utils::time::{Instant, SystemTime};
 use spark_wallet::{
     LeafLike, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
-    TargetAmounts, TreeNode, TreeNodeStatus, TreeServiceError, TreeStore,
+    TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore,
     select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
 };
 use tokio::sync::watch;
@@ -513,6 +513,28 @@ impl TreeStore for MysqlTreeStore {
             self.notify_balance_change();
         }
         Ok(reserve_result)
+    }
+
+    async fn try_reserve_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        if leaf_ids.is_empty() {
+            return Err(TreeServiceError::NonReservableLeaves);
+        }
+        let reservation_id = Uuid::now_v7().to_string();
+        let ids: Vec<String> = leaf_ids.iter().map(ToString::to_string).collect();
+
+        let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+        self.acquire_write_lock(&mut conn).await?;
+        let result = self
+            .reserve_leaves_by_ids_inner(&mut conn, &reservation_id, &ids, purpose)
+            .await;
+        self.release_write_lock_quiet(&mut conn).await;
+        let reservation = result?;
+        self.notify_balance_change();
+        Ok(reservation)
     }
 
     async fn now(&self) -> Result<SystemTime, TreeServiceError> {
@@ -1190,6 +1212,45 @@ impl MysqlTreeStore {
         result
     }
 
+    async fn reserve_leaves_by_ids_inner(
+        &self,
+        conn: &mut Conn,
+        reservation_id: &str,
+        ids: &[String],
+        purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
+
+        // Every requested leaf must be available and unreserved; otherwise
+        // reserve nothing (the transaction rolls back on drop).
+        let placeholders = build_placeholders(ids.len());
+        let sql = format!(
+            "SELECT id FROM brz_tree_leaves \
+             WHERE user_id = ? AND id IN ({placeholders}) \
+               AND status = 'Available' AND is_missing_from_operators = 0 \
+               AND reservation_id IS NULL"
+        );
+        let mut params: Vec<Value> = Vec::with_capacity(ids.len().saturating_add(1));
+        params.push(Value::from(self.identity.clone()));
+        params.extend(ids.iter().cloned().map(Value::from));
+        let available: Vec<String> = tx
+            .exec(&sql, Params::Positional(params))
+            .await
+            .map_err(map_err)?;
+        if available.len() != ids.len() {
+            return Err(TreeServiceError::NonReservableLeaves);
+        }
+
+        let selected_leaves = self.resolve_full_leaves(&mut tx, ids).await?;
+        self.create_reservation(&mut tx, reservation_id, &selected_leaves, purpose, 0)
+            .await?;
+        tx.commit().await.map_err(map_err)?;
+        Ok(LeavesReservation::new(
+            selected_leaves,
+            reservation_id.to_string(),
+        ))
+    }
+
     fn slim_max_target(target_amounts: Option<&TargetAmounts>) -> u64 {
         match target_amounts {
             Some(TargetAmounts::AmountAndFee {
@@ -1819,6 +1880,18 @@ mod tests {
     async fn test_reserve_leaves() {
         let fixture = MysqlTreeStoreTestFixture::new().await;
         shared_tests::test_reserve_leaves(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_leaves_by_ids() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_reserve_leaves_by_ids(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_leaves_by_ids_not_available() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_reserve_leaves_by_ids_not_available(&fixture.store).await;
     }
 
     #[tokio::test]
