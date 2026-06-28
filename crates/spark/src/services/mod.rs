@@ -16,7 +16,7 @@ pub use error::*;
 pub use htlc::*;
 pub use lightning::{
     InvoiceDescription, LightningReceivePayment, LightningSendPayment, LightningSendStatus,
-    LightningService,
+    LightningService, PayLightningResult,
 };
 pub use models::*;
 pub use swap::*;

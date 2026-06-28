@@ -7,7 +7,9 @@ use bitcoin::secp256k1::PublicKey;
 use platform_utils::tokio;
 use tracing::{debug, error, info, trace, warn};
 
-use crate::tree::{Leaves, ReservationPurpose, ReserveResult, SelectLeavesOptions, TreeNodeStatus};
+use crate::tree::{
+    LeafSelection, Leaves, ReservationPurpose, ReserveResult, SelectLeavesOptions, TreeNodeStatus,
+};
 use crate::{
     Network,
     operator::{
@@ -153,10 +155,48 @@ impl TreeService for SynchronousTreeService {
                 return Ok(reservation);
             }
 
+            if !options.allow_swap {
+                return Ok(reservation);
+            }
+
             // Perform swap and update reservation
             return self
                 .perform_swap_and_update_reservation(reservation, target_amounts)
                 .await;
+        }
+    }
+
+    async fn reserve_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        self.state
+            .try_reserve_leaves_by_ids(leaf_ids, purpose)
+            .await
+    }
+
+    async fn select_leaves_dry_run(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeafSelection, TreeServiceError> {
+        let reserve_result = self
+            .state
+            .try_reserve_leaves(target_amounts, false, ReservationPurpose::Payment)
+            .await?;
+        let reservation = match reserve_result {
+            ReserveResult::Success(reservation) => reservation,
+            ReserveResult::InsufficientFunds | ReserveResult::WaitForPending { .. } => {
+                return Err(TreeServiceError::InsufficientFunds);
+            }
+        };
+        let matches = self.reservation_matches_target(&reservation, target_amounts);
+        let leaves = reservation.leaves.clone();
+        self.cancel_reservation(reservation).await?;
+        if matches {
+            Ok(LeafSelection::Exact(leaves))
+        } else {
+            Ok(LeafSelection::SwapNeeded(leaves))
         }
     }
 

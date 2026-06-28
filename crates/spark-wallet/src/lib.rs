@@ -42,8 +42,9 @@ pub use spark::{
     ssp::*,
     token::{
         BURN_PUBLIC_KEY, GetTokenOutputsFilter, InMemoryTokenOutputStore,
+        PreparedTokenReceiverOutput, PreparedTokenTransfer,
         ReservationPurpose as TokenReservationPurpose, ReservationTarget, SelectionStrategy,
-        TokenMetadata, TokenOutput, TokenOutputServiceError, TokenOutputStore,
+        TokenMetadata, TokenOutpoint, TokenOutput, TokenOutputServiceError, TokenOutputStore,
         TokenOutputWithPrevOut, TokenOutputs, TokenOutputsPerStatus, TokenOutputsReservation,
         TokenOutputsReservationId, TokensConfig,
     },
@@ -61,7 +62,7 @@ pub use spark::{
         transactions::is_ephemeral_anchor_output,
     },
 };
-pub use wallet::SparkWallet;
+pub use wallet::{SendPackagePreparation, SparkWallet};
 pub use wallet_builder::WalletBuilder;
 
 #[cfg(feature = "test-utils")]

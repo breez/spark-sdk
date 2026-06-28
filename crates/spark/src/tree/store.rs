@@ -113,6 +113,12 @@ enum StoreCommand {
         change_leaves: Vec<TreeNode>,
         response_tx: oneshot::Sender<Result<LeavesReservation, TreeServiceError>>,
     },
+    ReserveLeavesByIds {
+        leaf_ids: Vec<TreeNodeId>,
+        purpose: ReservationPurpose,
+        permit: OwnedSemaphorePermit,
+        response_tx: oneshot::Sender<Result<LeavesReservation, TreeServiceError>>,
+    },
 }
 
 /// Queue-based in-memory tree store.
@@ -271,6 +277,16 @@ impl InMemoryTreeStore {
                     if result.is_ok() {
                         force_notify = true;
                     }
+                    let _ = response_tx.send(result);
+                }
+                StoreCommand::ReserveLeavesByIds {
+                    leaf_ids,
+                    purpose,
+                    permit,
+                    response_tx,
+                } => {
+                    let result =
+                        Self::process_reserve_leaves_by_ids(&mut state, &leaf_ids, purpose, permit);
                     let _ = response_tx.send(result);
                 }
             }
@@ -782,6 +798,27 @@ impl InMemoryTreeStore {
         Ok(id)
     }
 
+    fn process_reserve_leaves_by_ids(
+        state: &mut LeavesState,
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+        permit: OwnedSemaphorePermit,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        let mut selected = Vec::with_capacity(leaf_ids.len());
+        for id in leaf_ids {
+            let stored = state
+                .leaves
+                .get(id)
+                .ok_or(TreeServiceError::NonReservableLeaves)?;
+            if stored.node.status != TreeNodeStatus::Available {
+                return Err(TreeServiceError::NonReservableLeaves);
+            }
+            selected.push(stored.node.clone());
+        }
+        let id = Self::reserve_internal(state, &selected, purpose, permit, 0)?;
+        Ok(LeavesReservation::new(selected, id))
+    }
+
     /// Sends a command to the processor and returns the response.
     async fn send_command<T>(
         &self,
@@ -896,6 +933,32 @@ impl TreeStore for InMemoryTreeStore {
         self.send_command(|tx| StoreCommand::TryReserveLeaves {
             target_amounts,
             exact_only,
+            purpose,
+            permit,
+            response_tx: tx,
+        })
+        .await
+    }
+
+    async fn try_reserve_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        let permit = platform_utils::tokio::time::timeout(
+            self.reservation_timeout,
+            self.reservation_semaphore.clone().acquire_owned(),
+        )
+        .await
+        .map_err(|_| TreeServiceError::ResourceBusy {
+            max_concurrent: self.max_concurrent_reservations,
+            timeout: self.reservation_timeout,
+        })?
+        .map_err(|_| TreeServiceError::ProcessorShutdown)?;
+
+        let leaf_ids = leaf_ids.to_vec();
+        self.send_command(|tx| StoreCommand::ReserveLeavesByIds {
+            leaf_ids,
             purpose,
             permit,
             response_tx: tx,

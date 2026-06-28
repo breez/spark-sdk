@@ -47,6 +47,31 @@ const MAX_TOKEN_TX_INPUTS: usize = 500;
 const MAX_TRANSFER_TOKEN_TOO_MANY_OUTPUTS_RETRY_ATTEMPTS: usize = 3;
 const MAX_TOKEN_PREEMPTED_RETRY_ATTEMPTS: usize = 3;
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TokenOutpoint {
+    pub prev_tx_hash: String,
+    pub prev_tx_vout: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PreparedTokenReceiverOutput {
+    pub token_id: String,
+    pub amount: u128,
+    pub pay_request: String,
+    pub spark_invoice: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PreparedTokenTransfer {
+    pub token_id: String,
+    pub partial_token_transaction_hash: Vec<u8>,
+    pub partial_token_transaction_bytes: Vec<u8>,
+    pub spent_outpoints: Vec<TokenOutpoint>,
+    pub receiver_outputs: Vec<PreparedTokenReceiverOutput>,
+    pub num_receiver_outputs: usize,
+    pub created_timestamp: SystemTime,
+}
+
 /// Checks if an error indicates a transaction was preempted because token outputs
 /// were already spent.
 fn is_transaction_preempted_error(error: &OperatorRpcError) -> bool {
@@ -697,6 +722,33 @@ impl TokenService {
         receiver_outputs: Vec<TransferTokenOutput>,
         execute_before_unix_micros: Option<i64>,
     ) -> Result<TokenTransaction, ServiceError> {
+        let prepared = self
+            .build_partial_token_transfer(
+                identity_public_key,
+                token_id,
+                inputs,
+                receiver_outputs,
+                execute_before_unix_micros,
+            )
+            .await?;
+        let signature = self
+            .sign_token_digest(
+                TokenTransactionKind::Partial,
+                &prepared.partial_token_transaction_hash,
+            )
+            .await?;
+        self.broadcast_token_transfer(identity_public_key, prepared, signature)
+            .await
+    }
+
+    async fn build_partial_token_transfer(
+        &self,
+        identity_public_key: PublicKey,
+        token_id: &str,
+        inputs: Vec<TokenOutputWithPrevOut>,
+        receiver_outputs: Vec<TransferTokenOutput>,
+        execute_before_unix_micros: Option<i64>,
+    ) -> Result<PreparedTokenTransfer, ServiceError> {
         if inputs.len() > MAX_TOKEN_TX_INPUTS {
             return Err(ServiceError::NeededTooManyOutputs);
         }
@@ -744,18 +796,30 @@ impl TokenService {
             })
             .collect::<Result<Vec<_>, ServiceError>>()?;
 
-        let prim_receiver_outputs = receiver_outputs
+        let prepared_receivers = receiver_outputs
             .iter()
             .map(|o| {
-                let receiver_spark_address = match &o.spark_invoice {
+                let pay_request = match &o.spark_invoice {
                     Some(invoice) => invoice.clone(),
                     None => o
                         .receiver_address
                         .to_address_string()
                         .map_err(|e| ServiceError::Generic(e.to_string()))?,
                 };
+                Ok(PreparedTokenReceiverOutput {
+                    token_id: o.token_id.clone(),
+                    amount: o.amount,
+                    pay_request,
+                    spark_invoice: o.spark_invoice.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, ServiceError>>()?;
+
+        let prim_receiver_outputs = prepared_receivers
+            .iter()
+            .map(|o| {
                 Ok(spark_token_primitives::ReceiverTokenOutput {
-                    receiver_spark_address,
+                    receiver_spark_address: o.pay_request.clone(),
                     token_identifier: Some(
                         bech32m_decode_token_id(&o.token_id, Some(self.network)).map_err(|e| {
                             ServiceError::Generic(format!("Invalid token id '{}': {e}", o.token_id))
@@ -780,7 +844,7 @@ impl TokenService {
 
         let result = spark_token_primitives::construct_partial_transfer_transaction(
             spark_token_primitives::TransferBuildRequest {
-                identity_public_key: identity_public_key_bytes.clone(),
+                identity_public_key: identity_public_key_bytes,
                 selected_outputs,
                 receiver_outputs: prim_receiver_outputs,
                 operator_identity_public_keys: self.get_operator_identity_public_keys()?,
@@ -798,14 +862,43 @@ impl TokenService {
         )
         .map_err(|e| ServiceError::Generic(e.to_string()))?;
 
-        let signature = self
-            .sign_token_digest(
-                TokenTransactionKind::Partial,
-                &result.partial_token_transaction_hash,
-            )
-            .await?;
+        let spent_outpoints = inputs
+            .iter()
+            .map(|o| TokenOutpoint {
+                prev_tx_hash: o.prev_tx_hash.clone(),
+                prev_tx_vout: o.prev_tx_vout,
+            })
+            .collect();
 
-        let owner_signatures = inputs
+        Ok(PreparedTokenTransfer {
+            token_id: token_id.to_string(),
+            partial_token_transaction_hash: result.partial_token_transaction_hash,
+            partial_token_transaction_bytes: result.partial_token_transaction_bytes,
+            spent_outpoints,
+            receiver_outputs: prepared_receivers,
+            num_receiver_outputs,
+            created_timestamp: now,
+        })
+    }
+
+    async fn broadcast_token_transfer(
+        &self,
+        identity_public_key: PublicKey,
+        prepared: PreparedTokenTransfer,
+        signature: Vec<u8>,
+    ) -> Result<TokenTransaction, ServiceError> {
+        let identity_public_key_bytes = identity_public_key.serialize().to_vec();
+        let PreparedTokenTransfer {
+            token_id,
+            partial_token_transaction_hash,
+            partial_token_transaction_bytes,
+            spent_outpoints,
+            receiver_outputs,
+            num_receiver_outputs,
+            created_timestamp,
+        } = prepared;
+
+        let owner_signatures = spent_outpoints
             .iter()
             .enumerate()
             .map(|(i, _)| spark_token_primitives::SignatureWithIndexInput {
@@ -815,31 +908,21 @@ impl TokenService {
             })
             .collect::<Vec<_>>();
 
-        let partial_txid = hex::encode(&result.partial_token_transaction_hash);
+        let partial_txid = hex::encode(&partial_token_transaction_hash);
 
         if let Some(observer) = &self.transfer_observer {
             observer
                 .before_send_token(
                     &partial_txid,
-                    token_id,
+                    &token_id,
                     receiver_outputs
                         .iter()
                         .take(num_receiver_outputs)
-                        .map(|o| {
-                            Ok(ReceiverTokenOutput {
-                                pay_request: o
-                                    .spark_invoice
-                                    .clone()
-                                    .or(o.receiver_address.to_address_string().ok())
-                                    .ok_or_else(|| {
-                                        ServiceError::Generic(
-                                            "No pay request available".to_string(),
-                                        )
-                                    })?,
-                                amount: o.amount,
-                            })
+                        .map(|o| ReceiverTokenOutput {
+                            pay_request: o.pay_request.clone(),
+                            amount: o.amount,
                         })
-                        .collect::<Result<Vec<ReceiverTokenOutput>, ServiceError>>()?,
+                        .collect::<Vec<ReceiverTokenOutput>>(),
                 )
                 .await?;
         }
@@ -847,7 +930,7 @@ impl TokenService {
         let broadcast_bytes = spark_token_primitives::build_broadcast_transaction_request(
             spark_token_primitives::BroadcastBuildRequest {
                 identity_public_key: identity_public_key_bytes,
-                partial_token_transaction_bytes: result.partial_token_transaction_bytes,
+                partial_token_transaction_bytes,
                 owner_signatures,
             },
         )
@@ -961,15 +1044,13 @@ impl TokenService {
             warn!("after_send_token observer failed for tx {txid}: {e:?}");
         }
 
-        let outputs_to_spend = inputs
+        let outputs_to_spend = spent_outpoints
             .iter()
             .map(|o| TokenOutputToSpend {
                 prev_token_tx_hash: o.prev_tx_hash.clone(),
                 prev_token_tx_vout: o.prev_tx_vout,
             })
             .collect();
-
-        let created_timestamp = now;
 
         Ok(TokenTransaction {
             hash: txid,
@@ -986,6 +1067,73 @@ impl TokenService {
                 .filter_map(|o| o.spark_invoice)
                 .collect(),
         })
+    }
+
+    pub async fn prepare_token_transfer(
+        &self,
+        receiver_outputs: Vec<TransferTokenOutput>,
+        preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+        selection_strategy: Option<SelectionStrategy>,
+        execute_before_unix_micros: Option<i64>,
+    ) -> Result<PreparedTokenTransfer, ServiceError> {
+        if receiver_outputs.is_empty() {
+            return Err(ServiceError::Generic(
+                "No receiver outputs provided".to_string(),
+            ));
+        }
+        let token_id = receiver_outputs[0].token_id.clone();
+        if receiver_outputs.iter().any(|o| o.token_id != token_id) {
+            return Err(ServiceError::Generic(
+                "All receiver outputs must have the same token id".to_string(),
+            ));
+        }
+        let total_amount: u128 = receiver_outputs.iter().map(|o| o.amount).sum();
+        let identity_public_key = self.spark_signer.get_identity_public_key().await?;
+
+        let reservation = self
+            .token_output_service
+            .reserve_token_outputs(
+                &token_id,
+                ReservationTarget::MinTotalValue(total_amount),
+                ReservationPurpose::Payment,
+                preferred_outputs,
+                selection_strategy,
+            )
+            .await?;
+
+        let prepared = self
+            .build_partial_token_transfer(
+                identity_public_key,
+                &token_id,
+                reservation.token_outputs.outputs.clone(),
+                receiver_outputs,
+                execute_before_unix_micros,
+            )
+            .await;
+
+        if let Err(e) = self
+            .token_output_service
+            .cancel_reservation(&reservation.id)
+            .await
+        {
+            error!("Failed to cancel token reservation after prepare: {e:?}");
+        }
+
+        prepared
+    }
+
+    pub async fn submit_token_transfer(
+        &self,
+        prepared: PreparedTokenTransfer,
+        signature: Vec<u8>,
+    ) -> Result<TokenTransaction, ServiceError> {
+        let identity_public_key = self.spark_signer.get_identity_public_key().await?;
+        let token_transaction = self
+            .broadcast_token_transfer(identity_public_key, prepared, signature)
+            .await?;
+        self.update_token_outputs_for_transaction(&token_transaction, &identity_public_key)
+            .await?;
+        Ok(token_transaction)
     }
 
     /// Optimizes token outputs by consolidating them when there are more than the configured threshold.
