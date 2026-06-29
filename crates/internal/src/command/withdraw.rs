@@ -12,7 +12,8 @@ use bitcoin::{
 };
 use clap::Subcommand;
 use spark_wallet::{
-    Network, SparkWallet, SparkWalletError, TreeNodeId, is_ephemeral_anchor_output,
+    ExitChainTermination, Network, SparkWallet, SparkWalletError, TreeNodeId,
+    is_ephemeral_anchor_output,
 };
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -140,9 +141,52 @@ pub async fn handle_command(
                 .collect::<Result<_, _>>()?;
             let all_leaf_tx_cpfp_psbts = wallet.unilateral_exit(fee_rate, leaf_ids, utxos).await?;
 
+            let mut incomplete_leaves: Vec<&TreeNodeId> = Vec::new();
             for leaf_tx_cpfp_psbts in &all_leaf_tx_cpfp_psbts {
                 println!();
                 println!("Leaf ID: {}", leaf_tx_cpfp_psbts.leaf_id);
+                match &leaf_tx_cpfp_psbts.termination {
+                    ExitChainTermination::ReachedRoot => {
+                        println!("Exit chain: complete (reached root).");
+                    }
+                    ExitChainTermination::ParentStatusNonExitable {
+                        parent_id,
+                        parent_status,
+                        parent_tx,
+                        parent_parent_id,
+                    } => {
+                        incomplete_leaves.push(&leaf_tx_cpfp_psbts.leaf_id);
+                        let parent_txid = parent_tx.compute_txid();
+                        let parent_tx_hex = serialize_hex(parent_tx);
+                        println!(
+                            "Exit chain: STOPPED at parent {parent_id} with status {parent_status:?}. The Leaf TX below will not be broadcastable until this parent's node_tx is on chain."
+                        );
+                        println!("  Parent node ID:  {parent_id}");
+                        println!("  Parent status:   {parent_status:?}");
+                        println!("  Parent TX ID:    {parent_txid}");
+                        println!("  Parent TX:       {parent_tx_hex}");
+                        match parent_parent_id {
+                            Some(grand) => println!("  Parent's parent: {grand}"),
+                            None => println!("  Parent's parent: <none> (parent is the root)"),
+                        }
+                    }
+                    ExitChainTermination::CurrentStatusNonExitable {
+                        node_id,
+                        node_status,
+                        node_tx,
+                    } => {
+                        incomplete_leaves.push(&leaf_tx_cpfp_psbts.leaf_id);
+                        let node_txid = node_tx.compute_txid();
+                        let node_tx_hex = serialize_hex(node_tx);
+                        println!(
+                            "Exit chain: rejected current node {node_id} with status {node_status:?}. No package produced."
+                        );
+                        println!("  Node ID:     {node_id}");
+                        println!("  Node status: {node_status:?}");
+                        println!("  Node TX ID:  {node_txid}");
+                        println!("  Node TX:     {node_tx_hex}");
+                    }
+                }
                 println!();
 
                 let total_txs = leaf_tx_cpfp_psbts.tx_cpfp_psbts.len();
@@ -221,6 +265,16 @@ pub async fn handle_command(
             println!(
                 "Use the taproot descriptor shown for each refund TX to sweep funds into any Bitcoin wallet."
             );
+            if !incomplete_leaves.is_empty() {
+                println!();
+                println!(
+                    "WARNING: {} leaf(s) have an incomplete exit chain (see \"STOPPED at parent\" / \"rejected current node\" above):",
+                    incomplete_leaves.len()
+                );
+                for leaf_id in incomplete_leaves {
+                    println!("  - {leaf_id}");
+                }
+            }
         }
     }
 

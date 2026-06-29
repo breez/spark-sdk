@@ -16,7 +16,7 @@ pub use spark::{
     header_provider::*,
     operator::rpc::{BalancedConnectionManager, ConnectionManager, DefaultConnectionManager},
     services::{
-        CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitSpeed, Fee,
+        CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitChainTermination, ExitSpeed, Fee,
         FreezeIssuerTokenResponse, InvoiceDescription, LightningReceivePayment,
         LightningSendPayment, LightningSendStatus, Preimage, PreimageRequestStatus,
         ReceiverTokenOutput, ServiceError, SingleUseDepositAddress, StaticDepositAddress,
