@@ -7,6 +7,10 @@ use spark_wallet::{InvoiceDescription, LightningReceivePayment, Preimage};
 
 use crate::{
     ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse,
+    cross_chain::{
+        CrossChainReceivePrepared, CrossChainRoutePair, DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS,
+        MAX_CROSS_CHAIN_SLIPPAGE_BPS, MIN_CROSS_CHAIN_SLIPPAGE_BPS, SparkAsset,
+    },
     error::SdkError,
     models::{Payment, ReceivePaymentMethod, ReceivePaymentRequest, ReceivePaymentResponse},
 };
@@ -21,6 +25,7 @@ pub(super) async fn receive_payment(
     match request.payment_method {
         ReceivePaymentMethod::SparkAddress => Ok(ReceivePaymentResponse {
             fee: 0,
+            cross_chain_info: None,
             payment_request: sdk
                 .spark_wallet
                 .get_spark_address()?
@@ -58,6 +63,7 @@ pub(super) async fn receive_payment(
                 .await?;
             Ok(ReceivePaymentResponse {
                 fee: 0,
+                cross_chain_info: None,
                 payment_request: invoice,
             })
         }
@@ -67,6 +73,7 @@ pub(super) async fn receive_payment(
             Ok(ReceivePaymentResponse {
                 payment_request: address,
                 fee: 0,
+                cross_chain_info: None,
             })
         }
         ReceivePaymentMethod::Bolt11Invoice {
@@ -75,7 +82,99 @@ pub(super) async fn receive_payment(
             expiry_secs,
             payment_hash,
         } => receive_bolt11_invoice(sdk, description, amount_sats, expiry_secs, payment_hash).await,
+        ReceivePaymentMethod::CrossChain {
+            route,
+            amount,
+            destination,
+            max_slippage_bps,
+        } => receive_cross_chain(sdk, route, amount, destination, max_slippage_bps).await,
     }
+}
+
+async fn receive_cross_chain(
+    sdk: &BreezSdk,
+    route: CrossChainRoutePair,
+    amount: u128,
+    destination: Option<SparkAsset>,
+    max_slippage_bps: Option<u32>,
+) -> Result<ReceivePaymentResponse, SdkError> {
+    if amount == 0 {
+        return Err(SdkError::InvalidInput(
+            "Cross-chain receive amount must be greater than zero.".to_string(),
+        ));
+    }
+    let slippage = max_slippage_bps.unwrap_or(DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS);
+    if !(MIN_CROSS_CHAIN_SLIPPAGE_BPS..=MAX_CROSS_CHAIN_SLIPPAGE_BPS).contains(&slippage) {
+        return Err(SdkError::InvalidInput(format!(
+            "Cross-chain max_slippage_bps must be in [{MIN_CROSS_CHAIN_SLIPPAGE_BPS}, \
+             {MAX_CROSS_CHAIN_SLIPPAGE_BPS}]; got {slippage}."
+        )));
+    }
+
+    let resolved_destination = resolve_receive_destination(sdk, &route, destination).await?;
+
+    let service = sdk.cross_chain_context.get(route.provider)?.clone();
+
+    let recipient = sdk
+        .spark_wallet
+        .get_spark_address()?
+        .to_address_string()
+        .map_err(|e| {
+            SdkError::Generic(format!("Failed to convert Spark address to string: {e}"))
+        })?;
+
+    let CrossChainReceivePrepared {
+        payment_request,
+        info,
+    } = service
+        .prepare_receive(&route, &recipient, amount, slippage, &resolved_destination)
+        .await?;
+
+    Ok(ReceivePaymentResponse {
+        payment_request,
+        fee: 0,
+        cross_chain_info: Some(info),
+    })
+}
+
+/// Picks a Spark-side destination asset for a cross-chain receive.
+///
+/// * `Some(asset)` is honoured iff it appears in `route.spark_assets`;
+///   otherwise returns `InvalidInput` so the integrator surfaces the
+///   choice back to the user.
+/// * `None` auto-selects: prefer the wallet's active stable-balance token
+///   when the route supports landing it, otherwise Bitcoin. The route is
+///   expected to surface at least one of those — a degenerate route with
+///   neither returns `InvalidInput`.
+async fn resolve_receive_destination(
+    sdk: &BreezSdk,
+    route: &CrossChainRoutePair,
+    requested: Option<SparkAsset>,
+) -> Result<SparkAsset, SdkError> {
+    if let Some(asset) = requested {
+        if route.spark_assets.contains(&asset) {
+            return Ok(asset);
+        }
+        return Err(SdkError::InvalidInput(format!(
+            "Requested destination {asset:?} is not supported by this route. \
+             Pick one of route.spark_assets."
+        )));
+    }
+    if let Some(sb) = &sdk.stable_balance
+        && let Some(token_identifier) = sb.get_active_token_identifier().await
+    {
+        let token_asset = SparkAsset::Token { token_identifier };
+        if route.spark_assets.contains(&token_asset) {
+            return Ok(token_asset);
+        }
+    }
+    if route.spark_assets.contains(&SparkAsset::Bitcoin) {
+        return Ok(SparkAsset::Bitcoin);
+    }
+    Err(SdkError::InvalidInput(
+        "Route exposes no usable Spark destination (neither Bitcoin nor a supported token)."
+            .to_string(),
+    ))
 }
 
 pub(super) async fn claim_htlc_payment(
@@ -120,6 +219,7 @@ pub(super) async fn receive_bolt11_invoice(
     Ok(ReceivePaymentResponse {
         payment_request: receive.invoice,
         fee: 0,
+        cross_chain_info: None,
     })
 }
 

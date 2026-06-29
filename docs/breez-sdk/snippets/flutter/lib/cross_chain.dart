@@ -71,3 +71,54 @@ Future<SendPaymentResponse> sendPaymentCrossChain(
   // ANCHOR_END: cross-chain-send
   return response;
 }
+
+Future<List<CrossChainRoutePair>> getCrossChainReceiveRoutes(BreezSdk sdk) async {
+  // ANCHOR: cross-chain-get-receive-routes
+  List<CrossChainRoutePair> routes = await sdk.getCrossChainRoutes(
+    filter: CrossChainRouteFilter.receive(contractAddress: null),
+  );
+
+  for (var route in routes) {
+    print(
+      "Route via ${route.provider}: ${route.chain}/${route.asset} -> Spark",
+    );
+  }
+  // ANCHOR_END: cross-chain-get-receive-routes
+  return routes;
+}
+
+Future<ReceivePaymentResponse> receivePaymentCrossChain(
+  BreezSdk sdk,
+  CrossChainRoutePair route,
+) async {
+  // ANCHOR: cross-chain-receive
+  // amount is in source-asset base units (e.g. USDC base units when source is USDC)
+  final amount = BigInt.from(1000000);
+  // Optionally set the destination Spark-side asset. null = auto: active
+  // stable-balance token if the route supports it, otherwise BTC.
+  SparkAsset? optionalDestination;
+  // Optionally set the maximum slippage in basis points (10 to 500)
+  int? optionalMaxSlippageBps = 100;
+
+  final request = ReceivePaymentRequest(
+    paymentMethod: ReceivePaymentMethod.crossChain(
+      route: route,
+      amount: amount,
+      destination: optionalDestination,
+      maxSlippageBps: optionalMaxSlippageBps,
+    ),
+  );
+  final response = await sdk.receivePayment(request: request);
+
+  print("Payment request: ${response.paymentRequest}");
+  final info = response.crossChainInfo;
+  if (info != null) {
+    final denom = info.tokenIdentifier != null ? "USDB" : "BTC";
+    print("Deposit address: ${info.depositAddress}");
+    print("Deposit amount: ${info.depositAmount}");
+    print("Expected received: ${info.expectedReceivedAmount} $denom");
+    print("Expires at: ${info.expiresAt}");
+  }
+  // ANCHOR_END: cross-chain-receive
+  return response;
+}

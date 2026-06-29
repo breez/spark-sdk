@@ -40,6 +40,7 @@ pub enum ReceivePaymentMethodArg {
     SparkInvoice,
     Bitcoin,
     Bolt11,
+    CrossChain,
 }
 
 #[derive(Clone, Parser)]
@@ -140,6 +141,11 @@ pub enum Command {
         /// Request a new bitcoin deposit address instead of reusing the current one.
         #[arg(long)]
         new_address: bool,
+
+        /// Maximum slippage in basis points for cross-chain receives. Must be in 10..=500.
+        /// Falls back to the SDK config default (100 bps) when unset.
+        #[arg(long = "cross-chain-max-slippage-bps")]
+        cross_chain_max_slippage_bps: Option<u32>,
     },
 
     /// Pay the given payment request
@@ -592,6 +598,7 @@ pub(crate) async fn execute_command(
             sender_public_key,
             hodl,
             new_address,
+            cross_chain_max_slippage_bps,
         } => {
             let payment_method = match payment_method {
                 ReceivePaymentMethodArg::SparkAddress => ReceivePaymentMethod::SparkAddress,
@@ -634,6 +641,21 @@ pub(crate) async fn execute_command(
                         amount_sats: amount.map(TryInto::try_into).transpose()?,
                         expiry_secs,
                         payment_hash,
+                    }
+                }
+                ReceivePaymentMethodArg::CrossChain => {
+                    let amount = amount.ok_or_else(|| {
+                        anyhow::anyhow!("--amount is required for cross-chain receive")
+                    })?;
+                    let filter = breez_sdk_spark::CrossChainRouteFilter::Receive {
+                        contract_address: None,
+                    };
+                    let route = select_cross_chain_route(sdk, rl, filter).await?;
+                    ReceivePaymentMethod::CrossChain {
+                        route,
+                        amount,
+                        destination: None,
+                        max_slippage_bps: cross_chain_max_slippage_bps,
                     }
                 }
             };
@@ -689,7 +711,8 @@ pub(crate) async fn execute_command(
             let payment_request = match sdk.parse(&payment_request).await {
                 Ok(InputType::CrossChainAddress(address_details)) => {
                     let address = address_details.address.clone();
-                    let route = select_cross_chain_route(sdk, rl, address_details).await?;
+                    let filter = breez_sdk_spark::CrossChainRouteFilter::Send { address_details };
+                    let route = select_cross_chain_route(sdk, rl, filter).await?;
                     PaymentRequest::CrossChain {
                         address,
                         route,
@@ -1074,19 +1097,16 @@ pub(crate) async fn execute_command(
     }
 }
 
-/// Fetches cross-chain routes for the given address and prompts the user to
+/// Fetches cross-chain routes for the given filter and prompts the user to
 /// select one. If only a single route is available it is auto-selected.
 async fn select_cross_chain_route(
     sdk: &BreezSdk,
     rl: &mut Editor<CliHelper, DefaultHistory>,
-    address_details: breez_sdk_spark::CrossChainAddressDetails,
+    filter: breez_sdk_spark::CrossChainRouteFilter,
 ) -> Result<CrossChainRoutePair, anyhow::Error> {
-    let filter = breez_sdk_spark::CrossChainRouteFilter::Send { address_details };
     let routes = sdk.get_cross_chain_routes(&filter).await?;
     if routes.is_empty() {
-        return Err(anyhow::anyhow!(
-            "No cross-chain routes available for this address"
-        ));
+        return Err(anyhow::anyhow!("No cross-chain routes available"));
     }
 
     if routes.len() == 1 {

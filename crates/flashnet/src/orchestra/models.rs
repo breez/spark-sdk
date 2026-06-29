@@ -192,9 +192,10 @@ pub struct QuoteResponse {
 /// originate on Spark.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SubmitRequestSpark {
+pub struct SubmitRequest {
     pub quote_id: String,
-    pub spark_tx_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spark_tx_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_spark_address: Option<String>,
 }
@@ -250,28 +251,74 @@ pub struct StatusResponse {
 pub struct Order {
     pub id: String,
     pub status: OrderStatus,
-    pub quote_id: String,
-    pub source_chain: String,
-    pub source_asset: String,
+    #[serde(default, rename = "type")]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub quote_id: Option<String>,
+    #[serde(default)]
+    pub source_chain: Option<String>,
+    #[serde(default)]
+    pub source_asset: Option<String>,
     #[serde(default)]
     pub source_address: Option<String>,
-    pub source_tx_hash: String,
+    #[serde(default)]
+    pub source_tx_hash: Option<String>,
     #[serde(default)]
     pub source_tx_vout: Option<u32>,
-    pub deposit_address: String,
-    pub destination_chain: String,
-    pub destination_asset: String,
-    pub recipient_address: String,
-    pub amount_in: String,
+    #[serde(default)]
+    pub sweep_tx_hash: Option<String>,
+    #[serde(default)]
+    pub destination_chain: Option<String>,
+    #[serde(default)]
+    pub destination_asset: Option<String>,
+    #[serde(default)]
+    pub destination_address: Option<String>,
+    #[serde(default)]
+    pub destination_tx_hash: Option<String>,
+    #[serde(default)]
+    pub deposit_address: Option<String>,
+    #[serde(default)]
+    pub recipient_address: Option<String>,
+    #[serde(default)]
+    pub amount_in: Option<String>,
     #[serde(default)]
     pub amount_out: Option<String>,
-    pub fee_bps: u32,
-    pub fee_amount: String,
-    pub slippage_bps: u32,
+    #[serde(default)]
+    pub amount_fiat_usd: Option<String>,
+    #[serde(default)]
+    pub amount_fiat_currency: Option<String>,
+    #[serde(default)]
+    pub spot_usd_per_btc: Option<String>,
+    #[serde(default)]
+    pub fee_bps: Option<u32>,
+    #[serde(default)]
+    pub fee_amount: Option<String>,
+    #[serde(default)]
+    pub fee_asset: Option<String>,
+    #[serde(default)]
+    pub rounding_fee_amount: Option<String>,
+    #[serde(default)]
+    pub slippage_bps: Option<u32>,
+    #[serde(default)]
+    pub flashnet_request_id: Option<String>,
+    /// Spark transfer id the receiver sees, on Spark-destination orders. The
+    /// receive-flow linking key.
+    #[serde(default)]
+    pub spark_tx_hash: Option<String>,
+    #[serde(default)]
+    pub refund_asset: Option<String>,
+    #[serde(default)]
+    pub refund_amount: Option<String>,
+    #[serde(default)]
+    pub refund_tx_hash: Option<String>,
     #[serde(default)]
     pub error_code: Option<String>,
     #[serde(default)]
     pub error_message: Option<String>,
+    #[serde(default)]
+    pub total_fee_bps: Option<u32>,
+    #[serde(default)]
+    pub total_fee_amount: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     #[serde(default)]

@@ -231,6 +231,40 @@ fn parse_tron_uri(scheme: &str, path: &str, params: &QueryParams) -> ParsedCross
     }
 }
 
+/// Builds the string surfaced to the sender on a cross-chain receive.
+///
+/// `chain_id` is the EIP-681 chain id as a decimal string and is ignored on
+/// Solana/Tron. `amount` is in base units and is ignored on Solana/Tron.
+///
+/// - **EVM with contract** → `ethereum:<contract>[@<chain_id>]/transfer?address=<addr>&uint256=<amount>`
+/// - **EVM without contract** → `ethereum:<addr>[@<chain_id>]?value=<amount>`
+/// - **Solana** → `<address>`
+/// - **Tron** → `<address>`
+pub fn format_cross_chain_uri(
+    family: CrossChainAddressFamily,
+    address: &str,
+    contract_address: Option<&str>,
+    chain_id: Option<&str>,
+    amount: u128,
+) -> String {
+    let scheme = family.canonical_scheme();
+    let chain_id_suffix = chain_id
+        .filter(|_| matches!(family, CrossChainAddressFamily::Evm))
+        .map(|id| format!("@{id}"))
+        .unwrap_or_default();
+    match (family, contract_address) {
+        (CrossChainAddressFamily::Evm, Some(contract)) => {
+            format!(
+                "{scheme}:{contract}{chain_id_suffix}/transfer?address={address}&uint256={amount}"
+            )
+        }
+        (CrossChainAddressFamily::Evm, None) => {
+            format!("{scheme}:{address}{chain_id_suffix}?value={amount}")
+        }
+        (CrossChainAddressFamily::Solana | CrossChainAddressFamily::Tron, _) => address.to_string(),
+    }
+}
+
 /// Top-level entry point: attempt to classify `input` as a cross-chain
 /// address (or canonical URI). Returns `None` if the input is not recognized.
 ///
@@ -676,5 +710,99 @@ mod tests {
             try_parse_cross_chain_address("solana:0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
                 .is_none()
         );
+    }
+
+    // -- format_cross_chain_uri -----------------------------------------------
+
+    /// EVM ERC-20 transfer URI round-trips through `parse_cross_chain_uri`
+    /// to the same address / contract / `chain_id` / amount.
+    #[test]
+    fn format_evm_erc20_roundtrips_through_parser() {
+        let uri = format_cross_chain_uri(
+            CrossChainAddressFamily::Evm,
+            "0xC0Ffee0000000000000000000000000000000000",
+            Some("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"),
+            Some("8453"),
+            1_000_000,
+        );
+        assert_eq!(
+            uri,
+            "ethereum:0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913@8453/transfer\
+             ?address=0xC0Ffee0000000000000000000000000000000000&uint256=1000000"
+        );
+        let parsed = parse_cross_chain_uri(&uri).unwrap();
+        assert_eq!(parsed.scheme, "ethereum");
+        assert_eq!(parsed.address, "0xC0Ffee0000000000000000000000000000000000");
+        assert_eq!(
+            parsed.contract_address.as_deref(),
+            Some("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
+        );
+        assert_eq!(parsed.chain_id, Some(8453));
+        assert_eq!(parsed.amount, Some(1_000_000));
+    }
+
+    /// EVM native send (no contract) uses `value=` per EIP-681.
+    #[test]
+    fn format_evm_native_uses_value_param() {
+        let uri = format_cross_chain_uri(
+            CrossChainAddressFamily::Evm,
+            "0xC0Ffee0000000000000000000000000000000000",
+            None,
+            Some("1"),
+            42,
+        );
+        assert_eq!(
+            uri,
+            "ethereum:0xC0Ffee0000000000000000000000000000000000@1?value=42"
+        );
+        let parsed = parse_cross_chain_uri(&uri).unwrap();
+        assert_eq!(parsed.address, "0xC0Ffee0000000000000000000000000000000000");
+        assert!(parsed.contract_address.is_none());
+        assert_eq!(parsed.chain_id, Some(1));
+        assert_eq!(parsed.amount, Some(42));
+    }
+
+    #[test]
+    fn format_evm_without_chain_id_drops_the_suffix() {
+        let uri = format_cross_chain_uri(
+            CrossChainAddressFamily::Evm,
+            "0xC0Ffee0000000000000000000000000000000000",
+            None,
+            None,
+            1,
+        );
+        assert_eq!(
+            uri,
+            "ethereum:0xC0Ffee0000000000000000000000000000000000?value=1"
+        );
+    }
+
+    /// Solana wallets don't reliably honor Solana Pay URI parameters in
+    /// practice (Phantom partial, Solflare none), so we return the bare
+    /// address and let the integrator drive amount/token rendering.
+    #[test]
+    fn format_solana_returns_bare_address() {
+        let addr = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+        for contract in [None, Some("Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB")] {
+            let out = format_cross_chain_uri(
+                CrossChainAddressFamily::Solana,
+                addr,
+                contract,
+                None,
+                1_500_000,
+            );
+            assert_eq!(out, addr);
+        }
+    }
+
+    /// Tron has no published URI standard — return the bare address.
+    #[test]
+    fn format_tron_returns_bare_address() {
+        let addr = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
+        for contract in [None, Some("TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t")] {
+            let out =
+                format_cross_chain_uri(CrossChainAddressFamily::Tron, addr, contract, None, 500);
+            assert_eq!(out, addr);
+        }
     }
 }

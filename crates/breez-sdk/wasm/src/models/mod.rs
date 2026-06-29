@@ -823,6 +823,14 @@ pub enum ReceivePaymentMethod {
         expiry_secs: Option<u32>,
         payment_hash: Option<String>,
     },
+    CrossChain {
+        route: CrossChainRoutePair,
+        #[tsify(type = "string")]
+        #[serde(with = "serde_u128_as_string")]
+        amount: u128,
+        destination: Option<SparkAsset>,
+        max_slippage_bps: Option<u32>,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendOnchainFeeQuote)]
@@ -864,8 +872,8 @@ pub enum CrossChainRouteFilter {
     },
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::SourceAsset)]
-pub enum SourceAsset {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkAsset)]
+pub enum SparkAsset {
     Bitcoin,
     Token { token_identifier: String },
 }
@@ -886,7 +894,7 @@ pub struct CrossChainRoutePair {
     pub contract_address: Option<String>,
     pub decimals: u8,
     pub exact_out_eligible: bool,
-    pub supported_sources: Vec<SourceAsset>,
+    pub spark_assets: Vec<SparkAsset>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainProviderContext)]
@@ -980,6 +988,20 @@ pub struct ReceivePaymentRequest {
 pub struct ReceivePaymentResponse {
     pub payment_request: String,
     pub fee: u128,
+    pub cross_chain_info: Option<CrossChainReceiveInfo>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainReceiveInfo)]
+pub struct CrossChainReceiveInfo {
+    pub deposit_address: String,
+    #[tsify(type = "string")]
+    #[serde(with = "serde_u128_as_string")]
+    pub deposit_amount: u128,
+    #[tsify(type = "string")]
+    #[serde(with = "serde_u128_as_string")]
+    pub expected_received_amount: u128,
+    pub token_identifier: Option<String>,
+    pub expires_at: u64,
 }
 
 #[derive(Clone, Copy, Default)]
