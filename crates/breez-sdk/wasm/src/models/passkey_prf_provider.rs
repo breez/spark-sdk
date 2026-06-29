@@ -40,7 +40,7 @@ pub struct WasmPrfProvider {
     /// it (only platform passkey backends implement registration).
     supports_create: OnceLock<bool>,
     /// Cached `supportsImmediateMediation` presence probe: custom
-    /// providers may omit it and inherit the `true` trait default.
+    /// providers may omit it, in which case it is treated as unsupported.
     supports_immediate: OnceLock<bool>,
 }
 
@@ -309,9 +309,9 @@ export interface PrfProvider {
 
     /**
      * Optional. Whether the silent single-CTA flow works here (a
-     * no-credential sign-in fast-fails with no UI). Omit to inherit the
-     * `true` default; the built-in browser provider returns the WebAuthn
-     * immediate-mediation capability.
+     * no-credential sign-in fast-fails with no UI). Omit to be treated as
+     * unsupported (`false`); the built-in browser provider returns the
+     * WebAuthn immediate-mediation capability.
      */
     supportsImmediateMediation?(): Promise<boolean>;
 }
@@ -372,8 +372,8 @@ extern "C" {
         exclude_credentials: JsValue,
     ) -> Result<Promise, JsValue>;
 
-    // Optional method. Custom providers may omit it and inherit the
-    // `true` default; probed with `js_has_method` before invoking.
+    // Optional method. Custom providers may omit it (then treated as
+    // unsupported); probed with `js_has_method` before invoking.
     #[wasm_bindgen(structural, method, js_name = "supportsImmediateMediation", catch)]
     pub fn supports_immediate_mediation(this: &PrfProvider) -> Result<Promise, JsValue>;
 }
