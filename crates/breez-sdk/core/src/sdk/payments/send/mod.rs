@@ -10,7 +10,7 @@ use crate::{
     events::SdkEvent,
     models::{
         PrepareSendPaymentResponse, PublishSignedTransferPackageResponse, SendPaymentRequest,
-        SendPaymentResponse, SignedTransferPackage,
+        SendPaymentResponse, SignedTransferPackage, TransferSignature, UnsignedTransferPackage,
     },
     sdk::BreezSdk,
     signer::{ExternalPrepareTransferRequest, ExternalPreparedTransfer},
@@ -23,20 +23,24 @@ pub(in crate::sdk::payments) async fn publish_signed_transfer_package(
     prepare_response: &PrepareSendPaymentResponse,
     signed_package: &SignedTransferPackage,
 ) -> Result<PublishSignedTransferPackageResponse, SdkError> {
-    let res = match signed_package {
-        SignedTransferPackage::Swap { .. } => {
+    let res = match (&signed_package.unsigned, &signed_package.signature) {
+        (UnsignedTransferPackage::Swap { .. }, TransferSignature::Transfer { .. }) => {
             super::client_signing::submit_swap(sdk, signed_package).await?;
             return Ok(PublishSignedTransferPackageResponse::SwapCompleted);
         }
-        SignedTransferPackage::Transfer {
-            prepare_transfer,
-            signed,
-        } => deferred_transfer_send(sdk, prepare_response, prepare_transfer, signed).await,
-        SignedTransferPackage::Token {
-            token_context,
-            signed,
-            ..
-        } => spark_address::send_token_signed(sdk, token_context, signed).await,
+        (
+            UnsignedTransferPackage::Transfer { prepare_transfer },
+            TransferSignature::Transfer { signed },
+        ) => deferred_transfer_send(sdk, prepare_response, prepare_transfer, signed).await,
+        (
+            UnsignedTransferPackage::Token { token_context, .. },
+            TransferSignature::Token { signed },
+        ) => spark_address::send_token_signed(sdk, token_context, signed).await,
+        _ => {
+            return Err(SdkError::InvalidInput(
+                "signature does not match the unsigned package".to_string(),
+            ));
+        }
     }?;
     sdk.event_emitter
         .emit(&SdkEvent::from_payment(res.payment.clone()))

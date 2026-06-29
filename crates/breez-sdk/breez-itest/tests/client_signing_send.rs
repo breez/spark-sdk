@@ -9,8 +9,8 @@ use breez_sdk_spark::{
     OnchainConfirmationSpeed, PaymentRequest, PaymentStatus, PaymentType,
     PrepareSendPaymentRequest, PublishSignedTransferPackageRequest,
     PublishSignedTransferPackageResponse, ReceivePaymentMethod, ReceivePaymentRequest,
-    SignedTransferPackage, SyncWalletRequest, UnsignedTransferPackage, default_config,
-    default_external_signers,
+    SignedTransferPackage, SyncWalletRequest, TransferSignature, UnsignedTransferPackage,
+    default_config, default_external_signers,
 };
 use rand::RngCore;
 use tracing::info;
@@ -114,32 +114,22 @@ async fn test_client_signing_send_with_denomination_swap() -> Result<()> {
             })
             .await?;
 
-        let signed_package = match unsigned {
-            UnsignedTransferPackage::Swap {
-                prepare_transfer,
-                target_amounts,
-            } => {
-                let signed = client_signer
+        let signature = match &unsigned {
+            UnsignedTransferPackage::Transfer { prepare_transfer }
+            | UnsignedTransferPackage::Swap {
+                prepare_transfer, ..
+            } => TransferSignature::Transfer {
+                signed: client_signer
                     .prepare_transfer(prepare_transfer.clone())
-                    .await?;
-                SignedTransferPackage::Swap {
-                    prepare_transfer,
-                    target_amounts,
-                    signed,
-                }
-            }
-            UnsignedTransferPackage::Transfer { prepare_transfer } => {
-                let signed = client_signer
-                    .prepare_transfer(prepare_transfer.clone())
-                    .await?;
-                SignedTransferPackage::Transfer {
-                    prepare_transfer,
-                    signed,
-                }
-            }
+                    .await?,
+            },
             UnsignedTransferPackage::Token { .. } => {
                 panic!("unexpected token package for a sats send")
             }
+        };
+        let signed_package = SignedTransferPackage {
+            unsigned,
+            signature,
         };
 
         match alice
@@ -260,23 +250,23 @@ async fn test_client_signing_token_send() -> Result<()> {
 
     let UnsignedTransferPackage::Token {
         prepare_token_transaction,
-        token_context,
-    } = unsigned
+        ..
+    } = &unsigned
     else {
         panic!("expected a Token unsigned package for a token send");
     };
     let signed = client_signer
         .prepare_token_transaction(prepare_token_transaction.clone())
         .await?;
+    let signature = TransferSignature::Token { signed };
 
     let PublishSignedTransferPackageResponse::PaymentSent { payment } = alice
         .sdk
         .publish_signed_transfer_package(PublishSignedTransferPackageRequest {
             prepare_response: prep,
-            signed_package: SignedTransferPackage::Token {
-                prepare_token_transaction,
-                token_context,
-                signed,
+            signed_package: SignedTransferPackage {
+                unsigned,
+                signature,
             },
         })
         .await?
@@ -368,32 +358,22 @@ async fn test_client_signing_coop_exit() -> Result<()> {
             })
             .await?;
 
-        let signed_package = match unsigned {
-            UnsignedTransferPackage::Swap {
-                prepare_transfer,
-                target_amounts,
-            } => {
-                let signed = client_signer
+        let signature = match &unsigned {
+            UnsignedTransferPackage::Transfer { prepare_transfer }
+            | UnsignedTransferPackage::Swap {
+                prepare_transfer, ..
+            } => TransferSignature::Transfer {
+                signed: client_signer
                     .prepare_transfer(prepare_transfer.clone())
-                    .await?;
-                SignedTransferPackage::Swap {
-                    prepare_transfer,
-                    target_amounts,
-                    signed,
-                }
-            }
-            UnsignedTransferPackage::Transfer { prepare_transfer } => {
-                let signed = client_signer
-                    .prepare_transfer(prepare_transfer.clone())
-                    .await?;
-                SignedTransferPackage::Transfer {
-                    prepare_transfer,
-                    signed,
-                }
-            }
+                    .await?,
+            },
             UnsignedTransferPackage::Token { .. } => {
                 panic!("unexpected token package for a coop-exit")
             }
+        };
+        let signed_package = SignedTransferPackage {
+            unsigned,
+            signature,
         };
 
         match alice

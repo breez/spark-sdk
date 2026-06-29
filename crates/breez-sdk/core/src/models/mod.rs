@@ -1578,21 +1578,20 @@ pub enum UnsignedTransferPackage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SignedTransferPackage {
+    pub unsigned: UnsignedTransferPackage,
+    pub signature: TransferSignature,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum SignedTransferPackage {
+pub enum TransferSignature {
     Transfer {
-        prepare_transfer: crate::signer::ExternalPrepareTransferRequest,
         signed: crate::signer::ExternalPreparedTransfer,
     },
     Token {
-        prepare_token_transaction: crate::signer::ExternalPrepareTokenTransactionRequest,
-        token_context: Vec<u8>,
         signed: crate::signer::ExternalPreparedTokenTransaction,
-    },
-    Swap {
-        prepare_transfer: crate::signer::ExternalPrepareTransferRequest,
-        target_amounts: Vec<u64>,
-        signed: crate::signer::ExternalPreparedTransfer,
     },
 }
 

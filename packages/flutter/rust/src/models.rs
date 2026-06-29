@@ -565,20 +565,18 @@ pub enum _UnsignedTransferPackage {
 }
 
 #[frb(mirror(SignedTransferPackage))]
-pub enum _SignedTransferPackage {
+pub struct _SignedTransferPackage {
+    pub unsigned: UnsignedTransferPackage,
+    pub signature: TransferSignature,
+}
+
+#[frb(mirror(TransferSignature))]
+pub enum _TransferSignature {
     Transfer {
-        prepare_transfer: ExternalPrepareTransferRequest,
         signed: ExternalPreparedTransfer,
     },
     Token {
-        prepare_token_transaction: ExternalPrepareTokenTransactionRequest,
-        token_context: Vec<u8>,
         signed: ExternalPreparedTokenTransaction,
-    },
-    Swap {
-        prepare_transfer: ExternalPrepareTransferRequest,
-        target_amounts: Vec<u64>,
-        signed: ExternalPreparedTransfer,
     },
 }
 

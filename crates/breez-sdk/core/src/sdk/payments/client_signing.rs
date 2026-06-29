@@ -7,7 +7,7 @@ use crate::{
     error::SdkError,
     models::{
         BuildTransferPackageOptions, PrepareSendPaymentResponse, SendPaymentMethod,
-        SignedTransferPackage, UnsignedTransferPackage,
+        SignedTransferPackage, TransferSignature, UnsignedTransferPackage,
     },
     sdk::BreezSdk,
     signer::{
@@ -193,11 +193,13 @@ pub(in crate::sdk::payments) async fn submit_swap(
     sdk: &BreezSdk,
     signed_package: &SignedTransferPackage,
 ) -> Result<(), SdkError> {
-    let SignedTransferPackage::Swap {
-        prepare_transfer,
-        target_amounts,
-        signed,
-    } = signed_package
+    let (
+        UnsignedTransferPackage::Swap {
+            prepare_transfer,
+            target_amounts,
+        },
+        TransferSignature::Transfer { signed },
+    ) = (&signed_package.unsigned, &signed_package.signature)
     else {
         return Err(SdkError::InvalidInput(
             "submit_swap requires a Swap package".to_string(),

@@ -1056,20 +1056,18 @@ pub enum UnsignedTransferPackage {
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SignedTransferPackage)]
-pub enum SignedTransferPackage {
+pub struct SignedTransferPackage {
+    pub unsigned: UnsignedTransferPackage,
+    pub signature: TransferSignature,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TransferSignature)]
+pub enum TransferSignature {
     Transfer {
-        prepare_transfer: crate::signer::ExternalPrepareTransferRequest,
         signed: crate::signer::ExternalPreparedTransfer,
     },
     Token {
-        prepare_token_transaction: crate::signer::ExternalPrepareTokenTransactionRequest,
-        token_context: Vec<u8>,
         signed: crate::signer::ExternalPreparedTokenTransaction,
-    },
-    Swap {
-        prepare_transfer: crate::signer::ExternalPrepareTransferRequest,
-        target_amounts: Vec<u64>,
-        signed: crate::signer::ExternalPreparedTransfer,
     },
 }
 
