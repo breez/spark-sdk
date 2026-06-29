@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use breez_sdk_itest::{
     SdkInstance, build_sdk_with_external_signer, build_sdk_with_external_signer_and_config,
@@ -6,11 +8,11 @@ use breez_sdk_itest::{
 use breez_sdk_spark::{
     BuildTransferPackageOptions, BuildUnsignedTransferPackageRequest, CreateIssuerTokenRequest,
     GetInfoRequest, LeafOptimizationConfig, MintIssuerTokenRequest, Network,
-    OnchainConfirmationSpeed, PaymentRequest, PaymentStatus, PaymentType,
+    OnchainConfirmationSpeed, Payment, PaymentMethod, PaymentRequest, PaymentStatus, PaymentType,
     PrepareSendPaymentRequest, PublishSignedTransferPackageRequest,
     PublishSignedTransferPackageResponse, ReceivePaymentMethod, ReceivePaymentRequest,
     SignedTransferPackage, SyncWalletRequest, TransferSignature, UnsignedTransferPackage,
-    default_config, default_external_signers,
+    default_config, default_external_signers, signer::ExternalSparkSigner,
 };
 use rand::RngCore;
 use tracing::info;
@@ -35,20 +37,73 @@ async fn build_alice_manual_opt(mnemonic: String) -> Result<SdkInstance> {
     build_sdk_with_external_signer_and_config(path, mnemonic, cfg, Some(dir)).await
 }
 
-async fn build_alice_default(mnemonic: String) -> Result<SdkInstance> {
-    let dir = tempfile::Builder::new()
-        .prefix("breez-sdk-alice-client-signing")
-        .tempdir()?;
-    let path = dir.path().to_string_lossy().to_string();
-    build_sdk_with_external_signer(path, mnemonic, Some(dir)).await
-}
-
 async fn build_bob() -> Result<SdkInstance> {
     let dir = tempfile::Builder::new()
         .prefix("breez-sdk-bob-client-signing")
         .tempdir()?;
     let path = dir.path().to_string_lossy().to_string();
     build_sdk_with_external_signer(path, random_mnemonic()?, Some(dir)).await
+}
+
+/// Drives the client-signing prepare -> build -> sign -> publish loop for a
+/// transfer-style send (spark address, spark invoice, or lightning),
+/// re-preparing after any denomination swap, and returns the sent payment.
+async fn client_sign_transfer_send(
+    alice: &SdkInstance,
+    signer: &Arc<dyn ExternalSparkSigner>,
+    payment_request: String,
+    amount: Option<u128>,
+) -> Result<Payment> {
+    for _ in 0..10 {
+        let prep = alice
+            .sdk
+            .prepare_send_payment(PrepareSendPaymentRequest {
+                payment_request: PaymentRequest::Input {
+                    input: payment_request.clone(),
+                },
+                amount,
+                token_identifier: None,
+                conversion_options: None,
+                fee_policy: None,
+            })
+            .await?;
+
+        let unsigned = alice
+            .sdk
+            .build_unsigned_transfer_package(BuildUnsignedTransferPackageRequest {
+                prepare_response: prep.clone(),
+                options: None,
+            })
+            .await?;
+
+        let signature = match &unsigned {
+            UnsignedTransferPackage::Transfer { prepare_transfer }
+            | UnsignedTransferPackage::Swap {
+                prepare_transfer, ..
+            } => TransferSignature::Transfer {
+                signed: signer.prepare_transfer(prepare_transfer.clone()).await?,
+            },
+            UnsignedTransferPackage::Token { .. } => {
+                panic!("unexpected token package for a transfer send")
+            }
+        };
+
+        match alice
+            .sdk
+            .publish_signed_transfer_package(PublishSignedTransferPackageRequest {
+                prepare_response: prep,
+                signed_package: SignedTransferPackage {
+                    unsigned,
+                    signature,
+                },
+            })
+            .await?
+        {
+            PublishSignedTransferPackageResponse::SwapCompleted => continue,
+            PublishSignedTransferPackageResponse::PaymentSent { payment } => return Ok(payment),
+        }
+    }
+    anyhow::bail!("client-signing transfer send did not converge within 10 iterations")
 }
 
 #[test_log::test(tokio::test)]
@@ -196,7 +251,7 @@ async fn test_client_signing_token_send() -> Result<()> {
     let send_amount: u128 = 5;
 
     let alice_mnemonic = random_mnemonic()?;
-    let alice = build_alice_default(alice_mnemonic.clone()).await?;
+    let alice = build_alice_manual_opt(alice_mnemonic.clone()).await?;
     let bob = build_bob().await?;
 
     let client_signer =
@@ -310,7 +365,7 @@ async fn test_client_signing_coop_exit() -> Result<()> {
     let withdraw_sats: u128 = 15_000;
 
     let alice_mnemonic = random_mnemonic()?;
-    let mut alice = build_alice_default(alice_mnemonic.clone()).await?;
+    let mut alice = build_alice_manual_opt(alice_mnemonic.clone()).await?;
     let bob = build_bob().await?;
 
     let client_signer =
@@ -404,5 +459,130 @@ async fn test_client_signing_coop_exit() -> Result<()> {
     }
 
     info!("=== Test test_client_signing_coop_exit PASSED ===");
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_client_signing_lightning_send() -> Result<()> {
+    info!("=== Starting test_client_signing_lightning_send ===");
+
+    let fund_sats: u64 = 100_000;
+    let invoice_sats: u64 = 10_000;
+
+    let alice_mnemonic = random_mnemonic()?;
+    let mut alice = build_alice_manual_opt(alice_mnemonic.clone()).await?;
+    let mut bob = build_bob().await?;
+
+    let client_signer =
+        default_external_signers(alice_mnemonic, None, Network::Regtest, None)?.spark_signer;
+
+    ensure_funded(&mut alice, fund_sats).await?;
+
+    let bob_invoice = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::Bolt11Invoice {
+                description: "client-signing lightning send".to_string(),
+                amount_sats: Some(invoice_sats),
+                expiry_secs: None,
+                payment_hash: None,
+            },
+        })
+        .await?
+        .payment_request;
+
+    let payment = client_sign_transfer_send(&alice, &client_signer, bob_invoice, None).await?;
+    assert!(
+        matches!(
+            payment.status,
+            PaymentStatus::Completed | PaymentStatus::Pending
+        ),
+        "Lightning payment should be completed or pending"
+    );
+
+    let received =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
+    assert_eq!(received.payment_type, PaymentType::Receive);
+    assert_eq!(received.amount, u128::from(invoice_sats));
+    assert!(
+        matches!(
+            received.method,
+            PaymentMethod::Lightning | PaymentMethod::Spark
+        ),
+        "expected lightning or spark settlement, got {:?}",
+        received.method
+    );
+
+    info!("=== Test test_client_signing_lightning_send PASSED ===");
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_client_signing_spark_invoice_send() -> Result<()> {
+    info!("=== Starting test_client_signing_spark_invoice_send ===");
+
+    let fund_sats: u64 = 50_000;
+    let invoice_sats: u128 = 12_345;
+
+    let alice_mnemonic = random_mnemonic()?;
+    let mut alice = build_alice_manual_opt(alice_mnemonic.clone()).await?;
+    let mut bob = build_bob().await?;
+
+    let client_signer =
+        default_external_signers(alice_mnemonic, None, Network::Regtest, None)?.spark_signer;
+
+    ensure_funded(&mut alice, fund_sats).await?;
+
+    let bob_initial_balance = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+
+    let bob_invoice = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkInvoice {
+                amount: Some(invoice_sats),
+                token_identifier: None,
+                expiry_time: None,
+                description: Some("client-signing spark invoice".to_string()),
+                sender_public_key: None,
+            },
+        })
+        .await?
+        .payment_request;
+
+    let payment = client_sign_transfer_send(&alice, &client_signer, bob_invoice, None).await?;
+    assert!(
+        matches!(
+            payment.status,
+            PaymentStatus::Completed | PaymentStatus::Pending
+        ),
+        "Spark invoice payment should be completed or pending"
+    );
+
+    let received =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
+    assert_eq!(received.payment_type, PaymentType::Receive);
+    assert_eq!(received.amount, invoice_sats);
+
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let bob_final_balance = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    assert_eq!(
+        bob_final_balance,
+        bob_initial_balance + invoice_sats as u64,
+        "Bob's balance should increase by the invoice amount"
+    );
+
+    info!("=== Test test_client_signing_spark_invoice_send PASSED ===");
     Ok(())
 }
