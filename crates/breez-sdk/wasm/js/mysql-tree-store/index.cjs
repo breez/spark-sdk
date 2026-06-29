@@ -579,6 +579,69 @@ class MysqlTreeStore {
     }
   }
 
+  async trySelectLeaves(targetAmounts) {
+    try {
+      const targetAmount = targetAmounts ? this._totalSats(targetAmounts) : 0;
+      const maxTarget = this._maxTargetForPrefilter(targetAmounts);
+
+      const [slimRows] = await this.pool.query(
+        `SELECT id, value
+         FROM brz_tree_leaves
+         WHERE user_id = ?
+           AND status = 'Available'
+           AND is_missing_from_operators = 0
+           AND reservation_id IS NULL
+           AND (
+             value <= ?
+             OR id = (
+               SELECT id FROM (
+                 SELECT id FROM brz_tree_leaves
+                 WHERE user_id = ?
+                   AND status = 'Available'
+                   AND is_missing_from_operators = 0
+                   AND reservation_id IS NULL
+                   AND value > ?
+                 ORDER BY value
+                 LIMIT 1
+               ) AS smallest_over
+             )
+           )`,
+        [this.identity, maxTarget, this.identity, maxTarget]
+      );
+
+      const slimLeaves = slimRows.map((r) => ({
+        id: r.id,
+        value: Number(r.value),
+      }));
+
+      const selected = this._selectLeavesByTargetAmounts(slimLeaves, targetAmounts);
+      if (selected !== null && selected.length > 0) {
+        const fullLeaves = await this._fetchFullLeavesByIds(
+          this.pool,
+          selected.map((l) => l.id)
+        );
+        return { type: "exact", leaves: fullLeaves };
+      }
+
+      const minSelected = this._selectLeavesByMinimumAmount(slimLeaves, targetAmount);
+      if (minSelected !== null) {
+        const fullLeaves = await this._fetchFullLeavesByIds(
+          this.pool,
+          minSelected.map((l) => l.id)
+        );
+        return { type: "swapNeeded", leaves: fullLeaves };
+      }
+
+      return { type: "insufficientFunds" };
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to try select leaves: ${error.message}`,
+        error
+      );
+    }
+  }
+
   async tryReserveLeavesByIds(leafIds, purpose) {
     try {
       return await this._withWriteTransaction(async (conn) => {

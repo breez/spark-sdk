@@ -180,24 +180,7 @@ impl TreeService for SynchronousTreeService {
         &self,
         target_amounts: Option<&TargetAmounts>,
     ) -> Result<LeafSelection, TreeServiceError> {
-        let reserve_result = self
-            .state
-            .try_reserve_leaves(target_amounts, false, ReservationPurpose::Payment)
-            .await?;
-        let reservation = match reserve_result {
-            ReserveResult::Success(reservation) => reservation,
-            ReserveResult::InsufficientFunds | ReserveResult::WaitForPending { .. } => {
-                return Err(TreeServiceError::InsufficientFunds);
-            }
-        };
-        let matches = self.reservation_matches_target(&reservation, target_amounts);
-        let leaves = reservation.leaves.clone();
-        self.cancel_reservation(reservation).await?;
-        if matches {
-            Ok(LeafSelection::Exact(leaves))
-        } else {
-            Ok(LeafSelection::SwapNeeded(leaves))
-        }
+        self.state.try_select_leaves(target_amounts).await
     }
 
     async fn refresh_leaves(&self) -> Result<(), TreeServiceError> {

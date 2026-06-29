@@ -1090,36 +1090,24 @@ impl TokenService {
         let total_amount: u128 = receiver_outputs.iter().map(|o| o.amount).sum();
         let identity_public_key = self.spark_signer.get_identity_public_key().await?;
 
-        let reservation = self
+        let selected = self
             .token_output_service
-            .reserve_token_outputs(
+            .select_token_outputs(
                 &token_id,
                 ReservationTarget::MinTotalValue(total_amount),
-                ReservationPurpose::Payment,
                 preferred_outputs,
                 selection_strategy,
             )
             .await?;
 
-        let prepared = self
-            .build_partial_token_transfer(
-                identity_public_key,
-                &token_id,
-                reservation.token_outputs.outputs.clone(),
-                receiver_outputs,
-                execute_before_unix_micros,
-            )
-            .await;
-
-        if let Err(e) = self
-            .token_output_service
-            .cancel_reservation(&reservation.id)
-            .await
-        {
-            error!("Failed to cancel token reservation after prepare: {e:?}");
-        }
-
-        prepared
+        self.build_partial_token_transfer(
+            identity_public_key,
+            &token_id,
+            selected.outputs,
+            receiver_outputs,
+            execute_before_unix_micros,
+        )
+        .await
     }
 
     pub async fn submit_token_transfer(
@@ -1128,9 +1116,25 @@ impl TokenService {
         signature: Vec<u8>,
     ) -> Result<TokenTransaction, ServiceError> {
         let identity_public_key = self.spark_signer.get_identity_public_key().await?;
-        let token_transaction = self
-            .broadcast_token_transfer(identity_public_key, prepared, signature)
+        let token_id = prepared.token_id.clone();
+        let outpoints: Vec<(String, u32)> = prepared
+            .spent_outpoints
+            .iter()
+            .map(|o| (o.prev_tx_hash.clone(), o.prev_tx_vout))
+            .collect();
+
+        let reservation = self
+            .token_output_service
+            .reserve_token_outputs_by_outpoints(&token_id, &outpoints, ReservationPurpose::Payment)
             .await?;
+
+        let token_transaction = with_reserved_token_outputs(
+            self.token_output_service.as_ref(),
+            self.broadcast_token_transfer(identity_public_key, prepared, signature),
+            &reservation,
+        )
+        .await?;
+
         self.update_token_outputs_for_transaction(&token_transaction, &identity_public_key)
             .await?;
         Ok(token_transaction)

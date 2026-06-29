@@ -685,6 +685,11 @@ pub trait TreeStore: Send + Sync {
         ))
     }
 
+    async fn try_select_leaves(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeafSelection, TreeServiceError>;
+
     /// Returns the current time from the store's clock.
     ///
     /// For in-memory stores this returns `SystemTime::now()`. For database-backed

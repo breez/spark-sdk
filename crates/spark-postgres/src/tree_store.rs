@@ -12,9 +12,9 @@ use platform_utils::time::{Instant, SystemTime};
 use deadpool_postgres::Pool;
 use macros::async_trait;
 use spark_wallet::{
-    LeafLike, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
-    TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore,
-    select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
+    LeafLike, LeafSelection, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose,
+    ReserveResult, TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError,
+    TreeStore, select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
 };
 use tokio::sync::watch;
 use tracing::{debug, info, trace};
@@ -765,6 +765,82 @@ impl TreeStore for PostgresTreeStore {
             total_start.elapsed()
         );
         result
+    }
+
+    async fn try_select_leaves(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeafSelection, TreeServiceError> {
+        let target_amount = target_amounts.map_or(0, TargetAmounts::total_sats);
+        let max_target = Self::slim_max_target(target_amounts);
+        let max_target_signed: i64 = i64::try_from(max_target).unwrap_or(i64::MAX);
+
+        let mut client = self.pool.get().await.map_err(map_err)?;
+        let tx = client.transaction().await.map_err(map_err)?;
+
+        let slim_rows = tx
+            .query(
+                r"
+                SELECT id, (data->>'value')::bigint AS value
+                FROM brz_tree_leaves
+                WHERE user_id = $1
+                  AND status = 'Available'
+                  AND is_missing_from_operators = FALSE
+                  AND reservation_id IS NULL
+                  AND (
+                    (data->>'value')::bigint <= $2
+                    OR id = (
+                      SELECT id FROM brz_tree_leaves
+                      WHERE user_id = $1
+                        AND status = 'Available'
+                        AND is_missing_from_operators = FALSE
+                        AND reservation_id IS NULL
+                        AND (data->>'value')::bigint > $2
+                      ORDER BY (data->>'value')::bigint
+                      LIMIT 1
+                    )
+                  )
+                ",
+                &[&self.identity, &max_target_signed],
+            )
+            .await
+            .map_err(map_err)?;
+
+        let slim: Vec<SlimLeaf> = slim_rows
+            .iter()
+            .map(|r| {
+                let value = u64::try_from(r.get::<_, i64>("value")).unwrap_or(0);
+                SlimLeaf {
+                    id: r.get("id"),
+                    value,
+                }
+            })
+            .collect();
+
+        match select_leaves_by_target_amounts(&slim, target_amounts) {
+            Ok(target_leaves) => {
+                let selected_ids: Vec<String> = target_leaves
+                    .amount_leaves
+                    .iter()
+                    .chain(target_leaves.fee_leaves.iter().flatten())
+                    .map(|l| l.id.clone())
+                    .collect();
+                if selected_ids.is_empty() {
+                    return Err(TreeServiceError::InsufficientFunds);
+                }
+                let selected_leaves = self.resolve_full_leaves(&tx, &selected_ids).await?;
+                Ok(LeafSelection::Exact(selected_leaves))
+            }
+            Err(_) => {
+                if let Ok(Some(min_slim)) = select_leaves_by_minimum_amount(&slim, target_amount) {
+                    let min_ids: Vec<String> = min_slim.iter().map(|l| l.id.clone()).collect();
+                    let selected_leaves = self.resolve_full_leaves(&tx, &min_ids).await?;
+                    Ok(LeafSelection::SwapNeeded(selected_leaves))
+                } else {
+                    Err(TreeServiceError::InsufficientFunds)
+                }
+            }
+        }
     }
 
     async fn try_reserve_leaves_by_ids(

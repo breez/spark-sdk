@@ -10,9 +10,9 @@ use tracing::{info, trace, warn};
 use uuid::Uuid;
 
 use crate::tree::{
-    Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
-    TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore,
-    select_helper,
+    LeafSelection, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose,
+    ReserveResult, TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError,
+    TreeStore, select_helper,
 };
 
 /// Default maximum number of concurrent reservations allowed.
@@ -118,6 +118,10 @@ enum StoreCommand {
         purpose: ReservationPurpose,
         permit: OwnedSemaphorePermit,
         response_tx: oneshot::Sender<Result<LeavesReservation, TreeServiceError>>,
+    },
+    TrySelectLeaves {
+        target_amounts: Option<TargetAmounts>,
+        response_tx: oneshot::Sender<Result<LeafSelection, TreeServiceError>>,
     },
 }
 
@@ -287,6 +291,13 @@ impl InMemoryTreeStore {
                 } => {
                     let result =
                         Self::process_reserve_leaves_by_ids(&mut state, &leaf_ids, purpose, permit);
+                    let _ = response_tx.send(result);
+                }
+                StoreCommand::TrySelectLeaves {
+                    target_amounts,
+                    response_tx,
+                } => {
+                    let result = Self::process_try_select_leaves(&state, target_amounts.as_ref());
                     let _ = response_tx.send(result);
                 }
             }
@@ -604,6 +615,36 @@ impl InMemoryTreeStore {
                     })
                 } else {
                     Ok(ReserveResult::InsufficientFunds)
+                }
+            }
+        }
+    }
+
+    fn process_try_select_leaves(
+        state: &LeavesState,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeafSelection, TreeServiceError> {
+        let leaves: Vec<TreeNode> = state
+            .leaves
+            .values()
+            .filter(|stored| stored.node.status == TreeNodeStatus::Available)
+            .map(|stored| stored.node.clone())
+            .collect();
+
+        match select_helper::select_leaves_by_target_amounts(&leaves, target_amounts) {
+            Ok(target_leaves) => {
+                let selected = [
+                    target_leaves.amount_leaves,
+                    target_leaves.fee_leaves.unwrap_or_default(),
+                ]
+                .concat();
+                Ok(LeafSelection::Exact(selected))
+            }
+            Err(_) => {
+                let target_amount = target_amounts.map_or(0, |ta| ta.total_sats());
+                match select_helper::select_leaves_by_minimum_amount(&leaves, target_amount) {
+                    Ok(Some(selected)) => Ok(LeafSelection::SwapNeeded(selected)),
+                    _ => Err(TreeServiceError::InsufficientFunds),
                 }
             }
         }
@@ -961,6 +1002,18 @@ impl TreeStore for InMemoryTreeStore {
             leaf_ids,
             purpose,
             permit,
+            response_tx: tx,
+        })
+        .await
+    }
+
+    async fn try_select_leaves(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeafSelection, TreeServiceError> {
+        let target_amounts = target_amounts.cloned();
+        self.send_command(|tx| StoreCommand::TrySelectLeaves {
+            target_amounts,
             response_tx: tx,
         })
         .await

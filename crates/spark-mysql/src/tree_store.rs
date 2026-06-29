@@ -26,9 +26,9 @@ use mysql_async::prelude::*;
 use mysql_async::{Conn, Params, Pool, Value};
 use platform_utils::time::{Instant, SystemTime};
 use spark_wallet::{
-    LeafLike, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
-    TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore,
-    select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
+    LeafLike, LeafSelection, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose,
+    ReserveResult, TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError,
+    TreeStore, select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
 };
 use tokio::sync::watch;
 use tracing::{debug, info, trace};
@@ -513,6 +513,84 @@ impl TreeStore for MysqlTreeStore {
             self.notify_balance_change();
         }
         Ok(reserve_result)
+    }
+
+    async fn try_select_leaves(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeafSelection, TreeServiceError> {
+        let target_amount = target_amounts.map_or(0, TargetAmounts::total_sats);
+        let max_target = Self::slim_max_target(target_amounts);
+        let max_target_signed: i64 = i64::try_from(max_target).unwrap_or(i64::MAX);
+
+        let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
+
+        let slim_rows: Vec<(String, i64)> = tx
+            .exec(
+                r"SELECT id, value
+                  FROM brz_tree_leaves
+                  WHERE user_id = ?
+                    AND status = 'Available'
+                    AND is_missing_from_operators = 0
+                    AND reservation_id IS NULL
+                    AND (
+                      value <= ?
+                      OR id = (
+                        SELECT id FROM (
+                          SELECT id FROM brz_tree_leaves
+                          WHERE user_id = ?
+                            AND status = 'Available'
+                            AND is_missing_from_operators = 0
+                            AND reservation_id IS NULL
+                            AND value > ?
+                          ORDER BY value
+                          LIMIT 1
+                        ) AS smallest_over
+                      )
+                    )",
+                (
+                    self.identity.clone(),
+                    max_target_signed,
+                    self.identity.clone(),
+                    max_target_signed,
+                ),
+            )
+            .await
+            .map_err(map_err)?;
+
+        let slim: Vec<SlimLeaf> = slim_rows
+            .into_iter()
+            .map(|(id, value)| SlimLeaf {
+                id,
+                value: u64::try_from(value).unwrap_or(0),
+            })
+            .collect();
+
+        match select_leaves_by_target_amounts(&slim, target_amounts) {
+            Ok(target_leaves) => {
+                let selected_ids: Vec<String> = target_leaves
+                    .amount_leaves
+                    .iter()
+                    .chain(target_leaves.fee_leaves.iter().flatten())
+                    .map(|l| l.id.clone())
+                    .collect();
+                if selected_ids.is_empty() {
+                    return Err(TreeServiceError::InsufficientFunds);
+                }
+                let selected_leaves = self.resolve_full_leaves(&mut tx, &selected_ids).await?;
+                Ok(LeafSelection::Exact(selected_leaves))
+            }
+            Err(_) => {
+                if let Ok(Some(min_slim)) = select_leaves_by_minimum_amount(&slim, target_amount) {
+                    let min_ids: Vec<String> = min_slim.iter().map(|l| l.id.clone()).collect();
+                    let selected_leaves = self.resolve_full_leaves(&mut tx, &min_ids).await?;
+                    Ok(LeafSelection::SwapNeeded(selected_leaves))
+                } else {
+                    Err(TreeServiceError::InsufficientFunds)
+                }
+            }
+        }
     }
 
     async fn try_reserve_leaves_by_ids(
