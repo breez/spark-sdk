@@ -27,6 +27,7 @@ It’s a nodeless integration that offers a non-custodial, end-to-end solution f
 - [x] Automatic claims
 - [x] WebAssembly support
 - [x] Compatible with external signers
+- [x] Multi-user server mode
 - [x] Free open-source solution
 
 ## Pricing
