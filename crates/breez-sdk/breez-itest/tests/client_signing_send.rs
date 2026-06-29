@@ -77,7 +77,9 @@ async fn client_sign_transfer_send(
             .await?;
 
         let signature = match &unsigned {
-            UnsignedTransferPackage::Transfer { prepare_transfer }
+            UnsignedTransferPackage::Transfer {
+                prepare_transfer, ..
+            }
             | UnsignedTransferPackage::Swap {
                 prepare_transfer, ..
             } => TransferSignature::Transfer {
@@ -91,7 +93,6 @@ async fn client_sign_transfer_send(
         match alice
             .sdk
             .publish_signed_transfer_package(PublishSignedTransferPackageRequest {
-                prepare_response: prep,
                 signed_package: SignedTransferPackage {
                     unsigned,
                     signature,
@@ -170,7 +171,9 @@ async fn test_client_signing_send_with_denomination_swap() -> Result<()> {
             .await?;
 
         let signature = match &unsigned {
-            UnsignedTransferPackage::Transfer { prepare_transfer }
+            UnsignedTransferPackage::Transfer {
+                prepare_transfer, ..
+            }
             | UnsignedTransferPackage::Swap {
                 prepare_transfer, ..
             } => TransferSignature::Transfer {
@@ -189,10 +192,7 @@ async fn test_client_signing_send_with_denomination_swap() -> Result<()> {
 
         match alice
             .sdk
-            .publish_signed_transfer_package(PublishSignedTransferPackageRequest {
-                prepare_response: prep.clone(),
-                signed_package,
-            })
+            .publish_signed_transfer_package(PublishSignedTransferPackageRequest { signed_package })
             .await?
         {
             PublishSignedTransferPackageResponse::SwapCompleted => {
@@ -318,7 +318,6 @@ async fn test_client_signing_token_send() -> Result<()> {
     let PublishSignedTransferPackageResponse::PaymentSent { payment } = alice
         .sdk
         .publish_signed_transfer_package(PublishSignedTransferPackageRequest {
-            prepare_response: prep,
             signed_package: SignedTransferPackage {
                 unsigned,
                 signature,
@@ -414,7 +413,9 @@ async fn test_client_signing_coop_exit() -> Result<()> {
             .await?;
 
         let signature = match &unsigned {
-            UnsignedTransferPackage::Transfer { prepare_transfer }
+            UnsignedTransferPackage::Transfer {
+                prepare_transfer, ..
+            }
             | UnsignedTransferPackage::Swap {
                 prepare_transfer, ..
             } => TransferSignature::Transfer {
@@ -433,10 +434,7 @@ async fn test_client_signing_coop_exit() -> Result<()> {
 
         match alice
             .sdk
-            .publish_signed_transfer_package(PublishSignedTransferPackageRequest {
-                prepare_response: prep.clone(),
-                signed_package,
-            })
+            .publish_signed_transfer_package(PublishSignedTransferPackageRequest { signed_package })
             .await?
         {
             PublishSignedTransferPackageResponse::SwapCompleted => {

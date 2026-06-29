@@ -4,9 +4,9 @@ use spark_wallet::{ExitSpeed, TransferId};
 
 use crate::{
     BitcoinAddressDetails, ConversionOptions, ConversionPurpose, FeePolicy,
-    OnchainConfirmationSpeed, SendOnchainFeeQuote, SendPaymentMethod, SendPaymentOptions,
+    OnchainConfirmationSpeed, SendOnchainFeeQuote, SendPaymentOptions,
     error::SdkError,
-    models::{Payment, PrepareSendPaymentResponse, SendPaymentRequest, SendPaymentResponse},
+    models::{Payment, SendPaymentRequest, SendPaymentResponse},
     sdk::BreezSdk,
     signer::{ExternalPrepareTransferRequest, ExternalPreparedTransfer},
     token_conversion::{ConversionAmount, TokenConversionResponse},
@@ -123,26 +123,20 @@ pub(in crate::sdk::payments) async fn convert_token(
     Ok((response, purpose))
 }
 
-/// Returns the total fee (sats) for the requested confirmation speed.
 pub(super) async fn send_signed(
     sdk: &BreezSdk,
     prepare_transfer: &ExternalPrepareTransferRequest,
     signed: &ExternalPreparedTransfer,
-    prepare_response: &PrepareSendPaymentResponse,
+    address: &str,
+    amount_sat: u64,
+    fee_quote: &SendOnchainFeeQuote,
 ) -> Result<SendPaymentResponse, SdkError> {
-    let SendPaymentMethod::BitcoinAddress { address, fee_quote } = &prepare_response.payment_method
-    else {
-        return Err(SdkError::InvalidInput(
-            "expected a bitcoin address payment method".to_string(),
-        ));
-    };
-    let amount_sat: u64 = prepare_response.amount.try_into()?;
     let transfer = sdk
         .spark_wallet
         .publish_coop_exit_package(
             prepare_transfer.transfer_id()?,
             prepare_transfer.leaf_ids()?,
-            &address.address,
+            address,
             amount_sat,
             fee_quote.clone().into(),
             signed.to_prepared_transfer()?,

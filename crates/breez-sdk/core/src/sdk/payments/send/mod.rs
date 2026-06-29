@@ -9,8 +9,8 @@ use crate::{
     error::SdkError,
     events::SdkEvent,
     models::{
-        PrepareSendPaymentResponse, PublishSignedTransferPackageResponse, SendPaymentRequest,
-        SendPaymentResponse, SignedTransferPackage, TransferSignature, UnsignedTransferPackage,
+        PublishSignedTransferPackageResponse, SendPaymentRequest, SendPaymentResponse,
+        SignedTransferPackage, TransferSignature, TransferTarget, UnsignedTransferPackage,
     },
     sdk::BreezSdk,
     signer::{ExternalPrepareTransferRequest, ExternalPreparedTransfer},
@@ -20,7 +20,6 @@ use super::conversion;
 
 pub(in crate::sdk::payments) async fn publish_signed_transfer_package(
     sdk: &BreezSdk,
-    prepare_response: &PrepareSendPaymentResponse,
     signed_package: &SignedTransferPackage,
 ) -> Result<PublishSignedTransferPackageResponse, SdkError> {
     let res = match (&signed_package.unsigned, &signed_package.signature) {
@@ -29,9 +28,14 @@ pub(in crate::sdk::payments) async fn publish_signed_transfer_package(
             return Ok(PublishSignedTransferPackageResponse::SwapCompleted);
         }
         (
-            UnsignedTransferPackage::Transfer { prepare_transfer },
+            UnsignedTransferPackage::Transfer {
+                prepare_transfer,
+                amount_sat,
+                target,
+                ..
+            },
             TransferSignature::Transfer { signed },
-        ) => deferred_transfer_send(sdk, prepare_response, prepare_transfer, signed).await,
+        ) => deferred_transfer_send(sdk, prepare_transfer, signed, *amount_sat, target).await,
         (
             UnsignedTransferPackage::Token { token_context, .. },
             TransferSignature::Token { signed },
@@ -52,9 +56,10 @@ pub(in crate::sdk::payments) async fn publish_signed_transfer_package(
 
 async fn deferred_transfer_send(
     sdk: &BreezSdk,
-    prepare_response: &PrepareSendPaymentResponse,
     prepare_transfer: &ExternalPrepareTransferRequest,
     signed: &ExternalPreparedTransfer,
+    amount_sat: u64,
+    target: &TransferTarget,
 ) -> Result<SendPaymentResponse, SdkError> {
     if let Ok(payment) = sdk
         .storage
@@ -64,44 +69,24 @@ async fn deferred_transfer_send(
         return Ok(SendPaymentResponse { payment });
     }
 
-    match &prepare_response.payment_method {
-        SendPaymentMethod::SparkAddress { .. } => {
-            spark_address::send_signed(sdk, prepare_transfer, signed, None).await
+    match target {
+        TransferTarget::Spark { spark_invoice, .. } => {
+            spark_address::send_signed(sdk, prepare_transfer, signed, spark_invoice.clone()).await
         }
-        SendPaymentMethod::SparkInvoice {
-            spark_invoice_details,
-            ..
-        } => {
-            spark_address::send_signed(
+        TransferTarget::Lightning { bolt11 } => {
+            bolt11::send_signed(sdk, prepare_transfer, signed, bolt11, amount_sat).await
+        }
+        TransferTarget::CoopExit { address, fee_quote } => {
+            bitcoin_address::send_signed(
                 sdk,
                 prepare_transfer,
                 signed,
-                Some(spark_invoice_details.invoice.clone()),
+                address,
+                amount_sat,
+                fee_quote,
             )
             .await
         }
-        SendPaymentMethod::Bolt11Invoice {
-            invoice_details, ..
-        } => {
-            if super::client_signing::prefers_bolt11_spark_route(sdk, prepare_response) {
-                spark_address::send_signed(sdk, prepare_transfer, signed, None).await
-            } else {
-                bolt11::send_signed(
-                    sdk,
-                    prepare_transfer,
-                    signed,
-                    invoice_details,
-                    prepare_response,
-                )
-                .await
-            }
-        }
-        SendPaymentMethod::BitcoinAddress { .. } => {
-            bitcoin_address::send_signed(sdk, prepare_transfer, signed, prepare_response).await
-        }
-        SendPaymentMethod::CrossChainAddress { .. } => Err(SdkError::InvalidInput(
-            "client signing send is not supported for cross-chain sends".to_string(),
-        )),
     }
 }
 

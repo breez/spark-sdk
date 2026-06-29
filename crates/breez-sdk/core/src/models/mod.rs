@@ -1567,13 +1567,37 @@ pub enum UnsignedTransferPackage {
     Swap {
         prepare_transfer: crate::signer::ExternalPrepareTransferRequest,
         target_amounts: Vec<u64>,
+        amount_sat: u64,
+        fee_sat: u64,
     },
     Transfer {
         prepare_transfer: crate::signer::ExternalPrepareTransferRequest,
+        amount_sat: u64,
+        fee_sat: u64,
+        target: TransferTarget,
     },
     Token {
         prepare_token_transaction: crate::signer::ExternalPrepareTokenTransactionRequest,
         token_context: Vec<u8>,
+        token_identifier: String,
+        amount: u128,
+        fee: u128,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum TransferTarget {
+    Spark {
+        address: String,
+        spark_invoice: Option<String>,
+    },
+    Lightning {
+        bolt11: String,
+    },
+    CoopExit {
+        address: String,
+        fee_quote: SendOnchainFeeQuote,
     },
 }
 
@@ -1701,7 +1725,6 @@ pub struct SendPaymentRequest {
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PublishSignedTransferPackageRequest {
-    pub prepare_response: PrepareSendPaymentResponse,
     pub signed_package: SignedTransferPackage,
 }
 

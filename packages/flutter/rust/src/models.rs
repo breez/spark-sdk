@@ -554,13 +554,36 @@ pub enum _UnsignedTransferPackage {
     Swap {
         prepare_transfer: ExternalPrepareTransferRequest,
         target_amounts: Vec<u64>,
+        amount_sat: u64,
+        fee_sat: u64,
     },
     Transfer {
         prepare_transfer: ExternalPrepareTransferRequest,
+        amount_sat: u64,
+        fee_sat: u64,
+        target: TransferTarget,
     },
     Token {
         prepare_token_transaction: ExternalPrepareTokenTransactionRequest,
         token_context: Vec<u8>,
+        token_identifier: String,
+        amount: u128,
+        fee: u128,
+    },
+}
+
+#[frb(mirror(TransferTarget))]
+pub enum _TransferTarget {
+    Spark {
+        address: String,
+        spark_invoice: Option<String>,
+    },
+    Lightning {
+        bolt11: String,
+    },
+    CoopExit {
+        address: String,
+        fee_quote: SendOnchainFeeQuote,
     },
 }
 
@@ -738,7 +761,6 @@ pub struct _SendPaymentRequest {
 
 #[frb(mirror(PublishSignedTransferPackageRequest))]
 pub struct _PublishSignedTransferPackageRequest {
-    pub prepare_response: PrepareSendPaymentResponse,
     pub signed_package: SignedTransferPackage,
 }
 

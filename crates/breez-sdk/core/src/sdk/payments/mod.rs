@@ -115,7 +115,6 @@ impl BreezSdk {
         self.maybe_ensure_spark_private_mode_initialized().await?;
         Box::pin(send::publish_signed_transfer_package(
             self,
-            &request.prepare_response,
             &request.signed_package,
         ))
         .await
