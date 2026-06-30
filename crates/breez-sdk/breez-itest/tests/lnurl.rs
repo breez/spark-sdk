@@ -1370,17 +1370,12 @@ async fn test_14_client_signing_lnurl_pay() -> Result<()> {
     info!("=== Starting test_14_client_signing_lnurl_pay ===");
 
     let alice_mnemonic = random_mnemonic()?;
-    let mut alice = build_sdk_with_external_signer(
-        tempfile::Builder::new()
-            .prefix("breez-sdk-alice-lnurl-signing")
-            .tempdir()?
-            .path()
-            .to_string_lossy()
-            .to_string(),
-        alice_mnemonic.clone(),
-        None,
-    )
-    .await?;
+    let alice_dir = tempfile::Builder::new()
+        .prefix("breez-sdk-alice-lnurl-signing")
+        .tempdir()?;
+    let alice_path = alice_dir.path().to_string_lossy().to_string();
+    let mut alice =
+        build_sdk_with_external_signer(alice_path, alice_mnemonic.clone(), Some(alice_dir)).await?;
     let mut bob = setup_bob(false).await?;
 
     let client_signer =
