@@ -163,6 +163,12 @@ impl GraphQLClient {
 
             if *status_code == 401 && !auth_retried {
                 auth_retried = true;
+                // Force a fresh token before retrying: the cached session may be
+                // structurally valid but rejected by the server. A failure here
+                // is non-fatal: the next headers() call surfaces a fresh error.
+                if let Err(e) = self.header_provider.reauthenticate().await {
+                    warn!("Reauthentication after 401 failed: {e}");
+                }
                 continue;
             }
 
@@ -603,6 +609,28 @@ mod tests {
         }
     }
 
+    /// Header provider that counts `reauthenticate` calls, to assert the 401
+    /// retry forces a fresh authentication before re-sending the request.
+    #[derive(Default)]
+    struct CountingHeaderProvider {
+        reauth_calls: AtomicUsize,
+    }
+
+    #[macros::async_trait]
+    impl HeaderProvider for CountingHeaderProvider {
+        async fn headers(&self) -> Result<HashMap<String, String>, HeaderProviderError> {
+            Ok(HashMap::from([(
+                "Authorization".to_string(),
+                "Bearer test-token".to_string(),
+            )]))
+        }
+
+        async fn reauthenticate(&self) -> Result<(), HeaderProviderError> {
+            self.reauth_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
     /// Build a `GraphQLClient` wired up with the mock HTTP client and a
     /// static header provider so `post_query` never triggers an
     /// authentication round-trip.
@@ -696,6 +724,30 @@ mod tests {
         let result = client.list_wallet_webhooks().await;
         assert!(result.is_ok(), "expected success, got {result:?}");
         assert_eq!(handle.post_calls(), 2);
+    }
+
+    #[async_test_all]
+    async fn post_query_reauthenticates_before_401_retry() {
+        let http = MockHttpClient::with_responses(vec![
+            (401, "unauthorized"),
+            (200, VALID_WEBHOOKS_RESPONSE),
+        ]);
+        let handle = http.clone();
+        let provider = Arc::new(CountingHeaderProvider::default());
+        let client = GraphQLClient {
+            client: Arc::new(http),
+            base_url: "http://test.invalid".to_string(),
+            schema_endpoint: "graphql".to_string(),
+            retry_config: fast_retry(2),
+            header_provider: provider.clone(),
+        };
+
+        let result = client.list_wallet_webhooks().await;
+        assert!(result.is_ok(), "expected success, got {result:?}");
+        assert_eq!(handle.post_calls(), 2);
+        // The 401 must force a re-authentication before the single retry, so a
+        // stale token is replaced rather than re-sent.
+        assert_eq!(provider.reauth_calls.load(Ordering::SeqCst), 1);
     }
 
     #[async_test_all]

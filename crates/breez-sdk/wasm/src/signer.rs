@@ -208,11 +208,6 @@ impl ExternalBreezSignerHandle {
             .map(|h| h.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
-
-    #[wasm_bindgen(js_name = "encryptionAvailable")]
-    pub async fn encryption_available(&self) -> bool {
-        self.inner.encryption_available().await
-    }
 }
 
 use breez_sdk_spark::SignerError;
@@ -264,10 +259,6 @@ impl breez_sdk_spark::signer::ExternalBreezSigner for ExternalBreezSignerHandle 
         path: String,
     ) -> Result<core_types::HashedMessageBytes, SignerError> {
         self.inner.hmac_sha256(message, path).await
-    }
-
-    async fn encryption_available(&self) -> bool {
-        self.inner.encryption_available().await
     }
 }
 
@@ -400,24 +391,6 @@ impl breez_sdk_spark::signer::ExternalBreezSigner for WasmExternalBreezSigner {
             })?;
         Ok(wasm_hash.into())
     }
-
-    async fn encryption_available(&self) -> bool {
-        // Optional on the JS interface: a signer that doesn't implement it is
-        // assumed to support encryption (the trait default). The Turnkey/seed
-        // handles implement it as an infallible `bool`, so they report the real
-        // value and never reject. Anything unexpected (method absent, a rejection,
-        // a non-bool result) falls back to `true`: the method is infallible by
-        // design, and assuming "available" only risks a clear failure at the
-        // first ECIES call, whereas assuming "unavailable" would wrongly degrade
-        // a signer that can encrypt (plaintext sessions, features rejected).
-        let Ok(promise) = self.inner.encryption_available() else {
-            return true;
-        };
-        match JsFuture::from(promise).await {
-            Ok(result) => serde_wasm_bindgen::from_value(result).unwrap_or(true),
-            Err(_) => true,
-        }
-    }
 }
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -429,7 +402,6 @@ const SIGNER_INTERFACE: &'static str = r#"export interface ExternalBreezSigner {
     decryptEcies(message: Uint8Array, path: string): Promise<Uint8Array>;
     signHashSchnorr(hash: Uint8Array, path: string): Promise<SchnorrSignatureBytes>;
     hmacSha256(message: Uint8Array, path: string): Promise<HashedMessageBytes>;
-    encryptionAvailable?(): Promise<boolean>;
 }"#;
 
 #[wasm_bindgen]
@@ -484,9 +456,6 @@ extern "C" {
         message: Vec<u8>,
         path: String,
     ) -> Result<Promise, JsValue>;
-
-    #[wasm_bindgen(structural, method, js_name = "encryptionAvailable", catch)]
-    pub fn encryption_available(this: &JsExternalBreezSigner) -> Result<Promise, JsValue>;
 }
 
 // ───────────────────── High-level Spark signer types ─────────────────────
@@ -945,17 +914,6 @@ impl breez_sdk_spark::signer::ExternalSparkSigner for WasmExternalSparkSigner {
             serde_wasm_bindgen::from_value(result).map_err(spark_de_err)?;
         Ok(v.into())
     }
-
-    async fn static_deposit_export_available(&self) -> Result<bool, SignerError> {
-        // Optional on the JS interface: a signer that doesn't implement it is
-        // assumed able to export (the trait default). The Turnkey/seed handles
-        // implement it and report the real value.
-        let Ok(promise) = self.inner.static_deposit_export_available() else {
-            return Ok(true);
-        };
-        let result = JsFuture::from(promise).await.map_err(spark_js_err)?;
-        serde_wasm_bindgen::from_value(result).map_err(spark_de_err)
-    }
 }
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -975,7 +933,6 @@ const SPARK_SIGNER_INTERFACE: &'static str = r#"export interface ExternalSparkSi
     signSparkInvoice(request: ExternalSignSparkInvoiceRequest): Promise<ExternalSignedSparkInvoice>;
     prepareTokenTransaction(request: ExternalPrepareTokenTransactionRequest): Promise<ExternalPreparedTokenTransaction>;
     prepareStaticDepositClaim(request: ExternalPrepareStaticDepositClaimRequest): Promise<ExternalPreparedStaticDepositClaim>;
-    staticDepositExportAvailable?(): Promise<boolean>;
 }"#;
 
 #[wasm_bindgen]
@@ -1063,11 +1020,6 @@ extern "C" {
     pub fn prepare_static_deposit_claim(
         this: &JsExternalSparkSigner,
         request: ExternalPrepareStaticDepositClaimRequest,
-    ) -> Result<Promise, JsValue>;
-
-    #[wasm_bindgen(structural, method, js_name = "staticDepositExportAvailable", catch)]
-    pub fn static_deposit_export_available(
-        this: &JsExternalSparkSigner,
     ) -> Result<Promise, JsValue>;
 }
 
@@ -1270,14 +1222,6 @@ impl ExternalSparkSignerHandle {
             .prepare_static_deposit_claim(request.into())
             .await
             .map(Into::into)
-            .map_err(spark_handle_js_err)
-    }
-
-    #[wasm_bindgen(js_name = "staticDepositExportAvailable")]
-    pub async fn static_deposit_export_available(&self) -> Result<bool, JsValue> {
-        self.inner
-            .static_deposit_export_available()
-            .await
             .map_err(spark_handle_js_err)
     }
 }

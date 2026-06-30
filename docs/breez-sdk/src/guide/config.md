@@ -166,3 +166,9 @@ Constraints:
 The {{#name default_slippage_bps}} field sets the per-instance slippage default applied when the per-request {{#name max_slippage_bps}} is unset. It must be in the 10 to 500 basis-point range; when {{#name default_slippage_bps}} itself is unset, the SDK falls back to a built-in default of 100 bps (1%).
 
 See [Send USDC/USDT](./cross_chain.md) for the provider lineup, status lifecycle, retry-safety semantics, and limitations.
+
+## Signer key export
+
+Whether the configured signer can export private keys. Defaults to `true`.
+
+Set {{#name signer_can_export_keys}} to `false` when you connect an external signer whose policy forbids exporting private keys (for example, a hardware or policy-restricted enclave). The SDK seeds its local encryption from an exported key, and claiming or refunding an on-chain deposits also requires exporting a key.

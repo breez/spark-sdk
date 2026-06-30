@@ -317,27 +317,23 @@ impl BreezSdk {
             .map(|(u, _)| u)
             .collect();
 
-        // Both claiming and refunding a static deposit require exporting the
-        // static-deposit key. When the signer denies that export (e.g. a Turnkey
-        // policy), neither is possible, so surface the mature UTXOs as
-        // unclaimable instead of retry-storming the export on every sync. The
-        // probe is memoized, and only runs when a mature UTXO exists, so a
-        // deposit-free wallet never triggers an export.
-        let export_available = if to_claim.is_empty() {
-            true
-        } else {
-            self.spark_wallet.static_deposit_export_available().await?
-        };
-
         let mut claimed_deposits: Vec<DepositInfo> = Vec::new();
         let mut unclaimed_deposits: Vec<DepositInfo> = Vec::new();
         for detailed_utxo in to_claim {
-            if !export_available {
-                let error = SdkError::Signer(
-                    "Deposit cannot be claimed or refunded with the current signer".to_string(),
-                );
-                unclaimed_deposits
-                    .push(self.record_unclaimed_deposit(&detailed_utxo, error).await?);
+            // A no-export signer can't claim or refund (both need the
+            // static-deposit key export), so record the UTXO unclaimed rather
+            // than re-attempting the export every sync.
+            if !self.config.signer_can_export_keys {
+                let info = self
+                    .record_unclaimed_deposit(
+                        &detailed_utxo,
+                        SdkError::SignerKeyExportUnavailable(
+                            "On-chain deposits cannot be claimed or refunded with the current signer"
+                                .to_string(),
+                        ),
+                    )
+                    .await?;
+                unclaimed_deposits.push(info);
                 continue;
             }
             match self

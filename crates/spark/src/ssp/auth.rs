@@ -146,4 +146,16 @@ impl HeaderProvider for SspAuthHeaderProvider {
             format!("Bearer {}", session.token),
         )]))
     }
+
+    async fn reauthenticate(&self) -> Result<(), HeaderProviderError> {
+        let session = self
+            .authenticate()
+            .await
+            .map_err(|e| HeaderProviderError::Generic(e.to_string()))?;
+        self.session_store
+            .set_session(&self.ssp_identity_public_key, session)
+            .await
+            .map_err(|e| HeaderProviderError::Generic(e.to_string()))?;
+        Ok(())
+    }
 }

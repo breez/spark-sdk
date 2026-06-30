@@ -305,24 +305,24 @@ async fn token_mint(#[case] backend: SignerBackend) -> Result<()> {
     Ok(())
 }
 
-/// No-export end-to-end: under a Turnkey policy that denies
-/// `EXPORT_WALLET_ACCOUNT`, the wallet still connects (no 403 at construction;
-/// the session store falls back to unencrypted) and Spark receive works, but
-/// on-chain Bitcoin receive is refused — the static-deposit key can't be
-/// exported, so an address that could never be claimed or refunded is not issued.
+/// No-export end-to-end: with `signer_can_export_keys = false` the wallet
+/// connects without exporting the encryption key (the export is lazy and never
+/// reached while encryption is off; the session store stays unencrypted) and
+/// Spark receive works, but on-chain Bitcoin receive is refused: the
+/// static-deposit key can't be exported, so an address that could never be
+/// claimed or refunded is not issued.
 ///
-/// Requires the `TURNKEY_*` user to carry an `EFFECT_DENY` policy on
-/// `EXPORT_WALLET_ACCOUNT` (see the no-export policy setup), so it is `#[ignore]`
-/// by default — the normal Turnkey CI creds allow export. Run explicitly:
-/// `cargo test -p breez-sdk-itest --features turnkey -- --ignored
-/// turnkey_no_export_gates_onchain_receive`.
+/// The gating is config-driven, so this runs against the normal Turnkey CI
+/// credentials; no deny-export policy is required.
 #[cfg(feature = "turnkey")]
 #[test_log::test(tokio::test)]
-#[ignore = "requires a Turnkey policy denying EXPORT_WALLET_ACCOUNT; run with --ignored"]
 async fn turnkey_no_export_gates_onchain_receive() -> Result<()> {
-    // `build_backend_sdk` syncs via `get_info(ensure_synced)`, so reaching here
-    // proves the wallet connected despite the denied encryption-key export.
-    let sdk = build_backend_sdk(SignerBackend::Turnkey).await?;
+    // Declare the no-export limitation in config. `build_backend_sdk_with_config`
+    // syncs via `get_info(ensure_synced)`, so reaching past it proves the wallet
+    // connected without attempting the encryption-key export.
+    let mut config = regtest_test_config();
+    config.signer_can_export_keys = false;
+    let sdk = build_backend_sdk_with_config(SignerBackend::Turnkey, config).await?;
 
     // Spark receive needs no export, so it still works.
     let spark = sdk
@@ -346,4 +346,63 @@ async fn turnkey_no_export_gates_onchain_receive() -> Result<()> {
         .expect_err("on-chain receive must be gated under a no-export policy");
     info!("on-chain receive correctly rejected under no-export: {err}");
     Ok(())
+}
+
+/// Shared body for the deny-export-with-encryption misconfiguration guard: with
+/// `signer_can_export_keys = true`, the SDK seeds its local encryption from an
+/// exported key. Under a Turnkey policy that denies `EXPORT_WALLET_ACCOUNT` that
+/// export is rejected (403). Connecting succeeds (the export is lazy), and the
+/// background sync is resilient (it logs per-component auth failures and still
+/// returns `Ok`), but a direct authenticated operation must surface the error:
+/// `update_user_settings` makes an operator call whose session token is written
+/// through the encrypting session store, firing the denied export. This must fail
+/// rather than silently fall back to plaintext, and guards against re-introducing
+/// an auto-detect that swallows the 403. `update_user_settings` is used because
+/// it works the same in client and server mode (it does not depend on the
+/// background-only auto private-mode init).
+#[cfg(feature = "turnkey")]
+async fn assert_update_settings_fails_under_deny_export(mut config: Config) -> Result<()> {
+    config.signer_can_export_keys = true;
+    // Connect without the initial-sync wait: a failing initial sync never flips
+    // the synced signal, and `ensure_synced` is rejected outright in server mode.
+    let sdk = connect_turnkey_without_initial_sync(config).await?;
+    let err = sdk
+        .sdk
+        .update_user_settings(UpdateUserSettingsRequest {
+            spark_private_mode_enabled: Some(true),
+            stable_balance_active_label: None,
+        })
+        .await
+        .expect_err(
+            "update_user_settings must fail when encryption is enabled but the encryption-key export is denied",
+        );
+    info!("update_user_settings correctly failed under deny-export with encryption enabled: {err}");
+    Ok(())
+}
+
+/// Client-mode misconfiguration guard (see
+/// [`assert_update_settings_fails_under_deny_export`]).
+///
+/// Requires a `TURNKEY_*` user carrying an `EFFECT_DENY` policy on
+/// `EXPORT_WALLET_ACCOUNT`, so it is `#[ignore]` by default (normal CI creds
+/// allow export). Run explicitly:
+/// `cargo test -p breez-sdk-itest --features turnkey -- --ignored
+/// turnkey_export_denied_with_encryption_enabled_fails`.
+#[cfg(feature = "turnkey")]
+#[test_log::test(tokio::test)]
+#[ignore = "requires a Turnkey policy denying EXPORT_WALLET_ACCOUNT; run with --ignored"]
+async fn turnkey_export_denied_with_encryption_enabled_fails() -> Result<()> {
+    assert_update_settings_fails_under_deny_export(regtest_test_config()).await
+}
+
+/// Server-mode (`background_tasks_enabled = false`) variant of
+/// [`turnkey_export_denied_with_encryption_enabled_fails`]. Same `#[ignore]`
+/// requirement. Run explicitly:
+/// `cargo test -p breez-sdk-itest --features turnkey -- --ignored
+/// turnkey_export_denied_with_encryption_enabled_fails_server_mode`.
+#[cfg(feature = "turnkey")]
+#[test_log::test(tokio::test)]
+#[ignore = "requires a Turnkey policy denying EXPORT_WALLET_ACCOUNT; run with --ignored"]
+async fn turnkey_export_denied_with_encryption_enabled_fails_server_mode() -> Result<()> {
+    assert_update_settings_fails_under_deny_export(regtest_server_test_config()).await
 }

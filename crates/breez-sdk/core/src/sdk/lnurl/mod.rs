@@ -148,11 +148,11 @@ impl BreezSdk {
         request_data: LnurlAuthRequestDetails,
     ) -> Result<LnurlCallbackStatus, SdkError> {
         // LNURL-auth derives the domain linking key via HMAC, which needs the
-        // local encryption key. Fail clearly up front when it is unavailable
-        // (e.g. a Turnkey policy denied the encryption-key export).
-        if !self.encryption_available {
-            return Err(SdkError::Signer(
-                "LNURL-auth requires encryption that the current signer cannot provide".to_string(),
+        // local encryption key. Fail clearly up front when the signer cannot
+        // export the key that seeds it.
+        if !self.config.signer_can_export_keys {
+            return Err(SdkError::SignerKeyExportUnavailable(
+                "LNURL-auth key cannot be derived with the current signer".to_string(),
             ));
         }
         let request: breez_sdk_common::lnurl::auth::LnurlAuthRequestDetails = request_data.into();

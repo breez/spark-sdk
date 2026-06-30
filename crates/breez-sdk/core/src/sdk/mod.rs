@@ -87,8 +87,6 @@ pub struct BreezSdk {
     pub(crate) lnurl_client: Arc<dyn HttpClient>,
     pub(crate) lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     pub(crate) lnurl_auth_signer: Arc<LnurlAuthSignerAdapter>,
-    /// Whether the signer can perform local ECIES/HMAC.
-    pub(crate) encryption_available: bool,
     pub(crate) event_emitter: Arc<EventEmitter>,
     pub(crate) shutdown_sender: watch::Sender<()>,
     pub(crate) runtime: SdkRuntime,
@@ -116,7 +114,6 @@ pub(crate) struct BreezSdkParams {
     pub lnurl_client: Arc<dyn HttpClient>,
     pub lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     pub lnurl_auth_signer: Arc<LnurlAuthSignerAdapter>,
-    pub encryption_available: bool,
     pub shutdown_sender: watch::Sender<()>,
     pub runtime: SdkRuntime,
     pub spark_wallet: Arc<SparkWallet>,
@@ -227,6 +224,7 @@ pub fn default_config(network: Network) -> Config {
         spark_config: Some(default_spark_config(network)),
         background_tasks_enabled: true,
         cross_chain_config: None,
+        signer_can_export_keys: true,
     }
 }
 

@@ -398,8 +398,7 @@ impl SdkBuilder {
         validate_server_mode(&self.config, background_services_enabled)?;
 
         let signers = build_signers(&self.config, self.signer_source)?;
-        let encryption_available = signers.base.encryption_available().await;
-        validate_signer_capabilities(&self.config, encryption_available)?;
+        validate_signer_capabilities(&self.config)?;
 
         let context = resolve_context(self.context, &self.config).await?;
         let stores = resolve_storage(self.storage, &context, &signers.spark, &self.config).await?;
@@ -428,7 +427,7 @@ impl SdkBuilder {
             stores.session_store.clone(),
             &signers.base,
             self.config.network,
-            encryption_available,
+            self.config.signer_can_export_keys,
         )?;
 
         let spark_wallet = build_spark_wallet(BuildSparkWalletParams {
@@ -517,7 +516,6 @@ impl SdkBuilder {
             lnurl_client,
             lnurl_server_client,
             lnurl_auth_signer: signers.lnurl_auth,
-            encryption_available,
             shutdown_sender,
             runtime,
             spark_wallet,
@@ -576,28 +574,22 @@ fn validate_server_mode(
     Ok(())
 }
 
-/// Rejects configs that require local encryption when the signer cannot provide
-/// it (e.g. a Turnkey policy denied the encryption-key export). Session-token
-/// persistence stays fine unencrypted (see `wrap_session_store`); these features
-/// are not, because they encrypt genuinely sensitive data with no safe plaintext
-/// fallback (sync records go to a remote server; Boltz swap secrets are claim
-/// keys/preimages that control funds).
-fn validate_signer_capabilities(
-    config: &Config,
-    encryption_available: bool,
-) -> Result<(), SdkError> {
-    if encryption_available {
+/// Rejects configs whose features need local encryption when the signer cannot
+/// export the key that seeds it. Session tokens fall back to plaintext (see
+/// `wrap_session_store`), but sync records (sent to a remote server) and Boltz
+/// swap secrets (control funds) have no safe plaintext fallback.
+fn validate_signer_capabilities(config: &Config) -> Result<(), SdkError> {
+    if config.signer_can_export_keys {
         return Ok(());
     }
     if config.real_time_sync_server_url.is_some() {
-        return Err(SdkError::InvalidInput(
-            "Real-time sync requires encryption that the current signer cannot provide".to_string(),
+        return Err(SdkError::SignerKeyExportUnavailable(
+            "real-time sync requires encryption".to_string(),
         ));
     }
     if config.cross_chain_config.is_some() {
-        return Err(SdkError::InvalidInput(
-            "Cross-chain payments require encryption that the current signer cannot provide"
-                .to_string(),
+        return Err(SdkError::SignerKeyExportUnavailable(
+            "cross-chain payments require encryption".to_string(),
         ));
     }
     Ok(())
@@ -792,19 +784,19 @@ fn finalize_spark_wallet_config(
 }
 
 /// Wraps the resolved session store (or an in-memory default) in the caching
-/// layer, plus the encrypting layer when the signer can encrypt.
+/// layer, plus the encrypting layer when `encrypt` is set.
 ///
-/// When `encryption_available` is `false` (e.g. a Turnkey policy denied the
-/// encryption-key export), the encrypting layer is skipped and the provided
-/// store holds the bearer tokens in plaintext.
+/// `encrypt` mirrors `Config::signer_can_export_keys`. When `false` (the
+/// signer cannot export the key that seeds local encryption), the encrypting
+/// layer is skipped and the provided store holds the bearer tokens in plaintext.
 fn wrap_session_store(
     session_store: Option<Arc<dyn SessionStore>>,
     signer: &Arc<dyn crate::signer::BreezSigner>,
     network: Network,
-    encryption_available: bool,
+    encrypt: bool,
 ) -> Result<Arc<dyn SessionStore>, SdkError> {
     let inner = session_store.unwrap_or_else(|| Arc::new(InMemorySessionStore::default()));
-    let store: Arc<dyn SessionStore> = if encryption_available {
+    let store: Arc<dyn SessionStore> = if encrypt {
         Arc::new(
             crate::session_store::EncryptingSessionStore::new(inner, signer.clone(), network)
                 .map_err(|e| {
@@ -1045,28 +1037,30 @@ mod tests {
 
     #[test]
     fn validate_signer_capabilities_gates_encryption_features() {
-        // Encryption available: encryption-dependent features are allowed.
+        // Key export supported: encryption-dependent features are allowed.
         let mut config = default_config(Network::Regtest);
         config.real_time_sync_server_url = Some("https://example.com".to_string());
-        assert!(super::validate_signer_capabilities(&config, true).is_ok());
+        assert!(super::validate_signer_capabilities(&config).is_ok());
 
-        // Encryption unavailable + real-time sync: rejected with a clear error.
+        // No key export + real-time sync: rejected with a clear error.
         let mut config = default_config(Network::Regtest);
+        config.signer_can_export_keys = false;
         config.real_time_sync_server_url = Some("https://example.com".to_string());
         config.cross_chain_config = None;
-        match super::validate_signer_capabilities(&config, false) {
-            Err(SdkError::InvalidInput(m)) => {
-                assert!(m.contains("Real-time sync"), "got: {m}");
+        match super::validate_signer_capabilities(&config) {
+            Err(SdkError::SignerKeyExportUnavailable(m)) => {
+                assert!(m.contains("real-time sync"), "got: {m}");
             }
-            other => panic!("expected InvalidInput, got {other:?}"),
+            other => panic!("expected SignerKeyExportUnavailable, got {other:?}"),
         }
 
-        // Encryption unavailable + no encryption-dependent feature: allowed, so a
+        // No key export + no encryption-dependent feature: allowed, so a
         // payments-only wallet still builds.
         let mut config = default_config(Network::Regtest);
+        config.signer_can_export_keys = false;
         config.real_time_sync_server_url = None;
         config.cross_chain_config = None;
-        assert!(super::validate_signer_capabilities(&config, false).is_ok());
+        assert!(super::validate_signer_capabilities(&config).is_ok());
     }
 
     #[tokio::test]

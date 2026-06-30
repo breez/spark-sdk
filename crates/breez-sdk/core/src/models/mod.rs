@@ -676,6 +676,15 @@ pub struct Config {
     /// run background work (e.g. web sockets), so enabling is left to the
     /// caller. Cross-chain sends are only supported on mainnet.
     pub cross_chain_config: Option<CrossChainConfig>,
+
+    /// Whether the configured signer can export private keys. Defaults to
+    /// `true`.
+    ///
+    /// Set to `false` when connecting an external signer whose policy forbids
+    /// exporting private keys. The SDK seeds its local encryption from an
+    /// exported key, and claiming or refunding an on-chain deposits also
+    /// requires exporting a key.
+    pub signer_can_export_keys: bool,
 }
 
 /// Configuration for cross-chain sends.

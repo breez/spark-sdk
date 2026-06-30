@@ -183,15 +183,14 @@ pub(crate) fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
 pub(crate) async fn get_deposit_address(
     spark_wallet: &SparkWallet,
     new_address: bool,
+    signer_can_export_keys: bool,
 ) -> Result<String, SdkError> {
     // Never hand out a static deposit address the signer cannot later claim or
     // refund: both require exporting the static-deposit key, so if that export
     // is denied, funds sent here would be stuck.
-    if !spark_wallet.static_deposit_export_available().await? {
-        return Err(SdkError::Signer(
-            "On-chain deposits cannot be claimed or refunded with the current signer, \
-             so no deposit address can be issued"
-                .to_string(),
+    if !signer_can_export_keys {
+        return Err(SdkError::SignerKeyExportUnavailable(
+            "On-chain addresses cannot be issued with the current signer".to_string(),
         ));
     }
     if new_address {

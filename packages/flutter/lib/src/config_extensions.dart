@@ -24,6 +24,7 @@ extension ConfigCopyWith on Config {
     SparkConfig? sparkConfig,
     bool? backgroundTasksEnabled,
     CrossChainConfig? crossChainConfig,
+    bool? signerCanExportKeys,
   }) {
     return Config(
       apiKey: apiKey ?? this.apiKey,
@@ -43,6 +44,7 @@ extension ConfigCopyWith on Config {
       sparkConfig: sparkConfig ?? this.sparkConfig,
       backgroundTasksEnabled: backgroundTasksEnabled ?? this.backgroundTasksEnabled,
       crossChainConfig: crossChainConfig ?? this.crossChainConfig,
+      signerCanExportKeys: signerCanExportKeys ?? this.signerCanExportKeys,
     );
   }
 }

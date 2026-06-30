@@ -281,10 +281,6 @@ pub(crate) struct TurnkeySparkSigner {
     // start/sign pair need not re-export. Exportable by design (the SSP co-signs
     // with them); in-memory only, never persisted.
     static_deposit_secret_keys: Mutex<HashMap<u32, SecretKey>>,
-    // Memoized outcome of probing the static-deposit-key export: `None` = not
-    // attempted, `Some(true/false)` = attempted and allowed/denied. Avoids
-    // re-attempting (and re-403'ing) on every receive-address request.
-    static_deposit_export_available: Mutex<Option<bool>>,
 }
 
 impl TurnkeySparkSigner {
@@ -298,7 +294,6 @@ impl TurnkeySparkSigner {
             leaf_pubkeys: Mutex::new(HashMap::new()),
             static_deposit_pubkeys: Mutex::new(HashMap::new()),
             static_deposit_secret_keys: Mutex::new(HashMap::new()),
-            static_deposit_export_available: Mutex::new(None),
         }
     }
 
@@ -484,45 +479,16 @@ impl TurnkeySparkSigner {
             return Ok(secret);
         }
         let path = format!("{}/3'/{index}'", self.base_path());
-        let secret = match self
+        let secret = self
             .client
             .export_secret_key(path, ADDRESS_FORMAT_COMPRESSED)
             .await
-        {
-            Ok(secret) => secret,
-            // A policy denial (HTTP 403) is terminal: surface it as a structured
-            // error so the export-availability probe and the claim/refund
-            // backstop can classify it without re-attempting.
-            Err(TurnkeyError::Http { status: 403, body }) => {
-                return Err(SignerError::PermissionDenied(format!(
-                    "Turnkey denied EXPORT_WALLET_ACCOUNT for the static-deposit key: {body}"
-                )));
-            }
-            Err(e) => return Err(to_spark_err(e)),
-        };
+            .map_err(to_spark_err)?;
         self.static_deposit_secret_keys
             .lock()
             .await
             .insert(index, secret);
         Ok(secret)
-    }
-
-    /// Probes whether the static-deposit-key export is permitted by reusing
-    /// `export_static_deposit_key(0)`: a success caches the key (reused at
-    /// claim), a 403 returns `false`. The outcome is memoized so a deny-policy
-    /// wallet does not re-attempt on every receive-address request; transient
-    /// errors propagate and are not memoized.
-    async fn probe_static_deposit_export(&self) -> Result<bool, SignerError> {
-        if let Some(available) = *self.static_deposit_export_available.lock().await {
-            return Ok(available);
-        }
-        let available = match self.export_static_deposit_key(0).await {
-            Ok(_) => true,
-            Err(SignerError::PermissionDenied(_)) => false,
-            Err(e) => return Err(e),
-        };
-        *self.static_deposit_export_available.lock().await = Some(available);
-        Ok(available)
     }
 
     /// A local in-process signer rooted at the exported static-deposit key, so
@@ -868,10 +834,6 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
             user_signature: EcdsaSignatureBytes::from_signature(&user_signature),
         })
     }
-
-    async fn static_deposit_export_available(&self) -> Result<bool, SignerError> {
-        self.probe_static_deposit_export().await
-    }
 }
 
 #[cfg(test)]
@@ -884,12 +846,10 @@ mod tests {
 
     use crate::Network;
     use crate::error::SignerError;
-    use crate::signer::{ExternalBreezSigner, ExternalSparkSigner};
+    use crate::signer::ExternalBreezSigner;
     use crate::turnkey::breez_signer::TurnkeyBreezSigner;
     use crate::turnkey::config::TurnkeyConfig;
     use crate::turnkey::transport::TurnkeyClient;
-
-    use super::TurnkeySparkSigner;
 
     /// `HttpClient` that denies every request with HTTP 403 — simulating a
     /// Turnkey policy that rejects `EXPORT_WALLET_ACCOUNT` (and any activity).
@@ -954,19 +914,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn static_deposit_export_unavailable_on_403_and_memoized() {
-        let signer = TurnkeySparkSigner::new(deny_client(), Network::Regtest, 0);
-        // A 403 on the export is a denial, not an error: the probe reports
-        // unavailable so the SDK won't issue an unclaimable address.
-        assert!(!signer.static_deposit_export_available().await.unwrap());
-        // Memoized: the second call returns the same answer.
-        assert!(!signer.static_deposit_export_available().await.unwrap());
-    }
-
-    #[tokio::test]
-    async fn breez_signer_without_encryption_reports_unavailable() {
-        let signer = TurnkeyBreezSigner::new(deny_client(), Network::Regtest, 0, None);
-        assert!(!signer.encryption_available().await);
+    async fn breez_signer_lazy_export_denied_reports_unavailable() {
+        let signer = TurnkeyBreezSigner::new(deny_client(), Network::Regtest, 0);
+        // The encryption key is exported lazily on first ECIES use. Under a
+        // deny-export policy that export is rejected (403), surfaced as
+        // EncryptionUnavailable rather than a panic or a generic error.
         match signer
             .encrypt_ecies(vec![1, 2, 3], "m/0'".to_string())
             .await

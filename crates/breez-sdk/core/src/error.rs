@@ -60,6 +60,11 @@ pub enum SdkError {
     #[error("Signer error: {0}")]
     Signer(String),
 
+    /// The configured signer cannot export keys (`signer_can_export_keys`
+    /// is `false`), so a feature that depends on key export is unavailable.
+    #[error("Signer cannot export keys: {0}")]
+    SignerKeyExportUnavailable(String),
+
     /// `optimize_leaves` was called while another optimization run (auto or
     /// manual) was already in flight.
     #[error("Optimization is already in progress")]
@@ -332,9 +337,6 @@ pub enum SignerError {
 
     #[error("Encryption unavailable: {0}")]
     EncryptionUnavailable(String),
-
-    #[error("Permission denied: {0}")]
-    PermissionDenied(String),
 
     #[error("FROST error: {0}")]
     Frost(String),

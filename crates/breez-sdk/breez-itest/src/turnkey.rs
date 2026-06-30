@@ -167,6 +167,7 @@ pub async fn build_sdk_with_turnkey(
     config: Config,
     storage_dir: String,
     temp_dir: Option<TempDir>,
+    ensure_synced: bool,
 ) -> Result<SdkInstance> {
     let (turnkey_config, guard) = provision_turnkey_wallet().await?;
     let turnkey_guard = Some(guard);
@@ -183,11 +184,18 @@ pub async fn build_sdk_with_turnkey(
     let event_listener = Box::new(ChannelEventListener { tx });
     let _listener_id = sdk.add_event_listener(event_listener).await;
 
-    let _ = sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(true),
-        })
-        .await?;
+    // Most callers wait for the initial sync so the wallet is ready. A caller
+    // can skip it (e.g. the misconfiguration test where the first sync is
+    // expected to fail): a failing initial sync never flips the synced signal,
+    // so `ensure_synced` would block rather than surface the error. Drive and
+    // observe the sync explicitly via `sync_wallet` instead.
+    if ensure_synced {
+        let _ = sdk
+            .get_info(GetInfoRequest {
+                ensure_synced: Some(true),
+            })
+            .await?;
+    }
 
     Ok(SdkInstance {
         sdk,

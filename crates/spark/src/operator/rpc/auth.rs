@@ -131,4 +131,16 @@ impl HeaderProvider for SoAuthHeaderProvider {
             session.token,
         )]))
     }
+
+    async fn reauthenticate(&self) -> std::result::Result<(), HeaderProviderError> {
+        let session = self
+            .authenticate()
+            .await
+            .map_err(|e| HeaderProviderError::Generic(e.to_string()))?;
+        self.session_store
+            .set_session(&self.identity_public_key, session)
+            .await
+            .map_err(|e| HeaderProviderError::Generic(e.to_string()))?;
+        Ok(())
+    }
 }

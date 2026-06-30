@@ -764,12 +764,6 @@ impl SparkWallet {
         Ok(address)
     }
 
-    /// Whether the signer can export the static-deposit secret key, which both
-    /// claiming and refunding an on-chain static deposit require.
-    pub async fn static_deposit_export_available(&self) -> Result<bool, SparkWalletError> {
-        Ok(self.spark_signer.static_deposit_export_available().await?)
-    }
-
     pub async fn generate_static_deposit_address(&self) -> Result<Address, SparkWalletError> {
         let signing_public_key = self.spark_signer.get_static_deposit_public_key(0).await?;
         let address = self

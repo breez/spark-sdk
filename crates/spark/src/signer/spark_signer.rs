@@ -417,12 +417,6 @@ pub trait SparkSigner: Send + Sync + 'static {
         request: PrepareStaticDepositClaimRequest,
     ) -> Result<PreparedStaticDepositClaim, SignerError>;
 
-    /// Whether the signer can export the static-deposit secret key, which both
-    /// claiming and refunding an on-chain static deposit require.
-    async fn static_deposit_export_available(&self) -> Result<bool, SignerError> {
-        Ok(true)
-    }
-
     /// Schnorr-sign a Spark invoice (sats or tokens) with the identity key.
     /// Spark invoices are unrelated to Lightning.
     async fn sign_spark_invoice(

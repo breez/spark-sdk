@@ -252,11 +252,4 @@ impl spark_wallet::SparkSigner for ExternalSparkSignerAdapter {
             .to_prepared_static_deposit_claim()
             .map_err(to_spark_err)
     }
-
-    async fn static_deposit_export_available(&self) -> Result<bool, SignerError> {
-        self.inner
-            .static_deposit_export_available()
-            .await
-            .map_err(to_spark_err)
-    }
 }
