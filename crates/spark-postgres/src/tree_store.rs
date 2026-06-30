@@ -1607,6 +1607,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_try_select_leaves() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_try_select_leaves(&fixture.store).await;
+    }
+
+    #[tokio::test]
     async fn test_cancel_reservation() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_cancel_reservation(&fixture.store).await;

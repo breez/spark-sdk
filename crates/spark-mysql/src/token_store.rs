@@ -2033,6 +2033,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_select_token_outputs() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_select_token_outputs(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_token_outputs_by_outpoints() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_token_outputs_by_outpoints(&fixture.store).await;
+    }
+
+    #[tokio::test]
     async fn test_reserve_token_outputs_and_finalize() {
         let fixture = MysqlTokenStoreTestFixture::new().await;
         shared_tests::test_reserve_token_outputs_and_finalize(&fixture.store).await;

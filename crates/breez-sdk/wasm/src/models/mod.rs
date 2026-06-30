@@ -1058,7 +1058,11 @@ pub enum UnsignedTransferPackage {
         prepare_token_transaction: crate::signer::ExternalPrepareTokenTransactionRequest,
         token_context: Vec<u8>,
         token_identifier: String,
+        #[tsify(type = "string")]
+        #[serde(with = "serde_u128_as_string")]
         amount: u128,
+        #[tsify(type = "string")]
+        #[serde(with = "serde_u128_as_string")]
         fee: u128,
     },
 }

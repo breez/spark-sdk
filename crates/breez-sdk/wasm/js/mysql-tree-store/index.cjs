@@ -584,55 +584,57 @@ class MysqlTreeStore {
       const targetAmount = targetAmounts ? this._totalSats(targetAmounts) : 0;
       const maxTarget = this._maxTargetForPrefilter(targetAmounts);
 
-      const [slimRows] = await this.pool.query(
-        `SELECT id, value
-         FROM brz_tree_leaves
-         WHERE user_id = ?
-           AND status = 'Available'
-           AND is_missing_from_operators = 0
-           AND reservation_id IS NULL
-           AND (
-             value <= ?
-             OR id = (
-               SELECT id FROM (
-                 SELECT id FROM brz_tree_leaves
-                 WHERE user_id = ?
-                   AND status = 'Available'
-                   AND is_missing_from_operators = 0
-                   AND reservation_id IS NULL
-                   AND value > ?
-                 ORDER BY value
-                 LIMIT 1
-               ) AS smallest_over
-             )
-           )`,
-        [this.identity, maxTarget, this.identity, maxTarget]
-      );
-
-      const slimLeaves = slimRows.map((r) => ({
-        id: r.id,
-        value: Number(r.value),
-      }));
-
-      const selected = this._selectLeavesByTargetAmounts(slimLeaves, targetAmounts);
-      if (selected !== null && selected.length > 0) {
-        const fullLeaves = await this._fetchFullLeavesByIds(
-          this.pool,
-          selected.map((l) => l.id)
+      return await this._withTransaction(async (conn) => {
+        const [slimRows] = await conn.query(
+          `SELECT id, value
+           FROM brz_tree_leaves
+           WHERE user_id = ?
+             AND status = 'Available'
+             AND is_missing_from_operators = 0
+             AND reservation_id IS NULL
+             AND (
+               value <= ?
+               OR id = (
+                 SELECT id FROM (
+                   SELECT id FROM brz_tree_leaves
+                   WHERE user_id = ?
+                     AND status = 'Available'
+                     AND is_missing_from_operators = 0
+                     AND reservation_id IS NULL
+                     AND value > ?
+                   ORDER BY value
+                   LIMIT 1
+                 ) AS smallest_over
+               )
+             )`,
+          [this.identity, maxTarget, this.identity, maxTarget]
         );
-        return { type: "exact", leaves: fullLeaves };
-      }
 
-      const minSelected = this._selectLeavesByMinimumAmount(slimLeaves, targetAmount);
-      if (minSelected !== null) {
-        const fullLeaves = await this._fetchFullLeavesByIds(
-          this.pool,
-          minSelected.map((l) => l.id)
-        );
-        return { type: "swapNeeded", leaves: fullLeaves };
-      }
+        const slimLeaves = slimRows.map((r) => ({
+          id: r.id,
+          value: Number(r.value),
+        }));
 
-      return { type: "insufficientFunds" };
+        const selected = this._selectLeavesByTargetAmounts(slimLeaves, targetAmounts);
+        if (selected !== null && selected.length > 0) {
+          const fullLeaves = await this._fetchFullLeavesByIds(
+            conn,
+            selected.map((l) => l.id)
+          );
+          return { type: "exact", leaves: fullLeaves };
+        }
+
+        const minSelected = this._selectLeavesByMinimumAmount(slimLeaves, targetAmount);
+        if (minSelected !== null) {
+          const fullLeaves = await this._fetchFullLeavesByIds(
+            conn,
+            minSelected.map((l) => l.id)
+          );
+          return { type: "swapNeeded", leaves: fullLeaves };
+        }
+
+        return { type: "insufficientFunds" };
+      });
     } catch (error) {
       if (error instanceof TreeStoreError) throw error;
       throw new TreeStoreError(
@@ -781,6 +783,11 @@ class MysqlTreeStore {
       `SELECT data FROM brz_tree_leaves WHERE user_id = ? AND id IN (${placeholders})`,
       [this.identity, ...ids]
     );
+    if (rows.length !== ids.length) {
+      throw new TreeStoreError(
+        `Could not resolve full data for all selected leaves (wanted ${ids.length}, got ${rows.length})`
+      );
+    }
     return rows.map((r) => parseJson(r.data));
   }
 

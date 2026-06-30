@@ -1106,6 +1106,11 @@ mod tests {
     }
 
     #[async_test_all]
+    async fn test_try_select_leaves() {
+        shared_tests::test_try_select_leaves(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
     async fn test_cancel_reservation() {
         shared_tests::test_cancel_reservation(&InMemoryTreeStore::new()).await;
     }

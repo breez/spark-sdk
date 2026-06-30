@@ -105,6 +105,12 @@ async fn test_reserve_leaves_by_ids_not_available() {
 }
 
 #[wasm_bindgen_test]
+async fn test_try_select_leaves() {
+    let store = create_test_tree_store("pg_tree_try_select_leaves").await;
+    breez_sdk_spark::tree_store_tests::test_try_select_leaves(&store).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_cancel_reservation() {
     let store = create_test_tree_store("pg_tree_cancel_res").await;
     breez_sdk_spark::tree_store_tests::test_cancel_reservation(&store).await;

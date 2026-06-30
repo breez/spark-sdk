@@ -59,3 +59,15 @@ async fn test_remove_token_outputs_prevents_refresh_re_add() {
     breez_sdk_spark::token_store_tests::test_remove_token_outputs_prevents_refresh_re_add(&store)
         .await;
 }
+
+#[wasm_bindgen_test]
+async fn test_select_token_outputs() {
+    let store = create_test_token_store("mysql_token_select_outputs").await;
+    breez_sdk_spark::token_store_tests::test_select_token_outputs(&store).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_reserve_token_outputs_by_outpoints() {
+    let store = create_test_token_store("mysql_token_reserve_by_outpoints").await;
+    breez_sdk_spark::token_store_tests::test_reserve_token_outputs_by_outpoints(&store).await;
+}
