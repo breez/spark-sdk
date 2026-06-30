@@ -840,6 +840,7 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use bitcoin::secp256k1::{Secp256k1, SecretKey};
     use platform_utils::{HttpClient, HttpError, HttpResponse};
@@ -851,9 +852,14 @@ mod tests {
     use crate::turnkey::config::TurnkeyConfig;
     use crate::turnkey::transport::TurnkeyClient;
 
-    /// `HttpClient` that denies every request with HTTP 403 — simulating a
+    /// `HttpClient` that denies every request with HTTP 403, simulating a
     /// Turnkey policy that rejects `EXPORT_WALLET_ACCOUNT` (and any activity).
-    struct Always403;
+    /// `post_calls` counts POSTs so a test can assert the export is attempted
+    /// only once (memoized) across repeated ECIES/HMAC calls.
+    #[derive(Default)]
+    struct Always403 {
+        post_calls: Arc<AtomicUsize>,
+    }
 
     #[macros::async_trait]
     impl HttpClient for Always403 {
@@ -862,11 +868,7 @@ mod tests {
             _url: String,
             _headers: Option<HashMap<String, String>>,
         ) -> Result<HttpResponse, HttpError> {
-            Ok(HttpResponse {
-                status: 403,
-                body: "{\"message\":\"forbidden\"}".to_string(),
-                headers: HashMap::new(),
-            })
+            Ok(forbidden())
         }
         async fn post(
             &self,
@@ -874,11 +876,8 @@ mod tests {
             _headers: Option<HashMap<String, String>>,
             _body: Option<String>,
         ) -> Result<HttpResponse, HttpError> {
-            Ok(HttpResponse {
-                status: 403,
-                body: "{\"message\":\"forbidden\"}".to_string(),
-                headers: HashMap::new(),
-            })
+            self.post_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(forbidden())
         }
         async fn delete(
             &self,
@@ -886,17 +885,22 @@ mod tests {
             _headers: Option<HashMap<String, String>>,
             _body: Option<String>,
         ) -> Result<HttpResponse, HttpError> {
-            Ok(HttpResponse {
-                status: 403,
-                body: "{\"message\":\"forbidden\"}".to_string(),
-                headers: HashMap::new(),
-            })
+            Ok(forbidden())
         }
     }
 
-    /// A Turnkey client whose every request is denied (403). Uses a secp256k1
-    /// API keypair (supported without the `turnkey-p256` feature).
-    fn deny_client() -> Arc<TurnkeyClient> {
+    fn forbidden() -> HttpResponse {
+        HttpResponse {
+            status: 403,
+            body: "{\"message\":\"forbidden\"}".to_string(),
+            headers: HashMap::new(),
+        }
+    }
+
+    /// A Turnkey client backed by `http` whose every request is denied (403).
+    /// Uses a secp256k1 API keypair (supported without the `turnkey-p256`
+    /// feature).
+    fn deny_client(http: Arc<Always403>) -> Arc<TurnkeyClient> {
         let secp = Secp256k1::new();
         let sk = SecretKey::from_slice(&[0x11; 32]).unwrap();
         let pk = sk.public_key(&secp);
@@ -910,12 +914,16 @@ mod tests {
             account_number: Some(0),
             retry: None,
         };
-        Arc::new(TurnkeyClient::new(&config, Arc::new(Always403)).unwrap())
+        Arc::new(TurnkeyClient::new(&config, http).unwrap())
     }
 
     #[tokio::test]
     async fn breez_signer_lazy_export_denied_reports_unavailable() {
-        let signer = TurnkeyBreezSigner::new(deny_client(), Network::Regtest, 0);
+        let signer = TurnkeyBreezSigner::new(
+            deny_client(Arc::new(Always403::default())),
+            Network::Regtest,
+            0,
+        );
         // The encryption key is exported lazily on first ECIES use. Under a
         // deny-export policy that export is rejected (403), surfaced as
         // EncryptionUnavailable rather than a panic or a generic error.
@@ -926,5 +934,40 @@ mod tests {
             Err(SignerError::EncryptionUnavailable(_)) => {}
             other => panic!("expected EncryptionUnavailable, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn breez_signer_export_denial_is_memoized() {
+        let http = Arc::new(Always403::default());
+        let post_calls = http.post_calls.clone();
+        let signer = TurnkeyBreezSigner::new(deny_client(http), Network::Regtest, 0);
+
+        // First ECIES use attempts the export and is denied (403).
+        assert!(matches!(
+            signer
+                .encrypt_ecies(vec![1, 2, 3], "m/0'".to_string())
+                .await,
+            Err(SignerError::EncryptionUnavailable(_))
+        ));
+        let after_first = post_calls.load(Ordering::SeqCst);
+        assert!(after_first >= 1, "first ECIES use must attempt the export");
+
+        // The denial is memoized, so neither a second ECIES call nor an HMAC
+        // call re-exports: no further Turnkey requests are made.
+        assert!(matches!(
+            signer
+                .encrypt_ecies(vec![4, 5, 6], "m/0'".to_string())
+                .await,
+            Err(SignerError::EncryptionUnavailable(_))
+        ));
+        assert!(matches!(
+            signer.hmac_sha256(vec![7, 8, 9], "m/0'".to_string()).await,
+            Err(SignerError::EncryptionUnavailable(_))
+        ));
+        assert_eq!(
+            post_calls.load(Ordering::SeqCst),
+            after_first,
+            "a memoized denial must not trigger another export"
+        );
     }
 }

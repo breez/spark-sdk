@@ -348,40 +348,40 @@ async fn turnkey_no_export_gates_onchain_receive() -> Result<()> {
     Ok(())
 }
 
-/// Shared body for the deny-export-with-encryption misconfiguration guard: with
-/// `signer_can_export_keys = true`, the SDK seeds its local encryption from an
-/// exported key. Under a Turnkey policy that denies `EXPORT_WALLET_ACCOUNT` that
-/// export is rejected (403). Connecting succeeds (the export is lazy), and the
-/// background sync is resilient (it logs per-component auth failures and still
-/// returns `Ok`), but a direct authenticated operation must surface the error:
-/// `update_user_settings` makes an operator call whose session token is written
-/// through the encrypting session store, firing the denied export. This must fail
-/// rather than silently fall back to plaintext, and guards against re-introducing
-/// an auto-detect that swallows the 403. `update_user_settings` is used because
-/// it works the same in client and server mode (it does not depend on the
-/// background-only auto private-mode init).
+/// Shared body for the deny-export misconfiguration guard: with
+/// `signer_can_export_keys = true` against a Turnkey policy that denies
+/// `EXPORT_WALLET_ACCOUNT`, an on-chain receive must fail closed, not silently
+/// issue an unrecoverable deposit address. It passes the config gate (the flag is
+/// true) and then fails at auth: issuing the address is an authenticated operator
+/// RPC, and under a deny-export policy the encrypting session store's token write
+/// fires the denied export (403). The assertion only excludes the gate error
+/// (`SignerKeyExportUnavailable`), so any auth-layer failure satisfies it: the
+/// point is that no address is issued. Behaves the same in client and server mode.
 #[cfg(feature = "turnkey")]
-async fn assert_update_settings_fails_under_deny_export(mut config: Config) -> Result<()> {
+async fn assert_onchain_receive_fails_at_auth_under_deny_export(mut config: Config) -> Result<()> {
     config.signer_can_export_keys = true;
     // Connect without the initial-sync wait: a failing initial sync never flips
     // the synced signal, and `ensure_synced` is rejected outright in server mode.
     let sdk = connect_turnkey_without_initial_sync(config).await?;
     let err = sdk
         .sdk
-        .update_user_settings(UpdateUserSettingsRequest {
-            spark_private_mode_enabled: Some(true),
-            stable_balance_active_label: None,
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
         })
         .await
-        .expect_err(
-            "update_user_settings must fail when encryption is enabled but the encryption-key export is denied",
-        );
-    info!("update_user_settings correctly failed under deny-export with encryption enabled: {err}");
+        .expect_err("on-chain receive must fail at auth when the encryption-key export is denied");
+    // Must reach past the config gate (the flag is true) and fail at auth instead;
+    // a gate refusal would surface `SignerKeyExportUnavailable`.
+    assert!(
+        !matches!(err, SdkError::SignerKeyExportUnavailable(_)),
+        "expected an auth failure from the session store, not the config gate: {err}"
+    );
+    info!("on-chain receive correctly failed at auth under deny-export with the flag set: {err}");
     Ok(())
 }
 
 /// Client-mode misconfiguration guard (see
-/// [`assert_update_settings_fails_under_deny_export`]).
+/// [`assert_onchain_receive_fails_at_auth_under_deny_export`]).
 ///
 /// Requires a `TURNKEY_*` user carrying an `EFFECT_DENY` policy on
 /// `EXPORT_WALLET_ACCOUNT`, so it is `#[ignore]` by default (normal CI creds
@@ -392,7 +392,7 @@ async fn assert_update_settings_fails_under_deny_export(mut config: Config) -> R
 #[test_log::test(tokio::test)]
 #[ignore = "requires a Turnkey policy denying EXPORT_WALLET_ACCOUNT; run with --ignored"]
 async fn turnkey_export_denied_with_encryption_enabled_fails() -> Result<()> {
-    assert_update_settings_fails_under_deny_export(regtest_test_config()).await
+    assert_onchain_receive_fails_at_auth_under_deny_export(regtest_test_config()).await
 }
 
 /// Server-mode (`background_tasks_enabled = false`) variant of
@@ -404,5 +404,5 @@ async fn turnkey_export_denied_with_encryption_enabled_fails() -> Result<()> {
 #[test_log::test(tokio::test)]
 #[ignore = "requires a Turnkey policy denying EXPORT_WALLET_ACCOUNT; run with --ignored"]
 async fn turnkey_export_denied_with_encryption_enabled_fails_server_mode() -> Result<()> {
-    assert_update_settings_fails_under_deny_export(regtest_server_test_config()).await
+    assert_onchain_receive_fails_at_auth_under_deny_export(regtest_server_test_config()).await
 }

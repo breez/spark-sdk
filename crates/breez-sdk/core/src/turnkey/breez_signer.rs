@@ -9,7 +9,7 @@
 //!   keeps every Spark key (the identity key included) in the enclave.
 
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use bitcoin::secp256k1::PublicKey;
 use tokio::sync::OnceCell;
@@ -27,6 +27,7 @@ use super::accounts::{
     ecdsa_from_rs, ecdsa_recoverable_low_s, schnorr_from_rs, spark_address_format,
     xpriv_from_secret,
 };
+use super::error::TurnkeyError;
 use super::transport::TurnkeyClient;
 use super::types::{ADDRESS_FORMAT_COMPRESSED, HASH_FUNCTION_NO_OP};
 
@@ -48,12 +49,18 @@ fn encryption_key_path(account: u32) -> String {
 /// That key is exported lazily on first ECIES/HMAC use, so a no-export wallet
 /// (`Config::signer_can_export_keys = false`), which never encrypts, never
 /// triggers it. If reached under a deny-export policy the export fails with
-/// `SignerError::EncryptionUnavailable`.
+/// `SignerError::EncryptionUnavailable`; the policy denial (403) is memoized in
+/// `export_denied` so later ECIES/HMAC calls fail fast instead of re-exporting
+/// and 403-storming Turnkey.
 pub(crate) struct TurnkeyBreezSigner {
     client: Arc<TurnkeyClient>,
     network: Network,
     account: u32,
     encryption: OnceCell<BreezSignerImpl>,
+    /// Failure message recorded once a key export is denied by policy (403),
+    /// which is permanent for this session. Transient export failures are not
+    /// recorded, so they still retry.
+    export_denied: OnceLock<String>,
 }
 
 impl TurnkeyBreezSigner {
@@ -63,22 +70,38 @@ impl TurnkeyBreezSigner {
             network,
             account,
             encryption: OnceCell::new(),
+            export_denied: OnceLock::new(),
         }
     }
 
     /// The local ECIES/HMAC backend, exported from Turnkey on first use and
-    /// cached. Errors with `EncryptionUnavailable` when the export is denied.
+    /// cached. Errors with `EncryptionUnavailable` when the export fails; a
+    /// policy denial (403) is memoized so subsequent calls fail fast rather than
+    /// re-exporting, which would 403-storm Turnkey under a deny policy.
     async fn encryption(&self) -> Result<&BreezSignerImpl, SignerError> {
+        if let Some(msg) = self.export_denied.get() {
+            return Err(SignerError::EncryptionUnavailable(msg.clone()));
+        }
         self.encryption
             .get_or_try_init(|| async {
+                // Re-check under the init lock: a concurrent caller may have
+                // recorded the denial while this one waited.
+                if let Some(msg) = self.export_denied.get() {
+                    return Err(SignerError::EncryptionUnavailable(msg.clone()));
+                }
                 let secret = self
                     .client
                     .export_secret_key(encryption_key_path(self.account), ADDRESS_FORMAT_COMPRESSED)
                     .await
                     .map_err(|e| {
-                        SignerError::EncryptionUnavailable(format!(
-                            "Turnkey encryption-key export failed: {e}"
-                        ))
+                        let msg = format!("Turnkey encryption-key export failed: {e}");
+                        // A 403 is the deny-export policy verdict: permanent for
+                        // this session, so memoize it. Transient failures (already
+                        // retried by the transport) are left to retry.
+                        if matches!(e, TurnkeyError::Http { status: 403, .. }) {
+                            let _ = self.export_denied.set(msg.clone());
+                        }
+                        SignerError::EncryptionUnavailable(msg)
                     })?;
                 Ok(BreezSignerImpl::new(xpriv_from_secret(
                     secret,
