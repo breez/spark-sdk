@@ -124,3 +124,13 @@ If you need at-most-once semantics in either of these cases, debounce retries at
 - **Background tasks required.** Both providers depend on background monitors to reconcile delivery status. {{#name cross_chain_config}} is incompatible with {{#name background_tasks_enabled}} disabled.
 - **Token-leg sends have no idempotency guarantee.** Applies to a direct USDB send and to any USDB-funded send that auto-converts through bitcoin. See [Retry safety](#retry-safety) above.
 
+## Supported chains
+
+| Chain family | Asset | Chains |
+| ------------ | ----- | ------ |
+| EVM    | USDC | Arbitrum One, Avalanche, Base, BSC, Codex, Ethereum, HyperEVM, Ink, Linea, Monad, Optimism, Plume, Polygon PoS, Sei, Sonic, Tempo, Unichain, World Chain, XDC |
+| EVM    | USDT | Arbitrum One, Berachain, BSC, Conflux eSpace, Corn, Ethereum, Flare, Hedera, HyperEVM, Ink, Mantle, MegaETH, Monad, Morph, Optimism, Plasma, Polygon PoS, Rootstock, Sei, Stable, Tempo, Unichain, XLayer |
+| Solana | USDC | |
+| Solana | USDT | |
+| Tron   | USDT | |
+
