@@ -18,14 +18,14 @@ use crate::{
 
 use super::conversion;
 
-pub(in crate::sdk::payments) async fn publish_signed_transfer_package(
+pub(in crate::sdk) async fn publish_signed_package_inner(
     sdk: &BreezSdk,
     signed_package: &SignedTransferPackage,
-) -> Result<PublishSignedTransferPackageResponse, SdkError> {
+) -> Result<Option<SendPaymentResponse>, SdkError> {
     let res = match (&signed_package.unsigned, &signed_package.signature) {
         (UnsignedTransferPackage::Swap { .. }, TransferSignature::Transfer { .. }) => {
             super::client_signing::submit_swap(sdk, signed_package).await?;
-            return Ok(PublishSignedTransferPackageResponse::SwapCompleted);
+            return Ok(None);
         }
         (
             UnsignedTransferPackage::Transfer {
@@ -46,12 +46,24 @@ pub(in crate::sdk::payments) async fn publish_signed_transfer_package(
             ));
         }
     }?;
-    sdk.event_emitter
-        .emit(&SdkEvent::from_payment(res.payment.clone()))
-        .await;
-    Ok(PublishSignedTransferPackageResponse::PaymentSent {
-        payment: res.payment,
-    })
+    Ok(Some(res))
+}
+
+pub(in crate::sdk::payments) async fn publish_signed_transfer_package(
+    sdk: &BreezSdk,
+    signed_package: &SignedTransferPackage,
+) -> Result<PublishSignedTransferPackageResponse, SdkError> {
+    match publish_signed_package_inner(sdk, signed_package).await? {
+        None => Ok(PublishSignedTransferPackageResponse::SwapCompleted),
+        Some(res) => {
+            sdk.event_emitter
+                .emit(&SdkEvent::from_payment(res.payment.clone()))
+                .await;
+            Ok(PublishSignedTransferPackageResponse::PaymentSent {
+                payment: res.payment,
+            })
+        }
+    }
 }
 
 async fn deferred_transfer_send(

@@ -66,7 +66,7 @@ fn reject_conversion(response: &PrepareSendPaymentResponse) -> Result<(), SdkErr
     Ok(())
 }
 
-pub(in crate::sdk::payments) async fn build_unsigned_transfer_package(
+pub(in crate::sdk) async fn build_unsigned_transfer_package(
     sdk: &BreezSdk,
     prepare_response: &PrepareSendPaymentResponse,
     options: Option<&BuildTransferPackageOptions>,

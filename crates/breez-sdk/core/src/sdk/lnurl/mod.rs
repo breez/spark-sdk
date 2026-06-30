@@ -1,9 +1,11 @@
 use breez_sdk_common::lnurl::{self, error::LnurlError};
 
 use crate::{
-    LnurlAuthRequestDetails, LnurlCallbackStatus, LnurlPayRequest, LnurlPayResponse,
-    LnurlWithdrawInfo, LnurlWithdrawRequest, LnurlWithdrawResponse, PrepareLnurlPayRequest,
-    PrepareLnurlPayResponse, WaitForPaymentIdentifier,
+    BuildUnsignedLnurlPayPackageRequest, LnurlAuthRequestDetails, LnurlCallbackStatus,
+    LnurlPayRequest, LnurlPayResponse, LnurlWithdrawInfo, LnurlWithdrawRequest,
+    LnurlWithdrawResponse, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
+    PublishSignedLnurlPayPackageRequest, PublishSignedLnurlPayResponse, UnsignedTransferPackage,
+    WaitForPaymentIdentifier,
     error::SdkError,
     persist::{ObjectCacheRepository, PaymentMetadata},
 };
@@ -25,6 +27,21 @@ impl BreezSdk {
 
     pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
         pay::send(self, request).await
+    }
+
+    pub async fn build_unsigned_lnurl_pay_package(
+        &self,
+        request: BuildUnsignedLnurlPayPackageRequest,
+    ) -> Result<UnsignedTransferPackage, SdkError> {
+        pay::build_package(self, &request.prepare_response).await
+    }
+
+    pub async fn publish_signed_lnurl_pay_package(
+        &self,
+        request: PublishSignedLnurlPayPackageRequest,
+    ) -> Result<PublishSignedLnurlPayResponse, SdkError> {
+        self.maybe_ensure_spark_private_mode_initialized().await?;
+        pay::publish_signed_package(self, request.prepare_response, request.signed_package).await
     }
 
     /// Performs an LNURL withdraw operation for the amount of satoshis to

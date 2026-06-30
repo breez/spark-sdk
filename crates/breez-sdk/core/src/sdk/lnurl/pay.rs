@@ -6,7 +6,9 @@ use tracing::info;
 
 use crate::{
     ConversionEstimate, ConversionType, FeePolicy, InputType, LnurlPayInfo, LnurlPayRequest,
-    LnurlPayResponse, PrepareLnurlPayRequest, PrepareLnurlPayResponse, SendPaymentMethod,
+    LnurlPayRequestDetails, LnurlPayResponse, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
+    PublishSignedLnurlPayResponse, SendPaymentMethod, SignedTransferPackage, SuccessAction,
+    UnsignedTransferPackage,
     error::SdkError,
     events::SdkEvent,
     models::{PrepareSendPaymentResponse, SendPaymentRequest},
@@ -14,7 +16,7 @@ use crate::{
     sdk::{
         BreezSdk,
         helpers::process_success_action,
-        payments::{conversion, send, validation},
+        payments::{client_signing, conversion, send, validation},
     },
 };
 
@@ -288,7 +290,7 @@ pub(super) async fn send(
         FeePolicy::FeesExcluded
     };
 
-    let mut payment = Box::pin(send::orchestrate_send(
+    let payment = Box::pin(send::orchestrate_send(
         sdk,
         SendPaymentRequest {
             prepare_response: PrepareSendPaymentResponse {
@@ -329,23 +331,33 @@ pub(super) async fn send(
     .await?
     .payment;
 
-    let success_action = process_success_action(
-        &payment,
-        request
-            .prepare_response
-            .success_action
-            .clone()
-            .map(Into::into)
-            .as_ref(),
-    )?;
+    finalize_lnurl_pay(
+        sdk,
+        payment,
+        request.prepare_response.pay_request,
+        request.prepare_response.comment,
+        request.prepare_response.success_action,
+    )
+    .await
+}
+
+async fn finalize_lnurl_pay(
+    sdk: &BreezSdk,
+    mut payment: crate::Payment,
+    pay_request: LnurlPayRequestDetails,
+    comment: Option<String>,
+    success_action: Option<SuccessAction>,
+) -> Result<LnurlPayResponse, SdkError> {
+    let processed_success_action =
+        process_success_action(&payment, success_action.clone().map(Into::into).as_ref())?;
 
     let lnurl_info = LnurlPayInfo {
-        ln_address: request.prepare_response.pay_request.address,
-        comment: request.prepare_response.comment,
-        domain: Some(request.prepare_response.pay_request.domain),
-        metadata: Some(request.prepare_response.pay_request.metadata_str),
-        processed_success_action: success_action.clone().map(From::from),
-        raw_success_action: request.prepare_response.success_action,
+        ln_address: pay_request.address,
+        comment,
+        domain: Some(pay_request.domain),
+        metadata: Some(pay_request.metadata_str),
+        processed_success_action: processed_success_action.clone().map(From::from),
+        raw_success_action: success_action,
     };
     let lnurl_description = lnurl_info.extract_description();
 
@@ -386,8 +398,65 @@ pub(super) async fn send(
         .await;
     Ok(LnurlPayResponse {
         payment,
-        success_action: success_action.map(From::from),
+        success_action: processed_success_action.map(From::from),
     })
+}
+
+pub(super) async fn build_package(
+    sdk: &BreezSdk,
+    prepare_response: &PrepareLnurlPayResponse,
+) -> Result<UnsignedTransferPackage, SdkError> {
+    if prepare_response.fee_policy == FeePolicy::FeesIncluded {
+        return Err(SdkError::InvalidInput(
+            "client signing for LNURL pay does not yet support FeesIncluded".to_string(),
+        ));
+    }
+    if prepare_response.conversion_estimate.is_some() {
+        return Err(SdkError::InvalidInput(
+            "client signing is not supported for conversion sends".to_string(),
+        ));
+    }
+
+    let internal = PrepareSendPaymentResponse {
+        payment_method: SendPaymentMethod::Bolt11Invoice {
+            invoice_details: prepare_response.invoice_details.clone(),
+            spark_transfer_fee_sats: None,
+            lightning_fee_sats: prepare_response.fee_sats,
+        },
+        amount: u128::from(prepare_response.amount_sats),
+        token_identifier: None,
+        conversion_estimate: None,
+        fee_policy: FeePolicy::FeesExcluded,
+    };
+
+    client_signing::build_unsigned_transfer_package(sdk, &internal, None).await
+}
+
+pub(super) async fn publish_signed_package(
+    sdk: &BreezSdk,
+    prepare_response: PrepareLnurlPayResponse,
+    signed_package: SignedTransferPackage,
+) -> Result<PublishSignedLnurlPayResponse, SdkError> {
+    if prepare_response.fee_policy == FeePolicy::FeesIncluded {
+        return Err(SdkError::InvalidInput(
+            "client signing for LNURL pay does not yet support FeesIncluded".to_string(),
+        ));
+    }
+
+    match send::publish_signed_package_inner(sdk, &signed_package).await? {
+        None => Ok(PublishSignedLnurlPayResponse::SwapCompleted),
+        Some(res) => {
+            let response = finalize_lnurl_pay(
+                sdk,
+                res.payment,
+                prepare_response.pay_request,
+                prepare_response.comment,
+                prepare_response.success_action,
+            )
+            .await?;
+            Ok(PublishSignedLnurlPayResponse::PaymentSent { response })
+        }
+    }
 }
 
 /// Calls the LNURL pay endpoint for the given `amount_msat` and unwraps the

@@ -124,6 +124,59 @@ async fn setup_bob(use_postgres: bool) -> Result<SdkInstance> {
     .await
 }
 
+fn random_mnemonic() -> Result<String> {
+    let mut entropy = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut entropy);
+    Ok(bip39::Mnemonic::from_entropy(&entropy)?.to_string())
+}
+
+/// Drives the LNURL-pay client-signing build -> sign -> publish loop, rebuilding
+/// after any denomination swap, and returns the LNURL pay response.
+async fn client_sign_lnurl_pay(
+    alice: &SdkInstance,
+    signer: &Arc<dyn signer::ExternalSparkSigner>,
+    prepare_response: PrepareLnurlPayResponse,
+) -> Result<LnurlPayResponse> {
+    for _ in 0..10 {
+        let unsigned = alice
+            .sdk
+            .build_unsigned_lnurl_pay_package(BuildUnsignedLnurlPayPackageRequest {
+                prepare_response: prepare_response.clone(),
+            })
+            .await?;
+
+        let signature = match &unsigned {
+            UnsignedTransferPackage::Transfer {
+                prepare_transfer, ..
+            }
+            | UnsignedTransferPackage::Swap {
+                prepare_transfer, ..
+            } => TransferSignature::Transfer {
+                signed: signer.prepare_transfer(prepare_transfer.clone()).await?,
+            },
+            UnsignedTransferPackage::Token { .. } => {
+                panic!("unexpected token package for an LNURL pay")
+            }
+        };
+
+        match alice
+            .sdk
+            .publish_signed_lnurl_pay_package(PublishSignedLnurlPayPackageRequest {
+                prepare_response: prepare_response.clone(),
+                signed_package: SignedTransferPackage {
+                    unsigned,
+                    signature,
+                },
+            })
+            .await?
+        {
+            PublishSignedLnurlPayResponse::SwapCompleted => continue,
+            PublishSignedLnurlPayResponse::PaymentSent { response } => return Ok(response),
+        }
+    }
+    anyhow::bail!("client-signing LNURL pay did not converge within 10 iterations")
+}
+
 // ---------------------
 // Tests
 // ---------------------
@@ -1307,5 +1360,118 @@ async fn test_13_transfer_to_self_rejected(#[case] use_postgres: bool) -> Result
     );
 
     info!("=== Test test_13_transfer_to_self_rejected PASSED ===");
+    Ok(())
+}
+
+/// Test LNURL-pay driven through the client-signing build/sign/publish loop
+/// (FeesExcluded, no conversion).
+#[test_log::test(tokio::test)]
+async fn test_14_client_signing_lnurl_pay() -> Result<()> {
+    info!("=== Starting test_14_client_signing_lnurl_pay ===");
+
+    let alice_mnemonic = random_mnemonic()?;
+    let mut alice = build_sdk_with_external_signer(
+        tempfile::Builder::new()
+            .prefix("breez-sdk-alice-lnurl-signing")
+            .tempdir()?
+            .path()
+            .to_string_lossy()
+            .to_string(),
+        alice_mnemonic.clone(),
+        None,
+    )
+    .await?;
+    let mut bob = setup_bob(false).await?;
+
+    let client_signer =
+        default_external_signers(alice_mnemonic, None, Network::Regtest, None)?.spark_signer;
+
+    let username = "bobclientsigning";
+    let description = "Bob's client-signing test Lightning address";
+    let payment_amount_sats = 5_000u64;
+    let payment_comment = "Client-signing LNURL payment from Alice";
+
+    let register_response = bob
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: username.to_string(),
+            description: Some(description.to_string()),
+        })
+        .await?;
+    let bob_lightning_address = register_response.lightning_address;
+    info!("Bob registered Lightning address: {bob_lightning_address}");
+
+    ensure_funded(&mut alice, 50_000).await?;
+    info!("Alice funded with sats");
+
+    let parse_response = alice.sdk.parse(&bob_lightning_address).await?;
+    let InputType::LightningAddress(details) = parse_response else {
+        anyhow::bail!("Expected Lightning address");
+    };
+
+    let prepare_response = alice
+        .sdk
+        .prepare_lnurl_pay(PrepareLnurlPayRequest {
+            amount: payment_amount_sats as u128,
+            pay_request: details.pay_request,
+            comment: Some(payment_comment.to_string()),
+            validate_success_action_url: None,
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+    info!(
+        "Alice prepared client-signing LNURL payment for {} sats",
+        prepare_response.amount_sats
+    );
+
+    let pay_response = client_sign_lnurl_pay(&alice, &client_signer, prepare_response).await?;
+    info!("Alice completed client-signing LNURL payment");
+
+    wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 30).await?;
+    let bob_payment_from_event =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
+
+    let alice_payment = alice
+        .sdk
+        .get_payment(GetPaymentRequest {
+            payment_id: pay_response.payment.id,
+        })
+        .await?
+        .payment;
+
+    assert_eq!(alice_payment.payment_type, PaymentType::Send);
+    assert_eq!(alice_payment.amount, payment_amount_sats as u128);
+    assert_eq!(alice_payment.method, PaymentMethod::Lightning);
+    assert_eq!(alice_payment.status, PaymentStatus::Completed);
+
+    let Some(PaymentDetails::Lightning { lnurl_pay_info, .. }) = alice_payment.details else {
+        anyhow::bail!("Expected Lightning payment");
+    };
+    let Some(lnurl_pay_info) = lnurl_pay_info else {
+        anyhow::bail!("Expected Lnurl pay info");
+    };
+    assert_eq!(lnurl_pay_info.ln_address, Some(bob_lightning_address));
+    assert_eq!(lnurl_pay_info.comment, Some(payment_comment.to_string()));
+    assert_eq!(
+        lnurl_pay_info.extract_description(),
+        Some(description.to_string())
+    );
+    info!("LNURL pay info verified on Alice's side");
+
+    let bob_payment = bob
+        .sdk
+        .get_payment(GetPaymentRequest {
+            payment_id: bob_payment_from_event.id,
+        })
+        .await?
+        .payment;
+    assert_eq!(bob_payment.payment_type, PaymentType::Receive);
+    assert_eq!(bob_payment.amount, payment_amount_sats as u128);
+    assert_eq!(bob_payment.method, PaymentMethod::Lightning);
+    assert_eq!(bob_payment.status, PaymentStatus::Completed);
+
+    info!("=== Test test_14_client_signing_lnurl_pay PASSED ===");
     Ok(())
 }

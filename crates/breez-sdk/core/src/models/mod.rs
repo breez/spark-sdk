@@ -1440,6 +1440,25 @@ pub struct LnurlPayResponse {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct BuildUnsignedLnurlPayPackageRequest {
+    pub prepare_response: PrepareLnurlPayResponse,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PublishSignedLnurlPayPackageRequest {
+    pub prepare_response: PrepareLnurlPayResponse,
+    pub signed_package: SignedTransferPackage,
+}
+
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum PublishSignedLnurlPayResponse {
+    SwapCompleted,
+    PaymentSent { response: LnurlPayResponse },
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LnurlWithdrawRequest {
     /// The amount to withdraw in satoshis
     /// Must be within the min and max withdrawable limits
