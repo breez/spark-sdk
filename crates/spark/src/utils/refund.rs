@@ -9,17 +9,16 @@ use frost_secp256k1_tr::round1::SigningCommitments;
 use tracing::info;
 
 use crate::core::next_lightning_htlc_sequence;
-use crate::services::SignedTx;
-use crate::signer::{FrostDerivation, FrostJob, FrostShareResult, SignerError, SparkSigner};
+use crate::services::{
+    PendingRefundSignature, RefundVariant, SignedTx, build_refund_signing_job,
+};
+use crate::signer::{FrostJob, SignerError, SparkSigner};
 use crate::utils::frost::derive_leaf_signing_public_key;
 use crate::utils::htlc_transactions::{
     CreateLightningHtlcRefundTxsParams, create_lightning_htlc_refund_txs,
 };
 use crate::utils::transactions::{RefundTransactions, create_refund_txs};
-use crate::{
-    Network, bitcoin::sighash_from_tx, core::next_sequence, services::LeafKeyTweak,
-    tree::TreeNodeId,
-};
+use crate::{Network, bitcoin::sighash_from_tx, core::next_sequence, services::LeafKeyTweak};
 
 pub struct SignRefundsParams<'a> {
     pub spark_signer: &'a Arc<dyn SparkSigner>,
@@ -60,7 +59,7 @@ pub async fn sign_refunds(
     // needed to rebuild its SignedTx once the batched shares return. A leaf
     // contributes up to three jobs: cpfp, direct, direct-from-cpfp.
     let mut jobs: Vec<FrostJob> = Vec::new();
-    let mut pending: Vec<PendingSignedTx> = Vec::new();
+    let mut pending: Vec<PendingRefundSignature> = Vec::new();
     let secp = Secp256k1::new();
 
     for (i, leaf) in leaves.iter().enumerate() {
@@ -203,45 +202,10 @@ pub async fn sign_refunds(
     })
 }
 
-/// Which refund-transaction variant a signed share belongs to, so a flat batch
-/// of shares can be routed back to the right output bucket.
-#[derive(Clone, Copy)]
-enum RefundVariant {
-    Cpfp,
-    Direct,
-    DirectFromCpfp,
-}
-
-/// A refund transaction whose FROST job has been queued for signing, holding
-/// everything needed to build its `SignedTx` once the share returns.
-struct PendingSignedTx {
-    variant: RefundVariant,
-    node_id: TreeNodeId,
-    signing_public_key: PublicKey,
-    refund_tx: Transaction,
-    spark_commitments: BTreeMap<Identifier, SigningCommitments>,
-    network: Network,
-}
-
-impl PendingSignedTx {
-    fn into_signed_tx(self, share: FrostShareResult) -> SignedTx {
-        SignedTx {
-            node_id: self.node_id,
-            signing_public_key: self.signing_public_key,
-            tx: self.refund_tx,
-            user_signature: share.signature_share,
-            self_nonce_commitment: share.commitment,
-            signing_commitments: self.spark_commitments,
-            network: self.network,
-        }
-    }
-}
-
-/// Builds the FROST job for one refund transaction plus the `PendingSignedTx`
-/// that pairs with it. Pure client-side work: computes the sighash and the
-/// signing job but does not sign. Refund signing always uses the leaf's own
-/// (derived) signing key, keyed by the leaf's node id. Signature aggregation
-/// happens later, when the returned share is combined with operator signatures.
+/// Builds the shared refund FROST job, computing the sighash from the parent
+/// output first. A thin wrapper over `build_refund_signing_job` that keeps the
+/// send-path call sites terse (they pass the leaf and its parent tx rather than
+/// a precomputed sighash).
 #[allow(clippy::too_many_arguments)]
 fn build_refund_job(
     leaf: &LeafKeyTweak,
@@ -252,26 +216,18 @@ fn build_refund_job(
     network: Network,
     adaptor_public_key: Option<&PublicKey>,
     variant: RefundVariant,
-) -> Result<(FrostJob, PendingSignedTx), SignerError> {
+) -> Result<(FrostJob, PendingRefundSignature), SignerError> {
     let sighash = sighash_from_tx(&refund_tx, 0, &tx.output[0])
         .map_err(|e| SignerError::Generic(e.to_string()))?;
-
-    let job = FrostJob {
-        derivation: FrostDerivation::SigningLeaf {
-            leaf_id: leaf.node.id.clone(),
-        },
-        sighash: sighash.to_raw_hash().to_byte_array(),
-        verifying_key: leaf.node.verifying_public_key,
-        operator_commitments: spark_commitments.clone(),
-        adaptor_public_key: adaptor_public_key.copied(),
-    };
-    let pending = PendingSignedTx {
-        variant,
-        node_id: leaf.node.id.clone(),
-        signing_public_key,
+    Ok(build_refund_signing_job(
+        &leaf.node.id,
+        &leaf.node.verifying_public_key,
+        &signing_public_key,
         refund_tx,
+        sighash.to_raw_hash().to_byte_array(),
         spark_commitments,
+        adaptor_public_key,
+        variant,
         network,
-    };
-    Ok((job, pending))
+    ))
 }

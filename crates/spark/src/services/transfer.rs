@@ -831,6 +831,7 @@ impl TransferService {
                 cpfp_refund_tx,
                 *cpfp_sighash.as_byte_array(),
                 cpfp_commitments[i].clone(),
+                None, // claim refunds never use adaptor signatures
                 RefundVariant::Cpfp,
                 self.network,
             );
@@ -848,6 +849,7 @@ impl TransferService {
                     direct_refund_tx,
                     *sighash.as_byte_array(),
                     direct_commitments[i].clone(),
+                    None, // claim refunds never use adaptor signatures
                     RefundVariant::Direct,
                     self.network,
                 );
@@ -864,6 +866,7 @@ impl TransferService {
                     dfc_refund_tx,
                     *sighash.as_byte_array(),
                     direct_from_cpfp_commitments[i].clone(),
+                    None, // claim refunds never use adaptor signatures
                     RefundVariant::DirectFromCpfp,
                     self.network,
                 );
