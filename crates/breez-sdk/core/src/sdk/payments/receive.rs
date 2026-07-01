@@ -62,8 +62,12 @@ pub(super) async fn receive_payment(
             })
         }
         ReceivePaymentMethod::BitcoinAddress { new_address } => {
-            let address =
-                get_deposit_address(&sdk.spark_wallet, new_address.unwrap_or(false)).await?;
+            let address = get_deposit_address(
+                &sdk.spark_wallet,
+                new_address.unwrap_or(false),
+                sdk.config.signer_can_export_keys,
+            )
+            .await?;
             Ok(ReceivePaymentResponse {
                 payment_request: address,
                 fee: 0,

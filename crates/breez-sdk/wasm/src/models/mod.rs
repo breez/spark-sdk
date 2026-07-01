@@ -675,6 +675,12 @@ pub struct Config {
     pub spark_config: Option<SparkConfig>,
     pub background_tasks_enabled: bool,
     pub cross_chain_config: Option<CrossChainConfig>,
+    /// Whether the configured signer can export private keys (default `true`).
+    /// Set to `false` for an external signer whose policy forbids key export:
+    /// the SDK then stores session tokens unencrypted, rejects real-time sync /
+    /// cross-chain, errors LNURL-auth, and refuses on-chain (static) deposit
+    /// addresses.
+    pub signer_can_export_keys: bool,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainConfig)]

@@ -19,7 +19,7 @@ const TEST_PATH: &str = "m/138'/1'/2'/3'";
 #[test_log::test(tokio::test)]
 async fn breez_signer_signing_flows() -> Result<()> {
     let (config, _guard) = provision_turnkey_wallet().await?;
-    let signers = breez_sdk_spark::turnkey::create_turnkey_signer(config)
+    let signers = breez_sdk_spark::turnkey::create_turnkey_signer(config, None)
         .await
         .map_err(|e| anyhow::anyhow!("create_turnkey_signer failed: {e}"))?;
     let breez = signers.breez_signer;

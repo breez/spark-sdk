@@ -116,9 +116,13 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
+    use bitcoin::bip32::DerivationPath;
+    use bitcoin::hashes::{Hmac, sha256};
+    use bitcoin::secp256k1::{self, Message, ecdsa::RecoverableSignature};
     use macros::async_test_all;
     use spark_wallet::SessionStore as _;
 
+    use crate::SdkError;
     use crate::Seed;
     use crate::signer::BreezSigner;
     use crate::signer::breez::BreezSignerImpl;
@@ -267,6 +271,93 @@ mod tests {
         assert!(
             msg.contains("decrypt"),
             "expected decrypt error, got: {msg}"
+        );
+    }
+
+    /// A `BreezSigner` that cannot encrypt, modeling a no-export signer whose
+    /// encryption-key export is denied. Only the ECIES methods are exercised
+    /// here; the rest error because they are never reached.
+    struct NoEncryptSigner;
+
+    #[macros::async_trait]
+    impl BreezSigner for NoEncryptSigner {
+        async fn encrypt_ecies(
+            &self,
+            _message: &[u8],
+            _path: &DerivationPath,
+        ) -> Result<Vec<u8>, SdkError> {
+            Err(SdkError::Signer("encryption-key export denied".to_string()))
+        }
+        async fn decrypt_ecies(
+            &self,
+            _message: &[u8],
+            _path: &DerivationPath,
+        ) -> Result<Vec<u8>, SdkError> {
+            Err(SdkError::Signer("encryption-key export denied".to_string()))
+        }
+        async fn sign_ecdsa(
+            &self,
+            _message: Message,
+            _path: &DerivationPath,
+        ) -> Result<secp256k1::ecdsa::Signature, SdkError> {
+            Err(SdkError::Signer("unused".to_string()))
+        }
+        async fn sign_ecdsa_recoverable(
+            &self,
+            _message: Message,
+            _path: &DerivationPath,
+        ) -> Result<RecoverableSignature, SdkError> {
+            Err(SdkError::Signer("unused".to_string()))
+        }
+        async fn sign_hash_schnorr(
+            &self,
+            _hash: &[u8],
+            _path: &DerivationPath,
+        ) -> Result<secp256k1::schnorr::Signature, SdkError> {
+            Err(SdkError::Signer("unused".to_string()))
+        }
+        async fn derive_public_key(
+            &self,
+            _path: &DerivationPath,
+        ) -> Result<secp256k1::PublicKey, SdkError> {
+            Err(SdkError::Signer("unused".to_string()))
+        }
+        async fn hmac_sha256(
+            &self,
+            _key_path: &DerivationPath,
+            _input: &[u8],
+        ) -> Result<Hmac<sha256::Hash>, SdkError> {
+            Err(SdkError::Signer("unused".to_string()))
+        }
+    }
+
+    /// Fail-closed: when the signer cannot encrypt the token (a no-export signer
+    /// under a deny policy), `set_session` errors and the inner store receives
+    /// nothing. It must never fall back to writing the plaintext token.
+    #[async_test_all]
+    async fn encrypt_failure_never_writes_plaintext() {
+        let inner = Arc::new(InspectableInner::default());
+        let signer: Arc<dyn BreezSigner> = Arc::new(NoEncryptSigner);
+        let sm = EncryptingSessionStore::new(inner.clone(), signer, Network::Regtest).unwrap();
+        let pk = test_pubkey(4);
+
+        let result = sm
+            .set_session(
+                &pk,
+                spark_wallet::Session {
+                    token: "plaintext-bearer-token".to_string(),
+                    expiration: 1_700_000_000,
+                },
+            )
+            .await;
+
+        assert!(
+            result.is_err(),
+            "set_session must fail when the signer cannot encrypt"
+        );
+        assert!(
+            inner.sessions.lock().unwrap().is_empty(),
+            "fail closed: nothing may be written to the inner store when encryption fails"
         );
     }
 }

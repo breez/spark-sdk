@@ -304,3 +304,105 @@ async fn token_mint(#[case] backend: SignerBackend) -> Result<()> {
     info!("[{backend:?}] minted token {token_id}: {before} -> {after}");
     Ok(())
 }
+
+/// No-export end-to-end: with `signer_can_export_keys = false` the wallet
+/// connects without exporting the encryption key (the export is lazy and never
+/// reached while encryption is off; the session store stays unencrypted) and
+/// Spark receive works, but on-chain Bitcoin receive is refused: the
+/// static-deposit key can't be exported, so an address that could never be
+/// claimed or refunded is not issued.
+///
+/// The gating is config-driven, so this runs against the normal Turnkey CI
+/// credentials; no deny-export policy is required.
+#[cfg(feature = "turnkey")]
+#[test_log::test(tokio::test)]
+async fn turnkey_no_export_gates_onchain_receive() -> Result<()> {
+    // Declare the no-export limitation in config. `build_backend_sdk_with_config`
+    // syncs via `get_info(ensure_synced)`, so reaching past it proves the wallet
+    // connected without attempting the encryption-key export.
+    let mut config = regtest_test_config();
+    config.signer_can_export_keys = false;
+    let sdk = build_backend_sdk_with_config(SignerBackend::Turnkey, config).await?;
+
+    // Spark receive needs no export, so it still works.
+    let spark = sdk
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+    assert!(!spark.is_empty(), "expected a Spark address");
+
+    // On-chain Bitcoin receive is gated: a denied static-deposit export means a
+    // deposit could never be claimed or refunded, so issuing an address is
+    // refused.
+    let err = sdk
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
+        })
+        .await
+        .expect_err("on-chain receive must be gated under a no-export policy");
+    info!("on-chain receive correctly rejected under no-export: {err}");
+    Ok(())
+}
+
+/// Shared body for the deny-export misconfiguration guard: with
+/// `signer_can_export_keys = true` against a Turnkey policy that denies
+/// `EXPORT_WALLET_ACCOUNT`, an on-chain receive must fail closed, not silently
+/// issue an unrecoverable deposit address. It passes the config gate (the flag is
+/// true) and then fails at auth: issuing the address is an authenticated operator
+/// RPC, and under a deny-export policy the encrypting session store's token write
+/// fires the denied export (403). The assertion only excludes the gate error
+/// (`SignerKeyExportUnavailable`), so any auth-layer failure satisfies it: the
+/// point is that no address is issued. Behaves the same in client and server mode.
+#[cfg(feature = "turnkey")]
+async fn assert_onchain_receive_fails_at_auth_under_deny_export(mut config: Config) -> Result<()> {
+    config.signer_can_export_keys = true;
+    // Connect without the initial-sync wait: a failing initial sync never flips
+    // the synced signal, and `ensure_synced` is rejected outright in server mode.
+    let sdk = connect_turnkey_without_initial_sync(config).await?;
+    let err = sdk
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
+        })
+        .await
+        .expect_err("on-chain receive must fail at auth when the encryption-key export is denied");
+    // Must reach past the config gate (the flag is true) and fail at auth instead;
+    // a gate refusal would surface `SignerKeyExportUnavailable`.
+    assert!(
+        !matches!(err, SdkError::SignerKeyExportUnavailable(_)),
+        "expected an auth failure from the session store, not the config gate: {err}"
+    );
+    info!("on-chain receive correctly failed at auth under deny-export with the flag set: {err}");
+    Ok(())
+}
+
+/// Client-mode misconfiguration guard (see
+/// [`assert_onchain_receive_fails_at_auth_under_deny_export`]).
+///
+/// Requires a `TURNKEY_*` user carrying an `EFFECT_DENY` policy on
+/// `EXPORT_WALLET_ACCOUNT`, so it is `#[ignore]` by default (normal CI creds
+/// allow export). Run explicitly:
+/// `cargo test -p breez-sdk-itest --features turnkey -- --ignored
+/// turnkey_export_denied_with_encryption_enabled_fails`.
+#[cfg(feature = "turnkey")]
+#[test_log::test(tokio::test)]
+#[ignore = "requires a Turnkey policy denying EXPORT_WALLET_ACCOUNT; run with --ignored"]
+async fn turnkey_export_denied_with_encryption_enabled_fails() -> Result<()> {
+    assert_onchain_receive_fails_at_auth_under_deny_export(regtest_test_config()).await
+}
+
+/// Server-mode (`background_tasks_enabled = false`) variant of
+/// [`turnkey_export_denied_with_encryption_enabled_fails`]. Same `#[ignore]`
+/// requirement. Run explicitly:
+/// `cargo test -p breez-sdk-itest --features turnkey -- --ignored
+/// turnkey_export_denied_with_encryption_enabled_fails_server_mode`.
+#[cfg(feature = "turnkey")]
+#[test_log::test(tokio::test)]
+#[ignore = "requires a Turnkey policy denying EXPORT_WALLET_ACCOUNT; run with --ignored"]
+async fn turnkey_export_denied_with_encryption_enabled_fails_server_mode() -> Result<()> {
+    assert_onchain_receive_fails_at_auth_under_deny_export(regtest_server_test_config()).await
+}

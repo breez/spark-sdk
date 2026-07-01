@@ -26,6 +26,11 @@ impl BreezSdk {
         &self,
         request: ClaimDepositRequest,
     ) -> Result<ClaimDepositResponse, SdkError> {
+        if !self.config.signer_can_export_keys {
+            return Err(SdkError::SignerKeyExportUnavailable(
+                "On-chain deposits cannot be claimed with the current signer".to_string(),
+            ));
+        }
         self.maybe_ensure_spark_private_mode_initialized().await?;
         let detailed_utxo =
             CachedUtxoFetcher::new(self.chain_service.clone(), self.storage.clone())
@@ -73,6 +78,11 @@ impl BreezSdk {
         &self,
         request: RefundDepositRequest,
     ) -> Result<RefundDepositResponse, SdkError> {
+        if !self.config.signer_can_export_keys {
+            return Err(SdkError::SignerKeyExportUnavailable(
+                "On-chain deposits cannot be refunded with the current signer".to_string(),
+            ));
+        }
         let detailed_utxo =
             CachedUtxoFetcher::new(self.chain_service.clone(), self.storage.clone())
                 .fetch_detailed_utxo(&request.txid, request.vout)
