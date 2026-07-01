@@ -9,9 +9,7 @@ use frost_secp256k1_tr::round1::SigningCommitments;
 use tracing::info;
 
 use crate::core::next_lightning_htlc_sequence;
-use crate::services::{
-    PendingRefundSignature, RefundVariant, SignedTx, build_refund_signing_job,
-};
+use crate::services::{PendingRefundSignature, RefundVariant, SignedTx, build_refund_signing_job};
 use crate::signer::{FrostJob, SignerError, SparkSigner};
 use crate::utils::frost::derive_leaf_signing_public_key;
 use crate::utils::htlc_transactions::{
