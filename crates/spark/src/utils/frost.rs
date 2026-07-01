@@ -1,11 +1,32 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::keys::{PublicKeyPackage, VerifyingShare};
 use frost_secp256k1_tr::round1::SigningCommitments;
 use frost_secp256k1_tr::{Identifier, SigningPackage, VerifyingKey};
 
-use crate::signer::{AggregateFrostRequest, SignerError};
+use crate::signer::{AggregateFrostRequest, FrostJob, FrostShareResult, SignerError, SparkSigner};
+
+/// Signs a batch of FROST jobs in a single `sign_frost` call, pairing each
+/// returned share with its caller-side metadata (order preserved). Remote signer
+/// backends (e.g. Turnkey) collapse this into one round-trip instead of one per
+/// job, so callers should build all jobs up front rather than signing per item.
+pub(crate) async fn sign_frost_batch<T>(
+    spark_signer: &Arc<dyn SparkSigner>,
+    jobs: Vec<FrostJob>,
+    pending: Vec<T>,
+) -> Result<Vec<(T, FrostShareResult)>, SignerError> {
+    let shares = spark_signer.sign_frost(jobs).await?;
+    if shares.len() != pending.len() {
+        return Err(SignerError::Generic(format!(
+            "sign_frost returned {} shares, expected {}",
+            shares.len(),
+            pending.len()
+        )));
+    }
+    Ok(pending.into_iter().zip(shares).collect())
+}
 
 /// Builds the FROST [`SigningPackage`] for a user + statechain signing round.
 ///
