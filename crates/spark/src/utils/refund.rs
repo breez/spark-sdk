@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use bitcoin::Transaction;
 use bitcoin::hashes::{Hash, sha256};
-use bitcoin::secp256k1::PublicKey;
+use bitcoin::secp256k1::{All, PublicKey, Secp256k1};
 use frost_secp256k1_tr::Identifier;
 use frost_secp256k1_tr::round1::SigningCommitments;
 use tracing::info;
@@ -17,7 +17,7 @@ use crate::utils::htlc_transactions::{
 use crate::utils::transactions::{RefundTransactions, create_refund_txs};
 use crate::{
     Network, bitcoin::sighash_from_tx, core::next_sequence, services::LeafKeyTweak,
-    tree::TreeNodeId,
+    tree::{TreeNode, TreeNodeId},
 };
 
 pub struct SignRefundsParams<'a> {
@@ -60,6 +60,7 @@ pub async fn sign_refunds(
     // contributes up to three jobs: cpfp, direct, direct-from-cpfp.
     let mut jobs: Vec<FrostJob> = Vec::new();
     let mut pending: Vec<PendingSignedTx> = Vec::new();
+    let secp = Secp256k1::new();
 
     for (i, leaf) in leaves.iter().enumerate() {
         let node_tx = &leaf.node.node_tx;
@@ -114,7 +115,7 @@ pub async fn sign_refunds(
             leaf.node.id, cpfp_refund_tx.input[0].sequence
         );
 
-        let signing_public_key = spark_signer.get_public_key_for_leaf(&leaf.node.id).await?;
+        let signing_public_key = derive_leaf_signing_public_key(&leaf.node, &secp)?;
 
         let (job, entry) = build_refund_job(
             leaf,
@@ -233,6 +234,24 @@ impl PendingSignedTx {
             network: self.network,
         }
     }
+}
+
+/// The user's own signing public key for a leaf, derived from persisted tree
+/// data instead of asking the signer. FROST composes the group verifying key as
+/// the user's verifying share plus the operators' aggregate share, so the user's
+/// share is recoverable as `verifying_public_key - signing_keyshare.public_key`.
+/// `refresh_leaves` validates this exact relation for every Available leaf, so
+/// deriving it here avoids a per-leaf signer round-trip on the send hot path
+/// (which, for a remote signer with no warm in-memory cache, e.g. a per-request
+/// server instance, would otherwise be one network call per leaf).
+fn derive_leaf_signing_public_key(
+    node: &TreeNode,
+    secp: &Secp256k1<All>,
+) -> Result<PublicKey, SignerError> {
+    let se_share = node.signing_keyshare.public_key.negate(secp);
+    node.verifying_public_key
+        .combine(&se_share)
+        .map_err(|e| SignerError::Generic(format!("failed to derive leaf signing key: {e}")))
 }
 
 /// Builds the FROST job for one refund transaction plus the `PendingSignedTx`
