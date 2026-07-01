@@ -20,7 +20,9 @@ use crate::address::SparkAddress;
 use crate::core::Network;
 use crate::operator::rpc as operator_rpc;
 use crate::operator::rpc::spark::PreimageRequestRole;
-use crate::signer::{EncryptedSecret, FrostSigningCommitmentsWithNonces};
+use crate::signer::{
+    EncryptedSecret, FrostDerivation, FrostJob, FrostShareResult, FrostSigningCommitmentsWithNonces,
+};
 use crate::ssp::BitcoinNetwork;
 use crate::token::{HashableTokenTransaction, bech32m_encode_token_id};
 use crate::token::{TokenMetadata, TokenOutput, TokenOutputWithPrevOut};
@@ -143,6 +145,81 @@ impl TryFrom<&SignedTx> for operator_rpc::spark::UserSignedTxSigningJob {
             additional_inputs: vec![],
         })
     }
+}
+
+/// Which refund-transaction variant a claim/coop-exit signing job belongs to, so
+/// a flat batch of signed shares can be routed back to its output bucket.
+#[derive(Clone, Copy)]
+pub(crate) enum RefundVariant {
+    Cpfp,
+    Direct,
+    DirectFromCpfp,
+}
+
+/// A refund transaction whose FROST job has been queued for batched signing,
+/// carrying what's needed to build its `UserSignedTxSigningJob` once the share
+/// returns.
+pub(crate) struct PendingUserSignedJob {
+    pub variant: RefundVariant,
+    pub node_id: TreeNodeId,
+    pub signing_public_key: PublicKey,
+    pub refund_tx: Transaction,
+    pub operator_commitments: BTreeMap<Identifier, SigningCommitments>,
+    pub network: Network,
+}
+
+impl PendingUserSignedJob {
+    /// Combines the batched share into the operator-facing signing job, tagged
+    /// with its variant so the caller can route it to the right bucket.
+    pub(crate) fn into_user_signed_job(
+        self,
+        share: FrostShareResult,
+    ) -> Result<(RefundVariant, operator_rpc::spark::UserSignedTxSigningJob), ServiceError> {
+        let signed_tx = SignedTx {
+            node_id: self.node_id,
+            signing_public_key: self.signing_public_key,
+            tx: self.refund_tx,
+            user_signature: share.signature_share,
+            signing_commitments: self.operator_commitments,
+            self_nonce_commitment: share.commitment,
+            network: self.network,
+        };
+        Ok((self.variant, (&signed_tx).try_into()?))
+    }
+}
+
+/// Builds the FROST job for one refund transaction plus the `PendingUserSignedJob`
+/// that pairs with it. Pure client-side work: no signing. Shared by the claim and
+/// coop-exit paths, which sign every leaf-variant refund in one batched call.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_refund_signing_job(
+    node_id: &TreeNodeId,
+    verifying_key: &PublicKey,
+    signing_public_key: &PublicKey,
+    refund_tx: Transaction,
+    sighash: [u8; 32],
+    operator_commitments: BTreeMap<Identifier, SigningCommitments>,
+    variant: RefundVariant,
+    network: Network,
+) -> (FrostJob, PendingUserSignedJob) {
+    let job = FrostJob {
+        derivation: FrostDerivation::SigningLeaf {
+            leaf_id: node_id.clone(),
+        },
+        sighash,
+        verifying_key: *verifying_key,
+        operator_commitments: operator_commitments.clone(),
+        adaptor_public_key: None,
+    };
+    let pending = PendingUserSignedJob {
+        variant,
+        node_id: node_id.clone(),
+        signing_public_key: *signing_public_key,
+        refund_tx,
+        operator_commitments,
+        network,
+    };
+    (job, pending)
 }
 
 pub(crate) struct SigningResult {
