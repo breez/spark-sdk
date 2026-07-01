@@ -1,0 +1,270 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Passkey login - Breez SDK - Spark</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../styles.css">
+        <link rel="stylesheet" href="../theme/pagetoc.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Breez SDK - Spark</h1>
+
+                    <div class="right-buttons">
+                        <a href="https://github.com/breez/spark-sdk" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/src/guide/uxguide_passkey.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h2 id="passkey-login"><a class="header" href="#passkey-login">Passkey login</a></h2>
+<h3 id="ux-principles"><a class="header" href="#ux-principles">UX principles</a></h3>
+<ul>
+<li><strong>Be transparent about the trust model.</strong> Users should know up front that the passkey is the wallet, not just a convenience layer.</li>
+<li><strong>Make passkey login a choice on supported devices, not a forced default.</strong> Users who prefer mnemonic onboarding should be able to opt out without friction.</li>
+</ul>
+<h3 id="guidelines"><a class="header" href="#guidelines">Guidelines</a></h3>
+<ol>
+<li><strong>Gate passkey UI on availability.</strong> Call <code class="lang-fn"><span class="fn-rust">PasskeyClient.check_availability</span><span class="fn-python">PasskeyClient.check_availability</span><span class="fn-swift">PasskeyClient.checkAvailability</span><span class="fn-kotlin">PasskeyClient.checkAvailability</span><span class="fn-javascript">PasskeyClient.checkAvailability</span><span class="fn-react-native">PasskeyClient.checkAvailability</span><span class="fn-flutter">PasskeyClient.checkAvailability</span><span class="fn-go">PasskeyClient.CheckAvailability</span><span class="fn-csharp">PasskeyClient.CheckAvailability</span></code> at startup and fall back to mnemonic onboarding on unsupported devices. The same call surfaces domain-association failures, so one check covers both "device can't" and "config is broken".</li>
+<li><strong>Match the CTA layout to the platform.</strong> iOS and Android: a single primary CTA backed by <code class="lang-fn"><span class="fn-rust">PasskeyClient.connect_with_passkey</span><span class="fn-python">PasskeyClient.connect_with_passkey</span><span class="fn-swift">PasskeyClient.connectWithPasskey</span><span class="fn-kotlin">PasskeyClient.connectWithPasskey</span><span class="fn-javascript">PasskeyClient.connectWithPasskey</span><span class="fn-react-native">PasskeyClient.connectWithPasskey</span><span class="fn-flutter">PasskeyClient.connectWithPasskey</span><span class="fn-go">PasskeyClient.ConnectWithPasskey</span><span class="fn-csharp">PasskeyClient.ConnectWithPasskey</span></code> (silent sign-in for returning users, fall-through to register for new ones). Web: two CTAs, "Create a new passkey" and "Sign in with a passkey", since WebAuthn can't tell "no credential" from "cancel" for auto-detection.</li>
+<li><strong>Don't add your own consent screen.</strong> The OS shows its own consent UI, so don't gate registration behind a separate "I understand" review step.</li>
+<li><strong>Cache the derived seed within a session.</strong> A sign-in or register call avoids re-prompting for later <code class="lang-fn"><span class="fn-rust">PasskeyLabels.list</span><span class="fn-python">PasskeyLabels.list</span><span class="fn-swift">PasskeyLabels.list</span><span class="fn-kotlin">PasskeyLabels.list</span><span class="fn-javascript">PasskeyLabels.list</span><span class="fn-react-native">PasskeyLabels.list</span><span class="fn-flutter">PasskeyLabels.list</span><span class="fn-go">PasskeyLabels.List</span><span class="fn-csharp">PasskeyLabels.List</span></code> / <code class="lang-fn"><span class="fn-rust">PasskeyLabels.store</span><span class="fn-python">PasskeyLabels.store</span><span class="fn-swift">PasskeyLabels.store</span><span class="fn-kotlin">PasskeyLabels.store</span><span class="fn-javascript">PasskeyLabels.store</span><span class="fn-react-native">PasskeyLabels.store</span><span class="fn-flutter">PasskeyLabels.store</span><span class="fn-go">PasskeyLabels.Store</span><span class="fn-csharp">PasskeyLabels.Store</span></code> calls in the same session. For reuse across an app relaunch, keep the seed in your own in-memory cache and pass it to <code class="lang-fn"><span class="fn-rust">connect</span><span class="fn-python">connect</span><span class="fn-swift">connect</span><span class="fn-kotlin">connect</span><span class="fn-javascript">connect</span><span class="fn-react-native">connect</span><span class="fn-flutter">connect</span><span class="fn-go">Connect</span><span class="fn-csharp">Connect</span></code>; never persist it to disk.</li>
+<li><strong>Never persist the derived mnemonic.</strong> Re-derive it from the passkey and label on each session. Persisting it would bypass the OS authentication prompt.</li>
+<li><strong>Allow manual mnemonic backup.</strong> Offer a user-initiated "Show recovery phrase" path that derives the mnemonic on demand via <code class="lang-fn"><span class="fn-rust">PasskeyClient.sign_in</span><span class="fn-python">PasskeyClient.sign_in</span><span class="fn-swift">PasskeyClient.signIn</span><span class="fn-kotlin">PasskeyClient.signIn</span><span class="fn-javascript">PasskeyClient.signIn</span><span class="fn-react-native">PasskeyClient.signIn</span><span class="fn-flutter">PasskeyClient.signIn</span><span class="fn-go">PasskeyClient.SignIn</span><span class="fn-csharp">PasskeyClient.SignIn</span></code>, so users keep a recovery option if they lose the passkey.</li>
+<li><strong>Match on <code class="lang-fn"><span class="fn-rust">PrfProviderError</span><span class="fn-python">PrfProviderError</span><span class="fn-swift">PrfProviderError</span><span class="fn-kotlin">PrfProviderError</span><span class="fn-javascript">PrfProviderError</span><span class="fn-react-native">PrfProviderError</span><span class="fn-flutter">PrfProviderError</span><span class="fn-go">PrfProviderError</span><span class="fn-csharp">PrfProviderError</span></code> variants.</strong> They are the cross-language error surface. Rust callers can branch on the collapsed <code>error.kind()</code> instead.</li>
+<li><strong>Don't auto-retry on dismissed prompts.</strong> The SDK never re-fires the OS prompt on its own. A dismissed prompt should lead to a sticky error screen with a "Try Again" button; only a user tap retries.</li>
+</ol>
+<h3 id="onboarding-flow"><a class="header" href="#onboarding-flow">Onboarding flow</a></h3>
+<p>Browsers and native authenticators expose different error semantics, so the recommended UX differs by platform.</p>
+<p><strong>iOS 18+ / Android 9+:</strong> one "Use Passkey" button backed by <code class="lang-fn"><span class="fn-rust">PasskeyClient.connect_with_passkey</span><span class="fn-python">PasskeyClient.connect_with_passkey</span><span class="fn-swift">PasskeyClient.connectWithPasskey</span><span class="fn-kotlin">PasskeyClient.connectWithPasskey</span><span class="fn-javascript">PasskeyClient.connectWithPasskey</span><span class="fn-react-native">PasskeyClient.connectWithPasskey</span><span class="fn-flutter">PasskeyClient.connectWithPasskey</span><span class="fn-go">PasskeyClient.ConnectWithPasskey</span><span class="fn-csharp">PasskeyClient.ConnectWithPasskey</span></code>. It tries a silent sign-in first: a returning user gets a single biometric prompt; a new user fast-fails with no UI and the SDK falls through to register. On a real cancel, show a sticky retry and do not auto-register.</p>
+<div class="table-wrapper"><table><thead><tr><th>Path</th><th>OS prompts</th></tr></thead><tbody>
+<tr><td>Returning user</td><td><strong>1</strong> (one assertion derives master + label)</td></tr>
+<tr><td>New user</td><td><strong>2</strong> (1 create, 1 assertion)</td></tr>
+</tbody></table>
+</div>
+<p><strong>Web:</strong> two buttons, "Create a new passkey" and "Sign in with a passkey". WebAuthn reports "no credential" and "user cancelled" identically, so the SDK can't auto-detect which the user wants. <code class="lang-fn"><span class="fn-rust">PasskeyClient.connect_with_passkey</span><span class="fn-python">PasskeyClient.connect_with_passkey</span><span class="fn-swift">PasskeyClient.connectWithPasskey</span><span class="fn-kotlin">PasskeyClient.connectWithPasskey</span><span class="fn-javascript">PasskeyClient.connectWithPasskey</span><span class="fn-react-native">PasskeyClient.connectWithPasskey</span><span class="fn-flutter">PasskeyClient.connectWithPasskey</span><span class="fn-go">PasskeyClient.ConnectWithPasskey</span><span class="fn-csharp">PasskeyClient.ConnectWithPasskey</span></code> is not surfaced on the WASM target.</p>
+<p>See <a href="./passkey_onboarding.html">Onboarding</a> for the call shapes.</p>
+<h3 id="adding-a-wallet-under-a-new-label"><a class="header" href="#adding-a-wallet-under-a-new-label">Adding a wallet under a new label</a></h3>
+<p>For a user who already has a passkey and wants another wallet:</p>
+<ol>
+<li><code class="lang-fn"><span class="fn-rust">PasskeyClient.sign_in</span><span class="fn-python">PasskeyClient.sign_in</span><span class="fn-swift">PasskeyClient.signIn</span><span class="fn-kotlin">PasskeyClient.signIn</span><span class="fn-javascript">PasskeyClient.signIn</span><span class="fn-react-native">PasskeyClient.signIn</span><span class="fn-flutter">PasskeyClient.signIn</span><span class="fn-go">PasskeyClient.SignIn</span><span class="fn-csharp">PasskeyClient.SignIn</span></code> with the new label. One assertion derives the master and new-label seeds.</li>
+<li><code class="lang-fn"><span class="fn-rust">PasskeyLabels.store</span><span class="fn-python">PasskeyLabels.store</span><span class="fn-swift">PasskeyLabels.store</span><span class="fn-kotlin">PasskeyLabels.store</span><span class="fn-javascript">PasskeyLabels.store</span><span class="fn-react-native">PasskeyLabels.store</span><span class="fn-flutter">PasskeyLabels.store</span><span class="fn-go">PasskeyLabels.Store</span><span class="fn-csharp">PasskeyLabels.Store</span></code> to publish the label to Nostr. This reuses the cached identity, so it adds no prompt.</li>
+</ol>
+<p>Total: <strong>1</strong> OS prompt. Storing the label first would cost 2, since each call would derive the master salt independently.</p>
+<h3 id="credential-metadata"><a class="header" href="#credential-metadata">Credential metadata</a></h3>
+<p>Every flow returns a <code class="lang-fn"><span class="fn-rust">PasskeyCredential</span><span class="fn-python">PasskeyCredential</span><span class="fn-swift">PasskeyCredential</span><span class="fn-kotlin">PasskeyCredential</span><span class="fn-javascript">PasskeyCredential</span><span class="fn-react-native">PasskeyCredential</span><span class="fn-flutter">PasskeyCredential</span><span class="fn-go">PasskeyCredential</span><span class="fn-csharp">PasskeyCredential</span></code>: the credential ID on every path, plus the user handle, AAGUID, and backup flag on registration. Persist them to keep a returning user on the same wallet, block duplicate registrations on one device, and show which authenticator holds the passkey and whether it syncs. AAGUID and the backup flag are unverified: treat them as display hints, never trust signals.</p>
+<p>See <a href="./passkey_credential_metadata.html">Credential metadata</a> for the fields, where to store them, and the per-use-case code.</p>
+<h3 id="recovery-paths"><a class="header" href="#recovery-paths">Recovery paths</a></h3>
+<p>Every passkey failure normalizes to a <code class="lang-fn"><span class="fn-rust">PrfProviderError</span><span class="fn-python">PrfProviderError</span><span class="fn-swift">PrfProviderError</span><span class="fn-kotlin">PrfProviderError</span><span class="fn-javascript">PrfProviderError</span><span class="fn-react-native">PrfProviderError</span><span class="fn-flutter">PrfProviderError</span><span class="fn-go">PrfProviderError</span><span class="fn-csharp">PrfProviderError</span></code> variant. See <a href="./passkey_onboarding.html#error-recovery">Onboarding error recovery</a> for the variant-to-action table; the guidelines above cover the UX rules.</p>
+<p>On iOS, the SDK disambiguates the platform's generic failure (missing credential, cancel, or timeout) into these variants for you, so you don't need a host-side timer.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../guide/uxguide_seed.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../guide/uxguide_seed.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../tabs.js"></script>
+        <script src="../theme/pagetoc.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

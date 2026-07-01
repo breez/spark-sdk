@@ -1,0 +1,513 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>PRF providers - Breez SDK - Spark</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../styles.css">
+        <link rel="stylesheet" href="../theme/pagetoc.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Breez SDK - Spark</h1>
+
+                    <div class="right-buttons">
+                        <a href="https://github.com/breez/spark-sdk" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/src/guide/passkey_prf_providers.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="prf-providers"><a class="header" href="#prf-providers">PRF providers</a></h1>
+<p>The built-in <code class="lang-fn"><span class="fn-rust">PasskeyProvider</span><span class="fn-python">PasskeyProvider</span><span class="fn-swift">PasskeyProvider</span><span class="fn-kotlin">PasskeyProvider</span><span class="fn-javascript">PasskeyProvider</span><span class="fn-react-native">PasskeyProvider</span><span class="fn-flutter">PasskeyProvider</span><span class="fn-go">PasskeyProvider</span><span class="fn-csharp">PasskeyProvider</span></code> covers the common case. Reach for this page when:</p>
+<ul>
+<li>You need platform-specific provider options (iOS <code>URLSession</code> / presentation anchor, Android <code>Activity</code> wiring, web <code>authenticatorAttachment</code>).</li>
+<li>You're integrating Python, Go, or C# (no built-in <code class="lang-fn"><span class="fn-rust">PasskeyProvider</span><span class="fn-python">PasskeyProvider</span><span class="fn-swift">PasskeyProvider</span><span class="fn-kotlin">PasskeyProvider</span><span class="fn-javascript">PasskeyProvider</span><span class="fn-react-native">PasskeyProvider</span><span class="fn-flutter">PasskeyProvider</span><span class="fn-go">PasskeyProvider</span><span class="fn-csharp">PasskeyProvider</span></code> ships for those bindings).</li>
+<li>You need a custom <code class="lang-fn"><span class="fn-rust">PrfProvider</span><span class="fn-python">PrfProvider</span><span class="fn-swift">PrfProvider</span><span class="fn-kotlin">PrfProvider</span><span class="fn-javascript">PrfProvider</span><span class="fn-react-native">PrfProvider</span><span class="fn-flutter">PrfProvider</span><span class="fn-go">PrfProvider</span><span class="fn-csharp">PrfProvider</span></code> (CLI YubiKey, FIDO2, air-gapped backup file, hardware module).</li>
+</ul>
+<h2 id="built-in-passkeyprovider-options"><a class="header" href="#built-in-passkeyprovider-options">Built-in PasskeyProvider options</a></h2>
+<p>The built-in <code class="lang-fn"><span class="fn-rust">PasskeyProvider</span><span class="fn-python">PasskeyProvider</span><span class="fn-swift">PasskeyProvider</span><span class="fn-kotlin">PasskeyProvider</span><span class="fn-javascript">PasskeyProvider</span><span class="fn-react-native">PasskeyProvider</span><span class="fn-flutter">PasskeyProvider</span><span class="fn-go">PasskeyProvider</span><span class="fn-csharp">PasskeyProvider</span></code> takes a <code class="lang-fn"><span class="fn-rust">PasskeyProviderOptions</span><span class="fn-python">PasskeyProviderOptions</span><span class="fn-swift">PasskeyProviderOptions</span><span class="fn-kotlin">PasskeyProviderOptions</span><span class="fn-javascript">PasskeyProviderOptions</span><span class="fn-react-native">PasskeyProviderOptions</span><span class="fn-flutter">PasskeyProviderOptions</span><span class="fn-go">PasskeyProviderOptions</span><span class="fn-csharp">PasskeyProviderOptions</span></code>:</p>
+<div class="table-wrapper"><table><thead><tr><th>Field</th><th>Default</th><th>Description</th></tr></thead><tbody>
+<tr><td><code class="lang-fn"><span class="fn-rust">rp_id</span><span class="fn-python">rp_id</span><span class="fn-swift">rpId</span><span class="fn-kotlin">rpId</span><span class="fn-javascript">rpId</span><span class="fn-react-native">rpId</span><span class="fn-flutter">rpId</span><span class="fn-go">RpId</span><span class="fn-csharp">RpId</span></code></td><td>Breez shared RP</td><td>Relying Party ID. Your app's domain, or <code>PasskeyProvider.BREEZ_RP_ID</code> (<code>keys.breez.technology</code>) if Breez-registered. Changing it makes existing passkeys derive a different seed (see <a href="https://github.com/breez/passkey-login/blob/main/SDK%20implementation.md#passkey-migration-considerations">migration considerations</a>).</td></tr>
+<tr><td><code class="lang-fn"><span class="fn-rust">rp_name</span><span class="fn-python">rp_name</span><span class="fn-swift">rpName</span><span class="fn-kotlin">rpName</span><span class="fn-javascript">rpName</span><span class="fn-react-native">rpName</span><span class="fn-flutter">rpName</span><span class="fn-go">RpName</span><span class="fn-csharp">RpName</span></code></td><td><code>"Breez"</code></td><td>Display name for your app, shown in some authenticator UIs. Registration-only.</td></tr>
+<tr><td><code class="lang-fn"><span class="fn-rust">user_name</span><span class="fn-python">user_name</span><span class="fn-swift">userName</span><span class="fn-kotlin">userName</span><span class="fn-javascript">userName</span><span class="fn-react-native">userName</span><span class="fn-flutter">userName</span><span class="fn-go">UserName</span><span class="fn-csharp">UserName</span></code></td><td><code class="lang-fn"><span class="fn-rust">rp_name</span><span class="fn-python">rp_name</span><span class="fn-swift">rpName</span><span class="fn-kotlin">rpName</span><span class="fn-javascript">rpName</span><span class="fn-react-native">rpName</span><span class="fn-flutter">rpName</span><span class="fn-go">RpName</span><span class="fn-csharp">RpName</span></code></td><td>Account identifier shown beneath the display name in the OS picker, e.g. <code>john@doe.com</code>. Pass a stable per-user value so each registration is a distinct entry (Apple Passwords dedupes by <code>(rpId, user.name)</code>). Registration-only.</td></tr>
+<tr><td><code class="lang-fn"><span class="fn-rust">user_display_name</span><span class="fn-python">user_display_name</span><span class="fn-swift">userDisplayName</span><span class="fn-kotlin">userDisplayName</span><span class="fn-javascript">userDisplayName</span><span class="fn-react-native">userDisplayName</span><span class="fn-flutter">userDisplayName</span><span class="fn-go">UserDisplayName</span><span class="fn-csharp">UserDisplayName</span></code></td><td><code class="lang-fn"><span class="fn-rust">user_name</span><span class="fn-python">user_name</span><span class="fn-swift">userName</span><span class="fn-kotlin">userName</span><span class="fn-javascript">userName</span><span class="fn-react-native">userName</span><span class="fn-flutter">userName</span><span class="fn-go">UserName</span><span class="fn-csharp">UserName</span></code></td><td>Human-friendly name shown most prominently, e.g. <code>John Doe</code>. Registration-only.</td></tr>
+</tbody></table>
+</div>
+<p>The same <code class="lang-fn"><span class="fn-rust">PasskeyProviderOptions</span><span class="fn-python">PasskeyProviderOptions</span><span class="fn-swift">PasskeyProviderOptions</span><span class="fn-kotlin">PasskeyProviderOptions</span><span class="fn-javascript">PasskeyProviderOptions</span><span class="fn-react-native">PasskeyProviderOptions</span><span class="fn-flutter">PasskeyProviderOptions</span><span class="fn-go">PasskeyProviderOptions</span><span class="fn-csharp">PasskeyProviderOptions</span></code> is settable on <code class="lang-fn"><span class="fn-rust">passkey_config</span><span class="fn-python">passkey_config</span><span class="fn-swift">passkeyConfig</span><span class="fn-kotlin">passkeyConfig</span><span class="fn-javascript">passkeyConfig</span><span class="fn-react-native">passkeyConfig</span><span class="fn-flutter">passkeyConfig</span><span class="fn-go">PasskeyConfig</span><span class="fn-csharp">PasskeyConfig</span></code> via <code class="lang-fn"><span class="fn-rust">provider_options</span><span class="fn-python">provider_options</span><span class="fn-swift">providerOptions</span><span class="fn-kotlin">providerOptions</span><span class="fn-javascript">providerOptions</span><span class="fn-react-native">providerOptions</span><span class="fn-flutter">providerOptions</span><span class="fn-go">ProviderOptions</span><span class="fn-csharp">ProviderOptions</span></code>, which builds the provider for you (see <a href="./passkey_onboarding.html#initialization">Initialization</a>). Construct <code class="lang-fn"><span class="fn-rust">PasskeyProvider</span><span class="fn-python">PasskeyProvider</span><span class="fn-swift">PasskeyProvider</span><span class="fn-kotlin">PasskeyProvider</span><span class="fn-javascript">PasskeyProvider</span><span class="fn-react-native">PasskeyProvider</span><span class="fn-flutter">PasskeyProvider</span><span class="fn-go">PasskeyProvider</span><span class="fn-csharp">PasskeyProvider</span></code> directly only for platform-specific options (iOS <code>URLSession</code>, web <code>authenticatorAttachment</code>) or a custom backend.</p>
+<div class="warning">
+<h4 id="c--go--python-limitation"><a class="header" href="#c--go--python-limitation">C# / Go / Python limitation</a></h4>
+<p>The SDK does not ship a built-in <code class="lang-fn"><span class="fn-rust">PasskeyProvider</span><span class="fn-python">PasskeyProvider</span><span class="fn-swift">PasskeyProvider</span><span class="fn-kotlin">PasskeyProvider</span><span class="fn-javascript">PasskeyProvider</span><span class="fn-react-native">PasskeyProvider</span><span class="fn-flutter">PasskeyProvider</span><span class="fn-go">PasskeyProvider</span><span class="fn-csharp">PasskeyProvider</span></code> for C#, Go, or Python (no native passkey API to wrap). On those bindings, implement your own <code class="lang-fn"><span class="fn-rust">PrfProvider</span><span class="fn-python">PrfProvider</span><span class="fn-swift">PrfProvider</span><span class="fn-kotlin">PrfProvider</span><span class="fn-javascript">PrfProvider</span><span class="fn-react-native">PrfProvider</span><span class="fn-flutter">PrfProvider</span><span class="fn-go">PrfProvider</span><span class="fn-csharp">PrfProvider</span></code> and pass it to <code class="lang-fn"><span class="fn-rust">PasskeyClient</span><span class="fn-python">PasskeyClient</span><span class="fn-swift">PasskeyClient</span><span class="fn-kotlin">PasskeyClient</span><span class="fn-javascript">PasskeyClient</span><span class="fn-react-native">PasskeyClient</span><span class="fn-flutter">PasskeyClient</span><span class="fn-go">PasskeyClient</span><span class="fn-csharp">PasskeyClient</span></code>.</p>
+</div>
+<h2 id="custom-prfprovider"><a class="header" href="#custom-prfprovider">Custom PrfProvider</a></h2>
+<p>To support a custom authenticator (hardware security key, FIDO2/CTAP2 transport, air-gapped backup file), implement the <code class="lang-fn"><span class="fn-rust">PrfProvider</span><span class="fn-python">PrfProvider</span><span class="fn-swift">PrfProvider</span><span class="fn-kotlin">PrfProvider</span><span class="fn-javascript">PrfProvider</span><span class="fn-react-native">PrfProvider</span><span class="fn-flutter">PrfProvider</span><span class="fn-go">PrfProvider</span><span class="fn-csharp">PrfProvider</span></code> interface directly. The Breez CLI ships <a href="https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/cli/src/passkey/yubikey_prf.rs">YubiKey</a>, <a href="https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/cli/src/passkey/fido2_prf.rs">FIDO2</a>, and <a href="https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/cli/src/passkey/file_prf.rs">file-based</a> implementations as references.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">/// Implement PrfProvider for a custom authenticator (hardware key, FIDO2,
+/// file-backed). Only derive_seeds and is_supported are required.
+struct CustomPrfProvider;
+
+#[async_trait::async_trait]
+impl PrfProvider for CustomPrfProvider {
+    async fn derive_seeds(
+        &amp;self,
+        _request: DeriveSeedsRequest,
+    ) -&gt; Result&lt;DeriveSeedsOutput, PrfProviderError&gt; {
+        // Return one 32-byte PRF output per salt, in input order.
+        todo!("Implement using WebAuthn or native passkey APIs")
+    }
+
+    async fn is_supported(&amp;self) -&gt; Result&lt;bool, PrfProviderError&gt; {
+        todo!("Check platform passkey availability")
+    }
+
+    async fn create_passkey(
+        &amp;self,
+        _exclude_credentials: Vec&lt;Vec&lt;u8&gt;&gt;,
+    ) -&gt; Result&lt;PasskeyCredential, PrfProviderError&gt; {
+        // Register a credential and return its ID plus attestation.
+        todo!("Implement registration via WebAuthn create() / native API")
+    }
+
+    async fn check_domain_association(&amp;self) -&gt; Result&lt;DomainAssociation, PrfProviderError&gt; {
+        // Custom providers without a verification source return Skipped.
+        Ok(DomainAssociation::Skipped {
+            reason: "CustomPrfProvider does not verify domain association".to_string(),
+        })
+    }
+}</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">// Implement PrfProvider for a custom authenticator (hardware key, FIDO2,
+// file-backed). Only deriveSeeds and isSupported are required.
+class CustomPrfProvider: PrfProvider {
+    func deriveSeeds(request: DeriveSeedsRequest) async throws -&gt; DeriveSeedsOutput {
+        // Return one 32-byte PRF output per salt, in input order.
+        fatalError("Implement using WebAuthn or native passkey APIs")
+    }
+
+    func isSupported() async throws -&gt; Bool {
+        fatalError("Check platform passkey availability")
+    }
+
+    func createPasskey(excludeCredentials: [Data]) async throws -&gt; PasskeyCredential {
+        // Register a credential and return its ID plus attestation.
+        fatalError("Implement registration via WebAuthn create() / native API")
+    }
+
+    func checkDomainAssociation() async throws -&gt; DomainAssociation {
+        return .skipped(reason: "CustomPrfProvider does not verify domain association")
+    }
+}
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">// Implement PrfProvider for a custom authenticator. Only deriveSeeds and
+// isSupported are required.
+class CustomPrfProvider : PrfProvider {
+    override suspend fun deriveSeeds(request: DeriveSeedsRequest): DeriveSeedsOutput {
+        // Return one 32-byte PRF output per salt, in input order.
+        TODO("Implement using WebAuthn or native passkey APIs")
+    }
+
+    override suspend fun isSupported(): Boolean {
+        TODO("Check platform passkey availability")
+    }
+
+    override suspend fun createPasskey(excludeCredentials: List&lt;ByteArray&gt;): PasskeyCredential {
+        // Register a credential and return its ID plus attestation.
+        TODO("Implement registration via native passkey API")
+    }
+
+    override suspend fun checkDomainAssociation(): DomainAssociation {
+        return DomainAssociation.Skipped("CustomPrfProvider does not verify domain association")
+    }
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">// Implement PrfProvider for a custom authenticator (hardware key, FIDO2,
+// file-backed). Only DeriveSeeds and IsSupported are required.
+class CustomPrfProvider : PrfProvider
+{
+    public async Task&lt;DeriveSeedsOutput&gt; DeriveSeeds(DeriveSeedsRequest request)
+    {
+        // Return one 32-byte PRF output per salt, in input order.
+        throw new NotImplementedException("Implement using WebAuthn or native passkey APIs");
+    }
+
+    public async Task&lt;bool&gt; IsSupported()
+    {
+        throw new NotImplementedException("Check platform passkey availability");
+    }
+
+    public async Task&lt;PasskeyCredential&gt; CreatePasskey(byte[][] excludeCredentials)
+    {
+        // Register a credential and return its ID plus attestation.
+        throw new NotImplementedException("Implement registration via native passkey API");
+    }
+
+    public async Task&lt;DomainAssociation&gt; CheckDomainAssociation()
+    {
+        return await Task.FromResult&lt;DomainAssociation&gt;(
+            new DomainAssociation.Skipped("CustomPrfProvider does not verify domain association"));
+    }
+
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">// Implement PrfProvider for a custom authenticator (hardware key, FIDO2,
+// file-backed). Only deriveSeeds and isSupported are required.
+class CustomPrfProvider {
+  deriveSeeds = async (
+    salts: string[]
+  ): Promise&lt;{ seeds: Uint8Array[], credentialId: Uint8Array | null }&gt; =&gt; {
+    // Return one 32-byte PRF output per salt, in input order.
+    throw new Error('Implement using WebAuthn or native passkey APIs')
+  }
+
+  createPasskey = async (
+    _excludeCredentials: Uint8Array[]
+  ): Promise&lt;PasskeyCredential&gt; =&gt; {
+    // Register a credential and return its ID plus attestation.
+    throw new Error('Implement registration via WebAuthn create() / native API')
+  }
+
+  isSupported = async (): Promise&lt;boolean&gt; =&gt; {
+    throw new Error('Check platform passkey availability')
+  }
+}
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">// Implement PrfProvider for a custom authenticator (hardware key, FIDO2,
+// file-backed). Only deriveSeeds and isSupported are required.
+class CustomPrfProvider {
+  deriveSeeds = async (
+    _request: { salts: string[] }
+  ): Promise&lt;{ seeds: Uint8Array[], credentialId?: Uint8Array }&gt; =&gt; {
+    // Return one 32-byte PRF output per salt, in input order.
+    throw new Error('Implement using WebAuthn or native passkey APIs')
+  }
+
+  createPasskey = async (
+    _excludeCredentials: Uint8Array[]
+  ): Promise&lt;PasskeyCredential&gt; =&gt; {
+    // Register a credential and return its ID plus attestation.
+    throw new Error('Implement registration via native passkey API')
+  }
+
+  isSupported = async (): Promise&lt;boolean&gt; =&gt; {
+    throw new Error('Check platform passkey availability')
+  }
+}
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">// Implement custom callbacks if the built-in PasskeyProvider doesn't
+// fit your needs. Pass them to PasskeyClient.fromCallbacks instead
+// of going through PasskeyClientBuilder.withPrfProvider.
+Future&lt;DeriveSeedsOutput&gt; deriveSeeds(DeriveSeedsRequest request) async {
+  // Return one 32-byte PRF output per salt, in input order.
+  throw UnimplementedError('Implement using platform passkey APIs');
+}
+
+Future&lt;PasskeyCredential&gt; createPasskey(List&lt;Uint8List&gt; excludeCredentials) async {
+  // Register a credential and return its ID plus attestation.
+  throw UnimplementedError('Implement registration via native passkey API');
+}
+
+Future&lt;bool&gt; isSupported() async {
+  throw UnimplementedError('Check platform passkey availability');
+}
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore"># Implement the PrfProvider trait for custom logic if no built-in
+# PasskeyProvider ships for your target. Three required methods:
+# derive_seeds for derivation, is_supported for the capability probe;
+# create_passkey for registration is optional.
+class CustomPrfProvider(PrfProvider):
+    async def derive_seeds(self, request: DeriveSeedsRequest) -&gt; DeriveSeedsOutput:
+        # Return one 32-byte PRF output per salt, in input order.
+        raise NotImplementedError("Implement using WebAuthn or native passkey APIs")
+
+    async def is_supported(self) -&gt; bool:
+        raise NotImplementedError("Check platform passkey availability")
+
+    async def create_passkey(self, exclude_credentials: list[bytes]) -&gt; PasskeyCredential:
+        # Register a credential and return its ID plus attestation.
+        raise NotImplementedError("Implement registration via native passkey API")
+
+    async def check_domain_association(self) -&gt; DomainAssociation:
+        # Optional: verify the app's identity against the platform's
+        # domain verification source. Custom providers without a
+        # verification source return SKIPPED, which tells callers
+        # "proceed with WebAuthn as normal". The UniFFI-generated
+        # variant classes are reparented to DomainAssociation at
+        # runtime but mypy can't see that, hence the cast.
+        return cast(
+            DomainAssociation,
+            DomainAssociation.SKIPPED(
+                reason="CustomPrfProvider does not verify domain association"
+            ),
+        )
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">// Implement the PrfProvider interface for a custom authenticator (hardware
+// key, FIDO2, file-backed). Only DeriveSeeds and IsSupported are required.
+type CustomPrfProvider struct{}
+
+func (p *CustomPrfProvider) DeriveSeeds(
+	request breez_sdk_spark.DeriveSeedsRequest,
+) (breez_sdk_spark.DeriveSeedsOutput, error) {
+	// Return one 32-byte PRF output per salt, in input order.
+	panic("Implement using WebAuthn or native passkey APIs")
+}
+
+func (p *CustomPrfProvider) IsSupported() (bool, error) {
+	panic("Check platform passkey availability")
+}
+
+func (p *CustomPrfProvider) CreatePasskey(
+	excludeCredentials [][]byte,
+) (breez_sdk_spark.PasskeyCredential, error) {
+	// Register a credential and return its ID plus attestation.
+	panic("Implement registration via native passkey API")
+}
+
+func (p *CustomPrfProvider) CheckDomainAssociation() (breez_sdk_spark.DomainAssociation, error) {
+	return breez_sdk_spark.DomainAssociationSkipped{
+		Reason: "CustomPrfProvider does not verify domain association",
+	}, nil
+}
+</code></pre>
+</section>
+</custom-tabs>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../guide/passkey_labels.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../guide/stable_balance.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../guide/passkey_labels.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../guide/stable_balance.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../tabs.js"></script>
+        <script src="../theme/pagetoc.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
