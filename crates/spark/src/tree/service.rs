@@ -1,4 +1,5 @@
 use futures::future::join_all;
+use futures::{StreamExt, TryStreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,6 +33,11 @@ use crate::{
 };
 
 use super::{TreeNode, error::TreeServiceError};
+
+/// Max in-flight signer pubkey lookups while validating leaves in `refresh_leaves`.
+/// Bounds concurrency so a large wallet does not fire one request per leaf at
+/// the signer all at once.
+const REFRESH_LEAVES_PUBKEY_CONCURRENCY: usize = 16;
 
 pub struct SynchronousTreeService {
     identity_pubkey: PublicKey,
@@ -256,27 +262,51 @@ impl TreeService for SynchronousTreeService {
             }
         }
 
-        for leaf in &coordinator_leaves {
-            if leaf.status != TreeNodeStatus::Available {
-                info!("Ignoring leaf {} due to status: {:?}", leaf.id, leaf.status);
-                ignored_leaves_map.insert(leaf.id.clone(), leaf.clone());
-                continue;
-            }
+        // Leaves not Available are ignored outright; the rest need an ownership
+        // check (our signing share + the operators' share must equal the
+        // verifying key).
+        let available_leaves: Vec<&TreeNode> = coordinator_leaves
+            .iter()
+            .filter(|leaf| {
+                if leaf.status == TreeNodeStatus::Available {
+                    true
+                } else {
+                    info!("Ignoring leaf {} due to status: {:?}", leaf.id, leaf.status);
+                    ignored_leaves_map.insert(leaf.id.clone(), (*leaf).clone());
+                    false
+                }
+            })
+            .collect();
 
-            let our_node_pubkey = self.spark_signer.get_public_key_for_leaf(&leaf.id).await?;
-            let other_node_pubkey = leaf.signing_keyshare.public_key;
-            let verifying_pubkey = leaf.verifying_public_key;
+        // Fetch our signing pubkey for each Available leaf with bounded
+        // concurrency, so a remote signer resolves them in parallel instead of one
+        // blocking round-trip per leaf. Order is preserved for the zip below.
+        // TODO: validate each leaf once and persist the result, to skip
+        // re-checking unchanged leaves on every refresh.
+        let signer = &self.spark_signer;
+        let available_ids: Vec<TreeNodeId> = available_leaves
+            .iter()
+            .map(|leaf| leaf.id.clone())
+            .collect();
+        let our_pubkeys: Vec<PublicKey> = futures::stream::iter(available_ids)
+            .map(|leaf_id| async move { signer.get_public_key_for_leaf(&leaf_id).await })
+            .buffered(REFRESH_LEAVES_PUBKEY_CONCURRENCY)
+            .try_collect()
+            .await?;
 
-            let combined_pubkey = our_node_pubkey.combine(&other_node_pubkey).map_err(|_| {
-                TreeServiceError::Generic("Failed to combine public keys".to_string())
-            })?;
+        for (leaf, our_node_pubkey) in available_leaves.iter().zip(our_pubkeys) {
+            let combined_pubkey = our_node_pubkey
+                .combine(&leaf.signing_keyshare.public_key)
+                .map_err(|_| {
+                    TreeServiceError::Generic("Failed to combine public keys".to_string())
+                })?;
 
-            if combined_pubkey != verifying_pubkey {
+            if combined_pubkey != leaf.verifying_public_key {
                 warn!(
                     "Leaf {}'s verifying public key does not match the expected value",
                     leaf.id
                 );
-                ignored_leaves_map.insert(leaf.id.clone(), leaf.clone());
+                ignored_leaves_map.insert(leaf.id.clone(), (*leaf).clone());
             }
         }
 
