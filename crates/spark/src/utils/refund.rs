@@ -16,7 +16,10 @@ use crate::utils::htlc_transactions::{
 };
 use crate::utils::transactions::{RefundTransactions, create_refund_txs};
 use crate::{
-    Network, bitcoin::sighash_from_tx, core::next_sequence, services::LeafKeyTweak,
+    Network,
+    bitcoin::sighash_from_tx,
+    core::next_sequence,
+    services::LeafKeyTweak,
     tree::{TreeNode, TreeNodeId},
 };
 
