@@ -1,17 +1,19 @@
 //! Factory for the Turnkey-backed signers, exposed over uniffi.
 
+use std::str::FromStr;
 use std::sync::Arc;
 
-use bitcoin::secp256k1::SecretKey;
+use bitcoin::secp256k1::{PublicKey, SecretKey};
 use platform_utils::create_http_client;
 use serde::{Deserialize, Serialize};
+use spark_wallet::SparkAddress;
 
 use crate::ExternalSigners;
 use crate::error::SignerError;
 use crate::signer::breez::BreezSignerImpl;
 use crate::signer::{ExternalBreezSigner, ExternalSparkSigner};
 
-use super::accounts::{encryption_key_path, xpriv_from_secret};
+use super::accounts::{encryption_key_path, spark_address_format, xpriv_from_secret};
 use super::breez_signer::{EncryptionBackend, TurnkeyBreezSigner};
 use super::config::TurnkeyConfig;
 use super::error::TurnkeyError;
@@ -39,7 +41,7 @@ fn identity_path(account: u32) -> String {
 /// Layout version of [`TurnkeyProvisionedSigner`]'s bytes. Bumped when the blob
 /// contents change so an older blob is rejected as outdated rather than
 /// misread; the caller re-provisions to upgrade.
-const PROVISION_VERSION: u16 = 1;
+const PROVISION_VERSION: u16 = 2;
 
 /// The encryption-key verdict captured at provisioning time.
 #[derive(Serialize, Deserialize)]
@@ -55,6 +57,12 @@ enum ProvisionedEncryption {
 
 /// Versioned, persisted provisioning state. Bound to the wallet/network/account
 /// so a blob paired with the wrong config (or an older layout) is rejected.
+///
+/// Alongside the encryption verdict it carries the wallet's stable Spark values,
+/// the identity public key (hex) and Spark address, so a provisioned per-request
+/// signer serves them from memory instead of re-fetching them from Turnkey on
+/// every request. Both are fixed per wallet. Dynamic per-leaf keys are not here:
+/// they change with the wallet's leaves and stay lazy.
 #[derive(Serialize, Deserialize)]
 struct ProvisionBlob {
     version: u16,
@@ -62,6 +70,8 @@ struct ProvisionBlob {
     account: u32,
     wallet_id: String,
     encryption: ProvisionedEncryption,
+    identity_public_key: String,
+    spark_address: String,
 }
 
 impl ProvisionBlob {
@@ -117,11 +127,25 @@ pub async fn provision_turnkey_signer(
     let http = create_http_client(Some("breez-sdk-spark-turnkey"));
     let client = TurnkeyClient::new(&config, http).map_err(to_signer_err)?;
 
-    // Materialize the compressed identity account (idempotent) so a network-free
-    // `create` can use it as signWith for ECDSA identity signing.
-    client
+    // Materialize the compressed identity account (idempotent). Its address is
+    // the compressed identity pubkey hex, which `create` seeds into the Spark
+    // signer so a network-free build can sign ECDSA identity messages.
+    let identity_public_key = client
         .create_account(identity_path(account), ADDRESS_FORMAT_COMPRESSED)
         .await
+        .map_err(to_signer_err)?;
+    let identity_pubkey = PublicKey::from_str(&identity_public_key).map_err(to_signer_err)?;
+
+    // Materialize the Spark-format account at the same path so enclave Schnorr
+    // and Spark-protocol signing work; the address itself is derived locally (the
+    // canonical Spark address for the identity key), matching the Spark signer
+    // and avoiding the ambiguous get-by-path once both formats exist.
+    client
+        .create_account(identity_path(account), spark_address_format(config.network))
+        .await
+        .map_err(to_signer_err)?;
+    let spark_address = SparkAddress::new(identity_pubkey, config.network.into(), None)
+        .to_address_string()
         .map_err(to_signer_err)?;
 
     // Export the dedicated ECIES/HMAC key. A deny-export policy (403) is a
@@ -141,6 +165,8 @@ pub async fn provision_turnkey_signer(
         account,
         wallet_id: config.wallet_id.clone(),
         encryption,
+        identity_public_key,
+        spark_address,
     };
     Ok(TurnkeyProvisionedSigner {
         bytes: serde_json::to_vec(&blob).map_err(to_signer_err)?,
@@ -174,23 +200,27 @@ pub async fn create_turnkey_signer(
     let http = create_http_client(Some("breez-sdk-spark-turnkey"));
     let client = Arc::new(TurnkeyClient::new(&config, http).map_err(to_signer_err)?);
 
-    let encryption = match provisioned {
-        // Unprovisioned: materialize the identity account now, export lazily.
+    // `encryption` seeds the Breez signer's ECIES/HMAC backend; `spark_identity`
+    // seeds the Spark signer's identity pubkey and Spark address so a provisioned
+    // build makes no Turnkey calls for either.
+    let (encryption, spark_identity) = match provisioned {
+        // Unprovisioned: materialize the identity account now, export lazily, and
+        // let the Spark signer fetch its identity/address on first use.
         None => {
             client
                 .create_account(identity_path(account), ADDRESS_FORMAT_COMPRESSED)
                 .await
                 .map_err(to_signer_err)?;
-            EncryptionBackend::Lazy
+            (EncryptionBackend::Lazy, None)
         }
-        // Provisioned once: no network. The blob attests the identity account
-        // exists and tells us whether the encryption key is seedable or denied.
+        // Provisioned once: no network. The blob attests the accounts exist and
+        // carries the encryption verdict plus the stable Spark identity values.
         Some(provisioned) => {
             let blob: ProvisionBlob = serde_json::from_slice(&provisioned.bytes).map_err(|e| {
                 SignerError::ProvisioningOutdated(format!("unreadable provisioned state: {e}"))
             })?;
             blob.ensure_usable(network as u8, account, &config.wallet_id)?;
-            match blob.encryption {
+            let encryption = match blob.encryption {
                 ProvisionedEncryption::Key(bytes) => {
                     let secret = SecretKey::from_slice(&bytes).map_err(to_signer_err)?;
                     EncryptionBackend::Seeded(BreezSignerImpl::new(xpriv_from_secret(
@@ -200,7 +230,10 @@ pub async fn create_turnkey_signer(
                 ProvisionedEncryption::Unavailable => {
                     EncryptionBackend::Denied("Turnkey wallet policy denies key export".to_string())
                 }
-            }
+            };
+            let identity_pubkey =
+                PublicKey::from_str(&blob.identity_public_key).map_err(to_signer_err)?;
+            (encryption, Some((identity_pubkey, blob.spark_address)))
         }
     };
 
@@ -210,8 +243,16 @@ pub async fn create_turnkey_signer(
         account,
         encryption,
     ));
-    let spark_signer: Arc<dyn ExternalSparkSigner> =
-        Arc::new(TurnkeySparkSigner::new(client, network, account));
+    let spark_signer: Arc<dyn ExternalSparkSigner> = Arc::new(match spark_identity {
+        Some((identity_pubkey, spark_address)) => TurnkeySparkSigner::new_seeded(
+            client,
+            network,
+            account,
+            Some(identity_pubkey),
+            Some(spark_address),
+        ),
+        None => TurnkeySparkSigner::new(client, network, account),
+    });
     Ok(ExternalSigners {
         breez_signer,
         spark_signer,
@@ -242,6 +283,14 @@ mod tests {
         }
     }
 
+    // A fixed, valid identity pubkey to seed provisioned blobs with.
+    fn test_identity_pubkey() -> PublicKey {
+        let secp = Secp256k1::new();
+        SecretKey::from_slice(&[0x22; 32])
+            .unwrap()
+            .public_key(&secp)
+    }
+
     fn provisioned(
         config: &TurnkeyConfig,
         encryption: ProvisionedEncryption,
@@ -252,6 +301,8 @@ mod tests {
             account: account_number(config),
             wallet_id: config.wallet_id.clone(),
             encryption,
+            identity_public_key: hex::encode(test_identity_pubkey().serialize()),
+            spark_address: "sprt1qqtestsparkaddress".to_string(),
         };
         TurnkeyProvisionedSigner {
             bytes: serde_json::to_vec(&blob).unwrap(),
@@ -278,6 +329,23 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(plaintext, message);
+    }
+
+    // A seeded blob serves the Spark identity pubkey from memory: it returns the
+    // provisioned key with no network (the base URL is unroutable, so a fetch
+    // would fail), matching what the whole-signer in-memory cache did.
+    #[tokio::test]
+    async fn seeded_blob_serves_spark_identity_offline() {
+        let config = test_config();
+        let state = provisioned(&config, ProvisionedEncryption::Key([7u8; 32]));
+        let signers = create_turnkey_signer(config, Some(state)).await.unwrap();
+
+        let identity = signers
+            .spark_signer
+            .get_identity_public_key()
+            .await
+            .unwrap();
+        assert_eq!(identity.to_public_key().unwrap(), test_identity_pubkey());
     }
 
     // A blob recording denied export builds a signer that reports encryption
@@ -326,6 +394,8 @@ mod tests {
             account: account_number(&config),
             wallet_id: config.wallet_id.clone(),
             encryption: ProvisionedEncryption::Unavailable,
+            identity_public_key: hex::encode(test_identity_pubkey().serialize()),
+            spark_address: "sprt1qqtestsparkaddress".to_string(),
         };
         let state = TurnkeyProvisionedSigner {
             bytes: serde_json::to_vec(&old_blob).unwrap(),
