@@ -697,14 +697,12 @@ impl TransferService {
         let [cpfp_chunk, direct_chunk, direct_from_cpfp_chunk] =
             split_signing_commitments_by_variant(&signing_commitments, leaves.len())?;
 
-        // Sign the claim refunds (current timelock) operator-commits-first via
-        // sign_frost; the operators aggregate server-side during `claim_transfer`.
-        let (cpfp_jobs, direct_jobs, direct_from_cpfp_jobs) = self
-            .sign_claim_refunds(leaves, cpfp_chunk, direct_chunk, direct_from_cpfp_chunk)
-            .await?;
-
         // Key-tweak step (decrypt incoming key, derive new key, compute tweak,
-        // Feldman-split, ECIES per operator, sign the claim-package payload).
+        // Feldman-split, ECIES per operator). Run before signing the refunds: for
+        // a remote signer (e.g. Turnkey) prepare_claim returns and caches every
+        // new leaf pubkey in one activity, so the per-leaf get_public_key_for_leaf
+        // inside sign_claim_refunds is then a cache hit instead of a round-trip
+        // per incoming leaf.
         let claim_leaves = leaves
             .iter()
             .map(|leaf| {
@@ -749,6 +747,12 @@ impl TransferService {
                 )
             })
             .collect();
+
+        // Sign the claim refunds (current timelock) operator-commits-first via
+        // sign_frost; the operators aggregate server-side during `claim_transfer`.
+        let (cpfp_jobs, direct_jobs, direct_from_cpfp_jobs) = self
+            .sign_claim_refunds(leaves, cpfp_chunk, direct_chunk, direct_from_cpfp_chunk)
+            .await?;
 
         // Claim-package user signature: identity-key ECDSA over the tagged
         // payload (tag || transfer_id || tweak map). Done here, not in the
