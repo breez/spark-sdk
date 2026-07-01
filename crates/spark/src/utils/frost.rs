@@ -1,12 +1,33 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use bitcoin::secp256k1::PublicKey;
+use bitcoin::secp256k1::{All, PublicKey, Secp256k1};
 use frost_secp256k1_tr::keys::{PublicKeyPackage, VerifyingShare};
 use frost_secp256k1_tr::round1::SigningCommitments;
 use frost_secp256k1_tr::{Identifier, SigningPackage, VerifyingKey};
 
 use crate::signer::{AggregateFrostRequest, FrostJob, FrostShareResult, SignerError, SparkSigner};
+use crate::tree::TreeNode;
+
+/// The user's own signing public key for an OWNED leaf, derived from persisted
+/// tree data instead of asking the signer: `verifying_public_key -
+/// signing_keyshare.public_key`. FROST composes the group verifying key as the
+/// user's verifying share plus the operators' aggregate share, and
+/// `refresh_leaves` validates this relation for every Available leaf, so the
+/// user's share is recoverable locally. This avoids a per-leaf signer round-trip
+/// on the send/coop-exit/timelock hot paths (for a remote signer with a cold
+/// in-memory cache, e.g. a per-request server instance, that would otherwise be
+/// one network call per leaf). Only valid for owned leaves: an incoming (claim)
+/// leaf is mid-transfer, so its stored SE share need not pair with the new key.
+pub(crate) fn derive_leaf_signing_public_key(
+    node: &TreeNode,
+    secp: &Secp256k1<All>,
+) -> Result<PublicKey, SignerError> {
+    let se_share = node.signing_keyshare.public_key.negate(secp);
+    node.verifying_public_key
+        .combine(&se_share)
+        .map_err(|e| SignerError::Generic(format!("failed to derive leaf signing key: {e}")))
+}
 
 /// Signs a batch of FROST jobs in a single `sign_frost` call, pairing each
 /// returned share with its caller-side metadata (order preserved). Remote signer

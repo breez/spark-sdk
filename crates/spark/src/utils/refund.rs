@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use bitcoin::Transaction;
 use bitcoin::hashes::{Hash, sha256};
-use bitcoin::secp256k1::{All, PublicKey, Secp256k1};
+use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use frost_secp256k1_tr::Identifier;
 use frost_secp256k1_tr::round1::SigningCommitments;
 use tracing::info;
@@ -11,16 +11,14 @@ use tracing::info;
 use crate::core::next_lightning_htlc_sequence;
 use crate::services::SignedTx;
 use crate::signer::{FrostDerivation, FrostJob, FrostShareResult, SignerError, SparkSigner};
+use crate::utils::frost::derive_leaf_signing_public_key;
 use crate::utils::htlc_transactions::{
     CreateLightningHtlcRefundTxsParams, create_lightning_htlc_refund_txs,
 };
 use crate::utils::transactions::{RefundTransactions, create_refund_txs};
 use crate::{
-    Network,
-    bitcoin::sighash_from_tx,
-    core::next_sequence,
-    services::LeafKeyTweak,
-    tree::{TreeNode, TreeNodeId},
+    Network, bitcoin::sighash_from_tx, core::next_sequence, services::LeafKeyTweak,
+    tree::TreeNodeId,
 };
 
 pub struct SignRefundsParams<'a> {
@@ -237,24 +235,6 @@ impl PendingSignedTx {
             network: self.network,
         }
     }
-}
-
-/// The user's own signing public key for a leaf, derived from persisted tree
-/// data instead of asking the signer. FROST composes the group verifying key as
-/// the user's verifying share plus the operators' aggregate share, so the user's
-/// share is recoverable as `verifying_public_key - signing_keyshare.public_key`.
-/// `refresh_leaves` validates this exact relation for every Available leaf, so
-/// deriving it here avoids a per-leaf signer round-trip on the send hot path
-/// (which, for a remote signer with no warm in-memory cache, e.g. a per-request
-/// server instance, would otherwise be one network call per leaf).
-fn derive_leaf_signing_public_key(
-    node: &TreeNode,
-    secp: &Secp256k1<All>,
-) -> Result<PublicKey, SignerError> {
-    let se_share = node.signing_keyshare.public_key.negate(secp);
-    node.verifying_public_key
-        .combine(&se_share)
-        .map_err(|e| SignerError::Generic(format!("failed to derive leaf signing key: {e}")))
 }
 
 /// Builds the FROST job for one refund transaction plus the `PendingSignedTx`
