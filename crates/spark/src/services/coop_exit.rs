@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bitcoin::hashes::Hash;
-use bitcoin::secp256k1::PublicKey;
+use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use bitcoin::{Address, OutPoint, Transaction, Txid};
 use frost_secp256k1_tr::Identifier;
 use platform_utils::time::SystemTime;
@@ -26,7 +26,7 @@ use crate::ssp::RequestCoopExitInput;
 use crate::ssp::ServiceProvider;
 use crate::tree::TreeNode;
 use crate::tree::TreeNodeId;
-use crate::utils::frost::sign_frost_batch;
+use crate::utils::frost::{derive_leaf_signing_public_key, sign_frost_batch};
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::time::web_time_to_prost_timestamp;
 use crate::utils::transactions::{
@@ -480,12 +480,12 @@ impl CoopExitService {
         // network round-trip per leaf-variant on a remote signer.
         let mut jobs = Vec::new();
         let mut pending = Vec::new();
+        let secp = Secp256k1::new();
         for (i, leaf) in leaves.iter().enumerate() {
-            // The connector refund is signed with the leaf's current derived key.
-            let signing_public_key = self
-                .spark_signer
-                .get_public_key_for_leaf(&leaf.node.id)
-                .await?;
+            // The connector refund is signed with the leaf's current (owned)
+            // derived key, recovered locally from the tree node instead of the
+            // signer (see derive_leaf_signing_public_key).
+            let signing_public_key = derive_leaf_signing_public_key(&leaf.node, &secp)?;
             let verifying_key = leaf.node.verifying_public_key;
             let node_tx = &leaf.node.node_tx;
             let connector_prev_out = connector_tx_parsed.output.get(i).cloned();
