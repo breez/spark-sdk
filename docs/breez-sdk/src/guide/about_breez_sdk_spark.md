@@ -13,7 +13,8 @@ It’s a nodeless integration that offers a non-custodial, end-to-end solution f
 **Key Features**
 
 - [x] Send and receive Lightning payments
-- [x] Send and receive via LNURL-pay & Lightning addresses 
+- [x] Send and receive via LNURL-pay & Lightning addresses
+- [x] Send USDC/USDT
 - [x] Send and receive Spark payments (BTC)
 - [x] Passkey login for seedless experience
 - [x] Stable Balance - hold your balance in USD
