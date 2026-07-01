@@ -24,8 +24,8 @@ use crate::signer::external_types::{
 use crate::signer::{BreezSigner, ExternalBreezSigner};
 
 use super::accounts::{
-    ecdsa_from_rs, ecdsa_recoverable_low_s, schnorr_from_rs, spark_address_format,
-    xpriv_from_secret,
+    ecdsa_from_rs, ecdsa_recoverable_low_s, encryption_key_path, schnorr_from_rs,
+    spark_address_format, xpriv_from_secret,
 };
 use super::error::TurnkeyError;
 use super::transport::TurnkeyClient;
@@ -35,12 +35,15 @@ fn to_signer_err<E: std::fmt::Display>(e: E) -> SignerError {
     SignerError::Generic(e.to_string())
 }
 
-/// Dedicated SDK-layer encryption key path. The Spark signer only derives the
-/// account's low-index children (identity/signing/deposit/static/preimage), so
-/// this reserved max-index child is never a Spark key and can be exported to
-/// seed local ECIES/HMAC without exposing any Spark key.
-fn encryption_key_path(account: u32) -> String {
-    format!("m/8797555'/{account}'/2147483647'")
+/// How a [`TurnkeyBreezSigner`]'s local ECIES/HMAC backend is initialized.
+pub(crate) enum EncryptionBackend {
+    /// Pre-exported key: the backend is ready and no export ever runs.
+    Seeded(BreezSignerImpl),
+    /// Export is known to be denied by policy: encryption fails fast with this
+    /// message, without a network round-trip.
+    Denied(String),
+    /// Unprovisioned: export the key lazily on first ECIES/HMAC use.
+    Lazy,
 }
 
 /// SDK-layer signer backed by Turnkey. Sign/derive go to Turnkey; ECIES/HMAC
@@ -64,13 +67,32 @@ pub(crate) struct TurnkeyBreezSigner {
 }
 
 impl TurnkeyBreezSigner {
-    pub(crate) fn new(client: Arc<TurnkeyClient>, network: Network, account: u32) -> Self {
+    /// Builds the signer with its encryption backend initialized per `backend`:
+    /// seeded from a persisted key, pre-marked denied, or left to export lazily
+    /// on first use.
+    pub(crate) fn new_seeded(
+        client: Arc<TurnkeyClient>,
+        network: Network,
+        account: u32,
+        backend: EncryptionBackend,
+    ) -> Self {
+        let (encryption, export_denied) = match backend {
+            EncryptionBackend::Seeded(signer) => {
+                (OnceCell::new_with(Some(signer)), OnceLock::new())
+            }
+            EncryptionBackend::Denied(msg) => {
+                let denied = OnceLock::new();
+                let _ = denied.set(msg);
+                (OnceCell::new(), denied)
+            }
+            EncryptionBackend::Lazy => (OnceCell::new(), OnceLock::new()),
+        };
         Self {
             client,
             network,
             account,
-            encryption: OnceCell::new(),
-            export_denied: OnceLock::new(),
+            encryption,
+            export_denied,
         }
     }
 

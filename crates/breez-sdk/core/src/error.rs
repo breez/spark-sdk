@@ -338,6 +338,9 @@ pub enum SignerError {
     #[error("Encryption unavailable: {0}")]
     EncryptionUnavailable(String),
 
+    #[error("Provisioned signer state is outdated or invalid: {0}")]
+    ProvisioningOutdated(String),
+
     #[error("FROST error: {0}")]
     Frost(String),
 
