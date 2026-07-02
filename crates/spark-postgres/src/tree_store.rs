@@ -126,6 +126,33 @@ const RESERVATION_TIMEOUT_SECS: f64 = 300.0; // 5 minutes
 
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS: i64 = 5 * 60 * 1000; // 5 minutes
 
+/// Slim projection of selection candidates: id + value only.
+/// Includes all leaves with value <= `$2` (covers exact-match +
+/// minimum-amount accumulators) plus the smallest leaf with value >
+/// `$2` (covers the minimum-amount fallback case where one larger
+/// leaf is sufficient). `$1` is the user id.
+const SLIM_LEAF_CANDIDATES_SQL: &str = r"
+    SELECT id, (data->>'value')::bigint AS value
+    FROM brz_tree_leaves
+    WHERE user_id = $1
+      AND status = 'Available'
+      AND is_missing_from_operators = FALSE
+      AND reservation_id IS NULL
+      AND (
+        (data->>'value')::bigint <= $2
+        OR id = (
+          SELECT id FROM brz_tree_leaves
+          WHERE user_id = $1
+            AND status = 'Available'
+            AND is_missing_from_operators = FALSE
+            AND reservation_id IS NULL
+            AND (data->>'value')::bigint > $2
+          ORDER BY (data->>'value')::bigint
+          LIMIT 1
+        )
+      )
+";
+
 /// `PostgreSQL`-backed tree store implementation.
 ///
 /// This implementation uses database-level concurrency control (row locking)
@@ -629,35 +656,10 @@ impl TreeStore for PostgresTreeStore {
             .map_err(map_err)?;
         let available: u64 = u64::try_from(total_row.get::<_, i64>("total")).unwrap_or(0);
 
-        // Slim projection of selection candidates: id + value only.
-        // Includes all leaves with value <= max_target (covers exact-match +
-        // minimum-amount accumulators) plus the smallest leaf with value >
-        // max_target (covers the minimum-amount fallback case where one larger
-        // leaf is sufficient).
         let max_target_signed: i64 = i64::try_from(max_target).unwrap_or(i64::MAX);
         let slim_rows = tx
             .query(
-                r"
-                SELECT id, (data->>'value')::bigint AS value
-                FROM brz_tree_leaves
-                WHERE user_id = $1
-                  AND status = 'Available'
-                  AND is_missing_from_operators = FALSE
-                  AND reservation_id IS NULL
-                  AND (
-                    (data->>'value')::bigint <= $2
-                    OR id = (
-                      SELECT id FROM brz_tree_leaves
-                      WHERE user_id = $1
-                        AND status = 'Available'
-                        AND is_missing_from_operators = FALSE
-                        AND reservation_id IS NULL
-                        AND (data->>'value')::bigint > $2
-                      ORDER BY (data->>'value')::bigint
-                      LIMIT 1
-                    )
-                  )
-                ",
+                SLIM_LEAF_CANDIDATES_SQL,
                 &[&self.identity, &max_target_signed],
             )
             .await
@@ -780,27 +782,7 @@ impl TreeStore for PostgresTreeStore {
 
         let slim_rows = tx
             .query(
-                r"
-                SELECT id, (data->>'value')::bigint AS value
-                FROM brz_tree_leaves
-                WHERE user_id = $1
-                  AND status = 'Available'
-                  AND is_missing_from_operators = FALSE
-                  AND reservation_id IS NULL
-                  AND (
-                    (data->>'value')::bigint <= $2
-                    OR id = (
-                      SELECT id FROM brz_tree_leaves
-                      WHERE user_id = $1
-                        AND status = 'Available'
-                        AND is_missing_from_operators = FALSE
-                        AND reservation_id IS NULL
-                        AND (data->>'value')::bigint > $2
-                      ORDER BY (data->>'value')::bigint
-                      LIMIT 1
-                    )
-                  )
-                ",
+                SLIM_LEAF_CANDIDATES_SQL,
                 &[&self.identity, &max_target_signed],
             )
             .await

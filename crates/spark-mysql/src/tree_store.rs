@@ -135,6 +135,33 @@ const RESERVATION_TIMEOUT_SECS: i64 = 300; // 5 minutes
 /// deployments where another instance may still be processing a refresh.
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS: i64 = 5 * 60 * 1000;
 
+/// Slim projection of selection candidates: id + value only.
+/// Includes all leaves with value <= the max target (covers exact-match +
+/// minimum-amount accumulators) plus the smallest leaf with a larger value
+/// (covers the minimum-amount fallback case where one larger leaf is
+/// sufficient). Params: user id, max target, user id, max target.
+const SLIM_LEAF_CANDIDATES_SQL: &str = r"SELECT id, value
+    FROM brz_tree_leaves
+    WHERE user_id = ?
+      AND status = 'Available'
+      AND is_missing_from_operators = 0
+      AND reservation_id IS NULL
+      AND (
+        value <= ?
+        OR id = (
+          SELECT id FROM (
+            SELECT id FROM brz_tree_leaves
+            WHERE user_id = ?
+              AND status = 'Available'
+              AND is_missing_from_operators = 0
+              AND reservation_id IS NULL
+              AND value > ?
+            ORDER BY value
+            LIMIT 1
+          ) AS smallest_over
+        )
+      )";
+
 /// Lightweight `(id, value)` pair used by `try_reserve_leaves` to run the
 /// selection algorithm without pulling each leaf's full `data` JSON.
 #[derive(Clone)]
@@ -528,27 +555,7 @@ impl TreeStore for MysqlTreeStore {
 
         let slim_rows: Vec<(String, i64)> = tx
             .exec(
-                r"SELECT id, value
-                  FROM brz_tree_leaves
-                  WHERE user_id = ?
-                    AND status = 'Available'
-                    AND is_missing_from_operators = 0
-                    AND reservation_id IS NULL
-                    AND (
-                      value <= ?
-                      OR id = (
-                        SELECT id FROM (
-                          SELECT id FROM brz_tree_leaves
-                          WHERE user_id = ?
-                            AND status = 'Available'
-                            AND is_missing_from_operators = 0
-                            AND reservation_id IS NULL
-                            AND value > ?
-                          ORDER BY value
-                          LIMIT 1
-                        ) AS smallest_over
-                      )
-                    )",
+                SLIM_LEAF_CANDIDATES_SQL,
                 (
                     self.identity.clone(),
                     max_target_signed,
@@ -1155,31 +1162,10 @@ impl MysqlTreeStore {
             .map_err(map_err)?;
         let available: u64 = u64::try_from(total_row.unwrap_or(0)).unwrap_or(0);
 
-        // Slim projection of selection candidates: id + value only.
         let max_target_signed: i64 = i64::try_from(max_target).unwrap_or(i64::MAX);
         let slim_rows: Vec<(String, i64)> = tx
             .exec(
-                r"SELECT id, value
-                  FROM brz_tree_leaves
-                  WHERE user_id = ?
-                    AND status = 'Available'
-                    AND is_missing_from_operators = 0
-                    AND reservation_id IS NULL
-                    AND (
-                      value <= ?
-                      OR id = (
-                        SELECT id FROM (
-                          SELECT id FROM brz_tree_leaves
-                          WHERE user_id = ?
-                            AND status = 'Available'
-                            AND is_missing_from_operators = 0
-                            AND reservation_id IS NULL
-                            AND value > ?
-                          ORDER BY value
-                          LIMIT 1
-                        ) AS smallest_over
-                      )
-                    )",
+                SLIM_LEAF_CANDIDATES_SQL,
                 (
                     self.identity.clone(),
                     max_target_signed,
