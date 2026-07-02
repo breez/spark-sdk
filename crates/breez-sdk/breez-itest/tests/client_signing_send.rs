@@ -357,6 +357,124 @@ async fn test_client_signing_token_send() -> Result<()> {
 }
 
 #[test_log::test(tokio::test)]
+async fn test_client_signing_token_send_to_spark_invoice() -> Result<()> {
+    info!("=== Starting test_client_signing_token_send_to_spark_invoice ===");
+
+    let send_amount: u128 = 7;
+
+    let alice_mnemonic = random_mnemonic()?;
+    let alice = build_alice_manual_opt(alice_mnemonic.clone()).await?;
+    let bob = build_bob().await?;
+
+    let client_signer =
+        default_external_signers(alice_mnemonic, None, Network::Regtest, None)?.spark_signer;
+
+    let issuer = alice.sdk.get_token_issuer();
+    let token_metadata = issuer
+        .create_issuer_token(CreateIssuerTokenRequest {
+            name: "client-signing invoice token".to_string(),
+            ticker: "CSI".to_string(),
+            decimals: 2,
+            is_freezable: false,
+            max_supply: 1_000_000,
+        })
+        .await?;
+    issuer
+        .mint_issuer_token(MintIssuerTokenRequest { amount: 1_000_000 })
+        .await?;
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let token_id = token_metadata.identifier.clone();
+
+    let bob_invoice = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkInvoice {
+                amount: Some(send_amount),
+                token_identifier: Some(token_id.clone()),
+                expiry_time: None,
+                description: Some("client-signing token invoice".to_string()),
+                sender_public_key: None,
+            },
+        })
+        .await?
+        .payment_request;
+
+    let prep = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: PaymentRequest::Input {
+                input: bob_invoice.clone(),
+            },
+            amount: None,
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+
+    let unsigned = alice
+        .sdk
+        .build_unsigned_transfer_package(BuildUnsignedTransferPackageRequest {
+            prepare_response: prep.clone(),
+            options: None,
+        })
+        .await?;
+
+    let UnsignedTransferPackage::Token {
+        prepare_token_transaction,
+        ..
+    } = &unsigned
+    else {
+        panic!("expected a Token unsigned package for a token invoice send");
+    };
+    let signed = client_signer
+        .prepare_token_transaction(prepare_token_transaction.clone())
+        .await?;
+    let signature = TransferSignature::Token { signed };
+
+    let PublishSignedTransferPackageResponse::PaymentSent { payment } = alice
+        .sdk
+        .publish_signed_transfer_package(PublishSignedTransferPackageRequest {
+            signed_package: SignedTransferPackage {
+                unsigned,
+                signature,
+            },
+        })
+        .await?
+    else {
+        panic!("expected a sent payment for a token invoice send");
+    };
+    assert!(
+        matches!(
+            payment.status,
+            PaymentStatus::Completed | PaymentStatus::Pending
+        ),
+        "Payment should be completed or pending"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let bob_token_balance = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .token_balances
+        .get(&token_id)
+        .map(|b| b.balance)
+        .unwrap_or(0);
+    assert_eq!(
+        bob_token_balance, send_amount,
+        "Bob should have received the token amount via the invoice"
+    );
+
+    info!("=== Test test_client_signing_token_send_to_spark_invoice PASSED ===");
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
 async fn test_client_signing_coop_exit() -> Result<()> {
     info!("=== Starting test_client_signing_coop_exit ===");
 

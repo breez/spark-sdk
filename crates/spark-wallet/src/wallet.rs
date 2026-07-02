@@ -1596,12 +1596,10 @@ impl SparkWallet {
     /// # Arguments
     /// * `invoice` - The Spark invoice to fulfill
     /// * `amount` - The amount to pay in base units. Must be provided if the invoice doesn't include an amount. If it does, amount is ignored.
-    pub async fn fulfill_spark_invoice(
+    pub(crate) fn parse_and_validate_spark_invoice(
         &self,
         invoice_str: &str,
-        amount: Option<u128>,
-        transfer_id: Option<TransferId>,
-    ) -> Result<FulfillSparkInvoiceResult, SparkWalletError> {
+    ) -> Result<SparkAddress, SparkWalletError> {
         let invoice = SparkAddress::from_str(invoice_str)?;
 
         let Some(invoice_fields) = &invoice.spark_invoice_fields else {
@@ -1627,6 +1625,22 @@ impl SparkWallet {
             )));
         }
 
+        Ok(invoice)
+    }
+
+    pub async fn fulfill_spark_invoice(
+        &self,
+        invoice_str: &str,
+        amount: Option<u128>,
+        transfer_id: Option<TransferId>,
+    ) -> Result<FulfillSparkInvoiceResult, SparkWalletError> {
+        let invoice = self.parse_and_validate_spark_invoice(invoice_str)?;
+        let Some(invoice_fields) = &invoice.spark_invoice_fields else {
+            return Err(SparkWalletError::InvalidAddress(format!(
+                "Invoice does not include Spark invoice fields: {invoice:?}"
+            )));
+        };
+
         match &invoice_fields.payment_type {
             Some(SparkAddressPaymentType::SatsPayment(payment)) => {
                 let amount = payment.amount.or(amount.map(|a| a as u64)).ok_or(
@@ -1646,32 +1660,12 @@ impl SparkWallet {
 
                 Ok(FulfillSparkInvoiceResult::Transfer(Box::new(transfer)))
             }
-            Some(SparkAddressPaymentType::TokensPayment(payment)) => {
-                let Some(token_identifier) = &payment.token_identifier else {
-                    return Err(SparkWalletError::InvalidAddress(
-                        "Token invoice does not include token identifier".to_string(),
-                    ));
-                };
-                let amount = payment.amount.or(amount).ok_or(SparkWalletError::Generic(
-                    "Amount is required when invoice does not include an amount".to_string(),
-                ))?;
-
-                let execute_before_unix_micros =
-                    execute_before_from_expiry(invoice_fields.expiry_time);
-
+            Some(SparkAddressPaymentType::TokensPayment(_)) => {
+                let (output, execute_before_unix_micros) =
+                    token_output_from_invoice(&invoice, invoice_str, amount)?;
                 let tx = self
                     .token_service
-                    .transfer_tokens(
-                        vec![TransferTokenOutput {
-                            token_id: token_identifier.clone(),
-                            amount,
-                            receiver_address: invoice,
-                            spark_invoice: Some(invoice_str.to_string()),
-                        }],
-                        None,
-                        None,
-                        execute_before_unix_micros,
-                    )
+                    .transfer_tokens(vec![output], None, None, execute_before_unix_micros)
                     .await?;
 
                 Ok(FulfillSparkInvoiceResult::TokenTransaction(Box::new(tx)))
@@ -2498,6 +2492,40 @@ fn execute_before_from_expiry(expiry_time: Option<SystemTime>) -> Option<i64> {
             .ok()
             .and_then(|d| i64::try_from(d.as_micros()).ok())
     })
+}
+
+fn token_output_from_invoice(
+    invoice: &SparkAddress,
+    invoice_str: &str,
+    amount: Option<u128>,
+) -> Result<(TransferTokenOutput, Option<i64>), SparkWalletError> {
+    let Some(invoice_fields) = &invoice.spark_invoice_fields else {
+        return Err(SparkWalletError::InvalidAddress(format!(
+            "Invoice does not include Spark invoice fields: {invoice:?}"
+        )));
+    };
+    let Some(SparkAddressPaymentType::TokensPayment(payment)) = &invoice_fields.payment_type else {
+        return Err(SparkWalletError::InvalidAddress(
+            "Invoice does not include a token payment type".to_string(),
+        ));
+    };
+    let Some(token_identifier) = &payment.token_identifier else {
+        return Err(SparkWalletError::InvalidAddress(
+            "Token invoice does not include token identifier".to_string(),
+        ));
+    };
+    let amount = payment.amount.or(amount).ok_or(SparkWalletError::Generic(
+        "Amount is required when invoice does not include an amount".to_string(),
+    ))?;
+    Ok((
+        TransferTokenOutput {
+            token_id: token_identifier.clone(),
+            amount,
+            receiver_address: invoice.clone(),
+            spark_invoice: Some(invoice_str.to_string()),
+        },
+        execute_before_from_expiry(invoice_fields.expiry_time),
+    ))
 }
 
 #[cfg(test)]

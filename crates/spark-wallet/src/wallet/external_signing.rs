@@ -351,6 +351,26 @@ impl SparkWallet {
         Ok(prepared)
     }
 
+    pub async fn prepare_spark_invoice_token_package(
+        &self,
+        invoice_str: &str,
+        amount: Option<u128>,
+    ) -> Result<PreparedTokenTransfer, SparkWalletError> {
+        let invoice = self.parse_and_validate_spark_invoice(invoice_str)?;
+        if !self.config.self_payment_allowed
+            && invoice.identity_public_key == self.identity_public_key
+        {
+            return Err(SparkWalletError::SelfPaymentNotAllowed);
+        }
+        let (output, execute_before_unix_micros) =
+            token_output_from_invoice(&invoice, invoice_str, amount)?;
+        let prepared = self
+            .token_service
+            .prepare_token_transfer(vec![output], None, None, execute_before_unix_micros)
+            .await?;
+        Ok(prepared)
+    }
+
     pub async fn publish_token_package(
         &self,
         prepared: PreparedTokenTransfer,
