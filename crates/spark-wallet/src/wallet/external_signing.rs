@@ -19,7 +19,7 @@ impl SparkWallet {
         let target_amounts = TargetAmounts::new_amount_and_fee(amount_sat, None);
         match self
             .tree_service
-            .select_leaves_dry_run(Some(&target_amounts))
+            .select_leaves_for_package(Some(&target_amounts))
             .await?
         {
             LeafSelection::Exact(leaves) => {
@@ -132,7 +132,7 @@ impl SparkWallet {
         let target_amounts = TargetAmounts::new_amount_and_fee(total_amount_sat, None);
         match self
             .tree_service
-            .select_leaves_dry_run(Some(&target_amounts))
+            .select_leaves_for_package(Some(&target_amounts))
             .await?
         {
             LeafSelection::Exact(leaves) => {
@@ -205,7 +205,7 @@ impl SparkWallet {
         let target_amounts = TargetAmounts::new_amount_and_fee(amount_sats, Some(fee_sats));
         match self
             .tree_service
-            .select_leaves_dry_run(Some(&target_amounts))
+            .select_leaves_for_package(Some(&target_amounts))
             .await?
         {
             LeafSelection::Exact(leaves) => {
