@@ -653,6 +653,14 @@ impl CrossChainService for OrchestraService {
         let spark_tx_hash = asset_transfer.id();
         debug!("Orchestra: deposit transfer {spark_tx_hash} sent for quote {quote_id}");
 
+        // The deposit transfer has moved funds: this is the point of no return.
+        // Mark the quote consumed now, before /submit, so a retry of the same
+        // prepared response can't re-run the (non-idempotent) re-deposit.
+        // A failed submit is recovered by re-preparing, not re-sending.
+        if let Err(e) = self.swap_storage.mark_terminal(quote_id).await {
+            debug!("Orchestra: failed to mark quote {quote_id} terminal: {e:?}");
+        }
+
         // Step 2: Submit the deposit to Orchestra.
         // Include the source spark address for BTC transfers so Orchestra
         // can verify the deposit sender.
@@ -730,11 +738,6 @@ impl CrossChainService for OrchestraService {
             );
             spark_tx_hash
         });
-
-        // Mark the prepared-quote row terminal now the Payment row exists.
-        if let Err(e) = self.swap_storage.mark_terminal(quote_id).await {
-            debug!("Orchestra: failed to mark quote {quote_id} terminal: {e:?}");
-        }
 
         self.trigger_monitor();
 

@@ -22,7 +22,7 @@ use breez_sdk_common::fiat::FiatService;
 use serde::{Deserialize, Serialize};
 use spark_wallet::TransferId;
 
-use crate::{CrossChainAddressDetails, error::SdkError};
+use crate::{CrossChainAddressDetails, SendPaymentMethod, Storage, error::SdkError};
 
 /// SDK-level bounds for cross-chain slippage.
 pub(crate) const MIN_CROSS_CHAIN_SLIPPAGE_BPS: u32 = 10;
@@ -62,6 +62,47 @@ pub(crate) fn derive_btc_leg_transfer_id(
         Some(key) => TransferId::from_str(key).map_err(SdkError::Generic),
         None => Ok(TransferId::from_name(fallback_seed)),
     }
+}
+
+/// Provider tag used to key rows in the `cross_chain_swaps` table.
+pub(crate) fn provider_tag(provider: CrossChainProvider) -> &'static str {
+    match provider {
+        CrossChainProvider::Orchestra => orchestra_storage_adapter::PROVIDER_TAG_ORCHESTRA,
+        CrossChainProvider::Boltz => boltz_storage_adapter::PROVIDER_TAG_BOLTZ,
+    }
+}
+
+/// Rejects a send whose cross-chain swap row is already terminal: a prior send
+/// consumed it, or it was pruned as abandoned. Called before any conversion or
+/// transfer so a replayed or reused prepared response can't re-run the send
+/// (the send-stage token conversion is not idempotent). No-op for
+/// non-cross-chain payment methods.
+pub(crate) async fn validate_swap_not_terminal(
+    storage: &Arc<dyn Storage>,
+    method: &SendPaymentMethod,
+) -> Result<(), SdkError> {
+    let SendPaymentMethod::CrossChainAddress {
+        route,
+        reference_id,
+        ..
+    } = method
+    else {
+        return Ok(());
+    };
+    let terminal = storage
+        .get_cross_chain_swap(
+            provider_tag(route.provider).to_string(),
+            reference_id.clone(),
+        )
+        .await?
+        .is_some_and(|row| row.is_terminal);
+    if terminal {
+        return Err(SdkError::InvalidInput(
+            "This cross-chain quote is no longer available. Please prepare and send it again."
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -619,5 +660,93 @@ mod tests {
             Some(0),
             "saturating_sub must clamp at 0, not underflow"
         );
+    }
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod swap_guard_tests {
+    use super::*;
+    use crate::persist::StoredCrossChainSwap;
+    use crate::persist::sqlite::SqliteStorage;
+
+    fn make_storage() -> Arc<dyn Storage> {
+        let mut path = std::env::temp_dir();
+        path.push(format!("breez-swap-guard-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path).unwrap();
+        Arc::new(SqliteStorage::new(&path).unwrap())
+    }
+
+    fn cross_chain_method(provider: CrossChainProvider, reference_id: &str) -> SendPaymentMethod {
+        SendPaymentMethod::CrossChainAddress {
+            route: CrossChainRoutePair {
+                provider,
+                chain: "base".to_string(),
+                chain_id: Some("8453".to_string()),
+                asset: "USDC".to_string(),
+                contract_address: None,
+                decimals: 6,
+                exact_out_eligible: false,
+                supported_sources: vec![],
+            },
+            reference_id: reference_id.to_string(),
+            recipient_address: "0xabc".to_string(),
+            amount_in: 0,
+            asset_amount_in: 0,
+            estimated_out: 0,
+            fee_amount: 0,
+            service_fee_amount: 0,
+            service_fee_asset: None,
+            source_transfer_fee_sats: 0,
+            fee_mode: CrossChainFeeMode::FeesExcluded,
+            expires_at: "2099-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    async fn store_row(storage: &Arc<dyn Storage>, provider: &str, id: &str, is_terminal: bool) {
+        storage
+            .set_cross_chain_swap(StoredCrossChainSwap {
+                provider: provider.to_string(),
+                id: id.to_string(),
+                is_terminal,
+                updated_at: 0,
+                data: "{}".to_string(),
+                secrets: String::new(),
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn passes_when_no_row() {
+        let storage = make_storage();
+        let method = cross_chain_method(CrossChainProvider::Orchestra, "q1");
+        assert!(validate_swap_not_terminal(&storage, &method).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn passes_when_row_active() {
+        let storage = make_storage();
+        store_row(&storage, "orchestra", "q1", false).await;
+        let method = cross_chain_method(CrossChainProvider::Orchestra, "q1");
+        assert!(validate_swap_not_terminal(&storage, &method).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn rejects_when_row_terminal() {
+        let storage = make_storage();
+        store_row(&storage, "orchestra", "q1", true).await;
+        let method = cross_chain_method(CrossChainProvider::Orchestra, "q1");
+        let err = validate_swap_not_terminal(&storage, &method)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    #[tokio::test]
+    async fn rejects_terminal_boltz_row_too() {
+        let storage = make_storage();
+        store_row(&storage, "boltz", "s1", true).await;
+        let method = cross_chain_method(CrossChainProvider::Boltz, "s1");
+        assert!(validate_swap_not_terminal(&storage, &method).await.is_err());
     }
 }

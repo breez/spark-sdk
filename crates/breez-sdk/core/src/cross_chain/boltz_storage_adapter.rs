@@ -5,7 +5,7 @@
 //!
 //! boltz-client runs in seedless mode: each swap carries its own random preimage
 //! and gas/claim key under `key_source` ([`boltz_client::models::SwapKeySource::Stored`]).
-//! Those secrets are money-critical, so before a swap row reaches local storage
+//! Those secrets must be protected at rest, so before a swap row reaches local storage
 //! this adapter lifts `key_source` out of the swap JSON, ECIES-encrypts it via
 //! the SDK signer, and persists only the ciphertext in
 //! [`StoredCrossChainSwap::secrets`]. The rest of the swap is stored as
@@ -34,7 +34,7 @@ use tracing::warn;
 use crate::{Storage, persist::StoredCrossChainSwap, signer::BreezSigner};
 
 /// Provider tag this adapter writes into `StoredCrossChainSwap::provider`.
-const PROVIDER_TAG_BOLTZ: &str = "boltz";
+pub(crate) const PROVIDER_TAG_BOLTZ: &str = "boltz";
 
 /// JSON key under which a swap's secrets live before they are lifted out.
 const KEY_SOURCE_FIELD: &str = "key_source";

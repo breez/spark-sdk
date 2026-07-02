@@ -54,6 +54,16 @@ pub(in crate::sdk) async fn orchestrate_send(
             return Ok(SendPaymentResponse { payment });
         }
     }
+
+    // Reject a replayed/reused prepared response whose cross-chain swap is
+    // already terminal, before running any (non-idempotent) conversion or
+    // transfer.
+    crate::cross_chain::validate_swap_not_terminal(
+        &sdk.storage,
+        &request.prepare_response.payment_method,
+    )
+    .await?;
+
     let conversion_estimate = request.prepare_response.conversion_estimate.clone();
     // Perform the send payment, with conversion if requested
     let res = if let Some(ConversionEstimate {

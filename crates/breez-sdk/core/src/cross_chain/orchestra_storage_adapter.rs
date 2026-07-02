@@ -1,6 +1,6 @@
 //! Orchestra rows in the provider-agnostic `cross_chain_swaps` table.
 //!
-//! Orchestra has no money-critical secrets to keep at rest, so the row's
+//! Orchestra has no at-rest secrets to protect, so the row's
 //! `secrets` field stays empty. The row's `data` JSON is the SDK's
 //! authoritative record of a prepared send quote: the send stage reads the
 //! deposit address, amount, and source asset back from here rather than from
@@ -22,9 +22,9 @@ pub(crate) const PROVIDER_TAG_ORCHESTRA: &str = "orchestra";
 /// SDK-authoritative record of a prepared Orchestra send quote, serialized
 /// into [`StoredCrossChainSwap::data`].
 ///
-/// `deposit_address`, `deposit_amount`, and `source_token_identifier` are the
-/// money-path fields the send stage transfers against; the remaining fields
-/// reconstruct `ConversionInfo::Orchestra` without re-fetching the quote.
+/// `deposit_address`, `deposit_amount`, and `source_token_identifier` are what
+/// the send stage transfers against; the remaining fields reconstruct
+/// `ConversionInfo::Orchestra` without re-fetching the quote.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OrchestraSendData {

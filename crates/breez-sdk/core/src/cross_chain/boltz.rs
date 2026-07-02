@@ -568,6 +568,9 @@ impl CrossChainService for BoltzService {
         let invoice_amount_sats = swap.invoice_amount_sats;
         let max_slippage_bps = swap.slippage_bps;
 
+        // `expires_at` and the LN fee budget come from `prepared`, not the
+        // stored swap: neither is on `BoltzSwap` (only `timeout_block_height`,
+        // enforced by Boltz server-side), and neither can misdirect the send.
         validate_quote_expiry(&prepared.expires_at)?;
 
         let transfer_id = Some(derive_btc_leg_transfer_id(
