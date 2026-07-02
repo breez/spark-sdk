@@ -17,6 +17,7 @@ use crate::{
     signer::SparkSigner,
     tree::{TreeNode, TreeNodeId},
     utils::{
+        frost::derive_leaf_signing_public_key,
         signing_job::{SigningJob, SigningJobType, sign_signing_jobs},
         transactions::{
             NodeTransactions, RefundTransactions, create_decremented_timelock_node_txs,
@@ -25,6 +26,7 @@ use crate::{
         },
     },
 };
+use bitcoin::secp256k1::Secp256k1;
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments};
 use std::collections::BTreeMap;
 enum RenewType<'a> {
@@ -188,7 +190,9 @@ impl TimelockManager {
         info!("Renewing node: {:?}", node.id);
         let mut signing_jobs = Vec::new();
 
-        let signing_public_key = self.spark_signer.get_public_key_for_leaf(&node.id).await?;
+        // Owned node: recover the signing key locally from the tree node instead
+        // of a signer round-trip (see derive_leaf_signing_public_key).
+        let signing_public_key = derive_leaf_signing_public_key(node, &Secp256k1::new())?;
 
         let parent_node_tx = &parent_node.node_tx;
 
@@ -370,7 +374,9 @@ impl TimelockManager {
         info!("Renewing refund: {:?}", node.id);
         let mut signing_jobs = Vec::new();
 
-        let signing_public_key = self.spark_signer.get_public_key_for_leaf(&node.id).await?;
+        // Owned node: recover the signing key locally from the tree node instead
+        // of a signer round-trip (see derive_leaf_signing_public_key).
+        let signing_public_key = derive_leaf_signing_public_key(node, &Secp256k1::new())?;
 
         let parent_node_tx = &parent_node.node_tx;
         let node_tx = &node.node_tx;
@@ -517,7 +523,9 @@ impl TimelockManager {
         info!("Renewing zero timelock: {:?}", node.id);
         let mut signing_jobs = Vec::new();
 
-        let signing_public_key = self.spark_signer.get_public_key_for_leaf(&node.id).await?;
+        // Owned node: recover the signing key locally from the tree node instead
+        // of a signer round-trip (see derive_leaf_signing_public_key).
+        let signing_public_key = derive_leaf_signing_public_key(node, &Secp256k1::new())?;
 
         let node_tx = &node.node_tx;
 
