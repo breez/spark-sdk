@@ -357,15 +357,12 @@ pub struct SelectLeavesOptions {
     ///
     /// Default: 60 seconds
     pub max_wait_for_pending: Duration,
-
-    pub allow_swap: bool,
 }
 
 impl Default for SelectLeavesOptions {
     fn default() -> Self {
         Self {
             max_wait_for_pending: DEFAULT_MAX_WAIT_FOR_PENDING,
-            allow_swap: true,
         }
     }
 }
@@ -375,7 +372,6 @@ impl SelectLeavesOptions {
     pub fn no_wait() -> Self {
         Self {
             max_wait_for_pending: Duration::ZERO,
-            allow_swap: true,
         }
     }
 }

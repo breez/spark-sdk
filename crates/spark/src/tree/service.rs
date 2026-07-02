@@ -155,10 +155,6 @@ impl TreeService for SynchronousTreeService {
                 return Ok(reservation);
             }
 
-            if !options.allow_swap {
-                return Ok(reservation);
-            }
-
             // Perform swap and update reservation
             return self
                 .perform_swap_and_update_reservation(reservation, target_amounts)
