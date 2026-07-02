@@ -1075,11 +1075,19 @@ pub enum TransferTarget {
     },
     Lightning {
         bolt11: String,
+        lnurl_pay: Option<LnurlPayContext>,
     },
     CoopExit {
         address: String,
         fee_quote: SendOnchainFeeQuote,
     },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlPayContext)]
+pub struct LnurlPayContext {
+    pub pay_request: LnurlPayRequestDetails,
+    pub comment: Option<String>,
+    pub success_action: Option<SuccessAction>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SignedTransferPackage)]

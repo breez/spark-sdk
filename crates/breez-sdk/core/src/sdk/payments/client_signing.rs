@@ -121,6 +121,7 @@ pub(in crate::sdk) async fn build_unsigned_transfer_package(
                 *lightning_fee_sats,
                 TransferTarget::Lightning {
                     bolt11: invoice_details.invoice.bolt11.clone(),
+                    lnurl_pay: None,
                 },
             )
         }

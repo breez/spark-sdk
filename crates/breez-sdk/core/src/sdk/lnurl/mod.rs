@@ -41,7 +41,7 @@ impl BreezSdk {
         request: PublishSignedLnurlPayPackageRequest,
     ) -> Result<PublishSignedLnurlPayResponse, SdkError> {
         self.maybe_ensure_spark_private_mode_initialized().await?;
-        pay::publish_signed_package(self, request.prepare_response, request.signed_package).await
+        pay::publish_signed_package(self, request.signed_package).await
     }
 
     /// Performs an LNURL withdraw operation for the amount of satoshis to

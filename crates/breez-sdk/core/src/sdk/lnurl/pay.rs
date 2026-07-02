@@ -5,10 +5,10 @@ use breez_sdk_common::lnurl::{
 use tracing::info;
 
 use crate::{
-    ConversionEstimate, ConversionType, FeePolicy, InputType, LnurlPayInfo, LnurlPayRequest,
-    LnurlPayRequestDetails, LnurlPayResponse, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
-    PublishSignedLnurlPayResponse, SendPaymentMethod, SignedTransferPackage, SuccessAction,
-    UnsignedTransferPackage,
+    ConversionEstimate, ConversionType, FeePolicy, InputType, LnurlPayContext, LnurlPayInfo,
+    LnurlPayRequest, LnurlPayRequestDetails, LnurlPayResponse, PrepareLnurlPayRequest,
+    PrepareLnurlPayResponse, PublishSignedLnurlPayResponse, SendPaymentMethod,
+    SignedTransferPackage, SuccessAction, TransferTarget, UnsignedTransferPackage,
     error::SdkError,
     events::SdkEvent,
     models::{PrepareSendPaymentResponse, SendPaymentRequest},
@@ -429,29 +429,58 @@ pub(super) async fn build_package(
         fee_policy: FeePolicy::FeesExcluded,
     };
 
-    client_signing::build_unsigned_transfer_package(sdk, &internal, None).await
+    let mut package = client_signing::build_unsigned_transfer_package(sdk, &internal, None).await?;
+    if let UnsignedTransferPackage::Transfer {
+        target: TransferTarget::Lightning { lnurl_pay, .. },
+        ..
+    } = &mut package
+    {
+        *lnurl_pay = Some(LnurlPayContext {
+            pay_request: prepare_response.pay_request.clone(),
+            comment: prepare_response.comment.clone(),
+            success_action: prepare_response.success_action.clone(),
+        });
+    }
+    Ok(package)
 }
 
 pub(super) async fn publish_signed_package(
     sdk: &BreezSdk,
-    prepare_response: PrepareLnurlPayResponse,
     signed_package: SignedTransferPackage,
 ) -> Result<PublishSignedLnurlPayResponse, SdkError> {
-    if prepare_response.fee_policy == FeePolicy::FeesIncluded {
-        return Err(SdkError::InvalidInput(
-            "client signing for LNURL pay does not yet support FeesIncluded".to_string(),
-        ));
-    }
+    let context = match &signed_package.unsigned {
+        UnsignedTransferPackage::Transfer {
+            target:
+                TransferTarget::Lightning {
+                    lnurl_pay: Some(context),
+                    ..
+                },
+            ..
+        } => Some(context.clone()),
+        UnsignedTransferPackage::Swap { .. } => None,
+        _ => {
+            return Err(SdkError::InvalidInput(
+                "package does not carry LNURL pay context; \
+                 use publish_signed_transfer_package"
+                    .to_string(),
+            ));
+        }
+    };
 
     match send::publish_signed_package_inner(sdk, &signed_package).await? {
         None => Ok(PublishSignedLnurlPayResponse::SwapCompleted),
         Some(res) => {
+            let Some(context) = context else {
+                return Err(SdkError::Generic(
+                    "swap package unexpectedly produced a payment".to_string(),
+                ));
+            };
             let response = finalize_lnurl_pay(
                 sdk,
                 res.payment,
-                prepare_response.pay_request,
-                prepare_response.comment,
-                prepare_response.success_action,
+                context.pay_request,
+                context.comment,
+                context.success_action,
             )
             .await?;
             Ok(PublishSignedLnurlPayResponse::PaymentSent { response })

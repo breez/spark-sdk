@@ -162,7 +162,6 @@ async fn client_sign_lnurl_pay(
         match alice
             .sdk
             .publish_signed_lnurl_pay_package(PublishSignedLnurlPayPackageRequest {
-                prepare_response: prepare_response.clone(),
                 signed_package: SignedTransferPackage {
                     unsigned,
                     signature,

@@ -53,6 +53,21 @@ pub(in crate::sdk::payments) async fn publish_signed_transfer_package(
     sdk: &BreezSdk,
     signed_package: &SignedTransferPackage,
 ) -> Result<PublishSignedTransferPackageResponse, SdkError> {
+    if matches!(
+        &signed_package.unsigned,
+        UnsignedTransferPackage::Transfer {
+            target: TransferTarget::Lightning {
+                lnurl_pay: Some(_),
+                ..
+            },
+            ..
+        }
+    ) {
+        return Err(SdkError::InvalidInput(
+            "LNURL pay packages must be published with publish_signed_lnurl_pay_package"
+                .to_string(),
+        ));
+    }
     match publish_signed_package_inner(sdk, signed_package).await? {
         None => Ok(PublishSignedTransferPackageResponse::SwapCompleted),
         Some(res) => {
@@ -85,7 +100,7 @@ async fn deferred_transfer_send(
         TransferTarget::Spark { spark_invoice, .. } => {
             spark_address::send_signed(sdk, prepare_transfer, signed, spark_invoice.clone()).await
         }
-        TransferTarget::Lightning { bolt11 } => {
+        TransferTarget::Lightning { bolt11, .. } => {
             bolt11::send_signed(sdk, prepare_transfer, signed, bolt11, amount_sat).await
         }
         TransferTarget::CoopExit { address, fee_quote } => {

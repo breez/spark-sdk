@@ -580,11 +580,19 @@ pub enum _TransferTarget {
     },
     Lightning {
         bolt11: String,
+        lnurl_pay: Option<LnurlPayContext>,
     },
     CoopExit {
         address: String,
         fee_quote: SendOnchainFeeQuote,
     },
+}
+
+#[frb(mirror(LnurlPayContext))]
+pub struct _LnurlPayContext {
+    pub pay_request: LnurlPayRequestDetails,
+    pub comment: Option<String>,
+    pub success_action: Option<SuccessAction>,
 }
 
 #[frb(mirror(SignedTransferPackage))]

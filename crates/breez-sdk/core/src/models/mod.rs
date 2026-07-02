@@ -1446,7 +1446,6 @@ pub struct BuildUnsignedLnurlPayPackageRequest {
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PublishSignedLnurlPayPackageRequest {
-    pub prepare_response: PrepareLnurlPayResponse,
     pub signed_package: SignedTransferPackage,
 }
 
@@ -1580,6 +1579,7 @@ pub enum PaymentRequest {
     },
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum UnsignedTransferPackage {
@@ -1613,11 +1613,20 @@ pub enum TransferTarget {
     },
     Lightning {
         bolt11: String,
+        lnurl_pay: Option<LnurlPayContext>,
     },
     CoopExit {
         address: String,
         fee_quote: SendOnchainFeeQuote,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct LnurlPayContext {
+    pub pay_request: LnurlPayRequestDetails,
+    pub comment: Option<String>,
+    pub success_action: Option<SuccessAction>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
