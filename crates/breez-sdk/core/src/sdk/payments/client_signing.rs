@@ -3,7 +3,7 @@ use spark_wallet::{
 };
 
 use crate::{
-    BitcoinAddressDetails, SendOnchainFeeQuote,
+    BitcoinAddressDetails, FeePolicy, SendOnchainFeeQuote,
     error::SdkError,
     models::{
         BuildTransferPackageOptions, PrepareSendPaymentResponse, SendPaymentMethod,
@@ -66,12 +66,22 @@ fn reject_conversion(response: &PrepareSendPaymentResponse) -> Result<(), SdkErr
     Ok(())
 }
 
+fn reject_fees_included(response: &PrepareSendPaymentResponse) -> Result<(), SdkError> {
+    if response.fee_policy == FeePolicy::FeesIncluded {
+        return Err(SdkError::InvalidInput(
+            "client signing does not yet support FeesIncluded".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub(in crate::sdk) async fn build_unsigned_transfer_package(
     sdk: &BreezSdk,
     prepare_response: &PrepareSendPaymentResponse,
     options: Option<&BuildTransferPackageOptions>,
 ) -> Result<UnsignedTransferPackage, SdkError> {
     reject_conversion(prepare_response)?;
+    reject_fees_included(prepare_response)?;
     match &prepare_response.payment_method {
         SendPaymentMethod::SparkAddress { address, .. } => {
             build_spark_package(sdk, prepare_response, address, None).await
