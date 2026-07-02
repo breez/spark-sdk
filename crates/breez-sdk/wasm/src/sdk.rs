@@ -212,6 +212,30 @@ impl BreezSdk {
         Ok(self.sdk.lnurl_pay(request.into()).await?.into())
     }
 
+    #[wasm_bindgen(js_name = "buildUnsignedLnurlPayPackage")]
+    pub async fn build_unsigned_lnurl_pay_package(
+        &self,
+        request: BuildUnsignedLnurlPayPackageRequest,
+    ) -> WasmResult<UnsignedTransferPackage> {
+        Ok(self
+            .sdk
+            .build_unsigned_lnurl_pay_package(request.into())
+            .await?
+            .into())
+    }
+
+    #[wasm_bindgen(js_name = "publishSignedLnurlPayPackage")]
+    pub async fn publish_signed_lnurl_pay_package(
+        &self,
+        request: PublishSignedLnurlPayPackageRequest,
+    ) -> WasmResult<PublishSignedLnurlPayResponse> {
+        Ok(self
+            .sdk
+            .publish_signed_lnurl_pay_package(request.into())
+            .await?
+            .into())
+    }
+
     #[wasm_bindgen(js_name = "lnurlWithdraw")]
     pub async fn lnurl_withdraw(
         &self,

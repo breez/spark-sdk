@@ -1027,6 +1027,23 @@ pub struct LnurlPayResponse {
     pub success_action: Option<SuccessActionProcessed>,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BuildUnsignedLnurlPayPackageRequest)]
+pub struct BuildUnsignedLnurlPayPackageRequest {
+    pub prepare_response: PrepareLnurlPayResponse,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PublishSignedLnurlPayPackageRequest)]
+pub struct PublishSignedLnurlPayPackageRequest {
+    pub signed_package: SignedTransferPackage,
+}
+
+#[allow(clippy::large_enum_variant)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PublishSignedLnurlPayResponse)]
+pub enum PublishSignedLnurlPayResponse {
+    SwapCompleted,
+    PaymentSent { response: LnurlPayResponse },
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlWithdrawRequest)]
 pub struct LnurlWithdrawRequest {
     pub amount_sats: u64,

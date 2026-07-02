@@ -778,6 +778,22 @@ pub enum _PublishSignedTransferPackageResponse {
     PaymentSent { payment: Payment },
 }
 
+#[frb(mirror(BuildUnsignedLnurlPayPackageRequest))]
+pub struct _BuildUnsignedLnurlPayPackageRequest {
+    pub prepare_response: PrepareLnurlPayResponse,
+}
+
+#[frb(mirror(PublishSignedLnurlPayPackageRequest))]
+pub struct _PublishSignedLnurlPayPackageRequest {
+    pub signed_package: SignedTransferPackage,
+}
+
+#[frb(mirror(PublishSignedLnurlPayResponse))]
+pub enum _PublishSignedLnurlPayResponse {
+    SwapCompleted,
+    PaymentSent { response: LnurlPayResponse },
+}
+
 #[frb(mirror(SendPaymentResponse))]
 pub struct _SendPaymentResponse {
     pub payment: Payment,

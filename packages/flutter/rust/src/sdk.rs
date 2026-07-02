@@ -97,6 +97,20 @@ impl BreezSdk {
         self.inner.lnurl_pay(request).await
     }
 
+    pub async fn build_unsigned_lnurl_pay_package(
+        &self,
+        request: BuildUnsignedLnurlPayPackageRequest,
+    ) -> Result<UnsignedTransferPackage, SdkError> {
+        self.inner.build_unsigned_lnurl_pay_package(request).await
+    }
+
+    pub async fn publish_signed_lnurl_pay_package(
+        &self,
+        request: PublishSignedLnurlPayPackageRequest,
+    ) -> Result<PublishSignedLnurlPayResponse, SdkError> {
+        self.inner.publish_signed_lnurl_pay_package(request).await
+    }
+
     pub async fn lnurl_withdraw(
         &self,
         request: LnurlWithdrawRequest,
