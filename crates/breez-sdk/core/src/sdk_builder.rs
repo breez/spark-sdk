@@ -427,7 +427,7 @@ impl SdkBuilder {
             stores.session_store.clone(),
             &signers.base,
             self.config.network,
-            self.config.signer_can_export_keys,
+            self.config.signer_supports_ecies_hmac,
         )?;
 
         let spark_wallet = build_spark_wallet(BuildSparkWalletParams {
@@ -574,22 +574,20 @@ fn validate_server_mode(
     Ok(())
 }
 
-/// Rejects configs whose features need local encryption when the signer cannot
-/// export the key that seeds it. Session tokens fall back to plaintext (see
-/// `wrap_session_store`), but sync records (sent to a remote server) and Boltz
-/// swap secrets (control funds) have no safe plaintext fallback.
+/// Rejects configs whose features need local encryption when the signer can't
+/// perform ECIES/HMAC.
 fn validate_signer_capabilities(config: &Config) -> Result<(), SdkError> {
-    if config.signer_can_export_keys {
+    if config.signer_supports_ecies_hmac {
         return Ok(());
     }
     if config.real_time_sync_server_url.is_some() {
-        return Err(SdkError::SignerKeyExportUnavailable(
-            "real-time sync requires encryption".to_string(),
+        return Err(SdkError::SignerEciesHmacUnavailable(
+            "Real-time sync requires encryption".to_string(),
         ));
     }
     if config.cross_chain_config.is_some() {
-        return Err(SdkError::SignerKeyExportUnavailable(
-            "cross-chain payments require encryption".to_string(),
+        return Err(SdkError::SignerEciesHmacUnavailable(
+            "Cross-chain payments require encryption".to_string(),
         ));
     }
     Ok(())
@@ -786,9 +784,9 @@ fn finalize_spark_wallet_config(
 /// Wraps the resolved session store (or an in-memory default) in the caching
 /// layer, plus the encrypting layer when `encrypt` is set.
 ///
-/// `encrypt` mirrors `Config::signer_can_export_keys`. When `false` (the
-/// signer cannot export the key that seeds local encryption), the encrypting
-/// layer is skipped and the provided store holds the bearer tokens in plaintext.
+/// `encrypt` mirrors `Config::signer_supports_ecies_hmac`. When `false` (the
+/// signer can't perform local ECIES/HMAC), the encrypting layer is skipped and
+/// the provided store holds the bearer tokens in plaintext.
 fn wrap_session_store(
     session_store: Option<Arc<dyn SessionStore>>,
     signer: &Arc<dyn crate::signer::BreezSigner>,
@@ -1037,27 +1035,27 @@ mod tests {
 
     #[test]
     fn validate_signer_capabilities_gates_encryption_features() {
-        // Key export supported: encryption-dependent features are allowed.
+        // ECIES/HMAC supported: encryption-dependent features are allowed.
         let mut config = default_config(Network::Regtest);
         config.real_time_sync_server_url = Some("https://example.com".to_string());
         assert!(super::validate_signer_capabilities(&config).is_ok());
 
-        // No key export + real-time sync: rejected with a clear error.
+        // No ECIES/HMAC + real-time sync: rejected with a clear error.
         let mut config = default_config(Network::Regtest);
-        config.signer_can_export_keys = false;
+        config.signer_supports_ecies_hmac = false;
         config.real_time_sync_server_url = Some("https://example.com".to_string());
         config.cross_chain_config = None;
         match super::validate_signer_capabilities(&config) {
-            Err(SdkError::SignerKeyExportUnavailable(m)) => {
+            Err(SdkError::SignerEciesHmacUnavailable(m)) => {
                 assert!(m.contains("real-time sync"), "got: {m}");
             }
-            other => panic!("expected SignerKeyExportUnavailable, got {other:?}"),
+            other => panic!("expected SignerEciesHmacUnavailable, got {other:?}"),
         }
 
-        // No key export + no encryption-dependent feature: allowed, so a
+        // No ECIES/HMAC + no encryption-dependent feature: allowed, so a
         // payments-only wallet still builds.
         let mut config = default_config(Network::Regtest);
-        config.signer_can_export_keys = false;
+        config.signer_supports_ecies_hmac = false;
         config.real_time_sync_server_url = None;
         config.cross_chain_config = None;
         assert!(super::validate_signer_capabilities(&config).is_ok());

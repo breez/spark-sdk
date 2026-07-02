@@ -45,7 +45,7 @@ pub struct _Config {
     pub spark_config: Option<SparkConfig>,
     pub background_tasks_enabled: bool,
     pub cross_chain_config: Option<CrossChainConfig>,
-    pub signer_can_export_keys: bool,
+    pub signer_supports_ecies_hmac: bool,
 }
 
 #[frb(mirror(CrossChainConfig))]

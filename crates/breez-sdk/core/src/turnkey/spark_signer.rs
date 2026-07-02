@@ -525,6 +525,9 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
         &self,
         index: u32,
     ) -> Result<PublicKeyBytes, SignerError> {
+        // Fail here if the key can't be exported (a deny-export policy), so an
+        // address that could never be claimed or refunded is never issued.
+        self.export_static_deposit_key(index).await?;
         Ok(PublicKeyBytes::from_public_key(
             &self.static_deposit_public_key(index).await?,
         ))

@@ -42,7 +42,7 @@ pub enum _SdkError {
     },
     LnurlError(String),
     Signer(String),
-    SignerKeyExportUnavailable(String),
+    SignerEciesHmacUnavailable(String),
     OptimizationAlreadyRunning,
     OptimizationCancelled,
     Generic(String),

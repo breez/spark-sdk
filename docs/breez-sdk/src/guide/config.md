@@ -167,8 +167,8 @@ The {{#name default_slippage_bps}} field sets the per-instance slippage default 
 
 See [Send USDC/USDT](./cross_chain.md) for the provider lineup, status lifecycle, retry-safety semantics, and limitations.
 
-## Signer key export
+## Signer ECIES/HMAC support
 
-Whether the configured signer can export private keys. Defaults to `true`.
+Whether the signer can perform the SDK's local ECIES/HMAC operations. Defaults to `true`.
 
-Set {{#name signer_can_export_keys}} to `false` when you connect an external signer whose policy forbids exporting private keys (for example, a hardware or policy-restricted enclave). The SDK seeds its local encryption from an exported key, and claiming or refunding an on-chain deposits also requires exporting a key.
+Set {{#name signer_supports_ecies_hmac}} to `false` when you connect a signer that can't run these locally (for example, a policy-restricted enclave). The SDK then keeps session tokens in plaintext and disables the features that need local encryption.

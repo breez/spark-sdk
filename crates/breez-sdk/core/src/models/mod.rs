@@ -677,14 +677,13 @@ pub struct Config {
     /// caller. Cross-chain sends are only supported on mainnet.
     pub cross_chain_config: Option<CrossChainConfig>,
 
-    /// Whether the configured signer can export private keys. Defaults to
-    /// `true`.
+    /// Whether the signer can perform the SDK's local ECIES/HMAC operations.
+    /// Defaults to `true`.
     ///
-    /// Set to `false` when connecting an external signer whose policy forbids
-    /// exporting private keys. The SDK seeds its local encryption from an
-    /// exported key, and claiming or refunding an on-chain deposits also
-    /// requires exporting a key.
-    pub signer_can_export_keys: bool,
+    /// Set to `false` for a signer that can't run them locally (for example a
+    /// policy-restricted enclave). The SDK then keeps session tokens in plaintext
+    /// and disables the features that need local encryption.
+    pub signer_supports_ecies_hmac: bool,
 }
 
 /// Configuration for cross-chain sends.
