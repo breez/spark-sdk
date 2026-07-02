@@ -423,64 +423,96 @@ impl LightningService {
         leaves: &[TreeNode],
         transfer_id: Option<TransferId>,
     ) -> Result<PayLightningResult, ServiceError> {
+        let recover_on_error = transfer_id.is_some();
+        let unwrapped_transfer_id = transfer_id.unwrap_or_else(TransferId::generate);
+        self.send_lightning_inner(
+            &unwrapped_transfer_id,
+            leaves,
+            invoice,
+            amount_to_send,
+            None,
+            recover_on_error,
+        )
+        .await
+    }
+
+    async fn send_lightning_inner(
+        &self,
+        transfer_id: &TransferId,
+        leaves: &[TreeNode],
+        invoice: &str,
+        amount_to_send: Option<u64>,
+        prepared: Option<PreparedTransfer>,
+        recover_on_error: bool,
+    ) -> Result<PayLightningResult, ServiceError> {
         let ssp_identity_public_key = self.ssp_client.identity_public_key();
         let expiry_time = SystemTime::now() + Duration::from_secs(DEFAULT_SEND_EXPIRY_SECS);
-        let unwrapped_transfer_id = match &transfer_id {
-            Some(transfer_id) => transfer_id.clone(),
-            None => TransferId::generate(),
-        };
-
-        // Decode invoice and validate amount
         let decoded_invoice = Bolt11Invoice::from_str(invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
         let amount_sats = get_invoice_amount_sats(&decoded_invoice, amount_to_send)?;
-        let payment_hash = decoded_invoice.payment_hash();
+        let payment_hash = *decoded_invoice.payment_hash();
 
-        self.notify_before_send_lightning(&unwrapped_transfer_id, invoice, amount_sats)
+        self.notify_before_send_lightning(transfer_id, invoice, amount_sats)
             .await?;
 
-        // Prepare leaf tweaks
-        let leaf_tweaks = prepare_leaf_key_tweaks_to_send(leaves.to_vec());
+        let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(leaves.to_vec());
 
-        let prepared_transfer_request = self
-            .transfer_service
-            .prepare_transfer_request(
-                &unwrapped_transfer_id,
-                &leaf_tweaks,
-                &ssp_identity_public_key,
-                Some(payment_hash),
-                Some(expiry_time),
-                None, // No adaptor public key for lightning transfers
-            )
-            .await?;
+        let prepared_transfer_request = match prepared {
+            Some(prepared) => {
+                self.transfer_service
+                    .assemble_transfer_request_with_prepared(
+                        transfer_id,
+                        &leaf_key_tweaks,
+                        &ssp_identity_public_key,
+                        Some(&payment_hash),
+                        Some(expiry_time),
+                        None,
+                        prepared,
+                    )
+                    .await?
+            }
+            None => {
+                self.transfer_service
+                    .prepare_transfer_request(
+                        transfer_id,
+                        &leaf_key_tweaks,
+                        &ssp_identity_public_key,
+                        Some(&payment_hash),
+                        Some(expiry_time),
+                        None,
+                    )
+                    .await?
+            }
+        };
 
         let initiate_preimage_swap_res = self
             .initiate_lightning_preimage_swap(
-                &unwrapped_transfer_id,
-                &leaf_tweaks,
-                payment_hash,
+                transfer_id,
+                &leaf_key_tweaks,
+                &payment_hash,
                 invoice,
                 amount_sats,
                 &expiry_time,
                 prepared_transfer_request.transfer_request,
             )
             .await;
-        let transfer: Transfer = match (&transfer_id, initiate_preimage_swap_res) {
-            (_, Ok(initiate_preimage_swap)) => transfer_from_preimage_swap(initiate_preimage_swap)?,
-            (Some(transfer_id), Err(e)) => {
+
+        let transfer: Transfer = match initiate_preimage_swap_res {
+            Ok(initiate_preimage_swap) => transfer_from_preimage_swap(initiate_preimage_swap)?,
+            Err(e) if recover_on_error => {
                 return self
-                    .recovered_lightning_result(transfer_id, e, *payment_hash)
+                    .recovered_lightning_result(transfer_id, e, payment_hash)
                     .await;
             }
-            (_, Err(e)) => return Err(e),
+            Err(e) => return Err(e),
         };
 
         self.request_lightning_send_result(
             transfer,
-            &unwrapped_transfer_id,
+            transfer_id,
             invoice,
             amount_to_send,
-            *payment_hash,
+            payment_hash,
         )
         .await
     }
@@ -599,56 +631,13 @@ impl LightningService {
         amount_to_send: Option<u64>,
         approved_transfer: PreparedTransfer,
     ) -> Result<PayLightningResult, ServiceError> {
-        let ssp_identity_public_key = self.ssp_client.identity_public_key();
-        let expiry_time = SystemTime::now() + Duration::from_secs(DEFAULT_SEND_EXPIRY_SECS);
-        let decoded_invoice = Bolt11Invoice::from_str(invoice)
-            .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
-        let amount_sats = get_invoice_amount_sats(&decoded_invoice, amount_to_send)?;
-        let payment_hash = *decoded_invoice.payment_hash();
-        self.notify_before_send_lightning(&transfer_id, invoice, amount_sats)
-            .await?;
-        let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(leaves.to_vec());
-
-        let prepared_transfer_request = self
-            .transfer_service
-            .assemble_transfer_request_with_prepared(
-                &transfer_id,
-                &leaf_key_tweaks,
-                &ssp_identity_public_key,
-                Some(&payment_hash),
-                Some(expiry_time),
-                None,
-                approved_transfer,
-            )
-            .await?;
-
-        let initiate_preimage_swap_res = self
-            .initiate_lightning_preimage_swap(
-                &transfer_id,
-                &leaf_key_tweaks,
-                &payment_hash,
-                invoice,
-                amount_sats,
-                &expiry_time,
-                prepared_transfer_request.transfer_request,
-            )
-            .await;
-
-        let transfer: Transfer = match initiate_preimage_swap_res {
-            Ok(initiate_preimage_swap) => transfer_from_preimage_swap(initiate_preimage_swap)?,
-            Err(e) => {
-                return self
-                    .recovered_lightning_result(&transfer_id, e, payment_hash)
-                    .await;
-            }
-        };
-
-        self.request_lightning_send_result(
-            transfer,
+        self.send_lightning_inner(
             &transfer_id,
+            leaves,
             invoice,
             amount_to_send,
-            payment_hash,
+            Some(approved_transfer),
+            true,
         )
         .await
     }
