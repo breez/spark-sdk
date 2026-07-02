@@ -1469,3 +1469,94 @@ async fn test_14_client_signing_lnurl_pay() -> Result<()> {
     info!("=== Test test_14_client_signing_lnurl_pay PASSED ===");
     Ok(())
 }
+
+/// Test send-all LNURL-pay (FeesIncluded) driven through the client-signing
+/// build/sign/publish loop.
+#[test_log::test(tokio::test)]
+async fn test_15_client_signing_lnurl_pay_fees_included() -> Result<()> {
+    info!("=== Starting test_15_client_signing_lnurl_pay_fees_included ===");
+
+    let alice_mnemonic = random_mnemonic()?;
+    let alice_dir = tempfile::Builder::new()
+        .prefix("breez-sdk-alice-lnurl-signing-fi")
+        .tempdir()?;
+    let alice_path = alice_dir.path().to_string_lossy().to_string();
+    let mut alice =
+        build_sdk_with_external_signer(alice_path, alice_mnemonic.clone(), Some(alice_dir)).await?;
+    let mut bob = setup_bob(false).await?;
+
+    let client_signer =
+        default_external_signers(alice_mnemonic, None, Network::Regtest, None)?.spark_signer;
+
+    let register_response = bob
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: "bobsigningfullbalance".to_string(),
+            description: Some("Bob's client-signing full balance address".to_string()),
+        })
+        .await?;
+    let bob_lightning_address = register_response.lightning_address;
+
+    ensure_funded(&mut alice, 10_000).await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    info!("Alice balance after funding: {alice_balance} sats");
+
+    let parse_response = alice.sdk.parse(&bob_lightning_address).await?;
+    let InputType::LightningAddress(details) = parse_response else {
+        anyhow::bail!("Expected Lightning address");
+    };
+
+    let prepare_response = alice
+        .sdk
+        .prepare_lnurl_pay(PrepareLnurlPayRequest {
+            amount: alice_balance.into(),
+            pay_request: details.pay_request,
+            comment: Some("Client-signing FeesIncluded test".to_string()),
+            validate_success_action_url: None,
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: Some(FeePolicy::FeesIncluded),
+        })
+        .await?;
+
+    let invoice_amount_sats = prepare_response.invoice_details.amount_msat.unwrap() / 1000;
+    let expected_amount = alice_balance.saturating_sub(prepare_response.fee_sats);
+    assert_eq!(
+        invoice_amount_sats, expected_amount,
+        "Invoice amount should be exactly balance minus fees"
+    );
+
+    let pay_response = client_sign_lnurl_pay(&alice, &client_signer, prepare_response).await?;
+    info!("Alice completed client-signing FeesIncluded LNURL payment");
+
+    wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 30).await?;
+    let bob_payment =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
+
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_final = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    assert_eq!(alice_final, 0, "Alice's balance should be fully spent");
+
+    assert_eq!(
+        bob_payment.amount,
+        invoice_amount_sats.into(),
+        "Bob should receive exactly the prepared amount"
+    );
+    assert_eq!(pay_response.payment.payment_type, PaymentType::Send);
+
+    info!("=== Test test_15_client_signing_lnurl_pay_fees_included PASSED ===");
+    Ok(())
+}

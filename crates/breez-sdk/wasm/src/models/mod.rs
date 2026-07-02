@@ -1093,6 +1093,7 @@ pub enum TransferTarget {
     Lightning {
         bolt11: String,
         lnurl_pay: Option<LnurlPayContext>,
+        fee_policy: FeePolicy,
     },
     CoopExit {
         address: String,

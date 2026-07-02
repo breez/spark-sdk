@@ -406,16 +406,21 @@ pub(super) async fn build_package(
     sdk: &BreezSdk,
     prepare_response: &PrepareLnurlPayResponse,
 ) -> Result<UnsignedTransferPackage, SdkError> {
-    if prepare_response.fee_policy == FeePolicy::FeesIncluded {
-        return Err(SdkError::InvalidInput(
-            "client signing for LNURL pay does not yet support FeesIncluded".to_string(),
-        ));
-    }
     if prepare_response.conversion_estimate.is_some() {
         return Err(SdkError::InvalidInput(
             "client signing is not supported for conversion sends".to_string(),
         ));
     }
+
+    let receiver_amount_sats: u64 = if prepare_response.fee_policy == FeePolicy::FeesIncluded {
+        prepare_response
+            .invoice_details
+            .amount_msat
+            .ok_or_else(|| SdkError::Generic("Missing invoice amount".to_string()))?
+            / 1000
+    } else {
+        prepare_response.amount_sats
+    };
 
     let internal = PrepareSendPaymentResponse {
         payment_method: SendPaymentMethod::Bolt11Invoice {
@@ -423,10 +428,10 @@ pub(super) async fn build_package(
             spark_transfer_fee_sats: None,
             lightning_fee_sats: prepare_response.fee_sats,
         },
-        amount: u128::from(prepare_response.amount_sats),
+        amount: u128::from(receiver_amount_sats),
         token_identifier: None,
         conversion_estimate: None,
-        fee_policy: FeePolicy::FeesExcluded,
+        fee_policy: prepare_response.fee_policy,
     };
 
     let mut package = client_signing::build_unsigned_transfer_package(sdk, &internal, None).await?;

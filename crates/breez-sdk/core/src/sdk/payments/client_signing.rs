@@ -66,22 +66,12 @@ fn reject_conversion(response: &PrepareSendPaymentResponse) -> Result<(), SdkErr
     Ok(())
 }
 
-fn reject_fees_included(response: &PrepareSendPaymentResponse) -> Result<(), SdkError> {
-    if response.fee_policy == FeePolicy::FeesIncluded {
-        return Err(SdkError::InvalidInput(
-            "client signing does not yet support FeesIncluded".to_string(),
-        ));
-    }
-    Ok(())
-}
-
 pub(in crate::sdk) async fn build_unsigned_transfer_package(
     sdk: &BreezSdk,
     prepare_response: &PrepareSendPaymentResponse,
     options: Option<&BuildTransferPackageOptions>,
 ) -> Result<UnsignedTransferPackage, SdkError> {
     reject_conversion(prepare_response)?;
-    reject_fees_included(prepare_response)?;
     match &prepare_response.payment_method {
         SendPaymentMethod::SparkAddress { address, .. } => {
             build_spark_package(sdk, prepare_response, address, None).await
@@ -100,8 +90,8 @@ pub(in crate::sdk) async fn build_unsigned_transfer_package(
         }
         SendPaymentMethod::Bolt11Invoice {
             invoice_details,
+            spark_transfer_fee_sats,
             lightning_fee_sats,
-            ..
         } => {
             if prefers_bolt11_spark_route(sdk, prepare_response) {
                 let spark_address = sdk
@@ -113,27 +103,19 @@ pub(in crate::sdk) async fn build_unsigned_transfer_package(
                 let receiver = spark_address
                     .to_address_string()
                     .map_err(|e| SdkError::Generic(e.to_string()))?;
+                if prepare_response.fee_policy == FeePolicy::FeesIncluded
+                    && invoice_details.amount_msat.is_none()
+                {
+                    let mut adjusted = prepare_response.clone();
+                    adjusted.amount = adjusted
+                        .amount
+                        .saturating_sub(u128::from(spark_transfer_fee_sats.unwrap_or(0)));
+                    return build_spark_package(sdk, &adjusted, &receiver, None).await;
+                }
                 return build_spark_package(sdk, prepare_response, &receiver, None).await;
             }
-            let amount_sat: u64 = prepare_response.amount.try_into()?;
-            let prep = sdk
-                .spark_wallet
-                .prepare_lightning_send_package(
-                    &invoice_details.invoice.bolt11,
-                    Some(amount_sat),
-                    Some(*lightning_fee_sats),
-                    None,
-                )
-                .await?;
-            to_unsigned_package(
-                prep,
-                amount_sat,
-                *lightning_fee_sats,
-                TransferTarget::Lightning {
-                    bolt11: invoice_details.invoice.bolt11.clone(),
-                    lnurl_pay: None,
-                },
-            )
+            build_lightning_package(sdk, prepare_response, invoice_details, *lightning_fee_sats)
+                .await
         }
         SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
             build_coop_exit_package(sdk, prepare_response, address, fee_quote, options).await
@@ -187,6 +169,64 @@ async fn build_spark_package(
         TransferTarget::Spark {
             address,
             spark_invoice,
+        },
+    )
+}
+
+async fn build_lightning_package(
+    sdk: &BreezSdk,
+    prepare_response: &PrepareSendPaymentResponse,
+    invoice_details: &crate::Bolt11InvoiceDetails,
+    lightning_fee_sats: u64,
+) -> Result<UnsignedTransferPackage, SdkError> {
+    let amount_sat: u64 = prepare_response.amount.try_into()?;
+    let fee_policy = prepare_response.fee_policy;
+
+    let receiver_sat =
+        if fee_policy == FeePolicy::FeesIncluded && invoice_details.amount_msat.is_none() {
+            let receiver = amount_sat.saturating_sub(lightning_fee_sats);
+            if receiver == 0 {
+                return Err(SdkError::InvalidInput(
+                    "Amount too small to cover fees".to_string(),
+                ));
+            }
+            receiver
+        } else {
+            amount_sat
+        };
+
+    let prep = sdk
+        .spark_wallet
+        .prepare_lightning_send_package(
+            &invoice_details.invoice.bolt11,
+            Some(receiver_sat),
+            Some(lightning_fee_sats),
+            None,
+        )
+        .await?;
+
+    let fee_sat = if fee_policy == FeePolicy::FeesIncluded {
+        match &prep {
+            SendPackagePreparation::Ready(pt) => pt
+                .leaves
+                .iter()
+                .map(|l| l.node.value)
+                .sum::<u64>()
+                .saturating_sub(receiver_sat),
+            SendPackagePreparation::SwapRequired { .. } => lightning_fee_sats,
+        }
+    } else {
+        lightning_fee_sats
+    };
+
+    to_unsigned_package(
+        prep,
+        receiver_sat,
+        fee_sat,
+        TransferTarget::Lightning {
+            bolt11: invoice_details.invoice.bolt11.clone(),
+            lnurl_pay: None,
+            fee_policy,
         },
     )
 }
@@ -245,11 +285,23 @@ async fn build_coop_exit_package(
     let exit_speed: ExitSpeed = confirmation_speed.clone().into();
     let coop_fee_quote: CoopExitFeeQuote = fee_quote.clone().into();
     let fee_sat = coop_fee_quote.fee_sats(&exit_speed);
+    let receiver_sat = if prepare_response.fee_policy == FeePolicy::FeesIncluded {
+        let receiver = amount_sat.saturating_sub(fee_sat);
+        let dust_limit_sats = crate::utils::bitcoin_dust::get_dust_limit_sats(&address.address)?;
+        if receiver < dust_limit_sats {
+            return Err(SdkError::InvalidInput(format!(
+                "Amount is below the minimum of {dust_limit_sats} sats required for this address"
+            )));
+        }
+        receiver
+    } else {
+        amount_sat
+    };
     let prep = sdk
         .spark_wallet
         .prepare_coop_exit_package(
             &address.address,
-            amount_sat,
+            receiver_sat,
             exit_speed,
             coop_fee_quote,
             None,
@@ -257,7 +309,7 @@ async fn build_coop_exit_package(
         .await?;
     to_unsigned_package(
         prep,
-        amount_sat,
+        receiver_sat,
         fee_sat,
         TransferTarget::CoopExit {
             address: address.address.clone(),

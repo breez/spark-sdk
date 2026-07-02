@@ -104,19 +104,40 @@ pub(super) async fn send_signed(
     signed: &ExternalPreparedTransfer,
     bolt11: &str,
     amount_sat: u64,
+    fee_sat: u64,
+    fee_policy: FeePolicy,
 ) -> Result<SendPaymentResponse, SdkError> {
+    let amount_to_send = if fee_policy == FeePolicy::FeesIncluded {
+        let current_fee = sdk
+            .spark_wallet
+            .fetch_lightning_send_fee_estimate(bolt11, Some(amount_sat))
+            .await?;
+        let overpayment = fee_overpayment(fee_sat, current_fee)?;
+        if overpayment > 0 {
+            info!(
+                overpayment_sats = overpayment,
+                stored_fee_sats = fee_sat,
+                current_fee_sats = current_fee,
+                "FeesIncluded fee overpayment applied for signed Bolt11"
+            );
+        }
+        amount_sat.saturating_add(overpayment)
+    } else {
+        amount_sat
+    };
+
     let result = Box::pin(sdk.spark_wallet.publish_lightning_send_package(
         prepare_transfer.transfer_id()?,
         prepare_transfer.leaf_ids()?,
         bolt11.to_string(),
-        Some(amount_sat),
+        Some(amount_to_send),
         signed.to_prepared_transfer()?,
     ))
     .await?;
 
     let payment = sdk
         .lightning_sender
-        .payment_from_pay_result(result, u128::from(amount_sat), 0)
+        .payment_from_pay_result(result, u128::from(amount_to_send), 0)
         .await?;
     Ok(SendPaymentResponse { payment })
 }

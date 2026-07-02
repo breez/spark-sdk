@@ -7,12 +7,12 @@ use breez_sdk_itest::{
 };
 use breez_sdk_spark::{
     BuildTransferPackageOptions, BuildUnsignedTransferPackageRequest, CreateIssuerTokenRequest,
-    GetInfoRequest, LeafOptimizationConfig, MintIssuerTokenRequest, Network,
+    FeePolicy, GetInfoRequest, LeafOptimizationConfig, MintIssuerTokenRequest, Network,
     OnchainConfirmationSpeed, Payment, PaymentMethod, PaymentRequest, PaymentStatus, PaymentType,
     PrepareSendPaymentRequest, PublishSignedTransferPackageRequest,
     PublishSignedTransferPackageResponse, ReceivePaymentMethod, ReceivePaymentRequest,
-    SignedTransferPackage, SyncWalletRequest, TransferSignature, UnsignedTransferPackage,
-    default_config, default_external_signers, signer::ExternalSparkSigner,
+    SendPaymentMethod, SignedTransferPackage, SyncWalletRequest, TransferSignature,
+    UnsignedTransferPackage, default_config, default_external_signers, signer::ExternalSparkSigner,
 };
 use rand::RngCore;
 use tracing::info;
@@ -582,5 +582,126 @@ async fn test_client_signing_spark_invoice_send() -> Result<()> {
     );
 
     info!("=== Test test_client_signing_spark_invoice_send PASSED ===");
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_client_signing_lightning_send_fees_included() -> Result<()> {
+    info!("=== Starting test_client_signing_lightning_send_fees_included ===");
+
+    let fund_sats: u64 = 100_000;
+    let budget_sats: u128 = 20_000;
+
+    let alice_mnemonic = random_mnemonic()?;
+    let mut alice = build_alice_manual_opt(alice_mnemonic.clone()).await?;
+    let mut bob = build_bob().await?;
+
+    let client_signer =
+        default_external_signers(alice_mnemonic, None, Network::Regtest, None)?.spark_signer;
+
+    ensure_funded(&mut alice, fund_sats).await?;
+
+    let bob_invoice = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::Bolt11Invoice {
+                description: "client-signing fees included".to_string(),
+                amount_sats: None,
+                expiry_secs: None,
+                payment_hash: None,
+            },
+        })
+        .await?
+        .payment_request;
+
+    let mut iterations = 0;
+    let expected_receive_sats = loop {
+        iterations += 1;
+        assert!(
+            iterations <= 10,
+            "client-signing FeesIncluded loop did not converge within 10 iterations"
+        );
+
+        let prep = alice
+            .sdk
+            .prepare_send_payment(PrepareSendPaymentRequest {
+                payment_request: PaymentRequest::Input {
+                    input: bob_invoice.clone(),
+                },
+                amount: Some(budget_sats),
+                token_identifier: None,
+                conversion_options: None,
+                fee_policy: Some(FeePolicy::FeesIncluded),
+            })
+            .await?;
+
+        let SendPaymentMethod::Bolt11Invoice {
+            spark_transfer_fee_sats,
+            lightning_fee_sats,
+            ..
+        } = &prep.payment_method
+        else {
+            anyhow::bail!("expected a Bolt11Invoice payment method");
+        };
+        let fee_sats = spark_transfer_fee_sats.unwrap_or(*lightning_fee_sats);
+        let expected_receive_sats = budget_sats - u128::from(fee_sats);
+
+        let unsigned = alice
+            .sdk
+            .build_unsigned_transfer_package(BuildUnsignedTransferPackageRequest {
+                prepare_response: prep.clone(),
+                options: None,
+            })
+            .await?;
+
+        let signature = match &unsigned {
+            UnsignedTransferPackage::Transfer {
+                prepare_transfer, ..
+            }
+            | UnsignedTransferPackage::Swap {
+                prepare_transfer, ..
+            } => TransferSignature::Transfer {
+                signed: client_signer
+                    .prepare_transfer(prepare_transfer.clone())
+                    .await?,
+            },
+            UnsignedTransferPackage::Token { .. } => {
+                panic!("unexpected token package for a sats send")
+            }
+        };
+
+        match alice
+            .sdk
+            .publish_signed_transfer_package(PublishSignedTransferPackageRequest {
+                signed_package: SignedTransferPackage {
+                    unsigned,
+                    signature,
+                },
+            })
+            .await?
+        {
+            PublishSignedTransferPackageResponse::SwapCompleted => continue,
+            PublishSignedTransferPackageResponse::PaymentSent { payment } => {
+                assert!(
+                    matches!(
+                        payment.status,
+                        PaymentStatus::Completed | PaymentStatus::Pending
+                    ),
+                    "Payment should be completed or pending"
+                );
+                break expected_receive_sats;
+            }
+        }
+    };
+
+    let received =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
+    assert_eq!(received.payment_type, PaymentType::Receive);
+    assert_eq!(
+        received.amount, expected_receive_sats,
+        "receiver should get the budget minus the fee"
+    );
+
+    info!("=== Test test_client_signing_lightning_send_fees_included PASSED ===");
     Ok(())
 }

@@ -31,11 +31,14 @@ pub(in crate::sdk) async fn publish_signed_package_inner(
             UnsignedTransferPackage::Transfer {
                 prepare_transfer,
                 amount_sat,
+                fee_sat,
                 target,
-                ..
             },
             TransferSignature::Transfer { signed },
-        ) => deferred_transfer_send(sdk, prepare_transfer, signed, *amount_sat, target).await,
+        ) => {
+            deferred_transfer_send(sdk, prepare_transfer, signed, *amount_sat, *fee_sat, target)
+                .await
+        }
         (
             UnsignedTransferPackage::Token { token_context, .. },
             TransferSignature::Token { signed },
@@ -86,6 +89,7 @@ async fn deferred_transfer_send(
     prepare_transfer: &ExternalPrepareTransferRequest,
     signed: &ExternalPreparedTransfer,
     amount_sat: u64,
+    fee_sat: u64,
     target: &TransferTarget,
 ) -> Result<SendPaymentResponse, SdkError> {
     if let Ok(payment) = sdk
@@ -100,8 +104,19 @@ async fn deferred_transfer_send(
         TransferTarget::Spark { spark_invoice, .. } => {
             spark_address::send_signed(sdk, prepare_transfer, signed, spark_invoice.clone()).await
         }
-        TransferTarget::Lightning { bolt11, .. } => {
-            bolt11::send_signed(sdk, prepare_transfer, signed, bolt11, amount_sat).await
+        TransferTarget::Lightning {
+            bolt11, fee_policy, ..
+        } => {
+            bolt11::send_signed(
+                sdk,
+                prepare_transfer,
+                signed,
+                bolt11,
+                amount_sat,
+                fee_sat,
+                *fee_policy,
+            )
+            .await
         }
         TransferTarget::CoopExit { address, fee_quote } => {
             bitcoin_address::send_signed(
