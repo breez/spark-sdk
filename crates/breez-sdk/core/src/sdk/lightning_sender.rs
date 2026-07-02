@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use platform_utils::time::Duration;
 use platform_utils::tokio;
-use spark_wallet::{SparkWallet, TransferId};
+use spark_wallet::{PayLightningInvoiceResult, SparkWallet, TransferId};
 use tokio::select;
 use tokio::sync::{oneshot, watch};
 use tracing::{Instrument, error, info};
@@ -80,6 +80,16 @@ impl LightningSender {
             transfer_id,
         ))
         .await?;
+        self.payment_from_pay_result(payment_response, displayed_amount, completion_timeout_secs)
+            .await
+    }
+
+    pub(crate) async fn payment_from_pay_result(
+        &self,
+        payment_response: PayLightningInvoiceResult,
+        displayed_amount: u128,
+        completion_timeout_secs: u64,
+    ) -> Result<Payment, SdkError> {
         let payment = match payment_response.lightning_payment {
             Some(lightning_payment) => {
                 let ssp_id = lightning_payment.id.clone();

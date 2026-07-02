@@ -8,6 +8,7 @@ use crate::{
     error::SdkError,
     models::{SendPaymentRequest, SendPaymentResponse},
     sdk::BreezSdk,
+    signer::{ExternalPrepareTransferRequest, ExternalPreparedTransfer},
     token_conversion::{ConversionAmount, TokenConversionResponse},
     utils::fees::fee_overpayment,
 };
@@ -94,6 +95,29 @@ pub(super) async fn send(
         )
         .await?;
 
+    Ok(SendPaymentResponse { payment })
+}
+
+pub(super) async fn send_signed(
+    sdk: &BreezSdk,
+    prepare_transfer: &ExternalPrepareTransferRequest,
+    signed: &ExternalPreparedTransfer,
+    bolt11: &str,
+    amount_sat: u64,
+) -> Result<SendPaymentResponse, SdkError> {
+    let result = Box::pin(sdk.spark_wallet.publish_lightning_send_package(
+        prepare_transfer.transfer_id()?,
+        prepare_transfer.leaf_ids()?,
+        bolt11.to_string(),
+        Some(amount_sat),
+        signed.to_prepared_transfer()?,
+    ))
+    .await?;
+
+    let payment = sdk
+        .lightning_sender
+        .payment_from_pay_result(result, u128::from(amount_sat), 0)
+        .await?;
     Ok(SendPaymentResponse { payment })
 }
 

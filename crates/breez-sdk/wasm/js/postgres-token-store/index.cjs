@@ -677,74 +677,11 @@ class PostgresTokenStore {
           );
         }
 
-        // Select outputs based on target
-        let selectedOutputs;
-
-        if (target.type === "minTotalValue") {
-          const amount = BigInt(target.value);
-
-          // Check sufficiency
-          const totalAvailable = outputs.reduce(
-            (sum, o) => sum + BigInt(o.output.tokenAmount),
-            0n
-          );
-          if (totalAvailable < amount) {
-            throw new TokenStoreError("InsufficientFunds");
-          }
-
-          // Try exact match first
-          const exactMatch = outputs.find(
-            (o) => BigInt(o.output.tokenAmount) === amount
-          );
-          if (exactMatch) {
-            selectedOutputs = [exactMatch];
-          } else {
-            // Sort by selection strategy
-            if (selectionStrategy === "LargestFirst") {
-              outputs.sort(
-                (a, b) =>
-                  Number(BigInt(b.output.tokenAmount) - BigInt(a.output.tokenAmount))
-              );
-            } else {
-              // Default: SmallestFirst
-              outputs.sort(
-                (a, b) =>
-                  Number(BigInt(a.output.tokenAmount) - BigInt(b.output.tokenAmount))
-              );
-            }
-
-            selectedOutputs = [];
-            let remaining = amount;
-            for (const output of outputs) {
-              if (remaining <= 0n) break;
-              selectedOutputs.push(output);
-              remaining -= BigInt(output.output.tokenAmount);
-            }
-            if (remaining > 0n) {
-              throw new TokenStoreError("InsufficientFunds");
-            }
-          }
-        } else if (target.type === "maxOutputCount") {
-          const count = target.value;
-
-          // Sort by selection strategy
-          if (selectionStrategy === "LargestFirst") {
-            outputs.sort(
-              (a, b) =>
-                Number(BigInt(b.output.tokenAmount) - BigInt(a.output.tokenAmount))
-            );
-          } else {
-            // Default: SmallestFirst
-            outputs.sort(
-              (a, b) =>
-                Number(BigInt(a.output.tokenAmount) - BigInt(b.output.tokenAmount))
-            );
-          }
-
-          selectedOutputs = outputs.slice(0, count);
-        } else {
-          throw new TokenStoreError(`Unknown target type: ${target.type}`);
-        }
+        const selectedOutputs = this._selectOutputs(
+          outputs,
+          target,
+          selectionStrategy
+        );
 
         // Create reservation
         const reservationId = this._generateId();
@@ -780,6 +717,207 @@ class PostgresTokenStore {
       if (error instanceof TokenStoreError) throw error;
       throw new TokenStoreError(
         `Failed to reserve token outputs: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  _selectOutputs(outputs, target, selectionStrategy) {
+    if (target.type === "minTotalValue") {
+      const amount = BigInt(target.value);
+      const totalAvailable = outputs.reduce(
+        (sum, o) => sum + BigInt(o.output.tokenAmount),
+        0n
+      );
+      if (totalAvailable < amount) {
+        throw new TokenStoreError("InsufficientFunds");
+      }
+
+      const exactMatch = outputs.find(
+        (o) => BigInt(o.output.tokenAmount) === amount
+      );
+      if (exactMatch) {
+        return [exactMatch];
+      }
+
+      if (selectionStrategy === "LargestFirst") {
+        outputs.sort(
+          (a, b) =>
+            Number(BigInt(b.output.tokenAmount) - BigInt(a.output.tokenAmount))
+        );
+      } else {
+        outputs.sort(
+          (a, b) =>
+            Number(BigInt(a.output.tokenAmount) - BigInt(b.output.tokenAmount))
+        );
+      }
+
+      const selected = [];
+      let remaining = amount;
+      for (const output of outputs) {
+        if (remaining <= 0n) break;
+        selected.push(output);
+        remaining -= BigInt(output.output.tokenAmount);
+      }
+      if (remaining > 0n) {
+        throw new TokenStoreError("InsufficientFunds");
+      }
+      return selected;
+    }
+
+    if (target.type === "maxOutputCount") {
+      const count = target.value;
+      if (selectionStrategy === "LargestFirst") {
+        outputs.sort(
+          (a, b) =>
+            Number(BigInt(b.output.tokenAmount) - BigInt(a.output.tokenAmount))
+        );
+      } else {
+        outputs.sort(
+          (a, b) =>
+            Number(BigInt(a.output.tokenAmount) - BigInt(b.output.tokenAmount))
+        );
+      }
+      return outputs.slice(0, count);
+    }
+
+    throw new TokenStoreError(`Unknown target type: ${target.type}`);
+  }
+
+  async selectTokenOutputs(
+    tokenIdentifier,
+    target,
+    preferredOutputs,
+    selectionStrategy
+  ) {
+    try {
+      if (target.type === "minTotalValue" && (!target.value || target.value === "0")) {
+        throw new TokenStoreError("Amount to reserve must be greater than zero");
+      }
+      if (target.type === "maxOutputCount" && (!target.value || target.value === 0)) {
+        throw new TokenStoreError("Count to reserve must be greater than zero");
+      }
+
+      const metadataResult = await this.pool.query(
+        "SELECT * FROM brz_token_metadata WHERE user_id = $1 AND identifier = $2",
+        [this.identity, tokenIdentifier]
+      );
+      if (metadataResult.rows.length === 0) {
+        throw new TokenStoreError(
+          `Token outputs not found for identifier: ${tokenIdentifier}`
+        );
+      }
+      const metadata = this._metadataFromRow(metadataResult.rows[0]);
+
+      const outputRows = await this.pool.query(
+        `SELECT o.owner_public_key, o.revocation_commitment,
+                o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
+                o.token_public_key, o.token_amount, o.token_identifier,
+                o.prev_tx_hash, o.prev_tx_vout
+         FROM brz_token_outputs o
+         WHERE o.user_id = $1
+           AND o.token_identifier = $2
+           AND o.reservation_id IS NULL`,
+        [this.identity, tokenIdentifier]
+      );
+
+      let outputs = outputRows.rows.map((row) => this._outputFromRow(row));
+
+      if (preferredOutputs && preferredOutputs.length > 0) {
+        const preferredOutpoints = new Set(
+          preferredOutputs.map((p) => `${p.prevTxHash}:${p.prevTxVout}`)
+        );
+        outputs = outputs.filter((o) =>
+          preferredOutpoints.has(`${o.prevTxHash}:${o.prevTxVout}`)
+        );
+      }
+
+      const selectedOutputs = this._selectOutputs(
+        outputs,
+        target,
+        selectionStrategy
+      );
+      return { metadata, outputs: selectedOutputs };
+    } catch (error) {
+      if (error instanceof TokenStoreError) throw error;
+      throw new TokenStoreError(
+        `Failed to select token outputs: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  async reserveTokenOutputsByOutpoints(tokenIdentifier, outpoints, purpose) {
+    try {
+      if (!outpoints || outpoints.length === 0) {
+        throw new TokenStoreError("No outpoints provided");
+      }
+      return await this._withWriteTransaction(async (client) => {
+        const metadataResult = await client.query(
+          "SELECT * FROM brz_token_metadata WHERE user_id = $1 AND identifier = $2",
+          [this.identity, tokenIdentifier]
+        );
+        if (metadataResult.rows.length === 0) {
+          throw new TokenStoreError(
+            `Token outputs not found for identifier: ${tokenIdentifier}`
+          );
+        }
+        const metadata = this._metadataFromRow(metadataResult.rows[0]);
+
+        const txHashes = outpoints.map((o) => o.prevTxHash);
+        const vouts = outpoints.map((o) => o.prevTxVout);
+        const outputRows = await client.query(
+          `SELECT o.owner_public_key, o.revocation_commitment,
+                  o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
+                  o.token_public_key, o.token_amount, o.token_identifier,
+                  o.prev_tx_hash, o.prev_tx_vout
+           FROM brz_token_outputs o
+           WHERE o.user_id = $1
+             AND o.token_identifier = $2
+             AND o.reservation_id IS NULL
+             AND (o.prev_tx_hash, o.prev_tx_vout) IN (
+               SELECT * FROM UNNEST($3::text[], $4::int[])
+             )`,
+          [this.identity, tokenIdentifier, txHashes, vouts]
+        );
+
+        const selectedOutputs = outputRows.rows.map((row) =>
+          this._outputFromRow(row)
+        );
+
+        const distinct = new Set(
+          outpoints.map((o) => `${o.prevTxHash}:${o.prevTxVout}`)
+        );
+        if (selectedOutputs.length !== distinct.size) {
+          throw new TokenStoreError("InsufficientFunds");
+        }
+
+        const reservationId = this._generateId();
+        await client.query(
+          "INSERT INTO brz_token_reservations (user_id, id, purpose) VALUES ($1, $2, $3)",
+          [this.identity, reservationId, purpose]
+        );
+        await client.query(
+          `UPDATE brz_token_outputs SET reservation_id = $1
+           WHERE user_id = $4
+             AND (prev_tx_hash, prev_tx_vout) IN (
+               SELECT * FROM UNNEST($2::text[], $3::int[])
+             )`,
+          [reservationId, txHashes, vouts, this.identity]
+        );
+
+        return {
+          id: reservationId,
+          tokenOutputs: {
+            metadata,
+            outputs: selectedOutputs,
+          },
+        };
+      });
+    } catch (error) {
+      if (error instanceof TokenStoreError) throw error;
+      throw new TokenStoreError(
+        `Failed to reserve token outputs by outpoints: ${error.message}`,
         error
       );
     }

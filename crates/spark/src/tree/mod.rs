@@ -671,6 +671,21 @@ pub trait TreeStore: Send + Sync {
         purpose: ReservationPurpose,
     ) -> Result<ReserveResult, TreeServiceError>;
 
+    async fn try_reserve_leaves_by_ids(
+        &self,
+        _leaf_ids: &[TreeNodeId],
+        _purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        Err(TreeServiceError::Generic(
+            "reserve_leaves_by_ids is not supported by this store".to_string(),
+        ))
+    }
+
+    async fn try_select_leaves(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeafSelection, TreeServiceError>;
+
     /// Returns the current time from the store's clock.
     ///
     /// For in-memory stores this returns `SystemTime::now()`. For database-backed
@@ -710,6 +725,11 @@ pub trait TreeStore: Send + Sync {
         reserved_leaves: &[TreeNode],
         change_leaves: &[TreeNode],
     ) -> Result<LeavesReservation, TreeServiceError>;
+}
+
+pub enum LeafSelection {
+    Exact(Vec<TreeNode>),
+    SwapNeeded(Vec<TreeNode>),
 }
 
 #[macros::async_trait]
@@ -888,6 +908,17 @@ pub trait TreeService: Send + Sync {
         purpose: ReservationPurpose,
         options: SelectLeavesOptions,
     ) -> Result<LeavesReservation, TreeServiceError>;
+
+    async fn reserve_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError>;
+
+    async fn select_leaves_dry_run(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeafSelection, TreeServiceError>;
 
     /// Cancels a leaf reservation and returns the reserved leaves to the available pool.
     ///

@@ -7,7 +7,9 @@ use bitcoin::secp256k1::PublicKey;
 use platform_utils::tokio;
 use tracing::{debug, error, info, trace, warn};
 
-use crate::tree::{Leaves, ReservationPurpose, ReserveResult, SelectLeavesOptions, TreeNodeStatus};
+use crate::tree::{
+    LeafSelection, Leaves, ReservationPurpose, ReserveResult, SelectLeavesOptions, TreeNodeStatus,
+};
 use crate::{
     Network,
     operator::{
@@ -158,6 +160,23 @@ impl TreeService for SynchronousTreeService {
                 .perform_swap_and_update_reservation(reservation, target_amounts)
                 .await;
         }
+    }
+
+    async fn reserve_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        self.state
+            .try_reserve_leaves_by_ids(leaf_ids, purpose)
+            .await
+    }
+
+    async fn select_leaves_dry_run(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeafSelection, TreeServiceError> {
+        self.state.try_select_leaves(target_amounts).await
     }
 
     async fn refresh_leaves(&self) -> Result<(), TreeServiceError> {

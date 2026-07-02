@@ -1342,7 +1342,7 @@ pub enum SendPaymentMethod {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendOnchainFeeQuote {
     pub id: String,
     pub expires_at: u64,
@@ -1352,7 +1352,7 @@ pub struct SendOnchainFeeQuote {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendOnchainSpeedFeeQuote {
     pub user_fee_sat: u64,
     pub l1_broadcast_fee_sat: u64,
@@ -1437,6 +1437,24 @@ pub struct LnurlPayRequest {
 pub struct LnurlPayResponse {
     pub payment: Payment,
     pub success_action: Option<SuccessActionProcessed>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct BuildUnsignedLnurlPayPackageRequest {
+    pub prepare_response: PrepareLnurlPayResponse,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PublishSignedLnurlPayPackageRequest {
+    pub signed_package: SignedTransferPackage,
+}
+
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum PublishSignedLnurlPayResponse {
+    SwapCompleted,
+    PaymentSent { response: LnurlPayResponse },
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -1561,6 +1579,89 @@ pub enum PaymentRequest {
     },
 }
 
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum UnsignedTransferPackage {
+    Swap {
+        prepare_transfer: crate::signer::ExternalPrepareTransferRequest,
+        target_amounts: Vec<u64>,
+        amount_sat: u64,
+        fee_sat: u64,
+    },
+    Transfer {
+        prepare_transfer: crate::signer::ExternalPrepareTransferRequest,
+        amount_sat: u64,
+        fee_sat: u64,
+        target: TransferTarget,
+    },
+    Token {
+        prepare_token_transaction: crate::signer::ExternalPrepareTokenTransactionRequest,
+        token_context: Vec<u8>,
+        token_identifier: String,
+        amount: u128,
+        fee: u128,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum TransferTarget {
+    Spark {
+        address: String,
+        spark_invoice: Option<String>,
+    },
+    Lightning {
+        bolt11: String,
+        lnurl_pay: Option<LnurlPayContext>,
+    },
+    CoopExit {
+        address: String,
+        fee_quote: SendOnchainFeeQuote,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct LnurlPayContext {
+    pub pay_request: LnurlPayRequestDetails,
+    pub comment: Option<String>,
+    pub success_action: Option<SuccessAction>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SignedTransferPackage {
+    pub unsigned: UnsignedTransferPackage,
+    pub signature: TransferSignature,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum TransferSignature {
+    Transfer {
+        signed: crate::signer::ExternalPreparedTransfer,
+    },
+    Token {
+        signed: crate::signer::ExternalPreparedTokenTransaction,
+    },
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum BuildTransferPackageOptions {
+    BitcoinAddress {
+        confirmation_speed: OnchainConfirmationSpeed,
+    },
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct BuildUnsignedTransferPackageRequest {
+    pub prepare_response: PrepareSendPaymentResponse,
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub options: Option<BuildTransferPackageOptions>,
+}
+
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentRequest {
     pub payment_request: PaymentRequest,
@@ -1648,6 +1749,19 @@ pub struct SendPaymentRequest {
     /// The idempotency key must be a valid UUID.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub idempotency_key: Option<String>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PublishSignedTransferPackageRequest {
+    pub signed_package: SignedTransferPackage,
+}
+
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum PublishSignedTransferPackageResponse {
+    SwapCompleted,
+    PaymentSent { payment: Payment },
 }
 
 #[derive(Debug, Clone, Serialize)]

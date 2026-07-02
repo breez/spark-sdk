@@ -7,6 +7,7 @@
 use bitcoin::secp256k1;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::str::FromStr;
 
 use crate::SdkError;
 
@@ -304,6 +305,21 @@ impl ExternalPrepareTransferRequest {
                 .collect::<Result<_, _>>()?,
             threshold: r.threshold,
         })
+    }
+
+    pub fn leaf_ids(&self) -> Result<Vec<spark_wallet::TreeNodeId>, SdkError> {
+        self.leaves
+            .iter()
+            .map(|l| l.node_id.to_tree_node_id())
+            .collect()
+    }
+
+    pub fn transfer_id(&self) -> Result<spark_wallet::TransferId, SdkError> {
+        spark_wallet::TransferId::from_str(&self.transfer_id).map_err(SdkError::Generic)
+    }
+
+    pub fn receiver_pubkey(&self) -> Result<secp256k1::PublicKey, SdkError> {
+        public_key_from_bytes(&self.receiver_public_key, "receiver public key")
     }
 }
 
@@ -762,5 +778,31 @@ impl ExternalPreparedStaticDepositClaim {
             deposit_secret_key: self.deposit_secret_key.to_secret_key()?,
             user_signature: self.user_signature.to_signature()?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn leaf_ids_round_trip_from_request() {
+        let req = ExternalPrepareTransferRequest {
+            transfer_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            receiver_public_key: vec![2u8; 33],
+            leaves: vec![ExternalTransferLeafInput {
+                node_id: ExternalTreeNodeId {
+                    id: "22222222-2222-2222-2222-222222222222".to_string(),
+                },
+                new_leaf_id: ExternalTreeNodeId {
+                    id: "33333333-3333-3333-3333-333333333333".to_string(),
+                },
+            }],
+            operator_recipients: vec![],
+            threshold: 2,
+        };
+        let ids = req.leaf_ids().unwrap();
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0].to_string(), "22222222-2222-2222-2222-222222222222");
     }
 }

@@ -849,6 +849,45 @@ pub async fn build_sdk_with_external_signer(
         turnkey_guard: None,
     })
 }
+
+pub async fn build_sdk_with_external_signer_and_config(
+    storage_dir: String,
+    mnemonic: String,
+    mut config: Config,
+    temp_dir: Option<TempDir>,
+) -> Result<SdkInstance> {
+    config.api_key = None;
+    config.lnurl_domain = None;
+    config.prefer_spark_over_lightning = true;
+    config.sync_interval_secs = 5;
+    config.real_time_sync_server_url = None;
+
+    let signers = default_external_signers(mnemonic, None, Network::Regtest, None)?;
+    let builder = SdkBuilder::new_with_signer(config, signers.breez_signer, signers.spark_signer);
+    let builder = apply_storage(builder, storage_dir).await?;
+    let sdk = builder.build().await?;
+
+    let (tx, rx) = mpsc::channel(100);
+    let event_listener = Box::new(ChannelEventListener { tx });
+    let _listener_id = sdk.add_event_listener(event_listener).await;
+
+    let _ = sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?;
+
+    Ok(SdkInstance {
+        sdk,
+        events: rx,
+        span: tracing::Span::current(),
+        temp_dir,
+        data_sync_fixture: None,
+        lnurl_fixture: None,
+        turnkey_guard: None,
+    })
+}
+
 /// Which signer backend an SDK is built with, for backend-parametrized tests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SignerBackend {

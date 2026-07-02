@@ -212,6 +212,30 @@ impl BreezSdk {
         Ok(self.sdk.lnurl_pay(request.into()).await?.into())
     }
 
+    #[wasm_bindgen(js_name = "buildUnsignedLnurlPayPackage")]
+    pub async fn build_unsigned_lnurl_pay_package(
+        &self,
+        request: BuildUnsignedLnurlPayPackageRequest,
+    ) -> WasmResult<UnsignedTransferPackage> {
+        Ok(self
+            .sdk
+            .build_unsigned_lnurl_pay_package(request.into())
+            .await?
+            .into())
+    }
+
+    #[wasm_bindgen(js_name = "publishSignedLnurlPayPackage")]
+    pub async fn publish_signed_lnurl_pay_package(
+        &self,
+        request: PublishSignedLnurlPayPackageRequest,
+    ) -> WasmResult<PublishSignedLnurlPayResponse> {
+        Ok(self
+            .sdk
+            .publish_signed_lnurl_pay_package(request.into())
+            .await?
+            .into())
+    }
+
     #[wasm_bindgen(js_name = "lnurlWithdraw")]
     pub async fn lnurl_withdraw(
         &self,
@@ -228,12 +252,36 @@ impl BreezSdk {
         Ok(self.sdk.lnurl_auth(request_data.into()).await?.into())
     }
 
+    #[wasm_bindgen(js_name = "buildUnsignedTransferPackage")]
+    pub async fn build_unsigned_transfer_package(
+        &self,
+        request: BuildUnsignedTransferPackageRequest,
+    ) -> WasmResult<UnsignedTransferPackage> {
+        Ok(self
+            .sdk
+            .build_unsigned_transfer_package(request.into())
+            .await?
+            .into())
+    }
+
     #[wasm_bindgen(js_name = "sendPayment")]
     pub async fn send_payment(
         &self,
         request: SendPaymentRequest,
     ) -> WasmResult<SendPaymentResponse> {
         Ok(self.sdk.send_payment(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "publishSignedTransferPackage")]
+    pub async fn publish_signed_transfer_package(
+        &self,
+        request: PublishSignedTransferPackageRequest,
+    ) -> WasmResult<PublishSignedTransferPackageResponse> {
+        Ok(self
+            .sdk
+            .publish_signed_transfer_package(request.into())
+            .await?
+            .into())
     }
 
     #[wasm_bindgen(js_name = "syncWallet")]

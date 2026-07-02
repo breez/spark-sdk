@@ -1,3 +1,5 @@
+mod external_signing;
+
 use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 
 use bitcoin::{
@@ -28,24 +30,25 @@ use spark::{
     services::{
         CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpUtxo, DepositService, ExitSpeed,
         Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription, LeafTxCpfpPsbts,
-        LightningReceivePayment, LightningSendPayment, LightningService, Preimage,
-        PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
+        LightningReceivePayment, LightningSendPayment, LightningService, PayLightningResult,
+        Preimage, PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
         QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap, TimelockManager,
         TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
         TransferTokenOutput, TransferType, UnilateralExitService, Utxo,
     },
     session_store::{InMemorySessionStore, SessionStore},
-    signer::SparkSigner,
+    signer::{PrepareTransferRequest, PreparedTransfer, SparkSigner},
     ssp::{ServiceProvider, SspTransfer, SspUserRequest},
     token::{
-        InMemoryTokenOutputStore, SelectionStrategy, SynchronousTokenOutputService, TokenMetadata,
-        TokenOutputService, TokenOutputStore, TokenOutputWithPrevOut, TokenService,
+        InMemoryTokenOutputStore, PreparedTokenTransfer, SelectionStrategy,
+        SynchronousTokenOutputService, TokenMetadata, TokenOutputService, TokenOutputStore,
+        TokenOutputWithPrevOut, TokenService,
     },
     tree::{
         AutoOptimizationEvent, AutoOptimizationEventHandler, InMemoryTreeStore, LeafOptimizer,
-        OptimizationError, OptimizationOutcome, SelectLeavesOptions, SynchronousTreeService,
-        TargetAmounts, TreeNode, TreeNodeId, TreeService, TreeStore,
-        select_leaves_by_target_amounts, with_reserved_leaves,
+        LeafSelection, OptimizationError, OptimizationOutcome, ReservationPurpose,
+        SelectLeavesOptions, SynchronousTreeService, TargetAmounts, TreeNode, TreeNodeId,
+        TreeService, TreeStore, select_leaves_by_target_amounts, with_reserved_leaves,
     },
     utils::paging::{PagingFilter, PagingResult},
 };
@@ -63,6 +66,15 @@ use crate::{
 
 const SELECT_LEAVES_MAX_RETRIES: usize = 3;
 const MAX_LEAF_SPENT_RETRIES: usize = 3;
+
+pub enum SendPackagePreparation {
+    Ready(PrepareTransferRequest),
+    SwapRequired {
+        prepare_transfer: PrepareTransferRequest,
+        target_amounts: Vec<u64>,
+    },
+}
+
 /// Backoff for transient operator errors that clear on their own: rate limiting
 /// (ResourceExhausted) and leaves the operators have not finished finalizing yet
 /// (LEAF_UNAVAILABLE).
@@ -225,6 +237,7 @@ pub struct SparkWallet {
     coop_exit_service: Arc<CoopExitService>,
     unilateral_exit_service: Arc<UnilateralExitService>,
     transfer_service: Arc<TransferService>,
+    swap_service: Arc<Swap>,
     lightning_service: Arc<LightningService>,
     ssp_client: Arc<ServiceProvider>,
     token_service: Arc<TokenService>,
@@ -436,6 +449,7 @@ impl SparkWallet {
             coop_exit_service,
             unilateral_exit_service,
             transfer_service,
+            swap_service,
             lightning_service,
             ssp_client: service_provider.clone(),
             token_service,
@@ -508,8 +522,13 @@ impl SparkWallet {
             )
         )?;
 
-        // Collect the wallet transfer information from the lightning send payment result. If
-        // not present, we need to query for the SSP user request to get the transfer details.
+        self.finalize_pay_lightning(lightning_payment).await
+    }
+
+    async fn finalize_pay_lightning(
+        &self,
+        lightning_payment: PayLightningResult,
+    ) -> Result<PayLightningInvoiceResult, SparkWalletError> {
         let payment_hash = lightning_payment.payment_hash;
         let lightning_send_payment = lightning_payment.lightning_send_payment;
         let wallet_transfer = match &lightning_send_payment {

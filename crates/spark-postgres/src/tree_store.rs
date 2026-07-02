@@ -12,9 +12,9 @@ use platform_utils::time::{Instant, SystemTime};
 use deadpool_postgres::Pool;
 use macros::async_trait;
 use spark_wallet::{
-    LeafLike, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
-    TargetAmounts, TreeNode, TreeNodeStatus, TreeServiceError, TreeStore,
-    select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
+    LeafLike, LeafSelection, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose,
+    ReserveResult, TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError,
+    TreeStore, select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
 };
 use tokio::sync::watch;
 use tracing::{debug, info, trace};
@@ -125,6 +125,33 @@ const TREE_STORE_LOCK_PREFIX: &[u8] = b"breez-spark-sdk:tree:";
 const RESERVATION_TIMEOUT_SECS: f64 = 300.0; // 5 minutes
 
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS: i64 = 5 * 60 * 1000; // 5 minutes
+
+/// Slim projection of selection candidates: id + value only.
+/// Includes all leaves with value <= `$2` (covers exact-match +
+/// minimum-amount accumulators) plus the smallest leaf with value >
+/// `$2` (covers the minimum-amount fallback case where one larger
+/// leaf is sufficient). `$1` is the user id.
+const SLIM_LEAF_CANDIDATES_SQL: &str = r"
+    SELECT id, (data->>'value')::bigint AS value
+    FROM brz_tree_leaves
+    WHERE user_id = $1
+      AND status = 'Available'
+      AND is_missing_from_operators = FALSE
+      AND reservation_id IS NULL
+      AND (
+        (data->>'value')::bigint <= $2
+        OR id = (
+          SELECT id FROM brz_tree_leaves
+          WHERE user_id = $1
+            AND status = 'Available'
+            AND is_missing_from_operators = FALSE
+            AND reservation_id IS NULL
+            AND (data->>'value')::bigint > $2
+          ORDER BY (data->>'value')::bigint
+          LIMIT 1
+        )
+      )
+";
 
 /// `PostgreSQL`-backed tree store implementation.
 ///
@@ -629,35 +656,10 @@ impl TreeStore for PostgresTreeStore {
             .map_err(map_err)?;
         let available: u64 = u64::try_from(total_row.get::<_, i64>("total")).unwrap_or(0);
 
-        // Slim projection of selection candidates: id + value only.
-        // Includes all leaves with value <= max_target (covers exact-match +
-        // minimum-amount accumulators) plus the smallest leaf with value >
-        // max_target (covers the minimum-amount fallback case where one larger
-        // leaf is sufficient).
         let max_target_signed: i64 = i64::try_from(max_target).unwrap_or(i64::MAX);
         let slim_rows = tx
             .query(
-                r"
-                SELECT id, (data->>'value')::bigint AS value
-                FROM brz_tree_leaves
-                WHERE user_id = $1
-                  AND status = 'Available'
-                  AND is_missing_from_operators = FALSE
-                  AND reservation_id IS NULL
-                  AND (
-                    (data->>'value')::bigint <= $2
-                    OR id = (
-                      SELECT id FROM brz_tree_leaves
-                      WHERE user_id = $1
-                        AND status = 'Available'
-                        AND is_missing_from_operators = FALSE
-                        AND reservation_id IS NULL
-                        AND (data->>'value')::bigint > $2
-                      ORDER BY (data->>'value')::bigint
-                      LIMIT 1
-                    )
-                  )
-                ",
+                SLIM_LEAF_CANDIDATES_SQL,
                 &[&self.identity, &max_target_signed],
             )
             .await
@@ -765,6 +767,106 @@ impl TreeStore for PostgresTreeStore {
             total_start.elapsed()
         );
         result
+    }
+
+    async fn try_select_leaves(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeafSelection, TreeServiceError> {
+        let target_amount = target_amounts.map_or(0, TargetAmounts::total_sats);
+        let max_target = Self::slim_max_target(target_amounts);
+        let max_target_signed: i64 = i64::try_from(max_target).unwrap_or(i64::MAX);
+
+        let mut client = self.pool.get().await.map_err(map_err)?;
+        let tx = client.transaction().await.map_err(map_err)?;
+
+        let slim_rows = tx
+            .query(
+                SLIM_LEAF_CANDIDATES_SQL,
+                &[&self.identity, &max_target_signed],
+            )
+            .await
+            .map_err(map_err)?;
+
+        let slim: Vec<SlimLeaf> = slim_rows
+            .iter()
+            .map(|r| {
+                let value = u64::try_from(r.get::<_, i64>("value")).unwrap_or(0);
+                SlimLeaf {
+                    id: r.get("id"),
+                    value,
+                }
+            })
+            .collect();
+
+        match select_leaves_by_target_amounts(&slim, target_amounts) {
+            Ok(target_leaves) => {
+                let selected_ids: Vec<String> = target_leaves
+                    .amount_leaves
+                    .iter()
+                    .chain(target_leaves.fee_leaves.iter().flatten())
+                    .map(|l| l.id.clone())
+                    .collect();
+                if selected_ids.is_empty() {
+                    return Err(TreeServiceError::InsufficientFunds);
+                }
+                let selected_leaves = self.resolve_full_leaves(&tx, &selected_ids).await?;
+                Ok(LeafSelection::Exact(selected_leaves))
+            }
+            Err(_) => {
+                if let Ok(Some(min_slim)) = select_leaves_by_minimum_amount(&slim, target_amount) {
+                    let min_ids: Vec<String> = min_slim.iter().map(|l| l.id.clone()).collect();
+                    let selected_leaves = self.resolve_full_leaves(&tx, &min_ids).await?;
+                    Ok(LeafSelection::SwapNeeded(selected_leaves))
+                } else {
+                    Err(TreeServiceError::InsufficientFunds)
+                }
+            }
+        }
+    }
+
+    async fn try_reserve_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        if leaf_ids.is_empty() {
+            return Err(TreeServiceError::NonReservableLeaves);
+        }
+        let reservation_id = Uuid::now_v7().to_string();
+        let ids: Vec<String> = leaf_ids.iter().map(ToString::to_string).collect();
+
+        let mut client = self.pool.get().await.map_err(map_err)?;
+        let tx = client.transaction().await.map_err(map_err)?;
+        self.acquire_write_lock(&tx).await?;
+
+        // Every requested leaf must be available and unreserved; otherwise
+        // reserve nothing (the transaction is dropped without commit).
+        let available = tx
+            .query(
+                r"
+                SELECT id FROM brz_tree_leaves
+                WHERE user_id = $1
+                  AND id = ANY($2)
+                  AND status = 'Available'
+                  AND is_missing_from_operators = FALSE
+                  AND reservation_id IS NULL
+                ",
+                &[&self.identity, &ids],
+            )
+            .await
+            .map_err(map_err)?;
+        if available.len() != ids.len() {
+            return Err(TreeServiceError::NonReservableLeaves);
+        }
+
+        let selected_leaves = self.resolve_full_leaves(&tx, &ids).await?;
+        self.create_reservation(&tx, &reservation_id, &selected_leaves, purpose, 0)
+            .await?;
+        tx.commit().await.map_err(map_err)?;
+        self.notify_balance_change();
+
+        Ok(LeavesReservation::new(selected_leaves, reservation_id))
     }
 
     async fn now(&self) -> Result<SystemTime, TreeServiceError> {
@@ -1472,6 +1574,24 @@ mod tests {
     async fn test_reserve_leaves() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_reserve_leaves(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_leaves_by_ids() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_reserve_leaves_by_ids(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_leaves_by_ids_not_available() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_reserve_leaves_by_ids_not_available(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_try_select_leaves() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_try_select_leaves(&fixture.store).await;
     }
 
     #[tokio::test]

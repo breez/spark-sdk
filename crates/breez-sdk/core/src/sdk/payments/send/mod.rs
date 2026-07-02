@@ -8,11 +8,114 @@ use crate::{
     ConversionEstimate, SendPaymentMethod,
     error::SdkError,
     events::SdkEvent,
-    models::{SendPaymentRequest, SendPaymentResponse},
+    models::{
+        PublishSignedTransferPackageResponse, SendPaymentRequest, SendPaymentResponse,
+        SignedTransferPackage, TransferSignature, TransferTarget, UnsignedTransferPackage,
+    },
     sdk::BreezSdk,
+    signer::{ExternalPrepareTransferRequest, ExternalPreparedTransfer},
 };
 
 use super::conversion;
+
+pub(in crate::sdk) async fn publish_signed_package_inner(
+    sdk: &BreezSdk,
+    signed_package: &SignedTransferPackage,
+) -> Result<Option<SendPaymentResponse>, SdkError> {
+    let res = match (&signed_package.unsigned, &signed_package.signature) {
+        (UnsignedTransferPackage::Swap { .. }, TransferSignature::Transfer { .. }) => {
+            super::client_signing::submit_swap(sdk, signed_package).await?;
+            return Ok(None);
+        }
+        (
+            UnsignedTransferPackage::Transfer {
+                prepare_transfer,
+                amount_sat,
+                target,
+                ..
+            },
+            TransferSignature::Transfer { signed },
+        ) => deferred_transfer_send(sdk, prepare_transfer, signed, *amount_sat, target).await,
+        (
+            UnsignedTransferPackage::Token { token_context, .. },
+            TransferSignature::Token { signed },
+        ) => spark_address::send_token_signed(sdk, token_context, signed).await,
+        _ => {
+            return Err(SdkError::InvalidInput(
+                "signature does not match the unsigned package".to_string(),
+            ));
+        }
+    }?;
+    Ok(Some(res))
+}
+
+pub(in crate::sdk::payments) async fn publish_signed_transfer_package(
+    sdk: &BreezSdk,
+    signed_package: &SignedTransferPackage,
+) -> Result<PublishSignedTransferPackageResponse, SdkError> {
+    if matches!(
+        &signed_package.unsigned,
+        UnsignedTransferPackage::Transfer {
+            target: TransferTarget::Lightning {
+                lnurl_pay: Some(_),
+                ..
+            },
+            ..
+        }
+    ) {
+        return Err(SdkError::InvalidInput(
+            "LNURL pay packages must be published with publish_signed_lnurl_pay_package"
+                .to_string(),
+        ));
+    }
+    match publish_signed_package_inner(sdk, signed_package).await? {
+        None => Ok(PublishSignedTransferPackageResponse::SwapCompleted),
+        Some(res) => {
+            sdk.event_emitter
+                .emit(&SdkEvent::from_payment(res.payment.clone()))
+                .await;
+            Ok(PublishSignedTransferPackageResponse::PaymentSent {
+                payment: res.payment,
+            })
+        }
+    }
+}
+
+async fn deferred_transfer_send(
+    sdk: &BreezSdk,
+    prepare_transfer: &ExternalPrepareTransferRequest,
+    signed: &ExternalPreparedTransfer,
+    amount_sat: u64,
+    target: &TransferTarget,
+) -> Result<SendPaymentResponse, SdkError> {
+    if let Ok(payment) = sdk
+        .storage
+        .get_payment_by_id(prepare_transfer.transfer_id.clone())
+        .await
+    {
+        return Ok(SendPaymentResponse { payment });
+    }
+
+    match target {
+        TransferTarget::Spark { spark_invoice, .. } => {
+            spark_address::send_signed(sdk, prepare_transfer, signed, spark_invoice.clone()).await
+        }
+        TransferTarget::Lightning { bolt11, .. } => {
+            bolt11::send_signed(sdk, prepare_transfer, signed, bolt11, amount_sat).await
+        }
+        TransferTarget::CoopExit { address, fee_quote } => {
+            bitcoin_address::send_signed(
+                sdk,
+                prepare_transfer,
+                signed,
+                address,
+                amount_sat,
+                fee_quote,
+            )
+            .await
+        }
+    }
+}
 
 // Top-level dispatcher for `send_payment`: routes between the convert-then-send
 // pipeline and the direct send, then emits the payment event.
