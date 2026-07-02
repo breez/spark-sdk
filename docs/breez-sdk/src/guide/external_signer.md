@@ -29,6 +29,10 @@ If you need full control over the signing process, you can implement the [Extern
 
 The default implementations of the two interfaces, [DefaultExternalSigner](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/core/src/signer/default_external.rs) and [DefaultExternalSparkSigner](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/core/src/signer/default_external_spark.rs), can be used as a reference for what's expected.
 
+### Signers Without Local ECIES/HMAC Support
+
+Some external signers can't perform the SDK's local ECIES/HMAC operations (for example, a policy-restricted enclave that won't release key material). Declare this by setting {{#name signer_supports_ecies_hmac}} to `false` on the SDK {{#name Config}}. The SDK then keeps session tokens in plaintext and disables the features that need local encryption.
+
 <div class="warning">
 <h4>Developer note</h4>
 

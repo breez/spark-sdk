@@ -224,6 +224,7 @@ pub fn default_config(network: Network) -> Config {
         spark_config: Some(default_spark_config(network)),
         background_tasks_enabled: true,
         cross_chain_config: None,
+        signer_supports_ecies_hmac: true,
     }
 }
 

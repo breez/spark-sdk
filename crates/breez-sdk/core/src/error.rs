@@ -60,6 +60,12 @@ pub enum SdkError {
     #[error("Signer error: {0}")]
     Signer(String),
 
+    /// The signer can't perform the SDK's local ECIES/HMAC operations
+    /// (`signer_supports_ecies_hmac` is `false`), so a feature that depends on
+    /// them is unavailable.
+    #[error("Signer does not support local ECIES/HMAC: {0}")]
+    SignerEciesHmacUnavailable(String),
+
     /// `optimize_leaves` was called while another optimization run (auto or
     /// manual) was already in flight.
     #[error("Optimization is already in progress")]
@@ -329,6 +335,9 @@ pub enum SignerError {
 
     #[error("Decryption error: {0}")]
     Decryption(String),
+
+    #[error("Encryption unavailable: {0}")]
+    EncryptionUnavailable(String),
 
     #[error("FROST error: {0}")]
     Frost(String),

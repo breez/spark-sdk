@@ -676,6 +676,14 @@ pub struct Config {
     /// run background work (e.g. web sockets), so enabling is left to the
     /// caller. Cross-chain sends are only supported on mainnet.
     pub cross_chain_config: Option<CrossChainConfig>,
+
+    /// Whether the signer can perform the SDK's local ECIES/HMAC operations.
+    /// Defaults to `true`.
+    ///
+    /// Set to `false` for a signer that can't run them locally (for example a
+    /// policy-restricted enclave). The SDK then keeps session tokens in plaintext
+    /// and disables the features that need local encryption.
+    pub signer_supports_ecies_hmac: bool,
 }
 
 /// Configuration for cross-chain sends.
