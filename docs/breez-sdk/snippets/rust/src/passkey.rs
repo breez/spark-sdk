@@ -49,16 +49,10 @@ async fn check_availability() -> Result<()> {
 
     // ANCHOR: check-availability
     match passkey.check_availability().await? {
-        PasskeyAvailability::Available {
-            immediate_mediation_supported,
-        } => {
-            // On web, immediate_mediation_supported chooses single- vs
-            // two-button onboarding (always true on native).
-            if immediate_mediation_supported {
-                // Single button: connect_with_passkey.
-            } else {
-                // Two buttons: register / sign_in.
-            }
+        PasskeyAvailability::Available => {
+            // Passkey supported: proceed with connect_with_passkey. On web,
+            // call PasskeyClient::supports_immediate_mediation to pick
+            // single- vs two-button onboarding (native is always single).
         }
         PasskeyAvailability::PrfUnsupported => {
             // Fall back to mnemonic flow.

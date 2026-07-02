@@ -75,10 +75,10 @@ const connectWithPasskey = async () => {
 
   // ANCHOR: connect-with-passkey
   // Single-button flow. On web it works only where the browser supports
-  // immediate mediation; checkAvailability reports it. Otherwise use the
-  // two-button flow (register / signIn).
+  // immediate mediation; supportsImmediateMediation() reports it. Otherwise
+  // use the two-button flow (register / signIn).
   const availability = await passkey.checkAvailability()
-  if (availability.type !== 'available' || !availability.immediateMediationSupported) {
+  if (availability.type !== 'available' || !(await passkey.supportsImmediateMediation())) {
     throw new Error('Use the two-button flow (register / signIn) on this browser')
   }
   // No label: a returning user's wallets are discovered (response.labels,
