@@ -104,25 +104,13 @@ impl TransferService {
             None => TransferId::generate(),
         };
 
-        if let Some(transfer_observer) = &self.transfer_observer {
-            let identity_public_key = &self.spark_signer.get_identity_public_key().await?;
-            if identity_public_key != receiver_id {
-                let receiver_address = SparkAddress::new(*receiver_id, self.network, None);
-                let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
-                transfer_observer
-                    .before_send_transfer(
-                        &unwrapped_transfer_id,
-                        &spark_invoice
-                            .clone()
-                            .or(receiver_address.to_address_string().ok())
-                            .ok_or(ServiceError::Generic(
-                                "No pay request available".to_string(),
-                            ))?,
-                        amount_sats,
-                    )
-                    .await?;
-            }
-        }
+        self.notify_before_send_transfer(
+            &unwrapped_transfer_id,
+            receiver_id,
+            &leaves,
+            spark_invoice.as_ref(),
+        )
+        .await?;
 
         // build leaf key tweaks with new signing keys that we will send to the receiver
         let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(leaves);
@@ -206,6 +194,33 @@ impl TransferService {
         .await
     }
 
+    async fn notify_before_send_transfer(
+        &self,
+        transfer_id: &TransferId,
+        receiver_id: &PublicKey,
+        leaves: &[TreeNode],
+        spark_invoice: Option<&String>,
+    ) -> Result<(), ServiceError> {
+        let Some(transfer_observer) = &self.transfer_observer else {
+            return Ok(());
+        };
+        if &self.spark_signer.get_identity_public_key().await? == receiver_id {
+            return Ok(());
+        }
+        let receiver_address = SparkAddress::new(*receiver_id, self.network, None);
+        let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
+        let pay_request = spark_invoice
+            .cloned()
+            .or(receiver_address.to_address_string().ok())
+            .ok_or(ServiceError::Generic(
+                "No pay request available".to_string(),
+            ))?;
+        transfer_observer
+            .before_send_transfer(transfer_id, &pay_request, amount_sats)
+            .await?;
+        Ok(())
+    }
+
     pub fn build_transfer_approval_request(
         &self,
         transfer_id: &TransferId,
@@ -224,6 +239,13 @@ impl TransferService {
         prepared: PreparedTransfer,
         spark_invoice: Option<String>,
     ) -> Result<Transfer, ServiceError> {
+        self.notify_before_send_transfer(
+            transfer_id,
+            receiver_public_key,
+            leaves,
+            spark_invoice.as_ref(),
+        )
+        .await?;
         let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(leaves.to_vec());
         let prepared_package = self
             .assemble_transfer_package(&leaf_key_tweaks, receiver_public_key, None, None, prepared)

@@ -436,11 +436,8 @@ impl LightningService {
         let amount_sats = get_invoice_amount_sats(&decoded_invoice, amount_to_send)?;
         let payment_hash = decoded_invoice.payment_hash();
 
-        if let Some(transfer_observer) = &self.transfer_observer {
-            transfer_observer
-                .before_send_lightning_payment(&unwrapped_transfer_id, invoice, amount_sats)
-                .await?;
-        }
+        self.notify_before_send_lightning(&unwrapped_transfer_id, invoice, amount_sats)
+            .await?;
 
         // Prepare leaf tweaks
         let leaf_tweaks = prepare_leaf_key_tweaks_to_send(leaves.to_vec());
@@ -580,6 +577,20 @@ impl LightningService {
         )
     }
 
+    async fn notify_before_send_lightning(
+        &self,
+        transfer_id: &TransferId,
+        invoice: &str,
+        amount_sats: u64,
+    ) -> Result<(), ServiceError> {
+        if let Some(transfer_observer) = &self.transfer_observer {
+            transfer_observer
+                .before_send_lightning_payment(transfer_id, invoice, amount_sats)
+                .await?;
+        }
+        Ok(())
+    }
+
     pub async fn submit_lightning_send(
         &self,
         transfer_id: TransferId,
@@ -594,6 +605,8 @@ impl LightningService {
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
         let amount_sats = get_invoice_amount_sats(&decoded_invoice, amount_to_send)?;
         let payment_hash = *decoded_invoice.payment_hash();
+        self.notify_before_send_lightning(&transfer_id, invoice, amount_sats)
+            .await?;
         let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(leaves.to_vec());
 
         let prepared_transfer_request = self
