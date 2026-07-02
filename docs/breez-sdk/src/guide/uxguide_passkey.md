@@ -8,7 +8,7 @@
 ### Guidelines
 
 1. **Gate passkey UI on availability.** Call {{#name PasskeyClient.check_availability}} at startup and fall back to mnemonic onboarding on unsupported devices. The same call surfaces domain-association failures, so one check covers both "device can't" and "config is broken".
-2. **Match the CTA layout to the platform.** iOS and Android: a single primary CTA backed by {{#name PasskeyClient.connect_with_passkey}} (silent sign-in for returning users, fall-through to register for new ones). Web: the same single CTA where {{#name immediate_mediation_supported}} is set on {{#name PasskeyClient.check_availability}}, otherwise two CTAs ("Create a new passkey" / "Sign in with a passkey"), since without immediate mediation WebAuthn can't tell "no credential" from "cancel".
+2. **Match the CTA layout to the platform.** iOS and Android: a single primary CTA backed by {{#name PasskeyClient.connect_with_passkey}} (silent sign-in for returning users, fall-through to register for new ones). Web: the same single CTA where {{#name PasskeyClient.supports_immediate_mediation}} is true, otherwise two CTAs ("Create a new passkey" / "Sign in with a passkey"), since without immediate mediation WebAuthn can't tell "no credential" from "cancel".
 3. **Don't add your own consent screen.** The OS shows its own consent UI, so don't gate registration behind a separate "I understand" review step.
 4. **Cache the derived seed within a session.** A sign-in or register call avoids re-prompting for later {{#name PasskeyLabels.list}} / {{#name PasskeyLabels.store}} calls in the same session. For reuse across an app relaunch, keep the seed in your own in-memory cache and pass it to {{#name connect}}; never persist it to disk.
 5. **Never persist the derived mnemonic.** Re-derive it from the passkey and label on each session. Persisting it would bypass the OS authentication prompt.
@@ -27,7 +27,7 @@ Browsers and native authenticators expose different error semantics, so the reco
 | Returning user | **1** (one assertion derives master + label) |
 | New user | **2** (1 create, 1 assertion) |
 
-**Web:** where the browser supports immediate mediation ({{#name immediate_mediation_supported}} on {{#name PasskeyClient.check_availability}}), the same single "Use Passkey" button backed by {{#name PasskeyClient.connect_with_passkey}}. Otherwise two buttons, "Create a new passkey" and "Sign in with a passkey": without immediate mediation WebAuthn reports "no credential" and "user cancelled" identically, so the SDK can't auto-detect which the user wants.
+**Web:** where the browser supports immediate mediation ({{#name PasskeyClient.supports_immediate_mediation}}), the same single "Use Passkey" button backed by {{#name PasskeyClient.connect_with_passkey}}. Otherwise two buttons, "Create a new passkey" and "Sign in with a passkey": without immediate mediation WebAuthn reports "no credential" and "user cancelled" identically, so the SDK can't auto-detect which the user wants.
 
 See [Onboarding](./passkey_onboarding.md) for the call shapes.
 

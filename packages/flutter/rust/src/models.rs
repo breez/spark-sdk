@@ -1817,7 +1817,7 @@ pub struct _PasskeyConfig {
 
 #[frb(mirror(PasskeyAvailability))]
 pub enum _PasskeyAvailability {
-    Available { immediate_mediation_supported: bool },
+    Available,
     PrfUnsupported,
     NotAssociated { source: String, reason: String },
     Skipped { reason: String },

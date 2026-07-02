@@ -55,7 +55,7 @@ Call it without a label to support multiple wallets per passkey: {{#name labels}
 
 ### Web flow
 
-{{#name PasskeyClient.connect_with_passkey}} works on web too, **where the browser supports immediate mediation** (recent Chromium). Check {{#name immediate_mediation_supported}} on {{#name PasskeyClient.check_availability}} and use the same single-button unified flow.
+{{#name PasskeyClient.connect_with_passkey}} works on web too, **where the browser supports immediate mediation** (recent Chromium). Check {{#name PasskeyClient.supports_immediate_mediation}} and use the same single-button unified flow.
 
 Where it isn't supported (Safari, Firefox, older browsers), present two buttons: **Create a new passkey** (calls {{#name PasskeyClient.register}}) and **Sign in with a passkey** (calls {{#name PasskeyClient.sign_in}}). Without immediate mediation, WebAuthn reports "no credential" and "user cancelled" identically, so the SDK can't auto-detect the flow.
 

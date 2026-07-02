@@ -21,12 +21,7 @@ use super::{LabelStore, LabelStoreBuilder};
 pub enum PasskeyAvailability {
     /// PRF is supported and the platform's domain-association check
     /// (when present) passed. Safe to proceed with register / sign-in.
-    ///
-    /// `immediate_mediation_supported` is whether the silent single-CTA
-    /// flow ([`PasskeyClient::connect_with_passkey`]) works here: `true`
-    /// on native, and on web only where the browser advertises immediate
-    /// mediation. Web hosts pick single- vs two-button onboarding on it.
-    Available { immediate_mediation_supported: bool },
+    Available,
     /// The authenticator does not implement the `WebAuthn` PRF
     /// extension. Hosts gate the passkey UX path off this value.
     PrfUnsupported,
@@ -286,8 +281,8 @@ impl PasskeyClient {
     /// unchanged.
     ///
     /// On WASM the silent sign-in maps to `WebAuthn` `uiMode: 'immediate'`
-    /// where the browser advertises it. Web hosts gate on
-    /// `immediate_mediation_supported` from [`Self::check_availability`]:
+    /// where the browser advertises it. Web hosts gate on the browser's
+    /// immediate-mediation capability (the WASM client surfaces it):
     /// without it the probe shows the standard picker and a dismiss is a
     /// cancel, not `CredentialNotFound`, so it never reaches register.
     /// Present an explicit create / sign-in choice there instead.

@@ -42,7 +42,7 @@ pub struct PasskeyConfig {
 /// `checkDomainAssociation` into one tagged value hosts branch on.
 #[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::PasskeyAvailability)]
 pub enum PasskeyAvailability {
-    Available { immediate_mediation_supported: bool },
+    Available,
     PrfUnsupported,
     NotAssociated { source: String, reason: String },
     Skipped { reason: String },
@@ -164,16 +164,17 @@ impl PasskeyClient {
     /// hosts can gate UX on.
     #[wasm_bindgen(js_name = "checkAvailability")]
     pub async fn check_availability(&self) -> WasmResult<PasskeyAvailability> {
-        let mut availability = self.inner.check_availability().await?;
-        // The core reports native-`true`; on web fold in the browser's actual
-        // immediate-mediation capability so hosts gate single- vs two-CTA on it.
-        if let breez_sdk_spark::passkey::PasskeyAvailability::Available {
-            immediate_mediation_supported,
-        } = &mut availability
-        {
-            *immediate_mediation_supported = self.provider.supports_immediate_mediation().await;
-        }
-        Ok(availability.into())
+        Ok(self.inner.check_availability().await?.into())
+    }
+
+    /// Whether this browser advertises WebAuthn immediate mediation: the
+    /// silent single-CTA probe (a no-credential sign-in fast-fails with no
+    /// UI) works here, so a web host can pick single- vs two-button
+    /// onboarding. Web-only and WASM-only: native does the silent probe
+    /// inherently, so there is nothing to query off-web.
+    #[wasm_bindgen(js_name = "supportsImmediateMediation")]
+    pub async fn supports_immediate_mediation(&self) -> bool {
+        self.provider.supports_immediate_mediation().await
     }
 
     /// First-time setup. Drives the platform's create-passkey ceremony
@@ -196,9 +197,9 @@ impl PasskeyClient {
     /// Single-CTA onboarding: silent sign-in that falls through to
     /// registration when no credential exists on the device. Pins
     /// immediate mediation, so on web only use it where the browser
-    /// advertises it (`immediateMediationSupported` from
-    /// `checkAvailability`); otherwise the silent probe degrades to the
-    /// standard picker and a dismiss does not fall through to register, so
+    /// advertises it (`supportsImmediateMediation`); otherwise the silent
+    /// probe degrades to the standard picker and a dismiss does not fall
+    /// through to register, so
     /// present an explicit create / sign-in choice instead. Called without
     /// a `label`, the response `labels` lists a returning user's wallets
     /// for a picker.
