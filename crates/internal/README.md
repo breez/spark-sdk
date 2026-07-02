@@ -57,6 +57,7 @@ Enter passphrase (or press Enter for none):
 ## Unilateral Exit
 
 A unilateral exit allows you to withdraw your funds on-chain without cooperation from the Spark operators. Use this as a last resort if operators are unresponsive.
+Note that if you don't keep your leaves synced, you need to rely on at least one operator for fetching the leaves information before you can unilaterally exit.
 
 ### Step 1: Check Your Leaves
 
