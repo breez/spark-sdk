@@ -23,7 +23,7 @@ use crate::{
     BitcoinAddressDetails, BitcoinChainService, BitcoinNetwork, Bolt11InvoiceDetails,
     ExternalInputParser, FiatCurrency, LnurlPayRequestDetails, LnurlWithdrawRequestDetails, Rate,
     SdkError, SparkInvoiceDetails, SuccessAction, SuccessActionProcessed,
-    cross_chain::{CrossChainFeeMode, CrossChainProviderContext, CrossChainRoutePair},
+    cross_chain::{CrossChainFeeMode, CrossChainRoutePair},
     error::DepositClaimError,
 };
 
@@ -1306,6 +1306,8 @@ pub enum SendPaymentMethod {
     CrossChainAddress {
         /// The route selected for this cross-chain send (includes provider, chain, asset).
         route: CrossChainRoutePair,
+        /// Provider handle for this prepared send.
+        reference_id: String,
         /// Raw destination address (e.g. `0xabc...`).
         recipient_address: String,
         /// Amount routed to the provider, in the route's source-asset units
@@ -1335,9 +1337,6 @@ pub enum SendPaymentMethod {
         fee_mode: CrossChainFeeMode,
         /// ISO8601 timestamp after which the quote is no longer valid.
         expires_at: String,
-        /// Provider-internal state, produced when preparing and consumed
-        /// when sending.
-        provider_context: CrossChainProviderContext,
     },
 }
 

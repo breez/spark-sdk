@@ -29,10 +29,10 @@ use crate::error::SdkError;
 use crate::persist::{ConversionFilter, StorageListPaymentsRequest, StoragePaymentDetailsFilter};
 use crate::{ConversionInfo, ConversionStatus, PaymentDetails, Storage};
 
+use super::orchestra_storage_adapter::{OrchestraSendData, OrchestraStorageAdapter};
 use super::{
-    CrossChainFeeMode, CrossChainPrepared, CrossChainProvider, CrossChainProviderContext,
-    CrossChainRouteFilter, CrossChainRoutePair, CrossChainService, SourceAsset,
-    derive_btc_leg_transfer_id,
+    CrossChainFeeMode, CrossChainPrepared, CrossChainProvider, CrossChainRouteFilter,
+    CrossChainRoutePair, CrossChainService, SourceAsset, derive_btc_leg_transfer_id,
 };
 
 use crate::utils::{
@@ -98,6 +98,7 @@ pub(crate) struct OrchestraService {
     client: Arc<OrchestraClient>,
     spark_wallet: Arc<SparkWallet>,
     storage: Arc<dyn Storage>,
+    swap_storage: OrchestraStorageAdapter,
     fiat_service: Arc<dyn FiatService>,
     monitor_trigger: broadcast::Sender<()>,
 }
@@ -116,10 +117,12 @@ impl OrchestraService {
         ));
         let (monitor_trigger, _) = broadcast::channel(10);
 
+        let swap_storage = OrchestraStorageAdapter::new(Arc::clone(&storage));
         let service = Self {
             client,
             spark_wallet,
             storage,
+            swap_storage,
             fiat_service,
             monitor_trigger: monitor_trigger.clone(),
         };
@@ -561,11 +564,34 @@ impl CrossChainService for OrchestraService {
             .await?;
         let fee_amount = asset_amount_in.saturating_sub(estimated_out);
 
-        let provider_context = CrossChainProviderContext::Orchestra {
-            quote_id: quote.quote_id,
+        let service_fee_asset = if quote.fee_asset.eq_ignore_ascii_case("BTC") {
+            None
+        } else {
+            Some(quote.fee_asset)
+        };
+        let quote_id = quote.quote_id;
+        let expires_at = quote.expires_at;
+
+        // Persist the quote so `send` can reload it.
+        let send_data = OrchestraSendData {
+            quote_id: quote_id.clone(),
             deposit_address: quote.deposit_address,
             deposit_amount: amount_in,
+            source_token_identifier: token_identifier.clone(),
+            expires_at: expires_at.clone(),
+            recipient_address: recipient_address.to_string(),
+            chain: route.chain.clone(),
+            chain_id: route.chain_id.clone(),
+            asset: route.asset.clone(),
+            asset_decimals: u32::from(route.decimals),
+            asset_contract: route.contract_address.clone(),
+            estimated_out,
+            asset_amount_in,
+            fee_amount,
+            service_fee_amount,
+            service_fee_asset: service_fee_asset.clone(),
         };
+        self.swap_storage.upsert(&send_data).await?;
 
         Ok(CrossChainPrepared {
             amount_in,
@@ -573,19 +599,14 @@ impl CrossChainService for OrchestraService {
             estimated_out,
             fee_amount,
             service_fee_amount,
-            service_fee_asset: if quote.fee_asset.eq_ignore_ascii_case("BTC") {
-                None
-            } else {
-                Some(quote.fee_asset)
-            },
+            service_fee_asset,
             // Source-side Spark transfer fee is 0 today.
             source_transfer_fee_sats: 0,
             fee_mode,
-            expires_at: quote.expires_at,
+            expires_at,
             pair: route.clone(),
             recipient_address: recipient_address.to_string(),
-            token_identifier,
-            provider_context,
+            reference_id: quote_id,
         })
     }
 
@@ -594,21 +615,25 @@ impl CrossChainService for OrchestraService {
         prepared: &CrossChainPrepared,
         idempotency_key: Option<String>,
     ) -> Result<crate::Payment, SdkError> {
-        let CrossChainProviderContext::Orchestra {
-            quote_id,
-            deposit_address,
-            deposit_amount,
-        } = &prepared.provider_context
-        else {
-            return Err(SdkError::Generic(
-                "Orchestra send called with non-Orchestra provider context".to_string(),
-            ));
-        };
-        // Read from the context — `prepared.amount_in` may carry a user-facing
-        // display value (token base units on the conversion path) instead.
-        let deposit_amount = *deposit_amount;
+        // Load the prepared quote; the deposit address, amount, and source
+        // asset come from this row.
+        let stored = self
+            .swap_storage
+            .get(&prepared.reference_id)
+            .await?
+            .ok_or_else(|| {
+                SdkError::InvalidInput(
+                    "This cross-chain quote is no longer available. Please prepare and send \
+                     it again."
+                        .to_string(),
+                )
+            })?;
 
-        validate_quote_expiry(&prepared.expires_at)?;
+        validate_quote_expiry(&stored.expires_at)?;
+
+        let quote_id = &stored.quote_id;
+        let deposit_amount = stored.deposit_amount;
+        let source_token_identifier = stored.source_token_identifier.as_deref();
 
         let transfer_id = Some(derive_btc_leg_transfer_id(
             idempotency_key.as_deref(),
@@ -619,9 +644,9 @@ impl CrossChainService for OrchestraService {
         let asset_transfer = self
             .client
             .transfer_to_deposit(
-                deposit_address,
+                &stored.deposit_address,
                 deposit_amount,
-                prepared.token_identifier.as_deref(),
+                source_token_identifier,
                 transfer_id,
             )
             .await?;
@@ -631,7 +656,7 @@ impl CrossChainService for OrchestraService {
         // Step 2: Submit the deposit to Orchestra.
         // Include the source spark address for BTC transfers so Orchestra
         // can verify the deposit sender.
-        let source_spark_address = if prepared.token_identifier.is_none() {
+        let source_spark_address = if source_token_identifier.is_none() {
             let addr = self
                 .spark_wallet
                 .get_spark_address()?
@@ -669,20 +694,20 @@ impl CrossChainService for OrchestraService {
         let conversion_info = ConversionInfo::Orchestra {
             order_id: order_id.clone(),
             quote_id: quote_id.clone(),
-            chain: prepared.pair.chain.clone(),
-            chain_id: prepared.pair.chain_id.clone(),
-            asset: prepared.pair.asset.clone(),
-            recipient_address: prepared.recipient_address.clone(),
-            asset_amount_in: Some(prepared.asset_amount_in),
-            estimated_out: prepared.estimated_out,
+            chain: stored.chain.clone(),
+            chain_id: stored.chain_id.clone(),
+            asset: stored.asset.clone(),
+            recipient_address: stored.recipient_address.clone(),
+            asset_amount_in: Some(stored.asset_amount_in),
+            estimated_out: stored.estimated_out,
             delivered_amount: None,
             status,
-            fee_amount: Some(prepared.fee_amount),
-            service_fee_amount: Some(prepared.service_fee_amount),
-            service_fee_asset: prepared.service_fee_asset.clone(),
+            fee_amount: Some(stored.fee_amount),
+            service_fee_amount: Some(stored.service_fee_amount),
+            service_fee_asset: stored.service_fee_asset.clone(),
             read_token,
-            asset_decimals: u32::from(prepared.pair.decimals),
-            asset_contract: prepared.pair.contract_address.clone(),
+            asset_decimals: stored.asset_decimals,
+            asset_contract: stored.asset_contract.clone(),
         };
         let metadata = crate::PaymentMetadata {
             conversion_info: Some(conversion_info.clone()),
@@ -705,6 +730,11 @@ impl CrossChainService for OrchestraService {
             );
             spark_tx_hash
         });
+
+        // Mark the prepared-quote row terminal now the Payment row exists.
+        if let Err(e) = self.swap_storage.mark_terminal(quote_id).await {
+            debug!("Orchestra: failed to mark quote {quote_id} terminal: {e:?}");
+        }
 
         self.trigger_monitor();
 
@@ -916,7 +946,7 @@ fn validate_quote_expiry(expires_at: &str) -> Result<(), SdkError> {
         .as_secs();
     if now_secs >= exp_secs {
         return Err(SdkError::InvalidInput(
-            "Cross-chain quote has expired. Please re-prepare.".to_string(),
+            "This cross-chain quote has expired. Please prepare and send it again.".to_string(),
         ));
     }
     Ok(())

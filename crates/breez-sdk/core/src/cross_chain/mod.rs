@@ -8,6 +8,7 @@ pub(crate) mod boltz_event_listener;
 pub(crate) mod boltz_storage_adapter;
 mod cached_fiat;
 mod orchestra;
+mod orchestra_storage_adapter;
 
 pub(crate) use boltz::BoltzService;
 pub(crate) use cached_fiat::{CachedFiatService, DEFAULT_FIAT_CACHE_TTL};
@@ -211,34 +212,6 @@ impl CrossChainContext {
     }
 }
 
-/// Provider-internal state produced by `prepare` and consumed by `send`.
-/// Typed per provider so the send stage can resume without re-quoting and
-/// without a serde round-trip. Callers should round-trip this value as-is.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum CrossChainProviderContext {
-    Orchestra {
-        /// Orchestra quote id, passed back on `/submit`.
-        quote_id: String,
-        /// Spark address Orchestra expects the deposit transfer to land on.
-        deposit_address: String,
-        /// Spark-side deposit amount in the route's source-asset base units.
-        #[serde(default)]
-        deposit_amount: u128,
-    },
-    Boltz {
-        /// Boltz swap id.
-        swap_id: String,
-        /// Hold invoice to pay.
-        invoice: String,
-        /// Hold invoice amount in sats.
-        #[serde(default)]
-        invoice_amount_sats: u64,
-        /// Slippage tolerance in basis points.
-        max_slippage_bps: u32,
-    },
-}
-
 /// Data stashed on the prepared send payment so the provider can resume
 /// the send stage without re-quoting.
 #[derive(Debug, Clone)]
@@ -276,10 +249,9 @@ pub(crate) struct CrossChainPrepared {
     pub expires_at: String,
     pub pair: CrossChainRoutePair,
     pub recipient_address: String,
-    /// The `token_identifier` on the Spark source (e.g. USDB). `None` for BTC sats.
-    pub token_identifier: Option<String>,
-    /// Provider-internal state carried between `prepare` and `send`.
-    pub provider_context: CrossChainProviderContext,
+    /// Provider-scoped handle (Boltz swap id / Orchestra quote id). The send
+    /// stage loads the quote from storage by it.
+    pub reference_id: String,
 }
 
 /// Abstraction over cross-chain bridge/swap providers.
@@ -647,80 +619,5 @@ mod tests {
             Some(0),
             "saturating_sub must clamp at 0, not underflow"
         );
-    }
-
-    /// Regression: `CrossChainProviderContext::Boltz.invoice_amount_sats` must
-    /// be the source of truth for the LN-leg amount, distinct from
-    /// `CrossChainPrepared::amount_in` (which can carry a user-facing display
-    /// value such as token base units after the dispatcher's conversion-path
-    /// override). Conflating the two persisted USDB base units into the
-    /// `invoice_amount_sats` field of `ConversionInfo::Boltz`, showing a
-    /// ~$1,200,000-sat "from" amount for a ~$1 send. This test asserts the
-    /// two fields are independently representable + survive a serde
-    /// round-trip with their distinct values.
-    #[test_all]
-    fn boltz_provider_context_invoice_amount_sats_is_independent_of_amount_in() {
-        let ctx = CrossChainProviderContext::Boltz {
-            swap_id: "swap_1".to_string(),
-            invoice: "lnbc19090n1pexample".to_string(),
-            invoice_amount_sats: 1_909,
-            max_slippage_bps: 100,
-        };
-        let json = serde_json::to_string(&ctx).unwrap();
-        let decoded: CrossChainProviderContext = serde_json::from_str(&json).unwrap();
-        let CrossChainProviderContext::Boltz {
-            invoice_amount_sats,
-            ..
-        } = &decoded
-        else {
-            panic!("expected Boltz variant");
-        };
-        assert_eq!(*invoice_amount_sats, 1_909);
-        assert!(
-            *invoice_amount_sats != 1_222_703,
-            "the LN invoice sats must never be conflated with a user-facing display value (e.g. USDB base units)"
-        );
-    }
-
-    /// Pre-bug-fix persisted contexts lack `invoice_amount_sats`. Serde must
-    /// default the missing field to 0 rather than failing to deserialize — the
-    /// downstream send-time error becomes obvious instead of corrupting the
-    /// stored Payment.
-    #[test_all]
-    fn boltz_provider_context_legacy_row_without_invoice_amount_sats_defaults_to_zero() {
-        let legacy = r#"{
-            "Boltz": {
-                "swap_id": "swap_legacy",
-                "invoice": "lnbc19090n1p",
-                "max_slippage_bps": 100
-            }
-        }"#;
-        let decoded: CrossChainProviderContext = serde_json::from_str(legacy).unwrap();
-        let CrossChainProviderContext::Boltz {
-            invoice_amount_sats,
-            ..
-        } = &decoded
-        else {
-            panic!("expected Boltz variant");
-        };
-        assert_eq!(*invoice_amount_sats, 0);
-    }
-
-    /// Same invariant for Orchestra: `deposit_amount` is the source of truth
-    /// for the deposit transfer size and is distinct from
-    /// `CrossChainPrepared::amount_in`.
-    #[test_all]
-    fn orchestra_provider_context_deposit_amount_is_independent_of_amount_in() {
-        let ctx = CrossChainProviderContext::Orchestra {
-            quote_id: "q_1".to_string(),
-            deposit_address: "spark1...".to_string(),
-            deposit_amount: 1_020_434,
-        };
-        let json = serde_json::to_string(&ctx).unwrap();
-        let decoded: CrossChainProviderContext = serde_json::from_str(&json).unwrap();
-        let CrossChainProviderContext::Orchestra { deposit_amount, .. } = &decoded else {
-            panic!("expected Orchestra variant");
-        };
-        assert_eq!(*deposit_amount, 1_020_434);
     }
 }

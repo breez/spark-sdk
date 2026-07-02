@@ -21,9 +21,8 @@ use spark_wallet::SparkWallet;
 use tracing::{debug, error, info};
 
 use super::{
-    CrossChainFeeMode, CrossChainPrepared, CrossChainProvider, CrossChainProviderContext,
-    CrossChainRouteFilter, CrossChainRoutePair, CrossChainService, SourceAsset,
-    derive_btc_leg_transfer_id,
+    CrossChainFeeMode, CrossChainPrepared, CrossChainProvider, CrossChainRouteFilter,
+    CrossChainRoutePair, CrossChainService, SourceAsset, derive_btc_leg_transfer_id,
 };
 use crate::{
     ConversionInfo, ConversionStatus, CrossChainAddressDetails, Network, PaymentMetadata,
@@ -230,7 +229,6 @@ impl BoltzService {
             created,
             ln_fee_sats,
             asset_amount_in,
-            max_slippage_bps,
             CrossChainFeeMode::FeesExcluded,
         ))
     }
@@ -329,7 +327,6 @@ impl BoltzService {
             created,
             ln_fee_probe_sats,
             asset_amount_in,
-            max_slippage_bps,
             CrossChainFeeMode::FeesIncluded,
         ))
     }
@@ -420,7 +417,6 @@ impl BoltzService {
         created: boltz_client::models::CreatedSwap,
         ln_fee_sats: u64,
         asset_amount_in: u128,
-        max_slippage_bps: Option<u32>,
         fee_mode: CrossChainFeeMode,
     ) -> CrossChainPrepared {
         // `service_fee_amount` is just the Boltz spread (invoice sats minus
@@ -432,15 +428,7 @@ impl BoltzService {
         let service_fee_amount = u128::from(boltz_spread_sats);
         let estimated_out = u128::from(prepared.output_amount);
         let invoice_amount_sats = created.invoice_amount_sats;
-        let resolved_slippage = max_slippage_bps.unwrap_or(prepared.slippage_bps);
         let fee_amount = asset_amount_in.saturating_sub(estimated_out);
-
-        let provider_context = CrossChainProviderContext::Boltz {
-            swap_id: created.swap_id.clone(),
-            invoice: created.invoice,
-            invoice_amount_sats,
-            max_slippage_bps: resolved_slippage,
-        };
 
         CrossChainPrepared {
             amount_in: u128::from(invoice_amount_sats),
@@ -454,8 +442,7 @@ impl BoltzService {
             expires_at: prepared.expires_at.to_string(),
             pair: route.clone(),
             recipient_address: recipient_address.to_string(),
-            token_identifier: None,
-            provider_context,
+            reference_id: created.swap_id,
         }
     }
 }
@@ -564,20 +551,22 @@ impl CrossChainService for BoltzService {
         prepared: &CrossChainPrepared,
         idempotency_key: Option<String>,
     ) -> Result<crate::Payment, SdkError> {
-        let CrossChainProviderContext::Boltz {
-            swap_id,
-            invoice,
-            invoice_amount_sats,
-            max_slippage_bps,
-        } = &prepared.provider_context
-        else {
-            return Err(SdkError::Generic(
-                "Boltz send called with non-Boltz provider context".to_string(),
-            ));
-        };
-        // Read from the context — `prepared.amount_in` may carry a user-facing
-        // display value (token base units on the conversion path) instead of sats.
-        let invoice_amount_sats = *invoice_amount_sats;
+        // Load the swap boltz-client persisted at prepare; the invoice, its
+        // amount, and slippage come from this row.
+        let swap = self
+            .client
+            .get_swap(&prepared.reference_id)
+            .await?
+            .ok_or_else(|| {
+                SdkError::InvalidInput(
+                    "This cross-chain quote is no longer available. Please prepare and send it again."
+                        .to_string(),
+                )
+            })?;
+        let swap_id = &swap.id;
+        let invoice = swap.invoice.as_str();
+        let invoice_amount_sats = swap.invoice_amount_sats;
+        let max_slippage_bps = swap.slippage_bps;
 
         validate_quote_expiry(&prepared.expires_at)?;
 
@@ -647,7 +636,7 @@ impl CrossChainService for BoltzService {
             chain_id: prepared.pair.chain_id.clone(),
             asset: prepared.pair.asset.clone(),
             recipient_address: prepared.recipient_address.clone(),
-            invoice: invoice.clone(),
+            invoice: invoice.to_string(),
             invoice_amount_sats,
             asset_amount_in: Some(prepared.asset_amount_in),
             estimated_out: prepared.estimated_out,
@@ -657,7 +646,7 @@ impl CrossChainService for BoltzService {
             fee_amount: Some(prepared.fee_amount),
             service_fee_amount: Some(prepared.service_fee_amount),
             service_fee_asset: prepared.service_fee_asset.clone(),
-            max_slippage_bps: *max_slippage_bps,
+            max_slippage_bps,
             quote_degraded: false,
             asset_decimals: u32::from(prepared.pair.decimals),
             asset_contract: prepared.pair.contract_address.clone(),
@@ -785,7 +774,7 @@ fn validate_quote_expiry(expires_at: &str) -> Result<(), SdkError> {
         .as_secs();
     if now_secs >= exp_secs {
         return Err(SdkError::InvalidInput(
-            "Cross-chain quote has expired. Please re-prepare.".to_string(),
+            "This cross-chain quote has expired. Please prepare and send it again.".to_string(),
         ));
     }
     Ok(())

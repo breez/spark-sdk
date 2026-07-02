@@ -889,24 +889,6 @@ pub struct CrossChainRoutePair {
     pub supported_sources: Vec<SourceAsset>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainProviderContext)]
-pub enum CrossChainProviderContext {
-    Orchestra {
-        quote_id: String,
-        deposit_address: String,
-        #[tsify(type = "string")]
-        #[serde(default, with = "serde_u128_as_string")]
-        deposit_amount: u128,
-    },
-    Boltz {
-        swap_id: String,
-        invoice: String,
-        #[serde(default)]
-        invoice_amount_sats: u64,
-        max_slippage_bps: u32,
-    },
-}
-
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentRequest)]
 pub enum PaymentRequest {
     Input {
@@ -947,6 +929,7 @@ pub enum SendPaymentMethod {
     },
     CrossChainAddress {
         route: CrossChainRoutePair,
+        reference_id: String,
         recipient_address: String,
         #[tsify(type = "string")]
         #[serde(with = "serde_u128_as_string")]
@@ -967,7 +950,6 @@ pub enum SendPaymentMethod {
         source_transfer_fee_sats: u64,
         fee_mode: CrossChainFeeMode,
         expires_at: String,
-        provider_context: CrossChainProviderContext,
     },
 }
 

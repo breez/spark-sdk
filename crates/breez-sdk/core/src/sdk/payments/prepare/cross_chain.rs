@@ -669,6 +669,7 @@ fn build_response(
     PrepareSendPaymentResponse {
         payment_method: SendPaymentMethod::CrossChainAddress {
             route: prepared.pair,
+            reference_id: prepared.reference_id,
             recipient_address: prepared.recipient_address,
             amount_in,
             asset_amount_in,
@@ -679,7 +680,6 @@ fn build_response(
             source_transfer_fee_sats: prepared.source_transfer_fee_sats,
             fee_mode: prepared.fee_mode,
             expires_at: prepared.expires_at,
-            provider_context: prepared.provider_context,
         },
         amount: response_amount,
         token_identifier: response_token_identifier,
@@ -1359,12 +1359,7 @@ mod tests {
                 supported_sources: vec![],
             },
             recipient_address: "0xabc".to_string(),
-            token_identifier: None,
-            provider_context: crate::cross_chain::CrossChainProviderContext::Orchestra {
-                quote_id: "q1".to_string(),
-                deposit_address: "sp1...".to_string(),
-                deposit_amount: amount_in,
-            },
+            reference_id: "q1".to_string(),
         }
     }
 

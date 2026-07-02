@@ -19,6 +19,7 @@ pub(in crate::sdk) async fn send(
 ) -> Result<SendPaymentResponse, SdkError> {
     let SendPaymentMethod::CrossChainAddress {
         route,
+        reference_id,
         recipient_address,
         amount_in,
         asset_amount_in,
@@ -29,7 +30,6 @@ pub(in crate::sdk) async fn send(
         source_transfer_fee_sats,
         fee_mode,
         expires_at,
-        provider_context,
     } = method
     else {
         return Err(SdkError::Generic(
@@ -49,8 +49,7 @@ pub(in crate::sdk) async fn send(
         expires_at: expires_at.clone(),
         pair: route.clone(),
         recipient_address: recipient_address.clone(),
-        token_identifier: token_identifier.clone(),
-        provider_context: provider_context.clone(),
+        reference_id: reference_id.clone(),
     };
 
     // Token transfers may not trigger the same wallet event path as BTC

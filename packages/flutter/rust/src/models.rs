@@ -281,21 +281,6 @@ pub struct _CrossChainRoutePair {
     pub supported_sources: Vec<SourceAsset>,
 }
 
-#[frb(mirror(CrossChainProviderContext))]
-pub enum _CrossChainProviderContext {
-    Orchestra {
-        quote_id: String,
-        deposit_address: String,
-        deposit_amount: u128,
-    },
-    Boltz {
-        swap_id: String,
-        invoice: String,
-        invoice_amount_sats: u64,
-        max_slippage_bps: u32,
-    },
-}
-
 #[frb(mirror(CrossChainRouteFilter))]
 pub enum _CrossChainRouteFilter {
     Send {
@@ -569,6 +554,7 @@ pub enum _SendPaymentMethod {
     },
     CrossChainAddress {
         route: CrossChainRoutePair,
+        reference_id: String,
         recipient_address: String,
         amount_in: u128,
         asset_amount_in: u128,
@@ -579,7 +565,6 @@ pub enum _SendPaymentMethod {
         source_transfer_fee_sats: u64,
         fee_mode: CrossChainFeeMode,
         expires_at: String,
-        provider_context: CrossChainProviderContext,
     },
 }
 
