@@ -30,7 +30,7 @@ pub(crate) enum FeeSplit {
 
 /// Response from estimating a conversion, used when preparing a payment that requires conversion
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ConversionEstimate {
     /// The conversion options used for the estimate
     pub options: ConversionOptions,
@@ -563,7 +563,7 @@ pub(crate) struct TokenConversionResponse {
 /// Options for conversion when fulfilling a payment. When set, the SDK will
 /// perform a conversion before fulfilling the payment. If not set, the payment
 /// will only be fulfilled if the wallet has sufficient balance of the required asset.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConversionOptions {
     /// The type of conversion to perform when fulfilling the payment
@@ -582,7 +582,7 @@ pub struct ConversionOptions {
     pub completion_timeout_secs: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ConversionType {
     /// Converting from Bitcoin to a token

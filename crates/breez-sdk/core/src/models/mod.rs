@@ -1272,7 +1272,7 @@ pub enum ReceivePaymentMethod {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SendPaymentMethod {
     BitcoinAddress {
@@ -1689,7 +1689,7 @@ pub struct PrepareSendPaymentRequest {
     pub fee_policy: Option<FeePolicy>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
@@ -2259,32 +2259,4 @@ pub struct RegisterWebhookResponse {
 pub struct UnregisterWebhookRequest {
     /// The unique identifier of the webhook to unregister.
     pub webhook_id: String,
-}
-
-#[cfg(test)]
-mod client_signing_tests {
-    use super::*;
-
-    #[test]
-    fn prepare_response_json_round_trips() {
-        let resp = PrepareSendPaymentResponse {
-            payment_method: SendPaymentMethod::SparkAddress {
-                address: "spark1...".to_string(),
-                fee: 0,
-                token_identifier: None,
-            },
-            amount: 1000,
-            token_identifier: None,
-            conversion_estimate: None,
-            fee_policy: FeePolicy::FeesExcluded,
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        let back: PrepareSendPaymentResponse = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.amount, 1000);
-        assert!(matches!(
-            back.payment_method,
-            SendPaymentMethod::SparkAddress { fee: 0, .. }
-        ));
-        assert!(matches!(back.fee_policy, FeePolicy::FeesExcluded));
-    }
 }
