@@ -385,12 +385,7 @@ impl BreezSdk {
                 locked_amount_sat,
                 redirect_url,
             } => {
-                let address = get_deposit_address(
-                    &self.spark_wallet,
-                    true,
-                    self.config.signer_can_export_keys,
-                )
-                .await?;
+                let address = get_deposit_address(&self.spark_wallet, true).await?;
                 self.buy_bitcoin_provider
                     .buy_bitcoin(address, locked_amount_sat, redirect_url)
                     .await

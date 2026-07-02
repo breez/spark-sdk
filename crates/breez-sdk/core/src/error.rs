@@ -60,10 +60,11 @@ pub enum SdkError {
     #[error("Signer error: {0}")]
     Signer(String),
 
-    /// The configured signer cannot export keys (`signer_can_export_keys`
-    /// is `false`), so a feature that depends on key export is unavailable.
-    #[error("Signer cannot export keys: {0}")]
-    SignerKeyExportUnavailable(String),
+    /// The signer can't perform the SDK's local ECIES/HMAC operations
+    /// (`signer_supports_ecies_hmac` is `false`), so a feature that depends on
+    /// them is unavailable.
+    #[error("Signer does not support local ECIES/HMAC: {0}")]
+    SignerEciesHmacUnavailable(String),
 
     /// `optimize_leaves` was called while another optimization run (auto or
     /// manual) was already in flight.

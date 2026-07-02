@@ -46,9 +46,9 @@ fn encryption_key_path(account: u32) -> String {
 /// SDK-layer signer backed by Turnkey. Sign/derive go to Turnkey; ECIES/HMAC
 /// delegate to a local signer rooted at a key exported from Turnkey.
 ///
-/// That key is exported lazily on first ECIES/HMAC use, so a no-export wallet
-/// (`Config::signer_can_export_keys = false`), which never encrypts, never
-/// triggers it. If reached under a deny-export policy the export fails with
+/// That key is exported lazily on first ECIES/HMAC use, so a wallet that
+/// declares no ECIES/HMAC support (`Config::signer_supports_ecies_hmac =
+/// false`), which never encrypts, never triggers it. If reached under a deny-export policy the export fails with
 /// `SignerError::EncryptionUnavailable`; the policy denial (403) is memoized in
 /// `export_denied` so later ECIES/HMAC calls fail fast instead of re-exporting
 /// and 403-storming Turnkey.

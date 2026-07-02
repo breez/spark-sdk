@@ -320,22 +320,6 @@ impl BreezSdk {
         let mut claimed_deposits: Vec<DepositInfo> = Vec::new();
         let mut unclaimed_deposits: Vec<DepositInfo> = Vec::new();
         for detailed_utxo in to_claim {
-            // A no-export signer can't claim or refund (both need the
-            // static-deposit key export), so record the UTXO unclaimed rather
-            // than re-attempting the export every sync.
-            if !self.config.signer_can_export_keys {
-                let info = self
-                    .record_unclaimed_deposit(
-                        &detailed_utxo,
-                        SdkError::SignerKeyExportUnavailable(
-                            "On-chain deposits cannot be claimed or refunded with the current signer"
-                                .to_string(),
-                        ),
-                    )
-                    .await?;
-                unclaimed_deposits.push(info);
-                continue;
-            }
             match self
                 .claim_utxo(&detailed_utxo, self.config.max_deposit_claim_fee.clone())
                 .await
