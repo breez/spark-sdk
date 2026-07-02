@@ -41,6 +41,35 @@ const RESERVATION_TIMEOUT_SECS = 300; // 5 minutes
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
+ * Slim projection: only (id, value) for leaves the selection might use.
+ * Includes all leaves with value <= $2 (covers exact-match + the small-leaf
+ * accumulators for the minimum-amount path) plus the single smallest leaf
+ * with value > $2 (covers the minimum-amount fallback case where one larger
+ * leaf is sufficient). $1 is the user id.
+ */
+const SLIM_LEAF_CANDIDATES_SQL = `
+  SELECT id, (data->>'value')::bigint AS value
+  FROM brz_tree_leaves
+  WHERE user_id = $1
+    AND status = 'Available'
+    AND is_missing_from_operators = FALSE
+    AND reservation_id IS NULL
+    AND (
+      (data->>'value')::bigint <= $2
+      OR id = (
+        SELECT id FROM brz_tree_leaves
+        WHERE user_id = $1
+          AND status = 'Available'
+          AND is_missing_from_operators = FALSE
+          AND reservation_id IS NULL
+          AND (data->>'value')::bigint > $2
+        ORDER BY (data->>'value')::bigint
+        LIMIT 1
+      )
+    )
+`;
+
+/**
  * Derive a stable per-tenant 64-bit advisory-lock key by hashing a domain
  * prefix together with the identity pubkey and folding the first 8 bytes of
  * the SHA-256 digest into a signed big-endian i64 — the type expected by
@@ -485,35 +514,10 @@ class PostgresTreeStore {
         );
         const available = Number(totalResult.rows[0].total);
 
-        // Slim projection: only (id, value) for leaves the selection might use.
-        // Includes all leaves with value <= maxTarget (covers exact-match + the
-        // small-leaf accumulators for the minimum-amount path) plus the single
-        // smallest leaf with value > maxTarget (covers the minimum-amount
-        // fallback case where one larger leaf is sufficient).
-        const slimResult = await client.query(
-          `
-          SELECT id, (data->>'value')::bigint AS value
-          FROM brz_tree_leaves
-          WHERE user_id = $1
-            AND status = 'Available'
-            AND is_missing_from_operators = FALSE
-            AND reservation_id IS NULL
-            AND (
-              (data->>'value')::bigint <= $2
-              OR id = (
-                SELECT id FROM brz_tree_leaves
-                WHERE user_id = $1
-                  AND status = 'Available'
-                  AND is_missing_from_operators = FALSE
-                  AND reservation_id IS NULL
-                  AND (data->>'value')::bigint > $2
-                ORDER BY (data->>'value')::bigint
-                LIMIT 1
-              )
-            )
-        `,
-          [this.identity, maxTarget]
-        );
+        const slimResult = await client.query(SLIM_LEAF_CANDIDATES_SQL, [
+          this.identity,
+          maxTarget,
+        ]);
 
         const slimLeaves = slimResult.rows.map((r) => ({
           id: r.id,
@@ -600,30 +604,10 @@ class PostgresTreeStore {
       const maxTarget = this._maxTargetForPrefilter(targetAmounts);
 
       return await this._withTransaction(async (client) => {
-        const slimResult = await client.query(
-          `
-          SELECT id, (data->>'value')::bigint AS value
-          FROM brz_tree_leaves
-          WHERE user_id = $1
-            AND status = 'Available'
-            AND is_missing_from_operators = FALSE
-            AND reservation_id IS NULL
-            AND (
-              (data->>'value')::bigint <= $2
-              OR id = (
-                SELECT id FROM brz_tree_leaves
-                WHERE user_id = $1
-                  AND status = 'Available'
-                  AND is_missing_from_operators = FALSE
-                  AND reservation_id IS NULL
-                  AND (data->>'value')::bigint > $2
-                ORDER BY (data->>'value')::bigint
-                LIMIT 1
-              )
-            )
-        `,
-          [this.identity, maxTarget]
-        );
+        const slimResult = await client.query(SLIM_LEAF_CANDIDATES_SQL, [
+          this.identity,
+          maxTarget,
+        ]);
 
         const slimLeaves = slimResult.rows.map((r) => ({
           id: r.id,

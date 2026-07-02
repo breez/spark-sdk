@@ -44,6 +44,36 @@ const RESERVATION_TIMEOUT_SECS = 300;
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS = 5 * 60 * 1000;
 
 /**
+ * Slim projection: only (id, value) for leaves the selection might use.
+ * Includes all leaves with value <= the max target (covers exact-match + the
+ * small-leaf accumulators for the minimum-amount path) plus the single
+ * smallest leaf with a larger value (covers the minimum-amount fallback case
+ * where one larger leaf is sufficient).
+ * Params: user id, max target, user id, max target.
+ */
+const SLIM_LEAF_CANDIDATES_SQL = `SELECT id, value
+  FROM brz_tree_leaves
+  WHERE user_id = ?
+    AND status = 'Available'
+    AND is_missing_from_operators = 0
+    AND reservation_id IS NULL
+    AND (
+      value <= ?
+      OR id = (
+        SELECT id FROM (
+          SELECT id FROM brz_tree_leaves
+          WHERE user_id = ?
+            AND status = 'Available'
+            AND is_missing_from_operators = 0
+            AND reservation_id IS NULL
+            AND value > ?
+          ORDER BY value
+          LIMIT 1
+        ) AS smallest_over
+      )
+    )`;
+
+/**
  * Derive a stable per-tenant lock name from a tenant identity pubkey. Hashes
  * a domain prefix together with the identity (SHA-256, first 8 bytes hex).
  */
@@ -462,30 +492,12 @@ class MysqlTreeStore {
         );
         const available = Number(totalRows[0].total);
 
-        const [slimRows] = await conn.query(
-          `SELECT id, value
-           FROM brz_tree_leaves
-           WHERE user_id = ?
-             AND status = 'Available'
-             AND is_missing_from_operators = 0
-             AND reservation_id IS NULL
-             AND (
-               value <= ?
-               OR id = (
-                 SELECT id FROM (
-                   SELECT id FROM brz_tree_leaves
-                   WHERE user_id = ?
-                     AND status = 'Available'
-                     AND is_missing_from_operators = 0
-                     AND reservation_id IS NULL
-                     AND value > ?
-                   ORDER BY value
-                   LIMIT 1
-                 ) AS smallest_over
-               )
-             )`,
-          [this.identity, maxTarget, this.identity, maxTarget]
-        );
+        const [slimRows] = await conn.query(SLIM_LEAF_CANDIDATES_SQL, [
+          this.identity,
+          maxTarget,
+          this.identity,
+          maxTarget,
+        ]);
 
         const slimLeaves = slimRows.map((r) => ({
           id: r.id,
@@ -585,30 +597,12 @@ class MysqlTreeStore {
       const maxTarget = this._maxTargetForPrefilter(targetAmounts);
 
       return await this._withTransaction(async (conn) => {
-        const [slimRows] = await conn.query(
-          `SELECT id, value
-           FROM brz_tree_leaves
-           WHERE user_id = ?
-             AND status = 'Available'
-             AND is_missing_from_operators = 0
-             AND reservation_id IS NULL
-             AND (
-               value <= ?
-               OR id = (
-                 SELECT id FROM (
-                   SELECT id FROM brz_tree_leaves
-                   WHERE user_id = ?
-                     AND status = 'Available'
-                     AND is_missing_from_operators = 0
-                     AND reservation_id IS NULL
-                     AND value > ?
-                   ORDER BY value
-                   LIMIT 1
-                 ) AS smallest_over
-               )
-             )`,
-          [this.identity, maxTarget, this.identity, maxTarget]
-        );
+        const [slimRows] = await conn.query(SLIM_LEAF_CANDIDATES_SQL, [
+          this.identity,
+          maxTarget,
+          this.identity,
+          maxTarget,
+        ]);
 
         const slimLeaves = slimRows.map((r) => ({
           id: r.id,
