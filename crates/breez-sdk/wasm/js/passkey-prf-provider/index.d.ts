@@ -145,6 +145,14 @@ export declare class PasskeyProvider {
     isSupported(): Promise<boolean>;
 
     /**
+     * Whether the silent single-CTA flow works in this browser: WebAuthn
+     * immediate mediation (`getClientCapabilities().immediateGet`). The SDK
+     * surfaces this on the WASM client's `supportsImmediateMediation()`;
+     * hosts gate single- vs two-button onboarding on it.
+     */
+    supportsImmediateMediation(): Promise<boolean>;
+
+    /**
      * Check whether the configured `rpId` is a valid WebAuthn scope for
      * the current origin (must be a registrable suffix of
      * `window.location.hostname`, or equal to it). Mirrors the browser's

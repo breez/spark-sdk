@@ -119,10 +119,11 @@ pub struct ConnectWithPasskeyRequest {
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub label: Option<String>,
 
-    /// Optional credential IDs to restrict the silent sign-in
-    /// attempt to (reauthentication path). See
-    /// [`SignInRequest::allow_credentials`]. Ignored on the fallback
-    /// registration path.
+    /// Optional credential IDs to restrict the sign-in attempt to
+    /// (reauthentication path). A non-empty list runs the modal sign-in
+    /// rather than the immediate probe (a pin means a credential is already
+    /// known). See [`SignInRequest::allow_credentials`]. Ignored on the
+    /// fallback registration path.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub allow_credentials: Option<Vec<Vec<u8>>>,
 
@@ -140,11 +141,18 @@ pub struct ConnectWithPasskeyRequest {
 /// registered, when the provider surfaces it. The register path also
 /// populates the attestation fields (`aaguid`, `backup_eligible`); the
 /// sign-in path sets only `credential_id`.
+///
+/// `labels` is the user's discovered label set when `request.label` was
+/// `None` (the returning-user multi-wallet case): `wallet` is the default
+/// label, and a host showing more than one entry lets the user pick
+/// another via [`PasskeyClient::sign_in`]. Empty on the register path (a
+/// new user has no other labels) and when a specific label was requested.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConnectWithPasskeyResponse {
     pub wallet: Wallet,
     pub credential: Option<PasskeyCredential>,
+    pub labels: Vec<String>,
 }
 
 /// High-level orchestration over a [`PrfProvider`] and the internal
@@ -262,8 +270,7 @@ impl PasskeyClient {
     }
 
     /// Single-CTA onboarding: silent sign-in, falling through to
-    /// registration when no credential exists on the device. The returned
-    /// [`ConnectFlow`] tells the caller which path ran.
+    /// registration when no credential exists on the device.
     ///
     /// The silent sign-in pins `prefer_immediately_available_credentials =
     /// true` regardless of [`SignInRequest`]: the fallback depends on the OS
@@ -272,11 +279,12 @@ impl PasskeyClient {
     /// register path; every other error (`Cancel`, `Timeout`, ...) propagates
     /// unchanged.
     ///
-    /// Mobile-only: meant for iOS 18+ / Android 9+ where
-    /// `preferImmediatelyAvailableCredentials` is honored. The web
-    /// equivalent (`mediation: 'immediate'`) is not yet stable
-    /// cross-browser, so this is not surfaced on WASM; web hosts call
-    /// [`Self::sign_in`] and catch `CredentialNotFound` themselves.
+    /// On WASM the silent sign-in maps to `WebAuthn` `uiMode: 'immediate'`
+    /// where the browser advertises it. Web hosts gate on the browser's
+    /// immediate-mediation capability (the WASM client surfaces it):
+    /// without it the probe shows the standard picker and a dismiss is a
+    /// cancel, not `CredentialNotFound`, so it never reaches register.
+    /// Present an explicit create / sign-in choice there instead.
     pub async fn connect_with_passkey(
         &self,
         request: ConnectWithPasskeyRequest,
@@ -293,6 +301,9 @@ impl PasskeyClient {
             Ok(response) => Ok(ConnectWithPasskeyResponse {
                 wallet: response.wallet,
                 credential: response.credential,
+                // Discovery labels (populated when `label` was None) so a
+                // returning multi-wallet user can be offered a picker.
+                labels: response.labels,
             }),
             Err(PasskeyError::Prf(PrfProviderError::CredentialNotFound(_))) => {
                 let register_response = self
@@ -304,6 +315,8 @@ impl PasskeyClient {
                 Ok(ConnectWithPasskeyResponse {
                     wallet: register_response.wallet,
                     credential: register_response.credential,
+                    // New user: nothing to pick from.
+                    labels: Vec::new(),
                 })
             }
             Err(e) => Err(e),

@@ -79,9 +79,13 @@ class PasskeySnippets(private val activity: Activity) {
         // ANCHOR: connect-with-passkey
         // Single-CTA onboarding: silent sign-in, fall through to register.
         val config = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
-        val response = passkey.connectWithPasskey(
-            ConnectWithPasskeyRequest(label = "personal")
-        )
+        val response = passkey.connectWithPasskey(ConnectWithPasskeyRequest())
+
+        if (response.labels.size > 1) {
+            // Returning multi-wallet user: let them pick a label and sign in to it.
+            // val chosen = promptForLabel(response.labels)
+            // return connect(ConnectRequest(config, passkey.signIn(SignInRequest(label = chosen)).wallet.seed, "./.data"))
+        }
 
         val sdk = connect(ConnectRequest(config, response.wallet.seed, "./.data"))
         // ANCHOR_END: connect-with-passkey
