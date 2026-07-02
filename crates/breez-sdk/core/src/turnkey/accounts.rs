@@ -31,6 +31,14 @@ pub(crate) fn spark_address_format(network: Network) -> &'static str {
     }
 }
 
+/// Dedicated SDK-layer encryption key path. The Spark signer only derives the
+/// account's low-index children (identity/signing/deposit/static/preimage), so
+/// this reserved max-index child is never a Spark key and can be exported to
+/// seed local ECIES/HMAC without exposing any Spark key.
+pub(crate) fn encryption_key_path(account: u32) -> String {
+    format!("m/8797555'/{account}'/2147483647'")
+}
+
 impl TurnkeyClient {
     /// Materializes the wallet account at `path` with `address_format`,
     /// returning its address. Idempotent: a path can only be created once, so if

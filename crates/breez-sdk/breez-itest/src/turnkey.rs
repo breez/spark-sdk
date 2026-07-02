@@ -172,7 +172,7 @@ pub async fn build_sdk_with_turnkey(
     let (turnkey_config, guard) = provision_turnkey_wallet().await?;
     let turnkey_guard = Some(guard);
 
-    let signers = breez_sdk_spark::turnkey::create_turnkey_signer(turnkey_config)
+    let signers = breez_sdk_spark::turnkey::create_turnkey_signer(turnkey_config, None)
         .await
         .map_err(|e| anyhow::anyhow!("create_turnkey_signer failed: {e}"))?;
 

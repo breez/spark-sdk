@@ -285,12 +285,29 @@ pub(crate) struct TurnkeySparkSigner {
 
 impl TurnkeySparkSigner {
     pub(crate) fn new(client: Arc<TurnkeyClient>, network: Network, account: u32) -> Self {
+        Self::new_seeded(client, network, account, None, None)
+    }
+
+    /// Builds the signer with the wallet's stable identity pubkey and Spark
+    /// address pre-filled into their memos, so a provisioned per-request signer
+    /// serves them without the `get_wallet_account` / `create_wallet_accounts`
+    /// round-trips `new` would otherwise make on first use. Both are fixed per
+    /// wallet (identity is `HD(m/8797555'/{account}'/0')`, the Spark address is
+    /// derived from it), so seeding is always correct. `None`/`None` reproduces
+    /// `new`. Leaf and static-deposit keys are dynamic and stay lazy.
+    pub(crate) fn new_seeded(
+        client: Arc<TurnkeyClient>,
+        network: Network,
+        account: u32,
+        identity_pubkey: Option<PublicKey>,
+        spark_address: Option<String>,
+    ) -> Self {
         Self {
             client,
             account,
             network,
-            identity_pubkey: Mutex::new(None),
-            spark_address: Mutex::new(None),
+            identity_pubkey: Mutex::new(identity_pubkey),
+            spark_address: Mutex::new(spark_address),
             leaf_pubkeys: Mutex::new(HashMap::new()),
             static_deposit_pubkeys: Mutex::new(HashMap::new()),
             static_deposit_secret_keys: Mutex::new(HashMap::new()),
@@ -851,7 +868,7 @@ mod tests {
     use crate::Network;
     use crate::error::SignerError;
     use crate::signer::ExternalBreezSigner;
-    use crate::turnkey::breez_signer::TurnkeyBreezSigner;
+    use crate::turnkey::breez_signer::{EncryptionBackend, TurnkeyBreezSigner};
     use crate::turnkey::config::TurnkeyConfig;
     use crate::turnkey::transport::TurnkeyClient;
 
@@ -922,10 +939,11 @@ mod tests {
 
     #[tokio::test]
     async fn breez_signer_lazy_export_denied_reports_unavailable() {
-        let signer = TurnkeyBreezSigner::new(
+        let signer = TurnkeyBreezSigner::new_seeded(
             deny_client(Arc::new(Always403::default())),
             Network::Regtest,
             0,
+            EncryptionBackend::Lazy,
         );
         // The encryption key is exported lazily on first ECIES use. Under a
         // deny-export policy that export is rejected (403), surfaced as
@@ -943,7 +961,12 @@ mod tests {
     async fn breez_signer_export_denial_is_memoized() {
         let http = Arc::new(Always403::default());
         let post_calls = http.post_calls.clone();
-        let signer = TurnkeyBreezSigner::new(deny_client(http), Network::Regtest, 0);
+        let signer = TurnkeyBreezSigner::new_seeded(
+            deny_client(http),
+            Network::Regtest,
+            0,
+            EncryptionBackend::Lazy,
+        );
 
         // First ECIES use attempts the export and is denied (403).
         assert!(matches!(
