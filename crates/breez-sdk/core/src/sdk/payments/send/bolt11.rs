@@ -108,20 +108,7 @@ pub(super) async fn send_signed(
     fee_policy: FeePolicy,
 ) -> Result<SendPaymentResponse, SdkError> {
     let amount_to_send = if fee_policy == FeePolicy::FeesIncluded {
-        let current_fee = sdk
-            .spark_wallet
-            .fetch_lightning_send_fee_estimate(bolt11, Some(amount_sat))
-            .await?;
-        let overpayment = fee_overpayment(fee_sat, current_fee)?;
-        if overpayment > 0 {
-            info!(
-                overpayment_sats = overpayment,
-                stored_fee_sats = fee_sat,
-                current_fee_sats = current_fee,
-                "FeesIncluded fee overpayment applied for signed Bolt11"
-            );
-        }
-        amount_sat.saturating_add(overpayment)
+        receiver_amount_with_overpayment(sdk, bolt11, amount_sat, fee_sat).await?
     } else {
         amount_sat
     };
@@ -156,8 +143,15 @@ async fn calculate_fees_included_amount(
             "Amount too small to cover fees".to_string(),
         ));
     }
+    receiver_amount_with_overpayment(sdk, invoice, receiver_amount, stored_fee).await
+}
 
-    // Re-estimate current fee for receiver amount
+async fn receiver_amount_with_overpayment(
+    sdk: &BreezSdk,
+    invoice: &str,
+    receiver_amount: u64,
+    stored_fee: u64,
+) -> Result<u64, SdkError> {
     let current_fee = sdk
         .spark_wallet
         .fetch_lightning_send_fee_estimate(invoice, Some(receiver_amount))
