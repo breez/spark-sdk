@@ -25,6 +25,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 use std::sync::Arc;
 
+use futures::{StreamExt, TryStreamExt};
 use tokio::sync::Mutex;
 
 use bitcoin::bip32::DerivationPath;
@@ -268,6 +269,19 @@ fn ffi_public_key_map(
         .collect()
 }
 
+/// Maximum FROST jobs per `SPARK_SIGN_FROST` activity. Turnkey's enclave fails a
+/// single `sign_frost` with HTTP 500 (an internal ~15s timeout) past roughly 250
+/// to 300 jobs, far below its ~11 MB request-body cap. The batched send/coop-exit/
+/// claim/timelock paths can exceed that (a full-balance coop-exit signs every
+/// wallet leaf, one to three jobs each), so submissions are chunked with wide
+/// margin. Measured by the probe in `breez-itest/tests/turnkey_frost_batch_limit`.
+const MAX_FROST_JOBS_PER_ACTIVITY: usize = 100;
+
+/// How many chunk activities to submit concurrently. Kept low so a many-chunk
+/// batch stays within Turnkey's 10 RPS per-suborganization rate limit (each
+/// activity is a submit plus a few status polls).
+const SIGN_FROST_CHUNK_CONCURRENCY: usize = 4;
+
 pub(crate) struct TurnkeySparkSigner {
     client: Arc<TurnkeyClient>,
     account: u32,
@@ -436,8 +450,33 @@ impl TurnkeySparkSigner {
         jobs: &[FrostJob],
     ) -> Result<Vec<FrostShareResult>, SignerError> {
         let sign_with = self.spark_identity_address().await?;
-        let mut signatures = Vec::with_capacity(jobs.len());
-        for job in jobs {
+        // One activity per chunk (see MAX_FROST_JOBS_PER_ACTIVITY), submitted with
+        // bounded concurrency and reassembled in job order. FROST jobs are
+        // independent, so splitting the batch is signing-equivalent to one call.
+        let chunks: Vec<Vec<FrostJob>> = jobs
+            .chunks(MAX_FROST_JOBS_PER_ACTIVITY)
+            .map(<[FrostJob]>::to_vec)
+            .collect();
+        let chunk_shares: Vec<Vec<FrostShareResult>> = futures::stream::iter(chunks)
+            .map(|chunk| {
+                let sign_with = sign_with.clone();
+                async move { self.sign_frost_chunk(sign_with, &chunk).await }
+            })
+            .buffered(SIGN_FROST_CHUNK_CONCURRENCY)
+            .try_collect()
+            .await?;
+        Ok(chunk_shares.into_iter().flatten().collect())
+    }
+
+    /// Signs one chunk of FROST jobs as a single `SPARK_SIGN_FROST` activity,
+    /// returning the shares in job order.
+    async fn sign_frost_chunk(
+        &self,
+        sign_with: String,
+        chunk: &[FrostJob],
+    ) -> Result<Vec<FrostShareResult>, SignerError> {
+        let mut signatures = Vec::with_capacity(chunk.len());
+        for job in chunk {
             signatures.push(frost_job_to_request(job).map_err(to_spark_err)?);
         }
         let result: SparkSignFrostResult = self
@@ -454,10 +493,10 @@ impl TurnkeySparkSigner {
             )
             .await
             .map_err(to_spark_err)?;
-        if result.signatures.len() != jobs.len() {
+        if result.signatures.len() != chunk.len() {
             return Err(SignerError::Generic(format!(
                 "turnkey sign_frost: expected {} shares, got {}",
-                jobs.len(),
+                chunk.len(),
                 result.signatures.len()
             )));
         }
