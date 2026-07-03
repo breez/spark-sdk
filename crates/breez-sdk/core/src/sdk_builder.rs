@@ -781,12 +781,14 @@ fn finalize_spark_wallet_config(
     Ok(spark_wallet_config)
 }
 
-/// Wraps the resolved session store (or an in-memory default) in the caching
-/// layer, plus the encrypting layer when `encrypt` is set.
+/// Wraps the resolved session store (or an in-memory default) in the encrypting
+/// and caching layers.
 ///
-/// `encrypt` mirrors `Config::signer_supports_ecies_hmac`. When `false` (the
-/// signer can't perform local ECIES/HMAC), the encrypting layer is skipped and
-/// the provided store holds the bearer tokens in plaintext.
+/// `encrypt` mirrors `Config::signer_supports_ecies_hmac`. The
+/// `EncryptingSessionStore` is always in the stack: with `encrypt` it encrypts
+/// tokens at rest, otherwise it stores them in plaintext. Either way it tags each
+/// token with its mode, so flipping the flag between runs is caught on read and
+/// forces a fresh re-authentication.
 fn wrap_session_store(
     session_store: Option<Arc<dyn SessionStore>>,
     signer: &Arc<dyn crate::signer::BreezSigner>,
@@ -794,18 +796,11 @@ fn wrap_session_store(
     encrypt: bool,
 ) -> Result<Arc<dyn SessionStore>, SdkError> {
     let inner = session_store.unwrap_or_else(|| Arc::new(InMemorySessionStore::default()));
-    let store: Arc<dyn SessionStore> = if encrypt {
-        Arc::new(
-            crate::session_store::EncryptingSessionStore::new(inner, signer.clone(), network)
-                .map_err(|e| {
-                    SdkError::Generic(format!("failed to set up session token encryption: {e}"))
-                })?,
-        )
-    } else {
-        inner
-    };
+    let store =
+        crate::session_store::EncryptingSessionStore::new(inner, signer.clone(), network, encrypt)
+            .map_err(|e| SdkError::Generic(format!("failed to set up the session store: {e}")))?;
     Ok(Arc::new(crate::session_store::CachingSessionStore::new(
-        store,
+        Arc::new(store),
     )))
 }
 
@@ -1062,7 +1057,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wrap_session_store_skips_encryption_when_unavailable() {
+    async fn wrap_session_store_tags_tokens_by_mode() {
         use crate::Seed;
         use crate::signer::BreezSigner;
         use crate::signer::breez::BreezSignerImpl;
@@ -1110,7 +1105,7 @@ mod tests {
 
         let token = "bearer-token".to_string();
 
-        // Encryption unavailable: the inner store holds the plaintext token.
+        // Encryption off: the inner store holds the plaintext token, tagged pln:.
         let inner = Arc::new(InspectableInner::default());
         let store =
             super::wrap_session_store(Some(inner.clone()), &seed_signer(), Network::Regtest, false)
@@ -1127,11 +1122,12 @@ mod tests {
             .unwrap();
         let raw = inner.sessions.lock().unwrap().get(&key()).cloned().unwrap();
         assert_eq!(
-            raw.token, token,
-            "unencrypted fallback must persist the plaintext token"
+            raw.token,
+            format!("pln:{token}"),
+            "plaintext mode must persist the token tagged with pln:"
         );
 
-        // Encryption available: the inner store holds ciphertext, not plaintext.
+        // Encryption on: the inner store holds ciphertext, tagged enc:.
         let inner = Arc::new(InspectableInner::default());
         let store =
             super::wrap_session_store(Some(inner.clone()), &seed_signer(), Network::Regtest, true)
@@ -1147,9 +1143,9 @@ mod tests {
             .await
             .unwrap();
         let raw = inner.sessions.lock().unwrap().get(&key()).cloned().unwrap();
-        assert_ne!(
-            raw.token, token,
-            "encrypted store must not persist the plaintext token"
+        assert!(
+            raw.token.starts_with("enc:") && raw.token != token,
+            "encrypt mode must persist ciphertext tagged with enc:"
         );
     }
 
