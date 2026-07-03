@@ -11,7 +11,7 @@ use tracing::info;
 use crate::core::next_lightning_htlc_sequence;
 use crate::services::{PendingRefundSignature, RefundVariant, SignedTx, build_refund_signing_job};
 use crate::signer::{FrostJob, SignerError, SparkSigner};
-use crate::utils::frost::derive_leaf_signing_public_key;
+use crate::utils::frost::{derive_leaf_signing_public_key, sign_frost_batch};
 use crate::utils::htlc_transactions::{
     CreateLightningHtlcRefundTxsParams, create_lightning_htlc_refund_txs,
 };
@@ -169,21 +169,14 @@ pub async fn sign_refunds(
 
     // Sign every job in a single batched call. Remote-signer backends (e.g.
     // Turnkey) collapse this into one round-trip instead of one per leaf-variant.
-    let shares = spark_signer.sign_frost(jobs).await?;
-    if shares.len() != pending.len() {
-        return Err(SignerError::Generic(format!(
-            "sign_frost returned {} shares, expected {}",
-            shares.len(),
-            pending.len()
-        )));
-    }
+    let signed = sign_frost_batch(spark_signer, jobs, pending).await?;
 
     // Reassemble each SignedTx and route it to its variant bucket. Jobs were
     // pushed in leaf order, so per-variant order is preserved.
     let mut cpfp_signed_refunds = Vec::new();
     let mut direct_signed_refunds = Vec::new();
     let mut direct_from_cpfp_signed_refunds = Vec::new();
-    for (entry, share) in pending.into_iter().zip(shares) {
+    for (entry, share) in signed {
         let variant = entry.variant;
         let signed_tx = entry.into_signed_tx(share);
         match variant {
