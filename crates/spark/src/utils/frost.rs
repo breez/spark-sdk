@@ -181,3 +181,33 @@ pub fn aggregate_frost(
         ))
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use bitcoin::secp256k1::SecretKey;
+
+    use super::*;
+    use crate::tree::tests::create_test_tree_node;
+
+    /// `derive_leaf_signing_public_key` must recover the user's signing key from
+    /// the FROST relation `verifying_public_key = user_share + se_share`, i.e.
+    /// return `verifying_public_key - signing_keyshare.public_key`.
+    #[test]
+    fn derives_user_share_from_verifying_and_se_share() {
+        let secp = Secp256k1::new();
+
+        // se_share = a*G (operators' aggregate), user_share = b*G (what we derive).
+        let a = SecretKey::from_slice(&[0x11; 32]).unwrap();
+        let b = SecretKey::from_slice(&[0x22; 32]).unwrap();
+        let se_share = a.public_key(&secp);
+        let user_share = b.public_key(&secp);
+        let verifying = se_share.combine(&user_share).unwrap();
+
+        let mut node = create_test_tree_node("test_leaf", 1000);
+        node.signing_keyshare.public_key = se_share;
+        node.verifying_public_key = verifying;
+
+        let derived = derive_leaf_signing_public_key(&node, &secp).unwrap();
+        assert_eq!(derived, user_share);
+    }
+}
