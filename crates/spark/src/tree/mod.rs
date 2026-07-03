@@ -673,13 +673,9 @@ pub trait TreeStore: Send + Sync {
 
     async fn try_reserve_leaves_by_ids(
         &self,
-        _leaf_ids: &[TreeNodeId],
-        _purpose: ReservationPurpose,
-    ) -> Result<LeavesReservation, TreeServiceError> {
-        Err(TreeServiceError::Generic(
-            "reserve_leaves_by_ids is not supported by this store".to_string(),
-        ))
-    }
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError>;
 
     async fn try_select_leaves(
         &self,
