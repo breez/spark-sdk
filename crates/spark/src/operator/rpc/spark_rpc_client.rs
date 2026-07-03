@@ -52,27 +52,6 @@ pub struct SparkRpcClient {
     operator_id: usize,
 }
 
-/// Runs an operator call, re-authenticating once if the server rejects the
-/// session token with `Unauthenticated`, then retrying.
-async fn with_reauth<T, F, Fut>(header_provider: &Arc<dyn HeaderProvider>, op: F) -> Result<T>
-where
-    F: Fn() -> Fut,
-    Fut: std::future::Future<Output = Result<T>>,
-{
-    match Box::pin(op()).await {
-        Err(OperatorRpcError::Connection(status))
-            if status.code() == tonic::Code::Unauthenticated =>
-        {
-            header_provider
-                .reauthenticate()
-                .await
-                .map_err(|e| OperatorRpcError::Authentication(e.to_string()))?;
-            Box::pin(op()).await
-        }
-        res => res,
-    }
-}
-
 impl SparkRpcClient {
     pub fn new(
         channel: Transport,
@@ -92,15 +71,12 @@ impl SparkRpcClient {
         req: GenerateDepositAddressRequest,
     ) -> Result<GenerateDepositAddressResponse> {
         debug!("Calling generate_deposit_address with request: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .generate_deposit_address(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .generate_deposit_address(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -112,15 +88,12 @@ impl SparkRpcClient {
             "Calling query_unused_deposit_addresses with request: {:?}",
             req
         );
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .query_unused_deposit_addresses(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .query_unused_deposit_addresses(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -132,15 +105,12 @@ impl SparkRpcClient {
             "Calling finalize_deposit_tree_creation with request: {:?}",
             req
         );
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .finalize_deposit_tree_creation(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .finalize_deposit_tree_creation(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -149,29 +119,23 @@ impl SparkRpcClient {
         req: StartTransferRequest,
     ) -> Result<StartTransferResponse> {
         debug!("Calling start_transfer with request: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .start_transfer_v2(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .start_transfer_v2(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn claim_transfer(&self, req: ClaimTransferRequest) -> Result<ClaimTransferResponse> {
         debug!("Calling claim_transfer with request: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .claim_transfer(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .claim_transfer(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -180,29 +144,23 @@ impl SparkRpcClient {
         req: TransferFilter,
     ) -> Result<QueryTransfersResponse> {
         debug!("Querying pending transfers with filter: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .query_pending_transfers(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .query_pending_transfers(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_all_transfers(&self, req: TransferFilter) -> Result<QueryTransfersResponse> {
         debug!("Calling query_all_transfers with filter: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .query_all_transfers(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .query_all_transfers(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -211,15 +169,12 @@ impl SparkRpcClient {
             "Calling store_preimage_share_v2 for payment_hash {}",
             hex::encode(&req.payment_hash)
         );
-        with_reauth(&self.header_provider, || async {
-            self.spark_service_client()
-                .await?
-                .store_preimage_share_v2(req.clone())
-                .await?
-                .into_inner();
-            Ok(())
-        })
-        .await
+        self.spark_service_client()
+            .await?
+            .store_preimage_share_v2(req)
+            .await?
+            .into_inner();
+        Ok(())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -228,15 +183,12 @@ impl SparkRpcClient {
         req: GetSigningCommitmentsRequest,
     ) -> Result<GetSigningCommitmentsResponse> {
         debug!("Calling get_signing_commitments with request: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .get_signing_commitments(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .get_signing_commitments(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -245,15 +197,12 @@ impl SparkRpcClient {
         req: CooperativeExitRequest,
     ) -> Result<CooperativeExitResponse> {
         debug!("Calling cooperative_exit_v2 with request: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .cooperative_exit_v2(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .cooperative_exit_v2(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -265,15 +214,12 @@ impl SparkRpcClient {
             "Calling initiate_preimage_swap_v3 for payment_hash {}",
             hex::encode(&req.payment_hash)
         );
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .initiate_preimage_swap_v3(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .initiate_preimage_swap_v3(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -285,15 +231,12 @@ impl SparkRpcClient {
             "Calling provide_preimage for payment_hash {}",
             hex::encode(&req.payment_hash)
         );
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .provide_preimage(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .provide_preimage(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -305,15 +248,12 @@ impl SparkRpcClient {
             "Calling initiate_swap_primary_transfer with request: {:?}",
             req
         );
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .initiate_swap_primary_transfer(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .initiate_swap_primary_transfer(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -323,31 +263,25 @@ impl SparkRpcClient {
         idempotency_key: Option<String>,
     ) -> Result<RenewLeafResponse> {
         debug!("Calling renew_leaf with request: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            let mut request = Request::new(req.clone());
-            set_idempotency_key(request.metadata_mut(), idempotency_key.clone())?;
-            Ok(self
-                .spark_service_client()
-                .await?
-                .renew_leaf(request)
-                .await?
-                .into_inner())
-        })
-        .await
+        let mut request = Request::new(req);
+        set_idempotency_key(request.metadata_mut(), idempotency_key)?;
+        Ok(self
+            .spark_service_client()
+            .await?
+            .renew_leaf(request)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_nodes(&self, req: QueryNodesRequest) -> Result<QueryNodesResponse> {
         debug!("Calling query_nodes with request: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .query_nodes(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .query_nodes(req)
+            .await?
+            .into_inner())
     }
 
     /// Paginated version of query_nodes
@@ -404,15 +338,12 @@ impl SparkRpcClient {
         req: spark_token::FreezeTokensRequest,
     ) -> Result<spark_token::FreezeTokensResponse> {
         debug!("Calling freeze_tokens with request: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_token_service_client()
-                .await?
-                .freeze_tokens(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_token_service_client()
+            .await?
+            .freeze_tokens(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -421,15 +352,12 @@ impl SparkRpcClient {
         req: spark_token::QueryTokenOutputsRequest,
     ) -> Result<spark_token::QueryTokenOutputsResponse> {
         debug!("Calling query_token_outputs with request: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_token_service_client()
-                .await?
-                .query_token_outputs(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_token_service_client()
+            .await?
+            .query_token_outputs(req)
+            .await?
+            .into_inner())
     }
 
     /// Query all token outputs by automatically fetching all pages.
@@ -481,15 +409,12 @@ impl SparkRpcClient {
         req: spark_token::QueryTokenMetadataRequest,
     ) -> Result<spark_token::QueryTokenMetadataResponse> {
         debug!("Calling query_token_metadata with request: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_token_service_client()
-                .await?
-                .query_token_metadata(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_token_service_client()
+            .await?
+            .query_token_metadata(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -498,15 +423,12 @@ impl SparkRpcClient {
         req: spark_token::QueryTokenTransactionsRequest,
     ) -> Result<spark_token::QueryTokenTransactionsResponse> {
         debug!("Calling query_token_transactions with request: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_token_service_client()
-                .await?
-                .query_token_transactions(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_token_service_client()
+            .await?
+            .query_token_transactions(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -515,29 +437,23 @@ impl SparkRpcClient {
         req: QuerySparkInvoicesRequest,
     ) -> Result<QuerySparkInvoicesResponse> {
         debug!("Calling query_spark_invoices with request: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .query_spark_invoices(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .query_spark_invoices(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_htlc(&self, req: QueryHtlcRequest) -> Result<QueryHtlcResponse> {
         debug!("Calling query_htlc with request: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .query_htlc(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .query_htlc(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -546,15 +462,12 @@ impl SparkRpcClient {
         req: StartTransactionRequest,
     ) -> Result<StartTransactionResponse> {
         debug!("Calling start_transaction with request: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_token_service_client()
-                .await?
-                .start_transaction(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_token_service_client()
+            .await?
+            .start_transaction(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -563,15 +476,12 @@ impl SparkRpcClient {
         req: CommitTransactionRequest,
     ) -> Result<CommitTransactionResponse> {
         debug!("Calling commit_transaction with request: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_token_service_client()
-                .await?
-                .commit_transaction(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_token_service_client()
+            .await?
+            .commit_transaction(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -580,15 +490,12 @@ impl SparkRpcClient {
         req: BroadcastTransactionRequest,
     ) -> Result<BroadcastTransactionResponse> {
         debug!("Calling broadcast_transaction with request: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_token_service_client()
-                .await?
-                .broadcast_transaction(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_token_service_client()
+            .await?
+            .broadcast_transaction(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -600,15 +507,12 @@ impl SparkRpcClient {
             "Calling generate_static_deposit_address with request: {:?}",
             req
         );
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .generate_static_deposit_address(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .generate_static_deposit_address(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -620,15 +524,12 @@ impl SparkRpcClient {
             "Calling rotate_static_deposit_address with request: {:?}",
             req
         );
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .rotate_static_deposit_address(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .rotate_static_deposit_address(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -640,15 +541,12 @@ impl SparkRpcClient {
             "Calling query_static_deposit_addresses with request: {:?}",
             req
         );
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .query_static_deposit_addresses(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .query_static_deposit_addresses(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -657,15 +555,12 @@ impl SparkRpcClient {
         req: GetUtxosForIdentityRequest,
     ) -> Result<GetUtxosForIdentityResponse> {
         debug!("Calling get_utxos_for_identity with request: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .get_utxos_for_identity(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .get_utxos_for_identity(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -677,15 +572,12 @@ impl SparkRpcClient {
             "Calling initiate_static_deposit_utxo_refund with request: {:?}",
             req
         );
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .initiate_static_deposit_utxo_refund(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .initiate_static_deposit_utxo_refund(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -694,15 +586,12 @@ impl SparkRpcClient {
         req: SubscribeToEventsRequest,
     ) -> Result<tonic::codec::Streaming<SubscribeToEventsResponse>> {
         debug!("Calling subscribe_to_events with request: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .subscribe_to_events(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .subscribe_to_events(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -711,29 +600,23 @@ impl SparkRpcClient {
         req: UpdateWalletSettingRequest,
     ) -> Result<UpdateWalletSettingResponse> {
         debug!("Calling update_wallet_setting with request: {:?}", req);
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .update_wallet_setting(req.clone())
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .update_wallet_setting(req)
+            .await?
+            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_wallet_setting(&self) -> Result<QueryWalletSettingResponse> {
         debug!("Calling query_wallet_setting");
-        with_reauth(&self.header_provider, || async {
-            Ok(self
-                .spark_service_client()
-                .await?
-                .query_wallet_setting(QueryWalletSettingRequest {})
-                .await?
-                .into_inner())
-        })
-        .await
+        Ok(self
+            .spark_service_client()
+            .await?
+            .query_wallet_setting(QueryWalletSettingRequest {})
+            .await?
+            .into_inner())
     }
 
     async fn spark_service_client(
@@ -790,108 +673,5 @@ impl Interceptor for HeaderInterceptor {
             req.metadata_mut().insert(key, value.clone());
         }
         Ok(req)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use tonic::{Code, Status};
-
-    use crate::header_provider::{HeaderProvider, HeaderProviderError};
-    use crate::operator::rpc::OperatorRpcError;
-
-    use super::with_reauth;
-
-    /// Header provider that counts `reauthenticate` calls.
-    #[derive(Default)]
-    struct CountingHeaderProvider {
-        reauth_calls: AtomicUsize,
-    }
-
-    #[macros::async_trait]
-    impl HeaderProvider for CountingHeaderProvider {
-        async fn headers(&self) -> Result<HashMap<String, String>, HeaderProviderError> {
-            Ok(HashMap::new())
-        }
-
-        async fn reauthenticate(&self) -> Result<(), HeaderProviderError> {
-            self.reauth_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
-    }
-
-    fn unauthenticated() -> OperatorRpcError {
-        OperatorRpcError::Connection(Box::new(Status::unauthenticated("nope")))
-    }
-
-    #[macros::async_test_all]
-    async fn with_reauth_reauthenticates_and_retries_once_on_unauthenticated() {
-        let provider = Arc::new(CountingHeaderProvider::default());
-        let header_provider: Arc<dyn HeaderProvider> = provider.clone();
-        let attempts = AtomicUsize::new(0);
-
-        let result: Result<u8, OperatorRpcError> = with_reauth(&header_provider, || async {
-            // First attempt is rejected; the post-reauth retry succeeds.
-            if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                Err(unauthenticated())
-            } else {
-                Ok(7)
-            }
-        })
-        .await;
-
-        assert_eq!(result.unwrap(), 7);
-        assert_eq!(
-            attempts.load(Ordering::SeqCst),
-            2,
-            "expected exactly one retry"
-        );
-        assert_eq!(provider.reauth_calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[macros::async_test_all]
-    async fn with_reauth_does_not_retry_on_success() {
-        let provider = Arc::new(CountingHeaderProvider::default());
-        let header_provider: Arc<dyn HeaderProvider> = provider.clone();
-        let attempts = AtomicUsize::new(0);
-
-        let result: Result<u8, OperatorRpcError> = with_reauth(&header_provider, || async {
-            attempts.fetch_add(1, Ordering::SeqCst);
-            Ok(1)
-        })
-        .await;
-
-        assert_eq!(result.unwrap(), 1);
-        assert_eq!(attempts.load(Ordering::SeqCst), 1);
-        assert_eq!(provider.reauth_calls.load(Ordering::SeqCst), 0);
-    }
-
-    #[macros::async_test_all]
-    async fn with_reauth_does_not_retry_on_non_auth_error() {
-        let provider = Arc::new(CountingHeaderProvider::default());
-        let header_provider: Arc<dyn HeaderProvider> = provider.clone();
-        let attempts = AtomicUsize::new(0);
-
-        let result: Result<u8, OperatorRpcError> = with_reauth(&header_provider, || async {
-            attempts.fetch_add(1, Ordering::SeqCst);
-            Err(OperatorRpcError::Connection(Box::new(Status::internal(
-                "boom",
-            ))))
-        })
-        .await;
-
-        assert!(
-            matches!(result, Err(OperatorRpcError::Connection(s)) if s.code() == Code::Internal)
-        );
-        assert_eq!(
-            attempts.load(Ordering::SeqCst),
-            1,
-            "no retry on non-auth error"
-        );
-        assert_eq!(provider.reauth_calls.load(Ordering::SeqCst), 0);
     }
 }

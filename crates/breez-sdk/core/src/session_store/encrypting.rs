@@ -86,7 +86,10 @@ impl spark_wallet::SessionStore for EncryptingSessionStore {
         service_identity_key: &PublicKey,
     ) -> Result<spark_wallet::Session, spark_wallet::SessionStoreError> {
         let stored = self.inner.get_session(service_identity_key).await?;
-        let token = self.decrypt_token(&stored.token).await?;
+        // Treat the session as not found if the token cannot be decrypted.
+        let Ok(token) = self.decrypt_token(&stored.token).await else {
+            return Err(spark_wallet::SessionStoreError::NotFound);
+        };
         Ok(spark_wallet::Session {
             token,
             expiration: stored.expiration,
@@ -263,15 +266,72 @@ mod tests {
             .await
             .unwrap();
 
+        // A wrong-key reader can't decrypt the token, so it reads as absent
+        // (NotFound) and the caller re-authenticates instead of using a bad token.
         let result = reader.get_session(&pk).await;
-        let msg = match result {
-            Ok(_) => panic!("reader unexpectedly decrypted writer's session"),
-            Err(e) => e.to_string(),
-        };
         assert!(
-            msg.contains("decrypt"),
-            "expected decrypt error, got: {msg}"
+            matches!(result, Err(spark_wallet::SessionStoreError::NotFound)),
+            "expected NotFound for an undecryptable token"
         );
+    }
+
+    /// Mode switch plaintext -> encrypt: a token written before encryption was
+    /// enabled can't be decrypted, so `get_session` reports it absent and the
+    /// caller re-authenticates and stores a fresh encrypted token.
+    #[async_test_all]
+    async fn plaintext_token_read_in_encrypt_mode_is_not_found() {
+        let inner = Arc::new(InspectableInner::default());
+        let pk = test_pubkey(5);
+        inner
+            .set_session(
+                &pk,
+                spark_wallet::Session {
+                    token: "plaintext.bearer.token".to_string(),
+                    expiration: 2_000_000_000,
+                },
+            )
+            .await
+            .unwrap();
+
+        let sm =
+            EncryptingSessionStore::new(inner.clone(), test_signer(5), Network::Regtest).unwrap();
+        assert!(
+            matches!(
+                sm.get_session(&pk).await,
+                Err(spark_wallet::SessionStoreError::NotFound)
+            ),
+            "a plaintext token must read as NotFound in encrypt mode"
+        );
+    }
+
+    /// Mode switch encrypt -> plaintext: without the encrypting wrapper the inner
+    /// store returns the ciphertext verbatim (the token is opaque, so a plaintext
+    /// store can't detect it). It keeps its plaintext expiration, so recovery
+    /// relies on the token expiring rather than on local detection.
+    #[async_test_all]
+    async fn ciphertext_read_in_plaintext_mode_is_returned_verbatim() {
+        let inner = Arc::new(InspectableInner::default());
+        let sm =
+            EncryptingSessionStore::new(inner.clone(), test_signer(6), Network::Regtest).unwrap();
+        let pk = test_pubkey(6);
+        sm.set_session(
+            &pk,
+            spark_wallet::Session {
+                token: "the-real-token".to_string(),
+                expiration: 2_000_000_000,
+            },
+        )
+        .await
+        .unwrap();
+
+        // Read the inner store directly, as a plaintext-mode build would.
+        let raw = inner.get_session(&pk).await.unwrap();
+        assert_ne!(
+            raw.token, "the-real-token",
+            "plaintext read returns the stored ciphertext, not the original token"
+        );
+        assert!(BASE64.decode(raw.token.as_bytes()).is_ok());
+        assert_eq!(raw.expiration, 2_000_000_000);
     }
 
     /// A `BreezSigner` that cannot encrypt, modeling a no-export signer whose

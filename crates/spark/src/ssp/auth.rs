@@ -6,7 +6,7 @@ use bitcoin::secp256k1::PublicKey;
 use platform_utils::HttpClient;
 use tracing::{debug, error};
 
-use crate::header_provider::{HeaderProvider, HeaderProviderError, ReauthGuard};
+use crate::header_provider::{HeaderProvider, HeaderProviderError};
 use crate::session_store::{Session, SessionStore, SessionStoreError};
 use crate::signer::SparkSigner;
 use crate::ssp::graphql::client::post_graphql_query;
@@ -24,7 +24,6 @@ pub struct SspAuthHeaderProvider {
     spark_signer: Arc<dyn SparkSigner>,
     session_store: Arc<dyn SessionStore>,
     ssp_identity_public_key: PublicKey,
-    reauth: ReauthGuard,
 }
 
 impl SspAuthHeaderProvider {
@@ -43,7 +42,6 @@ impl SspAuthHeaderProvider {
             spark_signer,
             session_store,
             ssp_identity_public_key,
-            reauth: ReauthGuard::default(),
         }
     }
 
@@ -147,21 +145,5 @@ impl HeaderProvider for SspAuthHeaderProvider {
             "Authorization".to_string(),
             format!("Bearer {}", session.token),
         )]))
-    }
-
-    async fn reauthenticate(&self) -> Result<(), HeaderProviderError> {
-        self.reauth
-            .run(|| async {
-                let session = self
-                    .authenticate()
-                    .await
-                    .map_err(|e| HeaderProviderError::Generic(e.to_string()))?;
-                self.session_store
-                    .set_session(&self.ssp_identity_public_key, session)
-                    .await
-                    .map_err(|e| HeaderProviderError::Generic(e.to_string()))?;
-                Ok(())
-            })
-            .await
     }
 }

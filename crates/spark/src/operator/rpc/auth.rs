@@ -12,7 +12,7 @@ use super::spark_authn::{
     GetChallengeRequest, VerifyChallengeRequest,
     spark_authn_service_client::SparkAuthnServiceClient,
 };
-use crate::header_provider::{HeaderProvider, HeaderProviderError, ReauthGuard};
+use crate::header_provider::{HeaderProvider, HeaderProviderError};
 use crate::operator::rpc::transport::grpc_client::Transport;
 use crate::session_store::{Session, SessionStore, SessionStoreError};
 use crate::signer::SparkSigner;
@@ -23,9 +23,6 @@ pub struct SoAuthHeaderProvider {
     spark_signer: Arc<dyn SparkSigner>,
     session_store: Arc<dyn SessionStore>,
     identity_public_key: PublicKey,
-    // Shared across clones so a session-invalidation wave coalesces to one
-    // re-authentication regardless of which clone each rejected call holds.
-    reauth: Arc<ReauthGuard>,
 }
 
 impl SoAuthHeaderProvider {
@@ -40,7 +37,6 @@ impl SoAuthHeaderProvider {
             spark_signer,
             session_store,
             identity_public_key,
-            reauth: Arc::new(ReauthGuard::default()),
         }
     }
 
@@ -134,21 +130,5 @@ impl HeaderProvider for SoAuthHeaderProvider {
             "authorization".to_string(),
             session.token,
         )]))
-    }
-
-    async fn reauthenticate(&self) -> std::result::Result<(), HeaderProviderError> {
-        self.reauth
-            .run(|| async {
-                let session = self
-                    .authenticate()
-                    .await
-                    .map_err(|e| HeaderProviderError::Generic(e.to_string()))?;
-                self.session_store
-                    .set_session(&self.identity_public_key, session)
-                    .await
-                    .map_err(|e| HeaderProviderError::Generic(e.to_string()))?;
-                Ok(())
-            })
-            .await
     }
 }
