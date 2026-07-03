@@ -187,6 +187,7 @@ pub async fn connect_with_signer(
         request.config,
         request.breez_signer,
         request.spark_signer,
+        request.supports_ecies_hmac,
     )
     .with_default_storage(request.storage_dir);
     let sdk = builder.build().await?;
@@ -224,7 +225,6 @@ pub fn default_config(network: Network) -> Config {
         spark_config: Some(default_spark_config(network)),
         background_tasks_enabled: true,
         cross_chain_config: None,
-        signer_supports_ecies_hmac: true,
     }
 }
 

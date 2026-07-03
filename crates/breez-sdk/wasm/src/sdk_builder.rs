@@ -226,6 +226,7 @@ impl SdkBuilder {
         config: Config,
         breez_signer: crate::signer::JsExternalBreezSigner,
         spark_signer: crate::signer::JsExternalSparkSigner,
+        supports_ecies_hmac: bool,
     ) -> Self {
         use crate::signer::{WasmExternalBreezSigner, WasmExternalSparkSigner};
         use std::sync::Arc;
@@ -243,6 +244,7 @@ impl SdkBuilder {
                 config_core,
                 signer_adapter,
                 spark_signer_adapter,
+                supports_ecies_hmac,
             ),
             storage_config: None,
             storage: None,

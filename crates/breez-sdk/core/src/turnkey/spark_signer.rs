@@ -29,7 +29,7 @@ use tokio::sync::Mutex;
 
 use bitcoin::bip32::DerivationPath;
 use bitcoin::hashes::{Hash, sha256};
-use bitcoin::secp256k1::{PublicKey, SecretKey, ecdsa, schnorr};
+use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey, ecdsa, schnorr};
 use frost_secp256k1_tr::Identifier;
 use frost_secp256k1_tr::round1::{NonceCommitment, SigningCommitments};
 use frost_secp256k1_tr::round2::SignatureShare;
@@ -525,12 +525,12 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
         &self,
         index: u32,
     ) -> Result<PublicKeyBytes, SignerError> {
-        // Fail here if the key can't be exported (a deny-export policy), so an
-        // address that could never be claimed or refunded is never issued.
-        self.export_static_deposit_key(index).await?;
-        Ok(PublicKeyBytes::from_public_key(
-            &self.static_deposit_public_key(index).await?,
-        ))
+        // Export the static-deposit key up front so a signer that can't export
+        // it (a deny-export policy) fails here, not later. The pubkey is derived
+        // from the exported secret, so there's no second Turnkey round-trip.
+        let secret = self.export_static_deposit_key(index).await?;
+        let public_key = PublicKey::from_secret_key(&Secp256k1::new(), &secret);
+        Ok(PublicKeyBytes::from_public_key(&public_key))
     }
 
     async fn sign_authentication_challenge(

@@ -823,7 +823,9 @@ pub async fn build_sdk_with_external_signer(
     config.real_time_sync_server_url = None;
 
     let signers = default_external_signers(mnemonic, None, Network::Regtest, None)?;
-    let builder = SdkBuilder::new_with_signer(config, signers.breez_signer, signers.spark_signer);
+    // A seed-derived external signer can always perform local ECIES/HMAC.
+    let builder =
+        SdkBuilder::new_with_signer(config, signers.breez_signer, signers.spark_signer, true);
     let builder = apply_storage(builder, storage_dir).await?;
     let sdk = builder.build().await?;
 
@@ -883,14 +885,19 @@ pub fn regtest_server_test_config() -> Config {
 /// Builds a Regtest SDK for the given signer backend with the standard test
 /// config, so one test body can run against multiple signers.
 pub async fn build_backend_sdk(backend: SignerBackend) -> Result<SdkInstance> {
-    build_backend_sdk_with_config(backend, regtest_test_config()).await
+    build_backend_sdk_with_config(backend, regtest_test_config(), true).await
 }
 
 /// Like [`build_backend_sdk`], but with a caller-supplied config (e.g. to block
-/// auto-claim with `max_deposit_claim_fee = None` for refund tests).
+/// auto-claim with `max_deposit_claim_fee = None` for refund tests) and the
+/// external signer's `supports_ecies_hmac` capability (ignored for the seed
+/// backend, which always supports it; only the Turnkey backend reads it, so it
+/// is unused when the `turnkey` feature is off).
+#[cfg_attr(not(feature = "turnkey"), allow(unused_variables))]
 pub async fn build_backend_sdk_with_config(
     backend: SignerBackend,
     config: Config,
+    supports_ecies_hmac: bool,
 ) -> Result<SdkInstance> {
     let temp = TempDir::new()?;
     let dir = temp.path().to_string_lossy().to_string();
@@ -902,7 +909,14 @@ pub async fn build_backend_sdk_with_config(
         }
         #[cfg(feature = "turnkey")]
         SignerBackend::Turnkey => {
-            crate::turnkey::build_sdk_with_turnkey(config, dir, Some(temp), true).await
+            crate::turnkey::build_sdk_with_turnkey(
+                config,
+                dir,
+                Some(temp),
+                true,
+                supports_ecies_hmac,
+            )
+            .await
         }
     }
 }
@@ -912,10 +926,14 @@ pub async fn build_backend_sdk_with_config(
 /// failure (e.g. a deny-export policy with encryption enabled). Call
 /// `sync_wallet` to trigger and observe the first sync.
 #[cfg(feature = "turnkey")]
-pub async fn connect_turnkey_without_initial_sync(config: Config) -> Result<SdkInstance> {
+pub async fn connect_turnkey_without_initial_sync(
+    config: Config,
+    supports_ecies_hmac: bool,
+) -> Result<SdkInstance> {
     let temp = TempDir::new()?;
     let dir = temp.path().to_string_lossy().to_string();
-    crate::turnkey::build_sdk_with_turnkey(config, dir, Some(temp), false).await
+    crate::turnkey::build_sdk_with_turnkey(config, dir, Some(temp), false, supports_ecies_hmac)
+        .await
 }
 
 /// Waits for an `UnclaimedDeposits` event, returning the unclaimed deposits.

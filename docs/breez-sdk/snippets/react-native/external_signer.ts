@@ -31,6 +31,7 @@ const exampleConnectWithSigner = async (
     config,
     breezSigner: signers.breezSigner,
     sparkSigner: signers.sparkSigner,
+    supportsEciesHmac: true,
     storageDir: `${RNFS.DocumentDirectoryPath}/data`
   })
 }

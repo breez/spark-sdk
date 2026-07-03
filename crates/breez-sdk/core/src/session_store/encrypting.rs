@@ -29,7 +29,7 @@ const ENCRYPTION_DERIVATION_PATH_TEST: &str = "m/1397245774'/1'/0'/0/0";
 ///
 /// Each stored token is tagged with its mode (`enc:` / `pln:`). On read, a token
 /// written in the other mode (or a legacy untagged one) reads as `NotFound`, so
-/// flipping `Config::signer_supports_ecies_hmac` on an existing wallet forces a
+/// flipping the signer's `supports_ecies_hmac` on an existing wallet forces a
 /// re-authentication that re-stores the token in the current mode. Detection is
 /// symmetric: a stale ciphertext and a stale plaintext token are both rejected in
 /// the other mode.

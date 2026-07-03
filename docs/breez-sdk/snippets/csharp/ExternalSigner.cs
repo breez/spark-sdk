@@ -36,6 +36,7 @@ namespace BreezSdkSnippets
                 config: config,
                 breezSigner: signers.breezSigner,
                 sparkSigner: signers.sparkSigner,
+                supportsEciesHmac: true,
                 storageDir: "./.data"
             ));
 

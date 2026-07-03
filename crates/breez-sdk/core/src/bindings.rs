@@ -37,14 +37,22 @@ impl SdkBuilder {
     /// - `breez_signer`: External signer for non-Spark SDK signing (LNURL-auth,
     ///   sync, message signing, ECIES).
     /// - `spark_signer`: External high-level Spark signer for the Spark wallet.
+    /// - `supports_ecies_hmac`: Whether the signer can perform the SDK's local
+    ///   ECIES/HMAC operations. `false` keeps session tokens in plaintext and
+    ///   disables the features that rely on ECIES/HMAC.
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
     pub fn new_with_signer(
         config: Config,
         breez_signer: Arc<dyn crate::signer::ExternalBreezSigner>,
         spark_signer: Arc<dyn crate::signer::ExternalSparkSigner>,
+        supports_ecies_hmac: bool,
     ) -> Self {
-        let inner =
-            crate::sdk_builder::SdkBuilder::new_with_signer(config, breez_signer, spark_signer);
+        let inner = crate::sdk_builder::SdkBuilder::new_with_signer(
+            config,
+            breez_signer,
+            spark_signer,
+            supports_ecies_hmac,
+        );
         SdkBuilder {
             inner: Mutex::new(inner),
         }

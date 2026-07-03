@@ -675,7 +675,6 @@ pub struct Config {
     pub spark_config: Option<SparkConfig>,
     pub background_tasks_enabled: bool,
     pub cross_chain_config: Option<CrossChainConfig>,
-    pub signer_supports_ecies_hmac: bool,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainConfig)]

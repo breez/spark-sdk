@@ -46,11 +46,13 @@ pub async fn connect_with_signer(
     config: Config,
     breez_signer: crate::signer::JsExternalBreezSigner,
     spark_signer: crate::signer::JsExternalSparkSigner,
+    supports_ecies_hmac: bool,
     storage_dir: String,
 ) -> WasmResult<BreezSdk> {
-    let builder = SdkBuilder::new_with_signer(config, breez_signer, spark_signer)
-        .with_default_storage(storage_dir)
-        .await?;
+    let builder =
+        SdkBuilder::new_with_signer(config, breez_signer, spark_signer, supports_ecies_hmac)
+            .with_default_storage(storage_dir)
+            .await?;
     let sdk = builder.build().await?;
     Ok(sdk)
 }

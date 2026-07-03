@@ -43,10 +43,11 @@ func connectWithSigner(
 
 	// Connect using the external signers
 	sdk, err := breez_sdk_spark.ConnectWithSigner(breez_sdk_spark.ConnectWithSignerRequest{
-		Config:      config,
-		BreezSigner: signers.BreezSigner,
-		SparkSigner: signers.SparkSigner,
-		StorageDir:  "./.data",
+		Config:            config,
+		BreezSigner:       signers.BreezSigner,
+		SparkSigner:       signers.SparkSigner,
+		SupportsEciesHmac: true,
+		StorageDir:        "./.data",
 	})
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError

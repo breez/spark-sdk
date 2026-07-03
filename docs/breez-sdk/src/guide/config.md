@@ -166,9 +166,3 @@ Constraints:
 The {{#name default_slippage_bps}} field sets the per-instance slippage default applied when the per-request {{#name max_slippage_bps}} is unset. It must be in the 10 to 500 basis-point range; when {{#name default_slippage_bps}} itself is unset, the SDK falls back to a built-in default of 100 bps (1%).
 
 See [Send USDC/USDT](./cross_chain.md) for the provider lineup, status lifecycle, retry-safety semantics, and limitations.
-
-## Signer ECIES/HMAC support
-
-Whether the signer can perform the SDK's local ECIES/HMAC operations. Defaults to `true`.
-
-Set {{#name signer_supports_ecies_hmac}} to `false` when you connect a signer that can't run these locally (for example, a policy-restricted enclave). The SDK then keeps session tokens in plaintext and disables the features that need local encryption.

@@ -27,6 +27,7 @@ async fn connect_example(signers: ExternalSigners) -> Result<BreezSdk, SdkError>
         config,
         breez_signer: signers.breez_signer,
         spark_signer: signers.spark_signer,
+        supports_ecies_hmac: true,
         storage_dir: "./.data".to_string(),
     })
     .await?;

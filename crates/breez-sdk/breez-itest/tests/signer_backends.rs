@@ -208,7 +208,7 @@ async fn lightning_receive(#[case] backend: SignerBackend) -> Result<()> {
 async fn static_deposit_refund(#[case] backend: SignerBackend) -> Result<()> {
     let mut config = regtest_test_config();
     config.max_deposit_claim_fee = None;
-    let mut sdk = build_backend_sdk_with_config(backend, config).await?;
+    let mut sdk = build_backend_sdk_with_config(backend, config, true).await?;
 
     let address = sdk
         .sdk
@@ -305,7 +305,7 @@ async fn token_mint(#[case] backend: SignerBackend) -> Result<()> {
     Ok(())
 }
 
-/// No-export signer end-to-end: with `signer_supports_ecies_hmac = false` the
+/// No-export signer end-to-end: with the signer declaring no ECIES/HMAC support the
 /// session store stays plaintext (no encryption-key export), the wallet connects,
 /// and Spark receive works. On-chain Bitcoin receive fails, though: deriving the
 /// address exports the static-deposit key, which a deny-export policy blocks, so
@@ -320,9 +320,8 @@ async fn token_mint(#[case] backend: SignerBackend) -> Result<()> {
 #[test_log::test(tokio::test)]
 #[ignore = "requires a Turnkey policy denying EXPORT_WALLET_ACCOUNT; run with --ignored"]
 async fn turnkey_no_export_gates_onchain_receive() -> Result<()> {
-    let mut config = regtest_test_config();
-    config.signer_supports_ecies_hmac = false;
-    let sdk = build_backend_sdk_with_config(SignerBackend::Turnkey, config).await?;
+    let config = regtest_test_config();
+    let sdk = build_backend_sdk_with_config(SignerBackend::Turnkey, config, false).await?;
 
     // Spark receive needs no key export, so it still works.
     let spark = sdk
@@ -347,8 +346,8 @@ async fn turnkey_no_export_gates_onchain_receive() -> Result<()> {
     Ok(())
 }
 
-/// Shared body for the deny-export encryption misconfiguration guard: with
-/// `signer_supports_ecies_hmac = true` against a Turnkey policy that denies
+/// Shared body for the deny-export encryption misconfiguration guard: with the
+/// signer declared ECIES/HMAC-capable against a Turnkey policy that denies
 /// `EXPORT_WALLET_ACCOUNT`, an operation that writes a session token must fail
 /// closed rather than silently fall back to plaintext. `update_user_settings`
 /// makes an authenticated operator call whose token is written through the
@@ -357,11 +356,11 @@ async fn turnkey_no_export_gates_onchain_receive() -> Result<()> {
 /// signer-driven and would instead fail at the static-deposit export), and works
 /// the same in client and server mode (no background-only dependency).
 #[cfg(feature = "turnkey")]
-async fn assert_update_settings_fails_under_deny_export(mut config: Config) -> Result<()> {
-    config.signer_supports_ecies_hmac = true;
+async fn assert_update_settings_fails_under_deny_export(config: Config) -> Result<()> {
     // Connect without the initial-sync wait: a failing initial sync never flips
     // the synced signal, and `ensure_synced` is rejected outright in server mode.
-    let sdk = connect_turnkey_without_initial_sync(config).await?;
+    // The signer is declared ECIES/HMAC-capable (the misconfiguration under test).
+    let sdk = connect_turnkey_without_initial_sync(config, true).await?;
     let err = sdk
         .sdk
         .update_user_settings(UpdateUserSettingsRequest {

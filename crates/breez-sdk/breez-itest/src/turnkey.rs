@@ -168,6 +168,7 @@ pub async fn build_sdk_with_turnkey(
     storage_dir: String,
     temp_dir: Option<TempDir>,
     ensure_synced: bool,
+    supports_ecies_hmac: bool,
 ) -> Result<SdkInstance> {
     let (turnkey_config, guard) = provision_turnkey_wallet().await?;
     let turnkey_guard = Some(guard);
@@ -176,7 +177,12 @@ pub async fn build_sdk_with_turnkey(
         .await
         .map_err(|e| anyhow::anyhow!("create_turnkey_signer failed: {e}"))?;
 
-    let builder = SdkBuilder::new_with_signer(config, signers.breez_signer, signers.spark_signer);
+    let builder = SdkBuilder::new_with_signer(
+        config,
+        signers.breez_signer,
+        signers.spark_signer,
+        supports_ecies_hmac,
+    );
     let builder = apply_storage(builder, storage_dir).await?;
     let sdk = builder.build().await?;
 

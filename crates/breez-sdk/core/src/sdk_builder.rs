@@ -60,7 +60,22 @@ enum SignerSource {
     External {
         breez: Arc<dyn crate::signer::ExternalBreezSigner>,
         spark: Arc<dyn crate::signer::ExternalSparkSigner>,
+        /// Whether this signer can perform the SDK's local ECIES/HMAC. A seed
+        /// signer always can, so this only varies for external signers.
+        supports_ecies_hmac: bool,
     },
+}
+
+impl SignerSource {
+    fn supports_ecies_hmac(&self) -> bool {
+        match self {
+            SignerSource::Seed { .. } => true,
+            SignerSource::External {
+                supports_ecies_hmac,
+                ..
+            } => *supports_ecies_hmac,
+        }
+    }
 }
 
 /// The four signers derived from a single signer source.
@@ -137,17 +152,22 @@ impl SdkBuilder {
     /// - `breez_signer`: External signer for non-Spark SDK signing (LNURL-auth,
     ///   real-time sync, message signing, ECIES).
     /// - `spark_signer`: External high-level Spark signer for the Spark wallet.
+    /// - `supports_ecies_hmac`: Whether the signer can perform the SDK's local
+    ///   ECIES/HMAC operations. `false` keeps session tokens in plaintext and
+    ///   disables the features that rely on ECIES/HMAC.
     #[allow(clippy::needless_pass_by_value)]
     pub fn new_with_signer(
         config: Config,
         breez_signer: Arc<dyn crate::signer::ExternalBreezSigner>,
         spark_signer: Arc<dyn crate::signer::ExternalSparkSigner>,
+        supports_ecies_hmac: bool,
     ) -> Self {
         SdkBuilder {
             config,
             signer_source: SignerSource::External {
                 breez: breez_signer,
                 spark: spark_signer,
+                supports_ecies_hmac,
             },
             storage: None,
             chain_service: None,
@@ -397,8 +417,9 @@ impl SdkBuilder {
         let background_services_enabled = runtime.starts_background_services();
         validate_server_mode(&self.config, background_services_enabled)?;
 
+        let supports_ecies_hmac = self.signer_source.supports_ecies_hmac();
         let signers = build_signers(&self.config, self.signer_source)?;
-        validate_signer_capabilities(&self.config)?;
+        validate_signer_capabilities(&self.config, supports_ecies_hmac)?;
 
         let context = resolve_context(self.context, &self.config).await?;
         let stores = resolve_storage(self.storage, &context, &signers.spark, &self.config).await?;
@@ -427,7 +448,7 @@ impl SdkBuilder {
             stores.session_store.clone(),
             &signers.base,
             self.config.network,
-            self.config.signer_supports_ecies_hmac,
+            supports_ecies_hmac,
         )?;
 
         let spark_wallet = build_spark_wallet(BuildSparkWalletParams {
@@ -576,8 +597,11 @@ fn validate_server_mode(
 
 /// Rejects configs whose features need local encryption when the signer can't
 /// perform ECIES/HMAC.
-fn validate_signer_capabilities(config: &Config) -> Result<(), SdkError> {
-    if config.signer_supports_ecies_hmac {
+fn validate_signer_capabilities(
+    config: &Config,
+    supports_ecies_hmac: bool,
+) -> Result<(), SdkError> {
+    if supports_ecies_hmac {
         return Ok(());
     }
     if config.real_time_sync_server_url.is_some() {
@@ -619,7 +643,7 @@ fn build_signers(config: &Config, signer_source: SignerSource) -> Result<Signers
                 ));
                 (base, spark)
             }
-            SignerSource::External { breez, spark } => {
+            SignerSource::External { breez, spark, .. } => {
                 use crate::signer::{ExternalBreezSignerAdapter, ExternalSparkSignerAdapter};
                 let base: Arc<dyn crate::signer::BreezSigner> =
                     Arc::new(ExternalBreezSignerAdapter::new(breez));
@@ -784,7 +808,7 @@ fn finalize_spark_wallet_config(
 /// Wraps the resolved session store (or an in-memory default) in the encrypting
 /// and caching layers.
 ///
-/// `encrypt` mirrors `Config::signer_supports_ecies_hmac`. The
+/// `encrypt` mirrors the signer's `supports_ecies_hmac`. The
 /// `EncryptingSessionStore` is always in the stack: with `encrypt` it encrypts
 /// tokens at rest, otherwise it stores them in plaintext. Either way it tags each
 /// token with its mode, so flipping the flag between runs is caught on read and
@@ -1033,14 +1057,13 @@ mod tests {
         // ECIES/HMAC supported: encryption-dependent features are allowed.
         let mut config = default_config(Network::Regtest);
         config.real_time_sync_server_url = Some("https://example.com".to_string());
-        assert!(super::validate_signer_capabilities(&config).is_ok());
+        assert!(super::validate_signer_capabilities(&config, true).is_ok());
 
         // No ECIES/HMAC + real-time sync: rejected with a clear error.
         let mut config = default_config(Network::Regtest);
-        config.signer_supports_ecies_hmac = false;
         config.real_time_sync_server_url = Some("https://example.com".to_string());
         config.cross_chain_config = None;
-        match super::validate_signer_capabilities(&config) {
+        match super::validate_signer_capabilities(&config, false) {
             Err(SdkError::SignerEciesHmacUnavailable(m)) => {
                 assert!(m.contains("Real-time sync"), "got: {m}");
             }
@@ -1050,10 +1073,9 @@ mod tests {
         // No ECIES/HMAC + no encryption-dependent feature: allowed, so a
         // payments-only wallet still builds.
         let mut config = default_config(Network::Regtest);
-        config.signer_supports_ecies_hmac = false;
         config.real_time_sync_server_url = None;
         config.cross_chain_config = None;
-        assert!(super::validate_signer_capabilities(&config).is_ok());
+        assert!(super::validate_signer_capabilities(&config, false).is_ok());
     }
 
     #[tokio::test]

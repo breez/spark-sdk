@@ -96,6 +96,11 @@ pub struct ConnectWithSignerRequest {
     pub breez_signer: std::sync::Arc<dyn crate::signer::ExternalBreezSigner>,
     /// External high-level Spark signer for the Spark wallet flows.
     pub spark_signer: std::sync::Arc<dyn crate::signer::ExternalSparkSigner>,
+    /// Whether the signer can perform the SDK's local ECIES/HMAC operations.
+    /// Set `false` for a signer that can't run them locally (for example a
+    /// policy-restricted enclave): the SDK then keeps session tokens in plaintext
+    /// and disables the features that rely on ECIES/HMAC.
+    pub supports_ecies_hmac: bool,
     pub storage_dir: String,
 }
 
@@ -676,14 +681,6 @@ pub struct Config {
     /// run background work (e.g. web sockets), so enabling is left to the
     /// caller. Cross-chain sends are only supported on mainnet.
     pub cross_chain_config: Option<CrossChainConfig>,
-
-    /// Whether the signer can perform the SDK's local ECIES/HMAC operations.
-    /// Defaults to `true`.
-    ///
-    /// Set to `false` for a signer that can't run them locally (for example a
-    /// policy-restricted enclave). The SDK then keeps session tokens in plaintext
-    /// and disables the features that need local encryption.
-    pub signer_supports_ecies_hmac: bool,
 }
 
 /// Configuration for cross-chain sends.

@@ -31,7 +31,7 @@ The default implementations of the two interfaces, [DefaultExternalSigner](https
 
 ### Signers Without Local ECIES/HMAC Support
 
-Some external signers can't perform the SDK's local ECIES/HMAC operations (for example, a policy-restricted enclave that won't release key material). Declare this by setting {{#name signer_supports_ecies_hmac}} to `false` on the SDK {{#name Config}}. The SDK then keeps session tokens in plaintext and disables the features that need local encryption.
+Some external signers can't perform the SDK's local ECIES/HMAC operations (for example, a policy-restricted enclave that won't release key material). Declare this by setting {{#name supports_ecies_hmac}} to `false` on {{#name ConnectWithSignerRequest}}. The SDK then keeps session tokens in plaintext and disables the features that rely on local encryption.
 
 <div class="warning">
 <h4>Developer note</h4>
