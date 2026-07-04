@@ -86,6 +86,14 @@ pub(crate) struct SignRawPayloadResult {
 pub(crate) const ADDRESS_FORMAT_SPARK_MAINNET: &str = "ADDRESS_FORMAT_SPARK_MAINNET";
 pub(crate) const ADDRESS_FORMAT_SPARK_REGTEST: &str = "ADDRESS_FORMAT_SPARK_REGTEST";
 
+// Bitcoin P2TR address formats. Signing against a P2TR-format account makes
+// Turnkey switch to Schnorr and apply the BIP341 taproot key-path tweak (empty
+// script tree), unlike the Spark formats above which sign plain BIP340. Used to
+// spend leaf refund outputs in a unilateral exit. See
+// https://docs.turnkey.com/features/networks/bitcoin.
+pub(crate) const ADDRESS_FORMAT_BITCOIN_MAINNET_P2TR: &str = "ADDRESS_FORMAT_BITCOIN_MAINNET_P2TR";
+pub(crate) const ADDRESS_FORMAT_BITCOIN_REGTEST_P2TR: &str = "ADDRESS_FORMAT_BITCOIN_REGTEST_P2TR";
+
 pub(crate) const SPARK_SIGN_FROST_PATH: &str = "/public/v1/submit/spark_sign_frost";
 pub(crate) const SPARK_SIGN_FROST_TYPE: &str = "ACTIVITY_TYPE_SPARK_SIGN_FROST";
 pub(crate) const SPARK_SIGN_FROST_RESULT: &str = "sparkSignFrostResult";

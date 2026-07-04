@@ -12,6 +12,7 @@ use turnkey_enclave_encrypt::{ExportClient, QuorumPublicKey};
 use super::error::TurnkeyError;
 use super::transport::{OnConflict, TurnkeyClient};
 use super::types::{
+    ADDRESS_FORMAT_BITCOIN_MAINNET_P2TR, ADDRESS_FORMAT_BITCOIN_REGTEST_P2TR,
     ADDRESS_FORMAT_COMPRESSED, ADDRESS_FORMAT_SPARK_MAINNET, ADDRESS_FORMAT_SPARK_REGTEST,
     CREATE_WALLET_ACCOUNTS_PATH, CREATE_WALLET_ACCOUNTS_RESULT, CREATE_WALLET_ACCOUNTS_TYPE,
     CURVE_SECP256K1, CreateWalletAccountsIntent, CreateWalletAccountsResult, ENCODING_HEXADECIMAL,
@@ -28,6 +29,16 @@ pub(crate) fn spark_address_format(network: Network) -> &'static str {
     match network {
         Network::Mainnet => ADDRESS_FORMAT_SPARK_MAINNET,
         Network::Regtest => ADDRESS_FORMAT_SPARK_REGTEST,
+    }
+}
+
+/// The Bitcoin P2TR address format (and thus the BIP341 tweaked-Schnorr signing
+/// scheme) for the wallet's network. Used to sign leaf refund outputs in a
+/// unilateral exit.
+pub(crate) fn bitcoin_p2tr_format(network: Network) -> &'static str {
+    match network {
+        Network::Mainnet => ADDRESS_FORMAT_BITCOIN_MAINNET_P2TR,
+        Network::Regtest => ADDRESS_FORMAT_BITCOIN_REGTEST_P2TR,
     }
 }
 
@@ -107,6 +118,44 @@ impl TurnkeyClient {
             return Ok(public_key);
         }
         self.create_account(path, ADDRESS_FORMAT_COMPRESSED).await
+    }
+
+    /// Internal (untweaked) public key (hex) for a P2TR account at `path`,
+    /// provisioning it P2TR-format if absent. Creating it P2TR (not compressed)
+    /// lets the same path later sign its refund output as a tweaked BIP341
+    /// key-path spend for a unilateral exit, with one account per leaf path.
+    /// `create_account` returns the taproot address, so the key is read back.
+    pub(crate) async fn p2tr_pubkey_at(
+        &self,
+        path: String,
+        network: Network,
+    ) -> Result<String, TurnkeyError> {
+        let request = GetWalletAccountRequest {
+            organization_id: self.organization_id.clone(),
+            wallet_id: self.wallet_id.clone(),
+            path: path.clone(),
+        };
+        if let Ok(resp) = self
+            .process_request::<_, GetWalletAccountResponse>(
+                GET_WALLET_ACCOUNT_PATH,
+                &request,
+                OnConflict::Surface,
+            )
+            .await
+            && let Some(public_key) = resp.account.public_key
+        {
+            return Ok(public_key);
+        }
+        self.create_account(path, bitcoin_p2tr_format(network))
+            .await?;
+        let resp: GetWalletAccountResponse = self
+            .process_request(GET_WALLET_ACCOUNT_PATH, &request, OnConflict::Surface)
+            .await?;
+        resp.account.public_key.ok_or_else(|| {
+            TurnkeyError::UnexpectedResponse(
+                "P2TR wallet account did not expose a public key".into(),
+            )
+        })
     }
 
     /// Submits a `SIGN_RAW_PAYLOAD` activity: signs `payload_hex` with the
