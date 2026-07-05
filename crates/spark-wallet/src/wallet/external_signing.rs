@@ -110,9 +110,13 @@ impl SparkWallet {
             }
         };
 
-        self.tree_service
+        if let Err(e) = self
+            .tree_service
             .finalize_reservation(reservation.id.clone(), Some(claimed.as_slice()))
-            .await?;
+            .await
+        {
+            error!("Failed to finalize reservation: {e:?}");
+        }
         self.maybe_start_optimization().await;
         Ok(())
     }
@@ -309,9 +313,13 @@ impl SparkWallet {
             }
         };
 
-        self.tree_service
+        if let Err(e) = self
+            .tree_service
             .finalize_reservation(reservation.id.clone(), None)
-            .await?;
+            .await
+        {
+            error!("Failed to finalize reservation: {e:?}");
+        }
         self.maybe_start_optimization().await;
 
         create_transfer(
