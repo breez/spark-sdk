@@ -4,6 +4,8 @@ pub(in crate::sdk::payments) mod cross_chain;
 pub(super) mod spark_address;
 pub(super) mod spark_invoice;
 
+use tracing::warn;
+
 use crate::{
     ConversionEstimate, SendPaymentMethod,
     error::SdkError,
@@ -12,6 +14,7 @@ use crate::{
         PublishSignedTransferPackageResponse, SendPaymentRequest, SendPaymentResponse,
         SignedTransferPackage, TransferSignature, TransferTarget, UnsignedTransferPackage,
     },
+    persist::ObjectCacheRepository,
     sdk::BreezSdk,
     signer::{ExternalPrepareTransferRequest, ExternalPreparedTransfer},
 };
@@ -29,9 +32,27 @@ pub(in crate::sdk) async fn publish_signed_package_inner(
     sdk: &BreezSdk,
     signed_package: &SignedTransferPackage,
 ) -> Result<PublishOutcome, SdkError> {
+    let cache = ObjectCacheRepository::new(sdk.storage.clone());
     let res = match (&signed_package.unsigned, &signed_package.signature) {
-        (UnsignedTransferPackage::Swap { .. }, TransferSignature::Transfer { .. }) => {
+        (
+            UnsignedTransferPackage::Swap {
+                prepare_transfer, ..
+            },
+            TransferSignature::Transfer { .. },
+        ) => {
+            if let Ok(Some(_)) = cache
+                .fetch_published_package(&prepare_transfer.transfer_id)
+                .await
+            {
+                return Ok(PublishOutcome::SwapCompleted);
+            }
             super::client_signing::submit_swap(sdk, signed_package).await?;
+            if let Err(e) = cache
+                .save_published_package(&prepare_transfer.transfer_id, "swap")
+                .await
+            {
+                warn!("Failed to record the published swap package: {e:?}");
+            }
             return Ok(PublishOutcome::SwapCompleted);
         }
         (
@@ -54,9 +75,28 @@ pub(in crate::sdk) async fn publish_signed_package_inner(
                 .await
         }
         (
-            UnsignedTransferPackage::Token { token_context, .. },
+            UnsignedTransferPackage::Token {
+                prepare_token_transaction,
+                token_context,
+                ..
+            },
             TransferSignature::Token { signed },
-        ) => spark_address::send_token_signed(sdk, token_context, signed).await,
+        ) => {
+            let package_id = hex::encode(&prepare_token_transaction.digest);
+            if let Ok(Some(payment_id)) = cache.fetch_published_package(&package_id).await
+                && let Ok(payment) = sdk.storage.get_payment_by_id(payment_id).await
+            {
+                return Ok(PublishOutcome::Replayed(SendPaymentResponse { payment }));
+            }
+            let res = spark_address::send_token_signed(sdk, token_context, signed).await?;
+            if let Err(e) = cache
+                .save_published_package(&package_id, &res.payment.id)
+                .await
+            {
+                warn!("Failed to record the published token package: {e:?}");
+            }
+            Ok(res)
+        }
         _ => {
             return Err(SdkError::InvalidInput(
                 "signature does not match the unsigned package".to_string(),
