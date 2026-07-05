@@ -372,7 +372,7 @@ async fn test_client_signing_token_send_to_spark_invoice() -> Result<()> {
     let issuer = alice.sdk.get_token_issuer();
     let token_metadata = issuer
         .create_issuer_token(CreateIssuerTokenRequest {
-            name: "client-signing invoice token".to_string(),
+            name: "cs invoice token".to_string(),
             ticker: "CSI".to_string(),
             decimals: 2,
             is_freezable: false,
