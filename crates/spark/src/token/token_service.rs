@@ -701,7 +701,8 @@ impl TokenService {
                 prev_tx_vout: vout as u32,
             })
             .collect::<Vec<_>>();
-        self.token_output_service
+        if let Err(e) = self
+            .token_output_service
             .update_token_outputs(
                 &[],
                 Some(&TokenOutputs {
@@ -709,7 +710,10 @@ impl TokenService {
                     outputs: our_outputs,
                 }),
             )
-            .await?;
+            .await
+        {
+            error!("Failed to update token outputs after broadcast: {e:?}");
+        }
 
         Ok(token_transaction)
     }
@@ -1135,8 +1139,12 @@ impl TokenService {
         )
         .await?;
 
-        self.update_token_outputs_for_transaction(&token_transaction, &identity_public_key)
-            .await?;
+        if let Err(e) = self
+            .update_token_outputs_for_transaction(&token_transaction, &identity_public_key)
+            .await
+        {
+            error!("Failed to update token outputs after broadcast: {e:?}");
+        }
         Ok(token_transaction)
     }
 
