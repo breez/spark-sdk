@@ -293,17 +293,16 @@ async fn build_coop_exit_package(
     let coop_fee_quote: CoopExitFeeQuote = fee_quote.clone().into();
     let fee_sat = coop_fee_quote.fee_sats(&exit_speed);
     let receiver_sat = if prepare_response.fee_policy == FeePolicy::FeesIncluded {
-        let receiver = amount_sat.saturating_sub(fee_sat);
-        let dust_limit_sats = crate::utils::bitcoin_dust::get_dust_limit_sats(&address.address)?;
-        if receiver < dust_limit_sats {
-            return Err(SdkError::InvalidInput(format!(
-                "Amount is below the minimum of {dust_limit_sats} sats required for this address"
-            )));
-        }
-        receiver
+        amount_sat.saturating_sub(fee_sat)
     } else {
         amount_sat
     };
+    let dust_limit_sats = crate::utils::bitcoin_dust::get_dust_limit_sats(&address.address)?;
+    if receiver_sat < dust_limit_sats {
+        return Err(SdkError::InvalidInput(format!(
+            "Amount is below the minimum of {dust_limit_sats} sats required for this address"
+        )));
+    }
     let prep = sdk
         .spark_wallet
         .prepare_coop_exit_package(
