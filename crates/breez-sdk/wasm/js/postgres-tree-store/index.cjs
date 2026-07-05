@@ -697,15 +697,23 @@ class PostgresTreeStore {
   async _fetchFullLeavesByIds(client, ids) {
     if (!ids || ids.length === 0) return [];
     const result = await client.query(
-      "SELECT data FROM brz_tree_leaves WHERE user_id = $2 AND id = ANY($1)",
+      "SELECT id, data FROM brz_tree_leaves WHERE user_id = $2 AND id = ANY($1)",
       [ids, this.identity]
     );
-    if (result.rows.length !== ids.length) {
+    const byId = new Map(result.rows.map((r) => [r.id, r.data]));
+    const ordered = ids
+      .map((id) => {
+        const data = byId.get(id);
+        byId.delete(id);
+        return data;
+      })
+      .filter((data) => data !== undefined);
+    if (ordered.length !== ids.length) {
       throw new TreeStoreError(
-        `Could not resolve full data for all selected leaves (wanted ${ids.length}, got ${result.rows.length})`
+        `Could not resolve full data for all selected leaves (wanted ${ids.length}, got ${ordered.length})`
       );
     }
-    return result.rows.map((r) => r.data);
+    return ordered;
   }
 
   /**

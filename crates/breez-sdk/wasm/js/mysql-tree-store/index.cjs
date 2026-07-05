@@ -774,15 +774,24 @@ class MysqlTreeStore {
     if (!ids || ids.length === 0) return [];
     const placeholders = ids.map(() => "?").join(", ");
     const [rows] = await conn.query(
-      `SELECT data FROM brz_tree_leaves WHERE user_id = ? AND id IN (${placeholders})`,
+      `SELECT id, data FROM brz_tree_leaves WHERE user_id = ? AND id IN (${placeholders})`,
       [this.identity, ...ids]
     );
-    if (rows.length !== ids.length) {
+    const byId = new Map(rows.map((r) => [r.id, r.data]));
+    const ordered = ids
+      .map((id) => {
+        const data = byId.get(id);
+        byId.delete(id);
+        return data;
+      })
+      .filter((data) => data !== undefined)
+      .map((data) => parseJson(data));
+    if (ordered.length !== ids.length) {
       throw new TreeStoreError(
-        `Could not resolve full data for all selected leaves (wanted ${ids.length}, got ${rows.length})`
+        `Could not resolve full data for all selected leaves (wanted ${ids.length}, got ${ordered.length})`
       );
     }
-    return rows.map((r) => parseJson(r.data));
+    return ordered;
   }
 
   _selectLeavesByTargetAmounts(leaves, targetAmounts) {
