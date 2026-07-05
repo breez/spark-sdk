@@ -388,6 +388,11 @@ impl SparkWallet {
         prepared: PreparedTokenTransfer,
         signature: Vec<u8>,
     ) -> Result<TokenTransaction, SparkWalletError> {
+        for output in &prepared.receiver_outputs {
+            if let Some(invoice) = &output.spark_invoice {
+                self.parse_and_validate_spark_invoice(invoice)?;
+            }
+        }
         let tx = self
             .token_service
             .submit_token_transfer(prepared, signature)
