@@ -129,6 +129,7 @@ pub(super) async fn send_signed(
     signed: &ExternalPreparedTransfer,
     address: &str,
     amount_sat: u64,
+    confirmation_speed: &OnchainConfirmationSpeed,
     fee_quote: &SendOnchainFeeQuote,
 ) -> Result<SendPaymentResponse, SdkError> {
     let transfer = sdk
@@ -138,6 +139,7 @@ pub(super) async fn send_signed(
             prepare_transfer.leaf_ids()?,
             address,
             amount_sat,
+            confirmation_speed.clone().into(),
             fee_quote.clone().into(),
             signed.to_prepared_transfer()?,
         )

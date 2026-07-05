@@ -43,11 +43,11 @@ fn to_unsigned_package(
     })
 }
 
-pub(in crate::sdk::payments) fn prefers_bolt11_spark_route(
-    sdk: &BreezSdk,
+fn prefers_bolt11_spark_route(
+    prefer_spark: bool,
     prepare_response: &PrepareSendPaymentResponse,
 ) -> bool {
-    sdk.config.prefer_spark_over_lightning
+    prefer_spark
         && matches!(
             &prepare_response.payment_method,
             SendPaymentMethod::Bolt11Invoice {
@@ -93,7 +93,14 @@ pub(in crate::sdk) async fn build_unsigned_transfer_package(
             spark_transfer_fee_sats,
             lightning_fee_sats,
         } => {
-            if prefers_bolt11_spark_route(sdk, prepare_response) {
+            let (prefer_spark, completion_timeout_secs) = match options {
+                Some(BuildTransferPackageOptions::Bolt11Invoice {
+                    prefer_spark,
+                    completion_timeout_secs,
+                }) => (*prefer_spark, *completion_timeout_secs),
+                _ => (sdk.config.prefer_spark_over_lightning, None),
+            };
+            if prefers_bolt11_spark_route(prefer_spark, prepare_response) {
                 let spark_address = sdk
                     .spark_wallet
                     .extract_spark_address(&invoice_details.invoice.bolt11)?
@@ -114,8 +121,14 @@ pub(in crate::sdk) async fn build_unsigned_transfer_package(
                 }
                 return build_spark_package(sdk, prepare_response, &receiver, None).await;
             }
-            build_lightning_package(sdk, prepare_response, invoice_details, *lightning_fee_sats)
-                .await
+            build_lightning_package(
+                sdk,
+                prepare_response,
+                invoice_details,
+                *lightning_fee_sats,
+                completion_timeout_secs,
+            )
+            .await
         }
         SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
             build_coop_exit_package(sdk, prepare_response, address, fee_quote, options).await
@@ -179,6 +192,7 @@ async fn build_lightning_package(
     prepare_response: &PrepareSendPaymentResponse,
     invoice_details: &crate::Bolt11InvoiceDetails,
     lightning_fee_sats: u64,
+    completion_timeout_secs: Option<u32>,
 ) -> Result<UnsignedTransferPackage, SdkError> {
     let amount_sat: u64 = prepare_response.amount.try_into()?;
     let fee_policy = prepare_response.fee_policy;
@@ -228,6 +242,7 @@ async fn build_lightning_package(
             bolt11: invoice_details.invoice.bolt11.clone(),
             lnurl_pay: None,
             fee_policy,
+            completion_timeout_secs,
         },
     )
 }
@@ -320,6 +335,7 @@ async fn build_coop_exit_package(
         TransferTarget::CoopExit {
             address: address.address.clone(),
             fee_quote: fee_quote.clone(),
+            confirmation_speed: confirmation_speed.clone(),
         },
     )
 }

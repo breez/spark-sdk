@@ -98,6 +98,7 @@ pub(super) async fn send(
     Ok(SendPaymentResponse { payment })
 }
 
+#[expect(clippy::too_many_arguments)]
 pub(super) async fn send_signed(
     sdk: &BreezSdk,
     prepare_transfer: &ExternalPrepareTransferRequest,
@@ -106,6 +107,7 @@ pub(super) async fn send_signed(
     amount_sat: u64,
     fee_sat: u64,
     fee_policy: FeePolicy,
+    completion_timeout_secs: Option<u32>,
 ) -> Result<SendPaymentResponse, SdkError> {
     let amount_to_send = if fee_policy == FeePolicy::FeesIncluded {
         receiver_amount_with_overpayment(sdk, bolt11, amount_sat, fee_sat).await?
@@ -124,7 +126,11 @@ pub(super) async fn send_signed(
 
     let payment = sdk
         .lightning_sender
-        .payment_from_pay_result(result, u128::from(amount_to_send), 0)
+        .payment_from_pay_result(
+            result,
+            u128::from(amount_to_send),
+            completion_timeout_secs.unwrap_or(0).into(),
+        )
         .await?;
     Ok(SendPaymentResponse { payment })
 }

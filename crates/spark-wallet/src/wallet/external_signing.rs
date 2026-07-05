@@ -242,12 +242,14 @@ impl SparkWallet {
         }
     }
 
+    #[expect(clippy::too_many_arguments)]
     pub async fn publish_coop_exit_package(
         &self,
         transfer_id: TransferId,
         leaf_ids: Vec<TreeNodeId>,
         withdrawal_address: &str,
         amount_sats: u64,
+        exit_speed: ExitSpeed,
         fee_quote: CoopExitFeeQuote,
         approved_transfer: PreparedTransfer,
     ) -> Result<WalletTransfer, SparkWalletError> {
@@ -273,15 +275,12 @@ impl SparkWallet {
                 "reserved leaves do not cover the amount".to_string(),
             ));
         };
-        let Some(exit_speed) = [ExitSpeed::Fast, ExitSpeed::Medium, ExitSpeed::Slow]
-            .into_iter()
-            .find(|speed| fee_quote.fee_sats(speed) == fee_sats)
-        else {
+        if fee_quote.fee_sats(&exit_speed) != fee_sats {
             let _ = self.tree_service.cancel_reservation(reservation).await;
             return Err(SparkWalletError::Generic(
-                "could not match the fee leaves to a confirmation speed".to_string(),
+                "reserved fee leaves do not match the requested confirmation speed".to_string(),
             ));
-        };
+        }
         let target_amounts = TargetAmounts::new_amount_and_fee(amount_sats, Some(fee_sats));
 
         let target_leaves =

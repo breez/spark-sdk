@@ -1544,7 +1544,7 @@ pub enum FeePolicy {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum OnchainConfirmationSpeed {
     Fast,
     Medium,
@@ -1615,10 +1615,12 @@ pub enum TransferTarget {
         bolt11: String,
         lnurl_pay: Option<LnurlPayContext>,
         fee_policy: FeePolicy,
+        completion_timeout_secs: Option<u32>,
     },
     CoopExit {
         address: String,
         fee_quote: SendOnchainFeeQuote,
+        confirmation_speed: OnchainConfirmationSpeed,
     },
 }
 
@@ -1653,6 +1655,14 @@ pub enum TransferSignature {
 pub enum BuildTransferPackageOptions {
     BitcoinAddress {
         confirmation_speed: OnchainConfirmationSpeed,
+    },
+    Bolt11Invoice {
+        prefer_spark: bool,
+
+        /// If set, publishing the package waits up to this many seconds for the
+        /// payment to complete before returning it while still pending. If unset,
+        /// publishing returns immediately after initiating the payment.
+        completion_timeout_secs: Option<u32>,
     },
 }
 

@@ -114,7 +114,10 @@ async fn deferred_transfer_send(
             spark_address::send_signed(sdk, prepare_transfer, signed, spark_invoice.clone()).await
         }
         TransferTarget::Lightning {
-            bolt11, fee_policy, ..
+            bolt11,
+            fee_policy,
+            completion_timeout_secs,
+            ..
         } => {
             bolt11::send_signed(
                 sdk,
@@ -124,16 +127,22 @@ async fn deferred_transfer_send(
                 amount_sat,
                 fee_sat,
                 *fee_policy,
+                *completion_timeout_secs,
             )
             .await
         }
-        TransferTarget::CoopExit { address, fee_quote } => {
+        TransferTarget::CoopExit {
+            address,
+            fee_quote,
+            confirmation_speed,
+        } => {
             bitcoin_address::send_signed(
                 sdk,
                 prepare_transfer,
                 signed,
                 address,
                 amount_sat,
+                confirmation_speed,
                 fee_quote,
             )
             .await
