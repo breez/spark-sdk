@@ -1105,6 +1105,11 @@ mod tests {
     }
 
     #[async_test_all]
+    async fn test_reserve_leaves_by_ids_preserves_order() {
+        shared_tests::test_reserve_leaves_by_ids_preserves_order(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
     async fn test_reserve_leaves_by_ids_not_available() {
         shared_tests::test_reserve_leaves_by_ids_not_available(&InMemoryTreeStore::new()).await;
     }

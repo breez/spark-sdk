@@ -402,3 +402,9 @@ async fn test_set_leaves_replaces_fully() {
     let store = create_test_tree_store("pg_tree_replaces_fully").await;
     breez_sdk_spark::tree_store_tests::test_set_leaves_replaces_fully(&store).await;
 }
+
+#[wasm_bindgen_test]
+async fn test_reserve_leaves_by_ids_preserves_order() {
+    let store = create_test_tree_store("pg_tree_reserve_by_ids_order").await;
+    breez_sdk_spark::tree_store_tests::test_reserve_leaves_by_ids_preserves_order(&store).await;
+}

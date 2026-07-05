@@ -355,6 +355,30 @@ pub async fn test_reserve_leaves_by_ids_not_available(store: &dyn TreeStore) {
     ));
 }
 
+pub async fn test_reserve_leaves_by_ids_preserves_order(store: &dyn TreeStore) {
+    let leaves = vec![
+        create_test_tree_node("node1", 100),
+        create_test_tree_node("node2", 200),
+        create_test_tree_node("node3", 300),
+    ];
+    store.add_leaves(&leaves).await.unwrap();
+
+    // The per-leaf signing data in a signed package is positional, so the
+    // reservation must return leaves in the requested order.
+    let ids = vec![
+        leaves[2].id.clone(),
+        leaves[0].id.clone(),
+        leaves[1].id.clone(),
+    ];
+    let reservation = store
+        .try_reserve_leaves_by_ids(&ids, ReservationPurpose::Payment)
+        .await
+        .unwrap();
+
+    let got: Vec<TreeNodeId> = reservation.leaves.iter().map(|l| l.id.clone()).collect();
+    assert_eq!(got, ids);
+}
+
 pub async fn test_try_select_leaves(store: &dyn TreeStore) {
     let leaves = vec![
         create_test_tree_node("node1", 100),

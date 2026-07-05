@@ -1583,6 +1583,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_reserve_leaves_by_ids_preserves_order() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_reserve_leaves_by_ids_preserves_order(&fixture.store).await;
+    }
+
+    #[tokio::test]
     async fn test_reserve_leaves_by_ids_not_available() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_reserve_leaves_by_ids_not_available(&fixture.store).await;
