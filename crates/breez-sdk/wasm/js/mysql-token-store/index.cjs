@@ -658,7 +658,7 @@ class MysqlTokenStore {
 
         let outputs = outputRows.map((row) => this._outputFromRow(row));
 
-        if (preferredOutputs && preferredOutputs.length > 0) {
+        if (preferredOutputs) {
           const preferredOutpoints = new Set(
             preferredOutputs.map((p) => `${p.prevTxHash}:${p.prevTxVout}`)
           );
@@ -814,7 +814,7 @@ class MysqlTokenStore {
 
       let outputs = outputRows.map((row) => this._outputFromRow(row));
 
-      if (preferredOutputs && preferredOutputs.length > 0) {
+      if (preferredOutputs) {
         const preferredOutpoints = new Set(
           preferredOutputs.map((p) => `${p.prevTxHash}:${p.prevTxVout}`)
         );

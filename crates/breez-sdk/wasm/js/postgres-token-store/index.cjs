@@ -668,7 +668,7 @@ class PostgresTokenStore {
         let outputs = outputRows.rows.map((row) => this._outputFromRow(row));
 
         // Filter by preferred if provided
-        if (preferredOutputs && preferredOutputs.length > 0) {
+        if (preferredOutputs) {
           const preferredOutpoints = new Set(
             preferredOutputs.map((p) => `${p.prevTxHash}:${p.prevTxVout}`)
           );
@@ -823,7 +823,7 @@ class PostgresTokenStore {
 
       let outputs = outputRows.rows.map((row) => this._outputFromRow(row));
 
-      if (preferredOutputs && preferredOutputs.length > 0) {
+      if (preferredOutputs) {
         const preferredOutpoints = new Set(
           preferredOutputs.map((p) => `${p.prevTxHash}:${p.prevTxVout}`)
         );

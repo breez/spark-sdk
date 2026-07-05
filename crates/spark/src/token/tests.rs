@@ -837,6 +837,20 @@ pub async fn test_reserve_with_preferred_outputs_insufficient(store: &dyn TokenO
         .await;
 
     assert!(result.is_err());
+
+    // An empty preferred set filters out every output, unlike None which
+    // selects from all of them.
+    let result = store
+        .reserve_token_outputs(
+            "token-1",
+            ReservationTarget::MinTotalValue(100),
+            ReservationPurpose::Payment,
+            Some(vec![]),
+            None,
+        )
+        .await;
+
+    assert!(result.is_err());
 }
 
 pub async fn test_reserve_zero_amount(store: &dyn TokenOutputStore) {
