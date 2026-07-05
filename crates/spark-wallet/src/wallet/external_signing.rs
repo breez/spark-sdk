@@ -1,6 +1,36 @@
 use super::*;
 
 impl SparkWallet {
+    /// Like the normal send path's selection, cancels an in-progress leaf
+    /// optimization holding the leaves and retries once before failing with
+    /// insufficient funds.
+    async fn select_leaves_for_package_with_optimization_retry(
+        &self,
+        target_amounts: &TargetAmounts,
+    ) -> Result<LeafSelection, SparkWalletError> {
+        use spark::tree::TreeServiceError;
+
+        match self
+            .tree_service
+            .select_leaves_for_package(Some(target_amounts))
+            .await
+        {
+            Err(TreeServiceError::InsufficientFunds) if self.leaf_optimizer.is_running() => {
+                debug!(
+                    "Insufficient funds for package with optimization in progress, cancelling optimization and retrying"
+                );
+                if let Err(e) = self.leaf_optimizer.cancel().await {
+                    debug!("Failed to cancel optimization: {e:?}");
+                }
+                Ok(self
+                    .tree_service
+                    .select_leaves_for_package(Some(target_amounts))
+                    .await?)
+            }
+            res => Ok(res?),
+        }
+    }
+
     pub async fn prepare_transfer_package(
         &self,
         amount_sat: u64,
@@ -18,8 +48,7 @@ impl SparkWallet {
 
         let target_amounts = TargetAmounts::new_amount_and_fee(amount_sat, None);
         match self
-            .tree_service
-            .select_leaves_for_package(Some(&target_amounts))
+            .select_leaves_for_package_with_optimization_retry(&target_amounts)
             .await?
         {
             LeafSelection::Exact(leaves) => {
@@ -139,8 +168,7 @@ impl SparkWallet {
 
         let target_amounts = TargetAmounts::new_amount_and_fee(total_amount_sat, None);
         match self
-            .tree_service
-            .select_leaves_for_package(Some(&target_amounts))
+            .select_leaves_for_package_with_optimization_retry(&target_amounts)
             .await?
         {
             LeafSelection::Exact(leaves) => {
@@ -212,8 +240,7 @@ impl SparkWallet {
         let fee_sats = fee_quote.fee_sats(&exit_speed);
         let target_amounts = TargetAmounts::new_amount_and_fee(amount_sats, Some(fee_sats));
         match self
-            .tree_service
-            .select_leaves_for_package(Some(&target_amounts))
+            .select_leaves_for_package_with_optimization_retry(&target_amounts)
             .await?
         {
             LeafSelection::Exact(leaves) => {
