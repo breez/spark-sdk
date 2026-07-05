@@ -52,6 +52,10 @@ impl SparkWallet {
         spark_invoice: Option<String>,
         approved_transfer: PreparedTransfer,
     ) -> Result<WalletTransfer, SparkWalletError> {
+        if let Some(invoice_str) = &spark_invoice {
+            self.parse_and_validate_spark_invoice(invoice_str)?;
+        }
+
         let reservation = self
             .tree_service
             .reserve_leaves_by_ids(&leaf_ids, ReservationPurpose::Payment)
