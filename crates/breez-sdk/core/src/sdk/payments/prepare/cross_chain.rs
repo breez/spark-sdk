@@ -205,24 +205,48 @@ async fn estimate_and_validate_conversion(
     )
     .await?;
 
-    if let Some(ref ce) = estimate
-        && let ConversionType::ToBitcoin {
-            from_token_identifier,
-        } = &ce.options.conversion_type
-    {
-        let balances = sdk.spark_wallet.get_token_balances().await?;
-        let have = balances
-            .get(from_token_identifier)
-            .map_or(0u128, |b| b.balance);
-        if have < ce.amount_in {
-            return Err(SdkError::InvalidInput(format!(
-                "Insufficient {from_token_identifier} balance for conversion: have {have}, need {}.",
-                ce.amount_in
-            )));
-        }
-    }
+    ensure_token_balance_covers(sdk, estimate.as_ref()).await?;
 
     Ok((estimated_sats, estimate))
+}
+
+/// Rejects a token-funded (`ToBitcoin`) conversion whose source-token balance
+/// can't cover `estimate.amount_in`. The AMM estimate is computed independently
+/// of the wallet, so this is the gate that fails a stable-balance top-up fast,
+/// before any provider prepare or transfer. No-op when there is no conversion
+/// or it is not token-funded.
+async fn ensure_token_balance_covers(
+    sdk: &BreezSdk,
+    estimate: Option<&ConversionEstimate>,
+) -> Result<(), SdkError> {
+    let Some(estimate) = estimate else {
+        return Ok(());
+    };
+    let ConversionType::ToBitcoin {
+        from_token_identifier,
+    } = &estimate.options.conversion_type
+    else {
+        return Ok(());
+    };
+
+    let balances = sdk.spark_wallet.get_token_balances().await?;
+    let have = balances
+        .get(from_token_identifier)
+        .map_or(0u128, |b| b.balance);
+    if have < estimate.amount_in {
+        tracing::warn!(
+            token = %from_token_identifier,
+            have,
+            need = estimate.amount_in,
+            "Cross-chain: insufficient token balance for conversion"
+        );
+        return Err(SdkError::InvalidInput(format!(
+            "Insufficient {from_token_identifier} balance for cross-chain conversion: \
+             have {have}, need {} (includes conversion and bridge fees).",
+            estimate.amount_in
+        )));
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -288,6 +312,22 @@ pub(crate) async fn prepare(
             )
             .await
         }
+        // Conversion options are injected with sats denominated amount given.
+        (Some(opts), _) if token_identifier.is_none() => {
+            prepare_sats_denominated_with_conversion(
+                sdk,
+                address,
+                route,
+                amount,
+                opts,
+                provider_slippage_bps,
+                overpay_bps,
+                fee_policy,
+            )
+            .await
+        }
+        // Conversion options are injected with token denominated amount and
+        // fees included.
         (Some(opts), FeePolicy::FeesIncluded) => {
             prepare_token_denominated_fees_included(
                 sdk,
@@ -300,6 +340,8 @@ pub(crate) async fn prepare(
             )
             .await
         }
+        // Conversion options are injected with token denominated amount and
+        // fees excluded.
         (Some(opts), FeePolicy::FeesExcluded) => {
             prepare_token_denominated_fees_excluded(
                 sdk,
@@ -382,6 +424,80 @@ fn resolve_direct_overpay_amount(amount: u128, fee_policy: FeePolicy, overpay_bp
         return amount;
     }
     inflate_target_amount(amount, overpay_bps)
+}
+
+/// Conversion + sats-denominated: `amount` is **sats** (no `token_identifier`),
+/// funded by a token→sats conversion (a stable-balance top-up when the sats
+/// balance can't cover the send). The provider leg is sized in sats exactly
+/// like the direct path — the amount is NOT a destination/token-unit value, so
+/// it is not fiat-inverted — and the AMM then produces enough sats to cover the
+/// provider invoice plus the source-leg transfer fee.
+#[allow(clippy::too_many_arguments)]
+async fn prepare_sats_denominated_with_conversion(
+    sdk: &BreezSdk,
+    address: &str,
+    route: &CrossChainRoutePair,
+    amount: u128,
+    conversion_options: &ConversionOptions,
+    provider_slippage_bps: u32,
+    overpay_bps: u32,
+    fee_policy: FeePolicy,
+) -> Result<PrepareSendPaymentResponse, SdkError> {
+    let provider_amount = resolve_direct_overpay_amount(amount, fee_policy, overpay_bps);
+    tracing::debug!(
+        provider = ?route.provider,
+        chain = %route.chain,
+        asset = %route.asset,
+        amount,
+        provider_slippage_bps,
+        overpay_bps,
+        provider_amount,
+        "Cross-chain dispatcher: prepare_sats_denominated_with_conversion start"
+    );
+
+    let service = sdk.cross_chain_context.get(route.provider)?;
+    let prepared = service
+        .prepare(
+            address,
+            route,
+            provider_amount,
+            None,
+            provider_slippage_bps,
+            fee_policy.into(),
+        )
+        .await?;
+
+    // AMM must produce enough sats to cover the provider invoice AND the
+    // source-leg transfer fee (Boltz LN routing; 0 for Orchestra).
+    let amm_target_sats = prepared
+        .amount_in
+        .saturating_add(u128::from(prepared.source_transfer_fee_sats));
+    let conversion_estimate = conversion::estimate_conversion(
+        sdk,
+        Some(conversion_options),
+        None,
+        ConversionAmount::MinAmountOut(amm_target_sats),
+    )
+    .await?;
+
+    ensure_token_balance_covers(sdk, conversion_estimate.as_ref()).await?;
+
+    let response_token_identifier =
+        conversion::response_token_identifier(conversion_estimate.as_ref(), None);
+    // Response `amount` must be the provider invoice, not the user's pre-fee
+    // request: the send stage feeds `prepare_response.amount` to the conversion
+    // as its `MinAmountOut` target (see `execute_pre_send_conversion`), so it
+    // has to cover the invoice + source transfer fee, or the conversion yields
+    // too few sats to pay it. Matches `prepare_token_denominated_fees_excluded`.
+    let provider_amount_in = prepared.amount_in;
+    Ok(build_response(
+        prepared,
+        provider_amount_in,
+        response_token_identifier,
+        conversion_estimate,
+        fee_policy,
+        &PrepareResponseOverrides::default(),
+    ))
 }
 
 /// Conversion + `FeesIncluded` ("send all"): `amount` is the user's
@@ -557,30 +673,7 @@ async fn prepare_token_denominated_fees_excluded(
         "Cross-chain dispatcher: AMM MinAmountOut reverse-estimate"
     );
 
-    // Fail fast on insufficient balance: the AMM doesn't gate on user funds.
-    if let Some(estimate) = conversion_estimate.as_ref()
-        && let ConversionType::ToBitcoin {
-            from_token_identifier,
-        } = &estimate.options.conversion_type
-    {
-        let balances = sdk.spark_wallet.get_token_balances().await?;
-        let have = balances
-            .get(from_token_identifier)
-            .map_or(0u128, |b| b.balance);
-        if have < estimate.amount_in {
-            tracing::warn!(
-                token = %from_token_identifier,
-                have,
-                need = estimate.amount_in,
-                "Cross-chain dispatcher: insufficient token balance"
-            );
-            return Err(SdkError::InvalidInput(format!(
-                "Insufficient {from_token_identifier} balance for cross-chain conversion: \
-                 have {have}, need {} (= {amount} target + AMM/provider spread + bridge fees).",
-                estimate.amount_in
-            )));
-        }
-    }
+    ensure_token_balance_covers(sdk, conversion_estimate.as_ref()).await?;
 
     // Reuse `src_meta` from the stable-pair gate above (avoids a second wallet hit).
     let overrides = compute_conversion_overrides(
