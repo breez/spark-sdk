@@ -130,6 +130,22 @@ fn random_mnemonic() -> Result<String> {
     Ok(bip39::Mnemonic::from_entropy(&entropy)?.to_string())
 }
 
+/// Alice for the client-signing tests: automatic leaf optimization is
+/// disabled so a background denomination swap cannot reserve the leaves
+/// between funding and the package build (the build's selection does not
+/// wait on swap-pending balance the way the normal send path does).
+async fn build_signing_alice(mnemonic: String, prefix: &str) -> Result<SdkInstance> {
+    let dir = tempfile::Builder::new().prefix(prefix).tempdir()?;
+    let path = dir.path().to_string_lossy().to_string();
+
+    let mut cfg = default_config(Network::Regtest);
+    cfg.leaf_optimization_config = LeafOptimizationConfig {
+        auto_enabled: false,
+        multiplicity: 15,
+    };
+    build_sdk_with_external_signer_and_config(path, mnemonic, cfg, Some(dir)).await
+}
+
 /// Drives the LNURL-pay client-signing build -> sign -> publish loop, rebuilding
 /// after any denomination swap, and returns the LNURL pay response.
 async fn client_sign_lnurl_pay(
@@ -1369,12 +1385,8 @@ async fn test_14_client_signing_lnurl_pay() -> Result<()> {
     info!("=== Starting test_14_client_signing_lnurl_pay ===");
 
     let alice_mnemonic = random_mnemonic()?;
-    let alice_dir = tempfile::Builder::new()
-        .prefix("breez-sdk-alice-lnurl-signing")
-        .tempdir()?;
-    let alice_path = alice_dir.path().to_string_lossy().to_string();
     let mut alice =
-        build_sdk_with_external_signer(alice_path, alice_mnemonic.clone(), Some(alice_dir)).await?;
+        build_signing_alice(alice_mnemonic.clone(), "breez-sdk-alice-lnurl-signing").await?;
     let mut bob = setup_bob(false).await?;
 
     let client_signer =
@@ -1477,12 +1489,8 @@ async fn test_15_client_signing_lnurl_pay_fees_included() -> Result<()> {
     info!("=== Starting test_15_client_signing_lnurl_pay_fees_included ===");
 
     let alice_mnemonic = random_mnemonic()?;
-    let alice_dir = tempfile::Builder::new()
-        .prefix("breez-sdk-alice-lnurl-signing-fi")
-        .tempdir()?;
-    let alice_path = alice_dir.path().to_string_lossy().to_string();
     let mut alice =
-        build_sdk_with_external_signer(alice_path, alice_mnemonic.clone(), Some(alice_dir)).await?;
+        build_signing_alice(alice_mnemonic.clone(), "breez-sdk-alice-lnurl-signing-fi").await?;
     let mut bob = setup_bob(false).await?;
 
     let client_signer =
