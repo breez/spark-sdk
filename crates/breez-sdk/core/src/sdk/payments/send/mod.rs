@@ -18,14 +18,21 @@ use crate::{
 
 use super::conversion;
 
+#[allow(clippy::large_enum_variant)]
+pub(in crate::sdk) enum PublishOutcome {
+    SwapCompleted,
+    Sent(SendPaymentResponse),
+    Replayed(SendPaymentResponse),
+}
+
 pub(in crate::sdk) async fn publish_signed_package_inner(
     sdk: &BreezSdk,
     signed_package: &SignedTransferPackage,
-) -> Result<Option<SendPaymentResponse>, SdkError> {
+) -> Result<PublishOutcome, SdkError> {
     let res = match (&signed_package.unsigned, &signed_package.signature) {
         (UnsignedTransferPackage::Swap { .. }, TransferSignature::Transfer { .. }) => {
             super::client_signing::submit_swap(sdk, signed_package).await?;
-            return Ok(None);
+            return Ok(PublishOutcome::SwapCompleted);
         }
         (
             UnsignedTransferPackage::Transfer {
@@ -36,6 +43,13 @@ pub(in crate::sdk) async fn publish_signed_package_inner(
             },
             TransferSignature::Transfer { signed },
         ) => {
+            if let Ok(payment) = sdk
+                .storage
+                .get_payment_by_id(prepare_transfer.transfer_id.clone())
+                .await
+            {
+                return Ok(PublishOutcome::Replayed(SendPaymentResponse { payment }));
+            }
             deferred_transfer_send(sdk, prepare_transfer, signed, *amount_sat, *fee_sat, target)
                 .await
         }
@@ -49,7 +63,7 @@ pub(in crate::sdk) async fn publish_signed_package_inner(
             ));
         }
     }?;
-    Ok(Some(res))
+    Ok(PublishOutcome::Sent(res))
 }
 
 pub(in crate::sdk::payments) async fn publish_signed_transfer_package(
@@ -72,8 +86,11 @@ pub(in crate::sdk::payments) async fn publish_signed_transfer_package(
         ));
     }
     match publish_signed_package_inner(sdk, signed_package).await? {
-        None => Ok(PublishSignedTransferPackageResponse::SwapCompleted),
-        Some(res) => {
+        PublishOutcome::SwapCompleted => Ok(PublishSignedTransferPackageResponse::SwapCompleted),
+        PublishOutcome::Replayed(res) => Ok(PublishSignedTransferPackageResponse::PaymentSent {
+            payment: res.payment,
+        }),
+        PublishOutcome::Sent(res) => {
             sdk.event_emitter
                 .emit(&SdkEvent::from_payment(res.payment.clone()))
                 .await;
@@ -92,14 +109,6 @@ async fn deferred_transfer_send(
     fee_sat: u64,
     target: &TransferTarget,
 ) -> Result<SendPaymentResponse, SdkError> {
-    if let Ok(payment) = sdk
-        .storage
-        .get_payment_by_id(prepare_transfer.transfer_id.clone())
-        .await
-    {
-        return Ok(SendPaymentResponse { payment });
-    }
-
     match target {
         TransferTarget::Spark { spark_invoice, .. } => {
             spark_address::send_signed(sdk, prepare_transfer, signed, spark_invoice.clone()).await

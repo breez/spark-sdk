@@ -337,6 +337,7 @@ pub(super) async fn send(
         request.prepare_response.pay_request,
         request.prepare_response.comment,
         request.prepare_response.success_action,
+        true,
     )
     .await
 }
@@ -347,6 +348,7 @@ async fn finalize_lnurl_pay(
     pay_request: LnurlPayRequestDetails,
     comment: Option<String>,
     success_action: Option<SuccessAction>,
+    persist_and_emit: bool,
 ) -> Result<LnurlPayResponse, SdkError> {
     let processed_success_action =
         process_success_action(&payment, success_action.clone().map(Into::into).as_ref())?;
@@ -381,21 +383,23 @@ async fn finalize_lnurl_pay(
         }
     }
 
-    sdk.storage
-        .insert_payment_metadata(
-            payment.id.clone(),
-            PaymentMetadata {
-                lnurl_pay_info: Some(lnurl_info),
-                lnurl_description,
-                ..Default::default()
-            },
-        )
-        .await?;
+    if persist_and_emit {
+        sdk.storage
+            .insert_payment_metadata(
+                payment.id.clone(),
+                PaymentMetadata {
+                    lnurl_pay_info: Some(lnurl_info),
+                    lnurl_description,
+                    ..Default::default()
+                },
+            )
+            .await?;
 
-    // Emit the payment with metadata already included
-    sdk.event_emitter
-        .emit(&SdkEvent::from_payment(payment.clone()))
-        .await;
+        // Emit the payment with metadata already included
+        sdk.event_emitter
+            .emit(&SdkEvent::from_payment(payment.clone()))
+            .await;
+    }
     Ok(LnurlPayResponse {
         payment,
         success_action: processed_success_action.map(From::from),
@@ -472,25 +476,28 @@ pub(super) async fn publish_signed_package(
         }
     };
 
-    match send::publish_signed_package_inner(sdk, &signed_package).await? {
-        None => Ok(PublishSignedLnurlPayResponse::SwapCompleted),
-        Some(res) => {
-            let Some(context) = context else {
-                return Err(SdkError::Generic(
-                    "swap package unexpectedly produced a payment".to_string(),
-                ));
-            };
-            let response = finalize_lnurl_pay(
-                sdk,
-                res.payment,
-                context.pay_request,
-                context.comment,
-                context.success_action,
-            )
-            .await?;
-            Ok(PublishSignedLnurlPayResponse::PaymentSent { response })
+    let (res, fresh_send) = match send::publish_signed_package_inner(sdk, &signed_package).await? {
+        send::PublishOutcome::SwapCompleted => {
+            return Ok(PublishSignedLnurlPayResponse::SwapCompleted);
         }
-    }
+        send::PublishOutcome::Sent(res) => (res, true),
+        send::PublishOutcome::Replayed(res) => (res, false),
+    };
+    let Some(context) = context else {
+        return Err(SdkError::Generic(
+            "swap package unexpectedly produced a payment".to_string(),
+        ));
+    };
+    let response = finalize_lnurl_pay(
+        sdk,
+        res.payment,
+        context.pay_request,
+        context.comment,
+        context.success_action,
+        fresh_send,
+    )
+    .await?;
+    Ok(PublishSignedLnurlPayResponse::PaymentSent { response })
 }
 
 /// Calls the LNURL pay endpoint for the given `amount_msat` and unwraps the
