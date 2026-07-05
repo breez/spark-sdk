@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -845,6 +845,10 @@ impl InMemoryTreeStore {
         purpose: ReservationPurpose,
         permit: OwnedSemaphorePermit,
     ) -> Result<LeavesReservation, TreeServiceError> {
+        let unique_ids: HashSet<&TreeNodeId> = leaf_ids.iter().collect();
+        if leaf_ids.is_empty() || unique_ids.len() != leaf_ids.len() {
+            return Err(TreeServiceError::NonReservableLeaves);
+        }
         let mut selected = Vec::with_capacity(leaf_ids.len());
         for id in leaf_ids {
             let stored = state

@@ -334,6 +334,25 @@ pub async fn test_reserve_leaves_by_ids_not_available(store: &dyn TreeStore) {
             .await,
         Err(TreeServiceError::NonReservableLeaves)
     ));
+
+    // An empty request reserves nothing.
+    assert!(matches!(
+        store
+            .try_reserve_leaves_by_ids(&[], ReservationPurpose::Payment)
+            .await,
+        Err(TreeServiceError::NonReservableLeaves)
+    ));
+
+    // Duplicate ids must be rejected, not double-counted.
+    let available = vec![create_test_tree_node("node2", 200)];
+    store.add_leaves(&available).await.unwrap();
+    let duplicates = vec![available[0].id.clone(), available[0].id.clone()];
+    assert!(matches!(
+        store
+            .try_reserve_leaves_by_ids(&duplicates, ReservationPurpose::Payment)
+            .await,
+        Err(TreeServiceError::NonReservableLeaves)
+    ));
 }
 
 pub async fn test_try_select_leaves(store: &dyn TreeStore) {
