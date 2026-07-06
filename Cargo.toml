@@ -145,7 +145,7 @@ bech32 = "0.11.0"
 bip39 = "2.2.0"
 bitcoin = { version = "0.32.6", features = ["serde"] }
 bitflags = "2.10.0"
-boltz-client = { git = "https://github.com/breez/boltz-client", rev = "809ac77cfc9ab2d809e3ef05f31c6d23ee9c4730" }
+boltz-client = { git = "https://github.com/breez/boltz-client", rev = "63fa0dfdbaad0be716dfcaf2531ccfa36bc8d414" }
 breez-sdk-common = { path = "crates/breez-sdk/common", default-features = false }
 breez-sdk-spark = { path = "crates/breez-sdk/core" }
 built = { version = "0.8.0", features = ["git2"] }
