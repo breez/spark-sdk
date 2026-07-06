@@ -97,22 +97,24 @@ impl BoltzService {
         network: Network,
         spark_wallet: Arc<SparkWallet>,
         storage: Arc<dyn Storage>,
-        signer: Arc<dyn crate::signer::BreezSigner>,
+        ecies: Option<Arc<dyn crate::signer::EciesSigner>>,
         fiat_service: Arc<dyn FiatService>,
         lightning_sender: Arc<LightningSender>,
     ) -> Result<Option<Arc<dyn CrossChainService>>, SdkError> {
         let Some(client_config) = Self::default_client_config(network) else {
             return Ok(None);
         };
+        // Boltz encrypts each swap's secrets, so it can't run without an ECIES
+        // signer (a signing-only signer has none).
+        let Some(ecies) = ecies else {
+            return Ok(None);
+        };
 
         let adapter = Arc::new(
-            super::boltz_storage_adapter::BoltzStorageAdapter::new(
-                Arc::clone(&storage),
-                Arc::clone(&signer),
-            )
-            .map_err(|e| {
-                SdkError::Generic(format!("Failed to build Boltz storage adapter: {e}"))
-            })?,
+            super::boltz_storage_adapter::BoltzStorageAdapter::new(Arc::clone(&storage), ecies)
+                .map_err(|e| {
+                    SdkError::Generic(format!("Failed to build Boltz storage adapter: {e}"))
+                })?,
         );
 
         let client = Arc::new(

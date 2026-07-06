@@ -35,7 +35,6 @@ async def example_connect_with_signer(signers: ExternalSigners) -> BreezSdk:
         config=config,
         breez_signer=signers.breez_signer,
         spark_signer=signers.spark_signer,
-        supports_ecies_hmac=True,
         storage_dir="./.data"
     ))
 

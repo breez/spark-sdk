@@ -29,7 +29,6 @@ const exampleConnectWithSigner = async (
     config,
     signers.breezSigner,
     signers.sparkSigner,
-    true, // supportsEciesHmac: the default external signer can perform it
     'breez_spark_db' // For WASM, this is the IndexedDB database name
   )
 }

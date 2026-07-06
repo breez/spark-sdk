@@ -117,3 +117,74 @@ pub trait ExternalBreezSigner: Send + Sync {
         path: String,
     ) -> Result<HashedMessageBytes, SignerError>;
 }
+
+/// External signer that provides signing only, without the SDK's local
+/// ECIES/HMAC operations.
+///
+/// Implement this instead of [`ExternalBreezSigner`] for a signer that can't
+/// release key material for local encryption (for example a policy-restricted
+/// enclave). The capability is declared by the type: the SDK keeps session
+/// tokens in plaintext and the features that rely on ECIES/HMAC are unavailable.
+#[cfg_attr(
+    feature = "uniffi",
+    uniffi::export(with_foreign, async_runtime = "tokio")
+)]
+#[macros::async_trait]
+pub trait ExternalSigningSigner: Send + Sync {
+    /// Derives a public key for the given BIP32 derivation path.
+    ///
+    /// # Arguments
+    /// * `path` - BIP32 derivation path as a string (e.g., "m/44'/0'/0'/0/0")
+    ///
+    /// # Returns
+    /// The derived public key as 33 bytes, or a `SignerError`
+    ///
+    /// See also: [JavaScript `getPublicKeyFromDerivation`](https://docs.spark.money/wallets/spark-signer#get-public-key-from-derivation)
+    async fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, SignerError>;
+
+    /// Signs a message using ECDSA at the given derivation path.
+    ///
+    /// The message should be a 32-byte digest (typically a hash of the original data).
+    ///
+    /// # Arguments
+    /// * `message` - The 32-byte message digest to sign
+    /// * `path` - BIP32 derivation path as a string
+    ///
+    /// # Returns
+    /// 64-byte compact ECDSA signature, or a `SignerError`
+    async fn sign_ecdsa(
+        &self,
+        message: MessageBytes,
+        path: String,
+    ) -> Result<EcdsaSignatureBytes, SignerError>;
+
+    /// Signs a message using recoverable ECDSA at the given derivation path.
+    ///
+    /// The message should be a 32-byte digest (typically a hash of the original data).
+    ///
+    /// # Arguments
+    /// * `message` - The 32-byte message digest to sign
+    /// * `path` - BIP32 derivation path as a string
+    ///
+    /// # Returns
+    /// 65 bytes: recovery ID (31 + `recovery_id`) + 64-byte signature, or a `SignerError`
+    async fn sign_ecdsa_recoverable(
+        &self,
+        message: MessageBytes,
+        path: String,
+    ) -> Result<RecoverableEcdsaSignatureBytes, SignerError>;
+
+    /// Signs a hash using Schnorr signature at the given derivation path.
+    ///
+    /// # Arguments
+    /// * `hash` - The 32-byte hash to sign (must be 32 bytes)
+    /// * `path` - BIP32 derivation path as a string
+    ///
+    /// # Returns
+    /// 64-byte Schnorr signature, or a `SignerError`
+    async fn sign_hash_schnorr(
+        &self,
+        hash: Vec<u8>,
+        path: String,
+    ) -> Result<SchnorrSignatureBytes, SignerError>;
+}

@@ -96,11 +96,24 @@ pub struct ConnectWithSignerRequest {
     pub breez_signer: std::sync::Arc<dyn crate::signer::ExternalBreezSigner>,
     /// External high-level Spark signer for the Spark wallet flows.
     pub spark_signer: std::sync::Arc<dyn crate::signer::ExternalSparkSigner>,
-    /// Whether the signer can perform the SDK's local ECIES/HMAC operations.
-    /// Set `false` for a signer that can't run them locally (for example a
-    /// policy-restricted enclave): the SDK then keeps session tokens in plaintext
-    /// and disables the features that rely on ECIES/HMAC.
-    pub supports_ecies_hmac: bool,
+    pub storage_dir: String,
+}
+
+/// Request object for connecting to the Spark network using a signing-only
+/// external signer.
+///
+/// Use this instead of [`ConnectWithSignerRequest`] for a signer that can't
+/// perform the SDK's local ECIES/HMAC operations (for example a
+/// policy-restricted enclave). The SDK keeps session tokens in plaintext and
+/// disables the features that rely on ECIES/HMAC.
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ConnectWithSigningOnlySignerRequest {
+    pub config: Config,
+    /// Signing-only external signer for non-Spark SDK signing.
+    pub breez_signer: std::sync::Arc<dyn crate::signer::ExternalSigningSigner>,
+    /// External high-level Spark signer for the Spark wallet flows.
+    pub spark_signer: std::sync::Arc<dyn crate::signer::ExternalSparkSigner>,
     pub storage_dir: String,
 }
 

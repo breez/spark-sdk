@@ -226,7 +226,6 @@ impl SdkBuilder {
         config: Config,
         breez_signer: crate::signer::JsExternalBreezSigner,
         spark_signer: crate::signer::JsExternalSparkSigner,
-        supports_ecies_hmac: bool,
     ) -> Self {
         use crate::signer::{WasmExternalBreezSigner, WasmExternalSparkSigner};
         use std::sync::Arc;
@@ -244,7 +243,41 @@ impl SdkBuilder {
                 config_core,
                 signer_adapter,
                 spark_signer_adapter,
-                supports_ecies_hmac,
+            ),
+            storage_config: None,
+            storage: None,
+            context_postgres_pool: None,
+            context_mysql_pool: None,
+            account_number: None,
+        }
+    }
+
+    /// Creates a new `SdkBuilder` with a signing-only external signer, for a
+    /// signer that can't perform the SDK's local ECIES/HMAC operations. The SDK
+    /// keeps session tokens in plaintext and disables the features that rely on
+    /// ECIES/HMAC.
+    #[wasm_bindgen(js_name = "newWithSigningOnlySigner")]
+    pub fn new_with_signing_only_signer(
+        config: Config,
+        breez_signer: crate::signer::JsExternalSigningSigner,
+        spark_signer: crate::signer::JsExternalSparkSigner,
+    ) -> Self {
+        use crate::signer::{WasmExternalSigningSigner, WasmExternalSparkSigner};
+        use std::sync::Arc;
+
+        let config_core: breez_sdk_spark::Config = config.into();
+        let signer_adapter: Arc<dyn breez_sdk_spark::signer::ExternalSigningSigner> =
+            Arc::new(WasmExternalSigningSigner::new(breez_signer));
+        let spark_signer_adapter: Arc<dyn breez_sdk_spark::signer::ExternalSparkSigner> =
+            Arc::new(WasmExternalSparkSigner::new(spark_signer));
+
+        Self {
+            network: config_core.network,
+            seed: breez_sdk_spark::Seed::Entropy(vec![]), // Placeholder, won't be used
+            builder: breez_sdk_spark::SdkBuilder::new_with_signing_only_signer(
+                config_core,
+                signer_adapter,
+                spark_signer_adapter,
             ),
             storage_config: None,
             storage: None,

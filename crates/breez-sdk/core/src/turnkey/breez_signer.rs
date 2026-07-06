@@ -1,12 +1,14 @@
-//! `ExternalBreezSigner` implementation backed by Turnkey.
+//! Turnkey-backed external signers.
 //!
 //! Per Turnkey's design, signing is the norm and encryption is not offered:
-//! - derive / ECDSA / Schnorr go to Turnkey (the wallet's enclave keys).
+//! - derive / ECDSA / Schnorr go to Turnkey (the wallet's enclave keys), via
+//!   [`TurnkeySigningSigner`].
 //! - ECIES (multi-device sync + session storage) and HMAC (LNURL-auth path
 //!   computation) run locally against a dedicated, non-Spark key exported from
 //!   Turnkey (a reserved derivation the Spark signer never uses), via an inner
-//!   [`BreezSignerImpl`]. Those uses only need a stable key, so a non-Spark key
-//!   keeps every Spark key (the identity key included) in the enclave.
+//!   [`BreezSignerImpl`]. Only [`TurnkeyBreezSigner`] offers these. A wallet
+//!   under a deny-export policy connects with the signing-only signer instead,
+//!   so no key export is ever attempted.
 
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
@@ -21,7 +23,7 @@ use crate::signer::external_types::{
     EcdsaSignatureBytes, HashedMessageBytes, MessageBytes, PublicKeyBytes,
     RecoverableEcdsaSignatureBytes, SchnorrSignatureBytes, string_to_derivation_path,
 };
-use crate::signer::{BreezSigner, ExternalBreezSigner};
+use crate::signer::{EciesSigner, ExternalBreezSigner, ExternalSigningSigner, HmacSigner};
 
 use super::accounts::{
     ecdsa_from_rs, ecdsa_recoverable_low_s, schnorr_from_rs, spark_address_format,
@@ -43,78 +45,28 @@ fn encryption_key_path(account: u32) -> String {
     format!("m/8797555'/{account}'/2147483647'")
 }
 
-/// SDK-layer signer backed by Turnkey. Sign/derive go to Turnkey; ECIES/HMAC
-/// delegate to a local signer rooted at a key exported from Turnkey.
-///
-/// That key is exported lazily on first ECIES/HMAC use, so a wallet that
-/// declares no ECIES/HMAC support (`supports_ecies_hmac =
-/// false`), which never encrypts, never triggers it. If reached under a deny-export policy the export fails with
-/// `SignerError::EncryptionUnavailable`; the policy denial (403) is memoized in
-/// `export_denied` so later ECIES/HMAC calls fail fast instead of re-exporting
-/// and 403-storming Turnkey.
-pub(crate) struct TurnkeyBreezSigner {
+/// Turnkey-backed signing signer: derive / ECDSA / Schnorr go to Turnkey. It
+/// offers no ECIES/HMAC (those need a key export), so it is the signer for
+/// wallets under a deny-export policy.
+pub(crate) struct TurnkeySigningSigner {
     client: Arc<TurnkeyClient>,
     network: Network,
     account: u32,
-    encryption: OnceCell<BreezSignerImpl>,
-    /// Failure message recorded once a key export is denied by policy (403),
-    /// which is permanent for this session. Transient export failures are not
-    /// recorded, so they still retry.
-    export_denied: OnceLock<String>,
 }
 
-impl TurnkeyBreezSigner {
+impl TurnkeySigningSigner {
     pub(crate) fn new(client: Arc<TurnkeyClient>, network: Network, account: u32) -> Self {
         Self {
             client,
             network,
             account,
-            encryption: OnceCell::new(),
-            export_denied: OnceLock::new(),
         }
-    }
-
-    /// The local ECIES/HMAC backend, exported from Turnkey on first use and
-    /// cached. Errors with `EncryptionUnavailable` when the export fails; a
-    /// policy denial (403) is memoized so subsequent calls fail fast rather than
-    /// re-exporting, which would 403-storm Turnkey under a deny policy.
-    async fn encryption(&self) -> Result<&BreezSignerImpl, SignerError> {
-        if let Some(msg) = self.export_denied.get() {
-            return Err(SignerError::EncryptionUnavailable(msg.clone()));
-        }
-        self.encryption
-            .get_or_try_init(|| async {
-                // Re-check under the init lock: a concurrent caller may have
-                // recorded the denial while this one waited.
-                if let Some(msg) = self.export_denied.get() {
-                    return Err(SignerError::EncryptionUnavailable(msg.clone()));
-                }
-                let secret = self
-                    .client
-                    .export_secret_key(encryption_key_path(self.account), ADDRESS_FORMAT_COMPRESSED)
-                    .await
-                    .map_err(|e| {
-                        let msg = format!("Turnkey encryption-key export failed: {e}");
-                        // A 403 is the deny-export policy verdict: permanent for
-                        // this session, so memoize it. Transient failures (already
-                        // retried by the transport) are left to retry.
-                        if matches!(e, TurnkeyError::Http { status: 403, .. }) {
-                            let _ = self.export_denied.set(msg.clone());
-                        }
-                        SignerError::EncryptionUnavailable(msg)
-                    })?;
-                Ok(BreezSignerImpl::new(xpriv_from_secret(
-                    secret,
-                    self.network,
-                )))
-            })
-            .await
     }
 
     /// Roots a caller-supplied path at the wallet identity master
-    /// (`m/8797555'/{account}'/0'`). The `BreezSigner` contract applies caller
-    /// paths relative to the identity master (as the seed backend does), so the
-    /// same path yields the same key on either backend.
+    /// (`m/8797555'/{account}'/0'`). The signer contract applies caller paths
+    /// relative to the identity master (as the seed backend does), so the same
+    /// path yields the same key on either backend.
     fn identity_rooted_path(&self, caller_path: &str) -> String {
         let base = format!("m/8797555'/{}'/0'", self.account);
         let relative = caller_path.trim_start_matches('m').trim_start_matches('/');
@@ -127,7 +79,7 @@ impl TurnkeyBreezSigner {
 }
 
 #[macros::async_trait]
-impl ExternalBreezSigner for TurnkeyBreezSigner {
+impl ExternalSigningSigner for TurnkeySigningSigner {
     async fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, SignerError> {
         let hex = self
             .client
@@ -199,24 +151,6 @@ impl ExternalBreezSigner for TurnkeyBreezSigner {
         Ok(RecoverableEcdsaSignatureBytes::new(bytes))
     }
 
-    async fn encrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
-        let path = string_to_derivation_path(&path).map_err(to_signer_err)?;
-        self.encryption()
-            .await?
-            .encrypt_ecies(&message, &path)
-            .await
-            .map_err(to_signer_err)
-    }
-
-    async fn decrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
-        let path = string_to_derivation_path(&path).map_err(to_signer_err)?;
-        self.encryption()
-            .await?
-            .decrypt_ecies(&message, &path)
-            .await
-            .map_err(to_signer_err)
-    }
-
     async fn sign_hash_schnorr(
         &self,
         hash: Vec<u8>,
@@ -239,6 +173,118 @@ impl ExternalBreezSigner for TurnkeyBreezSigner {
             .map_err(to_signer_err)?;
         let sig = schnorr_from_rs(&result.r, &result.s).map_err(to_signer_err)?;
         Ok(SchnorrSignatureBytes::from_signature(&sig))
+    }
+}
+
+/// Full Turnkey SDK-layer signer: signing via an inner [`TurnkeySigningSigner`]
+/// plus local ECIES/HMAC against a key exported from Turnkey on first use and
+/// cached.
+pub(crate) struct TurnkeyBreezSigner {
+    signing: TurnkeySigningSigner,
+    encryption: OnceCell<BreezSignerImpl>,
+    /// Records a permanent export denial (403) so subsequent ECIES/HMAC calls
+    /// fail fast instead of re-hitting Turnkey. A deny-export wallet uses the
+    /// signing-only signer and never exports; this only guards a full signer
+    /// misconfigured against a deny-export policy from 403-storming Turnkey.
+    export_denied: OnceLock<String>,
+}
+
+impl TurnkeyBreezSigner {
+    pub(crate) fn new(client: Arc<TurnkeyClient>, network: Network, account: u32) -> Self {
+        Self {
+            signing: TurnkeySigningSigner::new(client, network, account),
+            encryption: OnceCell::new(),
+            export_denied: OnceLock::new(),
+        }
+    }
+
+    /// The local ECIES/HMAC backend, exported from Turnkey on first use and
+    /// cached. Errors with `EncryptionUnavailable` when the export fails; a
+    /// policy denial (403) is memoized so later calls fail fast.
+    async fn encryption(&self) -> Result<&BreezSignerImpl, SignerError> {
+        if let Some(msg) = self.export_denied.get() {
+            return Err(SignerError::EncryptionUnavailable(msg.clone()));
+        }
+        self.encryption
+            .get_or_try_init(|| async {
+                // Re-check under the init lock: a concurrent caller may have
+                // recorded the denial while this one waited.
+                if let Some(msg) = self.export_denied.get() {
+                    return Err(SignerError::EncryptionUnavailable(msg.clone()));
+                }
+                let secret = self
+                    .signing
+                    .client
+                    .export_secret_key(
+                        encryption_key_path(self.signing.account),
+                        ADDRESS_FORMAT_COMPRESSED,
+                    )
+                    .await
+                    .map_err(|e| {
+                        let msg = format!("Turnkey encryption-key export failed: {e}");
+                        // A 403 is the deny-export policy verdict: permanent for
+                        // this session, so memoize it. Transient failures (already
+                        // retried by the transport) are left to retry.
+                        if matches!(e, TurnkeyError::Http { status: 403, .. }) {
+                            let _ = self.export_denied.set(msg.clone());
+                        }
+                        SignerError::EncryptionUnavailable(msg)
+                    })?;
+                Ok(BreezSignerImpl::new(xpriv_from_secret(
+                    secret,
+                    self.signing.network,
+                )))
+            })
+            .await
+    }
+}
+
+#[macros::async_trait]
+impl ExternalBreezSigner for TurnkeyBreezSigner {
+    async fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, SignerError> {
+        self.signing.derive_public_key(path).await
+    }
+
+    async fn sign_ecdsa(
+        &self,
+        message: MessageBytes,
+        path: String,
+    ) -> Result<EcdsaSignatureBytes, SignerError> {
+        self.signing.sign_ecdsa(message, path).await
+    }
+
+    async fn sign_ecdsa_recoverable(
+        &self,
+        message: MessageBytes,
+        path: String,
+    ) -> Result<RecoverableEcdsaSignatureBytes, SignerError> {
+        self.signing.sign_ecdsa_recoverable(message, path).await
+    }
+
+    async fn sign_hash_schnorr(
+        &self,
+        hash: Vec<u8>,
+        path: String,
+    ) -> Result<SchnorrSignatureBytes, SignerError> {
+        self.signing.sign_hash_schnorr(hash, path).await
+    }
+
+    async fn encrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
+        let path = string_to_derivation_path(&path).map_err(to_signer_err)?;
+        self.encryption()
+            .await?
+            .encrypt_ecies(&message, &path)
+            .await
+            .map_err(to_signer_err)
+    }
+
+    async fn decrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
+        let path = string_to_derivation_path(&path).map_err(to_signer_err)?;
+        self.encryption()
+            .await?
+            .decrypt_ecies(&message, &path)
+            .await
+            .map_err(to_signer_err)
     }
 
     async fn hmac_sha256(

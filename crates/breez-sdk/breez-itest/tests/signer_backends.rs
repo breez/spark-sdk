@@ -208,7 +208,7 @@ async fn lightning_receive(#[case] backend: SignerBackend) -> Result<()> {
 async fn static_deposit_refund(#[case] backend: SignerBackend) -> Result<()> {
     let mut config = regtest_test_config();
     config.max_deposit_claim_fee = None;
-    let mut sdk = build_backend_sdk_with_config(backend, config, true).await?;
+    let mut sdk = build_backend_sdk_with_config(backend, config, false).await?;
 
     let address = sdk
         .sdk
@@ -321,7 +321,7 @@ async fn token_mint(#[case] backend: SignerBackend) -> Result<()> {
 #[ignore = "requires a Turnkey policy denying EXPORT_WALLET_ACCOUNT; run with --ignored"]
 async fn turnkey_no_export_gates_onchain_receive() -> Result<()> {
     let config = regtest_test_config();
-    let sdk = build_backend_sdk_with_config(SignerBackend::Turnkey, config, false).await?;
+    let sdk = build_backend_sdk_with_config(SignerBackend::Turnkey, config, true).await?;
 
     // Spark receive needs no key export, so it still works.
     let spark = sdk
@@ -360,7 +360,7 @@ async fn assert_update_settings_fails_under_deny_export(config: Config) -> Resul
     // Connect without the initial-sync wait: a failing initial sync never flips
     // the synced signal, and `ensure_synced` is rejected outright in server mode.
     // The signer is declared ECIES/HMAC-capable (the misconfiguration under test).
-    let sdk = connect_turnkey_without_initial_sync(config, true).await?;
+    let sdk = connect_turnkey_without_initial_sync(config, false).await?;
     let err = sdk
         .sdk
         .update_user_settings(UpdateUserSettingsRequest {

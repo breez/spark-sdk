@@ -75,10 +75,10 @@ pub use persist::{
 #[cfg(feature = "sqlite")]
 pub use {
     persist::{backend::default_storage, sqlite::SqliteStorage},
-    sdk::{connect, connect_with_signer},
+    sdk::{connect, connect_with_signer, connect_with_signing_only_signer},
 };
 
-pub use sdk::{ExternalSigners, default_external_signers};
+pub use sdk::{ExternalSigners, SigningOnlyExternalSigners, default_external_signers};
 
 #[cfg(feature = "test-utils")]
 pub use persist::tests as storage_tests;

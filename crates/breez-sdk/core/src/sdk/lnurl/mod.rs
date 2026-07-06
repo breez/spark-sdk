@@ -147,11 +147,17 @@ impl BreezSdk {
         &self,
         request_data: LnurlAuthRequestDetails,
     ) -> Result<LnurlCallbackStatus, SdkError> {
+        // LNURL-auth needs the HMAC step, absent on a signing-only signer.
+        let Some(lnurl_auth_signer) = self.lnurl_auth_signer.as_ref() else {
+            return Err(SdkError::Generic(
+                "LNURL-auth requires a signer that supports HMAC".to_string(),
+            ));
+        };
         let request: breez_sdk_common::lnurl::auth::LnurlAuthRequestDetails = request_data.into();
         let status = breez_sdk_common::lnurl::auth::perform_lnurl_auth(
             self.lnurl_client.as_ref(),
             &request,
-            self.lnurl_auth_signer.as_ref(),
+            lnurl_auth_signer.as_ref(),
         )
         .await
         .map_err(|e| match e {

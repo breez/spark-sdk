@@ -5,7 +5,7 @@ use bitcoin::bip32::DerivationPath;
 use bitcoin::secp256k1::PublicKey;
 
 use crate::Network;
-use crate::signer::BreezSigner;
+use crate::signer::EciesSigner;
 
 use super::SessionStoreError;
 
@@ -21,15 +21,15 @@ const MARKER_PLAINTEXT: &str = "pln:";
 const ENCRYPTION_DERIVATION_PATH: &str = "m/1397245774'/0'/0'/0/0";
 const ENCRYPTION_DERIVATION_PATH_TEST: &str = "m/1397245774'/1'/0'/0/0";
 
-/// `SessionStore` decorator for session tokens. With `encrypt` set it encrypts
-/// the token at rest via [`BreezSigner::encrypt_ecies`] /
-/// [`BreezSigner::decrypt_ecies`]; otherwise it stores the token in plaintext.
-/// Only `Session::token` is transformed; `expiration` stays plaintext so
-/// `is_valid()` stays cheap.
+/// `SessionStore` decorator for session tokens. When an [`EciesSigner`] is
+/// present it encrypts the token at rest via [`EciesSigner::encrypt_ecies`] /
+/// [`EciesSigner::decrypt_ecies`]; otherwise (a signing-only signer) it stores
+/// the token in plaintext. Only `Session::token` is transformed; `expiration`
+/// stays plaintext so `is_valid()` stays cheap.
 ///
 /// Each stored token is tagged with its mode (`enc:` / `pln:`). On read, a token
 /// written in the other mode (or a legacy untagged one) reads as `NotFound`, so
-/// flipping the signer's `supports_ecies_hmac` on an existing wallet forces a
+/// switching the signer's ECIES capability on an existing wallet forces a
 /// re-authentication that re-stores the token in the current mode. Detection is
 /// symmetric: a stale ciphertext and a stale plaintext token are both rejected in
 /// the other mode.
@@ -39,17 +39,15 @@ const ENCRYPTION_DERIVATION_PATH_TEST: &str = "m/1397245774'/1'/0'/0/0";
 /// each other's tokens; an attacker with read-only DB access cannot.
 pub(crate) struct EncryptingSessionStore {
     inner: Arc<dyn spark_wallet::SessionStore>,
-    signer: Arc<dyn BreezSigner>,
+    ecies: Option<Arc<dyn EciesSigner>>,
     encryption_path: DerivationPath,
-    encrypt: bool,
 }
 
 impl EncryptingSessionStore {
     pub(crate) fn new(
         inner: Arc<dyn spark_wallet::SessionStore>,
-        signer: Arc<dyn BreezSigner>,
+        ecies: Option<Arc<dyn EciesSigner>>,
         network: Network,
-        encrypt: bool,
     ) -> Result<Self, bitcoin::bip32::Error> {
         let encryption_path: DerivationPath = match network {
             Network::Mainnet => ENCRYPTION_DERIVATION_PATH,
@@ -58,19 +56,17 @@ impl EncryptingSessionStore {
         .parse()?;
         Ok(Self {
             inner,
-            signer,
+            ecies,
             encryption_path,
-            encrypt,
         })
     }
 
-    /// Tags `token` for storage in the current mode: `enc:` + ciphertext when
-    /// encryption is on, `pln:` + the token otherwise. Encryption failure
+    /// Tags `token` for storage in the current mode: `enc:` + ciphertext when an
+    /// ECIES signer is present, `pln:` + the token otherwise. Encryption failure
     /// propagates (fail closed: never falls back to plaintext).
     async fn encode_token(&self, token: &str) -> Result<String, SessionStoreError> {
-        if self.encrypt {
-            let ciphertext = self
-                .signer
+        if let Some(ecies) = &self.ecies {
+            let ciphertext = ecies
                 .encrypt_ecies(token.as_bytes(), &self.encryption_path)
                 .await
                 .map_err(|e| {
@@ -86,10 +82,9 @@ impl EncryptingSessionStore {
     /// (a mode switch, a legacy untagged token, or an undecryptable one). `None`
     /// surfaces as `NotFound`.
     async fn decode_token(&self, stored: &str) -> Option<String> {
-        if self.encrypt {
+        if let Some(ecies) = &self.ecies {
             let ciphertext = BASE64.decode(stored.strip_prefix(MARKER_ENCRYPTED)?).ok()?;
-            let plaintext = self
-                .signer
+            let plaintext = ecies
                 .decrypt_ecies(&ciphertext, &self.encryption_path)
                 .await
                 .ok()?;
@@ -143,14 +138,12 @@ mod tests {
     use std::sync::Mutex;
 
     use bitcoin::bip32::DerivationPath;
-    use bitcoin::hashes::{Hmac, sha256};
-    use bitcoin::secp256k1::{self, Message, ecdsa::RecoverableSignature};
     use macros::async_test_all;
     use spark_wallet::SessionStore as _;
 
     use crate::SdkError;
     use crate::Seed;
-    use crate::signer::BreezSigner;
+    use crate::signer::EciesSigner;
     use crate::signer::breez::BreezSignerImpl;
 
     use super::*;
@@ -193,7 +186,7 @@ mod tests {
         PublicKey::from_secret_key(&secp, &sk)
     }
 
-    fn test_signer(seed_byte: u8) -> Arc<dyn BreezSigner> {
+    fn test_signer(seed_byte: u8) -> Arc<dyn EciesSigner> {
         let seed = Seed::Entropy(vec![seed_byte; 32]);
         let seed_bytes = seed.to_bytes().unwrap();
         let master =
@@ -202,7 +195,8 @@ mod tests {
     }
 
     fn store(inner: Arc<InspectableInner>, seed: u8, encrypt: bool) -> EncryptingSessionStore {
-        EncryptingSessionStore::new(inner, test_signer(seed), Network::Regtest, encrypt).unwrap()
+        let ecies = encrypt.then(|| test_signer(seed));
+        EncryptingSessionStore::new(inner, ecies, Network::Regtest).unwrap()
     }
 
     #[async_test_all]
@@ -382,13 +376,12 @@ mod tests {
         );
     }
 
-    /// A `BreezSigner` that cannot encrypt, modeling a no-export signer whose
-    /// encryption-key export is denied. Only the ECIES methods are exercised
-    /// here; the rest error because they are never reached.
+    /// An `EciesSigner` that cannot encrypt, modeling a signer whose
+    /// encryption-key export is denied.
     struct NoEncryptSigner;
 
     #[macros::async_trait]
-    impl BreezSigner for NoEncryptSigner {
+    impl EciesSigner for NoEncryptSigner {
         async fn encrypt_ecies(
             &self,
             _message: &[u8],
@@ -403,40 +396,6 @@ mod tests {
         ) -> Result<Vec<u8>, SdkError> {
             Err(SdkError::Signer("encryption-key export denied".to_string()))
         }
-        async fn sign_ecdsa(
-            &self,
-            _message: Message,
-            _path: &DerivationPath,
-        ) -> Result<secp256k1::ecdsa::Signature, SdkError> {
-            Err(SdkError::Signer("unused".to_string()))
-        }
-        async fn sign_ecdsa_recoverable(
-            &self,
-            _message: Message,
-            _path: &DerivationPath,
-        ) -> Result<RecoverableSignature, SdkError> {
-            Err(SdkError::Signer("unused".to_string()))
-        }
-        async fn sign_hash_schnorr(
-            &self,
-            _hash: &[u8],
-            _path: &DerivationPath,
-        ) -> Result<secp256k1::schnorr::Signature, SdkError> {
-            Err(SdkError::Signer("unused".to_string()))
-        }
-        async fn derive_public_key(
-            &self,
-            _path: &DerivationPath,
-        ) -> Result<secp256k1::PublicKey, SdkError> {
-            Err(SdkError::Signer("unused".to_string()))
-        }
-        async fn hmac_sha256(
-            &self,
-            _key_path: &DerivationPath,
-            _input: &[u8],
-        ) -> Result<Hmac<sha256::Hash>, SdkError> {
-            Err(SdkError::Signer("unused".to_string()))
-        }
     }
 
     /// Fail-closed: when the signer cannot encrypt the token (a no-export signer
@@ -445,9 +404,9 @@ mod tests {
     #[async_test_all]
     async fn encrypt_failure_never_writes_plaintext() {
         let inner = Arc::new(InspectableInner::default());
-        let signer: Arc<dyn BreezSigner> = Arc::new(NoEncryptSigner);
+        let signer: Arc<dyn EciesSigner> = Arc::new(NoEncryptSigner);
         let sm =
-            EncryptingSessionStore::new(inner.clone(), signer, Network::Regtest, true).unwrap();
+            EncryptingSessionStore::new(inner.clone(), Some(signer), Network::Regtest).unwrap();
         let pk = test_pubkey(4);
 
         let result = sm

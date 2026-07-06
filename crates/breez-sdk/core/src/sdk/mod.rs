@@ -86,7 +86,7 @@ pub struct BreezSdk {
     pub(crate) fiat_service: Arc<dyn FiatService>,
     pub(crate) lnurl_client: Arc<dyn HttpClient>,
     pub(crate) lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
-    pub(crate) lnurl_auth_signer: Arc<LnurlAuthSignerAdapter>,
+    pub(crate) lnurl_auth_signer: Option<Arc<LnurlAuthSignerAdapter>>,
     pub(crate) event_emitter: Arc<EventEmitter>,
     pub(crate) shutdown_sender: watch::Sender<()>,
     pub(crate) runtime: SdkRuntime,
@@ -113,7 +113,7 @@ pub(crate) struct BreezSdkParams {
     pub fiat_service: Arc<dyn FiatService>,
     pub lnurl_client: Arc<dyn HttpClient>,
     pub lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
-    pub lnurl_auth_signer: Arc<LnurlAuthSignerAdapter>,
+    pub lnurl_auth_signer: Option<Arc<LnurlAuthSignerAdapter>>,
     pub shutdown_sender: watch::Sender<()>,
     pub runtime: SdkRuntime,
     pub spark_wallet: Arc<SparkWallet>,
@@ -187,7 +187,35 @@ pub async fn connect_with_signer(
         request.config,
         request.breez_signer,
         request.spark_signer,
-        request.supports_ecies_hmac,
+    )
+    .with_default_storage(request.storage_dir);
+    let sdk = builder.build().await?;
+    Ok(sdk)
+}
+
+/// Connects to the Spark network using a signing-only external signer.
+///
+/// Use this instead of [`connect_with_signer`] for a signer that can't perform
+/// the SDK's local ECIES/HMAC operations (for example a policy-restricted
+/// enclave). The SDK keeps session tokens in plaintext and disables the features
+/// that rely on ECIES/HMAC.
+///
+/// # Arguments
+///
+/// * `request` - The connection request object with a signing-only external signer
+///
+/// # Returns
+///
+/// Result containing either the initialized `BreezSdk` or an `SdkError`
+#[cfg(feature = "sqlite")]
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+pub async fn connect_with_signing_only_signer(
+    request: crate::ConnectWithSigningOnlySignerRequest,
+) -> Result<BreezSdk, SdkError> {
+    let builder = super::sdk_builder::SdkBuilder::new_with_signing_only_signer(
+        request.config,
+        request.breez_signer,
+        request.spark_signer,
     )
     .with_default_storage(request.storage_dir);
     let sdk = builder.build().await?;
@@ -330,6 +358,17 @@ pub struct ExternalSigners {
     /// External signer for non-Spark SDK signing (LNURL-auth, sync, message
     /// signing, ECIES).
     pub breez_signer: Arc<dyn crate::signer::ExternalBreezSigner>,
+    /// External high-level Spark signer for the Spark wallet flows.
+    pub spark_signer: Arc<dyn crate::signer::ExternalSparkSigner>,
+}
+
+/// A signing-only external signer paired with the Spark signer, for wallets that
+/// connect via [`connect_with_signing_only_signer`]. The Breez half performs
+/// signing only, without the SDK's local ECIES/HMAC operations.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SigningOnlyExternalSigners {
+    /// Signing-only external signer for non-Spark SDK signing.
+    pub breez_signer: Arc<dyn crate::signer::ExternalSigningSigner>,
     /// External high-level Spark signer for the Spark wallet flows.
     pub spark_signer: Arc<dyn crate::signer::ExternalSparkSigner>,
 }

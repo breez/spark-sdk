@@ -37,21 +37,39 @@ impl SdkBuilder {
     /// - `breez_signer`: External signer for non-Spark SDK signing (LNURL-auth,
     ///   sync, message signing, ECIES).
     /// - `spark_signer`: External high-level Spark signer for the Spark wallet.
-    /// - `supports_ecies_hmac`: Whether the signer can perform the SDK's local
-    ///   ECIES/HMAC operations. `false` keeps session tokens in plaintext and
-    ///   disables the features that rely on ECIES/HMAC.
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
     pub fn new_with_signer(
         config: Config,
         breez_signer: Arc<dyn crate::signer::ExternalBreezSigner>,
         spark_signer: Arc<dyn crate::signer::ExternalSparkSigner>,
-        supports_ecies_hmac: bool,
     ) -> Self {
-        let inner = crate::sdk_builder::SdkBuilder::new_with_signer(
+        let inner =
+            crate::sdk_builder::SdkBuilder::new_with_signer(config, breez_signer, spark_signer);
+        SdkBuilder {
+            inner: Mutex::new(inner),
+        }
+    }
+
+    /// Creates a new `SdkBuilder` with a signing-only external signer.
+    ///
+    /// Use this for a signer that can't perform the SDK's local ECIES/HMAC
+    /// operations (for example a policy-restricted enclave). The SDK keeps
+    /// session tokens in plaintext and disables the features that rely on
+    /// ECIES/HMAC.
+    /// Arguments:
+    /// - `config`: The configuration to be used.
+    /// - `breez_signer`: Signing-only external signer for non-Spark SDK signing.
+    /// - `spark_signer`: External high-level Spark signer for the Spark wallet.
+    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
+    pub fn new_with_signing_only_signer(
+        config: Config,
+        breez_signer: Arc<dyn crate::signer::ExternalSigningSigner>,
+        spark_signer: Arc<dyn crate::signer::ExternalSparkSigner>,
+    ) -> Self {
+        let inner = crate::sdk_builder::SdkBuilder::new_with_signing_only_signer(
             config,
             breez_signer,
             spark_signer,
-            supports_ecies_hmac,
         );
         SdkBuilder {
             inner: Mutex::new(inner),
