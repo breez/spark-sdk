@@ -331,13 +331,22 @@ impl TurnkeySparkSigner {
         Ok(pk)
     }
 
-    /// The signing public key for a tree leaf, memoized.
+    /// The signing public key for a tree leaf, memoized. The leaf account is
+    /// provisioned P2TR-format (rather than compressed) so the same path can
+    /// later sign the leaf's refund output as tweaked Schnorr in a unilateral
+    /// exit; the returned key is the internal (untweaked) key either way, so
+    /// FROST and transaction construction are unaffected.
     async fn leaf_public_key(&self, leaf_id: &TreeNodeId) -> Result<PublicKey, SignerError> {
         if let Some(pk) = self.leaf_pubkeys.lock().await.get(leaf_id).copied() {
             return Ok(pk);
         }
         let path = format!("{}/1'/{}'", self.base_path(), Self::leaf_index(leaf_id));
-        let pk = self.pubkey_at_path(path).await?;
+        let hex = self
+            .client
+            .p2tr_pubkey_at(path, self.network)
+            .await
+            .map_err(to_spark_err)?;
+        let pk = PublicKey::from_str(&hex).map_err(to_spark_err)?;
         self.leaf_pubkeys.lock().await.insert(leaf_id.clone(), pk);
         Ok(pk)
     }
