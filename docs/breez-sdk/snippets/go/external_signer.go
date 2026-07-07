@@ -61,3 +61,40 @@ func connectWithSigner(
 }
 
 // ANCHOR_END: connect-with-signer
+
+// ANCHOR: sdk-builder-with-signer
+func buildWithSigner(
+	signers breez_sdk_spark.ExternalSigners,
+) (*breez_sdk_spark.BreezSdk, error) {
+	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+	apiKey := "<breez api key>"
+	config.ApiKey = &apiKey
+
+	builder := breez_sdk_spark.SdkBuilderNewWithSigner(config, signers.BreezSigner, signers.SparkSigner)
+	// builder.WithStorageBackend(<your storage backend>)
+	// builder.WithSharedContext(<your shared context>)
+	sdk, err := builder.Build()
+	if err != nil {
+		return nil, err
+	}
+
+	return sdk, nil
+}
+
+// ANCHOR_END: sdk-builder-with-signer
+
+// ANCHOR: sdk-builder-with-signing-only-signer
+func buildWithSigningOnlySigner(
+	config breez_sdk_spark.Config,
+	signers breez_sdk_spark.SigningOnlyExternalSigners,
+) (*breez_sdk_spark.BreezSdk, error) {
+	builder := breez_sdk_spark.SdkBuilderNewWithSigningOnlySigner(config, signers.BreezSigner, signers.SparkSigner)
+	sdk, err := builder.Build()
+	if err != nil {
+		return nil, err
+	}
+
+	return sdk, nil
+}
+
+// ANCHOR_END: sdk-builder-with-signing-only-signer
