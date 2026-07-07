@@ -29,7 +29,7 @@ use tokio::sync::Mutex;
 
 use bitcoin::bip32::DerivationPath;
 use bitcoin::hashes::{Hash, sha256};
-use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey, ecdsa, schnorr};
+use bitcoin::secp256k1::{All, PublicKey, Secp256k1, SecretKey, ecdsa, schnorr};
 use frost_secp256k1_tr::Identifier;
 use frost_secp256k1_tr::round1::{NonceCommitment, SigningCommitments};
 use frost_secp256k1_tr::round2::SignatureShare;
@@ -272,6 +272,10 @@ pub(crate) struct TurnkeySparkSigner {
     client: Arc<TurnkeyClient>,
     account: u32,
     network: Network,
+    /// secp context for deriving a pubkey from an exported static-deposit secret.
+    /// Held on the signer so `Secp256k1::new()` (a large table allocation) runs
+    /// once, not per call.
+    secp: Secp256k1<All>,
     // Pubkey/address memoization (see module docs): immutable, in-memory, non-authoritative.
     identity_pubkey: Mutex<Option<PublicKey>>,
     spark_address: Mutex<Option<String>>,
@@ -289,6 +293,7 @@ impl TurnkeySparkSigner {
             client,
             account,
             network,
+            secp: Secp256k1::new(),
             identity_pubkey: Mutex::new(None),
             spark_address: Mutex::new(None),
             leaf_pubkeys: Mutex::new(HashMap::new()),
@@ -529,7 +534,7 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
         // it (a deny-export policy) fails here, not later. The pubkey is derived
         // from the exported secret, so there's no second Turnkey round-trip.
         let secret = self.export_static_deposit_key(index).await?;
-        let public_key = PublicKey::from_secret_key(&Secp256k1::new(), &secret);
+        let public_key = PublicKey::from_secret_key(&self.secp, &secret);
         Ok(PublicKeyBytes::from_public_key(&public_key))
     }
 
