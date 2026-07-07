@@ -348,7 +348,7 @@ async fn finalize_lnurl_pay(
     pay_request: LnurlPayRequestDetails,
     comment: Option<String>,
     success_action: Option<SuccessAction>,
-    persist_and_emit: bool,
+    emit: bool,
 ) -> Result<LnurlPayResponse, SdkError> {
     let processed_success_action =
         process_success_action(&payment, success_action.clone().map(Into::into).as_ref())?;
@@ -383,19 +383,22 @@ async fn finalize_lnurl_pay(
         }
     }
 
-    if persist_and_emit {
-        sdk.storage
-            .insert_payment_metadata(
-                payment.id.clone(),
-                PaymentMetadata {
-                    lnurl_pay_info: Some(lnurl_info),
-                    lnurl_description,
-                    ..Default::default()
-                },
-            )
-            .await?;
+    // Persist the metadata unconditionally: it is an idempotent upsert, so a
+    // replay still heals a first attempt that crashed after the payment was
+    // stored but before its LNURL metadata was persisted.
+    sdk.storage
+        .insert_payment_metadata(
+            payment.id.clone(),
+            PaymentMetadata {
+                lnurl_pay_info: Some(lnurl_info),
+                lnurl_description,
+                ..Default::default()
+            },
+        )
+        .await?;
 
-        // Emit the payment with metadata already included
+    // Only emit on a fresh send; a replay must not re-emit the success event.
+    if emit {
         sdk.event_emitter
             .emit(&SdkEvent::from_payment(payment.clone()))
             .await;

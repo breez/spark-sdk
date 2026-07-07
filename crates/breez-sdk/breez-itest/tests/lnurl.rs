@@ -1568,3 +1568,152 @@ async fn test_15_client_signing_lnurl_pay_fees_included() -> Result<()> {
     info!("=== Test test_15_client_signing_lnurl_pay_fees_included PASSED ===");
     Ok(())
 }
+
+/// Publishing the same LNURL-pay package twice must be idempotent: the replay
+/// returns the same payment and retains its LNURL metadata (address, comment,
+/// description), without sending again.
+#[test_log::test(tokio::test)]
+async fn test_16_client_signing_lnurl_pay_publish_twice() -> Result<()> {
+    info!("=== Starting test_16_client_signing_lnurl_pay_publish_twice ===");
+
+    let alice_mnemonic = random_mnemonic()?;
+    let mut alice = build_signing_alice(
+        alice_mnemonic.clone(),
+        "breez-sdk-alice-lnurl-signing-twice",
+    )
+    .await?;
+    let mut bob = setup_bob(false).await?;
+
+    let client_signer =
+        default_external_signers(alice_mnemonic, None, Network::Regtest, None)?.spark_signer;
+
+    let payment_amount_sats = 5_000u64;
+    let payment_comment = "Client-signing LNURL replay test";
+    let description = "Bob's client-signing replay address";
+
+    let register_response = bob
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: "bobsigningreplay".to_string(),
+            description: Some(description.to_string()),
+        })
+        .await?;
+    let bob_lightning_address = register_response.lightning_address;
+
+    ensure_funded(&mut alice, 50_000).await?;
+
+    let parse_response = alice.sdk.parse(&bob_lightning_address).await?;
+    let InputType::LightningAddress(details) = parse_response else {
+        anyhow::bail!("Expected Lightning address");
+    };
+
+    let prepare_response = alice
+        .sdk
+        .prepare_lnurl_pay(PrepareLnurlPayRequest {
+            amount: payment_amount_sats as u128,
+            pay_request: details.pay_request,
+            comment: Some(payment_comment.to_string()),
+            validate_success_action_url: None,
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+
+    // Drive the build/sign/publish loop, but on the final (non-swap) package,
+    // publish it twice: the second publish must replay, not send again.
+    let (first, second) = loop {
+        let unsigned = alice
+            .sdk
+            .build_unsigned_lnurl_pay_package(BuildUnsignedLnurlPayPackageRequest {
+                prepare_response: prepare_response.clone(),
+            })
+            .await?;
+
+        let (UnsignedTransferPackage::Transfer {
+            prepare_transfer, ..
+        }
+        | UnsignedTransferPackage::Swap {
+            prepare_transfer, ..
+        }) = &unsigned
+        else {
+            panic!("unexpected token package for an LNURL pay");
+        };
+        let signature = TransferSignature::Transfer {
+            signed: client_signer
+                .prepare_transfer(prepare_transfer.clone())
+                .await?,
+        };
+        let signed_package = SignedTransferPackage {
+            unsigned,
+            signature,
+        };
+
+        match alice
+            .sdk
+            .publish_signed_lnurl_pay_package(PublishSignedLnurlPayPackageRequest {
+                signed_package: signed_package.clone(),
+            })
+            .await?
+        {
+            PublishSignedLnurlPayResponse::SwapCompleted => continue,
+            PublishSignedLnurlPayResponse::PaymentSent { response: first } => {
+                // Republish the identical package: this must replay.
+                let second = alice
+                    .sdk
+                    .publish_signed_lnurl_pay_package(PublishSignedLnurlPayPackageRequest {
+                        signed_package: signed_package.clone(),
+                    })
+                    .await?;
+                break (first, second);
+            }
+        }
+    };
+
+    let PublishSignedLnurlPayResponse::PaymentSent { response: second } = second else {
+        anyhow::bail!("republishing an LNURL package must return the sent payment");
+    };
+    assert_eq!(
+        first.payment.id, second.payment.id,
+        "republishing an LNURL package must return the same payment"
+    );
+
+    // Both responses carry the LNURL info.
+    for response in [&first, &second] {
+        let Some(PaymentDetails::Lightning {
+            lnurl_pay_info: Some(info),
+            ..
+        }) = &response.payment.details
+        else {
+            anyhow::bail!("expected LNURL pay info on the response");
+        };
+        assert_eq!(info.ln_address, Some(bob_lightning_address.clone()));
+    }
+
+    // The stored payment retains the LNURL metadata after the replay.
+    let stored = alice
+        .sdk
+        .get_payment(GetPaymentRequest {
+            payment_id: first.payment.id.clone(),
+        })
+        .await?
+        .payment;
+    let Some(PaymentDetails::Lightning {
+        lnurl_pay_info: Some(info),
+        ..
+    }) = stored.details
+    else {
+        anyhow::bail!("stored payment should retain LNURL info after the replay");
+    };
+    assert_eq!(info.ln_address, Some(bob_lightning_address.clone()));
+    assert_eq!(info.comment, Some(payment_comment.to_string()));
+    assert_eq!(info.extract_description(), Some(description.to_string()));
+
+    // Bob received the payment exactly once.
+    let bob_payment =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
+    assert_eq!(bob_payment.amount, payment_amount_sats as u128);
+
+    info!("=== Test test_16_client_signing_lnurl_pay_publish_twice PASSED ===");
+    Ok(())
+}
