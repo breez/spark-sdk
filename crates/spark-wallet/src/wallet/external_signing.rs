@@ -35,8 +35,14 @@ impl SparkWallet {
         &self,
         amount_sat: u64,
         receiver_address: &SparkAddress,
+        spark_invoice: Option<&str>,
         transfer_id: Option<TransferId>,
     ) -> Result<SendPackagePreparation, SparkWalletError> {
+        // Validate the invoice (expiry, sender) at build time, before the user is
+        // asked to sign, matching the token path and publish_transfer_package.
+        if let Some(invoice) = spark_invoice {
+            self.parse_and_validate_spark_invoice(invoice)?;
+        }
         if self.config.network != receiver_address.network {
             return Err(SparkWalletError::InvalidNetwork);
         }

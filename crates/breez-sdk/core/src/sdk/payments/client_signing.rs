@@ -175,7 +175,7 @@ async fn build_spark_package(
     .map_err(|e| SdkError::Generic(e.to_string()))?;
     let prep = sdk
         .spark_wallet
-        .prepare_transfer_package(amount_sat, &spark_address, None)
+        .prepare_transfer_package(amount_sat, &spark_address, spark_invoice.as_deref(), None)
         .await?;
     to_unsigned_package(
         prep,
