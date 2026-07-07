@@ -51,6 +51,16 @@ struct RestChainServiceConfig {
 }
 
 /// Source for the signer - either a seed or an external signer implementation
+/// External SDK-layer signer, in one of its two capability profiles. The profile
+/// is chosen by the type the integrator supplies at connect, not a runtime flag:
+/// a [`SigningOnly`](ExternalBreez::SigningOnly) signer can't perform the SDK's
+/// local ECIES/HMAC operations.
+#[derive(Clone)]
+enum ExternalBreez {
+    Full(Arc<dyn crate::signer::ExternalBreezSigner>),
+    SigningOnly(Arc<dyn crate::signer::ExternalSigningSigner>),
+}
+
 #[derive(Clone)]
 enum SignerSource {
     Seed {
@@ -58,17 +68,19 @@ enum SignerSource {
         account_number: Option<u32>,
     },
     External {
-        breez: Arc<dyn crate::signer::ExternalBreezSigner>,
+        breez: ExternalBreez,
         spark: Arc<dyn crate::signer::ExternalSparkSigner>,
     },
 }
 
-/// The four signers derived from a single signer source.
+/// The signers derived from a single signer source. `ecies` is absent for a
+/// signing-only signer; the features that depend on it (`rtsync`, session-token
+/// encryption, cross-chain) and on HMAC (`lnurl_auth`) are then absent too.
 struct Signers {
-    base: Arc<dyn crate::signer::BreezSigner>,
+    ecies: Option<Arc<dyn crate::signer::EciesSigner>>,
     spark: Arc<dyn SparkSigner>,
-    rtsync: Arc<RTSyncSigner>,
-    lnurl_auth: Arc<LnurlAuthSignerAdapter>,
+    rtsync: Option<Arc<RTSyncSigner>>,
+    lnurl_auth: Option<Arc<LnurlAuthSignerAdapter>>,
 }
 
 /// Inputs to [`build_spark_wallet`] — bundled to avoid an >8-argument helper.
@@ -143,10 +155,42 @@ impl SdkBuilder {
         breez_signer: Arc<dyn crate::signer::ExternalBreezSigner>,
         spark_signer: Arc<dyn crate::signer::ExternalSparkSigner>,
     ) -> Self {
+        Self::with_external_signer(config, ExternalBreez::Full(breez_signer), spark_signer)
+    }
+
+    /// Creates a new `SdkBuilder` with a signing-only external signer.
+    ///
+    /// Use this for a signer that can't perform the SDK's local ECIES/HMAC
+    /// operations (for example a policy-restricted enclave). The SDK keeps
+    /// session tokens in plaintext and disables the features that rely on
+    /// ECIES/HMAC.
+    ///
+    /// # Arguments
+    /// - `config`: The configuration to be used.
+    /// - `breez_signer`: Signing-only external signer for non-Spark SDK signing.
+    /// - `spark_signer`: External high-level Spark signer for the Spark wallet.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn new_with_signing_only_signer(
+        config: Config,
+        breez_signer: Arc<dyn crate::signer::ExternalSigningSigner>,
+        spark_signer: Arc<dyn crate::signer::ExternalSparkSigner>,
+    ) -> Self {
+        Self::with_external_signer(
+            config,
+            ExternalBreez::SigningOnly(breez_signer),
+            spark_signer,
+        )
+    }
+
+    fn with_external_signer(
+        config: Config,
+        breez: ExternalBreez,
+        spark_signer: Arc<dyn crate::signer::ExternalSparkSigner>,
+    ) -> Self {
         SdkBuilder {
             config,
             signer_source: SignerSource::External {
-                breez: breez_signer,
+                breez,
                 spark: spark_signer,
             },
             storage: None,
@@ -398,6 +442,8 @@ impl SdkBuilder {
         validate_server_mode(&self.config, background_services_enabled)?;
 
         let signers = build_signers(&self.config, self.signer_source)?;
+        validate_signer_capabilities(&self.config, signers.ecies.is_some())?;
+
         let context = resolve_context(self.context, &self.config).await?;
         let stores = resolve_storage(self.storage, &context, &signers.spark, &self.config).await?;
         let chain_service = resolve_chain_service(
@@ -423,7 +469,7 @@ impl SdkBuilder {
         let shutdown_sender = watch::channel::<()>(()).0;
         let session_store = wrap_session_store(
             stores.session_store.clone(),
-            &signers.base,
+            signers.ecies.clone(),
             self.config.network,
         )?;
 
@@ -483,7 +529,7 @@ impl SdkBuilder {
             &context.breez_server,
             &spark_wallet,
             &storage,
-            &signers.base,
+            signers.ecies.clone(),
             &lightning_sender,
             Arc::clone(&fiat_service),
             shutdown_sender.subscribe(),
@@ -571,49 +617,95 @@ fn validate_server_mode(
     Ok(())
 }
 
-/// Derives the four signers (base, spark, rtsync, lnurl-auth) from one signer
-/// source.
+/// Rejects configs whose features need local encryption when the signer can't
+/// perform ECIES.
+fn validate_signer_capabilities(config: &Config, has_ecies: bool) -> Result<(), SdkError> {
+    if has_ecies {
+        return Ok(());
+    }
+    if config.real_time_sync_server_url.is_some() {
+        return Err(SdkError::InvalidInput(
+            "Real-time sync requires a signer that supports ECIES".to_string(),
+        ));
+    }
+    if config.cross_chain_config.is_some() {
+        return Err(SdkError::InvalidInput(
+            "Cross-chain payments require a signer that supports ECIES".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Derives the SDK-layer signers from one signer source: the Spark signer, and
+/// (when the signer can perform ECIES/HMAC) the `ecies` signer plus the
+/// real-time-sync and lnurl-auth signers. A signing-only external signer can do
+/// neither, so `ecies`, `rtsync`, and `lnurl_auth` are all left `None`.
 fn build_signers(config: &Config, signer_source: SignerSource) -> Result<Signers, SdkError> {
+    use crate::signer::{
+        BreezSigner, EciesSigner, ExternalBreezSignerAdapter, ExternalSigningSignerAdapter,
+        ExternalSparkSignerAdapter, HmacSigner,
+    };
+
     // The SDK-layer `BreezSigner` (`base`) roots at the identity master
     // (`base/0'`); the high-level Spark signer (the in-process `DefaultSigner`
     // wrapped in a `SparkSignerAdapter`) roots at the account master (`base`).
-    let (base, spark): (Arc<dyn crate::signer::BreezSigner>, Arc<dyn SparkSigner>) =
-        match signer_source {
-            SignerSource::Seed {
-                seed,
-                account_number,
-            } => {
-                let seed_bytes = seed.to_bytes()?;
-                let network = config.network.into();
-                let base: Arc<dyn crate::signer::BreezSigner> = Arc::new(BreezSignerImpl::new(
-                    spark_wallet::identity_master_key(&seed_bytes, network, account_number)
+    #[allow(clippy::type_complexity)]
+    let (base, ecies, hmac, spark): (
+        Arc<dyn BreezSigner>,
+        Option<Arc<dyn EciesSigner>>,
+        Option<Arc<dyn HmacSigner>>,
+        Arc<dyn SparkSigner>,
+    ) = match signer_source {
+        SignerSource::Seed {
+            seed,
+            account_number,
+        } => {
+            let seed_bytes = seed.to_bytes()?;
+            let network = config.network.into();
+            // One `BreezSignerImpl` implements all three capability traits.
+            let signer = Arc::new(BreezSignerImpl::new(
+                spark_wallet::identity_master_key(&seed_bytes, network, account_number)
+                    .map_err(|e| SdkError::Generic(e.to_string()))?,
+            ));
+            let spark: Arc<dyn SparkSigner> = Arc::new(spark_wallet::SparkSignerAdapter::new(
+                Arc::new(spark_wallet::DefaultSigner::from_master(
+                    spark_wallet::account_master_key(&seed_bytes, network, account_number)
                         .map_err(|e| SdkError::Generic(e.to_string()))?,
-                ));
-                let spark: Arc<dyn SparkSigner> = Arc::new(spark_wallet::SparkSignerAdapter::new(
-                    Arc::new(spark_wallet::DefaultSigner::from_master(
-                        spark_wallet::account_master_key(&seed_bytes, network, account_number)
-                            .map_err(|e| SdkError::Generic(e.to_string()))?,
-                    )),
-                ));
-                (base, spark)
+                )),
+            ));
+            (signer.clone(), Some(signer.clone()), Some(signer), spark)
+        }
+        SignerSource::External { breez, spark } => {
+            let spark: Arc<dyn SparkSigner> = Arc::new(ExternalSparkSignerAdapter::new(spark));
+            match breez {
+                ExternalBreez::Full(breez) => {
+                    // The full adapter implements all three capability traits.
+                    let signer = Arc::new(ExternalBreezSignerAdapter::new(breez));
+                    (signer.clone(), Some(signer.clone()), Some(signer), spark)
+                }
+                ExternalBreez::SigningOnly(breez) => {
+                    let base: Arc<dyn BreezSigner> =
+                        Arc::new(ExternalSigningSignerAdapter::new(breez));
+                    (base, None, None, spark)
+                }
             }
-            SignerSource::External { breez, spark } => {
-                use crate::signer::{ExternalBreezSignerAdapter, ExternalSparkSignerAdapter};
-                let base: Arc<dyn crate::signer::BreezSigner> =
-                    Arc::new(ExternalBreezSignerAdapter::new(breez));
-                let spark: Arc<dyn SparkSigner> = Arc::new(ExternalSparkSignerAdapter::new(spark));
-                (base, spark)
-            }
-        };
+        }
+    };
 
-    let rtsync = Arc::new(
-        RTSyncSigner::new(base.clone(), config.network)
-            .map_err(|e| SdkError::Generic(e.to_string()))?,
-    );
-    let lnurl_auth = Arc::new(LnurlAuthSignerAdapter::new(base.clone()));
+    let rtsync = ecies
+        .as_ref()
+        .map(|ecies| {
+            RTSyncSigner::new(base.clone(), ecies.clone(), config.network)
+                .map(Arc::new)
+                .map_err(|e| SdkError::Generic(e.to_string()))
+        })
+        .transpose()?;
+    let lnurl_auth = hmac
+        .as_ref()
+        .map(|hmac| Arc::new(LnurlAuthSignerAdapter::new(base.clone(), hmac.clone())));
 
     Ok(Signers {
-        base,
+        ecies,
         spark,
         rtsync,
         lnurl_auth,
@@ -760,20 +852,22 @@ fn finalize_spark_wallet_config(
 }
 
 /// Wraps the resolved session store (or an in-memory default) in the encrypting
-/// + caching layers used by the SDK.
+/// and caching layers.
+///
+/// With an `ecies` signer the tokens are encrypted at rest, otherwise (a
+/// signing-only signer) they are stored in plaintext. Either way each token is
+/// tagged with its mode, so switching the signer's ECIES capability between runs
+/// is caught on read and forces a fresh re-authentication.
 fn wrap_session_store(
     session_store: Option<Arc<dyn SessionStore>>,
-    signer: &Arc<dyn crate::signer::BreezSigner>,
+    ecies: Option<Arc<dyn crate::signer::EciesSigner>>,
     network: Network,
 ) -> Result<Arc<dyn SessionStore>, SdkError> {
     let inner = session_store.unwrap_or_else(|| Arc::new(InMemorySessionStore::default()));
-    let encrypting: Arc<dyn SessionStore> = Arc::new(
-        crate::session_store::EncryptingSessionStore::new(inner, signer.clone(), network).map_err(
-            |e| SdkError::Generic(format!("failed to set up session token encryption: {e}")),
-        )?,
-    );
+    let store = crate::session_store::EncryptingSessionStore::new(inner, ecies, network)
+        .map_err(|e| SdkError::Generic(format!("failed to set up the session store: {e}")))?;
     Ok(Arc::new(crate::session_store::CachingSessionStore::new(
-        encrypting,
+        Arc::new(store),
     )))
 }
 
@@ -839,18 +933,21 @@ async fn maybe_wrap_storage_with_real_time_sync(
     config: &Config,
     background_services_enabled: bool,
     user_agent: String,
-    rtsync_signer: Arc<RTSyncSigner>,
+    rtsync_signer: Option<Arc<RTSyncSigner>>,
     shutdown_receiver: watch::Receiver<()>,
     event_emitter: Arc<EventEmitter>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
 ) -> Result<Arc<dyn crate::persist::Storage>, SdkError> {
-    match &config.real_time_sync_server_url {
-        Some(server_url) if background_services_enabled => {
+    // `validate_signer_capabilities` rejects real-time sync without an
+    // ECIES-capable signer, so `rtsync_signer` is present whenever the URL is
+    // set; a missing signer can't be reached and falls through to the no-op arm.
+    match (&config.real_time_sync_server_url, rtsync_signer) {
+        (Some(server_url), Some(signer)) if background_services_enabled => {
             init_and_start_real_time_sync(RealTimeSyncParams {
                 server_url: server_url.clone(),
                 api_key: config.api_key.clone(),
                 user_agent,
-                signer: rtsync_signer,
+                signer,
                 storage,
                 shutdown_receiver,
                 event_emitter,
@@ -918,7 +1015,7 @@ async fn build_cross_chain_context(
     breez_server: &Arc<BreezServer>,
     spark_wallet: &Arc<SparkWallet>,
     storage: &Arc<dyn crate::persist::Storage>,
-    signer: &Arc<dyn crate::signer::BreezSigner>,
+    ecies: Option<Arc<dyn crate::signer::EciesSigner>>,
     lightning_sender: &Arc<crate::sdk::LightningSender>,
     fiat_service: Arc<dyn breez_sdk_common::fiat::FiatService>,
     shutdown_receiver: watch::Receiver<()>,
@@ -958,7 +1055,7 @@ async fn build_cross_chain_context(
         config.network,
         Arc::clone(spark_wallet),
         Arc::clone(storage),
-        Arc::clone(signer),
+        ecies,
         cached_fiat,
         Arc::clone(lightning_sender),
     )
@@ -1003,6 +1100,370 @@ mod tests {
                 },
             );
         }
+    }
+
+    #[test]
+    fn validate_signer_capabilities_gates_encryption_features() {
+        // ECIES/HMAC supported: encryption-dependent features are allowed.
+        let mut config = default_config(Network::Regtest);
+        config.real_time_sync_server_url = Some("https://example.com".to_string());
+        assert!(super::validate_signer_capabilities(&config, true).is_ok());
+
+        // No ECIES/HMAC + real-time sync: rejected with a clear error.
+        let mut config = default_config(Network::Regtest);
+        config.real_time_sync_server_url = Some("https://example.com".to_string());
+        config.cross_chain_config = None;
+        match super::validate_signer_capabilities(&config, false) {
+            Err(SdkError::InvalidInput(m)) => {
+                assert!(m.contains("Real-time sync"), "got: {m}");
+            }
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+
+        // No ECIES/HMAC + no encryption-dependent feature: allowed, so a
+        // payments-only wallet still builds.
+        let mut config = default_config(Network::Regtest);
+        config.real_time_sync_server_url = None;
+        config.cross_chain_config = None;
+        assert!(super::validate_signer_capabilities(&config, false).is_ok());
+    }
+
+    /// A signing-only signer yields no ECIES/HMAC, so `build_signers` leaves the
+    /// dependent signers (real-time sync, lnurl-auth) unbuilt; a full/seed signer
+    /// builds them.
+    #[test]
+    fn build_signers_signing_only_omits_ecies_dependent_signers() {
+        use crate::error::SignerError;
+        use crate::signer::external_types::{
+            EcdsaSignatureBytes, MessageBytes, PublicKeyBytes, RecoverableEcdsaSignatureBytes,
+            SchnorrSignatureBytes,
+        };
+        use crate::signer::{
+            DefaultExternalSparkSigner, ExternalSigningSigner, ExternalSparkSigner,
+        };
+        use std::sync::Arc;
+
+        // A signing-only signer; `build_signers` only wraps it, never calls it.
+        struct StubSigningSigner;
+        #[macros::async_trait]
+        impl ExternalSigningSigner for StubSigningSigner {
+            async fn derive_public_key(&self, _p: String) -> Result<PublicKeyBytes, SignerError> {
+                unreachable!("build_signers must not call the signer")
+            }
+            async fn sign_ecdsa(
+                &self,
+                _m: MessageBytes,
+                _p: String,
+            ) -> Result<EcdsaSignatureBytes, SignerError> {
+                unreachable!("build_signers must not call the signer")
+            }
+            async fn sign_ecdsa_recoverable(
+                &self,
+                _m: MessageBytes,
+                _p: String,
+            ) -> Result<RecoverableEcdsaSignatureBytes, SignerError> {
+                unreachable!("build_signers must not call the signer")
+            }
+            async fn sign_hash_schnorr(
+                &self,
+                _h: Vec<u8>,
+                _p: String,
+            ) -> Result<SchnorrSignatureBytes, SignerError> {
+                unreachable!("build_signers must not call the signer")
+            }
+        }
+
+        let config = default_config(Network::Regtest);
+
+        // Seed source: full capability, so rtsync + lnurl-auth signers are built.
+        let full = super::build_signers(
+            &config,
+            super::SignerSource::Seed {
+                seed: test_seed(),
+                account_number: None,
+            },
+        )
+        .unwrap();
+        assert!(full.ecies.is_some());
+        assert!(full.rtsync.is_some());
+        assert!(full.lnurl_auth.is_some());
+
+        // Signing-only external source: no ECIES/HMAC, so both are left unbuilt.
+        let breez: Arc<dyn ExternalSigningSigner> = Arc::new(StubSigningSigner);
+        let spark: Arc<dyn ExternalSparkSigner> = Arc::new(
+            DefaultExternalSparkSigner::new(
+                TEST_MNEMONIC.to_string(),
+                None,
+                Network::Regtest,
+                None,
+            )
+            .unwrap(),
+        );
+        let signing_only = super::build_signers(
+            &config,
+            super::SignerSource::External {
+                breez: super::ExternalBreez::SigningOnly(breez),
+                spark,
+            },
+        )
+        .unwrap();
+        assert!(signing_only.ecies.is_none());
+        assert!(signing_only.rtsync.is_none());
+        assert!(signing_only.lnurl_auth.is_none());
+    }
+
+    /// End to end: an offline SDK built with a signing-only signer has no
+    /// lnurl-auth signer, and `lnurl_auth` rejects with `InvalidInput`.
+    #[tokio::test]
+    async fn signing_only_signer_build_disables_lnurl_auth() {
+        use crate::error::SignerError;
+        use crate::signer::external_types::{
+            EcdsaSignatureBytes, MessageBytes, PublicKeyBytes, RecoverableEcdsaSignatureBytes,
+            SchnorrSignatureBytes,
+        };
+        use crate::signer::{
+            DefaultExternalSigner, DefaultExternalSparkSigner, ExternalBreezSigner,
+            ExternalSigningSigner, ExternalSparkSigner,
+        };
+        use std::sync::Arc;
+
+        // A real signing-only signer: delegates its four methods to a
+        // seed-derived reference signer.
+        struct SigningOnly(DefaultExternalSigner);
+        #[macros::async_trait]
+        impl ExternalSigningSigner for SigningOnly {
+            async fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, SignerError> {
+                self.0.derive_public_key(path).await
+            }
+            async fn sign_ecdsa(
+                &self,
+                message: MessageBytes,
+                path: String,
+            ) -> Result<EcdsaSignatureBytes, SignerError> {
+                self.0.sign_ecdsa(message, path).await
+            }
+            async fn sign_ecdsa_recoverable(
+                &self,
+                message: MessageBytes,
+                path: String,
+            ) -> Result<RecoverableEcdsaSignatureBytes, SignerError> {
+                self.0.sign_ecdsa_recoverable(message, path).await
+            }
+            async fn sign_hash_schnorr(
+                &self,
+                hash: Vec<u8>,
+                path: String,
+            ) -> Result<SchnorrSignatureBytes, SignerError> {
+                self.0.sign_hash_schnorr(hash, path).await
+            }
+        }
+
+        let mut config = default_config(Network::Regtest);
+        // Keep the build offline: no real-time sync, no network private-mode init.
+        config.real_time_sync_server_url = None;
+        config.private_enabled_default = false;
+
+        let breez: Arc<dyn ExternalSigningSigner> = Arc::new(SigningOnly(
+            DefaultExternalSigner::new(TEST_MNEMONIC.to_string(), None, Network::Regtest, None)
+                .unwrap(),
+        ));
+        let spark: Arc<dyn ExternalSparkSigner> = Arc::new(
+            DefaultExternalSparkSigner::new(
+                TEST_MNEMONIC.to_string(),
+                None,
+                Network::Regtest,
+                None,
+            )
+            .unwrap(),
+        );
+
+        let sdk = SdkBuilder::new_with_signing_only_signer(config, breez, spark)
+            .with_default_storage(unique_storage_dir("signing-only-lnurl"))
+            .build()
+            .await
+            .expect("signing-only build should succeed");
+
+        assert!(
+            sdk.lnurl_auth_signer.is_none(),
+            "a signing-only signer must not build an lnurl-auth signer"
+        );
+
+        let err = sdk
+            .lnurl_auth(crate::LnurlAuthRequestDetails {
+                k1: "00".repeat(32),
+                action: None,
+                domain: "example.com".to_string(),
+                url: "https://example.com/lnurl-auth".to_string(),
+            })
+            .await
+            .expect_err("lnurl_auth must fail for a signing-only signer");
+        assert!(
+            matches!(err, SdkError::Generic(_)),
+            "expected Generic, got {err:?}"
+        );
+
+        sdk.disconnect().await.expect("disconnect should succeed");
+    }
+
+    /// A signing-only signer is rejected at build when a feature that needs ECIES
+    /// is configured. Here real-time sync is set, so `build()` returns
+    /// `InvalidInput` before any signer method runs.
+    #[tokio::test]
+    async fn signing_only_signer_build_rejects_ecies_features() {
+        use crate::error::SignerError;
+        use crate::signer::external_types::{
+            EcdsaSignatureBytes, MessageBytes, PublicKeyBytes, RecoverableEcdsaSignatureBytes,
+            SchnorrSignatureBytes,
+        };
+        use crate::signer::{
+            DefaultExternalSparkSigner, ExternalSigningSigner, ExternalSparkSigner,
+        };
+        use std::sync::Arc;
+
+        // Never called: the build fails at capability validation before signing.
+        struct StubSigningSigner;
+        #[macros::async_trait]
+        impl ExternalSigningSigner for StubSigningSigner {
+            async fn derive_public_key(&self, _p: String) -> Result<PublicKeyBytes, SignerError> {
+                unreachable!("build must fail before calling the signer")
+            }
+            async fn sign_ecdsa(
+                &self,
+                _m: MessageBytes,
+                _p: String,
+            ) -> Result<EcdsaSignatureBytes, SignerError> {
+                unreachable!("build must fail before calling the signer")
+            }
+            async fn sign_ecdsa_recoverable(
+                &self,
+                _m: MessageBytes,
+                _p: String,
+            ) -> Result<RecoverableEcdsaSignatureBytes, SignerError> {
+                unreachable!("build must fail before calling the signer")
+            }
+            async fn sign_hash_schnorr(
+                &self,
+                _h: Vec<u8>,
+                _p: String,
+            ) -> Result<SchnorrSignatureBytes, SignerError> {
+                unreachable!("build must fail before calling the signer")
+            }
+        }
+
+        let mut config = default_config(Network::Regtest);
+        config.real_time_sync_server_url = Some("https://example.com".to_string());
+
+        let breez: Arc<dyn ExternalSigningSigner> = Arc::new(StubSigningSigner);
+        let spark: Arc<dyn ExternalSparkSigner> = Arc::new(
+            DefaultExternalSparkSigner::new(
+                TEST_MNEMONIC.to_string(),
+                None,
+                Network::Regtest,
+                None,
+            )
+            .unwrap(),
+        );
+
+        let result = SdkBuilder::new_with_signing_only_signer(config, breez, spark)
+            .with_default_storage(unique_storage_dir("signing-only-reject-rtsync"))
+            .build()
+            .await;
+        match result {
+            Err(SdkError::InvalidInput(_)) => {}
+            Ok(_) => panic!("build must reject real-time sync for a signing-only signer"),
+            Err(other) => panic!("expected InvalidInput, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn wrap_session_store_tags_tokens_by_mode() {
+        use crate::Seed;
+        use crate::signer::EciesSigner;
+        use crate::signer::breez::BreezSignerImpl;
+        use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+        use spark_wallet::{Session, SessionStore, SessionStoreError};
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        // Inner store that exposes the raw bytes the wrapper writes through.
+        #[derive(Default)]
+        struct InspectableInner {
+            sessions: Mutex<HashMap<PublicKey, Session>>,
+        }
+        #[macros::async_trait]
+        impl SessionStore for InspectableInner {
+            async fn get_session(&self, key: &PublicKey) -> Result<Session, SessionStoreError> {
+                self.sessions
+                    .lock()
+                    .unwrap()
+                    .get(key)
+                    .cloned()
+                    .ok_or(SessionStoreError::NotFound)
+            }
+            async fn set_session(
+                &self,
+                key: &PublicKey,
+                session: Session,
+            ) -> Result<(), SessionStoreError> {
+                self.sessions.lock().unwrap().insert(*key, session);
+                Ok(())
+            }
+        }
+
+        fn seed_signer() -> Arc<dyn EciesSigner> {
+            let seed_bytes = Seed::Entropy(vec![7u8; 32]).to_bytes().unwrap();
+            let master =
+                spark_wallet::identity_master_key(&seed_bytes, Network::Regtest.into(), None)
+                    .unwrap();
+            Arc::new(BreezSignerImpl::new(master))
+        }
+        fn key() -> PublicKey {
+            let secp = Secp256k1::new();
+            PublicKey::from_secret_key(&secp, &SecretKey::from_slice(&[3u8; 32]).unwrap())
+        }
+
+        let token = "bearer-token".to_string();
+
+        // Encryption off: the inner store holds the plaintext token, tagged pln:.
+        let inner = Arc::new(InspectableInner::default());
+        let store = super::wrap_session_store(Some(inner.clone()), None, Network::Regtest).unwrap();
+        store
+            .set_session(
+                &key(),
+                Session {
+                    token: token.clone(),
+                    expiration: 1,
+                },
+            )
+            .await
+            .unwrap();
+        let raw = inner.sessions.lock().unwrap().get(&key()).cloned().unwrap();
+        assert_eq!(
+            raw.token,
+            format!("pln:{token}"),
+            "plaintext mode must persist the token tagged with pln:"
+        );
+
+        // Encryption on: the inner store holds ciphertext, tagged enc:.
+        let inner = Arc::new(InspectableInner::default());
+        let store =
+            super::wrap_session_store(Some(inner.clone()), Some(seed_signer()), Network::Regtest)
+                .unwrap();
+        store
+            .set_session(
+                &key(),
+                Session {
+                    token: token.clone(),
+                    expiration: 1,
+                },
+            )
+            .await
+            .unwrap();
+        let raw = inner.sessions.lock().unwrap().get(&key()).cloned().unwrap();
+        assert!(
+            raw.token.starts_with("enc:") && raw.token != token,
+            "encrypt mode must persist ciphertext tagged with enc:"
+        );
     }
 
     #[tokio::test]
@@ -1164,11 +1625,11 @@ mod tests {
         );
     }
 
+    const TEST_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
     fn test_seed() -> crate::Seed {
         crate::Seed::Mnemonic {
-            mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon \
-                       abandon abandon about"
-                .to_string(),
+            mnemonic: TEST_MNEMONIC.to_string(),
             passphrase: None,
         }
     }

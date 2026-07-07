@@ -5,7 +5,9 @@ use crate::signer::external_types::{
     EcdsaSignatureBytes, HashedMessageBytes, MessageBytes, PublicKeyBytes,
     RecoverableEcdsaSignatureBytes, SchnorrSignatureBytes, string_to_derivation_path,
 };
-use crate::signer::{BreezSigner, ExternalBreezSigner, breez::BreezSignerImpl};
+use crate::signer::{
+    BreezSigner, EciesSigner, ExternalBreezSigner, HmacSigner, breez::BreezSignerImpl,
+};
 use crate::{Network, SdkError, Seed};
 
 /// Derives the identity master Xpriv (the `BreezSigner` derivation root) from a

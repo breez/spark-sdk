@@ -3,7 +3,10 @@ use bitcoin::bip32::DerivationPath;
 use breez_sdk_common::sync::SyncSigner;
 use std::sync::Arc;
 
-use crate::{Network, signer::BreezSigner};
+use crate::{
+    Network,
+    signer::{BreezSigner, EciesSigner},
+};
 
 const SIGNING_DERIVATION_PATH: &str = "m/1220588449'/0'/0'/0/0";
 const SIGNING_DERIVATION_PATH_TEST: &str = "m/1220588449'/1'/0'/0/0";
@@ -12,6 +15,7 @@ const ENCRYPTION_DERIVATION_PATH_TEST: &str = "m/1782705014'/1'/0'/0/0";
 
 pub struct RTSyncSigner {
     signer: Arc<dyn BreezSigner>,
+    ecies: Arc<dyn EciesSigner>,
     signing_path: DerivationPath,
     encryption_path: DerivationPath,
 }
@@ -19,6 +23,7 @@ pub struct RTSyncSigner {
 impl RTSyncSigner {
     pub fn new(
         signer: Arc<dyn BreezSigner>,
+        ecies: Arc<dyn EciesSigner>,
         network: Network,
     ) -> Result<Self, bitcoin::bip32::Error> {
         let signing_path: DerivationPath = match network {
@@ -34,6 +39,7 @@ impl RTSyncSigner {
 
         Ok(Self {
             signer,
+            ecies,
             signing_path,
             encryption_path,
         })
@@ -65,14 +71,14 @@ impl SyncSigner for RTSyncSigner {
     }
 
     async fn encrypt_ecies(&self, msg: Vec<u8>) -> anyhow::Result<Vec<u8>> {
-        self.signer
+        self.ecies
             .encrypt_ecies(&msg, &self.encryption_path)
             .await
             .map_err(|e| anyhow!(e.to_string()))
     }
 
     async fn decrypt_ecies(&self, msg: Vec<u8>) -> anyhow::Result<Vec<u8>> {
-        self.signer
+        self.ecies
             .decrypt_ecies(&msg, &self.encryption_path)
             .await
             .map_err(|e| anyhow!(e.to_string()))

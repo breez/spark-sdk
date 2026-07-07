@@ -5,16 +5,18 @@ use bitcoin::secp256k1::Message;
 use breez_sdk_common::lnurl::auth::LnurlAuthSigner;
 use breez_sdk_common::lnurl::error::{LnurlError, LnurlResult};
 
-use crate::signer::BreezSigner;
+use crate::signer::{BreezSigner, HmacSigner};
 
-/// Adapter that implements `LnurlAuthSigner` by delegating to `BreezSigner`
+/// Adapter that implements `LnurlAuthSigner` by delegating signing to
+/// [`BreezSigner`] and the HMAC step to [`HmacSigner`].
 pub struct LnurlAuthSignerAdapter {
     signer: Arc<dyn BreezSigner>,
+    hmac: Arc<dyn HmacSigner>,
 }
 
 impl LnurlAuthSignerAdapter {
-    pub fn new(signer: Arc<dyn BreezSigner>) -> Self {
-        Self { signer }
+    pub fn new(signer: Arc<dyn BreezSigner>, hmac: Arc<dyn HmacSigner>) -> Self {
+        Self { signer, hmac }
     }
 }
 
@@ -67,9 +69,9 @@ impl LnurlAuthSigner for LnurlAuthSignerAdapter {
 
         let path = DerivationPath::from(key_derivation_path.to_vec());
 
-        // Delegate to BreezSigner for HMAC-SHA256
+        // Delegate to HmacSigner for HMAC-SHA256
         let hmac = self
-            .signer
+            .hmac
             .hmac_sha256(&path, input)
             .await
             .map_err(|e| LnurlError::General(e.to_string()))?;

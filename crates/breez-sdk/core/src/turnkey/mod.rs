@@ -20,6 +20,6 @@ mod types;
 
 pub use config::{TurnkeyConfig, TurnkeyRetryConfig};
 pub use error::TurnkeyError;
-pub use factory::create_turnkey_signer;
+pub use factory::{create_turnkey_signer, create_turnkey_signing_only_signer};
 #[cfg(feature = "test-utils")]
 pub use management::{TurnkeyWalletInfo, TurnkeyWalletManager};

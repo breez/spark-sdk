@@ -5,9 +5,14 @@ use bitcoin::bip32::DerivationPath;
 use bitcoin::secp256k1::PublicKey;
 
 use crate::Network;
-use crate::signer::BreezSigner;
+use crate::signer::EciesSigner;
 
 use super::SessionStoreError;
+
+/// Prefixes recording which mode a stored token was written in, so a mode switch
+/// (encryption enabled or disabled between runs) is caught on read.
+const MARKER_ENCRYPTED: &str = "enc:";
+const MARKER_PLAINTEXT: &str = "pln:";
 
 /// Hardened derivation indices reserved for session-token encryption.
 /// `1397245774` == ASCII "SESN", distinct from `RTSyncSigner`'s indices, so this
@@ -16,27 +21,32 @@ use super::SessionStoreError;
 const ENCRYPTION_DERIVATION_PATH: &str = "m/1397245774'/0'/0'/0/0";
 const ENCRYPTION_DERIVATION_PATH_TEST: &str = "m/1397245774'/1'/0'/0/0";
 
-/// Internal decorator that encrypts session tokens at rest via
-/// [`BreezSigner::encrypt_ecies`] / [`BreezSigner::decrypt_ecies`], so the
-/// underlying [`spark_wallet::SessionStore`] only ever sees ciphertext. Only
-/// the `Session::token` field is encrypted; `expiration` stays in plaintext so
-/// `is_valid()` can be evaluated cheaply by the caller.
+/// `SessionStore` decorator for session tokens. When an [`EciesSigner`] is
+/// present it encrypts the token at rest via [`EciesSigner::encrypt_ecies`] /
+/// [`EciesSigner::decrypt_ecies`]; otherwise (a signing-only signer) it stores
+/// the token in plaintext. Only `Session::token` is transformed; `expiration`
+/// stays plaintext so `is_valid()` stays cheap.
 ///
-/// The receiver keypair is a child of the wallet's `identity_master_key`
-/// derived at a fixed path reserved for session-token encryption — distinct
-/// from every other subsystem's path. Multiple SDK pods deriving from the
-/// same seed therefore share the same key and can decrypt each other's
-/// stored tokens; an attacker with read-only DB access cannot.
+/// Each stored token is tagged with its mode (`enc:` / `pln:`). On read, a token
+/// written in the other mode (or a legacy untagged one) reads as `NotFound`, so
+/// switching the signer's ECIES capability on an existing wallet forces a
+/// re-authentication that re-stores the token in the current mode. Detection is
+/// symmetric: a stale ciphertext and a stale plaintext token are both rejected in
+/// the other mode.
+///
+/// The encryption keypair is a child of the wallet's `identity_master_key` at a
+/// fixed reserved path. SDK pods sharing the seed share the key and can decrypt
+/// each other's tokens; an attacker with read-only DB access cannot.
 pub(crate) struct EncryptingSessionStore {
     inner: Arc<dyn spark_wallet::SessionStore>,
-    signer: Arc<dyn BreezSigner>,
+    ecies: Option<Arc<dyn EciesSigner>>,
     encryption_path: DerivationPath,
 }
 
 impl EncryptingSessionStore {
     pub(crate) fn new(
         inner: Arc<dyn spark_wallet::SessionStore>,
-        signer: Arc<dyn BreezSigner>,
+        ecies: Option<Arc<dyn EciesSigner>>,
         network: Network,
     ) -> Result<Self, bitcoin::bip32::Error> {
         let encryption_path: DerivationPath = match network {
@@ -46,36 +56,42 @@ impl EncryptingSessionStore {
         .parse()?;
         Ok(Self {
             inner,
-            signer,
+            ecies,
             encryption_path,
         })
     }
 
-    async fn encrypt_token(&self, plaintext: &str) -> Result<String, SessionStoreError> {
-        let ciphertext = self
-            .signer
-            .encrypt_ecies(plaintext.as_bytes(), &self.encryption_path)
-            .await
-            .map_err(|e| {
-                SessionStoreError::Generic(format!("failed to encrypt session token: {e}"))
-            })?;
-        Ok(BASE64.encode(ciphertext))
+    /// Tags `token` for storage in the current mode: `enc:` + ciphertext when an
+    /// ECIES signer is present, `pln:` + the token otherwise. Encryption failure
+    /// propagates (fail closed: never falls back to plaintext).
+    async fn encode_token(&self, token: &str) -> Result<String, SessionStoreError> {
+        if let Some(ecies) = &self.ecies {
+            let ciphertext = ecies
+                .encrypt_ecies(token.as_bytes(), &self.encryption_path)
+                .await
+                .map_err(|e| {
+                    SessionStoreError::Generic(format!("failed to encrypt session token: {e}"))
+                })?;
+            Ok(format!("{MARKER_ENCRYPTED}{}", BASE64.encode(ciphertext)))
+        } else {
+            Ok(format!("{MARKER_PLAINTEXT}{token}"))
+        }
     }
 
-    async fn decrypt_token(&self, ciphertext_b64: &str) -> Result<String, SessionStoreError> {
-        let ciphertext = BASE64.decode(ciphertext_b64.as_bytes()).map_err(|e| {
-            SessionStoreError::Generic(format!("invalid base64 session token: {e}"))
-        })?;
-        let plaintext = self
-            .signer
-            .decrypt_ecies(&ciphertext, &self.encryption_path)
-            .await
-            .map_err(|e| {
-                SessionStoreError::Generic(format!("failed to decrypt session token: {e}"))
-            })?;
-        String::from_utf8(plaintext).map_err(|e| {
-            SessionStoreError::Generic(format!("decrypted session token is not utf-8: {e}"))
-        })
+    /// The usable token if `stored` was written in the current mode, else `None`
+    /// (a mode switch, a legacy untagged token, or an undecryptable one). `None`
+    /// surfaces as `NotFound`.
+    async fn decode_token(&self, stored: &str) -> Option<String> {
+        if let Some(ecies) = &self.ecies {
+            let ciphertext = BASE64.decode(stored.strip_prefix(MARKER_ENCRYPTED)?).ok()?;
+            let plaintext = ecies
+                .decrypt_ecies(&ciphertext, &self.encryption_path)
+                .await
+                .ok()?;
+            String::from_utf8(plaintext).ok()
+        } else {
+            stored.strip_prefix(MARKER_PLAINTEXT).map(str::to_string)
+        }
     }
 }
 
@@ -86,7 +102,12 @@ impl spark_wallet::SessionStore for EncryptingSessionStore {
         service_identity_key: &PublicKey,
     ) -> Result<spark_wallet::Session, spark_wallet::SessionStoreError> {
         let stored = self.inner.get_session(service_identity_key).await?;
-        let token = self.decrypt_token(&stored.token).await?;
+        // A token written in the other mode (or a legacy untagged one) is treated
+        // as absent, so the caller re-authenticates and re-stores it in the
+        // current mode.
+        let Some(token) = self.decode_token(&stored.token).await else {
+            return Err(spark_wallet::SessionStoreError::NotFound);
+        };
         Ok(spark_wallet::Session {
             token,
             expiration: stored.expiration,
@@ -98,7 +119,7 @@ impl spark_wallet::SessionStore for EncryptingSessionStore {
         service_identity_key: &PublicKey,
         session: spark_wallet::Session,
     ) -> Result<(), spark_wallet::SessionStoreError> {
-        let token = self.encrypt_token(&session.token).await?;
+        let token = self.encode_token(&session.token).await?;
         self.inner
             .set_session(
                 service_identity_key,
@@ -116,11 +137,13 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
+    use bitcoin::bip32::DerivationPath;
     use macros::async_test_all;
     use spark_wallet::SessionStore as _;
 
+    use crate::SdkError;
     use crate::Seed;
-    use crate::signer::BreezSigner;
+    use crate::signer::EciesSigner;
     use crate::signer::breez::BreezSignerImpl;
 
     use super::*;
@@ -163,7 +186,7 @@ mod tests {
         PublicKey::from_secret_key(&secp, &sk)
     }
 
-    fn test_signer(seed_byte: u8) -> Arc<dyn BreezSigner> {
+    fn test_signer(seed_byte: u8) -> Arc<dyn EciesSigner> {
         let seed = Seed::Entropy(vec![seed_byte; 32]);
         let seed_bytes = seed.to_bytes().unwrap();
         let master =
@@ -171,11 +194,15 @@ mod tests {
         Arc::new(BreezSignerImpl::new(master))
     }
 
+    fn store(inner: Arc<InspectableInner>, seed: u8, encrypt: bool) -> EncryptingSessionStore {
+        let ecies = encrypt.then(|| test_signer(seed));
+        EncryptingSessionStore::new(inner, ecies, Network::Regtest).unwrap()
+    }
+
     #[async_test_all]
-    async fn round_trip_decrypts_to_original_token() {
+    async fn encrypt_mode_round_trips_and_tags_ciphertext() {
         let inner = Arc::new(InspectableInner::default());
-        let signer = test_signer(7);
-        let sm = EncryptingSessionStore::new(inner.clone(), signer, Network::Regtest).unwrap();
+        let sm = store(inner.clone(), 7, true);
 
         let pk = test_pubkey(1);
         let original = "the-bearer-token";
@@ -190,11 +217,19 @@ mod tests {
         .unwrap();
 
         let stored_raw = inner.sessions.lock().unwrap().get(&pk).cloned().unwrap();
+        assert!(
+            stored_raw.token.starts_with(MARKER_ENCRYPTED),
+            "encrypt mode must tag with the enc: marker"
+        );
         assert_ne!(
             stored_raw.token, original,
-            "inner SM must only see ciphertext"
+            "inner store must not see plaintext"
         );
-        assert!(BASE64.decode(stored_raw.token.as_bytes()).is_ok());
+        assert!(
+            BASE64
+                .decode(stored_raw.token.strip_prefix(MARKER_ENCRYPTED).unwrap())
+                .is_ok()
+        );
 
         let read_back = sm.get_session(&pk).await.unwrap();
         assert_eq!(read_back.token, original);
@@ -202,10 +237,31 @@ mod tests {
     }
 
     #[async_test_all]
+    async fn plaintext_mode_round_trips_and_tags_token() {
+        let inner = Arc::new(InspectableInner::default());
+        let sm = store(inner.clone(), 8, false);
+
+        let pk = test_pubkey(8);
+        let original = "the-bearer-token";
+        sm.set_session(
+            &pk,
+            spark_wallet::Session {
+                token: original.to_string(),
+                expiration: 1_700_000_000,
+            },
+        )
+        .await
+        .unwrap();
+
+        let stored_raw = inner.sessions.lock().unwrap().get(&pk).cloned().unwrap();
+        assert_eq!(stored_raw.token, format!("{MARKER_PLAINTEXT}{original}"));
+        assert_eq!(sm.get_session(&pk).await.unwrap().token, original);
+    }
+
+    #[async_test_all]
     async fn distinct_writes_produce_distinct_ciphertext() {
         let inner = Arc::new(InspectableInner::default());
-        let signer = test_signer(9);
-        let sm = EncryptingSessionStore::new(inner.clone(), signer, Network::Regtest).unwrap();
+        let sm = store(inner.clone(), 9, true);
         let pk = test_pubkey(2);
         let token = "same-plaintext";
 
@@ -240,12 +296,8 @@ mod tests {
     #[async_test_all]
     async fn different_seeds_cannot_decrypt_each_others_tokens() {
         let inner = Arc::new(InspectableInner::default());
-        let writer_signer = test_signer(1);
-        let reader_signer = test_signer(2);
-        let writer =
-            EncryptingSessionStore::new(inner.clone(), writer_signer, Network::Regtest).unwrap();
-        let reader =
-            EncryptingSessionStore::new(inner.clone(), reader_signer, Network::Regtest).unwrap();
+        let writer = store(inner.clone(), 1, true);
+        let reader = store(inner.clone(), 2, true);
         let pk = test_pubkey(3);
 
         writer
@@ -259,14 +311,121 @@ mod tests {
             .await
             .unwrap();
 
-        let result = reader.get_session(&pk).await;
-        let msg = match result {
-            Ok(_) => panic!("reader unexpectedly decrypted writer's session"),
-            Err(e) => e.to_string(),
-        };
+        // A wrong-key reader can't decrypt the token, so it reads as absent
+        // (NotFound) and the caller re-authenticates instead of using a bad token.
         assert!(
-            msg.contains("decrypt"),
-            "expected decrypt error, got: {msg}"
+            matches!(
+                reader.get_session(&pk).await,
+                Err(spark_wallet::SessionStoreError::NotFound)
+            ),
+            "expected NotFound for an undecryptable token"
+        );
+    }
+
+    /// Mode switch plaintext -> encrypt: a token stored in plaintext mode reads
+    /// as `NotFound` once encryption is enabled, forcing a re-auth that re-stores
+    /// it encrypted.
+    #[async_test_all]
+    async fn plaintext_token_read_in_encrypt_mode_is_not_found() {
+        let inner = Arc::new(InspectableInner::default());
+        let pk = test_pubkey(5);
+        store(inner.clone(), 5, false)
+            .set_session(
+                &pk,
+                spark_wallet::Session {
+                    token: "the-bearer-token".to_string(),
+                    expiration: 2_000_000_000,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(
+                store(inner.clone(), 5, true).get_session(&pk).await,
+                Err(spark_wallet::SessionStoreError::NotFound)
+            ),
+            "a plaintext-mode token must read as NotFound in encrypt mode"
+        );
+    }
+
+    /// Mode switch encrypt -> plaintext: a ciphertext stored in encrypt mode
+    /// reads as `NotFound` after a downgrade, the symmetric counterpart the marker
+    /// adds (previously it was returned verbatim and only recovered on expiry).
+    #[async_test_all]
+    async fn ciphertext_read_in_plaintext_mode_is_not_found() {
+        let inner = Arc::new(InspectableInner::default());
+        let pk = test_pubkey(6);
+        store(inner.clone(), 6, true)
+            .set_session(
+                &pk,
+                spark_wallet::Session {
+                    token: "the-bearer-token".to_string(),
+                    expiration: 2_000_000_000,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(
+                store(inner.clone(), 6, false).get_session(&pk).await,
+                Err(spark_wallet::SessionStoreError::NotFound)
+            ),
+            "a ciphertext token must read as NotFound in plaintext mode"
+        );
+    }
+
+    /// An `EciesSigner` that cannot encrypt, modeling a signer whose
+    /// encryption-key export is denied.
+    struct NoEncryptSigner;
+
+    #[macros::async_trait]
+    impl EciesSigner for NoEncryptSigner {
+        async fn encrypt_ecies(
+            &self,
+            _message: &[u8],
+            _path: &DerivationPath,
+        ) -> Result<Vec<u8>, SdkError> {
+            Err(SdkError::Signer("encryption-key export denied".to_string()))
+        }
+        async fn decrypt_ecies(
+            &self,
+            _message: &[u8],
+            _path: &DerivationPath,
+        ) -> Result<Vec<u8>, SdkError> {
+            Err(SdkError::Signer("encryption-key export denied".to_string()))
+        }
+    }
+
+    /// Fail-closed: when the signer cannot encrypt the token (a no-export signer
+    /// under a deny policy), `set_session` errors and the inner store receives
+    /// nothing. It must never fall back to writing the plaintext token.
+    #[async_test_all]
+    async fn encrypt_failure_never_writes_plaintext() {
+        let inner = Arc::new(InspectableInner::default());
+        let signer: Arc<dyn EciesSigner> = Arc::new(NoEncryptSigner);
+        let sm =
+            EncryptingSessionStore::new(inner.clone(), Some(signer), Network::Regtest).unwrap();
+        let pk = test_pubkey(4);
+
+        let result = sm
+            .set_session(
+                &pk,
+                spark_wallet::Session {
+                    token: "plaintext-bearer-token".to_string(),
+                    expiration: 1_700_000_000,
+                },
+            )
+            .await;
+
+        assert!(
+            result.is_err(),
+            "set_session must fail when the signer cannot encrypt"
+        );
+        assert!(
+            inner.sessions.lock().unwrap().is_empty(),
+            "fail closed: nothing may be written to the inner store when encryption fails"
         );
     }
 }

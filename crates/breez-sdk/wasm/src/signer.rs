@@ -458,6 +458,256 @@ extern "C" {
     ) -> Result<Promise, JsValue>;
 }
 
+// ───────────────────── Signing-only external signer ─────────────────────
+
+/// Wraps a JS object implementing the `ExternalSigningSigner` interface and
+/// implements the core `ExternalSigningSigner` trait over it. Used for signers
+/// that can't perform the SDK's local ECIES/HMAC operations.
+pub struct WasmExternalSigningSigner {
+    pub inner: JsExternalSigningSigner,
+}
+
+// This assumes that we'll always be running in a single thread (true for Wasm environments)
+unsafe impl Send for WasmExternalSigningSigner {}
+unsafe impl Sync for WasmExternalSigningSigner {}
+
+impl WasmExternalSigningSigner {
+    pub fn new(inner: JsExternalSigningSigner) -> Self {
+        Self { inner }
+    }
+}
+
+#[async_trait]
+impl breez_sdk_spark::signer::ExternalSigningSigner for WasmExternalSigningSigner {
+    async fn derive_public_key(
+        &self,
+        path: String,
+    ) -> Result<core_types::PublicKeyBytes, SignerError> {
+        let promise = self
+            .inner
+            .derive_public_key(path)
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let future = JsFuture::from(promise);
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let wasm_pubkey: PublicKeyBytes = serde_wasm_bindgen::from_value(result).map_err(|e| {
+            SignerError::Generic(format!("Failed to deserialize public key: {}", e))
+        })?;
+        Ok(wasm_pubkey.into())
+    }
+
+    async fn sign_ecdsa(
+        &self,
+        message: core_types::MessageBytes,
+        path: String,
+    ) -> Result<core_types::EcdsaSignatureBytes, SignerError> {
+        let wasm_msg: MessageBytes = message.into();
+        let promise = self
+            .inner
+            .sign_ecdsa(wasm_msg, path)
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let future = JsFuture::from(promise);
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let wasm_sig: EcdsaSignatureBytes = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| SignerError::Generic(format!("Failed to deserialize signature: {}", e)))?;
+        Ok(wasm_sig.into())
+    }
+
+    async fn sign_ecdsa_recoverable(
+        &self,
+        message: core_types::MessageBytes,
+        path: String,
+    ) -> Result<core_types::RecoverableEcdsaSignatureBytes, SignerError> {
+        let wasm_msg: MessageBytes = message.into();
+        let promise = self
+            .inner
+            .sign_ecdsa_recoverable(wasm_msg, path)
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let future = JsFuture::from(promise);
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let bytes: Vec<u8> = serde_wasm_bindgen::from_value(result).map_err(|e| {
+            SignerError::Generic(format!(
+                "Failed to deserialize recoverable signature: {}",
+                e
+            ))
+        })?;
+        Ok(core_types::RecoverableEcdsaSignatureBytes::new(bytes))
+    }
+
+    async fn sign_hash_schnorr(
+        &self,
+        hash: Vec<u8>,
+        path: String,
+    ) -> Result<core_types::SchnorrSignatureBytes, SignerError> {
+        let promise = self
+            .inner
+            .sign_hash_schnorr(hash, path)
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let future = JsFuture::from(promise);
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let wasm_sig: SchnorrSignatureBytes =
+            serde_wasm_bindgen::from_value(result).map_err(|e| {
+                SignerError::Generic(format!("Failed to deserialize schnorr signature: {}", e))
+            })?;
+        Ok(wasm_sig.into())
+    }
+}
+
+/// A Rust-backed [`ExternalSigningSigner`] surfaced to JS as a signer object
+/// that can be passed to `connectWithSigningOnlySigner` or
+/// `SdkBuilder.newWithSigningOnlySigner`. Produced by
+/// `createTurnkeySigningOnlySigner`.
+///
+/// [`ExternalSigningSigner`]: breez_sdk_spark::signer::ExternalSigningSigner
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct ExternalSigningSignerHandle {
+    pub(crate) inner: std::sync::Arc<dyn breez_sdk_spark::signer::ExternalSigningSigner>,
+}
+
+// This assumes that we'll always be running in a single thread (true for Wasm environments)
+unsafe impl Send for ExternalSigningSignerHandle {}
+unsafe impl Sync for ExternalSigningSignerHandle {}
+
+impl ExternalSigningSignerHandle {
+    pub fn new(inner: std::sync::Arc<dyn breez_sdk_spark::signer::ExternalSigningSigner>) -> Self {
+        Self { inner }
+    }
+}
+
+#[wasm_bindgen]
+impl ExternalSigningSignerHandle {
+    #[wasm_bindgen(js_name = "derivePublicKey")]
+    pub async fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, JsValue> {
+        self.inner
+            .derive_public_key(path)
+            .await
+            .map(Into::into)
+            .map_err(|e| JsValue::from_str(&format!("{e:?}")))
+    }
+
+    #[wasm_bindgen(js_name = "signEcdsa")]
+    pub async fn sign_ecdsa(
+        &self,
+        message: MessageBytes,
+        path: String,
+    ) -> Result<EcdsaSignatureBytes, JsValue> {
+        self.inner
+            .sign_ecdsa(message.into(), path)
+            .await
+            .map(Into::into)
+            .map_err(|e| JsValue::from_str(&format!("{e:?}")))
+    }
+
+    #[wasm_bindgen(js_name = "signEcdsaRecoverable")]
+    pub async fn sign_ecdsa_recoverable(
+        &self,
+        message: MessageBytes,
+        path: String,
+    ) -> Result<RecoverableEcdsaSignatureBytes, JsValue> {
+        self.inner
+            .sign_ecdsa_recoverable(message.into(), path)
+            .await
+            .map(Into::into)
+            .map_err(|e| JsValue::from_str(&format!("{e:?}")))
+    }
+
+    #[wasm_bindgen(js_name = "signHashSchnorr")]
+    pub async fn sign_hash_schnorr(
+        &self,
+        hash: Vec<u8>,
+        path: String,
+    ) -> Result<SchnorrSignatureBytes, JsValue> {
+        self.inner
+            .sign_hash_schnorr(hash, path)
+            .await
+            .map(Into::into)
+            .map_err(|e| JsValue::from_str(&format!("{e:?}")))
+    }
+}
+
+#[async_trait]
+impl breez_sdk_spark::signer::ExternalSigningSigner for ExternalSigningSignerHandle {
+    async fn derive_public_key(
+        &self,
+        path: String,
+    ) -> Result<core_types::PublicKeyBytes, SignerError> {
+        self.inner.derive_public_key(path).await
+    }
+
+    async fn sign_ecdsa(
+        &self,
+        message: core_types::MessageBytes,
+        path: String,
+    ) -> Result<core_types::EcdsaSignatureBytes, SignerError> {
+        self.inner.sign_ecdsa(message, path).await
+    }
+
+    async fn sign_ecdsa_recoverable(
+        &self,
+        message: core_types::MessageBytes,
+        path: String,
+    ) -> Result<core_types::RecoverableEcdsaSignatureBytes, SignerError> {
+        self.inner.sign_ecdsa_recoverable(message, path).await
+    }
+
+    async fn sign_hash_schnorr(
+        &self,
+        hash: Vec<u8>,
+        path: String,
+    ) -> Result<core_types::SchnorrSignatureBytes, SignerError> {
+        self.inner.sign_hash_schnorr(hash, path).await
+    }
+}
+
+#[wasm_bindgen(typescript_custom_section)]
+const SIGNING_SIGNER_INTERFACE: &'static str = r#"export interface ExternalSigningSigner {
+    derivePublicKey(path: string): Promise<PublicKeyBytes>;
+    signEcdsa(message: MessageBytes, path: string): Promise<EcdsaSignatureBytes>;
+    signEcdsaRecoverable(message: MessageBytes, path: string): Promise<RecoverableEcdsaSignatureBytes>;
+    signHashSchnorr(hash: Uint8Array, path: string): Promise<SchnorrSignatureBytes>;
+}"#;
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(typescript_type = "ExternalSigningSigner")]
+    pub type JsExternalSigningSigner;
+
+    #[wasm_bindgen(structural, method, js_name = "derivePublicKey", catch)]
+    pub fn derive_public_key(
+        this: &JsExternalSigningSigner,
+        path: String,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "signEcdsa", catch)]
+    pub fn sign_ecdsa(
+        this: &JsExternalSigningSigner,
+        message: MessageBytes,
+        path: String,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "signEcdsaRecoverable", catch)]
+    pub fn sign_ecdsa_recoverable(
+        this: &JsExternalSigningSigner,
+        message: MessageBytes,
+        path: String,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "signHashSchnorr", catch)]
+    pub fn sign_hash_schnorr(
+        this: &JsExternalSigningSigner,
+        hash: Vec<u8>,
+        path: String,
+    ) -> Result<Promise, JsValue>;
+}
+
 // ───────────────────── High-level Spark signer types ─────────────────────
 
 #[macros::extern_wasm_bindgen(

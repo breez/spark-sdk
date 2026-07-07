@@ -55,6 +55,23 @@ pub async fn connect_with_signer(
     Ok(sdk)
 }
 
+/// Connects using a signing-only external signer, for a signer that can't
+/// perform the SDK's local ECIES/HMAC operations. The SDK keeps session tokens
+/// in plaintext and disables the features that rely on ECIES/HMAC.
+#[wasm_bindgen(js_name = "connectWithSigningOnlySigner")]
+pub async fn connect_with_signing_only_signer(
+    config: Config,
+    breez_signer: crate::signer::JsExternalSigningSigner,
+    spark_signer: crate::signer::JsExternalSparkSigner,
+    storage_dir: String,
+) -> WasmResult<BreezSdk> {
+    let builder = SdkBuilder::new_with_signing_only_signer(config, breez_signer, spark_signer)
+        .with_default_storage(storage_dir)
+        .await?;
+    let sdk = builder.build().await?;
+    Ok(sdk)
+}
+
 #[wasm_bindgen(js_name = "defaultConfig")]
 pub fn default_config(network: Network) -> Config {
     breez_sdk_spark::default_config(network.into()).into()
@@ -97,6 +114,42 @@ impl ExternalSigners {
     /// signing, ECIES).
     #[wasm_bindgen(getter, js_name = "breezSigner")]
     pub fn breez_signer(&self) -> crate::signer::ExternalBreezSignerHandle {
+        self.breez_signer.clone()
+    }
+
+    /// External high-level Spark signer for the Spark wallet flows.
+    #[wasm_bindgen(getter, js_name = "sparkSigner")]
+    pub fn spark_signer(&self) -> crate::signer::ExternalSparkSignerHandle {
+        self.spark_signer.clone()
+    }
+}
+
+/// The signing-only external signers for the SDK's signer-based connect.
+/// Returned by `createTurnkeySigningOnlySigner`; pass both halves to
+/// `connectWithSigningOnlySigner` or `SdkBuilder.newWithSigningOnlySigner`.
+#[wasm_bindgen]
+pub struct SigningOnlyExternalSigners {
+    breez_signer: crate::signer::ExternalSigningSignerHandle,
+    spark_signer: crate::signer::ExternalSparkSignerHandle,
+}
+
+impl SigningOnlyExternalSigners {
+    pub(crate) fn new(
+        breez_signer: crate::signer::ExternalSigningSignerHandle,
+        spark_signer: crate::signer::ExternalSparkSignerHandle,
+    ) -> Self {
+        Self {
+            breez_signer,
+            spark_signer,
+        }
+    }
+}
+
+#[wasm_bindgen]
+impl SigningOnlyExternalSigners {
+    /// Signing-only external signer for non-Spark SDK signing.
+    #[wasm_bindgen(getter, js_name = "breezSigner")]
+    pub fn breez_signer(&self) -> crate::signer::ExternalSigningSignerHandle {
         self.breez_signer.clone()
     }
 

@@ -336,18 +336,8 @@ impl BreezSdk {
                         "Failed to claim utxo {}:{}: {e}",
                         detailed_utxo.txid, detailed_utxo.vout
                     );
-                    self.storage
-                        .update_deposit(
-                            detailed_utxo.txid.to_string(),
-                            detailed_utxo.vout,
-                            UpdateDepositPayload::ClaimError {
-                                error: e.clone().into(),
-                            },
-                        )
-                        .await?;
-                    let mut unclaimed_deposit = detailed_utxo.into_deposit_info(true);
-                    unclaimed_deposit.claim_error = Some(e.into());
-                    unclaimed_deposits.push(unclaimed_deposit);
+                    unclaimed_deposits
+                        .push(self.record_unclaimed_deposit(&detailed_utxo, e).await?);
                 }
             }
         }
@@ -365,6 +355,27 @@ impl BreezSdk {
                 .await;
         }
         Ok(())
+    }
+
+    /// Persists a claim failure on the deposit and returns the matching
+    /// `DepositInfo` (with `claim_error` set) for the `UnclaimedDeposits` event.
+    async fn record_unclaimed_deposit(
+        &self,
+        utxo: &DetailedUtxo,
+        error: SdkError,
+    ) -> Result<DepositInfo, SdkError> {
+        self.storage
+            .update_deposit(
+                utxo.txid.to_string(),
+                utxo.vout,
+                UpdateDepositPayload::ClaimError {
+                    error: error.clone().into(),
+                },
+            )
+            .await?;
+        let mut info = utxo.clone().into_deposit_info(true);
+        info.claim_error = Some(error.into());
+        Ok(info)
     }
 
     pub(super) async fn sync_lnurl_metadata(&self) -> Result<(), SdkError> {

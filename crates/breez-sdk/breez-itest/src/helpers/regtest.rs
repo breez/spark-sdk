@@ -869,17 +869,33 @@ pub fn regtest_test_config() -> Config {
     config
 }
 
+/// Like [`regtest_test_config`] but in server mode
+/// (`background_tasks_enabled = false`): no background sync loop, so callers
+/// drive sync and claims explicitly.
+pub fn regtest_server_test_config() -> Config {
+    let mut config = breez_sdk_spark::default_server_config(breez_sdk_spark::Network::Regtest);
+    config.api_key = None;
+    config.lnurl_domain = None;
+    config.prefer_spark_over_lightning = true;
+    config
+}
+
 /// Builds a Regtest SDK for the given signer backend with the standard test
 /// config, so one test body can run against multiple signers.
 pub async fn build_backend_sdk(backend: SignerBackend) -> Result<SdkInstance> {
-    build_backend_sdk_with_config(backend, regtest_test_config()).await
+    build_backend_sdk_with_config(backend, regtest_test_config(), false).await
 }
 
 /// Like [`build_backend_sdk`], but with a caller-supplied config (e.g. to block
-/// auto-claim with `max_deposit_claim_fee = None` for refund tests).
+/// auto-claim with `max_deposit_claim_fee = None` for refund tests) and a
+/// `signing_only` flag selecting the external signer profile (ignored for the
+/// seed backend, which is always full; only the Turnkey backend reads it, so it
+/// is unused when the `turnkey` feature is off).
+#[cfg_attr(not(feature = "turnkey"), allow(unused_variables))]
 pub async fn build_backend_sdk_with_config(
     backend: SignerBackend,
     config: Config,
+    signing_only: bool,
 ) -> Result<SdkInstance> {
     let temp = TempDir::new()?;
     let dir = temp.path().to_string_lossy().to_string();
@@ -891,9 +907,24 @@ pub async fn build_backend_sdk_with_config(
         }
         #[cfg(feature = "turnkey")]
         SignerBackend::Turnkey => {
-            crate::turnkey::build_sdk_with_turnkey(config, dir, Some(temp)).await
+            crate::turnkey::build_sdk_with_turnkey(config, dir, Some(temp), true, signing_only)
+                .await
         }
     }
+}
+
+/// Connects a Turnkey-backed Regtest SDK WITHOUT waiting for the initial sync,
+/// so a test can drive the first authenticated operation itself and observe its
+/// failure (e.g. a deny-export policy with encryption enabled). Call
+/// `sync_wallet` to trigger and observe the first sync.
+#[cfg(feature = "turnkey")]
+pub async fn connect_turnkey_without_initial_sync(
+    config: Config,
+    signing_only: bool,
+) -> Result<SdkInstance> {
+    let temp = TempDir::new()?;
+    let dir = temp.path().to_string_lossy().to_string();
+    crate::turnkey::build_sdk_with_turnkey(config, dir, Some(temp), false, signing_only).await
 }
 
 /// Waits for an `UnclaimedDeposits` event, returning the unclaimed deposits.

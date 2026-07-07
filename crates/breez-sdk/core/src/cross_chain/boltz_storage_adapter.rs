@@ -31,7 +31,7 @@ use bitcoin::bip32::DerivationPath;
 use boltz_client::{BoltzError, BoltzStorage, models::BoltzSwap};
 use tracing::warn;
 
-use crate::{Storage, persist::StoredCrossChainSwap, signer::BreezSigner};
+use crate::{Storage, persist::StoredCrossChainSwap, signer::EciesSigner};
 
 /// Provider tag this adapter writes into `StoredCrossChainSwap::provider`.
 const PROVIDER_TAG_BOLTZ: &str = "boltz";
@@ -52,21 +52,21 @@ const BOLTZ_SECRETS_ENCRYPTION_PATH: &str = "m/1112493140'/0'/0'/0/0";
 /// Bridge between breez-sdk [`Storage`] and [`boltz_client::BoltzStorage`].
 pub(crate) struct BoltzStorageAdapter {
     storage: Arc<dyn Storage>,
-    signer: Arc<dyn BreezSigner>,
+    ecies: Arc<dyn EciesSigner>,
     encryption_path: DerivationPath,
 }
 
 impl BoltzStorageAdapter {
     pub(crate) fn new(
         storage: Arc<dyn Storage>,
-        signer: Arc<dyn BreezSigner>,
+        ecies: Arc<dyn EciesSigner>,
     ) -> Result<Self, BoltzError> {
         let encryption_path: DerivationPath = BOLTZ_SECRETS_ENCRYPTION_PATH
             .parse()
             .map_err(|e| BoltzError::Store(format!("Invalid Boltz secrets path: {e}")))?;
         Ok(Self {
             storage,
-            signer,
+            ecies,
             encryption_path,
         })
     }
@@ -83,7 +83,7 @@ impl BoltzStorageAdapter {
         let plaintext = serde_json::to_vec(&key_source)
             .map_err(|e| BoltzError::Store(format!("Failed to serialize swap secrets: {e}")))?;
         let ciphertext = self
-            .signer
+            .ecies
             .encrypt_ecies(&plaintext, &self.encryption_path)
             .await
             .map_err(|e| BoltzError::Store(format!("Failed to encrypt swap secrets: {e}")))?;
@@ -109,7 +109,7 @@ impl BoltzStorageAdapter {
             .decode(stored.secrets.as_bytes())
             .map_err(|e| BoltzError::Store(format!("Invalid base64 swap secrets: {e}")))?;
         let plaintext = self
-            .signer
+            .ecies
             .decrypt_ecies(&ciphertext, &self.encryption_path)
             .await
             .map_err(|e| BoltzError::Store(format!("Failed to decrypt swap secrets: {e}")))?;
@@ -225,8 +225,8 @@ mod tests {
         let dir = create_temp_dir("boltz_storage_adapter");
         let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&dir).unwrap());
         let master = Xpriv::new_master(Network::Regtest, &[7u8; 32]).unwrap();
-        let signer: Arc<dyn BreezSigner> = Arc::new(BreezSignerImpl::new(master));
-        let adapter = BoltzStorageAdapter::new(Arc::clone(&storage), signer).unwrap();
+        let ecies: Arc<dyn EciesSigner> = Arc::new(BreezSignerImpl::new(master));
+        let adapter = BoltzStorageAdapter::new(Arc::clone(&storage), ecies).unwrap();
         (adapter, storage)
     }
 

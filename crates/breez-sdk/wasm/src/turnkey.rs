@@ -8,7 +8,9 @@ use wasm_bindgen::prelude::*;
 
 use crate::error::WasmResult;
 use crate::models::Network;
-use crate::signer::{ExternalBreezSignerHandle, ExternalSparkSignerHandle};
+use crate::signer::{
+    ExternalBreezSignerHandle, ExternalSigningSignerHandle, ExternalSparkSignerHandle,
+};
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::turnkey::TurnkeyRetryConfig)]
 pub struct TurnkeyRetryConfig {
@@ -41,6 +43,22 @@ pub async fn create_turnkey_signer(
     let signers = breez_sdk_spark::turnkey::create_turnkey_signer(config.into()).await?;
     Ok(crate::sdk::ExternalSigners::new(
         ExternalBreezSignerHandle::new(signers.breez_signer),
+        ExternalSparkSignerHandle::new(signers.spark_signer),
+    ))
+}
+
+/// Builds the signing-only Turnkey-backed signers from `config` (for a wallet
+/// under a deny-export policy), then pass `signers.breezSigner` and
+/// `signers.sparkSigner` to `connectWithSigningOnlySigner`. The Breez half
+/// performs signing only and never exports a key.
+#[wasm_bindgen(js_name = "createTurnkeySigningOnlySigner")]
+pub async fn create_turnkey_signing_only_signer(
+    config: TurnkeyConfig,
+) -> WasmResult<crate::sdk::SigningOnlyExternalSigners> {
+    let signers =
+        breez_sdk_spark::turnkey::create_turnkey_signing_only_signer(config.into()).await?;
+    Ok(crate::sdk::SigningOnlyExternalSigners::new(
+        ExternalSigningSignerHandle::new(signers.breez_signer),
         ExternalSparkSignerHandle::new(signers.spark_signer),
     ))
 }

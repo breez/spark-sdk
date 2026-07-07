@@ -50,6 +50,32 @@ impl SdkBuilder {
         }
     }
 
+    /// Creates a new `SdkBuilder` with a signing-only external signer.
+    ///
+    /// Use this for a signer that can't perform the SDK's local ECIES/HMAC
+    /// operations (for example a policy-restricted enclave). The SDK keeps
+    /// session tokens in plaintext and disables the features that rely on
+    /// ECIES/HMAC.
+    /// Arguments:
+    /// - `config`: The configuration to be used.
+    /// - `breez_signer`: Signing-only external signer for non-Spark SDK signing.
+    /// - `spark_signer`: External high-level Spark signer for the Spark wallet.
+    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
+    pub fn new_with_signing_only_signer(
+        config: Config,
+        breez_signer: Arc<dyn crate::signer::ExternalSigningSigner>,
+        spark_signer: Arc<dyn crate::signer::ExternalSparkSigner>,
+    ) -> Self {
+        let inner = crate::sdk_builder::SdkBuilder::new_with_signing_only_signer(
+            config,
+            breez_signer,
+            spark_signer,
+        );
+        SdkBuilder {
+            inner: Mutex::new(inner),
+        }
+    }
+
     /// Sets the root storage directory to initialize the default storage with.
     /// This initializes both storage and real-time sync storage with the
     /// default implementations.

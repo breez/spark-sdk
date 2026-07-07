@@ -3,7 +3,7 @@ use bitcoin::bip32::{DerivationPath, Xpriv};
 use bitcoin::hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256};
 use bitcoin::secp256k1::{self, Message, Secp256k1, rand::thread_rng};
 
-use super::BreezSigner;
+use super::{BreezSigner, EciesSigner, HmacSigner};
 
 /// SDK-layer signer for non-Spark operations (LNURL-auth, real-time sync,
 /// message signing, ECIES). It holds a single master key and derives every key
@@ -61,6 +61,29 @@ impl BreezSigner for BreezSignerImpl {
             .sign_ecdsa_recoverable(&message, &derived.private_key))
     }
 
+    async fn sign_hash_schnorr(
+        &self,
+        hash: &[u8],
+        path: &DerivationPath,
+    ) -> Result<secp256k1::schnorr::Signature, SdkError> {
+        let derived = self
+            .master
+            .derive_priv(&self.secp, path)
+            .map_err(|e| SdkError::Generic(e.to_string()))?;
+        let message =
+            Message::from_digest_slice(hash).map_err(|e| SdkError::Generic(e.to_string()))?;
+        let keypair = derived.private_key.keypair(&self.secp);
+
+        // Always use auxiliary randomness for enhanced security
+        let mut rng = thread_rng();
+        Ok(self
+            .secp
+            .sign_schnorr_with_rng(&message, &keypair, &mut rng))
+    }
+}
+
+#[macros::async_trait]
+impl EciesSigner for BreezSignerImpl {
     async fn encrypt_ecies(
         &self,
         message: &[u8],
@@ -88,27 +111,10 @@ impl BreezSigner for BreezSignerImpl {
         utils::ecies::decrypt(&rc_prv, message)
             .map_err(|err| SdkError::Generic(format!("Could not decrypt data: {err}")))
     }
+}
 
-    async fn sign_hash_schnorr(
-        &self,
-        hash: &[u8],
-        path: &DerivationPath,
-    ) -> Result<secp256k1::schnorr::Signature, SdkError> {
-        let derived = self
-            .master
-            .derive_priv(&self.secp, path)
-            .map_err(|e| SdkError::Generic(e.to_string()))?;
-        let message =
-            Message::from_digest_slice(hash).map_err(|e| SdkError::Generic(e.to_string()))?;
-        let keypair = derived.private_key.keypair(&self.secp);
-
-        // Always use auxiliary randomness for enhanced security
-        let mut rng = thread_rng();
-        Ok(self
-            .secp
-            .sign_schnorr_with_rng(&message, &keypair, &mut rng))
-    }
-
+#[macros::async_trait]
+impl HmacSigner for BreezSignerImpl {
     async fn hmac_sha256(
         &self,
         key_path: &DerivationPath,
