@@ -31,6 +31,7 @@ pub struct TurnkeyConfig {
     pub network: Network,
     pub account_number: Option<u32>,
     pub retry: Option<TurnkeyRetryConfig>,
+    pub max_rps: Option<u32>,
 }
 
 /// Builds the Turnkey-backed signers from `config`, then pass

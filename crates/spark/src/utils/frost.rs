@@ -9,16 +9,13 @@ use frost_secp256k1_tr::{Identifier, SigningPackage, VerifyingKey};
 use crate::signer::{AggregateFrostRequest, FrostJob, FrostShareResult, SignerError, SparkSigner};
 use crate::tree::TreeNode;
 
-/// The user's own signing public key for an OWNED leaf, derived from persisted
-/// tree data instead of asking the signer: `verifying_public_key -
-/// signing_keyshare.public_key`. FROST composes the group verifying key as the
-/// user's verifying share plus the operators' aggregate share, and
-/// `refresh_leaves` validates this relation for every Available leaf, so the
-/// user's share is recoverable locally. This avoids a per-leaf signer round-trip
-/// on the send/coop-exit/timelock hot paths (for a remote signer with a cold
-/// in-memory cache, e.g. a per-request server instance, that would otherwise be
-/// one network call per leaf). Only valid for owned leaves: an incoming (claim)
-/// leaf is mid-transfer, so its stored SE share need not pair with the new key.
+/// The user's own signing public key for an OWNED leaf, recovered from persisted
+/// tree data as `verifying_public_key - signing_keyshare.public_key` instead of
+/// via a signer round-trip. FROST composes the group verifying key as the user's
+/// share plus the operators' aggregate share, an invariant `refresh_leaves`
+/// validates for every Available leaf, so the user's share is derivable locally.
+/// Only valid for owned leaves: an incoming (claim) leaf is mid-transfer, so its
+/// stored SE share need not pair with the new key.
 pub(crate) fn derive_leaf_signing_public_key(
     node: &TreeNode,
     secp: &Secp256k1<All>,
@@ -31,8 +28,8 @@ pub(crate) fn derive_leaf_signing_public_key(
 
 /// Signs a batch of FROST jobs in a single `sign_frost` call, pairing each
 /// returned share with its caller-side metadata (order preserved). Remote signer
-/// backends (e.g. Turnkey) collapse this into one round-trip instead of one per
-/// job, so callers should build all jobs up front rather than signing per item.
+/// backends (e.g. Turnkey) collapse the whole batch into one round-trip instead
+/// of one per job.
 pub(crate) async fn sign_frost_batch<T>(
     spark_signer: &Arc<dyn SparkSigner>,
     jobs: Vec<FrostJob>,

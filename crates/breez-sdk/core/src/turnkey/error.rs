@@ -6,6 +6,9 @@ pub enum TurnkeyError {
     #[error("invalid Turnkey API key: {0}")]
     InvalidApiKey(String),
 
+    #[error("invalid Turnkey config: {0}")]
+    InvalidConfig(String),
+
     #[error("failed to serialize request: {0}")]
     Serialize(String),
 

@@ -28,6 +28,7 @@ pub fn turnkey_config_from_env() -> Option<TurnkeyConfig> {
         // non-default accounts against the live API.
         account_number: var("TURNKEY_ACCOUNT_NUMBER").and_then(|v| v.parse().ok()),
         retry: None,
+        max_rps: None,
     })
 }
 

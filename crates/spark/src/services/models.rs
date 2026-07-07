@@ -158,8 +158,6 @@ pub(crate) enum RefundVariant {
 
 /// A refund transaction whose FROST job has been queued for batched signing,
 /// carrying what's needed to rebuild its signed form once the share returns.
-/// Shared by the send, claim, and coop-exit paths, which each sign every
-/// leaf-variant refund in one batched call.
 pub(crate) struct PendingRefundSignature {
     pub variant: RefundVariant,
     pub node_id: TreeNodeId,

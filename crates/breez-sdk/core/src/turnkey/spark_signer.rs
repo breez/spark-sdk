@@ -25,7 +25,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use futures::{StreamExt, TryStreamExt};
 use tokio::sync::Mutex;
 
 use bitcoin::bip32::DerivationPath;
@@ -274,13 +273,8 @@ fn ffi_public_key_map(
 /// to 300 jobs, far below its ~11 MB request-body cap. The batched send/coop-exit/
 /// claim/timelock paths can exceed that (a full-balance coop-exit signs every
 /// wallet leaf, one to three jobs each), so submissions are chunked with wide
-/// margin. Measured by the probe in `breez-itest/tests/turnkey_frost_batch_limit`.
+/// margin. Exercised by `breez-itest/tests/turnkey_sign_frost_chunking`.
 const MAX_FROST_JOBS_PER_ACTIVITY: usize = 100;
-
-/// How many chunk activities to submit concurrently. Kept low so a many-chunk
-/// batch stays within Turnkey's 10 RPS per-suborganization rate limit (each
-/// activity is a submit plus a few status polls).
-const SIGN_FROST_CHUNK_CONCURRENCY: usize = 4;
 
 pub(crate) struct TurnkeySparkSigner {
     client: Arc<TurnkeyClient>,
@@ -450,21 +444,17 @@ impl TurnkeySparkSigner {
         jobs: &[FrostJob],
     ) -> Result<Vec<FrostShareResult>, SignerError> {
         let sign_with = self.spark_identity_address().await?;
-        // One activity per chunk (see MAX_FROST_JOBS_PER_ACTIVITY), submitted with
-        // bounded concurrency and reassembled in job order. FROST jobs are
-        // independent, so splitting the batch is signing-equivalent to one call.
-        let chunks: Vec<Vec<FrostJob>> = jobs
-            .chunks(MAX_FROST_JOBS_PER_ACTIVITY)
-            .map(<[FrostJob]>::to_vec)
-            .collect();
-        let chunk_shares: Vec<Vec<FrostShareResult>> = futures::stream::iter(chunks)
-            .map(|chunk| {
-                let sign_with = sign_with.clone();
-                async move { self.sign_frost_chunk(sign_with, &chunk).await }
-            })
-            .buffered(SIGN_FROST_CHUNK_CONCURRENCY)
-            .try_collect()
-            .await?;
+        // One activity per chunk (see MAX_FROST_JOBS_PER_ACTIVITY), all fired
+        // concurrently and reassembled in job order. FROST jobs are independent,
+        // so splitting the batch is signing-equivalent to one call. The Turnkey
+        // client paces submissions to the per-suborg rate limit, so no concurrency
+        // cap is needed here.
+        let chunk_futures = jobs.chunks(MAX_FROST_JOBS_PER_ACTIVITY).map(|chunk| {
+            let sign_with = sign_with.clone();
+            async move { self.sign_frost_chunk(sign_with, chunk).await }
+        });
+        let chunk_shares: Vec<Vec<FrostShareResult>> =
+            futures::future::try_join_all(chunk_futures).await?;
         Ok(chunk_shares.into_iter().flatten().collect())
     }
 

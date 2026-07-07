@@ -1,5 +1,4 @@
 use futures::future::join_all;
-use futures::{StreamExt, TryStreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,11 +32,6 @@ use crate::{
 };
 
 use super::{TreeNode, error::TreeServiceError};
-
-/// Max in-flight signer pubkey lookups while validating leaves in `refresh_leaves`.
-/// Bounds concurrency so a large wallet does not fire one request per leaf at
-/// the signer all at once.
-const REFRESH_LEAVES_PUBKEY_CONCURRENCY: usize = 16;
 
 pub struct SynchronousTreeService {
     identity_pubkey: PublicKey,
@@ -281,21 +275,20 @@ impl TreeService for SynchronousTreeService {
             })
             .collect();
 
-        // Fetch our signing pubkey for each Available leaf with bounded
-        // concurrency, so a remote signer resolves them in parallel instead of one
-        // blocking round-trip per leaf. Order is preserved for the zip below.
+        // Fetch our signing pubkey for each Available leaf concurrently, so a
+        // remote signer resolves them in parallel instead of one blocking
+        // round-trip per leaf. A rate-limited signer (e.g. Turnkey) paces the
+        // calls internally, so no concurrency cap is imposed here. Order is
+        // preserved for the zip below.
         // TODO: validate each leaf once and persist the result, to skip
         // re-checking unchanged leaves on every refresh.
         let signer = &self.spark_signer;
-        let available_ids: Vec<TreeNodeId> = available_leaves
-            .iter()
-            .map(|leaf| leaf.id.clone())
-            .collect();
-        let our_pubkeys: Vec<PublicKey> = futures::stream::iter(available_ids)
-            .map(|leaf_id| async move { signer.get_public_key_for_leaf(&leaf_id).await })
-            .buffered(REFRESH_LEAVES_PUBKEY_CONCURRENCY)
-            .try_collect()
-            .await?;
+        let our_pubkeys: Vec<PublicKey> = futures::future::try_join_all(
+            available_leaves
+                .iter()
+                .map(|leaf| async move { signer.get_public_key_for_leaf(&leaf.id).await }),
+        )
+        .await?;
 
         for (leaf, our_node_pubkey) in available_leaves.iter().zip(our_pubkeys) {
             let combined_pubkey = our_node_pubkey
