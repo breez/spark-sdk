@@ -71,3 +71,22 @@ async fn test_reserve_token_outputs_by_outpoints() {
     let store = create_test_token_store("pg_token_reserve_by_outpoints").await;
     breez_sdk_spark::token_store_tests::test_reserve_token_outputs_by_outpoints(&store).await;
 }
+
+#[wasm_bindgen_test]
+async fn test_reserve_token_outputs() {
+    let store = create_test_token_store("pg_token_reserve_outputs").await;
+    breez_sdk_spark::token_store_tests::test_reserve_token_outputs(&store).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_reserve_with_preferred_outputs() {
+    let store = create_test_token_store("pg_token_reserve_preferred").await;
+    breez_sdk_spark::token_store_tests::test_reserve_with_preferred_outputs(&store).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_reserve_with_preferred_outputs_insufficient() {
+    let store = create_test_token_store("pg_token_reserve_preferred_insufficient").await;
+    breez_sdk_spark::token_store_tests::test_reserve_with_preferred_outputs_insufficient(&store)
+        .await;
+}
