@@ -887,7 +887,7 @@ async fn test_client_signing_coop_exit() -> Result<()> {
 
     let alice_mnemonic = random_mnemonic()?;
     let mut alice = build_alice_manual_opt(alice_mnemonic.clone()).await?;
-    let bob = build_bob().await?;
+    let mut bob = build_bob().await?;
 
     let client_signer =
         default_external_signers(alice_mnemonic, None, Network::Regtest, None)?.spark_signer;
@@ -902,6 +902,15 @@ async fn test_client_signing_coop_exit() -> Result<()> {
         .await?
         .payment_request;
     info!("Withdrawal address: {withdrawal_address}");
+
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let bob_initial = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
 
     let prep = alice
         .sdk
@@ -966,6 +975,13 @@ async fn test_client_signing_coop_exit() -> Result<()> {
             PublishSignedTransferPackageResponse::PaymentSent { payment } => {
                 info!("coop-exit iteration {iterations}: transfer ready, sent");
                 assert_eq!(payment.payment_type, PaymentType::Send);
+                assert_eq!(payment.method, PaymentMethod::Withdraw);
+                // FeesExcluded (the default): the recipient gets exactly the
+                // requested amount. Catches a wrong send amount.
+                assert_eq!(
+                    payment.amount, withdraw_sats,
+                    "coop-exit should send exactly the requested amount"
+                );
                 assert!(
                     matches!(
                         payment.status,
@@ -977,6 +993,27 @@ async fn test_client_signing_coop_exit() -> Result<()> {
             }
         }
     }
+
+    // The coop-exit lands on-chain at Bob's address. Verifying Bob actually
+    // receives it proves the withdrawal used the right address (a wrong address
+    // would never arrive) and that his balance increases.
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let recv_payment =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 180).await?;
+    assert_eq!(recv_payment.method, PaymentMethod::Deposit);
+
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let bob_final = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    assert!(
+        bob_final > bob_initial,
+        "Bob's balance should increase after receiving the coop-exit"
+    );
 
     info!("=== Test test_client_signing_coop_exit PASSED ===");
     Ok(())
