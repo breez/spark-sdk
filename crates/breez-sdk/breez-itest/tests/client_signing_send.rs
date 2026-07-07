@@ -264,6 +264,128 @@ async fn test_client_signing_send_with_denomination_swap() -> Result<()> {
     Ok(())
 }
 
+// Publishing the same signed package twice must be idempotent: a swap package
+// returns SwapCompleted again (via the transfer_id, not a local cache), and a
+// transfer package returns the same sent payment (replay by transfer_id).
+#[test_log::test(tokio::test)]
+async fn test_client_signing_publish_twice_is_idempotent() -> Result<()> {
+    info!("=== Starting test_client_signing_publish_twice_is_idempotent ===");
+
+    let fund_sats: u64 = 50_000;
+    let send_sats: u128 = 12_345;
+
+    let alice_mnemonic = random_mnemonic()?;
+    let mut alice = build_alice_manual_opt(alice_mnemonic.clone()).await?;
+    let bob = build_bob().await?;
+
+    let client_signer =
+        default_external_signers(alice_mnemonic, None, Network::Regtest, None)?.spark_signer;
+
+    ensure_funded(&mut alice, fund_sats).await?;
+
+    let bob_spark_address = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+
+    let mut saw_swap = false;
+    let payment = 'outer: loop {
+        let prep = alice
+            .sdk
+            .prepare_send_payment(PrepareSendPaymentRequest {
+                payment_request: PaymentRequest::Input {
+                    input: bob_spark_address.clone(),
+                },
+                amount: Some(send_sats),
+                token_identifier: None,
+                conversion_options: None,
+                fee_policy: None,
+            })
+            .await?;
+
+        let unsigned = alice
+            .sdk
+            .build_unsigned_transfer_package(BuildUnsignedTransferPackageRequest {
+                prepare_response: prep.clone(),
+                options: None,
+            })
+            .await?;
+
+        let is_swap = matches!(unsigned, UnsignedTransferPackage::Swap { .. });
+        let (UnsignedTransferPackage::Transfer {
+            prepare_transfer, ..
+        }
+        | UnsignedTransferPackage::Swap {
+            prepare_transfer, ..
+        }) = &unsigned
+        else {
+            panic!("unexpected token package for a sats send");
+        };
+        let signature = TransferSignature::Transfer {
+            signed: client_signer
+                .prepare_transfer(prepare_transfer.clone())
+                .await?,
+        };
+        let signed_package = SignedTransferPackage {
+            unsigned,
+            signature,
+        };
+
+        // First publish.
+        let first = alice
+            .sdk
+            .publish_signed_transfer_package(PublishSignedTransferPackageRequest {
+                signed_package: signed_package.clone(),
+            })
+            .await?;
+        // Second publish of the identical package must be idempotent.
+        let second = alice
+            .sdk
+            .publish_signed_transfer_package(PublishSignedTransferPackageRequest {
+                signed_package: signed_package.clone(),
+            })
+            .await?;
+
+        match (first, second) {
+            (
+                PublishSignedTransferPackageResponse::SwapCompleted,
+                PublishSignedTransferPackageResponse::SwapCompleted,
+            ) => {
+                assert!(is_swap, "SwapCompleted must come from a swap package");
+                saw_swap = true;
+                continue;
+            }
+            (
+                PublishSignedTransferPackageResponse::PaymentSent { payment: p1 },
+                PublishSignedTransferPackageResponse::PaymentSent { payment: p2 },
+            ) => {
+                assert!(!is_swap, "PaymentSent must come from a transfer package");
+                assert_eq!(
+                    p1.id, p2.id,
+                    "republishing a transfer package must return the same payment"
+                );
+                break 'outer p1;
+            }
+            (a, b) => panic!("republish changed the outcome: {a:?} then {b:?}"),
+        }
+    };
+
+    assert!(
+        saw_swap,
+        "expected at least one denomination swap iteration"
+    );
+    assert!(matches!(
+        payment.status,
+        PaymentStatus::Completed | PaymentStatus::Pending
+    ));
+
+    info!("=== Test test_client_signing_publish_twice_is_idempotent PASSED ===");
+    Ok(())
+}
+
 #[test_log::test(tokio::test)]
 async fn test_client_signing_token_send() -> Result<()> {
     info!("=== Starting test_client_signing_token_send ===");
@@ -373,6 +495,127 @@ async fn test_client_signing_token_send() -> Result<()> {
     );
 
     info!("=== Test test_client_signing_token_send PASSED ===");
+    Ok(())
+}
+
+// Publishing the same token package twice returns the same sent payment (replay
+// by the package digest) and must not transfer the tokens twice.
+#[test_log::test(tokio::test)]
+async fn test_client_signing_token_publish_twice_is_idempotent() -> Result<()> {
+    info!("=== Starting test_client_signing_token_publish_twice_is_idempotent ===");
+
+    let send_amount: u128 = 5;
+
+    let alice_mnemonic = random_mnemonic()?;
+    let alice = build_alice_manual_opt(alice_mnemonic.clone()).await?;
+    let bob = build_bob().await?;
+
+    let client_signer =
+        default_external_signers(alice_mnemonic, None, Network::Regtest, None)?.spark_signer;
+
+    let issuer = alice.sdk.get_token_issuer();
+    let token_metadata = issuer
+        .create_issuer_token(CreateIssuerTokenRequest {
+            name: "replay token".to_string(),
+            ticker: "RPT".to_string(),
+            decimals: 2,
+            is_freezable: false,
+            max_supply: 1_000_000,
+        })
+        .await?;
+    issuer
+        .mint_issuer_token(MintIssuerTokenRequest { amount: 1_000_000 })
+        .await?;
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let token_id = token_metadata.identifier.clone();
+
+    let bob_spark_address = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+
+    let prep = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address.clone(),
+            },
+            amount: Some(send_amount),
+            token_identifier: Some(token_id.clone()),
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+
+    let unsigned = alice
+        .sdk
+        .build_unsigned_transfer_package(BuildUnsignedTransferPackageRequest {
+            prepare_response: prep.clone(),
+            options: None,
+        })
+        .await?;
+
+    let UnsignedTransferPackage::Token {
+        prepare_token_transaction,
+        ..
+    } = &unsigned
+    else {
+        panic!("expected a Token unsigned package for a token send");
+    };
+    let signed = client_signer
+        .prepare_token_transaction(prepare_token_transaction.clone())
+        .await?;
+    let signed_package = SignedTransferPackage {
+        unsigned,
+        signature: TransferSignature::Token { signed },
+    };
+
+    let PublishSignedTransferPackageResponse::PaymentSent { payment: first } = alice
+        .sdk
+        .publish_signed_transfer_package(PublishSignedTransferPackageRequest {
+            signed_package: signed_package.clone(),
+        })
+        .await?
+    else {
+        panic!("expected a sent payment for a token send");
+    };
+    // Republishing the identical package returns the same payment, not a second send.
+    let PublishSignedTransferPackageResponse::PaymentSent { payment: second } = alice
+        .sdk
+        .publish_signed_transfer_package(PublishSignedTransferPackageRequest {
+            signed_package: signed_package.clone(),
+        })
+        .await?
+    else {
+        panic!("expected a replayed payment on the second publish");
+    };
+    assert_eq!(
+        first.id, second.id,
+        "republishing a token package must return the same payment"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let bob_token_balance = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .token_balances
+        .get(&token_id)
+        .map(|b| b.balance)
+        .unwrap_or(0);
+    assert_eq!(
+        bob_token_balance, send_amount,
+        "Bob should have received the tokens exactly once"
+    );
+
+    info!("=== Test test_client_signing_token_publish_twice_is_idempotent PASSED ===");
     Ok(())
 }
 

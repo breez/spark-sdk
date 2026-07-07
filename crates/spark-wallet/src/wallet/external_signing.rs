@@ -121,6 +121,42 @@ impl SparkWallet {
         target_amounts: Vec<u64>,
         approved_transfer: PreparedTransfer,
     ) -> Result<(), SparkWalletError> {
+        // Attempt the swap optimistically. On a retry or a crash after submit the
+        // leaves are already consumed, so this fails; the swap's primary transfer
+        // is created under transfer_id at the operator, so if a transfer with this
+        // id already exists the swap completed and we report success idempotently
+        // instead of the leaf error. The happy path pays no extra query.
+        match self
+            .submit_swap_package_inner(
+                transfer_id.clone(),
+                leaf_ids,
+                target_amounts,
+                approved_transfer,
+            )
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                if self
+                    .transfer_service
+                    .query_transfer(&transfer_id)
+                    .await?
+                    .is_some()
+                {
+                    return Ok(());
+                }
+                Err(e)
+            }
+        }
+    }
+
+    async fn submit_swap_package_inner(
+        &self,
+        transfer_id: TransferId,
+        leaf_ids: Vec<TreeNodeId>,
+        target_amounts: Vec<u64>,
+        approved_transfer: PreparedTransfer,
+    ) -> Result<(), SparkWalletError> {
         let reservation = self
             .tree_service
             .reserve_leaves_by_ids(&leaf_ids, ReservationPurpose::Swap)

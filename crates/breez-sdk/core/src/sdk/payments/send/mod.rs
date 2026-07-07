@@ -34,25 +34,11 @@ pub(in crate::sdk) async fn publish_signed_package_inner(
 ) -> Result<PublishOutcome, SdkError> {
     let cache = ObjectCacheRepository::new(sdk.storage.clone());
     let res = match (&signed_package.unsigned, &signed_package.signature) {
-        (
-            UnsignedTransferPackage::Swap {
-                prepare_transfer, ..
-            },
-            TransferSignature::Transfer { .. },
-        ) => {
-            if let Ok(Some(_)) = cache
-                .fetch_published_package(&prepare_transfer.transfer_id)
-                .await
-            {
-                return Ok(PublishOutcome::SwapCompleted);
-            }
+        (UnsignedTransferPackage::Swap { .. }, TransferSignature::Transfer { .. }) => {
+            // Idempotent at the spark-wallet layer via the swap's transfer_id: a
+            // re-publish (retry or crash after submit) detects the existing
+            // transfer and returns without re-submitting.
             super::client_signing::submit_swap(sdk, signed_package).await?;
-            if let Err(e) = cache
-                .save_published_package(&prepare_transfer.transfer_id, "swap")
-                .await
-            {
-                warn!("Failed to record the published swap package: {e:?}");
-            }
             return Ok(PublishOutcome::SwapCompleted);
         }
         (
@@ -83,6 +69,14 @@ pub(in crate::sdk) async fn publish_signed_package_inner(
             },
             TransferSignature::Token { signed },
         ) => {
+            // Token replay-safety relies on a local record keyed by the package
+            // digest: unlike transfer and swap, a token transaction is queryable
+            // at the operator only by its final hash, which is computed during
+            // broadcast and so is unknown from the package after a crash. A crash
+            // between the operator broadcast and recording the digest here is
+            // therefore not recoverable from the package; the integrator must
+            // reconcile local state (sync) before rebuilding, or the retry fails
+            // on the already-spent outputs rather than double-spending.
             let package_id = hex::encode(&prepare_token_transaction.digest);
             if *is_swap {
                 if let Ok(Some(_)) = cache.fetch_published_package(&package_id).await {
