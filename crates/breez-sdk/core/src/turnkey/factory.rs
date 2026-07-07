@@ -6,14 +6,15 @@ use std::sync::Arc;
 use bitcoin::secp256k1::{PublicKey, SecretKey};
 use platform_utils::create_http_client;
 use serde::{Deserialize, Serialize};
-use spark_wallet::SparkAddress;
 
 use crate::ExternalSigners;
 use crate::error::SignerError;
 use crate::signer::breez::BreezSignerImpl;
 use crate::signer::{ExternalBreezSigner, ExternalSparkSigner};
 
-use super::accounts::{encryption_key_path, spark_address_format, xpriv_from_secret};
+use super::accounts::{
+    encryption_key_path, spark_address_format, spark_identity_address, xpriv_from_secret,
+};
 use super::breez_signer::{EncryptionBackend, TurnkeyBreezSigner};
 use super::config::TurnkeyConfig;
 use super::error::TurnkeyError;
@@ -41,7 +42,7 @@ fn identity_path(account: u32) -> String {
 /// Layout version of [`TurnkeyProvisionedSigner`]'s bytes. Bumped when the blob
 /// contents change so an older blob is rejected as outdated rather than
 /// misread; the caller re-provisions to upgrade.
-const PROVISION_VERSION: u16 = 2;
+const PROVISION_VERSION: u16 = 3;
 
 /// The encryption-key verdict captured at provisioning time.
 #[derive(Serialize, Deserialize)]
@@ -55,37 +56,49 @@ enum ProvisionedEncryption {
     Unavailable,
 }
 
-/// Versioned, persisted provisioning state. Bound to the wallet/network/account
-/// so a blob paired with the wrong config (or an older layout) is rejected.
+/// Versioned, persisted provisioning state. Bound to the
+/// organization/wallet/network/account so a blob paired with the wrong config
+/// (or an older layout) is rejected.
 ///
-/// Alongside the encryption verdict it carries the wallet's stable Spark values,
-/// the identity public key (hex) and Spark address, so a provisioned per-request
-/// signer serves them from memory instead of re-fetching them from Turnkey on
-/// every request. Both are fixed per wallet. Dynamic per-leaf keys are not here:
-/// they change with the wallet's leaves and stay lazy.
+/// Alongside the encryption verdict it carries the wallet's stable identity
+/// public key (hex), so a provisioned per-request signer serves it from memory
+/// instead of re-fetching from Turnkey on every request. The Spark address is
+/// not stored: it is derived locally from the identity key at build time.
+/// Dynamic per-leaf keys are not here either: they change with the wallet's
+/// leaves and stay lazy.
 #[derive(Serialize, Deserialize)]
 struct ProvisionBlob {
     version: u16,
     network: u8,
     account: u32,
+    organization_id: String,
     wallet_id: String,
     encryption: ProvisionedEncryption,
     identity_public_key: String,
-    spark_address: String,
 }
 
 impl ProvisionBlob {
     /// Rejects a blob whose layout version or wallet binding does not match this
     /// config, so a stale or mispaired blob triggers a re-provision instead of
     /// building a signer against the wrong keys.
-    fn ensure_usable(&self, network: u8, account: u32, wallet_id: &str) -> Result<(), SignerError> {
+    fn ensure_usable(
+        &self,
+        network: u8,
+        account: u32,
+        organization_id: &str,
+        wallet_id: &str,
+    ) -> Result<(), SignerError> {
         if self.version != PROVISION_VERSION {
             return Err(SignerError::ProvisioningOutdated(format!(
                 "provisioned state version {} is not {PROVISION_VERSION}; re-provision",
                 self.version
             )));
         }
-        if self.network != network || self.account != account || self.wallet_id != wallet_id {
+        if self.network != network
+            || self.account != account
+            || self.organization_id != organization_id
+            || self.wallet_id != wallet_id
+        {
             return Err(SignerError::ProvisioningOutdated(
                 "provisioned state does not match this config; re-provision".to_string(),
             ));
@@ -127,25 +140,25 @@ pub async fn provision_turnkey_signer(
     let http = create_http_client(Some("breez-sdk-spark-turnkey"));
     let client = TurnkeyClient::new(&config, http).map_err(to_signer_err)?;
 
-    // Materialize the compressed identity account (idempotent). Its address is
-    // the compressed identity pubkey hex, which `create` seeds into the Spark
-    // signer so a network-free build can sign ECDSA identity messages.
+    // Materialize the compressed identity account and read its pubkey, which
+    // `create` seeds into the Spark signer so a network-free build can sign ECDSA
+    // identity messages. Read via `compressed_pubkey_at` (the account's
+    // format-independent `publicKey`), not `create_account`'s returned address:
+    // on a re-provision both account formats coexist at this path and get-by-path
+    // is ambiguous, so the address read-back could return the Spark bech32 form.
     let identity_public_key = client
-        .create_account(identity_path(account), ADDRESS_FORMAT_COMPRESSED)
+        .compressed_pubkey_at(identity_path(account))
         .await
         .map_err(to_signer_err)?;
-    let identity_pubkey = PublicKey::from_str(&identity_public_key).map_err(to_signer_err)?;
+    // Validate now so a malformed pubkey fails at provisioning, not at build.
+    PublicKey::from_str(&identity_public_key).map_err(to_signer_err)?;
 
     // Materialize the Spark-format account at the same path so enclave Schnorr
-    // and Spark-protocol signing work; the address itself is derived locally (the
-    // canonical Spark address for the identity key), matching the Spark signer
-    // and avoiding the ambiguous get-by-path once both formats exist.
+    // and Spark-protocol signing work. Its address is not needed here: `create`
+    // derives the canonical Spark address locally from the identity key.
     client
         .create_account(identity_path(account), spark_address_format(config.network))
         .await
-        .map_err(to_signer_err)?;
-    let spark_address = SparkAddress::new(identity_pubkey, config.network.into(), None)
-        .to_address_string()
         .map_err(to_signer_err)?;
 
     // Export the dedicated ECIES/HMAC key. A deny-export policy (403) is a
@@ -163,10 +176,10 @@ pub async fn provision_turnkey_signer(
         version: PROVISION_VERSION,
         network: config.network as u8,
         account,
+        organization_id: config.organization_id.clone(),
         wallet_id: config.wallet_id.clone(),
         encryption,
         identity_public_key,
-        spark_address,
     };
     Ok(TurnkeyProvisionedSigner {
         bytes: serde_json::to_vec(&blob).map_err(to_signer_err)?,
@@ -179,8 +192,8 @@ pub async fn provision_turnkey_signer(
 /// With `provisioned` from a prior [`provision_turnkey_signer`], this makes no
 /// network calls: the blob attests the identity account exists and carries the
 /// encryption-key verdict (a seeded key, or that export is denied). A blob that
-/// does not match `config` (wallet, network, account, or an older layout) is
-/// rejected with [`SignerError::ProvisioningOutdated`] so the caller
+/// does not match `config` (organization, wallet, network, account, or an older
+/// layout) is rejected with [`SignerError::ProvisioningOutdated`] so the caller
 /// re-provisions.
 ///
 /// Without `provisioned` (mobile/CLI), the identity account is materialized
@@ -219,7 +232,12 @@ pub async fn create_turnkey_signer(
             let blob: ProvisionBlob = serde_json::from_slice(&provisioned.bytes).map_err(|e| {
                 SignerError::ProvisioningOutdated(format!("unreadable provisioned state: {e}"))
             })?;
-            blob.ensure_usable(network as u8, account, &config.wallet_id)?;
+            blob.ensure_usable(
+                network as u8,
+                account,
+                &config.organization_id,
+                &config.wallet_id,
+            )?;
             let encryption = match blob.encryption {
                 ProvisionedEncryption::Key(bytes) => {
                     let secret = SecretKey::from_slice(&bytes).map_err(to_signer_err)?;
@@ -233,11 +251,14 @@ pub async fn create_turnkey_signer(
             };
             let identity_pubkey =
                 PublicKey::from_str(&blob.identity_public_key).map_err(to_signer_err)?;
-            (encryption, Some((identity_pubkey, blob.spark_address)))
+            // The Spark address is the canonical address for the identity key, so
+            // derive it locally rather than persisting a second, redundant copy.
+            let spark_address = spark_identity_address(identity_pubkey, network)?;
+            (encryption, Some((identity_pubkey, spark_address)))
         }
     };
 
-    let breez_signer: Arc<dyn ExternalBreezSigner> = Arc::new(TurnkeyBreezSigner::new_seeded(
+    let breez_signer: Arc<dyn ExternalBreezSigner> = Arc::new(TurnkeyBreezSigner::new(
         client.clone(),
         network,
         account,
@@ -299,10 +320,10 @@ mod tests {
             version: PROVISION_VERSION,
             network: config.network as u8,
             account: account_number(config),
+            organization_id: config.organization_id.clone(),
             wallet_id: config.wallet_id.clone(),
             encryption,
             identity_public_key: hex::encode(test_identity_pubkey().serialize()),
-            spark_address: "sprt1qqtestsparkaddress".to_string(),
         };
         TurnkeyProvisionedSigner {
             bytes: serde_json::to_vec(&blob).unwrap(),
@@ -384,6 +405,24 @@ mod tests {
         }
     }
 
+    // A blob provisioned under a different organization (even with the same
+    // wallet id) is rejected rather than used against the wrong keys.
+    #[tokio::test]
+    async fn mismatched_org_is_rejected() {
+        let config = test_config();
+        let mut other = test_config();
+        other.organization_id = "other-org".to_string();
+        let state = provisioned(&other, ProvisionedEncryption::Key([7u8; 32]));
+
+        match create_turnkey_signer(config, Some(state)).await {
+            Err(SignerError::ProvisioningOutdated(_)) => {}
+            result => panic!(
+                "expected ProvisioningOutdated, got {:?}",
+                result.map(|_| ())
+            ),
+        }
+    }
+
     // An older layout version is rejected as outdated so the caller re-provisions.
     #[tokio::test]
     async fn outdated_version_is_rejected() {
@@ -392,10 +431,10 @@ mod tests {
             version: PROVISION_VERSION - 1,
             network: config.network as u8,
             account: account_number(&config),
+            organization_id: config.organization_id.clone(),
             wallet_id: config.wallet_id.clone(),
             encryption: ProvisionedEncryption::Unavailable,
             identity_public_key: hex::encode(test_identity_pubkey().serialize()),
-            spark_address: "sprt1qqtestsparkaddress".to_string(),
         };
         let state = TurnkeyProvisionedSigner {
             bytes: serde_json::to_vec(&old_blob).unwrap(),

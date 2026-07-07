@@ -70,7 +70,7 @@ impl TurnkeyBreezSigner {
     /// Builds the signer with its encryption backend initialized per `backend`:
     /// seeded from a persisted key, pre-marked denied, or left to export lazily
     /// on first use.
-    pub(crate) fn new_seeded(
+    pub(crate) fn new(
         client: Arc<TurnkeyClient>,
         network: Network,
         account: u32,

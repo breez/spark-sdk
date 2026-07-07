@@ -36,7 +36,7 @@ use frost_secp256k1_tr::round2::SignatureShare;
 use spark_wallet::{
     AggregateFrostRequest, DefaultSigner, FrostDerivation, FrostJob, FrostShareResult,
     FrostSigningCommitmentsWithNonces, NewLeafKey, OperatorPackage, OperatorRecipient,
-    SecretSource, SignFrostRequest, Signer, SparkAddress, TreeNodeId, aggregate_frost,
+    SecretSource, SignFrostRequest, Signer, TreeNodeId, aggregate_frost,
 };
 
 use crate::Network;
@@ -57,7 +57,8 @@ use crate::signer::{
 };
 
 use super::accounts::{
-    decode_scalar_32, ecdsa_from_rs, schnorr_from_rs, spark_address_format, xpriv_from_secret,
+    decode_scalar_32, ecdsa_from_rs, schnorr_from_rs, spark_address_format, spark_identity_address,
+    xpriv_from_secret,
 };
 use super::error::TurnkeyError;
 use super::transport::{OnConflict, TurnkeyClient};
@@ -394,9 +395,7 @@ impl TurnkeySparkSigner {
             .await
             .map_err(to_spark_err)?;
         let identity = self.identity_public_key().await?;
-        let addr = SparkAddress::new(identity, self.network.into(), None)
-            .to_address_string()
-            .map_err(to_spark_err)?;
+        let addr = spark_identity_address(identity, self.network)?;
         *self.spark_address.lock().await = Some(addr.clone());
         Ok(addr)
     }
@@ -936,7 +935,7 @@ mod tests {
 
     #[tokio::test]
     async fn breez_signer_lazy_export_denied_reports_unavailable() {
-        let signer = TurnkeyBreezSigner::new_seeded(
+        let signer = TurnkeyBreezSigner::new(
             deny_client(Arc::new(Always403::default())),
             Network::Regtest,
             0,
@@ -958,7 +957,7 @@ mod tests {
     async fn breez_signer_export_denial_is_memoized() {
         let http = Arc::new(Always403::default());
         let post_calls = http.post_calls.clone();
-        let signer = TurnkeyBreezSigner::new_seeded(
+        let signer = TurnkeyBreezSigner::new(
             deny_client(http),
             Network::Regtest,
             0,

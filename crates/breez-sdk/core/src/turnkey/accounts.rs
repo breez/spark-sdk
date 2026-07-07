@@ -3,9 +3,11 @@
 
 use bitcoin::NetworkKind;
 use bitcoin::bip32::{ChainCode, ChildNumber, Fingerprint, Xpriv};
-use bitcoin::secp256k1::{SecretKey, ecdsa, schnorr};
+use bitcoin::secp256k1::{PublicKey, SecretKey, ecdsa, schnorr};
+use spark_wallet::SparkAddress;
 
 use crate::Network;
+use crate::error::SignerError;
 
 use turnkey_enclave_encrypt::{ExportClient, QuorumPublicKey};
 
@@ -37,6 +39,18 @@ pub(crate) fn spark_address_format(network: Network) -> &'static str {
 /// seed local ECIES/HMAC without exposing any Spark key.
 pub(crate) fn encryption_key_path(account: u32) -> String {
     format!("m/8797555'/{account}'/2147483647'")
+}
+
+/// The canonical Spark address for the wallet identity key: the address Turnkey
+/// assigns the Spark-format account at the identity path. Derived locally to
+/// avoid the ambiguous get-by-path once both account formats coexist there.
+pub(crate) fn spark_identity_address(
+    identity: PublicKey,
+    network: Network,
+) -> Result<String, SignerError> {
+    SparkAddress::new(identity, network.into(), None)
+        .to_address_string()
+        .map_err(|e| SignerError::Generic(e.to_string()))
 }
 
 impl TurnkeyClient {
