@@ -1313,6 +1313,14 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
     assert_eq!(alice_payment.payment_type, PaymentType::Send);
     assert_eq!(alice_payment.method, PaymentMethod::Lightning);
     assert_eq!(alice_payment.status, PaymentStatus::Completed);
+    // The send records the net amount reaching Bob (not the gross total), so
+    // amount + fees equals the balance Alice spent, matching the client-signing,
+    // coop-exit, and spark paths.
+    assert_eq!(
+        alice_payment.amount,
+        expected_bob_amount.into(),
+        "Alice's send amount should equal the net amount Bob received"
+    );
 
     info!(
         "Fee overpayment test passed! Expected overpayment: {} sats",

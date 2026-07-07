@@ -82,6 +82,13 @@ pub(super) async fn send(
         .map(|a| Ok::<u64, SdkError>(a.try_into()?))
         .transpose()?;
 
+    // Record the amount actually sent to the receiver, so amount + fees equals
+    // what the user paid, consistent with the coop-exit, spark, and
+    // client-signing paths. Under FeesIncluded this is the fee-deducted
+    // amount_to_send; for a fixed-amount invoice it falls back to the requested
+    // amount.
+    let displayed_amount = amount_to_send.unwrap_or(amount);
+
     let payment = sdk
         .lightning_sender
         .pay_and_persist_lightning_invoice(
@@ -89,7 +96,7 @@ pub(super) async fn send(
             amount_to_send_sats,
             fee_sats,
             prefer_spark,
-            amount,
+            displayed_amount,
             transfer_id,
             completion_timeout_secs.unwrap_or(0).into(),
         )
