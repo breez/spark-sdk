@@ -209,9 +209,10 @@ impl PasskeyClient {
             .setup_wallet(SetupWalletRequest {
                 label: request.label,
                 publish_label: true,
-                // Registration always derives via the just-created
-                // credential; callers don't drive sign-in pinning here.
-                allow_credentials: Vec::new(),
+                // Pin the derive to the just-created credential so the
+                // seed comes from it, not another resident passkey for
+                // this RP that the OS could otherwise resolve.
+                allow_credentials: vec![credential.credential_id.clone()],
                 prefer_immediately_available_credentials: None,
             })
             .await?;
@@ -396,6 +397,9 @@ mod tests {
         /// provider that reports the signed-in credential. `None` mirrors
         /// providers that don't expose it (CLI / file-backed / hardware).
         derive_credential_id: Option<Vec<u8>>,
+        /// `allow_credentials` seen on each `derive_seeds` call, so tests
+        /// can assert pinning.
+        derive_allow: Mutex<Vec<Vec<Vec<u8>>>>,
     }
 
     impl MockProvider {
@@ -407,6 +411,7 @@ mod tests {
                 fail_create: false,
                 derive_errors: Mutex::new(Vec::new()),
                 derive_credential_id: None,
+                derive_allow: Mutex::new(Vec::new()),
             }
         }
 
@@ -452,6 +457,10 @@ mod tests {
             &self,
             request: DeriveSeedsRequest,
         ) -> Result<DeriveSeedsOutput, PrfProviderError> {
+            self.derive_allow
+                .lock()
+                .unwrap()
+                .push(request.allow_credentials.clone());
             if let Some(err) = {
                 let mut errs = self.derive_errors.lock().unwrap();
                 if errs.is_empty() {
@@ -619,6 +628,26 @@ mod tests {
         assert_eq!(calls.list_calls, 0);
         assert!(calls.stored.is_empty());
         assert!(response.labels.is_empty());
+    }
+
+    #[macros::async_test_all]
+    async fn register_pins_derive_to_created_credential() {
+        let provider = Arc::new(MockProvider::new([7u8; 32]));
+        let client = test_client(provider.clone(), None);
+        client
+            .register(RegisterRequest {
+                label: Some("alice".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        // The seed derive is pinned to the credential create_passkey
+        // returned, so the OS resolves it and not another resident passkey.
+        let allow = provider.derive_allow.lock().unwrap();
+        assert!(!allow.is_empty());
+        for call in allow.iter() {
+            assert_eq!(call, &vec![vec![0xab, 0xcd, 0xef]]);
+        }
     }
 
     #[macros::async_test_all]
