@@ -120,6 +120,7 @@ pub(crate) fn configure_spark_config() -> Result<()> {
         },
         expected_withdraw_bond_sats: 10_000,
         expected_withdraw_relative_block_locktime: 1_000,
+        max_token_transaction_inputs: None,
     });
     // ANCHOR_END: spark-config
     info!("Config: {:?}", config);

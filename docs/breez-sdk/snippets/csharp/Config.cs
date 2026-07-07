@@ -118,7 +118,8 @@ namespace BreezSdkSnippets
                         schemaEndpoint: "graphql/spark/rc"
                     ),
                     expectedWithdrawBondSats: 10000,
-                    expectedWithdrawRelativeBlockLocktime: 1000
+                    expectedWithdrawRelativeBlockLocktime: 1000,
+                    maxTokenTransactionInputs: null
                 )
             };
             // ANCHOR_END: spark-config
