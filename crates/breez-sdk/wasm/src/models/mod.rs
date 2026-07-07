@@ -691,6 +691,7 @@ pub struct SparkConfig {
     pub ssp_config: SparkSspConfig,
     pub expected_withdraw_bond_sats: u64,
     pub expected_withdraw_relative_block_locktime: u64,
+    pub max_token_transaction_inputs: Option<u32>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SparkSigningOperator)]
@@ -1081,6 +1082,7 @@ pub enum UnsignedTransferPackage {
         #[tsify(type = "string")]
         #[serde(with = "serde_u128_as_string")]
         fee: u128,
+        is_swap: bool,
     },
 }
 

@@ -847,6 +847,10 @@ pub struct SparkConfig {
     pub expected_withdraw_bond_sats: u64,
     /// Expected relative block locktime for token withdrawals.
     pub expected_withdraw_relative_block_locktime: u64,
+    /// Cap on the inputs a single token transaction may spend. A send needing
+    /// more first consolidates the wallet's token outputs. Unset uses the SDK
+    /// default (500).
+    pub max_token_transaction_inputs: Option<u32>,
 }
 
 /// A Spark signing operator.
@@ -1601,6 +1605,10 @@ pub enum UnsignedTransferPackage {
         token_identifier: String,
         amount: u128,
         fee: u128,
+        /// When set, this package re-shapes the wallet's token outputs instead of
+        /// sending a payment. Publishing it returns `SwapCompleted`: rebuild the
+        /// original send from the same prepare response and submit again.
+        is_swap: bool,
     },
 }
 

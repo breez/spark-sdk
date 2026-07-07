@@ -43,7 +43,9 @@ use crate::{
     },
 };
 
-const MAX_TOKEN_TX_INPUTS: usize = 500;
+/// Default cap on the number of inputs a single token transaction may spend.
+/// Overridable per wallet via [`TokensConfig::max_tx_inputs`].
+pub const DEFAULT_MAX_TOKEN_TX_INPUTS: usize = 500;
 const MAX_TRANSFER_TOKEN_TOO_MANY_OUTPUTS_RETRY_ATTEMPTS: usize = 3;
 const MAX_TOKEN_PREEMPTED_RETRY_ATTEMPTS: usize = 3;
 
@@ -70,6 +72,18 @@ pub struct PreparedTokenTransfer {
     pub receiver_outputs: Vec<PreparedTokenReceiverOutput>,
     pub num_receiver_outputs: usize,
     pub created_timestamp: SystemTime,
+}
+
+/// Outcome of preparing a token transfer for external signing.
+///
+/// The client-signing flow cannot self-consolidate (that needs the external
+/// signer), so when a send would exceed the per-transaction input cap the SDK
+/// returns a `Consolidation` self-transfer for the client to sign and publish;
+/// the caller then rebuilds and retries, mirroring the sats denomination-swap
+/// step.
+pub enum PreparedTokenPackage {
+    Ready(PreparedTokenTransfer),
+    Consolidation(PreparedTokenTransfer),
 }
 
 /// Checks if an error indicates a transaction was preempted because token outputs
@@ -136,6 +150,10 @@ pub struct TokensConfig {
     pub expected_withdraw_bond_sats: u64,
     pub expected_withdraw_relative_block_locktime: u64,
     pub transaction_validity_duration_seconds: u64,
+    /// Cap on the inputs a single token transaction may spend. A send needing
+    /// more triggers a consolidation instead. Defaults to
+    /// [`DEFAULT_MAX_TOKEN_TX_INPUTS`].
+    pub max_tx_inputs: usize,
 }
 
 pub struct TokenService {
@@ -753,7 +771,7 @@ impl TokenService {
         receiver_outputs: Vec<TransferTokenOutput>,
         execute_before_unix_micros: Option<i64>,
     ) -> Result<PreparedTokenTransfer, ServiceError> {
-        if inputs.len() > MAX_TOKEN_TX_INPUTS {
+        if inputs.len() > self.tokens_config.max_tx_inputs {
             return Err(ServiceError::NeededTooManyOutputs);
         }
 
@@ -1079,7 +1097,7 @@ impl TokenService {
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
         execute_before_unix_micros: Option<i64>,
-    ) -> Result<PreparedTokenTransfer, ServiceError> {
+    ) -> Result<PreparedTokenPackage, ServiceError> {
         if receiver_outputs.is_empty() {
             return Err(ServiceError::Generic(
                 "No receiver outputs provided".to_string(),
@@ -1104,12 +1122,56 @@ impl TokenService {
             )
             .await?;
 
+        if selected.outputs.len() > self.tokens_config.max_tx_inputs {
+            let prepared = self
+                .prepare_token_consolidation(identity_public_key, &token_id)
+                .await?;
+            return Ok(PreparedTokenPackage::Consolidation(prepared));
+        }
+
+        let prepared = self
+            .build_partial_token_transfer(
+                identity_public_key,
+                &token_id,
+                selected.outputs,
+                receiver_outputs,
+                execute_before_unix_micros,
+            )
+            .await?;
+        Ok(PreparedTokenPackage::Ready(prepared))
+    }
+
+    /// Builds a self-transfer that collapses the wallet's smallest token outputs
+    /// into one, without signing or broadcasting. This is the client-signing
+    /// counterpart to one `optimize_token_outputs` iteration: the client signs
+    /// the returned transfer, publishes it, then rebuilds the original send.
+    async fn prepare_token_consolidation(
+        &self,
+        identity_public_key: PublicKey,
+        token_id: &str,
+    ) -> Result<PreparedTokenTransfer, ServiceError> {
+        let selected = self
+            .token_output_service
+            .select_token_outputs(
+                token_id,
+                ReservationTarget::MaxOutputCount(self.tokens_config.max_tx_inputs),
+                None,
+                Some(SelectionStrategy::SmallestFirst),
+            )
+            .await?;
+        let amount = selected
+            .outputs
+            .iter()
+            .map(|o| o.output.token_amount)
+            .sum::<u128>();
+        let receiver_address = SparkAddress::new(identity_public_key, self.network, None);
+        let receiver_outputs = build_consolidation_outputs(token_id, amount, 1, &receiver_address);
         self.build_partial_token_transfer(
             identity_public_key,
-            &token_id,
+            token_id,
             selected.outputs,
             receiver_outputs,
-            execute_before_unix_micros,
+            None,
         )
         .await
     }
@@ -1204,7 +1266,7 @@ impl TokenService {
                 .token_output_service
                 .reserve_token_outputs(
                     &output.metadata.identifier,
-                    ReservationTarget::MaxOutputCount(MAX_TOKEN_TX_INPUTS),
+                    ReservationTarget::MaxOutputCount(self.tokens_config.max_tx_inputs),
                     ReservationPurpose::Swap,
                     None,
                     Some(SelectionStrategy::SmallestFirst),

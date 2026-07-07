@@ -131,11 +131,11 @@ pub(super) async fn send_signed(
     Ok(SendPaymentResponse { payment })
 }
 
-pub(super) async fn send_token_signed(
+pub(super) async fn broadcast_signed_token_package(
     sdk: &BreezSdk,
     token_context: &[u8],
     signed: &ExternalPreparedTokenTransaction,
-) -> Result<SendPaymentResponse, SdkError> {
+) -> Result<spark_wallet::TokenTransaction, SdkError> {
     let prepared: PreparedTokenTransfer = serde_json::from_slice(token_context)
         .map_err(|e| SdkError::Generic(format!("Failed to deserialize token transfer: {e}")))?;
     let signature = signed
@@ -143,10 +143,18 @@ pub(super) async fn send_token_signed(
         .signature
         .serialize()
         .to_vec();
-    let token_transaction = sdk
+    Ok(sdk
         .spark_wallet
         .publish_token_package(prepared, signature)
-        .await?;
+        .await?)
+}
+
+pub(super) async fn send_token_signed(
+    sdk: &BreezSdk,
+    token_context: &[u8],
+    signed: &ExternalPreparedTokenTransaction,
+) -> Result<SendPaymentResponse, SdkError> {
+    let token_transaction = broadcast_signed_token_package(sdk, token_context, signed).await?;
     let payment =
         map_and_persist_token_transaction(&sdk.spark_wallet, &sdk.storage, &token_transaction)
             .await?;

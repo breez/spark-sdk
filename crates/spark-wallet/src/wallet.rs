@@ -40,7 +40,7 @@ use spark::{
     signer::{PrepareTransferRequest, PreparedTransfer, SparkSigner},
     ssp::{ServiceProvider, SspTransfer, SspUserRequest},
     token::{
-        InMemoryTokenOutputStore, PreparedTokenTransfer, SelectionStrategy,
+        InMemoryTokenOutputStore, PreparedTokenPackage, PreparedTokenTransfer, SelectionStrategy,
         SynchronousTokenOutputService, TokenMetadata, TokenOutputService, TokenOutputStore,
         TokenOutputWithPrevOut, TokenService,
     },

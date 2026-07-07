@@ -367,7 +367,7 @@ impl SparkWallet {
         outputs: Vec<TransferTokenOutput>,
         selected_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
-    ) -> Result<PreparedTokenTransfer, SparkWalletError> {
+    ) -> Result<PreparedTokenPackage, SparkWalletError> {
         if outputs.iter().any(|o| o.spark_invoice.is_some()) {
             return Err(SparkWalletError::Generic(
                 "Spark invoices are not supported for token transfers. Use the `fulfill_spark_invoice` method instead.".to_string(),
@@ -393,7 +393,7 @@ impl SparkWallet {
         &self,
         invoice_str: &str,
         amount: Option<u128>,
-    ) -> Result<PreparedTokenTransfer, SparkWalletError> {
+    ) -> Result<PreparedTokenPackage, SparkWalletError> {
         let invoice = self.parse_and_validate_spark_invoice(invoice_str)?;
         if !self.config.self_payment_allowed
             && invoice.identity_public_key == self.identity_public_key

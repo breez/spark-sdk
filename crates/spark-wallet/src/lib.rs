@@ -41,7 +41,7 @@ pub use spark::{
     },
     ssp::*,
     token::{
-        BURN_PUBLIC_KEY, GetTokenOutputsFilter, InMemoryTokenOutputStore,
+        BURN_PUBLIC_KEY, GetTokenOutputsFilter, InMemoryTokenOutputStore, PreparedTokenPackage,
         PreparedTokenReceiverOutput, PreparedTokenTransfer,
         ReservationPurpose as TokenReservationPurpose, ReservationTarget, SelectionStrategy,
         TokenMetadata, TokenOutpoint, TokenOutput, TokenOutputServiceError, TokenOutputStore,

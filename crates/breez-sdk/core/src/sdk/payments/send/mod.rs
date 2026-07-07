@@ -78,11 +78,25 @@ pub(in crate::sdk) async fn publish_signed_package_inner(
             UnsignedTransferPackage::Token {
                 prepare_token_transaction,
                 token_context,
+                is_swap,
                 ..
             },
             TransferSignature::Token { signed },
         ) => {
             let package_id = hex::encode(&prepare_token_transaction.digest);
+            if *is_swap {
+                if let Ok(Some(_)) = cache.fetch_published_package(&package_id).await {
+                    return Ok(PublishOutcome::SwapCompleted);
+                }
+                spark_address::broadcast_signed_token_package(sdk, token_context, signed).await?;
+                if let Err(e) = cache
+                    .save_published_package(&package_id, "consolidation")
+                    .await
+                {
+                    warn!("Failed to record the published token consolidation package: {e:?}");
+                }
+                return Ok(PublishOutcome::SwapCompleted);
+            }
             if let Ok(Some(payment_id)) = cache.fetch_published_package(&package_id).await
                 && let Ok(payment) = sdk.storage.get_payment_by_id(payment_id).await
             {

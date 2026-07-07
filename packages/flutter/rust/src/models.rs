@@ -62,6 +62,7 @@ pub struct _SparkConfig {
     pub ssp_config: SparkSspConfig,
     pub expected_withdraw_bond_sats: u64,
     pub expected_withdraw_relative_block_locktime: u64,
+    pub max_token_transaction_inputs: Option<u32>,
 }
 
 #[frb(mirror(SparkSigningOperator))]
@@ -569,6 +570,7 @@ pub enum _UnsignedTransferPackage {
         token_identifier: String,
         amount: u128,
         fee: u128,
+        is_swap: bool,
     },
 }
 

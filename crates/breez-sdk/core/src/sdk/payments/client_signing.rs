@@ -1,5 +1,6 @@
 use spark_wallet::{
-    CoopExitFeeQuote, ExitSpeed, SendPackagePreparation, SparkAddress, TransferTokenOutput,
+    CoopExitFeeQuote, ExitSpeed, PreparedTokenPackage, SendPackagePreparation, SparkAddress,
+    TransferTokenOutput,
 };
 
 use crate::{
@@ -276,6 +277,13 @@ async fn build_token_package(
             )
             .await?
     };
+    // A consolidation package re-shapes the wallet's outputs rather than paying
+    // the receiver, so it carries no send amount or fee to display. It is exposed
+    // as a swap: publishing it returns SwapCompleted, like the sats flow.
+    let (prepared, is_swap, amount, fee) = match prepared {
+        PreparedTokenPackage::Ready(pt) => (pt, false, amount, fee),
+        PreparedTokenPackage::Consolidation(pt) => (pt, true, 0, 0),
+    };
     let digest = prepared.partial_token_transaction_hash.clone();
     let token_context = serde_json::to_vec(&prepared)
         .map_err(|e| SdkError::Generic(format!("Failed to serialize token transfer: {e}")))?;
@@ -288,6 +296,7 @@ async fn build_token_package(
         token_identifier,
         amount,
         fee,
+        is_swap,
     })
 }
 

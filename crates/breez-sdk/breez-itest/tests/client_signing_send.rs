@@ -37,6 +37,26 @@ async fn build_alice_manual_opt(mnemonic: String) -> Result<SdkInstance> {
     build_sdk_with_external_signer_and_config(path, mnemonic, cfg, Some(dir)).await
 }
 
+async fn build_alice_with_token_cap(
+    mnemonic: String,
+    max_token_transaction_inputs: u32,
+) -> Result<SdkInstance> {
+    let dir = tempfile::Builder::new()
+        .prefix("breez-sdk-alice-client-signing")
+        .tempdir()?;
+    let path = dir.path().to_string_lossy().to_string();
+
+    let mut cfg = default_config(Network::Regtest);
+    cfg.leaf_optimization_config = LeafOptimizationConfig {
+        auto_enabled: false,
+        multiplicity: 15,
+    };
+    if let Some(spark_config) = cfg.spark_config.as_mut() {
+        spark_config.max_token_transaction_inputs = Some(max_token_transaction_inputs);
+    }
+    build_sdk_with_external_signer_and_config(path, mnemonic, cfg, Some(dir)).await
+}
+
 async fn build_bob() -> Result<SdkInstance> {
     let dir = tempfile::Builder::new()
         .prefix("breez-sdk-bob-client-signing")
@@ -353,6 +373,147 @@ async fn test_client_signing_token_send() -> Result<()> {
     );
 
     info!("=== Test test_client_signing_token_send PASSED ===");
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_client_signing_token_send_with_consolidation() -> Result<()> {
+    info!("=== Starting test_client_signing_token_send_with_consolidation ===");
+
+    let send_amount: u128 = 250;
+
+    let alice_mnemonic = random_mnemonic()?;
+    // Cap token transactions at 2 inputs so a send that needs all three outputs
+    // below must consolidate first instead of sending directly.
+    let alice = build_alice_with_token_cap(alice_mnemonic.clone(), 2).await?;
+    let bob = build_bob().await?;
+
+    let client_signer =
+        default_external_signers(alice_mnemonic, None, Network::Regtest, None)?.spark_signer;
+
+    let issuer = alice.sdk.get_token_issuer();
+    let token_metadata = issuer
+        .create_issuer_token(CreateIssuerTokenRequest {
+            name: "consolidation token".to_string(),
+            ticker: "CSC".to_string(),
+            decimals: 0,
+            is_freezable: false,
+            max_supply: 1_000_000,
+        })
+        .await?;
+    // Three separate mints leave Alice with three separate token outputs.
+    for _ in 0..3 {
+        issuer
+            .mint_issuer_token(MintIssuerTokenRequest { amount: 100 })
+            .await?;
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let token_id = token_metadata.identifier.clone();
+
+    let bob_spark_address = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+
+    // Sending 250 needs all three 100-unit outputs (> the cap of 2), so the first
+    // build returns a consolidation package. Keep preparing, signing, and
+    // publishing until the payment is actually sent.
+    let mut consolidations = 0;
+    let payment = loop {
+        let prep = alice
+            .sdk
+            .prepare_send_payment(PrepareSendPaymentRequest {
+                payment_request: PaymentRequest::Input {
+                    input: bob_spark_address.clone(),
+                },
+                amount: Some(send_amount),
+                token_identifier: Some(token_id.clone()),
+                conversion_options: None,
+                fee_policy: None,
+            })
+            .await?;
+
+        let unsigned = alice
+            .sdk
+            .build_unsigned_transfer_package(BuildUnsignedTransferPackageRequest {
+                prepare_response: prep.clone(),
+                options: None,
+            })
+            .await?;
+
+        let UnsignedTransferPackage::Token {
+            prepare_token_transaction,
+            is_swap,
+            ..
+        } = &unsigned
+        else {
+            panic!("expected a Token unsigned package for a token send");
+        };
+        let is_swap = *is_swap;
+
+        let signed = client_signer
+            .prepare_token_transaction(prepare_token_transaction.clone())
+            .await?;
+        let signature = TransferSignature::Token { signed };
+
+        let response = alice
+            .sdk
+            .publish_signed_transfer_package(PublishSignedTransferPackageRequest {
+                signed_package: SignedTransferPackage {
+                    unsigned,
+                    signature,
+                },
+            })
+            .await?;
+
+        match response {
+            PublishSignedTransferPackageResponse::SwapCompleted => {
+                assert!(is_swap, "SwapCompleted must come from a swap package");
+                consolidations += 1;
+                assert!(consolidations <= 3, "consolidation did not converge");
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+            }
+            PublishSignedTransferPackageResponse::PaymentSent { payment } => {
+                assert!(!is_swap, "a real send must not be a swap package");
+                break payment;
+            }
+        }
+    };
+    assert!(
+        consolidations >= 1,
+        "expected the send to require at least one consolidation round"
+    );
+    assert!(
+        matches!(
+            payment.status,
+            PaymentStatus::Completed | PaymentStatus::Pending
+        ),
+        "Payment should be completed or pending"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let bob_token_balance = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .token_balances
+        .get(&token_id)
+        .map(|b| b.balance)
+        .unwrap_or(0);
+    assert_eq!(
+        bob_token_balance, send_amount,
+        "Bob should have received the token amount"
+    );
+
+    info!("=== Test test_client_signing_token_send_with_consolidation PASSED ===");
     Ok(())
 }
 
