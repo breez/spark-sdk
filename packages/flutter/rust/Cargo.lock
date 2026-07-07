@@ -1085,7 +1085,7 @@ dependencies = [
 [[package]]
 name = "boltz-client"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=63fa0dfdbaad0be716dfcaf2531ccfa36bc8d414#63fa0dfdbaad0be716dfcaf2531ccfa36bc8d414"
+source = "git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879#b5f4683aba10efd875d674f2bb9a5800b047a879"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -1100,8 +1100,8 @@ dependencies = [
  "hex",
  "k256",
  "lightning-invoice 0.34.0",
- "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=63fa0dfdbaad0be716dfcaf2531ccfa36bc8d414)",
- "platform-utils 0.1.0 (git+https://github.com/breez/boltz-client?rev=63fa0dfdbaad0be716dfcaf2531ccfa36bc8d414)",
+ "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879)",
+ "platform-utils 0.1.0 (git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879)",
  "serde",
  "serde_json",
  "sha2",
@@ -3187,7 +3187,7 @@ dependencies = [
 [[package]]
 name = "macros"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=63fa0dfdbaad0be716dfcaf2531ccfa36bc8d414#63fa0dfdbaad0be716dfcaf2531ccfa36bc8d414"
+source = "git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879#b5f4683aba10efd875d674f2bb9a5800b047a879"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3595,11 +3595,11 @@ dependencies = [
 [[package]]
 name = "platform-utils"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=63fa0dfdbaad0be716dfcaf2531ccfa36bc8d414#63fa0dfdbaad0be716dfcaf2531ccfa36bc8d414"
+source = "git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879#b5f4683aba10efd875d674f2bb9a5800b047a879"
 dependencies = [
  "async-trait",
  "base64",
- "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=63fa0dfdbaad0be716dfcaf2531ccfa36bc8d414)",
+ "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879)",
  "reqwest",
  "serde",
  "serde_json",
