@@ -82,12 +82,18 @@ pub(super) async fn send(
         .map(|a| Ok::<u64, SdkError>(a.try_into()?))
         .transpose()?;
 
-    // Record the amount actually sent to the receiver, so amount + fees equals
-    // what the user paid, consistent with the coop-exit, spark, and
-    // client-signing paths. Under FeesIncluded this is the fee-deducted
-    // amount_to_send; for a fixed-amount invoice it falls back to the requested
-    // amount.
-    let displayed_amount = amount_to_send.unwrap_or(amount);
+    // Under FeesIncluded, record the net amount reaching the receiver (the
+    // fee-deducted amount_to_send) rather than the gross total, so amount + fees
+    // equals what the user paid, consistent with the coop-exit, spark, and
+    // client-signing paths. Other flows keep the requested amount: LNURL runs
+    // internally as FeesExcluded and overpays the fixed invoice to drain the
+    // wallet, but that overpayment is paid to the SSP as fees, not to the
+    // receiver, so the displayed amount must stay the invoice amount.
+    let displayed_amount = if is_fees_included {
+        amount_to_send.unwrap_or(amount)
+    } else {
+        amount
+    };
 
     let payment = sdk
         .lightning_sender

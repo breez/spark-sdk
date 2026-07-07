@@ -975,6 +975,19 @@ async fn test_08_lnurl_send_all_with_fee_overpayment(
     assert_eq!(alice_payment.payment_type, PaymentType::Send);
     assert_eq!(alice_payment.method, PaymentMethod::Lightning);
     assert_eq!(alice_payment.status, PaymentStatus::Completed);
+    // The recorded amount is the invoice amount the receiver got, and the
+    // overpayment (which is paid to the SSP, not the receiver) shows up in the
+    // fees: amount stays the invoice amount and fees carry the full prepared fee.
+    assert_eq!(
+        alice_payment.amount,
+        invoice_amount_sats.into(),
+        "LNURL send should record the invoice amount, not the overpaid amount"
+    );
+    assert_eq!(
+        alice_payment.fees,
+        expected_fee1.into(),
+        "the overpayment should appear in the fees, not the amount"
+    );
 
     info!(
         "Fee overpayment test passed! Expected overpayment: {} sats",
