@@ -163,6 +163,57 @@ pub enum ReservationPurpose {
     Swap,
 }
 
+pub fn select_token_outputs_from(
+    mut outputs: Vec<TokenOutputWithPrevOut>,
+    target: ReservationTarget,
+    selection_strategy: Option<SelectionStrategy>,
+) -> Result<Vec<TokenOutputWithPrevOut>, TokenOutputServiceError> {
+    if let ReservationTarget::MinTotalValue(amount) = target
+        && outputs.iter().map(|o| o.output.token_amount).sum::<u128>() < amount
+    {
+        return Err(TokenOutputServiceError::InsufficientFunds);
+    }
+
+    if let ReservationTarget::MinTotalValue(amount) = target
+        && let Some(output) = outputs.iter().find(|o| o.output.token_amount == amount)
+    {
+        return Ok(vec![output.clone()]);
+    }
+
+    match selection_strategy {
+        None | Some(SelectionStrategy::SmallestFirst) => {
+            outputs.sort_by_key(|o| o.output.token_amount);
+        }
+        Some(SelectionStrategy::LargestFirst) => {
+            outputs.sort_by_key(|o| std::cmp::Reverse(o.output.token_amount));
+        }
+    }
+
+    match target {
+        ReservationTarget::MinTotalValue(amount) => {
+            let mut selected_outputs = Vec::new();
+            let mut remaining_amount = amount;
+            for output in outputs {
+                if remaining_amount == 0 {
+                    break;
+                }
+                selected_outputs.push(output.clone());
+                remaining_amount = remaining_amount.saturating_sub(output.output.token_amount);
+            }
+
+            if remaining_amount > 0 {
+                return Err(TokenOutputServiceError::InsufficientFunds);
+            }
+
+            Ok(selected_outputs)
+        }
+        ReservationTarget::MaxOutputCount(count) => {
+            outputs.truncate(count);
+            Ok(outputs)
+        }
+    }
+}
+
 #[macros::async_trait]
 pub trait TokenOutputStore: Send + Sync {
     async fn set_tokens_outputs(
@@ -215,6 +266,21 @@ pub trait TokenOutputStore: Send + Sync {
         purpose: ReservationPurpose,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
+    ) -> Result<TokenOutputsReservation, TokenOutputServiceError>;
+
+    async fn select_token_outputs(
+        &self,
+        token_identifier: &str,
+        target: ReservationTarget,
+        preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+        selection_strategy: Option<SelectionStrategy>,
+    ) -> Result<TokenOutputs, TokenOutputServiceError>;
+
+    async fn reserve_token_outputs_by_outpoints(
+        &self,
+        token_identifier: &str,
+        outpoints: &[(String, u32)],
+        purpose: ReservationPurpose,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError>;
 
     async fn cancel_reservation(
@@ -270,6 +336,21 @@ pub trait TokenOutputService: Send + Sync {
         purpose: ReservationPurpose,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
+    ) -> Result<TokenOutputsReservation, TokenOutputServiceError>;
+
+    async fn select_token_outputs(
+        &self,
+        token_identifier: &str,
+        target: ReservationTarget,
+        preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+        selection_strategy: Option<SelectionStrategy>,
+    ) -> Result<TokenOutputs, TokenOutputServiceError>;
+
+    async fn reserve_token_outputs_by_outpoints(
+        &self,
+        token_identifier: &str,
+        outpoints: &[(String, u32)],
+        purpose: ReservationPurpose,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError>;
 
     async fn cancel_reservation(

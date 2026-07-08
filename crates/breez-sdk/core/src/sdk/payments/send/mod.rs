@@ -4,15 +4,199 @@ pub(in crate::sdk::payments) mod cross_chain;
 pub(super) mod spark_address;
 pub(super) mod spark_invoice;
 
+use tracing::warn;
+
 use crate::{
     ConversionEstimate, SendPaymentMethod,
     error::SdkError,
     events::SdkEvent,
-    models::{SendPaymentRequest, SendPaymentResponse},
+    models::{
+        PublishSignedTransferPackageResponse, SendPaymentRequest, SendPaymentResponse,
+        SignedTransferPackage, TransferSignature, TransferTarget, UnsignedTransferPackage,
+    },
+    persist::ObjectCacheRepository,
     sdk::BreezSdk,
+    signer::{ExternalPrepareTransferRequest, ExternalPreparedTransfer},
 };
 
 use super::conversion;
+
+#[allow(clippy::large_enum_variant)]
+pub(in crate::sdk) enum PublishOutcome {
+    SwapCompleted,
+    Sent(SendPaymentResponse),
+    Replayed(SendPaymentResponse),
+}
+
+pub(in crate::sdk) async fn publish_signed_package_inner(
+    sdk: &BreezSdk,
+    signed_package: &SignedTransferPackage,
+) -> Result<PublishOutcome, SdkError> {
+    let cache = ObjectCacheRepository::new(sdk.storage.clone());
+    let res = match (&signed_package.unsigned, &signed_package.signature) {
+        (UnsignedTransferPackage::Swap { .. }, TransferSignature::Transfer { .. }) => {
+            // Idempotent at the spark-wallet layer via the swap's transfer_id: a
+            // re-publish (retry or crash after submit) detects the existing
+            // transfer and returns without re-submitting.
+            super::client_signing::submit_swap(sdk, signed_package).await?;
+            return Ok(PublishOutcome::SwapCompleted);
+        }
+        (
+            UnsignedTransferPackage::Transfer {
+                prepare_transfer,
+                amount_sat,
+                fee_sat,
+                target,
+            },
+            TransferSignature::Transfer { signed },
+        ) => {
+            if let Ok(payment) = sdk
+                .storage
+                .get_payment_by_id(prepare_transfer.transfer_id.clone())
+                .await
+            {
+                return Ok(PublishOutcome::Replayed(SendPaymentResponse { payment }));
+            }
+            deferred_transfer_send(sdk, prepare_transfer, signed, *amount_sat, *fee_sat, target)
+                .await
+        }
+        (
+            UnsignedTransferPackage::Token {
+                prepare_token_transaction,
+                token_context,
+                is_swap,
+                ..
+            },
+            TransferSignature::Token { signed },
+        ) => {
+            // Token replay-safety relies on a local record keyed by the package
+            // digest: unlike transfer and swap, a token transaction is queryable
+            // at the operator only by its final hash, which is computed during
+            // broadcast and so is unknown from the package after a crash. A crash
+            // between the operator broadcast and recording the digest here is
+            // therefore not recoverable from the package; the integrator must
+            // reconcile local state (sync) before rebuilding, or the retry fails
+            // on the already-spent outputs rather than double-spending.
+            let package_id = hex::encode(&prepare_token_transaction.digest);
+            if *is_swap {
+                if let Ok(Some(_)) = cache.fetch_published_package(&package_id).await {
+                    return Ok(PublishOutcome::SwapCompleted);
+                }
+                spark_address::broadcast_signed_token_package(sdk, token_context, signed).await?;
+                if let Err(e) = cache
+                    .save_published_package(&package_id, "consolidation")
+                    .await
+                {
+                    warn!("Failed to record the published token consolidation package: {e:?}");
+                }
+                return Ok(PublishOutcome::SwapCompleted);
+            }
+            if let Ok(Some(payment_id)) = cache.fetch_published_package(&package_id).await
+                && let Ok(payment) = sdk.storage.get_payment_by_id(payment_id).await
+            {
+                return Ok(PublishOutcome::Replayed(SendPaymentResponse { payment }));
+            }
+            let res = spark_address::send_token_signed(sdk, token_context, signed).await?;
+            if let Err(e) = cache
+                .save_published_package(&package_id, &res.payment.id)
+                .await
+            {
+                warn!("Failed to record the published token package: {e:?}");
+            }
+            Ok(res)
+        }
+        _ => {
+            return Err(SdkError::InvalidInput(
+                "signature does not match the unsigned package".to_string(),
+            ));
+        }
+    }?;
+    Ok(PublishOutcome::Sent(res))
+}
+
+pub(in crate::sdk::payments) async fn publish_signed_transfer_package(
+    sdk: &BreezSdk,
+    signed_package: &SignedTransferPackage,
+) -> Result<PublishSignedTransferPackageResponse, SdkError> {
+    if matches!(
+        &signed_package.unsigned,
+        UnsignedTransferPackage::Transfer {
+            target: TransferTarget::Lightning {
+                lnurl_pay: Some(_),
+                ..
+            },
+            ..
+        }
+    ) {
+        return Err(SdkError::InvalidInput(
+            "LNURL pay packages must be published with publish_signed_lnurl_pay_package"
+                .to_string(),
+        ));
+    }
+    match publish_signed_package_inner(sdk, signed_package).await? {
+        PublishOutcome::SwapCompleted => Ok(PublishSignedTransferPackageResponse::SwapCompleted),
+        PublishOutcome::Replayed(res) => Ok(PublishSignedTransferPackageResponse::PaymentSent {
+            payment: res.payment,
+        }),
+        PublishOutcome::Sent(res) => {
+            sdk.event_emitter
+                .emit(&SdkEvent::from_payment(res.payment.clone()))
+                .await;
+            Ok(PublishSignedTransferPackageResponse::PaymentSent {
+                payment: res.payment,
+            })
+        }
+    }
+}
+
+async fn deferred_transfer_send(
+    sdk: &BreezSdk,
+    prepare_transfer: &ExternalPrepareTransferRequest,
+    signed: &ExternalPreparedTransfer,
+    amount_sat: u64,
+    fee_sat: u64,
+    target: &TransferTarget,
+) -> Result<SendPaymentResponse, SdkError> {
+    match target {
+        TransferTarget::Spark { spark_invoice, .. } => {
+            spark_address::send_signed(sdk, prepare_transfer, signed, spark_invoice.clone()).await
+        }
+        TransferTarget::Lightning {
+            bolt11,
+            fee_policy,
+            completion_timeout_secs,
+            ..
+        } => {
+            bolt11::send_signed(
+                sdk,
+                prepare_transfer,
+                signed,
+                bolt11,
+                amount_sat,
+                fee_sat,
+                *fee_policy,
+                *completion_timeout_secs,
+            )
+            .await
+        }
+        TransferTarget::CoopExit {
+            address,
+            fee_quote,
+            confirmation_speed,
+        } => {
+            bitcoin_address::send_signed(
+                sdk,
+                prepare_transfer,
+                signed,
+                address,
+                amount_sat,
+                confirmation_speed,
+                fee_quote,
+            )
+            .await
+        }
+    }
+}
 
 // Top-level dispatcher for `send_payment`: routes between the convert-then-send
 // pipeline and the direct send, then emits the payment event.

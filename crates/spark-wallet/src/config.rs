@@ -6,7 +6,7 @@ use spark::{
     Network,
     operator::{OperatorConfig, OperatorPoolConfig},
     ssp::{RetryConfig, ServiceProviderConfig},
-    token::TokensConfig,
+    token::{DEFAULT_MAX_TOKEN_TX_INPUTS, TokensConfig},
     tree::LeafOptimizationOptions,
 };
 
@@ -175,6 +175,7 @@ impl SparkWalletConfig {
             expected_withdraw_bond_sats: 10_000,
             expected_withdraw_relative_block_locktime: 1_000,
             transaction_validity_duration_seconds: 180,
+            max_tx_inputs: DEFAULT_MAX_TOKEN_TX_INPUTS,
         }
     }
 }

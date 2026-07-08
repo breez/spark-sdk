@@ -7,7 +7,9 @@ use bitcoin::secp256k1::PublicKey;
 use platform_utils::tokio;
 use tracing::{debug, error, info, trace, warn};
 
-use crate::tree::{Leaves, ReservationPurpose, ReserveResult, SelectLeavesOptions, TreeNodeStatus};
+use crate::tree::{
+    LeafSelection, Leaves, ReservationPurpose, ReserveResult, SelectLeavesOptions, TreeNodeStatus,
+};
 use crate::{
     Network,
     operator::{
@@ -157,6 +159,30 @@ impl TreeService for SynchronousTreeService {
             return self
                 .perform_swap_and_update_reservation(reservation, target_amounts)
                 .await;
+        }
+    }
+
+    async fn reserve_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        self.state
+            .try_reserve_leaves_by_ids(leaf_ids, purpose)
+            .await
+    }
+
+    async fn select_leaves_for_package(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeafSelection, TreeServiceError> {
+        match self.state.try_select_leaves(target_amounts).await? {
+            LeafSelection::Exact(leaves) => Ok(LeafSelection::Exact(
+                self.renew_leaves_timelocks(leaves).await?,
+            )),
+            LeafSelection::SwapNeeded(leaves) => Ok(LeafSelection::SwapNeeded(
+                self.renew_leaves_timelocks(leaves).await?,
+            )),
         }
     }
 
@@ -625,6 +651,32 @@ impl SynchronousTreeService {
                 )))
             }
         }
+    }
+
+    async fn renew_leaves_timelocks(
+        &self,
+        leaves: Vec<TreeNode>,
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        let mut needs_renewal = false;
+        for leaf in &leaves {
+            if leaf.needs_refund_tx_renewed()? {
+                needs_renewal = true;
+                break;
+            }
+        }
+        if !needs_renewal {
+            return Ok(leaves);
+        }
+
+        let leaf_ids: Vec<TreeNodeId> = leaves.iter().map(|l| l.id.clone()).collect();
+        let reservation = self
+            .state
+            .try_reserve_leaves_by_ids(&leaf_ids, ReservationPurpose::Payment)
+            .await?;
+        let reservation = self.renew_reservation_timelocks(reservation).await?;
+        let renewed = reservation.leaves.clone();
+        self.cancel_reservation(reservation).await?;
+        Ok(renewed)
     }
 
     /// Renew timelocks for reserved leaves and handle partial failures.

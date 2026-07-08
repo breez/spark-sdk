@@ -428,6 +428,9 @@ impl SdkBuilder {
             .tokens_config
             .expected_withdraw_relative_block_locktime =
             env_config.expected_withdraw_relative_block_locktime;
+        if let Some(max_tx_inputs) = env_config.max_token_transaction_inputs {
+            config.tokens_config.max_tx_inputs = max_tx_inputs as usize;
+        }
 
         Ok(config)
     }

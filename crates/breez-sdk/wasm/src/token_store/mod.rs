@@ -283,6 +283,13 @@ impl TryFrom<WasmTokenOutputsReservation> for TokenOutputsReservation {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WasmOutpoint {
+    prev_tx_hash: String,
+    prev_tx_vout: u32,
+}
+
+#[derive(Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum WasmGetTokenOutputsFilter {
     Identifier {
@@ -513,6 +520,97 @@ impl TokenOutputStore for WasmTokenStore {
         wasm_reservation.try_into()
     }
 
+    async fn select_token_outputs(
+        &self,
+        token_identifier: &str,
+        target: ReservationTarget,
+        preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+        selection_strategy: Option<SelectionStrategy>,
+    ) -> Result<TokenOutputs, TokenOutputServiceError> {
+        let wasm_target = match target {
+            ReservationTarget::MinTotalValue(v) => WasmReservationTarget::MinTotalValue {
+                value: v.to_string(),
+            },
+            ReservationTarget::MaxOutputCount(c) => {
+                WasmReservationTarget::MaxOutputCount { value: c as u32 }
+            }
+        };
+        let target_js = serde_wasm_bindgen::to_value(&wasm_target)
+            .map_err(|e| TokenOutputServiceError::Generic(e.to_string()))?;
+
+        let preferred_js = match preferred_outputs {
+            Some(ref outputs) => {
+                let wasm_outputs: Vec<WasmTokenOutputWithPrevOut> =
+                    outputs.iter().map(Into::into).collect();
+                serde_wasm_bindgen::to_value(&wasm_outputs)
+                    .map_err(|e| TokenOutputServiceError::Generic(e.to_string()))?
+            }
+            None => JsValue::NULL,
+        };
+
+        let strategy_str = selection_strategy.map(|s| match s {
+            SelectionStrategy::SmallestFirst => "SmallestFirst",
+            SelectionStrategy::LargestFirst => "LargestFirst",
+        });
+        let strategy_js = match strategy_str {
+            Some(s) => JsValue::from_str(s),
+            None => JsValue::NULL,
+        };
+
+        let promise = self
+            .token_store
+            .select_token_outputs(
+                token_identifier.to_string(),
+                target_js,
+                preferred_js,
+                strategy_js,
+            )
+            .map_err(js_error_to_token_error)?;
+        let result = JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_token_error)?;
+        let wasm_outputs: WasmTokenOutputsDeser = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| TokenOutputServiceError::Generic(e.to_string()))?;
+        wasm_outputs.try_into()
+    }
+
+    async fn reserve_token_outputs_by_outpoints(
+        &self,
+        token_identifier: &str,
+        outpoints: &[(String, u32)],
+        purpose: TokenReservationPurpose,
+    ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
+        let purpose_str = match purpose {
+            TokenReservationPurpose::Payment => "Payment",
+            TokenReservationPurpose::Swap => "Swap",
+        };
+
+        let wasm_outpoints: Vec<WasmOutpoint> = outpoints
+            .iter()
+            .map(|(prev_tx_hash, prev_tx_vout)| WasmOutpoint {
+                prev_tx_hash: prev_tx_hash.clone(),
+                prev_tx_vout: *prev_tx_vout,
+            })
+            .collect();
+        let outpoints_js = serde_wasm_bindgen::to_value(&wasm_outpoints)
+            .map_err(|e| TokenOutputServiceError::Generic(e.to_string()))?;
+
+        let promise = self
+            .token_store
+            .reserve_token_outputs_by_outpoints(
+                token_identifier.to_string(),
+                outpoints_js,
+                purpose_str.to_string(),
+            )
+            .map_err(js_error_to_token_error)?;
+        let result = JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_token_error)?;
+        let wasm_reservation: WasmTokenOutputsReservation = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| TokenOutputServiceError::Generic(e.to_string()))?;
+        wasm_reservation.try_into()
+    }
+
     async fn cancel_reservation(
         &self,
         id: &TokenOutputsReservationId,
@@ -633,6 +731,17 @@ export interface TokenStore {
         preferredOutputs: WasmTokenOutputWithPrevOut[] | null,
         selectionStrategy: string | null
     ) => Promise<WasmTokenOutputsReservation>;
+    selectTokenOutputs: (
+        tokenIdentifier: string,
+        target: WasmReservationTarget,
+        preferredOutputs: WasmTokenOutputWithPrevOut[] | null,
+        selectionStrategy: string | null
+    ) => Promise<WasmTokenOutputs>;
+    reserveTokenOutputsByOutpoints: (
+        tokenIdentifier: string,
+        outpoints: { prevTxHash: string; prevTxVout: number }[],
+        purpose: string
+    ) => Promise<WasmTokenOutputsReservation>;
     cancelReservation: (id: string) => Promise<void>;
     finalizeReservation: (id: string) => Promise<void>;
     now: () => Promise<number>;
@@ -674,6 +783,23 @@ extern "C" {
         purpose: String,
         preferred_outputs: JsValue,
         selection_strategy: JsValue,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = selectTokenOutputs, catch)]
+    pub fn select_token_outputs(
+        this: &TokenStoreJs,
+        token_identifier: String,
+        target: JsValue,
+        preferred_outputs: JsValue,
+        selection_strategy: JsValue,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = reserveTokenOutputsByOutpoints, catch)]
+    pub fn reserve_token_outputs_by_outpoints(
+        this: &TokenStoreJs,
+        token_identifier: String,
+        outpoints: JsValue,
+        purpose: String,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = cancelReservation, catch)]

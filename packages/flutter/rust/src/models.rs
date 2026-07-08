@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 pub use breez_sdk_spark::passkey::*;
+pub use breez_sdk_spark::signer::*;
 pub use breez_sdk_spark::sync_storage::*;
 pub use breez_sdk_spark::*;
 use flutter_rust_bridge::frb;
@@ -61,6 +62,7 @@ pub struct _SparkConfig {
     pub ssp_config: SparkSspConfig,
     pub expected_withdraw_bond_sats: u64,
     pub expected_withdraw_relative_block_locktime: u64,
+    pub max_token_transaction_inputs: Option<u32>,
 }
 
 #[frb(mirror(SparkSigningOperator))]
@@ -452,7 +454,9 @@ pub struct _PrepareLnurlPayResponse {
 
 #[frb(mirror(PaymentRequest))]
 pub enum _PaymentRequest {
-    Input { input: String },
+    Input {
+        input: String,
+    },
     CrossChain {
         address: String,
         route: CrossChainRoutePair,
@@ -465,6 +469,168 @@ pub enum _PaymentRequest {
 pub enum _CrossChainProvider {
     Orchestra,
     Boltz,
+}
+
+#[frb(mirror(ExternalTreeNodeId))]
+pub struct _ExternalTreeNodeId {
+    pub id: String,
+}
+
+#[frb(mirror(ExternalIdentifier))]
+pub struct _ExternalIdentifier {
+    pub bytes: Vec<u8>,
+}
+
+#[frb(mirror(EcdsaSignatureBytes))]
+pub struct _EcdsaSignatureBytes {
+    pub bytes: Vec<u8>,
+}
+
+#[frb(mirror(ExternalTransferLeafInput))]
+pub struct _ExternalTransferLeafInput {
+    pub node_id: ExternalTreeNodeId,
+    pub new_leaf_id: ExternalTreeNodeId,
+}
+
+#[frb(mirror(ExternalOperatorRecipient))]
+pub struct _ExternalOperatorRecipient {
+    pub id: u64,
+    pub identifier: ExternalIdentifier,
+    pub public_key: Vec<u8>,
+}
+
+#[frb(mirror(ExternalOperatorPackage))]
+pub struct _ExternalOperatorPackage {
+    pub operator_identifier: ExternalIdentifier,
+    pub encrypted_package: Vec<u8>,
+}
+
+#[frb(mirror(ExternalNewLeafKey))]
+pub struct _ExternalNewLeafKey {
+    pub node_id: ExternalTreeNodeId,
+    pub new_signing_public_key: Vec<u8>,
+}
+
+#[frb(mirror(ExternalPrepareTransferRequest))]
+pub struct _ExternalPrepareTransferRequest {
+    pub transfer_id: String,
+    pub receiver_public_key: Vec<u8>,
+    pub leaves: Vec<ExternalTransferLeafInput>,
+    pub operator_recipients: Vec<ExternalOperatorRecipient>,
+    pub threshold: u32,
+}
+
+#[frb(mirror(ExternalPreparedTransfer))]
+pub struct _ExternalPreparedTransfer {
+    pub operator_packages: Vec<ExternalOperatorPackage>,
+    pub new_leaf_keys: Vec<ExternalNewLeafKey>,
+    pub transfer_user_signature: EcdsaSignatureBytes,
+}
+
+#[frb(mirror(SchnorrSignatureBytes))]
+pub struct _SchnorrSignatureBytes {
+    pub bytes: Vec<u8>,
+}
+
+#[frb(mirror(ExternalTokenTransactionKind))]
+pub enum _ExternalTokenTransactionKind {
+    Freeze,
+    Partial,
+    Final,
+}
+
+#[frb(mirror(ExternalPrepareTokenTransactionRequest))]
+pub struct _ExternalPrepareTokenTransactionRequest {
+    pub kind: ExternalTokenTransactionKind,
+    pub digest: Vec<u8>,
+}
+
+#[frb(mirror(ExternalPreparedTokenTransaction))]
+pub struct _ExternalPreparedTokenTransaction {
+    pub signature: SchnorrSignatureBytes,
+}
+
+#[frb(mirror(UnsignedTransferPackage))]
+pub enum _UnsignedTransferPackage {
+    Swap {
+        prepare_transfer: ExternalPrepareTransferRequest,
+        target_amounts: Vec<u64>,
+        amount_sat: u64,
+        fee_sat: u64,
+    },
+    Transfer {
+        prepare_transfer: ExternalPrepareTransferRequest,
+        amount_sat: u64,
+        fee_sat: u64,
+        target: TransferTarget,
+    },
+    Token {
+        prepare_token_transaction: ExternalPrepareTokenTransactionRequest,
+        token_context: Vec<u8>,
+        token_identifier: String,
+        amount: u128,
+        fee: u128,
+        is_swap: bool,
+    },
+}
+
+#[frb(mirror(TransferTarget))]
+pub enum _TransferTarget {
+    Spark {
+        address: String,
+        spark_invoice: Option<String>,
+    },
+    Lightning {
+        bolt11: String,
+        lnurl_pay: Option<LnurlPayContext>,
+        fee_policy: FeePolicy,
+        completion_timeout_secs: Option<u32>,
+    },
+    CoopExit {
+        address: String,
+        fee_quote: SendOnchainFeeQuote,
+        confirmation_speed: OnchainConfirmationSpeed,
+    },
+}
+
+#[frb(mirror(LnurlPayContext))]
+pub struct _LnurlPayContext {
+    pub pay_request: LnurlPayRequestDetails,
+    pub comment: Option<String>,
+    pub success_action: Option<SuccessAction>,
+}
+
+#[frb(mirror(SignedTransferPackage))]
+pub struct _SignedTransferPackage {
+    pub unsigned: UnsignedTransferPackage,
+    pub signature: TransferSignature,
+}
+
+#[frb(mirror(TransferSignature))]
+pub enum _TransferSignature {
+    Transfer {
+        signed: ExternalPreparedTransfer,
+    },
+    Token {
+        signed: ExternalPreparedTokenTransaction,
+    },
+}
+
+#[frb(mirror(BuildTransferPackageOptions))]
+pub enum _BuildTransferPackageOptions {
+    BitcoinAddress {
+        confirmation_speed: OnchainConfirmationSpeed,
+    },
+    Bolt11Invoice {
+        prefer_spark: bool,
+        completion_timeout_secs: Option<u32>,
+    },
+}
+
+#[frb(mirror(BuildUnsignedTransferPackageRequest))]
+pub struct _BuildUnsignedTransferPackageRequest {
+    pub prepare_response: PrepareSendPaymentResponse,
+    pub options: Option<BuildTransferPackageOptions>,
 }
 
 #[frb(mirror(PrepareSendPaymentRequest))]
@@ -608,6 +774,33 @@ pub struct _SendPaymentRequest {
     pub prepare_response: PrepareSendPaymentResponse,
     pub options: Option<SendPaymentOptions>,
     pub idempotency_key: Option<String>,
+}
+
+#[frb(mirror(PublishSignedTransferPackageRequest))]
+pub struct _PublishSignedTransferPackageRequest {
+    pub signed_package: SignedTransferPackage,
+}
+
+#[frb(mirror(PublishSignedTransferPackageResponse))]
+pub enum _PublishSignedTransferPackageResponse {
+    SwapCompleted,
+    PaymentSent { payment: Payment },
+}
+
+#[frb(mirror(BuildUnsignedLnurlPayPackageRequest))]
+pub struct _BuildUnsignedLnurlPayPackageRequest {
+    pub prepare_response: PrepareLnurlPayResponse,
+}
+
+#[frb(mirror(PublishSignedLnurlPayPackageRequest))]
+pub struct _PublishSignedLnurlPayPackageRequest {
+    pub signed_package: SignedTransferPackage,
+}
+
+#[frb(mirror(PublishSignedLnurlPayResponse))]
+pub enum _PublishSignedLnurlPayResponse {
+    SwapCompleted,
+    PaymentSent { response: LnurlPayResponse },
 }
 
 #[frb(mirror(SendPaymentResponse))]

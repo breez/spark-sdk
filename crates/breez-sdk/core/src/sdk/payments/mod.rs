@@ -6,15 +6,18 @@ use crate::{
     FetchConversionLimitsResponse, GetPaymentRequest, GetPaymentResponse, WaitForPaymentIdentifier,
     error::SdkError,
     models::{
-        ListPaymentsRequest, ListPaymentsResponse, Payment, PaymentRequest,
-        PrepareSendPaymentRequest, PrepareSendPaymentResponse, ReceivePaymentRequest,
-        ReceivePaymentResponse, SendPaymentRequest, SendPaymentResponse,
+        BuildUnsignedTransferPackageRequest, ListPaymentsRequest, ListPaymentsResponse, Payment,
+        PaymentRequest, PrepareSendPaymentRequest, PrepareSendPaymentResponse,
+        PublishSignedTransferPackageRequest, PublishSignedTransferPackageResponse,
+        ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentRequest, SendPaymentResponse,
+        UnsignedTransferPackage,
     },
     utils::payments::get_payment_with_conversion_details,
 };
 
 use super::BreezSdk;
 
+pub(in crate::sdk) mod client_signing;
 pub(in crate::sdk) mod conversion;
 mod polling;
 pub(in crate::sdk) mod prepare;
@@ -86,6 +89,35 @@ impl BreezSdk {
             tracing::Span::current().record("payment_id", key);
         }
         Box::pin(send::orchestrate_send(self, request, false, None)).await
+    }
+
+    pub async fn build_unsigned_transfer_package(
+        &self,
+        request: BuildUnsignedTransferPackageRequest,
+    ) -> Result<UnsignedTransferPackage, SdkError> {
+        Box::pin(client_signing::build_unsigned_transfer_package(
+            self,
+            &request.prepare_response,
+            request.options.as_ref(),
+        ))
+        .await
+    }
+
+    #[instrument(
+        level = "info",
+        target = "breez_sdk_core::publish_signed_transfer_package",
+        skip_all
+    )]
+    pub async fn publish_signed_transfer_package(
+        &self,
+        request: PublishSignedTransferPackageRequest,
+    ) -> Result<PublishSignedTransferPackageResponse, SdkError> {
+        self.maybe_ensure_spark_private_mode_initialized().await?;
+        Box::pin(send::publish_signed_transfer_package(
+            self,
+            &request.signed_package,
+        ))
+        .await
     }
 
     pub async fn fetch_conversion_limits(

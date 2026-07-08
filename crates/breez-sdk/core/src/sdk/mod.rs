@@ -348,6 +348,7 @@ fn default_spark_config(network: Network) -> crate::models::SparkConfig {
         expected_withdraw_relative_block_locktime: wallet_config
             .tokens_config
             .expected_withdraw_relative_block_locktime,
+        max_token_transaction_inputs: None,
     }
 }
 

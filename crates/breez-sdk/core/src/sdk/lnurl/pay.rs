@@ -5,8 +5,10 @@ use breez_sdk_common::lnurl::{
 use tracing::info;
 
 use crate::{
-    ConversionEstimate, ConversionType, FeePolicy, InputType, LnurlPayInfo, LnurlPayRequest,
-    LnurlPayResponse, PrepareLnurlPayRequest, PrepareLnurlPayResponse, SendPaymentMethod,
+    ConversionEstimate, ConversionType, FeePolicy, InputType, LnurlPayContext, LnurlPayInfo,
+    LnurlPayRequest, LnurlPayRequestDetails, LnurlPayResponse, PrepareLnurlPayRequest,
+    PrepareLnurlPayResponse, PublishSignedLnurlPayResponse, SendPaymentMethod,
+    SignedTransferPackage, SuccessAction, TransferTarget, UnsignedTransferPackage,
     error::SdkError,
     events::SdkEvent,
     models::{PrepareSendPaymentResponse, SendPaymentRequest},
@@ -14,7 +16,7 @@ use crate::{
     sdk::{
         BreezSdk,
         helpers::process_success_action,
-        payments::{conversion, send, validation},
+        payments::{client_signing, conversion, send, validation},
     },
 };
 
@@ -288,7 +290,7 @@ pub(super) async fn send(
         FeePolicy::FeesExcluded
     };
 
-    let mut payment = Box::pin(send::orchestrate_send(
+    let payment = Box::pin(send::orchestrate_send(
         sdk,
         SendPaymentRequest {
             prepare_response: PrepareSendPaymentResponse {
@@ -329,23 +331,35 @@ pub(super) async fn send(
     .await?
     .payment;
 
-    let success_action = process_success_action(
-        &payment,
-        request
-            .prepare_response
-            .success_action
-            .clone()
-            .map(Into::into)
-            .as_ref(),
-    )?;
+    finalize_lnurl_pay(
+        sdk,
+        payment,
+        request.prepare_response.pay_request,
+        request.prepare_response.comment,
+        request.prepare_response.success_action,
+        true,
+    )
+    .await
+}
+
+async fn finalize_lnurl_pay(
+    sdk: &BreezSdk,
+    mut payment: crate::Payment,
+    pay_request: LnurlPayRequestDetails,
+    comment: Option<String>,
+    success_action: Option<SuccessAction>,
+    emit: bool,
+) -> Result<LnurlPayResponse, SdkError> {
+    let processed_success_action =
+        process_success_action(&payment, success_action.clone().map(Into::into).as_ref())?;
 
     let lnurl_info = LnurlPayInfo {
-        ln_address: request.prepare_response.pay_request.address,
-        comment: request.prepare_response.comment,
-        domain: Some(request.prepare_response.pay_request.domain),
-        metadata: Some(request.prepare_response.pay_request.metadata_str),
-        processed_success_action: success_action.clone().map(From::from),
-        raw_success_action: request.prepare_response.success_action,
+        ln_address: pay_request.address,
+        comment,
+        domain: Some(pay_request.domain),
+        metadata: Some(pay_request.metadata_str),
+        processed_success_action: processed_success_action.clone().map(From::from),
+        raw_success_action: success_action,
     };
     let lnurl_description = lnurl_info.extract_description();
 
@@ -369,6 +383,9 @@ pub(super) async fn send(
         }
     }
 
+    // Persist the metadata unconditionally: it is an idempotent upsert, so a
+    // replay still heals a first attempt that crashed after the payment was
+    // stored but before its LNURL metadata was persisted.
     sdk.storage
         .insert_payment_metadata(
             payment.id.clone(),
@@ -380,14 +397,110 @@ pub(super) async fn send(
         )
         .await?;
 
-    // Emit the payment with metadata already included
-    sdk.event_emitter
-        .emit(&SdkEvent::from_payment(payment.clone()))
-        .await;
+    // Only emit on a fresh send; a replay must not re-emit the success event.
+    if emit {
+        sdk.event_emitter
+            .emit(&SdkEvent::from_payment(payment.clone()))
+            .await;
+    }
     Ok(LnurlPayResponse {
         payment,
-        success_action: success_action.map(From::from),
+        success_action: processed_success_action.map(From::from),
     })
+}
+
+pub(super) async fn build_package(
+    sdk: &BreezSdk,
+    prepare_response: &PrepareLnurlPayResponse,
+) -> Result<UnsignedTransferPackage, SdkError> {
+    if prepare_response.conversion_estimate.is_some() {
+        return Err(SdkError::InvalidInput(
+            "client signing is not supported for conversion sends".to_string(),
+        ));
+    }
+
+    let receiver_amount_sats: u64 = if prepare_response.fee_policy == FeePolicy::FeesIncluded {
+        prepare_response
+            .invoice_details
+            .amount_msat
+            .ok_or_else(|| SdkError::Generic("Missing invoice amount".to_string()))?
+            / 1000
+    } else {
+        prepare_response.amount_sats
+    };
+
+    let internal = PrepareSendPaymentResponse {
+        payment_method: SendPaymentMethod::Bolt11Invoice {
+            invoice_details: prepare_response.invoice_details.clone(),
+            spark_transfer_fee_sats: None,
+            lightning_fee_sats: prepare_response.fee_sats,
+        },
+        amount: u128::from(receiver_amount_sats),
+        token_identifier: None,
+        conversion_estimate: None,
+        fee_policy: prepare_response.fee_policy,
+    };
+
+    let mut package = client_signing::build_unsigned_transfer_package(sdk, &internal, None).await?;
+    if let UnsignedTransferPackage::Transfer {
+        target: TransferTarget::Lightning { lnurl_pay, .. },
+        ..
+    } = &mut package
+    {
+        *lnurl_pay = Some(LnurlPayContext {
+            pay_request: prepare_response.pay_request.clone(),
+            comment: prepare_response.comment.clone(),
+            success_action: prepare_response.success_action.clone(),
+        });
+    }
+    Ok(package)
+}
+
+pub(super) async fn publish_signed_package(
+    sdk: &BreezSdk,
+    signed_package: SignedTransferPackage,
+) -> Result<PublishSignedLnurlPayResponse, SdkError> {
+    let context = match &signed_package.unsigned {
+        UnsignedTransferPackage::Transfer {
+            target:
+                TransferTarget::Lightning {
+                    lnurl_pay: Some(context),
+                    ..
+                },
+            ..
+        } => Some(context.clone()),
+        UnsignedTransferPackage::Swap { .. } => None,
+        _ => {
+            return Err(SdkError::InvalidInput(
+                "package does not carry LNURL pay context; \
+                 use publish_signed_transfer_package"
+                    .to_string(),
+            ));
+        }
+    };
+
+    let (res, fresh_send) = match send::publish_signed_package_inner(sdk, &signed_package).await? {
+        send::PublishOutcome::SwapCompleted => {
+            return Ok(PublishSignedLnurlPayResponse::SwapCompleted);
+        }
+        send::PublishOutcome::Sent(res) => (res, true),
+        send::PublishOutcome::Replayed(res) => (res, false),
+    };
+    let Some(context) = context else {
+        return Err(SdkError::Generic(
+            "swap package unexpectedly produced a payment".to_string(),
+        ));
+    };
+    let response = finalize_lnurl_pay(
+        sdk,
+        res.payment,
+        context.pay_request,
+        context.comment,
+        context.success_action,
+        fresh_send,
+    )
+    .await?;
+    Ok(PublishSignedLnurlPayResponse::PaymentSent { response })
 }
 
 /// Calls the LNURL pay endpoint for the given `amount_msat` and unwraps the

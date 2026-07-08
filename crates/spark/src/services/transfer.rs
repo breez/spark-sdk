@@ -31,7 +31,7 @@ use crate::{
     core::{current_sequence, enforce_timelock},
     signer::{
         ClaimLeafInput, FrostDerivation, FrostJob, OperatorRecipient, PrepareClaimRequest,
-        PrepareTransferRequest, SparkSigner, TransferLeafInput,
+        PrepareTransferRequest, PreparedTransfer, SparkSigner, TransferLeafInput,
     },
     tree::{TreeNode, TreeNodeId},
     utils::transactions::{RefundTransactions, create_refund_txs},
@@ -99,52 +99,60 @@ impl TransferService {
         transfer_id: Option<TransferId>,
         spark_invoice: Option<String>,
     ) -> Result<Transfer, ServiceError> {
-        let unwrapped_transfer_id = match &transfer_id {
-            Some(transfer_id) => transfer_id.clone(),
-            None => TransferId::generate(),
-        };
+        let recover_on_error = transfer_id.is_some();
+        let unwrapped_transfer_id = transfer_id.unwrap_or_else(TransferId::generate);
+        self.send_transfer_inner(
+            &unwrapped_transfer_id,
+            leaves,
+            receiver_id,
+            spark_invoice,
+            None,
+            recover_on_error,
+        )
+        .await
+    }
 
-        if let Some(transfer_observer) = &self.transfer_observer {
-            let identity_public_key = &self.spark_signer.get_identity_public_key().await?;
-            if identity_public_key != receiver_id {
-                let receiver_address = SparkAddress::new(*receiver_id, self.network, None);
-                let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
-                transfer_observer
-                    .before_send_transfer(
-                        &unwrapped_transfer_id,
-                        &spark_invoice
-                            .clone()
-                            .or(receiver_address.to_address_string().ok())
-                            .ok_or(ServiceError::Generic(
-                                "No pay request available".to_string(),
-                            ))?,
-                        amount_sats,
-                    )
-                    .await?;
-            }
-        }
+    async fn send_transfer_inner(
+        &self,
+        transfer_id: &TransferId,
+        leaves: Vec<TreeNode>,
+        receiver_id: &PublicKey,
+        spark_invoice: Option<String>,
+        prepared: Option<PreparedTransfer>,
+        recover_on_error: bool,
+    ) -> Result<Transfer, ServiceError> {
+        self.notify_before_send_transfer(transfer_id, receiver_id, &leaves, spark_invoice.as_ref())
+            .await?;
 
-        // build leaf key tweaks with new signing keys that we will send to the receiver
         let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(leaves);
-        let transfer_res = self
-            .send_transfer_with_key_tweaks(
-                &unwrapped_transfer_id,
-                &leaf_key_tweaks,
+        let prepared = match prepared {
+            Some(prepared) => prepared,
+            None => {
+                let request =
+                    self.build_prepare_transfer_request(transfer_id, &leaf_key_tweaks, receiver_id);
+                self.spark_signer.prepare_transfer(request).await?
+            }
+        };
+        let prepared_package = self
+            .assemble_transfer_package(&leaf_key_tweaks, receiver_id, None, None, prepared)
+            .await?;
+
+        match self
+            .start_transfer_from_package(
+                transfer_id,
                 receiver_id,
+                prepared_package.transfer_package,
                 spark_invoice,
             )
-            .await;
-        let transfer = match (&transfer_id, transfer_res) {
-            (_, Ok(t)) => t,
-            (Some(transfer_id), Err(e)) => {
-                return self
-                    .recover_transfer_on_rpc_connection_error(transfer_id, e)
-                    .await;
+            .await
+        {
+            Ok(transfer) => Ok(transfer),
+            Err(e) if recover_on_error => {
+                self.recover_transfer_on_rpc_connection_error(transfer_id, e)
+                    .await
             }
-            (None, Err(e)) => return Err(e),
-        };
-
-        Ok(transfer)
+            Err(e) => Err(e),
+        }
     }
 
     pub(crate) async fn recover_transfer_on_rpc_connection_error(
@@ -187,24 +195,69 @@ impl TransferService {
         Err(error)
     }
 
-    pub async fn send_transfer_with_key_tweaks(
+    async fn notify_before_send_transfer(
         &self,
         transfer_id: &TransferId,
-        leaf_key_tweaks: &[LeafKeyTweak],
         receiver_id: &PublicKey,
+        leaves: &[TreeNode],
+        spark_invoice: Option<&String>,
+    ) -> Result<(), ServiceError> {
+        let Some(transfer_observer) = &self.transfer_observer else {
+            return Ok(());
+        };
+        if &self.spark_signer.get_identity_public_key().await? == receiver_id {
+            return Ok(());
+        }
+        let receiver_address = SparkAddress::new(*receiver_id, self.network, None);
+        let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
+        let pay_request = spark_invoice
+            .cloned()
+            .or(receiver_address.to_address_string().ok())
+            .ok_or(ServiceError::Generic(
+                "No pay request available".to_string(),
+            ))?;
+        transfer_observer
+            .before_send_transfer(transfer_id, &pay_request, amount_sats)
+            .await?;
+        Ok(())
+    }
+
+    pub fn build_transfer_approval_request(
+        &self,
+        transfer_id: &TransferId,
+        leaves: &[TreeNode],
+        receiver_public_key: &PublicKey,
+    ) -> PrepareTransferRequest {
+        let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(leaves.to_vec());
+        self.build_prepare_transfer_request(transfer_id, &leaf_key_tweaks, receiver_public_key)
+    }
+
+    pub async fn submit_transfer_with_prepared(
+        &self,
+        transfer_id: &TransferId,
+        leaves: &[TreeNode],
+        receiver_public_key: &PublicKey,
+        prepared: PreparedTransfer,
         spark_invoice: Option<String>,
     ) -> Result<Transfer, ServiceError> {
-        let prepared_package = self
-            .prepare_transfer_package(
-                transfer_id,
-                leaf_key_tweaks,
-                receiver_id,
-                None,
-                None, // No adaptor public key for regular transfers
-            )
-            .await?;
+        self.send_transfer_inner(
+            transfer_id,
+            leaves.to_vec(),
+            receiver_public_key,
+            spark_invoice,
+            Some(prepared),
+            true,
+        )
+        .await
+    }
 
-        // Make request to start transfer
+    async fn start_transfer_from_package(
+        &self,
+        transfer_id: &TransferId,
+        receiver_id: &PublicKey,
+        transfer_package: operator_rpc::spark::TransferPackage,
+        spark_invoice: Option<String>,
+    ) -> Result<Transfer, ServiceError> {
         let start_transfer_request = operator_rpc::spark::StartTransferRequest {
             transfer_id: transfer_id.to_string(),
             owner_identity_public_key: self
@@ -214,7 +267,7 @@ impl TransferService {
                 .serialize()
                 .to_vec(),
             receiver_identity_public_key: receiver_id.serialize().to_vec(),
-            transfer_package: Some(prepared_package.transfer_package),
+            transfer_package: Some(transfer_package),
             spark_invoice: spark_invoice.unwrap_or_default(),
             ..Default::default()
         };
@@ -236,17 +289,38 @@ impl TransferService {
         transfer.try_into()
     }
 
-    pub(crate) async fn prepare_transfer_package(
+    pub(crate) fn build_prepare_transfer_request(
         &self,
         transfer_id: &TransferId,
         leaf_key_tweaks: &[LeafKeyTweak],
         receiver_public_key: &PublicKey,
+    ) -> PrepareTransferRequest {
+        PrepareTransferRequest {
+            transfer_id: transfer_id.clone(),
+            receiver_public_key: *receiver_public_key,
+            leaves: leaf_key_tweaks
+                .iter()
+                .map(|l| TransferLeafInput {
+                    node: l.node.clone(),
+                    new_leaf_id: TreeNodeId::generate(),
+                })
+                .collect(),
+            operator_recipients: self.operator_recipients(),
+            threshold: self.split_secret_threshold,
+        }
+    }
+
+    pub(crate) async fn assemble_transfer_package(
+        &self,
+        leaf_key_tweaks: &[LeafKeyTweak],
+        receiver_public_key: &PublicKey,
         payment_hash: Option<&sha256::Hash>,
         cpfp_adaptor_public_key: Option<&PublicKey>,
+        prepared: PreparedTransfer,
     ) -> Result<PreparedTransferPackage, ServiceError> {
         if leaf_key_tweaks.is_empty() {
             return Err(ServiceError::InvalidInput(
-                "prepare_transfer_package requires at least one leaf".to_string(),
+                "assemble_transfer_package requires at least one leaf".to_string(),
             ));
         }
 
@@ -291,26 +365,6 @@ impl TransferService {
             cpfp_adaptor_public_key,
         })
         .await?;
-
-        // Key-tweak / Feldman-split / ECIES / transfer-payload signing. The
-        // signer generates the new receiver key and produces the per-operator
-        // encrypted key-tweak packages plus the transfer-package signature.
-        let prepared = self
-            .spark_signer
-            .prepare_transfer(PrepareTransferRequest {
-                transfer_id: transfer_id.clone(),
-                receiver_public_key: *receiver_public_key,
-                leaves: leaf_key_tweaks
-                    .iter()
-                    .map(|l| TransferLeafInput {
-                        node: l.node.clone(),
-                        new_leaf_id: TreeNodeId::generate(),
-                    })
-                    .collect(),
-                operator_recipients: self.operator_recipients(),
-                threshold: self.split_secret_threshold,
-            })
-            .await?;
 
         let transfer_package = operator_rpc::spark::TransferPackage {
             leaves_to_send: cpfp_signed_tx
@@ -371,13 +425,38 @@ impl TransferService {
         expiry_time: Option<SystemTime>,
         cpfp_adaptor_public_key: Option<&PublicKey>,
     ) -> Result<PreparedTransferRequest, ServiceError> {
+        let request = self.build_prepare_transfer_request(transfer_id, leaves, receiver_public_key);
+        let prepared = self.spark_signer.prepare_transfer(request).await?;
+        self.assemble_transfer_request_with_prepared(
+            transfer_id,
+            leaves,
+            receiver_public_key,
+            payment_hash,
+            expiry_time,
+            cpfp_adaptor_public_key,
+            prepared,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn assemble_transfer_request_with_prepared(
+        &self,
+        transfer_id: &TransferId,
+        leaves: &[LeafKeyTweak],
+        receiver_public_key: &PublicKey,
+        payment_hash: Option<&sha256::Hash>,
+        expiry_time: Option<SystemTime>,
+        cpfp_adaptor_public_key: Option<&PublicKey>,
+        prepared: PreparedTransfer,
+    ) -> Result<PreparedTransferRequest, ServiceError> {
         let prepared_package = self
-            .prepare_transfer_package(
-                transfer_id,
+            .assemble_transfer_package(
                 leaves,
                 receiver_public_key,
                 payment_hash,
                 cpfp_adaptor_public_key,
+                prepared,
             )
             .await?;
 

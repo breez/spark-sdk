@@ -104,7 +104,8 @@ const exampleConfigureSparkConfig = () => {
       schemaEndpoint: 'graphql/spark/rc'
     },
     expectedWithdrawBondSats: BigInt(10_000),
-    expectedWithdrawRelativeBlockLocktime: BigInt(1_000)
+    expectedWithdrawRelativeBlockLocktime: BigInt(1_000),
+    maxTokenTransactionInputs: undefined
   }
   // ANCHOR_END: spark-config
   console.log('Config:', config)

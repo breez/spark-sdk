@@ -9,6 +9,7 @@ use crate::token::{
     GetTokenOutputsFilter, ReservationPurpose, ReservationTarget, SelectionStrategy,
     TokenOutputServiceError, TokenOutputStore, TokenOutputWithPrevOut, TokenOutputs,
     TokenOutputsPerStatus, TokenOutputsReservation, TokenOutputsReservationId,
+    select_token_outputs_from,
 };
 
 #[derive(Default)]
@@ -462,7 +463,7 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
             )));
         };
 
-        let mut outputs = if let Some(preferred_outputs) = preferred_outputs {
+        let outputs = if let Some(preferred_outputs) = preferred_outputs {
             let preferred_outpoints: HashSet<OutPoint> =
                 preferred_outputs.iter().map(outpoint_of).collect();
             token_outputs
@@ -474,51 +475,7 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
             token_outputs.output_vec()
         };
 
-        if let ReservationTarget::MinTotalValue(amount) = target
-            && outputs.iter().map(|o| o.output.token_amount).sum::<u128>() < amount
-        {
-            return Err(TokenOutputServiceError::InsufficientFunds);
-        }
-
-        let selected_outputs = if let ReservationTarget::MinTotalValue(amount) = target
-            && let Some(output) = outputs.iter().find(|o| o.output.token_amount == amount)
-        {
-            vec![output.clone()]
-        } else {
-            match selection_strategy {
-                None | Some(SelectionStrategy::SmallestFirst) => {
-                    outputs.sort_by_key(|o| o.output.token_amount);
-                }
-                Some(SelectionStrategy::LargestFirst) => {
-                    outputs.sort_by_key(|o| std::cmp::Reverse(o.output.token_amount));
-                }
-            }
-
-            match target {
-                ReservationTarget::MinTotalValue(amount) => {
-                    let mut selected_outputs = Vec::new();
-                    let mut remaining_amount = amount;
-                    for output in outputs {
-                        if remaining_amount == 0 {
-                            break;
-                        }
-                        selected_outputs.push(output.clone());
-                        remaining_amount =
-                            remaining_amount.saturating_sub(output.output.token_amount);
-                    }
-
-                    if remaining_amount > 0 {
-                        return Err(TokenOutputServiceError::InsufficientFunds);
-                    }
-
-                    selected_outputs
-                }
-                ReservationTarget::MaxOutputCount(count) => {
-                    outputs.truncate(count);
-                    outputs
-                }
-            }
-        };
+        let selected_outputs = select_token_outputs_from(outputs, target, selection_strategy)?;
 
         let reservation_id = Uuid::now_v7().to_string();
 
@@ -544,6 +501,129 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
             .retain(|op, _| !selected_outpoints.contains(op));
 
         // Insert the reservation (with original timestamps preserved)
+        token_outputs_state.reservations.insert(
+            reservation_id.clone(),
+            TokenOutputsEntry {
+                metadata,
+                stored_outputs: stored_selected,
+                purpose,
+            },
+        );
+
+        Ok(TokenOutputsReservation::new(
+            reservation_id,
+            reservation_token_outputs,
+        ))
+    }
+
+    async fn select_token_outputs(
+        &self,
+        token_identifier: &str,
+        target: ReservationTarget,
+        preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+        selection_strategy: Option<SelectionStrategy>,
+    ) -> Result<TokenOutputs, TokenOutputServiceError> {
+        match target {
+            ReservationTarget::MinTotalValue(amount) => {
+                if amount == 0 {
+                    return Err(TokenOutputServiceError::Generic(
+                        "Amount to reserve must be greater than zero".to_string(),
+                    ));
+                }
+            }
+            ReservationTarget::MaxOutputCount(count) => {
+                if count == 0 {
+                    return Err(TokenOutputServiceError::Generic(
+                        "Count to reserve must be greater than zero".to_string(),
+                    ));
+                }
+            }
+        }
+
+        let token_outputs_state = self.token_outputs.lock().await;
+        let Some(token_outputs) = token_outputs_state
+            .available_token_outputs
+            .get(token_identifier)
+        else {
+            return Err(TokenOutputServiceError::Generic(format!(
+                "Token outputs not found for identifier: {}",
+                token_identifier
+            )));
+        };
+
+        let outputs = if let Some(preferred_outputs) = preferred_outputs {
+            let preferred_outpoints: HashSet<OutPoint> =
+                preferred_outputs.iter().map(outpoint_of).collect();
+            token_outputs
+                .output_vec()
+                .into_iter()
+                .filter(|o| preferred_outpoints.contains(&outpoint_of(o)))
+                .collect::<Vec<_>>()
+        } else {
+            token_outputs.output_vec()
+        };
+
+        let selected_outputs = select_token_outputs_from(outputs, target, selection_strategy)?;
+        Ok(TokenOutputs {
+            metadata: token_outputs.metadata.clone(),
+            outputs: selected_outputs,
+        })
+    }
+
+    async fn reserve_token_outputs_by_outpoints(
+        &self,
+        token_identifier: &str,
+        outpoints: &[(String, u32)],
+        purpose: ReservationPurpose,
+    ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
+        if outpoints.is_empty() {
+            return Err(TokenOutputServiceError::Generic(
+                "No outpoints provided".to_string(),
+            ));
+        }
+
+        let mut token_outputs_state = self.token_outputs.lock().await;
+        let Some(token_outputs) = token_outputs_state
+            .available_token_outputs
+            .get_mut(token_identifier)
+        else {
+            return Err(TokenOutputServiceError::Generic(format!(
+                "Token outputs not found for identifier: {}",
+                token_identifier
+            )));
+        };
+
+        let wanted: HashSet<OutPoint> = outpoints.iter().cloned().collect();
+        let selected_outputs: Vec<TokenOutputWithPrevOut> = token_outputs
+            .output_vec()
+            .into_iter()
+            .filter(|o| wanted.contains(&outpoint_of(o)))
+            .collect();
+        if selected_outputs.len() != wanted.len() {
+            return Err(TokenOutputServiceError::InsufficientFunds);
+        }
+
+        let reservation_id = Uuid::now_v7().to_string();
+
+        let stored_selected: Vec<StoredTokenOutput> = selected_outputs
+            .iter()
+            .filter_map(|o| token_outputs.outputs.get(&outpoint_of(o)).cloned())
+            .collect();
+
+        let metadata = token_outputs.metadata.clone();
+        let reservation_token_outputs = TokenOutputs {
+            metadata: metadata.clone(),
+            outputs: selected_outputs.clone(),
+        };
+
+        let selected_outpoints = selected_outputs
+            .iter()
+            .map(outpoint_of)
+            .collect::<HashSet<_>>();
+        token_outputs
+            .outputs
+            .retain(|op, _| !selected_outpoints.contains(op));
+
         token_outputs_state.reservations.insert(
             reservation_id.clone(),
             TokenOutputsEntry {

@@ -44,6 +44,36 @@ const RESERVATION_TIMEOUT_SECS = 300;
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS = 5 * 60 * 1000;
 
 /**
+ * Slim projection: only (id, value) for leaves the selection might use.
+ * Includes all leaves with value <= the max target (covers exact-match + the
+ * small-leaf accumulators for the minimum-amount path) plus the single
+ * smallest leaf with a larger value (covers the minimum-amount fallback case
+ * where one larger leaf is sufficient).
+ * Params: user id, max target, user id, max target.
+ */
+const SLIM_LEAF_CANDIDATES_SQL = `SELECT id, value
+  FROM brz_tree_leaves
+  WHERE user_id = ?
+    AND status = 'Available'
+    AND is_missing_from_operators = 0
+    AND reservation_id IS NULL
+    AND (
+      value <= ?
+      OR id = (
+        SELECT id FROM (
+          SELECT id FROM brz_tree_leaves
+          WHERE user_id = ?
+            AND status = 'Available'
+            AND is_missing_from_operators = 0
+            AND reservation_id IS NULL
+            AND value > ?
+          ORDER BY value
+          LIMIT 1
+        ) AS smallest_over
+      )
+    )`;
+
+/**
  * Derive a stable per-tenant lock name from a tenant identity pubkey. Hashes
  * a domain prefix together with the identity (SHA-256, first 8 bytes hex).
  */
@@ -462,30 +492,12 @@ class MysqlTreeStore {
         );
         const available = Number(totalRows[0].total);
 
-        const [slimRows] = await conn.query(
-          `SELECT id, value
-           FROM brz_tree_leaves
-           WHERE user_id = ?
-             AND status = 'Available'
-             AND is_missing_from_operators = 0
-             AND reservation_id IS NULL
-             AND (
-               value <= ?
-               OR id = (
-                 SELECT id FROM (
-                   SELECT id FROM brz_tree_leaves
-                   WHERE user_id = ?
-                     AND status = 'Available'
-                     AND is_missing_from_operators = 0
-                     AND reservation_id IS NULL
-                     AND value > ?
-                   ORDER BY value
-                   LIMIT 1
-                 ) AS smallest_over
-               )
-             )`,
-          [this.identity, maxTarget, this.identity, maxTarget]
-        );
+        const [slimRows] = await conn.query(SLIM_LEAF_CANDIDATES_SQL, [
+          this.identity,
+          maxTarget,
+          this.identity,
+          maxTarget,
+        ]);
 
         const slimLeaves = slimRows.map((r) => ({
           id: r.id,
@@ -574,6 +586,86 @@ class MysqlTreeStore {
       if (error instanceof TreeStoreError) throw error;
       throw new TreeStoreError(
         `Failed to try reserve leaves: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  async trySelectLeaves(targetAmounts) {
+    try {
+      const targetAmount = targetAmounts ? this._totalSats(targetAmounts) : 0;
+      const maxTarget = this._maxTargetForPrefilter(targetAmounts);
+
+      return await this._withTransaction(async (conn) => {
+        const [slimRows] = await conn.query(SLIM_LEAF_CANDIDATES_SQL, [
+          this.identity,
+          maxTarget,
+          this.identity,
+          maxTarget,
+        ]);
+
+        const slimLeaves = slimRows.map((r) => ({
+          id: r.id,
+          value: Number(r.value),
+        }));
+
+        const selected = this._selectLeavesByTargetAmounts(slimLeaves, targetAmounts);
+        if (selected !== null && selected.length > 0) {
+          const fullLeaves = await this._fetchFullLeavesByIds(
+            conn,
+            selected.map((l) => l.id)
+          );
+          return { type: "exact", leaves: fullLeaves };
+        }
+
+        const minSelected = this._selectLeavesByMinimumAmount(slimLeaves, targetAmount);
+        if (minSelected !== null) {
+          const fullLeaves = await this._fetchFullLeavesByIds(
+            conn,
+            minSelected.map((l) => l.id)
+          );
+          return { type: "swapNeeded", leaves: fullLeaves };
+        }
+
+        return { type: "insufficientFunds" };
+      });
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to try select leaves: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  async tryReserveLeavesByIds(leafIds, purpose) {
+    try {
+      return await this._withWriteTransaction(async (conn) => {
+        if (!leafIds || leafIds.length === 0) {
+          throw new TreeStoreError("NonReservableLeaves");
+        }
+        // Every requested leaf must be available and unreserved; otherwise
+        // reserve nothing (the transaction rolls back).
+        const placeholders = leafIds.map(() => "?").join(", ");
+        const [availableRows] = await conn.query(
+          `SELECT id FROM brz_tree_leaves
+           WHERE user_id = ? AND id IN (${placeholders})
+             AND status = 'Available' AND is_missing_from_operators = 0
+             AND reservation_id IS NULL`,
+          [this.identity, ...leafIds]
+        );
+        if (availableRows.length !== leafIds.length) {
+          throw new TreeStoreError("NonReservableLeaves");
+        }
+        const fullLeaves = await this._fetchFullLeavesByIds(conn, leafIds);
+        const reservationId = this._generateId();
+        await this._createReservation(conn, reservationId, fullLeaves, purpose, 0);
+        return { id: reservationId, leaves: fullLeaves };
+      });
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to try reserve leaves by ids: ${error.message}`,
         error
       );
     }
@@ -682,10 +774,24 @@ class MysqlTreeStore {
     if (!ids || ids.length === 0) return [];
     const placeholders = ids.map(() => "?").join(", ");
     const [rows] = await conn.query(
-      `SELECT data FROM brz_tree_leaves WHERE user_id = ? AND id IN (${placeholders})`,
+      `SELECT id, data FROM brz_tree_leaves WHERE user_id = ? AND id IN (${placeholders})`,
       [this.identity, ...ids]
     );
-    return rows.map((r) => parseJson(r.data));
+    const byId = new Map(rows.map((r) => [r.id, r.data]));
+    const ordered = ids
+      .map((id) => {
+        const data = byId.get(id);
+        byId.delete(id);
+        return data;
+      })
+      .filter((data) => data !== undefined)
+      .map((data) => parseJson(data));
+    if (ordered.length !== ids.length) {
+      throw new TreeStoreError(
+        `Could not resolve full data for all selected leaves (wanted ${ids.length}, got ${ordered.length})`
+      );
+    }
+    return ordered;
   }
 
   _selectLeavesByTargetAmounts(leaves, targetAmounts) {

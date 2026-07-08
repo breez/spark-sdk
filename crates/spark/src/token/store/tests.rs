@@ -242,6 +242,18 @@ async fn test_reserve_token_outputs() {
 }
 
 #[async_test_all]
+async fn test_select_token_outputs() {
+    let store = InMemoryTokenOutputStore::default();
+    shared_tests::test_select_token_outputs(&store).await;
+}
+
+#[async_test_all]
+async fn test_reserve_token_outputs_by_outpoints() {
+    let store = InMemoryTokenOutputStore::default();
+    shared_tests::test_reserve_token_outputs_by_outpoints(&store).await;
+}
+
+#[async_test_all]
 async fn test_reserve_token_outputs_and_cancel() {
     let store = InMemoryTokenOutputStore::default();
     shared_tests::test_reserve_token_outputs_and_cancel(&store).await;

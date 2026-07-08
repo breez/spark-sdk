@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,9 +10,9 @@ use tracing::{info, trace, warn};
 use uuid::Uuid;
 
 use crate::tree::{
-    Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
-    TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore,
-    select_helper,
+    LeafSelection, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose,
+    ReserveResult, TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError,
+    TreeStore, select_helper,
 };
 
 /// Default maximum number of concurrent reservations allowed.
@@ -112,6 +112,16 @@ enum StoreCommand {
         reserved_leaves: Vec<TreeNode>,
         change_leaves: Vec<TreeNode>,
         response_tx: oneshot::Sender<Result<LeavesReservation, TreeServiceError>>,
+    },
+    ReserveLeavesByIds {
+        leaf_ids: Vec<TreeNodeId>,
+        purpose: ReservationPurpose,
+        permit: OwnedSemaphorePermit,
+        response_tx: oneshot::Sender<Result<LeavesReservation, TreeServiceError>>,
+    },
+    TrySelectLeaves {
+        target_amounts: Option<TargetAmounts>,
+        response_tx: oneshot::Sender<Result<LeafSelection, TreeServiceError>>,
     },
 }
 
@@ -271,6 +281,23 @@ impl InMemoryTreeStore {
                     if result.is_ok() {
                         force_notify = true;
                     }
+                    let _ = response_tx.send(result);
+                }
+                StoreCommand::ReserveLeavesByIds {
+                    leaf_ids,
+                    purpose,
+                    permit,
+                    response_tx,
+                } => {
+                    let result =
+                        Self::process_reserve_leaves_by_ids(&mut state, &leaf_ids, purpose, permit);
+                    let _ = response_tx.send(result);
+                }
+                StoreCommand::TrySelectLeaves {
+                    target_amounts,
+                    response_tx,
+                } => {
+                    let result = Self::process_try_select_leaves(&state, target_amounts.as_ref());
                     let _ = response_tx.send(result);
                 }
             }
@@ -593,6 +620,36 @@ impl InMemoryTreeStore {
         }
     }
 
+    fn process_try_select_leaves(
+        state: &LeavesState,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeafSelection, TreeServiceError> {
+        let leaves: Vec<TreeNode> = state
+            .leaves
+            .values()
+            .filter(|stored| stored.node.status == TreeNodeStatus::Available)
+            .map(|stored| stored.node.clone())
+            .collect();
+
+        match select_helper::select_leaves_by_target_amounts(&leaves, target_amounts) {
+            Ok(target_leaves) => {
+                let selected = [
+                    target_leaves.amount_leaves,
+                    target_leaves.fee_leaves.unwrap_or_default(),
+                ]
+                .concat();
+                Ok(LeafSelection::Exact(selected))
+            }
+            Err(_) => {
+                let target_amount = target_amounts.map_or(0, |ta| ta.total_sats());
+                match select_helper::select_leaves_by_minimum_amount(&leaves, target_amount) {
+                    Ok(Some(selected)) => Ok(LeafSelection::SwapNeeded(selected)),
+                    _ => Err(TreeServiceError::InsufficientFunds),
+                }
+            }
+        }
+    }
+
     /// Cancel a reservation. The reservation entry and all of its currently-held leaves
     /// are removed; the supplied `leaves_to_keep` are inserted into the available pool
     /// with a fresh `added_at`. To release the original leaves unchanged, callers pass
@@ -782,6 +839,31 @@ impl InMemoryTreeStore {
         Ok(id)
     }
 
+    fn process_reserve_leaves_by_ids(
+        state: &mut LeavesState,
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+        permit: OwnedSemaphorePermit,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        let unique_ids: HashSet<&TreeNodeId> = leaf_ids.iter().collect();
+        if leaf_ids.is_empty() || unique_ids.len() != leaf_ids.len() {
+            return Err(TreeServiceError::NonReservableLeaves);
+        }
+        let mut selected = Vec::with_capacity(leaf_ids.len());
+        for id in leaf_ids {
+            let stored = state
+                .leaves
+                .get(id)
+                .ok_or(TreeServiceError::NonReservableLeaves)?;
+            if stored.node.status != TreeNodeStatus::Available {
+                return Err(TreeServiceError::NonReservableLeaves);
+            }
+            selected.push(stored.node.clone());
+        }
+        let id = Self::reserve_internal(state, &selected, purpose, permit, 0)?;
+        Ok(LeavesReservation::new(selected, id))
+    }
+
     /// Sends a command to the processor and returns the response.
     async fn send_command<T>(
         &self,
@@ -903,6 +985,44 @@ impl TreeStore for InMemoryTreeStore {
         .await
     }
 
+    async fn try_reserve_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        let permit = platform_utils::tokio::time::timeout(
+            self.reservation_timeout,
+            self.reservation_semaphore.clone().acquire_owned(),
+        )
+        .await
+        .map_err(|_| TreeServiceError::ResourceBusy {
+            max_concurrent: self.max_concurrent_reservations,
+            timeout: self.reservation_timeout,
+        })?
+        .map_err(|_| TreeServiceError::ProcessorShutdown)?;
+
+        let leaf_ids = leaf_ids.to_vec();
+        self.send_command(|tx| StoreCommand::ReserveLeavesByIds {
+            leaf_ids,
+            purpose,
+            permit,
+            response_tx: tx,
+        })
+        .await
+    }
+
+    async fn try_select_leaves(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeafSelection, TreeServiceError> {
+        let target_amounts = target_amounts.cloned();
+        self.send_command(|tx| StoreCommand::TrySelectLeaves {
+            target_amounts,
+            response_tx: tx,
+        })
+        .await
+    }
+
     async fn now(&self) -> Result<SystemTime, TreeServiceError> {
         Ok(SystemTime::now())
     }
@@ -977,6 +1097,26 @@ mod tests {
     #[async_test_all]
     async fn test_reserve_leaves() {
         shared_tests::test_reserve_leaves(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_reserve_leaves_by_ids() {
+        shared_tests::test_reserve_leaves_by_ids(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_reserve_leaves_by_ids_preserves_order() {
+        shared_tests::test_reserve_leaves_by_ids_preserves_order(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_reserve_leaves_by_ids_not_available() {
+        shared_tests::test_reserve_leaves_by_ids_not_available(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_try_select_leaves() {
+        shared_tests::test_try_select_leaves(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]

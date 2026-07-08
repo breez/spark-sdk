@@ -103,7 +103,8 @@ class Config {
                 schemaEndpoint = "graphql/spark/rc"
             ),
             expectedWithdrawBondSats = 10_000u,
-            expectedWithdrawRelativeBlockLocktime = 1_000u
+            expectedWithdrawRelativeBlockLocktime = 1_000u,
+            maxTokenTransactionInputs = null
         )
         // ANCHOR_END: spark-config
         println("Config: $config")

@@ -41,6 +41,35 @@ const RESERVATION_TIMEOUT_SECS = 300; // 5 minutes
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
+ * Slim projection: only (id, value) for leaves the selection might use.
+ * Includes all leaves with value <= $2 (covers exact-match + the small-leaf
+ * accumulators for the minimum-amount path) plus the single smallest leaf
+ * with value > $2 (covers the minimum-amount fallback case where one larger
+ * leaf is sufficient). $1 is the user id.
+ */
+const SLIM_LEAF_CANDIDATES_SQL = `
+  SELECT id, (data->>'value')::bigint AS value
+  FROM brz_tree_leaves
+  WHERE user_id = $1
+    AND status = 'Available'
+    AND is_missing_from_operators = FALSE
+    AND reservation_id IS NULL
+    AND (
+      (data->>'value')::bigint <= $2
+      OR id = (
+        SELECT id FROM brz_tree_leaves
+        WHERE user_id = $1
+          AND status = 'Available'
+          AND is_missing_from_operators = FALSE
+          AND reservation_id IS NULL
+          AND (data->>'value')::bigint > $2
+        ORDER BY (data->>'value')::bigint
+        LIMIT 1
+      )
+    )
+`;
+
+/**
  * Derive a stable per-tenant 64-bit advisory-lock key by hashing a domain
  * prefix together with the identity pubkey and folding the first 8 bytes of
  * the SHA-256 digest into a signed big-endian i64 — the type expected by
@@ -485,35 +514,10 @@ class PostgresTreeStore {
         );
         const available = Number(totalResult.rows[0].total);
 
-        // Slim projection: only (id, value) for leaves the selection might use.
-        // Includes all leaves with value <= maxTarget (covers exact-match + the
-        // small-leaf accumulators for the minimum-amount path) plus the single
-        // smallest leaf with value > maxTarget (covers the minimum-amount
-        // fallback case where one larger leaf is sufficient).
-        const slimResult = await client.query(
-          `
-          SELECT id, (data->>'value')::bigint AS value
-          FROM brz_tree_leaves
-          WHERE user_id = $1
-            AND status = 'Available'
-            AND is_missing_from_operators = FALSE
-            AND reservation_id IS NULL
-            AND (
-              (data->>'value')::bigint <= $2
-              OR id = (
-                SELECT id FROM brz_tree_leaves
-                WHERE user_id = $1
-                  AND status = 'Available'
-                  AND is_missing_from_operators = FALSE
-                  AND reservation_id IS NULL
-                  AND (data->>'value')::bigint > $2
-                ORDER BY (data->>'value')::bigint
-                LIMIT 1
-              )
-            )
-        `,
-          [this.identity, maxTarget]
-        );
+        const slimResult = await client.query(SLIM_LEAF_CANDIDATES_SQL, [
+          this.identity,
+          maxTarget,
+        ]);
 
         const slimLeaves = slimResult.rows.map((r) => ({
           id: r.id,
@@ -594,6 +598,87 @@ class PostgresTreeStore {
     }
   }
 
+  async trySelectLeaves(targetAmounts) {
+    try {
+      const targetAmount = targetAmounts ? this._totalSats(targetAmounts) : 0;
+      const maxTarget = this._maxTargetForPrefilter(targetAmounts);
+
+      return await this._withTransaction(async (client) => {
+        const slimResult = await client.query(SLIM_LEAF_CANDIDATES_SQL, [
+          this.identity,
+          maxTarget,
+        ]);
+
+        const slimLeaves = slimResult.rows.map((r) => ({
+          id: r.id,
+          value: Number(r.value),
+        }));
+
+        const selected = this._selectLeavesByTargetAmounts(slimLeaves, targetAmounts);
+        if (selected !== null && selected.length > 0) {
+          const fullLeaves = await this._fetchFullLeavesByIds(
+            client,
+            selected.map((l) => l.id)
+          );
+          return { type: "exact", leaves: fullLeaves };
+        }
+
+        const minSelected = this._selectLeavesByMinimumAmount(slimLeaves, targetAmount);
+        if (minSelected !== null) {
+          const fullLeaves = await this._fetchFullLeavesByIds(
+            client,
+            minSelected.map((l) => l.id)
+          );
+          return { type: "swapNeeded", leaves: fullLeaves };
+        }
+
+        return { type: "insufficientFunds" };
+      });
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to try select leaves: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  async tryReserveLeavesByIds(leafIds, purpose) {
+    try {
+      return await this._withWriteTransaction(async (client) => {
+        if (!leafIds || leafIds.length === 0) {
+          throw new TreeStoreError("NonReservableLeaves");
+        }
+        // Every requested leaf must be available and unreserved; otherwise
+        // reserve nothing (the transaction rolls back).
+        const availableResult = await client.query(
+          `
+          SELECT id FROM brz_tree_leaves
+          WHERE user_id = $1
+            AND id = ANY($2)
+            AND status = 'Available'
+            AND is_missing_from_operators = FALSE
+            AND reservation_id IS NULL
+        `,
+          [this.identity, leafIds]
+        );
+        if (availableResult.rows.length !== leafIds.length) {
+          throw new TreeStoreError("NonReservableLeaves");
+        }
+        const fullLeaves = await this._fetchFullLeavesByIds(client, leafIds);
+        const reservationId = this._generateId();
+        await this._createReservation(client, reservationId, fullLeaves, purpose, 0);
+        return { id: reservationId, leaves: fullLeaves };
+      });
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to try reserve leaves by ids: ${error.message}`,
+        error
+      );
+    }
+  }
+
   _maxTargetForPrefilter(targetAmounts) {
     if (!targetAmounts) return Number.MAX_SAFE_INTEGER;
     if (targetAmounts.type === "amountAndFee") {
@@ -612,10 +697,23 @@ class PostgresTreeStore {
   async _fetchFullLeavesByIds(client, ids) {
     if (!ids || ids.length === 0) return [];
     const result = await client.query(
-      "SELECT data FROM brz_tree_leaves WHERE user_id = $2 AND id = ANY($1)",
+      "SELECT id, data FROM brz_tree_leaves WHERE user_id = $2 AND id = ANY($1)",
       [ids, this.identity]
     );
-    return result.rows.map((r) => r.data);
+    const byId = new Map(result.rows.map((r) => [r.id, r.data]));
+    const ordered = ids
+      .map((id) => {
+        const data = byId.get(id);
+        byId.delete(id);
+        return data;
+      })
+      .filter((data) => data !== undefined);
+    if (ordered.length !== ids.length) {
+      throw new TreeStoreError(
+        `Could not resolve full data for all selected leaves (wanted ${ids.length}, got ${ordered.length})`
+      );
+    }
+    return ordered;
   }
 
   /**

@@ -19,8 +19,8 @@ use crate::services::models::{
 use crate::services::{ExitSpeed, LeafKeyTweak, Transfer, TransferId, TransferService};
 use crate::services::{ServiceError, TransferObserver};
 use crate::signer::{
-    FrostDerivation, FrostJob, OperatorRecipient, PrepareTransferRequest, SparkSigner,
-    TransferLeafInput,
+    FrostDerivation, FrostJob, OperatorRecipient, PrepareTransferRequest, PreparedTransfer,
+    SparkSigner, TransferLeafInput,
 };
 use crate::ssp::RequestCoopExitInput;
 use crate::ssp::ServiceProvider;
@@ -154,7 +154,37 @@ impl CoopExitService {
             .try_into()
     }
 
+    pub fn prepare_coop_exit(
+        &self,
+        leaves: &[TreeNode],
+        transfer_id: Option<TransferId>,
+    ) -> PrepareTransferRequest {
+        let ssp_identity_public_key = self.ssp_client.identity_public_key();
+        let transfer_id = transfer_id.unwrap_or_else(TransferId::generate);
+        self.transfer_service.build_transfer_approval_request(
+            &transfer_id,
+            leaves,
+            &ssp_identity_public_key,
+        )
+    }
+
     pub async fn coop_exit(&self, params: CoopExitParams<'_>) -> Result<Transfer, ServiceError> {
+        self.coop_exit_inner(params, None).await
+    }
+
+    pub async fn submit_coop_exit(
+        &self,
+        params: CoopExitParams<'_>,
+        approved_transfer: PreparedTransfer,
+    ) -> Result<Transfer, ServiceError> {
+        self.coop_exit_inner(params, Some(approved_transfer)).await
+    }
+
+    async fn coop_exit_inner(
+        &self,
+        params: CoopExitParams<'_>,
+        prepared: Option<PreparedTransfer>,
+    ) -> Result<Transfer, ServiceError> {
         let CoopExitParams {
             leaves,
             withdrawal_address,
@@ -247,6 +277,7 @@ impl CoopExitService {
                 coop_exit_input,
                 unwrapped_transfer_id,
                 raw_connector_transaction_bytes.clone(),
+                prepared,
             )
             .await;
         let transfer = match (&transfer_id, res) {
@@ -281,6 +312,7 @@ impl CoopExitService {
         exit_txid: Txid,
         transfer_id: TransferId,
         connector_tx: Vec<u8>,
+        prepared: Option<PreparedTransfer>,
     ) -> Result<Transfer, ServiceError> {
         debug!(
             "Submitting cooperative exit transfer for connector_txid: {connector_txid}, exit_txid: {exit_txid}",
@@ -334,22 +366,26 @@ impl CoopExitService {
 
         // 3. Key-tweak step (to the SSP receiver) + transfer-package signature
         //    via the high-level signer; assemble with the connector refunds.
-        let prepared = self
-            .spark_signer
-            .prepare_transfer(PrepareTransferRequest {
-                transfer_id: transfer_id.clone(),
-                receiver_public_key,
-                leaves: leaf_key_tweaks
-                    .iter()
-                    .map(|l| TransferLeafInput {
-                        node: l.node.clone(),
-                        new_leaf_id: TreeNodeId::generate(),
+        let prepared = match prepared {
+            Some(prepared) => prepared,
+            None => {
+                self.spark_signer
+                    .prepare_transfer(PrepareTransferRequest {
+                        transfer_id: transfer_id.clone(),
+                        receiver_public_key,
+                        leaves: leaf_key_tweaks
+                            .iter()
+                            .map(|l| TransferLeafInput {
+                                node: l.node.clone(),
+                                new_leaf_id: TreeNodeId::generate(),
+                            })
+                            .collect(),
+                        operator_recipients: self.operator_recipients(),
+                        threshold: self.transfer_service.split_secret_threshold(),
                     })
-                    .collect(),
-                operator_recipients: self.operator_recipients(),
-                threshold: self.transfer_service.split_secret_threshold(),
-            })
-            .await?;
+                    .await?
+            }
+        };
 
         let signed_package = operator_rpc::spark::TransferPackage {
             leaves_to_send: cpfp_jobs,

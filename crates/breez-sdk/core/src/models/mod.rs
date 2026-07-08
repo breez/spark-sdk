@@ -865,6 +865,10 @@ pub struct SparkConfig {
     pub expected_withdraw_bond_sats: u64,
     /// Expected relative block locktime for token withdrawals.
     pub expected_withdraw_relative_block_locktime: u64,
+    /// Cap on the inputs a single token transaction may spend. A send needing
+    /// more first consolidates the wallet's token outputs. Unset uses the SDK
+    /// default (500).
+    pub max_token_transaction_inputs: Option<u32>,
 }
 
 /// A Spark signing operator.
@@ -1360,7 +1364,7 @@ pub enum SendPaymentMethod {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendOnchainFeeQuote {
     pub id: String,
     pub expires_at: u64,
@@ -1370,7 +1374,7 @@ pub struct SendOnchainFeeQuote {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendOnchainSpeedFeeQuote {
     pub user_fee_sat: u64,
     pub l1_broadcast_fee_sat: u64,
@@ -1455,6 +1459,24 @@ pub struct LnurlPayRequest {
 pub struct LnurlPayResponse {
     pub payment: Payment,
     pub success_action: Option<SuccessActionProcessed>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct BuildUnsignedLnurlPayPackageRequest {
+    pub prepare_response: PrepareLnurlPayResponse,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PublishSignedLnurlPayPackageRequest {
+    pub signed_package: SignedTransferPackage,
+}
+
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum PublishSignedLnurlPayResponse {
+    SwapCompleted,
+    PaymentSent { response: LnurlPayResponse },
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -1544,7 +1566,7 @@ pub enum FeePolicy {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum OnchainConfirmationSpeed {
     Fast,
     Medium,
@@ -1577,6 +1599,104 @@ pub enum PaymentRequest {
         /// which itself defaults to 15 bps.
         target_overpay_bps: Option<u32>,
     },
+}
+
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum UnsignedTransferPackage {
+    Swap {
+        prepare_transfer: crate::signer::ExternalPrepareTransferRequest,
+        target_amounts: Vec<u64>,
+        amount_sat: u64,
+        fee_sat: u64,
+    },
+    Transfer {
+        prepare_transfer: crate::signer::ExternalPrepareTransferRequest,
+        amount_sat: u64,
+        fee_sat: u64,
+        target: TransferTarget,
+    },
+    Token {
+        prepare_token_transaction: crate::signer::ExternalPrepareTokenTransactionRequest,
+        token_context: Vec<u8>,
+        token_identifier: String,
+        amount: u128,
+        fee: u128,
+        /// When set, this package re-shapes the wallet's token outputs instead of
+        /// sending a payment. Publishing it returns `SwapCompleted`: rebuild the
+        /// original send from the same prepare response and submit again.
+        is_swap: bool,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum TransferTarget {
+    Spark {
+        address: String,
+        spark_invoice: Option<String>,
+    },
+    Lightning {
+        bolt11: String,
+        lnurl_pay: Option<LnurlPayContext>,
+        fee_policy: FeePolicy,
+        completion_timeout_secs: Option<u32>,
+    },
+    CoopExit {
+        address: String,
+        fee_quote: SendOnchainFeeQuote,
+        confirmation_speed: OnchainConfirmationSpeed,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct LnurlPayContext {
+    pub pay_request: LnurlPayRequestDetails,
+    pub comment: Option<String>,
+    pub success_action: Option<SuccessAction>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SignedTransferPackage {
+    pub unsigned: UnsignedTransferPackage,
+    pub signature: TransferSignature,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum TransferSignature {
+    Transfer {
+        signed: crate::signer::ExternalPreparedTransfer,
+    },
+    Token {
+        signed: crate::signer::ExternalPreparedTokenTransaction,
+    },
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum BuildTransferPackageOptions {
+    BitcoinAddress {
+        confirmation_speed: OnchainConfirmationSpeed,
+    },
+    Bolt11Invoice {
+        prefer_spark: bool,
+
+        /// If set, publishing the package waits up to this many seconds for the
+        /// payment to complete before returning it while still pending. If unset,
+        /// publishing returns immediately after initiating the payment.
+        completion_timeout_secs: Option<u32>,
+    },
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct BuildUnsignedTransferPackageRequest {
+    pub prepare_response: PrepareSendPaymentResponse,
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub options: Option<BuildTransferPackageOptions>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -1666,6 +1786,19 @@ pub struct SendPaymentRequest {
     /// The idempotency key must be a valid UUID.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub idempotency_key: Option<String>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PublishSignedTransferPackageRequest {
+    pub signed_package: SignedTransferPackage,
+}
+
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum PublishSignedTransferPackageResponse {
+    SwapCompleted,
+    PaymentSent { payment: Payment },
 }
 
 #[derive(Debug, Clone, Serialize)]
