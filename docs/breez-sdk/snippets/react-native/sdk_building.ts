@@ -81,7 +81,7 @@ const exampleWithPaymentObserver = async (builder: SdkBuilder) => {
 
 // ANCHOR: with-session-store
 class EncryptingSessionStore implements SessionStore {
-  constructor(private inner: SessionStore) {}
+  constructor (private readonly inner: SessionStore) {}
 
   getSession = async (serviceIdentityKey: string): Promise<Session> => {
     const session = await this.inner.getSession(serviceIdentityKey)

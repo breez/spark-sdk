@@ -93,9 +93,9 @@ class SdkBuilding {
 
     // `identity` is the wallet identity public key bytes, used to scope the store.
     suspend fun withSessionStore(
-        config: Config,
+        config: breez_sdk_spark.Config,
         seed: Seed,
-        identity: List<UByte>,
+        identity: ByteArray,
     ): SdkBuilder {
         // Reuse one storage backend for both the SDK storage and the session store.
         val backend = defaultStorage("./.data")
