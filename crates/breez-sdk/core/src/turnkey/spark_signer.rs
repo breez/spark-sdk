@@ -959,6 +959,7 @@ mod tests {
             network: Network::Regtest,
             account_number: Some(0),
             retry: None,
+            max_rps: None,
         };
         Arc::new(TurnkeyClient::new(&config, http).unwrap())
     }
