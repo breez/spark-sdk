@@ -9,9 +9,12 @@ use frost_secp256k1_tr::round1::SigningCommitments;
 use tracing::info;
 
 use crate::core::next_lightning_htlc_sequence;
-use crate::services::{PendingRefundSignature, RefundVariant, SignedTx, build_refund_signing_job};
-use crate::signer::{FrostJob, SignerError, SparkSigner};
-use crate::utils::frost::{derive_leaf_signing_public_key, sign_frost_batch};
+use crate::services::{
+    LeafRefundJobs, RefundJob, SignedTx, build_refund_signing_job, into_signed_tx_groups,
+    sign_leaf_refunds,
+};
+use crate::signer::{SignerError, SparkSigner};
+use crate::utils::frost::derive_leaf_signing_public_key;
 use crate::utils::htlc_transactions::{
     CreateLightningHtlcRefundTxsParams, create_lightning_htlc_refund_txs,
 };
@@ -56,8 +59,7 @@ pub async fn sign_refunds(
     // Build every FROST job up front (all local work), tagging each with what's
     // needed to rebuild its SignedTx once the batched shares return. A leaf
     // contributes up to three jobs: cpfp, direct, direct-from-cpfp.
-    let mut jobs: Vec<FrostJob> = Vec::new();
-    let mut pending: Vec<PendingRefundSignature> = Vec::new();
+    let mut leaf_jobs: Vec<LeafRefundJobs> = Vec::new();
     let secp = Secp256k1::new();
 
     for (i, leaf) in leaves.iter().enumerate() {
@@ -115,7 +117,7 @@ pub async fn sign_refunds(
 
         let signing_public_key = derive_leaf_signing_public_key(&leaf.node, &secp)?;
 
-        let (job, entry) = build_refund_job(
+        let cpfp = build_refund_job(
             leaf,
             node_tx,
             cpfp_refund_tx,
@@ -123,19 +125,16 @@ pub async fn sign_refunds(
             cpfp_signing_commitments[i].clone(),
             network,
             cpfp_adaptor_public_key,
-            RefundVariant::Cpfp,
         )?;
-        jobs.push(job);
-        pending.push(entry);
 
-        if let Some(direct_tx) = direct_tx {
+        let direct = if let Some(direct_tx) = direct_tx {
             let Some(direct_refund_tx) = direct_refund_tx else {
                 return Err(SignerError::Generic(
                     "Direct refund transaction is missing".to_string(),
                 ));
             };
 
-            let (job, entry) = build_refund_job(
+            Some(build_refund_job(
                 leaf,
                 direct_tx,
                 direct_refund_tx,
@@ -143,16 +142,15 @@ pub async fn sign_refunds(
                 direct_signing_commitments[i].clone(),
                 network,
                 None, // Direct transactions don't use adaptor signatures
-                RefundVariant::Direct,
-            )?;
-            jobs.push(job);
-            pending.push(entry);
-        }
+            )?)
+        } else {
+            None
+        };
 
         // direct_from_cpfp_refund_tx spends from the CPFP (node_tx) output, not from
         // direct_tx, so it must be signed regardless of whether direct_tx exists.
-        if let Some(direct_from_cpfp_refund_tx) = direct_from_cpfp_refund_tx {
-            let (job, entry) = build_refund_job(
+        let direct_from_cpfp = if let Some(direct_from_cpfp_refund_tx) = direct_from_cpfp_refund_tx {
+            Some(build_refund_job(
                 leaf,
                 node_tx,
                 direct_from_cpfp_refund_tx,
@@ -160,36 +158,29 @@ pub async fn sign_refunds(
                 direct_from_cpfp_signing_commitments[i].clone(),
                 network,
                 None, // Direct transactions don't use adaptor signatures
-                RefundVariant::DirectFromCpfp,
-            )?;
-            jobs.push(job);
-            pending.push(entry);
-        }
+            )?)
+        } else {
+            None
+        };
+
+        leaf_jobs.push(LeafRefundJobs {
+            cpfp,
+            direct,
+            direct_from_cpfp,
+        });
     }
 
-    // Sign every job in a single batched call. Remote-signer backends (e.g.
-    // Turnkey) collapse this into one round-trip instead of one per leaf-variant.
-    let signed = sign_frost_batch(spark_signer, jobs, pending).await?;
-
-    // Reassemble each SignedTx and route it to its variant bucket. Jobs were
-    // pushed in leaf order, so per-variant order is preserved.
-    let mut cpfp_signed_refunds = Vec::new();
-    let mut direct_signed_refunds = Vec::new();
-    let mut direct_from_cpfp_signed_refunds = Vec::new();
-    for (entry, share) in signed {
-        let variant = entry.variant;
-        let signed_tx = entry.into_signed_tx(share);
-        match variant {
-            RefundVariant::Cpfp => cpfp_signed_refunds.push(signed_tx),
-            RefundVariant::Direct => direct_signed_refunds.push(signed_tx),
-            RefundVariant::DirectFromCpfp => direct_from_cpfp_signed_refunds.push(signed_tx),
-        }
-    }
+    // Sign every leaf's jobs in one batched call, then split by variant. Remote
+    // signer backends (e.g. Turnkey) collapse this into one round-trip instead of
+    // one per leaf-variant.
+    let signed = sign_leaf_refunds(spark_signer, leaf_jobs).await?;
+    let (cpfp_signed_tx, direct_signed_tx, direct_from_cpfp_signed_tx) =
+        into_signed_tx_groups(signed);
 
     Ok(SignedRefundTransactions {
-        cpfp_signed_tx: cpfp_signed_refunds,
-        direct_signed_tx: direct_signed_refunds,
-        direct_from_cpfp_signed_tx: direct_from_cpfp_signed_refunds,
+        cpfp_signed_tx,
+        direct_signed_tx,
+        direct_from_cpfp_signed_tx,
     })
 }
 
@@ -197,7 +188,6 @@ pub async fn sign_refunds(
 /// output first. A thin wrapper over `build_refund_signing_job` that keeps the
 /// send-path call sites terse (they pass the leaf and its parent tx rather than
 /// a precomputed sighash).
-#[allow(clippy::too_many_arguments)]
 fn build_refund_job(
     leaf: &LeafKeyTweak,
     tx: &Transaction,
@@ -206,8 +196,7 @@ fn build_refund_job(
     spark_commitments: BTreeMap<Identifier, SigningCommitments>,
     network: Network,
     adaptor_public_key: Option<&PublicKey>,
-    variant: RefundVariant,
-) -> Result<(FrostJob, PendingRefundSignature), SignerError> {
+) -> Result<RefundJob, SignerError> {
     let sighash = sighash_from_tx(&refund_tx, 0, &tx.output[0])
         .map_err(|e| SignerError::Generic(e.to_string()))?;
     Ok(build_refund_signing_job(
@@ -218,7 +207,6 @@ fn build_refund_job(
         sighash.to_raw_hash().to_byte_array(),
         spark_commitments,
         adaptor_public_key,
-        variant,
         network,
     ))
 }
