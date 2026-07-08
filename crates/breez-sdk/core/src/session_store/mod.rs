@@ -16,9 +16,6 @@
 //! CachingSessionStore   ← in-memory hot path
 //!     │
 //!     ▼
-//! LegacyTokenGuard      ← hides tokens a prior version encrypted/tagged
-//!     │
-//!     ▼
 //! PostgresSessionStore | MysqlSessionStore | InMemorySessionStore
 //!     (or a SessionStore supplied via SdkBuilder::with_session_store)
 //! ```
@@ -31,7 +28,6 @@
 
 mod adapter;
 mod caching;
-mod legacy_guard;
 
 use bitcoin::secp256k1::PublicKey;
 use thiserror::Error;
@@ -39,7 +35,6 @@ use thiserror::Error;
 pub use adapter::SessionStoreAdapter;
 pub(crate) use adapter::SparkSessionStoreAdapter;
 pub(crate) use caching::CachingSessionStore;
-pub(crate) use legacy_guard::LegacyTokenGuard;
 
 #[cfg(feature = "uniffi")]
 uniffi::custom_type!(PublicKey, String, {

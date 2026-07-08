@@ -883,13 +883,12 @@ fn finalize_spark_wallet_config(
 /// caching layer. Tokens are stored as-is: the SDK applies no encryption (see
 /// [`SdkBuilder::with_session_store`] to layer your own).
 ///
-/// A [`LegacyTokenGuard`](crate::session_store::LegacyTokenGuard) sits below the
-/// cache so a token written encrypted and tag-prefixed by a prior SDK version
-/// reads as absent and is re-authenticated rather than sent verbatim.
+/// A token a server later rejects (a stale cached one, or one a prior SDK
+/// version wrote in a format this version does not recognize) self-heals: the
+/// request layer force-refreshes the session on an auth error and re-authenticates.
 fn wrap_session_store(session_store: Option<Arc<dyn SessionStore>>) -> Arc<dyn SessionStore> {
     let inner = session_store.unwrap_or_else(|| Arc::new(InMemorySessionStore::default()));
-    let guarded = Arc::new(crate::session_store::LegacyTokenGuard::new(inner));
-    Arc::new(crate::session_store::CachingSessionStore::new(guarded))
+    Arc::new(crate::session_store::CachingSessionStore::new(inner))
 }
 
 /// Builds the [`SparkWallet`] from the assembled config, signers and stores.
