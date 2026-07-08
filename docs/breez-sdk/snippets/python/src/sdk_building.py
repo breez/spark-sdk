@@ -2,10 +2,13 @@ import logging
 import typing
 from breez_sdk_spark import (
     BreezSdk,
+    Config,
     default_config,
     default_server_config,
     default_postgres_storage_config,
     default_mysql_storage_config,
+    default_session_store,
+    default_storage,
     postgres_storage,
     mysql_storage,
     Network,
@@ -15,6 +18,8 @@ from breez_sdk_spark import (
     ReceivePaymentRequest,
     SdkBuilder,
     Seed,
+    Session,
+    SessionStore,
     PaymentObserver,
     ChainApiType,
     Credentials,
@@ -88,6 +93,41 @@ async def with_payment_observer(builder: SdkBuilder):
     payment_observer = ExamplePaymentObserver()
     await builder.with_payment_observer(payment_observer=payment_observer)
 # ANCHOR_END: with-payment-observer
+
+
+# ANCHOR: with-session-store
+class EncryptingSessionStore(SessionStore):
+    def __init__(self, inner: SessionStore):
+        self.inner = inner
+
+    async def get_session(self, service_identity_key: str) -> Session:
+        session = await self.inner.get_session(service_identity_key)
+        # Decrypt session.token here before returning it.
+        return session
+
+    async def set_session(self, service_identity_key: str, session: Session) -> None:
+        # Encrypt session.token here before persisting it.
+        await self.inner.set_session(service_identity_key, session)
+
+
+# `identity` is the wallet identity public key bytes, used to scope the store.
+async def with_session_store(config: Config, seed: Seed, identity: bytes) -> SdkBuilder:
+    # Reuse one storage backend for both the SDK storage and the session store.
+    backend = default_storage(storage_dir="./.data")
+
+    # Get the session store the backend provides, then wrap it to add encryption.
+    inner = await default_session_store(
+        backend=backend,
+        network=config.network,
+        identity=identity,
+    )
+    session_store = EncryptingSessionStore(inner)
+
+    builder = SdkBuilder(config=config, seed=seed)
+    await builder.with_storage_backend(storage=backend)
+    await builder.with_session_store(session_store=session_store)
+    return builder
+# ANCHOR_END: with-session-store
 
 
 # ANCHOR: init-sdk-postgres

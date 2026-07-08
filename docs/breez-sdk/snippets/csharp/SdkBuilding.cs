@@ -82,6 +82,51 @@ namespace BreezSdkSnippets
         }
         // ANCHOR_END: with-payment-observer
 
+        // ANCHOR: with-session-store
+        class EncryptingSessionStore : SessionStore
+        {
+            private readonly SessionStore inner;
+
+            public EncryptingSessionStore(SessionStore inner)
+            {
+                this.inner = inner;
+            }
+
+            public async Task<Session> GetSession(string serviceIdentityKey)
+            {
+                var session = await inner.GetSession(serviceIdentityKey);
+                // Decrypt session.token here before returning it.
+                return session;
+            }
+
+            public async Task SetSession(string serviceIdentityKey, Session session)
+            {
+                // Encrypt session.token here before persisting it.
+                await inner.SetSession(serviceIdentityKey, session);
+            }
+        }
+
+        // `identity` is the wallet identity public key bytes, used to scope the store.
+        async Task<SdkBuilder> WithSessionStore(Config config, Seed seed, byte[] identity)
+        {
+            // Reuse one storage backend for both the SDK storage and the session store.
+            var backend = BreezSdkSparkMethods.DefaultStorage(storageDir: "./.data");
+
+            // Get the session store the backend provides, then wrap it to add encryption.
+            var inner = await BreezSdkSparkMethods.DefaultSessionStore(
+                backend: backend,
+                network: config.network,
+                identity: identity
+            );
+            var sessionStore = new EncryptingSessionStore(inner);
+
+            var builder = new SdkBuilder(config: config, seed: seed);
+            await builder.WithStorageBackend(storage: backend);
+            await builder.WithSessionStore(sessionStore: sessionStore);
+            return builder;
+        }
+        // ANCHOR_END: with-session-store
+
         async Task InitSdkPostgres()
         {
             // ANCHOR: init-sdk-postgres

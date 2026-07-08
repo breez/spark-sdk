@@ -5,7 +5,9 @@ import {
   defaultPostgresStorageConfig,
   postgresStorage,
   defaultMysqlStorageConfig,
-  mysqlStorage
+  mysqlStorage,
+  defaultStorage,
+  defaultSessionStore
 } from '@breeztech/breez-sdk-spark'
 import type {
   BreezSdk,
@@ -26,7 +28,10 @@ import type {
   UnversionedRecordChange,
   OutgoingChange,
   IncomingChange,
-  Credentials
+  Credentials,
+  SessionStore,
+  DefaultSessionStore,
+  Session
 } from '@breeztech/breez-sdk-spark'
 
 // Init stub
@@ -225,3 +230,41 @@ const exampleWithPaymentObserver = (builder: SdkBuilder): SdkBuilder => {
   return builder.withPaymentObserver(paymentObserver)
 }
 // ANCHOR_END: with-payment-observer
+
+// ANCHOR: with-session-store
+class EncryptingSessionStore implements SessionStore {
+  constructor(private inner: DefaultSessionStore) {}
+
+  getSession = async (serviceIdentityKey: string): Promise<Session> => {
+    const session = await this.inner.getSession(serviceIdentityKey)
+    // Decrypt session.token here before returning it.
+    return session
+  }
+
+  setSession = async (serviceIdentityKey: string, session: Session): Promise<void> => {
+    // Encrypt session.token here before persisting it.
+    await this.inner.setSession(serviceIdentityKey, session)
+  }
+}
+
+const exampleWithSessionStore = async (identity: string): Promise<SdkBuilder> => {
+  // Construct the seed using a mnemonic, entropy or passkey
+  const mnemonic = '<mnemonic words>'
+  const seed: Seed = { type: 'mnemonic', mnemonic, passphrase: undefined }
+
+  // Create the default config
+  const config = defaultConfig('mainnet')
+  config.apiKey = '<breez api key>'
+
+  // Get the backend's own session store, then wrap it to encrypt at rest.
+  // identity is the wallet identity public key, hex.
+  const storageConfig = defaultStorage('./.data')
+  const inner = await defaultSessionStore(storageConfig, 'mainnet', identity)
+  const sessionStore = new EncryptingSessionStore(inner)
+
+  let builder = SdkBuilder.new(config, seed)
+  builder = builder.withStorageBackend(storageConfig)
+  builder = builder.withSessionStore(sessionStore)
+  return builder
+}
+// ANCHOR_END: with-session-store
