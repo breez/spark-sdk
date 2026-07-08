@@ -685,11 +685,10 @@ impl TransferService {
             split_signing_commitments_by_variant(&signing_commitments, leaves.len())?;
 
         // Key-tweak step (decrypt incoming key, derive new key, compute tweak,
-        // Feldman-split, ECIES per operator). Run before signing the refunds: for
-        // a remote signer (e.g. Turnkey) prepare_claim returns and caches every
-        // new leaf pubkey in one activity, so the per-leaf get_public_key_for_leaf
-        // inside sign_claim_refunds is then a cache hit instead of a round-trip
-        // per incoming leaf.
+        // Feldman-split, ECIES per operator). Run before signing the refunds:
+        // prepare_claim resolves every new leaf pubkey up front, so the per-leaf
+        // get_public_key_for_leaf inside sign_claim_refunds can reuse those rather
+        // than resolving each one again.
         let claim_leaves = leaves
             .iter()
             .map(|leaf| {
@@ -788,8 +787,7 @@ impl TransferService {
         ServiceError,
     > {
         // Build every leaf-variant claim-refund FROST job up front, then sign the
-        // whole batch in one call. A per-job loop would cost one sign_frost
-        // network round-trip per leaf-variant on a remote signer.
+        // whole batch in one call.
         let mut leaf_jobs: Vec<LeafRefundJobs> = Vec::new();
         for (i, leaf) in leaves.iter().enumerate() {
             // The claim refund is signed with the receiver's new leaf key, which

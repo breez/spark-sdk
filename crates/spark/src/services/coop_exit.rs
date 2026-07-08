@@ -478,8 +478,7 @@ impl CoopExitService {
         ServiceError,
     > {
         // Build every leaf-variant connector-refund FROST job up front, then sign
-        // the whole batch in one call. A per-job loop would cost one sign_frost
-        // network round-trip per leaf-variant on a remote signer.
+        // the whole batch in one call.
         let mut leaf_jobs: Vec<LeafRefundJobs> = Vec::new();
         for (i, leaf) in leaves.iter().enumerate() {
             // The connector refund is signed with the leaf's current (owned)

@@ -47,8 +47,7 @@ pub async fn sign_signing_jobs(
     network: Network,
 ) -> Result<Vec<SignedJob>, SignerError> {
     // Build every renewal-tx FROST job up front, then sign the whole batch in one
-    // call: remote signers turn each sign_frost into a network round-trip, so a
-    // per-job loop would cost one round-trip per renewal.
+    // call.
     let mut jobs = Vec::with_capacity(signing_jobs.len());
     for (i, signing_job) in signing_jobs.iter().enumerate() {
         let sighash = sighash_from_tx(&signing_job.tx, 0, &signing_job.parent_tx_out)

@@ -171,9 +171,7 @@ pub async fn sign_refunds(
         });
     }
 
-    // Sign every leaf's jobs in one batched call, then split by variant. Remote
-    // signer backends (e.g. Turnkey) collapse this into one round-trip instead of
-    // one per leaf-variant.
+    // Sign every leaf's jobs in one batched call, then split by variant.
     let signed = sign_leaf_refunds(spark_signer, leaf_jobs).await?;
     let (cpfp_signed_tx, direct_signed_tx, direct_from_cpfp_signed_tx) =
         into_signed_tx_groups(signed);

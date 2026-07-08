@@ -210,8 +210,7 @@ struct LeafRefundShape {
 impl LeafRefundJobs {
     /// Moves this leaf's jobs and pending metadata into the shared batch buffers
     /// in field order (cpfp, then direct, then direct-from-cpfp), returning the
-    /// variant shape needed to regroup the shares. Moves rather than clones: each
-    /// job is consumed by the single `sign_frost` batch.
+    /// variant shape needed to regroup the shares.
     fn flatten_into(
         self,
         jobs: &mut Vec<FrostJob>,
@@ -262,9 +261,7 @@ fn next_signed(signed: &mut impl Iterator<Item = SignedTx>) -> Result<SignedTx, 
 /// Signs every leaf's refund jobs in one batched `sign_frost` call, then
 /// reattaches the shares. Flatten and rebuild walk the same fields in the same
 /// order, and the count is length-checked inside `sign_frost_batch`, so the
-/// single reliance on share ordering is confined here. Remote signer backends
-/// (e.g. Turnkey) collapse the whole batch into one round-trip instead of one
-/// per job.
+/// single reliance on share ordering is confined here.
 pub(crate) async fn sign_leaf_refunds(
     spark_signer: &Arc<dyn SparkSigner>,
     leaves: Vec<LeafRefundJobs>,

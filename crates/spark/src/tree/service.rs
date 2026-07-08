@@ -275,11 +275,9 @@ impl TreeService for SynchronousTreeService {
             })
             .collect();
 
-        // Fetch our signing pubkey for each Available leaf concurrently, so a
-        // remote signer resolves them in parallel instead of one blocking
-        // round-trip per leaf. A rate-limited signer (e.g. Turnkey) paces the
-        // calls internally, so no concurrency cap is imposed here. Order is
-        // preserved for the zip below.
+        // Fetch our signing pubkey for each Available leaf concurrently rather
+        // than one at a time, leaving the signer to bound its own concurrency.
+        // Order is preserved for the zip below.
         // TODO: validate each leaf once and persist the result, to skip
         // re-checking unchanged leaves on every refresh.
         let signer = &self.spark_signer;

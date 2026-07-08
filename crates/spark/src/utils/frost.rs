@@ -49,9 +49,7 @@ pub(crate) fn zip_checked<S, T>(
 }
 
 /// Signs a batch of FROST jobs in a single `sign_frost` call, pairing each
-/// returned share with its caller-side metadata (order preserved). Remote signer
-/// backends (e.g. Turnkey) collapse the whole batch into one round-trip instead
-/// of one per job.
+/// returned share with its caller-side metadata (order preserved).
 pub(crate) async fn sign_frost_batch<T>(
     spark_signer: &Arc<dyn SparkSigner>,
     jobs: Vec<FrostJob>,
