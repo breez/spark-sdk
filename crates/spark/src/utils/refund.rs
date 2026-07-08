@@ -149,7 +149,8 @@ pub async fn sign_refunds(
 
         // direct_from_cpfp_refund_tx spends from the CPFP (node_tx) output, not from
         // direct_tx, so it must be signed regardless of whether direct_tx exists.
-        let direct_from_cpfp = if let Some(direct_from_cpfp_refund_tx) = direct_from_cpfp_refund_tx {
+        let direct_from_cpfp = if let Some(direct_from_cpfp_refund_tx) = direct_from_cpfp_refund_tx
+        {
             Some(build_refund_job(
                 leaf,
                 node_tx,

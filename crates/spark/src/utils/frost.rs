@@ -29,6 +29,25 @@ pub(crate) fn derive_leaf_signing_public_key(
         .map_err(|e| SignerError::Generic(format!("failed to derive leaf signing key: {e}")))
 }
 
+/// Zips signer shares back onto their caller-side metadata one-to-one, erroring
+/// on a count mismatch instead of silently dropping the tail (a plain `zip`
+/// truncates to the shorter side, misrouting every share past the gap). This is
+/// the single length guard behind the batched signing paths, so the reliance on
+/// `sign_frost` returning one share per job in order is enforced in one place.
+pub(crate) fn zip_checked<S, T>(
+    shares: Vec<S>,
+    pending: Vec<T>,
+) -> Result<Vec<(T, S)>, SignerError> {
+    if shares.len() != pending.len() {
+        return Err(SignerError::Generic(format!(
+            "sign_frost returned {} shares, expected {}",
+            shares.len(),
+            pending.len()
+        )));
+    }
+    Ok(pending.into_iter().zip(shares).collect())
+}
+
 /// Signs a batch of FROST jobs in a single `sign_frost` call, pairing each
 /// returned share with its caller-side metadata (order preserved). Remote signer
 /// backends (e.g. Turnkey) collapse the whole batch into one round-trip instead
@@ -39,14 +58,7 @@ pub(crate) async fn sign_frost_batch<T>(
     pending: Vec<T>,
 ) -> Result<Vec<(T, FrostShareResult)>, SignerError> {
     let shares = spark_signer.sign_frost(jobs).await?;
-    if shares.len() != pending.len() {
-        return Err(SignerError::Generic(format!(
-            "sign_frost returned {} shares, expected {}",
-            shares.len(),
-            pending.len()
-        )));
-    }
-    Ok(pending.into_iter().zip(shares).collect())
+    zip_checked(shares, pending)
 }
 
 /// Builds the FROST [`SigningPackage`] for a user + statechain signing round.
@@ -209,5 +221,20 @@ mod tests {
 
         let derived = derive_leaf_signing_public_key(&node, &secp).unwrap();
         assert_eq!(derived, user_share);
+    }
+
+    /// `zip_checked` pairs shares with pending metadata one-to-one and rejects a
+    /// count mismatch rather than silently truncating: a plain `zip` would drop
+    /// the tail and misroute every share past the gap.
+    #[test]
+    fn zip_checked_pairs_equal_lengths_and_rejects_mismatch() {
+        // Equal lengths: (pending, share) pairs, order preserved.
+        let paired = zip_checked(vec!['a', 'b'], vec![1, 2]).unwrap();
+        assert_eq!(paired, vec![(1, 'a'), (2, 'b')]);
+
+        // Too few shares (a truncated signer response) errors.
+        assert!(zip_checked(vec!['a'], vec![1, 2]).is_err());
+        // Too many shares errors as well.
+        assert!(zip_checked(vec!['a', 'b', 'c'], vec![1, 2]).is_err());
     }
 }

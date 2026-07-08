@@ -22,14 +22,15 @@ use crate::core::Network;
 use crate::operator::rpc as operator_rpc;
 use crate::operator::rpc::spark::PreimageRequestRole;
 use crate::signer::{
-    EncryptedSecret, FrostDerivation, FrostJob, FrostShareResult, FrostSigningCommitmentsWithNonces,
-    SignerError, SparkSigner,
+    EncryptedSecret, FrostDerivation, FrostJob, FrostShareResult,
+    FrostSigningCommitmentsWithNonces, SignerError, SparkSigner,
 };
 use crate::ssp::BitcoinNetwork;
 use crate::token::{HashableTokenTransaction, bech32m_encode_token_id};
 use crate::token::{TokenMetadata, TokenOutput, TokenOutputWithPrevOut};
 use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId, TreeNodeStatus};
 use crate::utils::byte_padding::BytePadding;
+use crate::utils::frost::sign_frost_batch;
 
 use super::ServiceError;
 
@@ -198,35 +199,52 @@ impl PendingRefundSignature {
     }
 }
 
+/// Which optional refund variants a leaf carries. Regroups a flat, field-ordered
+/// stream of signed refunds back into per-leaf buckets, matching the order
+/// [`LeafRefundJobs::flatten_into`] emitted them.
+struct LeafRefundShape {
+    has_direct: bool,
+    has_direct_from_cpfp: bool,
+}
+
 impl LeafRefundJobs {
-    /// The leaf's FROST jobs in field order: cpfp, then direct, then
-    /// direct-from-cpfp.
-    fn jobs(&self) -> impl Iterator<Item = FrostJob> + '_ {
-        std::iter::once(self.cpfp.job.clone())
-            .chain(self.direct.as_ref().map(|r| r.job.clone()))
-            .chain(self.direct_from_cpfp.as_ref().map(|r| r.job.clone()))
+    /// Moves this leaf's jobs and pending metadata into the shared batch buffers
+    /// in field order (cpfp, then direct, then direct-from-cpfp), returning the
+    /// variant shape needed to regroup the shares. Moves rather than clones: each
+    /// job is consumed by the single `sign_frost` batch.
+    fn flatten_into(
+        self,
+        jobs: &mut Vec<FrostJob>,
+        pending: &mut Vec<PendingRefundSignature>,
+    ) -> LeafRefundShape {
+        let shape = LeafRefundShape {
+            has_direct: self.direct.is_some(),
+            has_direct_from_cpfp: self.direct_from_cpfp.is_some(),
+        };
+        for refund in std::iter::once(self.cpfp)
+            .chain(self.direct)
+            .chain(self.direct_from_cpfp)
+        {
+            jobs.push(refund.job);
+            pending.push(refund.pending);
+        }
+        shape
     }
+}
 
-    /// Number of jobs this leaf contributes (cpfp plus each present variant).
-    fn job_count(&self) -> usize {
-        1 + usize::from(self.direct.is_some()) + usize::from(self.direct_from_cpfp.is_some())
-    }
-
-    /// Pulls one share per present variant from `shares`, in the same field order
-    /// as [`Self::jobs`], and reattaches them into the signed refunds.
+impl LeafRefundShape {
+    /// Pulls one signed refund per present variant from `signed`, in the same
+    /// field order as [`LeafRefundJobs::flatten_into`].
     fn rebuild(
         self,
-        shares: &mut impl Iterator<Item = FrostShareResult>,
+        signed: &mut impl Iterator<Item = SignedTx>,
     ) -> Result<SignedLeafRefunds, SignerError> {
-        let cpfp = self.cpfp.pending.into_signed_tx(next_share(shares)?);
-        let direct = match self.direct {
-            Some(r) => Some(r.pending.into_signed_tx(next_share(shares)?)),
-            None => None,
-        };
-        let direct_from_cpfp = match self.direct_from_cpfp {
-            Some(r) => Some(r.pending.into_signed_tx(next_share(shares)?)),
-            None => None,
-        };
+        let cpfp = next_signed(signed)?;
+        let direct = self.has_direct.then(|| next_signed(signed)).transpose()?;
+        let direct_from_cpfp = self
+            .has_direct_from_cpfp
+            .then(|| next_signed(signed))
+            .transpose()?;
         Ok(SignedLeafRefunds {
             cpfp,
             direct,
@@ -235,36 +253,36 @@ impl LeafRefundJobs {
     }
 }
 
-fn next_share(
-    shares: &mut impl Iterator<Item = FrostShareResult>,
-) -> Result<FrostShareResult, SignerError> {
-    shares
+fn next_signed(signed: &mut impl Iterator<Item = SignedTx>) -> Result<SignedTx, SignerError> {
+    signed
         .next()
         .ok_or_else(|| SignerError::Generic("sign_frost returned too few shares".to_string()))
 }
 
 /// Signs every leaf's refund jobs in one batched `sign_frost` call, then
 /// reattaches the shares. Flatten and rebuild walk the same fields in the same
-/// order, so the single reliance on share ordering is confined here and
-/// length-checked. Remote signer backends (e.g. Turnkey) collapse the whole
-/// batch into one round-trip instead of one per job.
+/// order, and the count is length-checked inside `sign_frost_batch`, so the
+/// single reliance on share ordering is confined here. Remote signer backends
+/// (e.g. Turnkey) collapse the whole batch into one round-trip instead of one
+/// per job.
 pub(crate) async fn sign_leaf_refunds(
     spark_signer: &Arc<dyn SparkSigner>,
     leaves: Vec<LeafRefundJobs>,
 ) -> Result<Vec<SignedLeafRefunds>, SignerError> {
-    let jobs: Vec<FrostJob> = leaves.iter().flat_map(LeafRefundJobs::jobs).collect();
-    let shares = spark_signer.sign_frost(jobs).await?;
-    let expected: usize = leaves.iter().map(LeafRefundJobs::job_count).sum();
-    if shares.len() != expected {
-        return Err(SignerError::Generic(format!(
-            "sign_frost returned {} shares, expected {expected}",
-            shares.len(),
-        )));
-    }
-    let mut shares = shares.into_iter();
-    leaves
+    // Flatten to parallel job/pending buffers, remembering each leaf's variant
+    // shape so the flat share stream can be regrouped per leaf.
+    let mut jobs = Vec::new();
+    let mut pending = Vec::new();
+    let shapes: Vec<LeafRefundShape> = leaves
         .into_iter()
-        .map(|leaf| leaf.rebuild(&mut shares))
+        .map(|leaf| leaf.flatten_into(&mut jobs, &mut pending))
+        .collect();
+
+    let signed = sign_frost_batch(spark_signer, jobs, pending).await?;
+    let mut signed = signed.into_iter().map(|(p, share)| p.into_signed_tx(share));
+    shapes
+        .into_iter()
+        .map(|shape| shape.rebuild(&mut signed))
         .collect()
 }
 
@@ -274,8 +292,8 @@ pub(crate) fn into_signed_tx_groups(
     signed: Vec<SignedLeafRefunds>,
 ) -> (Vec<SignedTx>, Vec<SignedTx>, Vec<SignedTx>) {
     let mut cpfp = Vec::with_capacity(signed.len());
-    let mut direct = Vec::new();
-    let mut direct_from_cpfp = Vec::new();
+    let mut direct = Vec::with_capacity(signed.len());
+    let mut direct_from_cpfp = Vec::with_capacity(signed.len());
     for s in signed {
         cpfp.push(s.cpfp);
         if let Some(d) = s.direct {
