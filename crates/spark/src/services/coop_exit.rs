@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bitcoin::hashes::Hash;
-use bitcoin::secp256k1::{PublicKey, Secp256k1};
+use bitcoin::secp256k1::{All, PublicKey, Secp256k1};
 use bitcoin::{Address, OutPoint, Transaction, Txid};
 use frost_secp256k1_tr::Identifier;
 use platform_utils::time::SystemTime;
@@ -108,6 +108,7 @@ pub struct CoopExitService {
     network: Network,
     spark_signer: Arc<dyn SparkSigner>,
     transfer_observer: Option<Arc<dyn TransferObserver>>,
+    secp: Secp256k1<All>,
 }
 
 impl CoopExitService {
@@ -126,6 +127,7 @@ impl CoopExitService {
             network,
             spark_signer,
             transfer_observer,
+            secp: Secp256k1::new(),
         }
     }
 
@@ -480,12 +482,12 @@ impl CoopExitService {
         // network round-trip per leaf-variant on a remote signer.
         let mut jobs = Vec::new();
         let mut pending = Vec::new();
-        let secp = Secp256k1::new();
         for (i, leaf) in leaves.iter().enumerate() {
             // The connector refund is signed with the leaf's current (owned)
             // derived key, recovered locally from the tree node instead of the
-            // signer (see derive_leaf_signing_public_key).
-            let signing_public_key = derive_leaf_signing_public_key(&leaf.node, &secp)?;
+            // signer (see derive_leaf_signing_public_key). Safe here: the derived
+            // value is the signing key, not the refund destination.
+            let signing_public_key = derive_leaf_signing_public_key(&leaf.node, &self.secp)?;
             let verifying_key = leaf.node.verifying_public_key;
             let node_tx = &leaf.node.node_tx;
             let connector_prev_out = connector_tx_parsed.output.get(i).cloned();
