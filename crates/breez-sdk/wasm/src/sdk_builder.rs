@@ -1,15 +1,15 @@
-use std::{rc::Rc, sync::Arc};
+use std::{rc::Rc, str::FromStr, sync::Arc};
 
 use crate::{
     error::{WasmError, WasmResult},
     logger::{Logger, WASM_LOGGER},
     models::{
-        Config, Credentials, Seed,
+        Config, Credentials, Network, Seed,
         chain_service::{BitcoinChainService, ChainApiType, WasmBitcoinChainService},
         fiat_service::{FiatService, WasmFiatService},
         payment_observer::{PaymentObserver, WasmPaymentObserver},
         rest_client::{RestClient, WasmRestClient},
-        session_store::WasmSessionStore,
+        session_store::{DefaultSessionStore, SessionStore, WasmSessionStore},
     },
     persist::{
         Storage, WasmStorage,
@@ -187,6 +187,25 @@ pub fn mysql_storage(config: MysqlStorageConfig) -> WasmStorageConfig {
     }
 }
 
+/// The session store the `config`'s backend provides for `identity` (the wallet
+/// identity public key, hex), as a handle to wrap in a `SessionStore` decorator
+/// and pass to `SdkBuilder.withSessionStore`, keeping the backend's persistence.
+/// A typical use is at-rest encryption, which the SDK does not apply itself.
+#[wasm_bindgen(js_name = "defaultSessionStore")]
+pub async fn default_session_store(
+    config: WasmStorageConfig,
+    network: Network,
+    identity: String,
+) -> WasmResult<DefaultSessionStore> {
+    let network: breez_sdk_spark::Network = network.into();
+    let identity_pk = PublicKey::from_str(&identity).map_err(WasmError::new)?;
+    let identity_bytes = identity_pk.serialize();
+    let backend = resolve_storage_config(config, &identity_bytes, &network).await?;
+    let inner =
+        breez_sdk_spark::default_session_store(backend, network, identity_bytes.to_vec()).await?;
+    Ok(DefaultSessionStore { inner })
+}
+
 #[wasm_bindgen]
 pub struct SdkBuilder {
     builder: breez_sdk_spark::SdkBuilder,
@@ -306,6 +325,18 @@ impl SdkBuilder {
     #[wasm_bindgen(js_name = "withStorageBackend")]
     pub fn with_storage_backend(mut self, config: WasmStorageConfig) -> Self {
         self.storage_config = Some(config);
+        self
+    }
+
+    /// Overrides the session store used to cache auth tokens, replacing the one
+    /// the backend provides. Pass any `SessionStore`: for example one that wraps
+    /// the backend's own store from `defaultSessionStore` to add at-rest
+    /// encryption, which the SDK does not apply itself.
+    #[wasm_bindgen(js_name = "withSessionStore")]
+    pub fn with_session_store(mut self, session_store: SessionStore) -> Self {
+        self.builder = self
+            .builder
+            .with_session_store(Arc::new(WasmSessionStore { session_store }));
         self
     }
 

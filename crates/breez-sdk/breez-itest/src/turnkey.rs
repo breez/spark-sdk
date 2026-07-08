@@ -27,6 +27,9 @@ pub fn turnkey_config_from_env() -> Option<TurnkeyConfig> {
         // Defaults to the network default (0 on regtest); settable to verify
         // non-default accounts against the live API.
         account_number: var("TURNKEY_ACCOUNT_NUMBER").and_then(|v| v.parse().ok()),
+        // The test harness provisions a fresh wallet per run, so there is no
+        // prior identity pubkey to seed; the signer fetches it lazily.
+        identity_public_key: None,
         retry: None,
     })
 }

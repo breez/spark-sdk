@@ -106,6 +106,7 @@ pub struct SdkBuilder {
     signer_source: SignerSource,
 
     storage: Option<Arc<dyn StorageBackend>>,
+    session_store: Option<Arc<dyn crate::session_store::SessionStore>>,
     chain_service: Option<Arc<dyn BitcoinChainService>>,
     rest_chain_service_config: Option<RestChainServiceConfig>,
     fiat_service: Option<Arc<dyn FiatService>>,
@@ -132,6 +133,7 @@ impl SdkBuilder {
                 account_number: None,
             },
             storage: None,
+            session_store: None,
             chain_service: None,
             rest_chain_service_config: None,
             fiat_service: None,
@@ -194,6 +196,7 @@ impl SdkBuilder {
                 spark: spark_signer,
             },
             storage: None,
+            session_store: None,
             chain_service: None,
             rest_chain_service_config: None,
             fiat_service: None,
@@ -251,6 +254,28 @@ impl SdkBuilder {
     /// - `storage`: The storage backend to be used.
     pub fn with_storage_backend(mut self, storage: Arc<dyn StorageBackend>) -> Self {
         self.storage = Some(storage);
+        self
+    }
+
+    /// Overrides the session store used to cache Spark operator and SSP auth
+    /// tokens, replacing the one the [`StorageBackend`] provides.
+    ///
+    /// Supply any [`SessionStore`]: a different persistence layer, or a decorator
+    /// that wraps the backend's own store (from
+    /// [`default_session_store`](crate::default_session_store)) to transform
+    /// tokens on read/write while keeping its persistence. One such transform is
+    /// at-rest encryption, which the SDK does not apply itself: wrap the store in
+    /// a [`SessionStore`] that encrypts in `set_session` and decrypts in
+    /// `get_session`.
+    ///
+    /// Arguments:
+    /// - `session_store`: The session store to use in place of the backend's.
+    #[must_use]
+    pub fn with_session_store(
+        mut self,
+        session_store: Arc<dyn crate::session_store::SessionStore>,
+    ) -> Self {
+        self.session_store = Some(session_store);
         self
     }
 
@@ -467,11 +492,14 @@ impl SdkBuilder {
         let spark_wallet_config =
             finalize_spark_wallet_config(&self.config, &user_agent, background_services_enabled)?;
         let shutdown_sender = watch::channel::<()>(()).0;
-        let session_store = wrap_session_store(
-            stores.session_store.clone(),
-            signers.ecies.clone(),
-            self.config.network,
-        )?;
+        // An explicit `with_session_store` override (adapted to the wallet's
+        // session-store trait) wins; otherwise use the store the backend
+        // resolved (or an in-memory default).
+        let override_store = self.session_store.map(|s| {
+            Arc::new(crate::session_store::SessionStoreAdapter::new(s)) as Arc<dyn SessionStore>
+        });
+        let session_store =
+            wrap_session_store(override_store.or_else(|| stores.session_store.clone()));
 
         let spark_wallet = build_spark_wallet(BuildSparkWalletParams {
             config: spark_wallet_config,
@@ -851,24 +879,17 @@ fn finalize_spark_wallet_config(
     Ok(spark_wallet_config)
 }
 
-/// Wraps the resolved session store (or an in-memory default) in the encrypting
-/// and caching layers.
+/// Wraps the resolved session store (or an in-memory default) in the in-memory
+/// caching layer. Tokens are stored as-is: the SDK applies no encryption (see
+/// [`SdkBuilder::with_session_store`] to layer your own).
 ///
-/// With an `ecies` signer the tokens are encrypted at rest, otherwise (a
-/// signing-only signer) they are stored in plaintext. Either way each token is
-/// tagged with its mode, so switching the signer's ECIES capability between runs
-/// is caught on read and forces a fresh re-authentication.
-fn wrap_session_store(
-    session_store: Option<Arc<dyn SessionStore>>,
-    ecies: Option<Arc<dyn crate::signer::EciesSigner>>,
-    network: Network,
-) -> Result<Arc<dyn SessionStore>, SdkError> {
+/// A [`LegacyTokenGuard`](crate::session_store::LegacyTokenGuard) sits below the
+/// cache so a token written encrypted and tag-prefixed by a prior SDK version
+/// reads as absent and is re-authenticated rather than sent verbatim.
+fn wrap_session_store(session_store: Option<Arc<dyn SessionStore>>) -> Arc<dyn SessionStore> {
     let inner = session_store.unwrap_or_else(|| Arc::new(InMemorySessionStore::default()));
-    let store = crate::session_store::EncryptingSessionStore::new(inner, ecies, network)
-        .map_err(|e| SdkError::Generic(format!("failed to set up the session store: {e}")))?;
-    Ok(Arc::new(crate::session_store::CachingSessionStore::new(
-        Arc::new(store),
-    )))
+    let guarded = Arc::new(crate::session_store::LegacyTokenGuard::new(inner));
+    Arc::new(crate::session_store::CachingSessionStore::new(guarded))
 }
 
 /// Builds the [`SparkWallet`] from the assembled config, signers and stores.
@@ -1376,10 +1397,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wrap_session_store_tags_tokens_by_mode() {
-        use crate::Seed;
-        use crate::signer::EciesSigner;
-        use crate::signer::breez::BreezSignerImpl;
+    async fn wrap_session_store_stores_token_verbatim() {
         use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
         use spark_wallet::{Session, SessionStore, SessionStoreError};
         use std::collections::HashMap;
@@ -1409,24 +1427,14 @@ mod tests {
                 Ok(())
             }
         }
-
-        fn seed_signer() -> Arc<dyn EciesSigner> {
-            let seed_bytes = Seed::Entropy(vec![7u8; 32]).to_bytes().unwrap();
-            let master =
-                spark_wallet::identity_master_key(&seed_bytes, Network::Regtest.into(), None)
-                    .unwrap();
-            Arc::new(BreezSignerImpl::new(master))
-        }
         fn key() -> PublicKey {
             let secp = Secp256k1::new();
             PublicKey::from_secret_key(&secp, &SecretKey::from_slice(&[3u8; 32]).unwrap())
         }
 
+        let inner = Arc::new(InspectableInner::default());
+        let store = super::wrap_session_store(Some(inner.clone()));
         let token = "bearer-token".to_string();
-
-        // Encryption off: the inner store holds the plaintext token, tagged pln:.
-        let inner = Arc::new(InspectableInner::default());
-        let store = super::wrap_session_store(Some(inner.clone()), None, Network::Regtest).unwrap();
         store
             .set_session(
                 &key(),
@@ -1437,33 +1445,12 @@ mod tests {
             )
             .await
             .unwrap();
-        let raw = inner.sessions.lock().unwrap().get(&key()).cloned().unwrap();
-        assert_eq!(
-            raw.token,
-            format!("pln:{token}"),
-            "plaintext mode must persist the token tagged with pln:"
-        );
 
-        // Encryption on: the inner store holds ciphertext, tagged enc:.
-        let inner = Arc::new(InspectableInner::default());
-        let store =
-            super::wrap_session_store(Some(inner.clone()), Some(seed_signer()), Network::Regtest)
-                .unwrap();
-        store
-            .set_session(
-                &key(),
-                Session {
-                    token: token.clone(),
-                    expiration: 1,
-                },
-            )
-            .await
-            .unwrap();
+        // The SDK applies no encryption or tagging: the inner store holds the
+        // token verbatim, and it round-trips through the caching wrapper.
         let raw = inner.sessions.lock().unwrap().get(&key()).cloned().unwrap();
-        assert!(
-            raw.token.starts_with("enc:") && raw.token != token,
-            "encrypt mode must persist ciphertext tagged with enc:"
-        );
+        assert_eq!(raw.token, token, "the SDK must store the token as-is");
+        assert_eq!(store.get_session(&key()).await.unwrap().token, token);
     }
 
     #[tokio::test]

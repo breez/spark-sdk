@@ -87,6 +87,16 @@ pub struct TurnkeyConfig {
     /// the seed-based signer, so the same wallet seed derives the same keys on
     /// either backend.
     pub account_number: Option<u32>,
+    /// The wallet's identity public key (compressed, hex), to skip fetching it
+    /// from Turnkey on init. Obtain it once from a completed connect (it is
+    /// `identity_pubkey` on the get-info response) and pass it back on later
+    /// inits: the signer then serves the identity key and its Spark address from
+    /// this value instead of the per-init Turnkey round-trips, making signer
+    /// setup network-free. Unset fetches lazily, as before. It is a stable,
+    /// non-secret, per-wallet value; a value that does not match the wallet
+    /// yields a signer that signs with the wrong identity, so only pass one read
+    /// from this same wallet.
+    pub identity_public_key: Option<String>,
     /// Retry policy for Turnkey requests. Unset uses the default policy.
     pub retry: Option<TurnkeyRetryConfig>,
 }

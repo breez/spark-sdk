@@ -11,27 +11,35 @@
 //!
 //! ```text
 //! auth providers (SO / SSP)
-//!     │ plaintext
+//!     │
 //!     ▼
 //! CachingSessionStore   ← in-memory hot path
-//!     │ plaintext
+//!     │
 //!     ▼
-//! EncryptingSessionStore ← ECIES on Session::token
-//!     │ ciphertext (base64)
+//! LegacyTokenGuard      ← hides tokens a prior version encrypted/tagged
+//!     │
 //!     ▼
 //! PostgresSessionStore | MysqlSessionStore | InMemorySessionStore
+//!     (or a SessionStore supplied via SdkBuilder::with_session_store)
 //! ```
+//!
+//! The SDK stores tokens as-is and applies no transformation. To change how
+//! tokens are persisted or to transform them (for example at-rest encryption,
+//! which the SDK does not apply itself), supply a [`SessionStore`] via
+//! `SdkBuilder::with_session_store`, wrapping the backend's own store from
+//! `default_session_store` to keep persistence.
 
 mod adapter;
 mod caching;
-mod encrypting;
+mod legacy_guard;
 
 use bitcoin::secp256k1::PublicKey;
 use thiserror::Error;
 
 pub use adapter::SessionStoreAdapter;
+pub(crate) use adapter::SparkSessionStoreAdapter;
 pub(crate) use caching::CachingSessionStore;
-pub(crate) use encrypting::EncryptingSessionStore;
+pub(crate) use legacy_guard::LegacyTokenGuard;
 
 #[cfg(feature = "uniffi")]
 uniffi::custom_type!(PublicKey, String, {
