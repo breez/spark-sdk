@@ -1,15 +1,48 @@
 
 /* Globals */
 
+/* JetBrains Mono — the design's code face, vendored in theme/fonts/
+   (OFL licensed, see theme/fonts/JETBRAINS-MONO-LICENSE.txt). */
+@font-face {
+    font-family: "JetBrains Mono";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("../fonts/JetBrainsMono-Regular.woff2") format("woff2");
+}
+@font-face {
+    font-family: "JetBrains Mono";
+    font-style: italic;
+    font-weight: 400;
+    font-display: swap;
+    src: url("../fonts/JetBrainsMono-Italic.woff2") format("woff2");
+}
+@font-face {
+    font-family: "JetBrains Mono";
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url("../fonts/JetBrainsMono-Bold.woff2") format("woff2");
+}
+
 :root {
-    --sidebar-width: 300px;
+    --sidebar-width: 312px;
     --sidebar-resize-indicator-width: 8px;
     --sidebar-resize-indicator-space: 2px;
     --page-padding: 15px;
-    --content-max-width: 750px;
-    --menu-bar-height: 50px;
-    --mono-font: "Source Code Pro", Consolas, "Ubuntu Mono", Menlo, "DejaVu Sans Mono", monospace, monospace;
+    --content-max-width: 820px;
+    --menu-bar-height: 60px;
+    /* JetBrains Mono is vendored above; Source Code Pro stays as fallback. */
+    --mono-font: "JetBrains Mono", "Source Code Pro", Consolas, "Ubuntu Mono", Menlo, "DejaVu Sans Mono", monospace, monospace;
     --code-font-size: 0.875em; /* please adjust the ace font size accordingly in editor.js */
+
+    /* Breez brand tokens (shared across every theme, used by the fixed brand header
+       and the content components in styles.css). */
+    --brz-blue: #0085FB;
+    --brz-blue-bright: #3f9cff;
+    --brz-blue-soft: #63b0ff;
+    --brz-heading: #f4f8fc;
+    --brz-header-h: 60px;
 }
 
 /* Themes */
@@ -161,46 +194,48 @@
     --copy-button-filter-hover: invert(14%) sepia(93%) saturate(4250%) hue-rotate(243deg) brightness(99%) contrast(130%);
 }
 
+/* Navy carries the Breez "Spark" design and is the default theme (see book.toml).
+   The other four themes are left untouched so the switcher stays useful. */
 .navy {
-    --bg: #00091c;
-    --fg: #d6d6d6;
+    --bg: #00091C;
+    --fg: #f4f8fc;
 
-    --sidebar-bg: #282d3f;
-    --sidebar-fg: #c8c9db;
-    --sidebar-non-existant: #505274;
-    --sidebar-active: #2b79a2;
-    --sidebar-spacer: #2d334f;
+    --sidebar-bg: #030b1e;
+    --sidebar-fg: #8798a9;
+    --sidebar-non-existant: #4a5a6b;
+    --sidebar-active: #63b0ff;
+    --sidebar-spacer: rgba(255, 255, 255, 0.06);
 
-    --scrollbar: var(--sidebar-fg);
+    --scrollbar: rgba(255, 255, 255, 0.18);
 
-    --icons: #737480;
-    --icons-hover: #b7b9cc;
+    --icons: #5f7183;
+    --icons-hover: #aebccb;
 
-    --links: #0085fb;
+    --links: #3f9cff;
 
-    --inline-code-color: #c5c8c6;
+    --inline-code-color: #8fc6ff;
 
-    --theme-popup-bg: #161923;
-    --theme-popup-border: #737480;
-    --theme-hover: #282e40;
+    --theme-popup-bg: #0a1730;
+    --theme-popup-border: rgba(255, 255, 255, 0.14);
+    --theme-hover: rgba(255, 255, 255, 0.06);
 
-    --quote-bg: hsl(226, 15%, 17%);
-    --quote-border: hsl(226, 15%, 22%);
+    --quote-bg: rgba(0, 133, 251, 0.07);
+    --quote-border: rgba(0, 133, 251, 0.5);
 
     --warning-border: #ff8e00;
 
-    --table-border-color: hsl(226, 23%, 16%);
-    --table-header-bg: hsl(226, 23%, 31%);
-    --table-alternate-bg: hsl(226, 23%, 14%);
+    --table-border-color: rgba(255, 255, 255, 0.1);
+    --table-header-bg: rgba(255, 255, 255, 0.05);
+    --table-alternate-bg: rgba(255, 255, 255, 0.02);
 
-    --searchbar-border-color: #aaa;
-    --searchbar-bg: #aeaec6;
-    --searchbar-fg: #000;
-    --searchbar-shadow-color: #aaa;
-    --searchresults-header-fg: #5f5f71;
-    --searchresults-border-color: #5c5c68;
-    --searchresults-li-bg: #242430;
-    --search-mark-bg: #a2cff5;
+    --searchbar-border-color: rgba(255, 255, 255, 0.1);
+    --searchbar-bg: rgba(255, 255, 255, 0.04);
+    --searchbar-fg: #e6edf5;
+    --searchbar-shadow-color: rgba(0, 133, 251, 0.4);
+    --searchresults-header-fg: #63b0ff;
+    --searchresults-border-color: rgba(255, 255, 255, 0.1);
+    --searchresults-li-bg: rgba(255, 255, 255, 0.03);
+    --search-mark-bg: rgba(0, 133, 251, 0.32);
 
     --color-scheme: dark;
 
