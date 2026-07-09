@@ -22,6 +22,7 @@ mod refunding_payments;
 mod sdk_building;
 mod send_payment;
 mod tokens;
+mod turnkey;
 mod user_settings;
 mod webhooks;
 

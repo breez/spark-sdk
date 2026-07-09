@@ -8,7 +8,7 @@ The External Signer feature allows you to provide custom signing logic for the S
 
 ## Using the Default External Signers
 
-The external signer interface is split into two parts: an `ExternalBreezSigner` for SDK-layer signing (LNURL-auth, sync, message signing, ECIES) and an `ExternalSparkSigner` for the Spark wallet flows (transfers, claims, FROST signing, deposits).
+The external signer interface is split into two parts: an `ExternalBreezSigner` for SDK-layer signing (LNURL-auth, sync, message signing, ECIES) and an `ExternalSparkSigner` for the Spark wallet flows (transfers, claims, FROST signing, deposits). The SDK also ships a Turnkey-backed implementation that keeps the keys in a secure enclave; see [Using Turnkey](turnkey.md).
 
 The SDK provides a convenient factory function {{#name default_external_signers}} that creates both signers from a mnemonic:
 
