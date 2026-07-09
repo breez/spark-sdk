@@ -140,6 +140,7 @@ pub fn default_mysql_storage_config(connection_string: &str) -> MysqlStorageConf
 }
 
 /// The built-in storage backend a [`SdkBuilder`] uses.
+#[derive(Clone)]
 enum WasmStorageConfigKind {
     /// File-based storage rooted at `storage_dir` (IndexedDB in the browser,
     /// SQLite under Node.js).
@@ -155,6 +156,7 @@ enum WasmStorageConfigKind {
 /// Construct it via `defaultStorage`, `postgresStorage` or `mysqlStorage` and
 /// pass it to `SdkBuilder.withStorageBackend`.
 #[wasm_bindgen]
+#[derive(Clone)]
 pub struct WasmStorageConfig {
     kind: WasmStorageConfigKind,
 }
@@ -193,14 +195,14 @@ pub fn mysql_storage(config: MysqlStorageConfig) -> WasmStorageConfig {
 /// A typical use is at-rest encryption, which the SDK does not apply itself.
 #[wasm_bindgen(js_name = "defaultSessionStore")]
 pub async fn default_session_store(
-    config: WasmStorageConfig,
+    config: &WasmStorageConfig,
     network: Network,
     identity: String,
 ) -> WasmResult<DefaultSessionStore> {
     let network: breez_sdk_spark::Network = network.into();
     let identity_pk = PublicKey::from_str(&identity).map_err(WasmError::new)?;
     let identity_bytes = identity_pk.serialize();
-    let backend = resolve_storage_config(config, &identity_bytes, &network).await?;
+    let backend = resolve_storage_config(config.clone(), &identity_bytes, &network).await?;
     let inner =
         breez_sdk_spark::default_session_store(backend, network, identity_bytes.to_vec()).await?;
     Ok(DefaultSessionStore { inner })
