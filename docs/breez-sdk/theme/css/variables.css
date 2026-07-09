@@ -26,7 +26,13 @@
 }
 
 :root {
-    --sidebar-width: 312px;
+    /* book.js's drag-resize writes --sidebar-target-width; --sidebar-width
+       must derive from it (this theme file predates mdBook's rename, which
+       is why the resize handle was dead). Clamped to a sane maximum:
+       80vw while the sidebar is an off-canvas overlay on small screens,
+       a third of the viewport once it sits inline (see media rule below). */
+    --sidebar-target-width: 312px;
+    --sidebar-width: min(var(--sidebar-target-width), 80vw);
     --sidebar-resize-indicator-width: 8px;
     --sidebar-resize-indicator-space: 2px;
     --page-padding: 15px;
@@ -35,6 +41,16 @@
     /* JetBrains Mono is vendored above; Source Code Pro stays as fallback. */
     --mono-font: "JetBrains Mono", "Source Code Pro", Consolas, "Ubuntu Mono", Menlo, "DejaVu Sans Mono", monospace, monospace;
     --code-font-size: 0.875em; /* please adjust the ace font size accordingly in editor.js */
+}
+
+/* Inline (non-overlay) sidebar: cap drag-resizing at a third of the screen. */
+@media only screen and (min-width: 1080px) {
+    :root {
+        --sidebar-width: min(var(--sidebar-target-width), 33.33vw);
+    }
+}
+
+:root {
 
     /* Breez brand tokens (shared across every theme, used by the fixed brand header
        and the content components in styles.css). */

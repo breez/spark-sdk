@@ -198,11 +198,11 @@ html.light .brand-nav a img, html.rust .brand-nav a img { filter: brightness(0) 
 .brand-controls .icon-button:hover { background: rgba(255, 255, 255, 0.06); color: var(--brz-heading); }
 html.light .brand-controls .icon-button:hover,
 html.rust .brand-controls .icon-button:hover { background: var(--theme-hover); }
-/* The mobile hamburger only makes sense when the sidebar can be toggled off-canvas. */
-.brand-controls #sidebar-toggle { display: none; }
-@media only screen and (max-width: 1079px) {
-    .brand-controls #sidebar-toggle { display: inline-flex; }
-}
+/* The sidebar toggle stays visible at every width: mdBook auto-hides the
+   sidebar when the window shrinks and does not restore it on grow, so
+   without a persistent toggle the sidebar is unrecoverable short of a
+   refresh at full size. */
+.brand-controls #sidebar-toggle { display: inline-flex; }
 .brand-controls #theme-list { top: 40px; }
 
 /* ---- Reconcile the fixed header with mdBook's layout -------------------- */
@@ -408,6 +408,20 @@ table th, table td { text-align: left; }
         right: 28px !important;
         width: 240px !important;
     }
+}
+
+/* ---- Search: align with the article column ------------------------------
+   The search wrapper sits in the full-width .page, so give it the same
+   inline geometry as #content and cap the bar + results to the article
+   width. Keeps results clear of the fixed page TOC on the right. */
+#search-wrapper { padding: 24px 5px 0; }
+#search-wrapper .searchbar-outer,
+#search-wrapper .searchresults-outer {
+    max-width: var(--content-max-width);
+    margin-inline: auto;
+}
+@media only screen and (min-width: 1440px) {
+    #search-wrapper { padding-left: 100px; padding-right: 280px; }
 }
 
 /* ---- Mobile ------------------------------------------------------------ */
