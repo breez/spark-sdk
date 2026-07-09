@@ -414,6 +414,11 @@ table th, table td { text-align: left; }
    inline geometry as #content and cap the bar + results to the article
    width. Keeps results clear of the fixed page TOC on the right. */
 #search-wrapper { padding: 24px 5px 0; }
+/* Teasers can contain very long unbroken identifiers (the snippets
+   processor concatenates every language tab's content, e.g.
+   "SdkBuilderSdkBuilder…"); break them rather than letting a result
+   expand beyond its box. */
+ul#searchresults span.teaser { word-wrap: break-word; overflow-wrap: anywhere; }
 #search-wrapper .searchbar-outer,
 #search-wrapper .searchresults-outer {
     max-width: var(--content-max-width);
