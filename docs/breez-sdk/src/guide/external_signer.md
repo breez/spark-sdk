@@ -23,6 +23,16 @@ Provide both signers to the {{#name connect_with_signer}} method instead of the 
 When using an external signer, you don't provide a seed directly to the SDK. Instead, the signer handles all cryptographic operations internally.
 </div>
 
+## Advanced Setup with Sdk Builder
+
+To compose an external signer along with the options in [customizing the SDK](./customizing.md) (custom storage backends, a shared SDK context, an account number), build the SDK with {{#name new_with_signer}} instead. It takes the same two signers and returns an {{#name SdkBuilder}} you chain the customization methods on before calling {{#name build}}:
+
+{{#tabs external_signer:sdk-builder-with-signer}}
+
+For a signer that provides signing only (see [Signers Without Local ECIES/HMAC Support](#signers-without-local-ecieshmac-support)), use {{#name new_with_signing_only_signer}} the same way:
+
+{{#tabs external_signer:sdk-builder-with-signing-only-signer}}
+
 ## Implementing a Custom Signer
 
 If you need full control over the signing process, you can implement the [ExternalBreezSigner](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/core/src/signer/external.rs) and [ExternalSparkSigner](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/core/src/signer/external_spark.rs) interfaces in your application. These interfaces define all the cryptographic operations the SDK needs.

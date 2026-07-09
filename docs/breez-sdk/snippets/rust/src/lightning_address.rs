@@ -1,6 +1,6 @@
 use breez_sdk_spark::{
-    default_config, ClaimTransferRequest, AuthorizeTransferRequest, BreezSdk,
-    CheckLightningAddressRequest, Config, GetPaymentRequest, Network, PaymentDetails,
+    default_config, AuthorizeTransferRequest, BreezSdk, CheckLightningAddressRequest,
+    ClaimTransferRequest, Config, GetPaymentRequest, Network, PaymentDetails,
     RegisterLightningAddressRequest, TransferAuthorization,
 };
 
