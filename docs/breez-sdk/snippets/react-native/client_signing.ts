@@ -44,8 +44,12 @@ const signPackage = async (
       break
     }
     case UnsignedTransferPackage_Tags.Token: {
-      const { prepareTokenTransaction, tokenIdentifier, amount, fee } = unsigned.inner
-      console.log(`Approve sending ${amount} of token ${tokenIdentifier} (fee ${fee})`)
+      const { prepareTokenTransaction, tokenIdentifier, amount, fee, isSwap } = unsigned.inner
+      if (isSwap) {
+        console.log(`Approve combining token outputs for a ${tokenIdentifier} send`)
+      } else {
+        console.log(`Approve sending ${amount} of token ${tokenIdentifier} (fee ${fee})`)
+      }
       signature = new TransferSignature.Token({
         signed: await signer.prepareTokenTransaction(prepareTokenTransaction)
       })

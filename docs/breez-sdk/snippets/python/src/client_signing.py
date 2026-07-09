@@ -54,10 +54,15 @@ async def sign_package(
             signed=await signer.prepare_transfer(unsigned.prepare_transfer)
         )
     elif isinstance(unsigned, UnsignedTransferPackage.TOKEN):
-        logging.debug(
-            f"Approve sending {unsigned.amount} of token"
-            f" {unsigned.token_identifier} (fee {unsigned.fee})"
-        )
+        if unsigned.is_swap:
+            logging.debug(
+                f"Approve combining token outputs for a {unsigned.token_identifier} send"
+            )
+        else:
+            logging.debug(
+                f"Approve sending {unsigned.amount} of token"
+                f" {unsigned.token_identifier} (fee {unsigned.fee})"
+            )
         signature = TransferSignature.TOKEN(
             signed=await signer.prepare_token_transaction(
                 unsigned.prepare_token_transaction

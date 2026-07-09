@@ -44,9 +44,14 @@ async fn sign_package(
             token_identifier,
             amount,
             fee,
+            is_swap,
             ..
         } => {
-            info!("Approve sending {amount} of token {token_identifier} (fee {fee})");
+            if *is_swap {
+                info!("Approve combining token outputs for a {token_identifier} send");
+            } else {
+                info!("Approve sending {amount} of token {token_identifier} (fee {fee})");
+            }
             TransferSignature::Token {
                 signed: signer
                     .prepare_token_transaction(prepare_token_transaction.clone())

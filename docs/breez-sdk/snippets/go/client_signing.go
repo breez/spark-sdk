@@ -49,12 +49,19 @@ func SignPackage(
 		}
 		signature = breez_sdk_spark.TransferSignatureTransfer{Signed: signed}
 	case breez_sdk_spark.UnsignedTransferPackageToken:
-		log.Printf(
-			"Approve sending %v of token %v (fee %v)",
-			pkg.Amount,
-			pkg.TokenIdentifier,
-			pkg.Fee,
-		)
+		if pkg.IsSwap {
+			log.Printf(
+				"Approve combining token outputs for a %v send",
+				pkg.TokenIdentifier,
+			)
+		} else {
+			log.Printf(
+				"Approve sending %v of token %v (fee %v)",
+				pkg.Amount,
+				pkg.TokenIdentifier,
+				pkg.Fee,
+			)
+		}
 		signed, err := signer.PrepareTokenTransaction(pkg.PrepareTokenTransaction)
 		if err != nil {
 			return breez_sdk_spark.SignedTransferPackage{}, err

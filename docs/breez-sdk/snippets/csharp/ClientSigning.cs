@@ -35,8 +35,16 @@ namespace BreezSdkSnippets
                     );
                     break;
                 case UnsignedTransferPackage.Token token:
-                    Console.WriteLine($"Approve sending {token.amount} of token " +
-                        $"{token.tokenIdentifier} (fee {token.fee})");
+                    if (token.isSwap)
+                    {
+                        Console.WriteLine("Approve combining token outputs for a " +
+                            $"{token.tokenIdentifier} send");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Approve sending {token.amount} of token " +
+                            $"{token.tokenIdentifier} (fee {token.fee})");
+                    }
                     signature = new TransferSignature.Token(
                         signed: await signer.PrepareTokenTransaction(token.prepareTokenTransaction)
                     );

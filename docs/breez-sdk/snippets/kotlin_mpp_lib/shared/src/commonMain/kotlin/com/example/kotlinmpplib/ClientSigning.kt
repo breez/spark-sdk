@@ -31,8 +31,13 @@ class ClientSigning {
                 )
             }
             is UnsignedTransferPackage.Token -> {
-                // Log.v("Breez", "Approve sending ${unsigned.amount} of token " +
-                //     "${unsigned.tokenIdentifier} (fee ${unsigned.fee})")
+                if (unsigned.isSwap) {
+                    // Log.v("Breez", "Approve combining token outputs for a " +
+                    //     "${unsigned.tokenIdentifier} send")
+                } else {
+                    // Log.v("Breez", "Approve sending ${unsigned.amount} of token " +
+                    //     "${unsigned.tokenIdentifier} (fee ${unsigned.fee})")
+                }
                 TransferSignature.Token(
                     signer.prepareTokenTransaction(unsigned.prepareTokenTransaction)
                 )

@@ -38,8 +38,12 @@ const signPackage = async (
       break
     }
     case 'token': {
-      const { prepareTokenTransaction, tokenIdentifier, amount, fee } = unsigned
-      console.log(`Approve sending ${amount} of token ${tokenIdentifier} (fee ${fee})`)
+      const { prepareTokenTransaction, tokenIdentifier, amount, fee, isSwap } = unsigned
+      if (isSwap) {
+        console.log(`Approve combining token outputs for a ${tokenIdentifier} send`)
+      } else {
+        console.log(`Approve sending ${amount} of token ${tokenIdentifier} (fee ${fee})`)
+      }
       signature = {
         type: 'token',
         signed: await signer.prepareTokenTransaction(prepareTokenTransaction)

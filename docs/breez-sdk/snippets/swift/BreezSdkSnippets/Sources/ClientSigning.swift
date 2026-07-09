@@ -27,8 +27,12 @@ func signPackage(signer: ExternalSparkSigner, unsigned: UnsignedTransferPackage)
         signature = TransferSignature.transfer(
             signed: try await signer.prepareTransfer(request: prepareTransfer)
         )
-    case let .token(prepareTokenTransaction, _, tokenIdentifier, amount, fee, _):
-        print("Approve sending \(amount) of token \(tokenIdentifier) (fee \(fee))")
+    case let .token(prepareTokenTransaction, _, tokenIdentifier, amount, fee, isSwap):
+        if isSwap {
+            print("Approve combining token outputs for a \(tokenIdentifier) send")
+        } else {
+            print("Approve sending \(amount) of token \(tokenIdentifier) (fee \(fee))")
+        }
         signature = TransferSignature.token(
             signed: try await signer.prepareTokenTransaction(request: prepareTokenTransaction)
         )

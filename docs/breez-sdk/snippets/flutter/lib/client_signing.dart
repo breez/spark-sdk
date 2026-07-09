@@ -32,8 +32,12 @@ Future<SignedTransferPackage> signPackage(
     signature = TransferSignature.transfer(
         signed: await signer.prepareTransfer(unsigned.prepareTransfer));
   } else if (unsigned is UnsignedTransferPackage_Token) {
-    print("Approve sending ${unsigned.amount} of token"
-        " ${unsigned.tokenIdentifier} (fee ${unsigned.fee})");
+    if (unsigned.isSwap) {
+      print("Approve combining token outputs for a ${unsigned.tokenIdentifier} send");
+    } else {
+      print("Approve sending ${unsigned.amount} of token"
+          " ${unsigned.tokenIdentifier} (fee ${unsigned.fee})");
+    }
     signature = TransferSignature.token(
         signed: await signer
             .prepareTokenTransaction(unsigned.prepareTokenTransaction));
