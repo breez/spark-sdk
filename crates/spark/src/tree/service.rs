@@ -275,30 +275,26 @@ impl TreeService for SynchronousTreeService {
             })
             .collect();
 
-        // A leaf enters the store only after this ownership check has passed, so
-        // one already stored with the same verifying and signing-keyshare keys is
-        // known-good and skipped. Only leaves new or changed since the last
-        // refresh need their pubkey fetched, which is a network round-trip on some
-        // signers: re-deriving every leaf each refresh would flood the signer and
-        // stall payments behind the rate limiter on large wallets. Remaining
+        // Deriving our leaf pubkey is a network round-trip on a remote signer, so
+        // re-deriving every leaf each refresh would flood the signer and stall
+        // payments behind its rate limiter on large wallets. For remote signers we
+        // skip leaves already stored with matching keys (see `VerifiedLeafKeys`),
+        // re-checking only new or changed leaves. Local signers derive cheaply, so
+        // they skip the store read and verify every available leaf. Remaining
         // fetches run concurrently, leaving the signer to bound its own
         // concurrency; order is preserved for the zip below.
-        let stored_leaves = self.state.get_leaves().await?;
-        let stored_by_id: HashMap<&TreeNodeId, &TreeNode> = stored_leaves
-            .available
-            .iter()
-            .chain(&stored_leaves.available_missing_from_operators)
-            .chain(&stored_leaves.reserved_for_payment)
-            .chain(&stored_leaves.reserved_for_swap)
-            .map(|leaf| (&leaf.id, leaf))
-            .collect();
+        let already_verified = if self.spark_signer.is_remote() {
+            self.state.get_verified_leaf_keys().await?
+        } else {
+            HashMap::new()
+        };
         let unverified_leaves: Vec<&TreeNode> = available_leaves
             .iter()
             .copied()
             .filter(|leaf| {
-                !stored_by_id.get(&leaf.id).is_some_and(|stored| {
-                    stored.verifying_public_key == leaf.verifying_public_key
-                        && stored.signing_keyshare.public_key == leaf.signing_keyshare.public_key
+                !already_verified.get(&leaf.id).is_some_and(|keys| {
+                    keys.verifying_public_key == leaf.verifying_public_key
+                        && keys.signing_keyshare_public_key == leaf.signing_keyshare.public_key
                 })
             })
             .collect();

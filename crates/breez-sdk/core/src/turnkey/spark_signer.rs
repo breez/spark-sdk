@@ -564,6 +564,10 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
         ))
     }
 
+    fn is_remote(&self) -> bool {
+        true
+    }
+
     async fn get_static_deposit_public_key(
         &self,
         index: u32,

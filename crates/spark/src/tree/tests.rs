@@ -115,6 +115,56 @@ pub async fn test_new(store: &dyn TreeStore) {
     assert!(store.get_leaves().await.unwrap().available.is_empty());
 }
 
+pub async fn test_get_verified_leaf_keys(store: &dyn TreeStore) {
+    // `create_test_tree_node` uses one key for both fields; override these so a
+    // projection that swaps or drops a field is caught. Both are valid points.
+    let verifying = "02e6642fd69bd211f93f7f1f36ca51a26a5290eb2dd1b0d8279a87bb0d480c8443";
+    let keyshare = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+
+    let mut available = create_test_tree_node("verified-available", 1000);
+    available.verifying_public_key = PublicKey::from_str(verifying).unwrap();
+    available.signing_keyshare.public_key = PublicKey::from_str(keyshare).unwrap();
+
+    // Reserved leaves were verified before storage, so they must be included.
+    let reserved = create_test_tree_node("verified-reserved", 2000);
+
+    // Non-Available and unreserved: never verified, so it must be excluded.
+    let mut not_available = create_test_tree_node("verified-not-available", 3000);
+    not_available.status = TreeNodeStatus::TransferLocked;
+
+    store
+        .add_leaves(&[available.clone(), reserved.clone(), not_available.clone()])
+        .await
+        .unwrap();
+    store
+        .try_reserve_leaves_by_ids(
+            std::slice::from_ref(&reserved.id),
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+
+    let keys = store.get_verified_leaf_keys().await.unwrap();
+
+    // The override must agree with the canonical projection of `get_leaves`.
+    let expected = crate::tree::verified_leaf_keys_from_leaves(&store.get_leaves().await.unwrap());
+    assert_eq!(keys, expected);
+
+    // Available leaf verified with the right (non-swapped) keys.
+    let got = keys.get(&available.id).expect("available leaf verified");
+    assert_eq!(
+        got.verifying_public_key,
+        PublicKey::from_str(verifying).unwrap()
+    );
+    assert_eq!(
+        got.signing_keyshare_public_key,
+        PublicKey::from_str(keyshare).unwrap()
+    );
+    // Reserved leaf included; non-Available unreserved leaf excluded.
+    assert!(keys.contains_key(&reserved.id));
+    assert!(!keys.contains_key(&not_available.id));
+}
+
 pub async fn test_add_leaves(store: &dyn TreeStore) {
     let leaves = vec![
         create_test_tree_node("node1", 100),

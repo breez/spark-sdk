@@ -1,6 +1,8 @@
 #[cfg(all(test, not(feature = "browser-tests")))]
 mod tests;
 
+use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use macros::async_trait;
@@ -8,8 +10,9 @@ use platform_utils::time::Instant;
 use platform_utils::tokio::sync::watch;
 use serde::{Deserialize, Serialize};
 use spark_wallet::{
-    LeafSelection, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose,
+    LeafSelection, Leaves, LeavesReservation, LeavesReservationId, PublicKey, ReservationPurpose,
     ReserveResult, TargetAmounts, TreeNode, TreeNodeId, TreeServiceError, TreeStore,
+    VerifiedLeafKeys,
 };
 use tracing::info;
 use wasm_bindgen::prelude::*;
@@ -232,6 +235,37 @@ impl TreeStore for WasmTreeStore {
 
         info!("WasmTreeStore::get_available_balance: {balance}, js_promise: {js_dt:?}");
         Ok(balance)
+    }
+
+    async fn get_verified_leaf_keys(
+        &self,
+    ) -> Result<HashMap<TreeNodeId, VerifiedLeafKeys>, TreeServiceError> {
+        let promise = self
+            .tree_store
+            .get_verified_leaf_keys()
+            .map_err(js_error_to_tree_error)?;
+        let result = JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_tree_error)?;
+
+        // Each row is `[id, verifyingPublicKeyHex, signingKeysharePublicKeyHex]`.
+        // Pubkeys cross the boundary as hex strings and are parsed here, sidestepping
+        // serde_wasm_bindgen's non-human-readable encoding of `PublicKey`.
+        let rows: Vec<(String, String, String)> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
+        let mut keys = HashMap::with_capacity(rows.len());
+        for (id, verifying, keyshare) in rows {
+            keys.insert(
+                TreeNodeId::from_str(&id).map_err(TreeServiceError::Generic)?,
+                VerifiedLeafKeys {
+                    verifying_public_key: PublicKey::from_str(&verifying)
+                        .map_err(|e| TreeServiceError::Generic(e.to_string()))?,
+                    signing_keyshare_public_key: PublicKey::from_str(&keyshare)
+                        .map_err(|e| TreeServiceError::Generic(e.to_string()))?,
+                },
+            );
+        }
+        Ok(keys)
     }
 
     async fn get_leaves(&self) -> Result<Leaves, TreeServiceError> {
@@ -503,6 +537,7 @@ export interface TreeStore {
     addLeaves: (leaves: TreeNode[]) => Promise<void>;
     getLeaves: () => Promise<Leaves>;
     getAvailableBalance: () => Promise<bigint>;
+    getVerifiedLeafKeys: () => Promise<[string, string, string][]>;
     setLeaves: (leaves: TreeNode[], missingLeaves: TreeNode[], refreshStartedAtMs: number) => Promise<void>;
     cancelReservation: (id: string, leavesToKeep: TreeNode[]) => Promise<void>;
     finalizeReservation: (id: string, newLeaves: TreeNode[] | null) => Promise<void>;
@@ -526,6 +561,9 @@ extern "C" {
 
     #[wasm_bindgen(structural, method, js_name = getAvailableBalance, catch)]
     pub fn get_available_balance(this: &TreeStoreJs) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = getVerifiedLeafKeys, catch)]
+    pub fn get_verified_leaf_keys(this: &TreeStoreJs) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = setLeaves, catch)]
     pub fn set_leaves(

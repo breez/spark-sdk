@@ -5,16 +5,18 @@
 //! in-memory storage is insufficient.
 
 use std::collections::{HashMap, HashSet};
+use std::str::FromStr;
 use std::sync::Arc;
 
 use platform_utils::time::{Instant, SystemTime};
 
+use bitcoin::secp256k1::PublicKey;
 use deadpool_postgres::Pool;
 use macros::async_trait;
 use spark_wallet::{
     LeafLike, LeafSelection, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose,
     ReserveResult, TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError,
-    TreeStore, select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
+    TreeStore, VerifiedLeafKeys, select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
 };
 use tokio::sync::watch;
 use tracing::{debug, info, trace};
@@ -302,6 +304,54 @@ impl TreeStore for PostgresTreeStore {
             .map_err(map_err)?;
         let balance: i64 = row.get("balance");
         Ok(u64::try_from(balance).unwrap_or(0))
+    }
+
+    async fn get_verified_leaf_keys(
+        &self,
+    ) -> Result<HashMap<TreeNodeId, VerifiedLeafKeys>, TreeServiceError> {
+        let client = self.pool.get().await.map_err(map_err)?;
+
+        // Project just the two pubkeys straight out of the JSON, skipping the
+        // per-leaf `data` blob (up to five transactions). The filter mirrors the
+        // verified categories in `verified_leaf_keys_from_leaves`: every
+        // reserved leaf plus every Available one, and nothing non-Available and
+        // unreserved (never verified).
+        let rows = client
+            .query(
+                r"
+                SELECT l.id AS id,
+                       l.data->>'verifying_public_key' AS verifying,
+                       l.data->'signing_keyshare'->>'public_key' AS keyshare
+                FROM brz_tree_leaves l
+                LEFT JOIN brz_tree_reservations r
+                  ON l.reservation_id = r.id AND l.user_id = r.user_id
+                WHERE l.user_id = $1
+                  AND (r.purpose IS NOT NULL OR l.status = 'Available')
+                ",
+                &[&self.identity],
+            )
+            .await
+            .map_err(map_err)?;
+
+        let mut keys = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let id: String = row.get("id");
+            // A valid node always carries both pubkeys; treat a missing one as a
+            // non-verified leaf (skip) rather than failing the whole refresh.
+            let (Some(verifying), Some(keyshare)): (Option<String>, Option<String>) =
+                (row.get("verifying"), row.get("keyshare"))
+            else {
+                continue;
+            };
+            keys.insert(
+                TreeNodeId::from_str(&id).map_err(TreeServiceError::Generic)?,
+                VerifiedLeafKeys {
+                    verifying_public_key: PublicKey::from_str(&verifying).map_err(map_err)?,
+                    signing_keyshare_public_key: PublicKey::from_str(&keyshare).map_err(map_err)?,
+                },
+            );
+        }
+        Ok(keys)
     }
 
     async fn get_leaves(&self) -> Result<Leaves, TreeServiceError> {
@@ -1550,6 +1600,12 @@ mod tests {
     async fn test_new() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_new(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_get_verified_leaf_keys() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_get_verified_leaf_keys(&fixture.store).await;
     }
 
     #[tokio::test]
