@@ -275,20 +275,43 @@ impl TreeService for SynchronousTreeService {
             })
             .collect();
 
-        // Fetch our signing pubkey for each Available leaf concurrently rather
-        // than one at a time, leaving the signer to bound its own concurrency.
-        // Order is preserved for the zip below.
-        // TODO: validate each leaf once and persist the result, to skip
-        // re-checking unchanged leaves on every refresh.
+        // A leaf enters the store only after this ownership check has passed, so
+        // one already stored with the same verifying and signing-keyshare keys is
+        // known-good and skipped. Only leaves new or changed since the last
+        // refresh need their pubkey fetched, which is a network round-trip on some
+        // signers: re-deriving every leaf each refresh would flood the signer and
+        // stall payments behind the rate limiter on large wallets. Remaining
+        // fetches run concurrently, leaving the signer to bound its own
+        // concurrency; order is preserved for the zip below.
+        let stored_leaves = self.state.get_leaves().await?;
+        let stored_by_id: HashMap<&TreeNodeId, &TreeNode> = stored_leaves
+            .available
+            .iter()
+            .chain(&stored_leaves.available_missing_from_operators)
+            .chain(&stored_leaves.reserved_for_payment)
+            .chain(&stored_leaves.reserved_for_swap)
+            .map(|leaf| (&leaf.id, leaf))
+            .collect();
+        let unverified_leaves: Vec<&TreeNode> = available_leaves
+            .iter()
+            .copied()
+            .filter(|leaf| {
+                !stored_by_id.get(&leaf.id).is_some_and(|stored| {
+                    stored.verifying_public_key == leaf.verifying_public_key
+                        && stored.signing_keyshare.public_key == leaf.signing_keyshare.public_key
+                })
+            })
+            .collect();
+
         let signer = &self.spark_signer;
         let our_pubkeys: Vec<PublicKey> = futures::future::try_join_all(
-            available_leaves
+            unverified_leaves
                 .iter()
                 .map(|leaf| async move { signer.get_public_key_for_leaf(&leaf.id).await }),
         )
         .await?;
 
-        for (leaf, our_node_pubkey) in available_leaves.iter().zip(our_pubkeys) {
+        for (leaf, our_node_pubkey) in unverified_leaves.iter().zip(our_pubkeys) {
             let combined_pubkey = our_node_pubkey
                 .combine(&leaf.signing_keyshare.public_key)
                 .map_err(|_| {

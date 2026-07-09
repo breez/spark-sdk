@@ -174,14 +174,30 @@ impl AdaptivePacer {
         }
     }
 
-    /// Reserves the next emission slot and returns how long the caller must wait
-    /// before sending. The lock is never held across the wait.
-    fn reserve(&self) -> Duration {
+    /// Reserves the next emission slot, returning a guard that carries the wait
+    /// and reclaims the slot if the caller is dropped before sending. The lock is
+    /// never held across the wait.
+    ///
+    /// A dropped-before-commit reservation (the request future cancelled during
+    /// the pacing wait) would otherwise leave the cursor advanced with nothing
+    /// sent, so a burst of cancellations would push the cursor far ahead and make
+    /// the next real request wait needlessly. The guard rolls the cursor back on
+    /// such a drop; [`SlotReservation::commit`] disarms it once the request is
+    /// actually sent.
+    fn reserve(&self) -> SlotReservation<'_> {
         let now = Instant::now();
         let mut inner = self.inner.lock().expect("pacer mutex poisoned");
-        let slot = inner.next_slot.max(now);
-        inner.next_slot = slot.checked_add(inner.gap).unwrap_or(slot);
-        slot.saturating_duration_since(now)
+        let prev_slot = inner.next_slot;
+        let slot = prev_slot.max(now);
+        let reserved = slot.checked_add(inner.gap).unwrap_or(slot);
+        inner.next_slot = reserved;
+        SlotReservation {
+            pacer: self,
+            wait: slot.saturating_duration_since(now),
+            prev_slot,
+            reserved,
+            committed: false,
+        }
     }
 
     /// Records a successful request, narrowing the gap by one step every
@@ -209,6 +225,46 @@ impl AdaptivePacer {
             .next_slot
             .max(now.checked_add(inner.gap).unwrap_or(now));
         inner.gap
+    }
+}
+
+/// A reserved emission slot. Holds the wait until the slot opens and, until
+/// [`commit`](Self::commit) is called, rolls the pacer cursor back on drop so a
+/// cancelled request does not consume its slot.
+struct SlotReservation<'a> {
+    pacer: &'a AdaptivePacer,
+    wait: Duration,
+    /// Cursor value before this reservation, restored on rollback.
+    prev_slot: Instant,
+    /// Cursor value this reservation set. Rollback applies only while the cursor
+    /// still holds it: once a later caller has advanced past our slot, their
+    /// schedule depends on it, so we leave it in place and reclaim nothing.
+    reserved: Instant,
+    committed: bool,
+}
+
+impl SlotReservation<'_> {
+    /// How long the caller must wait before sending.
+    fn wait(&self) -> Duration {
+        self.wait
+    }
+
+    /// Marks the slot as used, so dropping the guard no longer rolls it back.
+    /// Called once the request is actually being sent.
+    fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for SlotReservation<'_> {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        let mut inner = self.pacer.inner.lock().expect("pacer mutex poisoned");
+        if inner.next_slot == self.reserved {
+            inner.next_slot = self.prev_slot;
+        }
     }
 }
 
@@ -297,10 +353,14 @@ impl TurnkeyClient {
             // Pace emission to the adaptive rate before every attempt, so
             // concurrent callers self-throttle to Turnkey's per-suborg RPS limit
             // rather than bursting into 429s.
-            let wait = self.pacer.reserve();
+            let reservation = self.pacer.reserve();
+            let wait = reservation.wait();
             if !wait.is_zero() {
                 sleep(wait).await;
             }
+            // Past the pacing wait: the request is about to go out, so keep the
+            // slot even if the POST below is later cancelled.
+            reservation.commit();
             let started = *started.get_or_insert_with(Instant::now);
             let outcome = self
                 .http
@@ -540,10 +600,13 @@ mod tests {
         let min_gap = Duration::from_millis(100);
 
         // Fresh pacer: the first slot is immediate, the next is spaced by the
-        // configured-rate gap.
-        assert_eq!(pacer.reserve(), Duration::ZERO);
+        // configured-rate gap. Commit each so the cursor advances.
+        let first = pacer.reserve();
+        assert_eq!(first.wait(), Duration::ZERO);
+        first.commit();
         let second = pacer.reserve();
-        assert!(second > Duration::from_millis(50) && second <= min_gap);
+        assert!(second.wait() > Duration::from_millis(50) && second.wait() <= min_gap);
+        second.commit();
 
         // Each 429 doubles the gap (multiplicative decrease of the rate).
         let g1 = pacer.on_throttle();
@@ -563,6 +626,21 @@ mod tests {
             pacer.on_success();
         }
         assert_eq!(pacer.on_throttle(), min_gap.saturating_mul(2));
+    }
+
+    #[test]
+    fn pacer_reclaims_slot_when_reservation_dropped_uncommitted() {
+        let pacer = AdaptivePacer::new(10);
+        let min_gap = Duration::from_millis(100);
+
+        // Commit one slot so the cursor sits one gap in the future.
+        pacer.reserve().commit();
+        // Reserve then drop without committing: models a caller cancelled during
+        // the pacing wait. The tail slot must be reclaimed.
+        drop(pacer.reserve());
+        // The next caller reuses the reclaimed slot: one gap out, not two.
+        let next = pacer.reserve();
+        assert!(next.wait() <= min_gap);
     }
 
     #[test]
