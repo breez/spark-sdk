@@ -162,6 +162,7 @@ mod tests {
             account_number: Some(0),
             identity_public_key,
             retry: None,
+            max_rps: None,
         }
     }
 
