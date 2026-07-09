@@ -13,6 +13,8 @@ Use server mode when:
 
 If you're building a mobile or desktop wallet, stay on the default ([client mode](initializing.md)) — server mode disables features your app relies on.
 
+When the server must not be able to send payments on its own, server mode pairs with [Client signing](client_signing.md): the user reviews and signs each payment on their side, and the build and publish steps are stateless, so they fit the per-request lifecycle.
+
 ## Selecting server mode
 
 Build the config with {{#name default_server_config}} instead of {{#name default_config}}:
