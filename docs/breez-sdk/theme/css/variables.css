@@ -32,7 +32,9 @@
        80vw while the sidebar is an off-canvas overlay on small screens,
        a third of the viewport once it sits inline (see media rule below). */
     --sidebar-target-width: 312px;
-    --sidebar-width: min(var(--sidebar-target-width), 80vw);
+    /* Floored at 200px so the sidebar never renders illegibly narrow —
+       brand-header.js hides it outright when a drag goes below that. */
+    --sidebar-width: min(max(var(--sidebar-target-width), 200px), 80vw);
     --sidebar-resize-indicator-width: 8px;
     --sidebar-resize-indicator-space: 2px;
     --page-padding: 15px;
@@ -46,7 +48,7 @@
 /* Inline (non-overlay) sidebar: cap drag-resizing at a third of the screen. */
 @media only screen and (min-width: 1080px) {
     :root {
-        --sidebar-width: min(var(--sidebar-target-width), 33.33vw);
+        --sidebar-width: min(max(var(--sidebar-target-width), 200px), 33.33vw);
     }
 }
 

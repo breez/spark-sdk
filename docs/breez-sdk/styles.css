@@ -182,7 +182,7 @@ html.light .brand-nav a img, html.rust .brand-nav a img { filter: brightness(0) 
     gap: 2px;
     flex: none;
 }
-.brand-controls .icon-button {
+#brand-header .icon-button {
     border: none;
     background: transparent;
     cursor: pointer;
@@ -195,14 +195,13 @@ html.light .brand-nav a img, html.rust .brand-nav a img { filter: brightness(0) 
     border-radius: 8px;
     font-size: 1.3rem;
 }
-.brand-controls .icon-button:hover { background: rgba(255, 255, 255, 0.06); color: var(--brz-heading); }
-html.light .brand-controls .icon-button:hover,
-html.rust .brand-controls .icon-button:hover { background: var(--theme-hover); }
-/* The sidebar toggle stays visible at every width: mdBook auto-hides the
-   sidebar when the window shrinks and does not restore it on grow, so
-   without a persistent toggle the sidebar is unrecoverable short of a
-   refresh at full size. */
-.brand-controls #sidebar-toggle { display: inline-flex; }
+#brand-header .icon-button:hover { background: rgba(255, 255, 255, 0.06); color: var(--brz-heading); }
+html.light #brand-header .icon-button:hover,
+html.rust #brand-header .icon-button:hover { background: var(--theme-hover); }
+/* The sidebar toggle stays visible at every width (mdBook auto-hides the
+   sidebar on narrow windows and never restores it on grow) and leads the
+   bar, left of the logo, next to the sidebar it controls. */
+#brand-header #sidebar-toggle { display: inline-flex; margin-right: 6px; }
 .brand-controls #theme-list { top: 40px; }
 
 /* ---- Reconcile the fixed header with mdBook's layout -------------------- */
