@@ -38,6 +38,14 @@ pub trait ExternalSparkSigner: Send + Sync {
         leaf_id: ExternalTreeNodeId,
     ) -> Result<PublicKeyBytes, SignerError>;
 
+    /// Whether this signer is backed by a remote service, so its operations are
+    /// network round-trips rather than local computation. Local signers return
+    /// false; a hosted signer like Turnkey returns true so the SDK can avoid
+    /// redundant calls, e.g. re-deriving keys for leaves it has already verified.
+    fn is_remote(&self) -> bool {
+        false
+    }
+
     /// The static-deposit signing public key at `index`.
     async fn get_static_deposit_public_key(
         &self,

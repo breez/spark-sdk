@@ -53,8 +53,9 @@ pub use spark::{
         InMemoryTreeStore, LeafLike, LeafOptimizationOptions, LeafSelection, Leaves,
         LeavesReservation, LeavesReservationId, OptimizationError, OptimizationOutcome,
         ReservationPurpose, ReserveResult, SelectLeavesOptions, SigningKeyshare, TargetAmounts,
-        TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore,
+        TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore, VerifiedLeafKeys,
         select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
+        verified_leaf_keys_from_leaves,
     },
     utils::frost::aggregate_frost,
     utils::{

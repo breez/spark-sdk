@@ -54,6 +54,12 @@ async fn test_new() {
 }
 
 #[wasm_bindgen_test]
+async fn test_get_verified_leaf_keys() {
+    let store = create_test_tree_store("pg_tree_verified_leaf_keys").await;
+    breez_sdk_spark::tree_store_tests::test_get_verified_leaf_keys(&store).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_add_leaves() {
     let store = create_test_tree_store("pg_tree_add_leaves").await;
     breez_sdk_spark::tree_store_tests::test_add_leaves(&store).await;

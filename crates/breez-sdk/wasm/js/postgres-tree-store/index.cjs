@@ -246,6 +246,34 @@ class PostgresTreeStore {
     }
   }
 
+  async getVerifiedLeafKeys() {
+    try {
+      // Project just the two pubkeys out of the JSON, skipping each leaf's
+      // `data` blob (up to five transactions). The filter matches the verified
+      // categories the SDK expects: every reserved leaf plus every Available
+      // one, and nothing non-Available and unreserved.
+      const result = await this.pool.query(
+        `
+        SELECT l.id AS id,
+               l.data->>'verifying_public_key' AS verifying,
+               l.data->'signing_keyshare'->>'public_key' AS keyshare
+        FROM brz_tree_leaves l
+        LEFT JOIN brz_tree_reservations r
+          ON l.reservation_id = r.id AND l.user_id = r.user_id
+        WHERE l.user_id = $1
+          AND (r.purpose IS NOT NULL OR l.status = 'Available')
+      `,
+        [this.identity]
+      );
+      return result.rows.map((row) => [row.id, row.verifying, row.keyshare]);
+    } catch (error) {
+      throw new TreeStoreError(
+        `Failed to get verified leaf keys: ${error.message}`,
+        error
+      );
+    }
+  }
+
   async getLeaves() {
     try {
       const result = await this.pool.query(

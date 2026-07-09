@@ -31,6 +31,7 @@ pub fn turnkey_config_from_env() -> Option<TurnkeyConfig> {
         // prior identity pubkey to seed; the signer fetches it lazily.
         identity_public_key: None,
         retry: None,
+        max_rps: None,
     })
 }
 

@@ -1,11 +1,63 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
-use bitcoin::secp256k1::PublicKey;
+use bitcoin::secp256k1::{All, PublicKey, Secp256k1};
 use frost_secp256k1_tr::keys::{PublicKeyPackage, VerifyingShare};
 use frost_secp256k1_tr::round1::SigningCommitments;
 use frost_secp256k1_tr::{Identifier, SigningPackage, VerifyingKey};
 
-use crate::signer::{AggregateFrostRequest, SignerError};
+use crate::signer::{AggregateFrostRequest, FrostJob, FrostShareResult, SignerError, SparkSigner};
+use crate::tree::TreeNode;
+
+/// The user's own signing public key for an OWNED leaf, recovered from persisted
+/// tree data as `verifying_public_key - signing_keyshare.public_key` rather than
+/// via a signer round-trip: FROST composes the group verifying key as the user's
+/// share plus the operators' aggregate share.
+///
+/// The result is only as trustworthy as the persisted operands: a poisoned
+/// `signing_keyshare.public_key` steers it, so use it only where a wrong value
+/// fails closed (an invalid signature), never to choose a payout destination.
+/// Valid only for owned leaves: an incoming (claim) leaf is mid-transfer, so its
+/// stored SE share need not pair with the new key.
+pub(crate) fn derive_leaf_signing_public_key(
+    node: &TreeNode,
+    secp: &Secp256k1<All>,
+) -> Result<PublicKey, SignerError> {
+    let se_share = node.signing_keyshare.public_key.negate(secp);
+    node.verifying_public_key
+        .combine(&se_share)
+        .map_err(|e| SignerError::Generic(format!("failed to derive leaf signing key: {e}")))
+}
+
+/// Zips signer shares back onto their caller-side metadata one-to-one, erroring
+/// on a count mismatch instead of silently dropping the tail (a plain `zip`
+/// truncates to the shorter side, misrouting every share past the gap). This is
+/// the single length guard behind the batched signing paths, so the reliance on
+/// `sign_frost` returning one share per job in order is enforced in one place.
+pub(crate) fn zip_checked<S, T>(
+    shares: Vec<S>,
+    pending: Vec<T>,
+) -> Result<Vec<(T, S)>, SignerError> {
+    if shares.len() != pending.len() {
+        return Err(SignerError::Generic(format!(
+            "sign_frost returned {} shares, expected {}",
+            shares.len(),
+            pending.len()
+        )));
+    }
+    Ok(pending.into_iter().zip(shares).collect())
+}
+
+/// Signs a batch of FROST jobs in a single `sign_frost` call, pairing each
+/// returned share with its caller-side metadata (order preserved).
+pub(crate) async fn sign_frost_batch<T>(
+    spark_signer: &Arc<dyn SparkSigner>,
+    jobs: Vec<FrostJob>,
+    pending: Vec<T>,
+) -> Result<Vec<(T, FrostShareResult)>, SignerError> {
+    let shares = spark_signer.sign_frost(jobs).await?;
+    zip_checked(shares, pending)
+}
 
 /// Builds the FROST [`SigningPackage`] for a user + statechain signing round.
 ///
@@ -138,4 +190,49 @@ pub fn aggregate_frost(
             e.culprit()
         ))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use bitcoin::secp256k1::SecretKey;
+
+    use super::*;
+    use crate::tree::tests::create_test_tree_node;
+
+    /// `derive_leaf_signing_public_key` must recover the user's signing key from
+    /// the FROST relation `verifying_public_key = user_share + se_share`, i.e.
+    /// return `verifying_public_key - signing_keyshare.public_key`.
+    #[test]
+    fn derives_user_share_from_verifying_and_se_share() {
+        let secp = Secp256k1::new();
+
+        // se_share = a*G (operators' aggregate), user_share = b*G (what we derive).
+        let a = SecretKey::from_slice(&[0x11; 32]).unwrap();
+        let b = SecretKey::from_slice(&[0x22; 32]).unwrap();
+        let se_share = a.public_key(&secp);
+        let user_share = b.public_key(&secp);
+        let verifying = se_share.combine(&user_share).unwrap();
+
+        let mut node = create_test_tree_node("test_leaf", 1000);
+        node.signing_keyshare.public_key = se_share;
+        node.verifying_public_key = verifying;
+
+        let derived = derive_leaf_signing_public_key(&node, &secp).unwrap();
+        assert_eq!(derived, user_share);
+    }
+
+    /// `zip_checked` pairs shares with pending metadata one-to-one and rejects a
+    /// count mismatch rather than silently truncating: a plain `zip` would drop
+    /// the tail and misroute every share past the gap.
+    #[test]
+    fn zip_checked_pairs_equal_lengths_and_rejects_mismatch() {
+        // Equal lengths: (pending, share) pairs, order preserved.
+        let paired = zip_checked(vec!['a', 'b'], vec![1, 2]).unwrap();
+        assert_eq!(paired, vec![(1, 'a'), (2, 'b')]);
+
+        // Too few shares (a truncated signer response) errors.
+        assert!(zip_checked(vec!['a'], vec![1, 2]).is_err());
+        // Too many shares errors as well.
+        assert!(zip_checked(vec!['a', 'b', 'c'], vec![1, 2]).is_err());
+    }
 }

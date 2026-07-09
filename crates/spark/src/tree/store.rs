@@ -1067,6 +1067,11 @@ mod tests {
     }
 
     #[async_test_all]
+    async fn test_get_verified_leaf_keys() {
+        shared_tests::test_get_verified_leaf_keys(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
     async fn test_add_leaves() {
         shared_tests::test_add_leaves(&InMemoryTreeStore::new()).await;
     }

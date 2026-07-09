@@ -332,6 +332,15 @@ pub trait SparkSigner: Send + Sync + 'static {
     async fn get_public_key_for_leaf(&self, leaf_id: &TreeNodeId)
     -> Result<PublicKey, SignerError>;
 
+    /// Whether this signer is backed by a remote service, so its operations
+    /// (deriving a leaf's public key, signing) are network round-trips rather
+    /// than local computation. When true, callers should avoid redundant signer
+    /// calls, e.g. re-deriving keys for leaves whose ownership is already
+    /// verified in storage. Defaults to false: most signers are local.
+    fn is_remote(&self) -> bool {
+        false
+    }
+
     /// Returns the static-deposit public key at `index`. The wallet hands this
     /// to the operators to derive a static-deposit address. Analogous to
     /// [`get_public_key_for_leaf`](Self::get_public_key_for_leaf).

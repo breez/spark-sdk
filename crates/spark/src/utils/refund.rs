@@ -3,14 +3,18 @@ use std::sync::Arc;
 
 use bitcoin::Transaction;
 use bitcoin::hashes::{Hash, sha256};
-use bitcoin::secp256k1::PublicKey;
+use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use frost_secp256k1_tr::Identifier;
 use frost_secp256k1_tr::round1::SigningCommitments;
 use tracing::info;
 
 use crate::core::next_lightning_htlc_sequence;
-use crate::services::SignedTx;
-use crate::signer::{FrostDerivation, FrostJob, SignerError, SparkSigner};
+use crate::services::{
+    LeafRefundJobs, RefundJob, SignedTx, build_refund_signing_job, into_signed_tx_groups,
+    sign_leaf_refunds,
+};
+use crate::signer::{SignerError, SparkSigner};
+use crate::utils::frost::derive_leaf_signing_public_key;
 use crate::utils::htlc_transactions::{
     CreateLightningHtlcRefundTxsParams, create_lightning_htlc_refund_txs,
 };
@@ -52,9 +56,11 @@ pub async fn sign_refunds(
     } = params;
     let identity_pubkey = spark_signer.get_identity_public_key().await?;
 
-    let mut cpfp_signed_refunds = Vec::with_capacity(leaves.len());
-    let mut direct_signed_refunds = Vec::with_capacity(leaves.len());
-    let mut direct_from_cpfp_signed_refunds = Vec::with_capacity(leaves.len());
+    // Build every FROST job up front (all local work), tagging each with what's
+    // needed to rebuild its SignedTx once the batched shares return. A leaf
+    // contributes up to three jobs: cpfp, direct, direct-from-cpfp.
+    let mut leaf_jobs: Vec<LeafRefundJobs> = Vec::new();
+    let secp = Secp256k1::new();
 
     for (i, leaf) in leaves.iter().enumerate() {
         let node_tx = &leaf.node.node_tx;
@@ -109,10 +115,9 @@ pub async fn sign_refunds(
             leaf.node.id, cpfp_refund_tx.input[0].sequence
         );
 
-        let signing_public_key = spark_signer.get_public_key_for_leaf(&leaf.node.id).await?;
+        let signing_public_key = derive_leaf_signing_public_key(&leaf.node, &secp)?;
 
-        let cpfp_signed_tx = sign_refund(
-            spark_signer,
+        let cpfp = build_refund_job(
             leaf,
             node_tx,
             cpfp_refund_tx,
@@ -120,19 +125,16 @@ pub async fn sign_refunds(
             cpfp_signing_commitments[i].clone(),
             network,
             cpfp_adaptor_public_key,
-        )
-        .await?;
-        cpfp_signed_refunds.push(cpfp_signed_tx);
+        )?;
 
-        if let Some(direct_tx) = direct_tx {
+        let direct = if let Some(direct_tx) = direct_tx {
             let Some(direct_refund_tx) = direct_refund_tx else {
                 return Err(SignerError::Generic(
                     "Direct refund transaction is missing".to_string(),
                 ));
             };
 
-            let direct_refund_tx = sign_refund(
-                spark_signer,
+            Some(build_refund_job(
                 leaf,
                 direct_tx,
                 direct_refund_tx,
@@ -140,16 +142,16 @@ pub async fn sign_refunds(
                 direct_signing_commitments[i].clone(),
                 network,
                 None, // Direct transactions don't use adaptor signatures
-            )
-            .await?;
-            direct_signed_refunds.push(direct_refund_tx);
-        }
+            )?)
+        } else {
+            None
+        };
 
         // direct_from_cpfp_refund_tx spends from the CPFP (node_tx) output, not from
         // direct_tx, so it must be signed regardless of whether direct_tx exists.
-        if let Some(direct_from_cpfp_refund_tx) = direct_from_cpfp_refund_tx {
-            let direct_from_cpfp_signed_tx = sign_refund(
-                spark_signer,
+        let direct_from_cpfp = if let Some(direct_from_cpfp_refund_tx) = direct_from_cpfp_refund_tx
+        {
+            Some(build_refund_job(
                 leaf,
                 node_tx,
                 direct_from_cpfp_refund_tx,
@@ -157,47 +159,35 @@ pub async fn sign_refunds(
                 direct_from_cpfp_signing_commitments[i].clone(),
                 network,
                 None, // Direct transactions don't use adaptor signatures
-            )
-            .await?;
-            direct_from_cpfp_signed_refunds.push(direct_from_cpfp_signed_tx);
-        }
+            )?)
+        } else {
+            None
+        };
+
+        leaf_jobs.push(LeafRefundJobs {
+            cpfp,
+            direct,
+            direct_from_cpfp,
+        });
     }
 
+    // Sign every leaf's jobs in one batched call, then split by variant.
+    let signed = sign_leaf_refunds(spark_signer, leaf_jobs).await?;
+    let (cpfp_signed_tx, direct_signed_tx, direct_from_cpfp_signed_tx) =
+        into_signed_tx_groups(signed);
+
     Ok(SignedRefundTransactions {
-        cpfp_signed_tx: cpfp_signed_refunds,
-        direct_signed_tx: direct_signed_refunds,
-        direct_from_cpfp_signed_tx: direct_from_cpfp_signed_refunds,
+        cpfp_signed_tx,
+        direct_signed_tx,
+        direct_from_cpfp_signed_tx,
     })
 }
 
-/// Signs a refund transaction using FROST threshold signatures.
-///
-/// This function performs the client-side portion of the FROST signing protocol for a refund transaction:
-/// 1. Calculates the transaction sighash
-/// 2. Generates new nonce commitments for signing
-/// 3. Signs the transaction using the FROST protocol
-/// 4. Returns a structured `SignedTx` object with all data needed for later aggregation
-///
-/// The function does not perform signature aggregation - it only creates the user's signature share.
-/// Aggregation happens later when combined with operator signatures.
-///
-/// # Arguments
-///
-/// * `signer` - Reference to the signer implementation
-/// * `leaf` - The leaf key data containing node info and signing key
-/// * `tx` - The original transaction being spent by the refund transaction
-/// * `refund_tx` - The refund transaction to sign
-/// * `signing_public_key` - The public key corresponding to the user's signing key
-/// * `spark_commitments` - The FROST signing commitments from the Spark operators
-/// * `network` - The Bitcoin network being used
-///
-/// # Returns
-///
-/// * `Ok(SignedTx)` - A structure containing the signed transaction and signing metadata
-/// * `Err(SignerError)` - If the signing process fails
-#[allow(clippy::too_many_arguments)]
-async fn sign_refund(
-    spark_signer: &Arc<dyn SparkSigner>,
+/// Builds the shared refund FROST job, computing the sighash from the parent
+/// output first. A thin wrapper over `build_refund_signing_job` that keeps the
+/// send-path call sites terse (they pass the leaf and its parent tx rather than
+/// a precomputed sighash).
+fn build_refund_job(
     leaf: &LeafKeyTweak,
     tx: &Transaction,
     refund_tx: Transaction,
@@ -205,35 +195,17 @@ async fn sign_refund(
     spark_commitments: BTreeMap<Identifier, SigningCommitments>,
     network: Network,
     adaptor_public_key: Option<&PublicKey>,
-) -> Result<SignedTx, SignerError> {
+) -> Result<RefundJob, SignerError> {
     let sighash = sighash_from_tx(&refund_tx, 0, &tx.output[0])
         .map_err(|e| SignerError::Generic(e.to_string()))?;
-
-    // Refund signing always uses the leaf's own (derived) signing key, keyed by
-    // the leaf's node id.
-    let job = FrostJob {
-        derivation: FrostDerivation::SigningLeaf {
-            leaf_id: leaf.node.id.clone(),
-        },
-        sighash: sighash.to_raw_hash().to_byte_array(),
-        verifying_key: leaf.node.verifying_public_key,
-        operator_commitments: spark_commitments.clone(),
-        adaptor_public_key: adaptor_public_key.copied(),
-    };
-    let share = spark_signer
-        .sign_frost(vec![job])
-        .await?
-        .into_iter()
-        .next()
-        .ok_or_else(|| SignerError::Generic("sign_frost returned no share".to_string()))?;
-
-    Ok(SignedTx {
-        node_id: leaf.node.id.clone(),
-        signing_public_key,
-        tx: refund_tx,
-        user_signature: share.signature_share,
-        self_nonce_commitment: share.commitment,
-        signing_commitments: spark_commitments,
+    Ok(build_refund_signing_job(
+        &leaf.node.id,
+        &leaf.node.verifying_public_key,
+        &signing_public_key,
+        refund_tx,
+        sighash.to_raw_hash().to_byte_array(),
+        spark_commitments,
+        adaptor_public_key,
         network,
-    })
+    ))
 }

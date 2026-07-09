@@ -6,9 +6,10 @@
 //! the activity reaches a terminal status.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use platform_utils::time::Instant;
 use platform_utils::tokio::time::sleep;
 use platform_utils::{HttpClient, HttpResponse};
 use serde::Serialize;
@@ -117,6 +118,156 @@ pub(crate) enum OnConflict {
     Surface,
 }
 
+/// Default cap on requests per second when `TurnkeyConfig::max_rps` is unset:
+/// Turnkey's documented per-suborganization limit of 10 RPS.
+const DEFAULT_MAX_RPS: u32 = 10;
+/// Absolute floor on the inter-request gap. A mechanism guard, not the operating
+/// rate: the gap must stay non-zero so multiplicative back-off can double it, and
+/// a misconfigured rate cannot busy-fire.
+const PACE_FLOOR: Duration = Duration::from_millis(1);
+/// Ceiling on the inter-request gap, so a sustained 429 streak cannot stall the
+/// client indefinitely.
+const PACE_MAX_GAP: Duration = Duration::from_secs(5);
+/// Additive gap reduction applied once per `PACE_RECOVER_STREAK` successes.
+const PACE_RECOVER_STEP: Duration = Duration::from_millis(25);
+/// Successes between gap reductions. Additive-increase of the rate: recover
+/// gently so one lucky window does not immediately re-provoke the limit.
+const PACE_RECOVER_STREAK: u32 = 4;
+
+/// Adaptive request pacer shared across all concurrent callers of one Turnkey
+/// suborganization. The steady-state rate is the configured `max_rps`, which the
+/// pacer never exceeds; a 429 backs it off further (double the gap) and success
+/// recovers it (additive) back to that rate. Turnkey returns no `Retry-After`,
+/// so a 429 is the only throttle signal. All callers reserve emission slots from
+/// one shared cursor, so firing N requests concurrently drains them at the paced
+/// rate instead of bursting.
+struct AdaptivePacer {
+    inner: Mutex<PacerInner>,
+}
+
+struct PacerInner {
+    /// Earliest time the next request may be sent.
+    next_slot: Instant,
+    /// Current spacing between successive requests.
+    gap: Duration,
+    /// Steady-state floor on the gap, derived from the configured max rate.
+    min_gap: Duration,
+    /// Successes since the last gap reduction or throttle.
+    successes: u32,
+}
+
+impl AdaptivePacer {
+    fn new(max_rps: u32) -> Self {
+        // `max_rps` of 0 is rejected at config; `max(1)` plus `checked_div` is a
+        // defensive guard so the division can never divide by zero.
+        let min_gap = Duration::from_secs(1)
+            .checked_div(max_rps.max(1))
+            .unwrap_or(PACE_FLOOR)
+            .max(PACE_FLOOR);
+        Self {
+            inner: Mutex::new(PacerInner {
+                next_slot: Instant::now(),
+                gap: min_gap,
+                min_gap,
+                successes: 0,
+            }),
+        }
+    }
+
+    /// Reserves the next emission slot, returning a guard that carries the wait
+    /// and reclaims the slot if the caller is dropped before sending. The lock is
+    /// never held across the wait.
+    ///
+    /// A dropped-before-commit reservation (the request future cancelled during
+    /// the pacing wait) would otherwise leave the cursor advanced with nothing
+    /// sent, so a burst of cancellations would push the cursor far ahead and make
+    /// the next real request wait needlessly. The guard rolls the cursor back on
+    /// such a drop; [`SlotReservation::commit`] disarms it once the request is
+    /// actually sent.
+    fn reserve(&self) -> SlotReservation<'_> {
+        let now = Instant::now();
+        let mut inner = self.inner.lock().expect("pacer mutex poisoned");
+        let prev_slot = inner.next_slot;
+        let slot = prev_slot.max(now);
+        let reserved = slot.checked_add(inner.gap).unwrap_or(slot);
+        inner.next_slot = reserved;
+        SlotReservation {
+            pacer: self,
+            wait: slot.saturating_duration_since(now),
+            prev_slot,
+            reserved,
+            committed: false,
+        }
+    }
+
+    /// Records a successful request, narrowing the gap by one step every
+    /// `PACE_RECOVER_STREAK` successes (down to the configured rate).
+    fn on_success(&self) {
+        let mut inner = self.inner.lock().expect("pacer mutex poisoned");
+        inner.successes = inner.successes.saturating_add(1);
+        if inner.successes >= PACE_RECOVER_STREAK {
+            inner.successes = 0;
+            let min_gap = inner.min_gap;
+            inner.gap = inner.gap.saturating_sub(PACE_RECOVER_STEP).max(min_gap);
+        }
+    }
+
+    /// Records a 429, doubling the gap (up to `PACE_MAX_GAP`) and pushing the
+    /// cursor out so this retry and every future reservation back off. Callers
+    /// already waiting on earlier slots keep their schedule; they widen the gap
+    /// further if they also 429. Returns the new gap for the retry-budget check.
+    fn on_throttle(&self) -> Duration {
+        let now = Instant::now();
+        let mut inner = self.inner.lock().expect("pacer mutex poisoned");
+        inner.successes = 0;
+        inner.gap = inner.gap.saturating_mul(2).min(PACE_MAX_GAP);
+        inner.next_slot = inner
+            .next_slot
+            .max(now.checked_add(inner.gap).unwrap_or(now));
+        inner.gap
+    }
+}
+
+/// A reserved emission slot. Holds the wait until the slot opens and, until
+/// [`commit`](Self::commit) is called, rolls the pacer cursor back on drop so a
+/// cancelled request does not consume its slot.
+struct SlotReservation<'a> {
+    pacer: &'a AdaptivePacer,
+    wait: Duration,
+    /// Cursor value before this reservation, restored on rollback.
+    prev_slot: Instant,
+    /// Cursor value this reservation set. Rollback applies only while the cursor
+    /// still holds it: once a later caller has advanced past our slot, their
+    /// schedule depends on it, so we leave it in place and reclaim nothing.
+    reserved: Instant,
+    committed: bool,
+}
+
+impl SlotReservation<'_> {
+    /// How long the caller must wait before sending.
+    fn wait(&self) -> Duration {
+        self.wait
+    }
+
+    /// Marks the slot as used, so dropping the guard no longer rolls it back.
+    /// Called once the request is actually being sent.
+    fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for SlotReservation<'_> {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        let mut inner = self.pacer.inner.lock().expect("pacer mutex poisoned");
+        if inner.next_slot == self.reserved {
+            inner.next_slot = self.prev_slot;
+        }
+    }
+}
+
 pub(crate) struct TurnkeyClient {
     http: Arc<dyn HttpClient>,
     base_url: String,
@@ -124,6 +275,7 @@ pub(crate) struct TurnkeyClient {
     pub(crate) wallet_id: String,
     stamper: ApiKeyStamper,
     retry: TurnkeyRetryConfig,
+    pacer: AdaptivePacer,
 }
 
 impl TurnkeyClient {
@@ -131,6 +283,11 @@ impl TurnkeyClient {
         config: &TurnkeyConfig,
         http: Arc<dyn HttpClient>,
     ) -> Result<Self, TurnkeyError> {
+        if config.max_rps == Some(0) {
+            return Err(TurnkeyError::InvalidConfig(
+                "max_rps must be greater than 0".to_string(),
+            ));
+        }
         Ok(Self {
             http,
             base_url: config
@@ -143,6 +300,7 @@ impl TurnkeyClient {
             wallet_id: config.wallet_id.clone(),
             stamper: ApiKeyStamper::from_hex(&config.api_private_key, &config.api_public_key)?,
             retry: config.retry.clone().unwrap_or_default(),
+            pacer: AdaptivePacer::new(config.max_rps.unwrap_or(DEFAULT_MAX_RPS)),
         })
     }
 
@@ -161,7 +319,10 @@ impl TurnkeyClient {
     /// `Retry-After` overrides the backoff delay. Every retry is bounded by the
     /// configured request timeout: a wait that would end past it (a long
     /// `Retry-After`, or a late attempt with little budget left) fails the
-    /// request with the error at hand instead of stalling.
+    /// request with the error at hand instead of stalling. The timeout is
+    /// measured from the first attempt (after the initial paced slot), so time
+    /// spent waiting behind other concurrent callers does not eat the retry
+    /// budget.
     pub(crate) async fn process_request<Req, Resp>(
         &self,
         path: &str,
@@ -181,22 +342,56 @@ impl TurnkeyClient {
         headers.insert("Content-Type".to_string(), "application/json".to_string());
         headers.insert(stamp_name, stamp_value);
 
-        let started = platform_utils::time::Instant::now();
         let timeout = self.retry.request_timeout();
         let mut attempt: u32 = 0;
+        // Set on the first attempt, after the initial paced slot. Queue wait
+        // (waiting our turn behind other concurrent callers) is deliberately
+        // excluded from the timeout: it must not consume the request's retry
+        // budget, or a deeply-queued request would arrive with none left.
+        let mut started: Option<Instant> = None;
         loop {
+            // Pace emission to the adaptive rate before every attempt, so
+            // concurrent callers self-throttle to Turnkey's per-suborg RPS limit
+            // rather than bursting into 429s.
+            let reservation = self.pacer.reserve();
+            let wait = reservation.wait();
+            if !wait.is_zero() {
+                sleep(wait).await;
+            }
+            // Past the pacing wait: the request is about to go out, so keep the
+            // slot even if the POST below is later cancelled.
+            reservation.commit();
+            let started = *started.get_or_insert_with(Instant::now);
             let outcome = self
                 .http
                 .post(url.clone(), Some(headers.clone()), Some(body.clone()))
                 .await;
             match outcome {
                 Ok(resp) if resp.is_success() => {
+                    self.pacer.on_success();
                     return resp
                         .json::<Resp>()
                         .map_err(|e| TurnkeyError::Deserialize(e.to_string()));
                 }
+                // A 429 is a rate signal: widen the pacer (Turnkey sends no
+                // Retry-After) and let the next reserve() impose the back-off.
+                Ok(resp) if resp.status == 429 && attempt < self.retry.max_retries => {
+                    attempt = attempt.saturating_add(1);
+                    let backoff = self.pacer.on_throttle();
+                    if !retry_within_budget(started.elapsed(), backoff, timeout) {
+                        return Err(TurnkeyError::Http {
+                            status: resp.status,
+                            body: resp.body,
+                        });
+                    }
+                }
+                // Other transient failures (408, 5xx, conflict-retry) are not
+                // rate signals, so back off on the exponential schedule and leave
+                // the pacer untouched. 429 is excluded explicitly so this arm's
+                // behavior does not depend on the 429 arm above coming first.
                 Ok(resp)
                     if attempt < self.retry.max_retries
+                        && resp.status != 429
                         && (is_retryable_status(resp.status)
                             || (resp.status == 409 && on_conflict == OnConflict::Retry)) =>
                 {
@@ -396,5 +591,79 @@ mod tests {
             Duration::ZERO,
             timeout
         ));
+    }
+
+    #[test]
+    fn pacer_backs_off_on_throttle_and_recovers_on_success() {
+        let pacer = AdaptivePacer::new(10);
+        // 1s / 10 RPS.
+        let min_gap = Duration::from_millis(100);
+
+        // Fresh pacer: the first slot is immediate, the next is spaced by the
+        // configured-rate gap. Commit each so the cursor advances.
+        let first = pacer.reserve();
+        assert_eq!(first.wait(), Duration::ZERO);
+        first.commit();
+        let second = pacer.reserve();
+        assert!(second.wait() > Duration::from_millis(50) && second.wait() <= min_gap);
+        second.commit();
+
+        // Each 429 doubles the gap (multiplicative decrease of the rate).
+        let g1 = pacer.on_throttle();
+        let g2 = pacer.on_throttle();
+        assert_eq!(g1, min_gap.saturating_mul(2));
+        assert_eq!(g2, g1.saturating_mul(2));
+
+        // Sustained throttling saturates at the ceiling, never beyond.
+        for _ in 0..10 {
+            assert!(pacer.on_throttle() <= PACE_MAX_GAP);
+        }
+        assert_eq!(pacer.on_throttle(), PACE_MAX_GAP);
+
+        // Sustained success walks the gap back down to the configured rate
+        // (additive increase), and stops there.
+        for _ in 0..10_000 {
+            pacer.on_success();
+        }
+        assert_eq!(pacer.on_throttle(), min_gap.saturating_mul(2));
+    }
+
+    #[test]
+    fn pacer_reclaims_slot_when_reservation_dropped_uncommitted() {
+        let pacer = AdaptivePacer::new(10);
+        let min_gap = Duration::from_millis(100);
+
+        // Commit one slot so the cursor sits one gap in the future.
+        pacer.reserve().commit();
+        // Reserve then drop without committing: models a caller cancelled during
+        // the pacing wait. The tail slot must be reclaimed.
+        drop(pacer.reserve());
+        // The next caller reuses the reclaimed slot: one gap out, not two.
+        let next = pacer.reserve();
+        assert!(next.wait() <= min_gap);
+    }
+
+    #[test]
+    fn pacer_steady_state_gap_tracks_configured_rate() {
+        // A faster configured rate settles at a smaller gap.
+        let fast = AdaptivePacer::new(100);
+        for _ in 0..10_000 {
+            fast.on_success();
+        }
+        assert_eq!(
+            fast.on_throttle(),
+            Duration::from_millis(10).saturating_mul(2)
+        );
+
+        // Defensive: config rejects 0, but the pacer still never divides by
+        // zero, clamping to 1 RPS (a 1s gap).
+        let guarded = AdaptivePacer::new(0);
+        for _ in 0..10_000 {
+            guarded.on_success();
+        }
+        assert_eq!(
+            guarded.on_throttle(),
+            Duration::from_secs(1).saturating_mul(2)
+        );
     }
 }

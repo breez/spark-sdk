@@ -266,6 +266,14 @@ fn ffi_public_key_map(
         .collect()
 }
 
+/// Maximum FROST jobs per `SPARK_SIGN_FROST` activity. Turnkey's enclave fails a
+/// single `sign_frost` with HTTP 500 (an internal ~15s timeout) past roughly 250
+/// to 300 jobs, far below its ~11 MB request-body cap. The batched send/coop-exit/
+/// claim/timelock paths can exceed that (a full-balance coop-exit signs every
+/// wallet leaf, one to three jobs each), so submissions are chunked with wide
+/// margin. Exercised by `breez-itest/tests/turnkey_sign_frost_chunking`.
+const MAX_FROST_JOBS_PER_ACTIVITY: usize = 100;
+
 pub(crate) struct TurnkeySparkSigner {
     client: Arc<TurnkeyClient>,
     account: u32,
@@ -447,8 +455,29 @@ impl TurnkeySparkSigner {
         jobs: &[FrostJob],
     ) -> Result<Vec<FrostShareResult>, SignerError> {
         let sign_with = self.spark_identity_address().await?;
-        let mut signatures = Vec::with_capacity(jobs.len());
-        for job in jobs {
+        // One activity per chunk (see MAX_FROST_JOBS_PER_ACTIVITY), all fired
+        // concurrently and reassembled in job order. FROST jobs are independent,
+        // so splitting the batch is signing-equivalent to one call. The Turnkey
+        // client paces submissions to the per-suborg rate limit, so no concurrency
+        // cap is needed here.
+        let chunk_futures = jobs.chunks(MAX_FROST_JOBS_PER_ACTIVITY).map(|chunk| {
+            let sign_with = sign_with.clone();
+            async move { self.sign_frost_chunk(sign_with, chunk).await }
+        });
+        let chunk_shares: Vec<Vec<FrostShareResult>> =
+            futures::future::try_join_all(chunk_futures).await?;
+        Ok(chunk_shares.into_iter().flatten().collect())
+    }
+
+    /// Signs one chunk of FROST jobs as a single `SPARK_SIGN_FROST` activity,
+    /// returning the shares in job order.
+    async fn sign_frost_chunk(
+        &self,
+        sign_with: String,
+        chunk: &[FrostJob],
+    ) -> Result<Vec<FrostShareResult>, SignerError> {
+        let mut signatures = Vec::with_capacity(chunk.len());
+        for job in chunk {
             signatures.push(frost_job_to_request(job).map_err(to_spark_err)?);
         }
         let result: SparkSignFrostResult = self
@@ -465,10 +494,10 @@ impl TurnkeySparkSigner {
             )
             .await
             .map_err(to_spark_err)?;
-        if result.signatures.len() != jobs.len() {
+        if result.signatures.len() != chunk.len() {
             return Err(SignerError::Generic(format!(
                 "turnkey sign_frost: expected {} shares, got {}",
-                jobs.len(),
+                chunk.len(),
                 result.signatures.len()
             )));
         }
@@ -544,6 +573,10 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
         Ok(PublicKeyBytes::from_public_key(
             &self.leaf_public_key(&id).await?,
         ))
+    }
+
+    fn is_remote(&self) -> bool {
+        true
     }
 
     async fn get_static_deposit_public_key(
@@ -942,6 +975,7 @@ mod tests {
             account_number: Some(0),
             identity_public_key: None,
             retry: None,
+            max_rps: None,
         };
         Arc::new(TurnkeyClient::new(&config, http).unwrap())
     }

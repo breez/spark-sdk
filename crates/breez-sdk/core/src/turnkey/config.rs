@@ -99,4 +99,11 @@ pub struct TurnkeyConfig {
     pub identity_public_key: Option<String>,
     /// Retry policy for Turnkey requests. Unset uses the default policy.
     pub retry: Option<TurnkeyRetryConfig>,
+    /// Maximum requests per second the client issues to this suborganization,
+    /// across all concurrent operations. The client paces itself to this rate.
+    /// Unset uses Turnkey's documented per-suborganization cap of 10 RPS; set it
+    /// to the account's actual limit if a different one is provisioned. Must be
+    /// greater than 0 when set: 0 is rejected at connect.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub max_rps: Option<u32>,
 }
