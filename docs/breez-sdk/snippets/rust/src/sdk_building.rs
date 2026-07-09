@@ -86,6 +86,51 @@ pub(crate) fn with_payment_observer(builder: SdkBuilder) -> SdkBuilder {
 }
 // ANCHOR_END: with-payment-observer
 
+// ANCHOR: with-session-store
+pub(crate) struct EncryptingSessionStore {
+    inner: Arc<dyn SessionStore>,
+}
+
+#[async_trait]
+impl SessionStore for EncryptingSessionStore {
+    async fn get_session(
+        &self,
+        service_identity_key: PublicKey,
+    ) -> Result<Session, SessionStoreError> {
+        let session = self.inner.get_session(service_identity_key).await?;
+        // Decrypt session.token here before returning it.
+        Ok(session)
+    }
+
+    async fn set_session(
+        &self,
+        service_identity_key: PublicKey,
+        session: Session,
+    ) -> Result<(), SessionStoreError> {
+        // Encrypt session.token here before persisting it.
+        self.inner.set_session(service_identity_key, session).await
+    }
+}
+
+// `identity` is the wallet identity public key bytes, used to scope the store.
+pub(crate) async fn with_session_store(
+    config: Config,
+    seed: Seed,
+    identity: Vec<u8>,
+) -> Result<SdkBuilder> {
+    // Reuse one storage backend for both the SDK storage and the session store.
+    let backend = default_storage("./.data".to_string());
+
+    // Get the session store the backend provides, then wrap it to add encryption.
+    let inner = default_session_store(backend.clone(), config.network, identity).await?;
+    let session_store = Arc::new(EncryptingSessionStore { inner });
+
+    Ok(SdkBuilder::new(config, seed)
+        .with_storage_backend(backend)
+        .with_session_store(session_store))
+}
+// ANCHOR_END: with-session-store
+
 pub(crate) async fn init_sdk_postgres() -> Result<BreezSdk> {
     // ANCHOR: init-sdk-postgres
     // Construct the seed using a mnemonic, entropy or passkey

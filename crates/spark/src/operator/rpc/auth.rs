@@ -40,19 +40,21 @@ impl SoAuthHeaderProvider {
         }
     }
 
-    async fn get_or_authenticate(&self) -> Result<Session> {
-        let cached = self
-            .session_store
-            .get_session(&self.identity_public_key)
-            .await;
-        match cached {
-            Ok(session) if session.is_valid() => return Ok(session),
-            Ok(_) => debug!("Operator session expired, authenticating"),
-            Err(SessionStoreError::NotFound) => {
-                debug!("Operator session not found, authenticating")
-            }
-            Err(SessionStoreError::Generic(e)) => {
-                error!("Failed to get operator session from session store: {}", e)
+    async fn get_or_authenticate(&self, force_refresh: bool) -> Result<Session> {
+        if !force_refresh {
+            let cached = self
+                .session_store
+                .get_session(&self.identity_public_key)
+                .await;
+            match cached {
+                Ok(session) if session.is_valid() => return Ok(session),
+                Ok(_) => debug!("Operator session expired, authenticating"),
+                Err(SessionStoreError::NotFound) => {
+                    debug!("Operator session not found, authenticating")
+                }
+                Err(SessionStoreError::Generic(e)) => {
+                    error!("Failed to get operator session from session store: {}", e)
+                }
             }
         }
         let session = self.authenticate().await?;
@@ -119,16 +121,31 @@ impl SoAuthHeaderProvider {
     }
 }
 
-#[macros::async_trait]
-impl HeaderProvider for SoAuthHeaderProvider {
-    async fn headers(&self) -> std::result::Result<HashMap<String, String>, HeaderProviderError> {
+impl SoAuthHeaderProvider {
+    async fn auth_headers(
+        &self,
+        force_refresh: bool,
+    ) -> std::result::Result<HashMap<String, String>, HeaderProviderError> {
         let session = self
-            .get_or_authenticate()
+            .get_or_authenticate(force_refresh)
             .await
             .map_err(|e| HeaderProviderError::Generic(e.to_string()))?;
         Ok(HashMap::from([(
             "authorization".to_string(),
             session.token,
         )]))
+    }
+}
+
+#[macros::async_trait]
+impl HeaderProvider for SoAuthHeaderProvider {
+    async fn headers(&self) -> std::result::Result<HashMap<String, String>, HeaderProviderError> {
+        self.auth_headers(false).await
+    }
+
+    async fn headers_refresh(
+        &self,
+    ) -> std::result::Result<HashMap<String, String>, HeaderProviderError> {
+        self.auth_headers(true).await
     }
 }

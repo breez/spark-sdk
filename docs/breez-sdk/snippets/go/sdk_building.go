@@ -78,6 +78,54 @@ func WithPaymentObserver(builder *breez_sdk_spark.SdkBuilder) {
 
 // ANCHOR_END: with-payment-observer
 
+// ANCHOR: with-session-store
+type EncryptingSessionStore struct {
+	inner breez_sdk_spark.SessionStore
+}
+
+func (s EncryptingSessionStore) GetSession(
+	serviceIdentityKey string,
+) (breez_sdk_spark.Session, error) {
+	session, err := s.inner.GetSession(serviceIdentityKey)
+	if err != nil {
+		return breez_sdk_spark.Session{}, err
+	}
+	// Decrypt session.Token here before returning it.
+	return session, nil
+}
+
+func (s EncryptingSessionStore) SetSession(
+	serviceIdentityKey string,
+	session breez_sdk_spark.Session,
+) error {
+	// Encrypt session.Token here before persisting it.
+	return s.inner.SetSession(serviceIdentityKey, session)
+}
+
+// `identity` is the wallet identity public key bytes, used to scope the store.
+func WithSessionStore(
+	config breez_sdk_spark.Config,
+	seed breez_sdk_spark.Seed,
+	identity []byte,
+) (*breez_sdk_spark.SdkBuilder, error) {
+	// Reuse one storage backend for both the SDK storage and the session store.
+	backend := breez_sdk_spark.DefaultStorage("./.data")
+
+	// Get the session store the backend provides, then wrap it to add encryption.
+	inner, err := breez_sdk_spark.DefaultSessionStore(backend, config.Network, identity)
+	if err != nil {
+		return nil, err
+	}
+	sessionStore := EncryptingSessionStore{inner: inner}
+
+	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
+	builder.WithStorageBackend(backend)
+	builder.WithSessionStore(sessionStore)
+	return builder, nil
+}
+
+// ANCHOR_END: with-session-store
+
 func InitSdkPostgres() (*breez_sdk_spark.BreezSdk, error) {
 	// ANCHOR: init-sdk-postgres
 	// Construct the seed using a mnemonic, entropy or passkey

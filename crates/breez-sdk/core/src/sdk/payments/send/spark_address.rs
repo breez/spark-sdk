@@ -39,13 +39,13 @@ pub(super) async fn send(
             ));
         }
 
-        return send_htlc(
+        return Box::pin(send_htlc(
             sdk,
             &spark_address,
             amount.try_into()?,
             htlc_options,
             idempotency_key,
-        )
+        ))
         .await;
     }
 
@@ -90,16 +90,14 @@ async fn send_htlc(
         .as_ref()
         .map(|key| TransferId::from_str(key))
         .transpose()?;
-    let transfer = sdk
-        .spark_wallet
-        .create_htlc(
-            amount_sat,
-            address,
-            &payment_hash,
-            expiry_duration,
-            transfer_id,
-        )
-        .await?;
+    let transfer = Box::pin(sdk.spark_wallet.create_htlc(
+        amount_sat,
+        address,
+        &payment_hash,
+        expiry_duration,
+        transfer_id,
+    ))
+    .await?;
 
     let payment: Payment = transfer.try_into()?;
 

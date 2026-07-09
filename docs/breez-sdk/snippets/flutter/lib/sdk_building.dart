@@ -51,6 +51,9 @@ Future<void> withAccountNumber(SdkBuilder builder) async {
 // ANCHOR: with-payment-observer
 // ANCHOR_END: with-payment-observer
 
+// ANCHOR: with-session-store
+// ANCHOR_END: with-session-store
+
 Future<BreezSdk> initSdkServer() async {
   // ANCHOR: init-sdk-server
   // Construct the seed using a mnemonic, entropy or passkey

@@ -122,9 +122,9 @@ impl GraphQLClient {
 
     /// Execute a raw GraphQL query.
     ///
-    /// Retries once on a 401 (after re-fetching auth headers) and up to
-    /// `retry_config.max_retries` times on transient 5xx responses with
-    /// exponential backoff and jitter.
+    /// Retries once on a 401 after force-refreshing auth headers (re-minting the
+    /// session, bypassing any cached token), and up to `retry_config.max_retries`
+    /// times on transient 5xx responses with exponential backoff and jitter.
     pub async fn post_query<Q: GraphQLQuery, T>(
         &self,
         variables: T,
@@ -134,14 +134,17 @@ impl GraphQLClient {
     {
         let full_url = self.get_full_url();
         let mut auth_retried = false;
+        let mut force_refresh = false;
         let mut server_attempt: u32 = 0;
 
         loop {
-            let headers = self
-                .header_provider
-                .headers()
-                .await
-                .map_err(|e| GraphQLError::Authentication(e.to_string()))?;
+            let headers = if force_refresh {
+                self.header_provider.headers_refresh().await
+            } else {
+                self.header_provider.headers().await
+            }
+            .map_err(|e| GraphQLError::Authentication(e.to_string()))?;
+            force_refresh = false;
 
             let err = match self
                 .post_query_inner::<Q, T>(&full_url, &headers, variables.clone())
@@ -163,6 +166,7 @@ impl GraphQLClient {
 
             if *status_code == 401 && !auth_retried {
                 auth_retried = true;
+                force_refresh = true;
                 continue;
             }
 
@@ -603,6 +607,34 @@ mod tests {
         }
     }
 
+    /// Header provider that counts `headers` vs `headers_refresh` calls and
+    /// returns a distinct token from each, so a test can assert the 401 retry
+    /// path force-refreshes rather than re-reading the cached headers.
+    #[derive(Default)]
+    struct CountingHeaderProvider {
+        headers_calls: AtomicUsize,
+        refresh_calls: AtomicUsize,
+    }
+
+    #[macros::async_trait]
+    impl HeaderProvider for CountingHeaderProvider {
+        async fn headers(&self) -> Result<HashMap<String, String>, HeaderProviderError> {
+            self.headers_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HashMap::from([(
+                "Authorization".to_string(),
+                "Bearer stale".to_string(),
+            )]))
+        }
+
+        async fn headers_refresh(&self) -> Result<HashMap<String, String>, HeaderProviderError> {
+            self.refresh_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HashMap::from([(
+                "Authorization".to_string(),
+                "Bearer fresh".to_string(),
+            )]))
+        }
+    }
+
     /// Build a `GraphQLClient` wired up with the mock HTTP client and a
     /// static header provider so `post_query` never triggers an
     /// authentication round-trip.
@@ -696,6 +728,29 @@ mod tests {
         let result = client.list_wallet_webhooks().await;
         assert!(result.is_ok(), "expected success, got {result:?}");
         assert_eq!(handle.post_calls(), 2);
+    }
+
+    #[async_test_all]
+    async fn post_query_force_refreshes_headers_on_401() {
+        let http = MockHttpClient::with_responses(vec![
+            (401, "unauthorized"),
+            (200, VALID_WEBHOOKS_RESPONSE),
+        ]);
+        let provider = Arc::new(CountingHeaderProvider::default());
+        let client = GraphQLClient {
+            client: Arc::new(http),
+            base_url: "http://test.invalid".to_string(),
+            schema_endpoint: "graphql".to_string(),
+            retry_config: fast_retry(2),
+            header_provider: provider.clone(),
+        };
+
+        let result = client.list_wallet_webhooks().await;
+        assert!(result.is_ok(), "expected success, got {result:?}");
+        // First attempt reads the (stale) cached headers; the 401 retry
+        // force-refreshes exactly once to re-mint the token.
+        assert_eq!(provider.headers_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(provider.refresh_calls.load(Ordering::SeqCst), 1);
     }
 
     #[async_test_all]

@@ -47,7 +47,6 @@ External signers are not supported in Flutter due to limitations with passing tr
 
 Some external signers can't perform the SDK's local ECIES/HMAC operations (for example, a policy-restricted enclave that won't release key material). For these, implement {{#name ExternalSigningSigner}} instead of {{#name ExternalBreezSigner}}, then connect with {{#name connect_with_signing_only_signer}}. With such a signer:
 
-- **Session tokens** are stored in plaintext instead of encrypted at rest.
 - **LNURL-auth** returns an error when called.
 - **Real-time sync** must be disabled: leave [{{#name real_time_sync_server_url}}](./config.md#real-time-sync-server-url) unset, or the build fails.
 - **Cross-chain** must be disabled: leave [{{#name cross_chain_config}}](./config.md#send-usdc-usdt) unset, or the build fails.

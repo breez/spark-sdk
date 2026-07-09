@@ -66,6 +66,32 @@ pub fn custom_storage(storage: Arc<dyn Storage>) -> Arc<dyn StorageBackend> {
     Arc::new(prebuilt::PrebuiltBackend::new(storage, None, None, None))
 }
 
+/// The session store `backend` provides for `identity` on `network` (its own
+/// persistence: `PostgreSQL`/`MySQL` when the backend is DB-backed, else an
+/// in-memory store).
+///
+/// Returned so it can be wrapped in a decorating [`SessionStore`] and passed to
+/// [`SdkBuilder::with_session_store`](crate::SdkBuilder::with_session_store),
+/// keeping the backend's persistence. A typical use is at-rest encryption (the
+/// SDK does not encrypt tokens itself): wrap it in a store that encrypts on
+/// write and decrypts on read. `identity` is the wallet identity public key
+/// bytes (the same value the SDK derives from the signer).
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+pub async fn default_session_store(
+    backend: Arc<dyn StorageBackend>,
+    network: Network,
+    identity: Vec<u8>,
+) -> Result<Arc<dyn crate::session_store::SessionStore>, SdkError> {
+    let stores = backend.create_stores(network, identity).await?;
+    let inner = stores
+        .session_store
+        .clone()
+        .unwrap_or_else(|| Arc::new(spark_wallet::InMemorySessionStore::default()));
+    Ok(Arc::new(crate::session_store::SparkSessionStoreAdapter(
+        inner,
+    )))
+}
+
 /// File-based `SQLite` storage rooted at `storage_dir` — the default for
 /// mobile and desktop apps. Each tenant gets its own database file under the
 /// directory.

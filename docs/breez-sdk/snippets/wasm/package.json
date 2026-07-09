@@ -24,7 +24,7 @@
         "eslint-plugin-promise": "^6.0.0",
         "eslint-plugin-react": "^7.33.2",
         "tsx": "^3.12.7",
-        "typescript": "*"
+        "typescript": "~5.3.3"
     },
     "prettier": {
         "endOfLine": "lf",

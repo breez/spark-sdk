@@ -12,7 +12,7 @@ use spark_postgres::{
     PostgresSessionStore, PostgresTokenStore, PostgresTreeStore, default_postgres_storage_config,
 };
 use spark_wallet::{
-    DefaultSigner, Network, Signer, SparkSigner, SparkSignerAdapter, SparkWallet,
+    DefaultSigner, Network, SessionStore, Signer, SparkSigner, SparkSignerAdapter, SparkWallet,
     SparkWalletConfig, WalletBuilder, WalletEvent,
 };
 use tokio::sync::broadcast::Receiver;
@@ -139,6 +139,38 @@ pub async fn create_regtest_wallet() -> Result<(SparkWallet, Receiver<WalletEven
     wallet.start_background_processing().await;
 
     // Wait for initial sync
+    wait_for_event(&mut listener, 60, "Synced", |e| match e {
+        WalletEvent::Synced => Ok(Some(e)),
+        _ => Ok(None),
+    })
+    .await?;
+
+    info!("Wallet synced successfully");
+    Ok((wallet, listener))
+}
+
+/// Like [`create_regtest_wallet`] but installs a caller-provided session store,
+/// so tests can exercise the operator auth-token behavior (the force-refresh
+/// self-heal). Tree and token-output stores stay in memory.
+pub async fn create_regtest_wallet_with_session_store(
+    session_store: Arc<dyn SessionStore>,
+) -> Result<(SparkWallet, Receiver<WalletEvent>)> {
+    let mut config = SparkWalletConfig::default_config(Network::Regtest);
+    config.leaf_auto_optimize_enabled = false;
+
+    let mut seed = [0u8; 32];
+    rand::thread_rng().fill(&mut seed);
+    let signer = Arc::new(DefaultSigner::new(&seed, Network::Regtest)?);
+    let spark_signer = Arc::new(SparkSignerAdapter::new(signer));
+
+    info!("Connecting wallet to deployed regtest operators (custom session store)...");
+    let wallet = WalletBuilder::new(config, spark_signer)
+        .with_session_store(session_store)
+        .build()
+        .await?;
+    let mut listener = wallet.subscribe_events();
+    wallet.start_background_processing().await;
+
     wait_for_event(&mut listener, 60, "Synced", |e| match e {
         WalletEvent::Synced => Ok(Some(e)),
         _ => Ok(None),
