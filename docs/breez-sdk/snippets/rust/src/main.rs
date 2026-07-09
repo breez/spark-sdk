@@ -1,4 +1,5 @@
 mod buying_bitcoin;
+mod client_signing;
 mod config;
 mod contacts;
 mod cross_chain;
