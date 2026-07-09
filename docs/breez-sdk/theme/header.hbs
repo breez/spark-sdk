@@ -1,0 +1,43 @@
+<!--
+  Breez SDK · Spark docs — brand header partial.
+
+  mdBook renders the `header` partial at the top of every page's content. The default
+  theme ships an EMPTY header.hbs, which is why the reskin's styles.css and
+  brand-header.js both reference `.brand-header` / #brand-controls but the file
+  itself was never committed to the reskin branch. THIS is that missing file,
+  reconstructed from the design mockup (design/Breez SDK Docs.dc.html) and the
+  class names in styles.css.
+
+  Drop this at: docs/breez-sdk/theme/header.hbs
+  It pairs with styles.css (.brand-header rules) and brand-header.js (which moves
+  mdBook's theme/search/sidebar controls into #brand-controls at load time).
+-->
+<div id="brand-header" class="brand-header">
+  <a class="brand-logo" href="{{ path_to_root }}index.html" aria-label="Docs home">
+    <img src="{{ path_to_root }}assets/icons/logo-breez-header.svg" alt="Breez">
+  </a>
+  <span class="brand-sep"></span>
+  <span class="brand-product">SDK Documentation</span>
+  <span class="brand-badge">
+    <img src="{{ path_to_root }}assets/icons/spark_icon.svg" alt="">Spark
+  </span>
+
+  <span class="brand-spacer"></span>
+
+  <nav class="brand-nav">
+    <a href="https://breez.technology" target="_blank" rel="noopener">Home</a>
+    <a href="https://github.com/breez/spark-sdk" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://t.me/breezsdk" target="_blank" rel="noopener" aria-label="Telegram">
+      <img src="{{ path_to_root }}assets/icons/telegram-icon.svg" alt="">
+    </a>
+  </nav>
+
+  <!-- brand-header.js relocates #sidebar-toggle, #theme-toggle, #theme-list and
+       #search-toggle into this container so they read as one bar. -->
+  <div id="brand-controls" class="brand-controls"></div>
+
+  <a class="brand-cta" href="https://breez.technology/request-api-key/#contact-us-form-sdk" target="_blank" rel="noopener">
+    Request API Key
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+  </a>
+</div>
