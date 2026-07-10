@@ -860,3 +860,45 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
             .map_err(|e| WebhookRepositoryError::General(e.into()))
     }
 }
+
+// PostgreSQL tests - only run when LNURL_TEST_POSTGRES_URL is set.
+// Example: LNURL_TEST_POSTGRES_URL="postgres://user:pass@localhost/lnurl_test" cargo test
+#[cfg(test)]
+mod postgres_tests {
+    use crate::repository::shared_tests;
+
+    /// Connects, migrates, and clears `allowed_domains` for a clean slate.
+    /// Returns `None` (skipping the test) when `LNURL_TEST_POSTGRES_URL` is unset.
+    async fn setup_pool() -> Option<sqlx::PgPool> {
+        let url = std::env::var("LNURL_TEST_POSTGRES_URL").ok()?;
+        let pool = sqlx::PgPool::connect(&url).await.ok()?;
+        crate::postgresql::run_migrations(&pool).await.ok()?;
+        sqlx::query("DELETE FROM allowed_domains")
+            .execute(&pool)
+            .await
+            .ok()?;
+        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn list_domains_surfaces_api_keys() {
+        let Some(pool) = setup_pool().await else {
+            return;
+        };
+        sqlx::query("INSERT INTO allowed_domains (domain, api_key) VALUES ('a.com', 'key-a')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::list_domains_surfaces_api_keys(&db).await;
+    }
+
+    #[tokio::test]
+    async fn set_domain_jwt_round_trips() {
+        let Some(pool) = setup_pool().await else {
+            return;
+        };
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::set_domain_jwt_round_trips(&db).await;
+    }
+}

@@ -874,61 +874,31 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::LnurlRepository as SqliteRepository;
-    use crate::repository::LnurlRepository;
+mod sqlite_tests {
+    use crate::repository::shared_tests;
     use sqlx::sqlite::SqlitePoolOptions;
 
-    #[tokio::test]
-    async fn list_domains_round_trips_api_key() {
+    async fn setup_pool() -> sqlx::SqlitePool {
         let pool = SqlitePoolOptions::new().connect(":memory:").await.unwrap();
         crate::sqlite::run_migrations(&pool).await.unwrap();
+        pool
+    }
 
-        // A keyed domain (admins set `api_key` directly in the row) and a
-        // keyless one added via the config bootstrap path.
+    #[tokio::test]
+    async fn list_domains_surfaces_api_keys() {
+        let pool = setup_pool().await;
+        // Seed a keyed domain the way admins do: a direct row write.
         sqlx::query("INSERT INTO allowed_domains (domain, api_key) VALUES ('a.com', 'key-a')")
             .execute(&pool)
             .await
             .unwrap();
-        let db = SqliteRepository::new(pool);
-        db.add_domain("b.com").await.unwrap();
-
-        let mut domains = db.list_domains().await.unwrap();
-        domains.sort_by(|x, y| x.domain.cmp(&y.domain));
-        assert_eq!(domains.len(), 2);
-        assert_eq!(domains[0].domain, "a.com");
-        assert_eq!(domains[0].api_key.as_deref(), Some("key-a"));
-        assert_eq!(domains[1].domain, "b.com");
-        assert_eq!(domains[1].api_key, None);
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::list_domains_surfaces_api_keys(&db).await;
     }
 
     #[tokio::test]
-    async fn set_domain_jwt_round_trips_via_list_domains() {
-        let pool = SqlitePoolOptions::new().connect(":memory:").await.unwrap();
-        crate::sqlite::run_migrations(&pool).await.unwrap();
-        let db = SqliteRepository::new(pool);
-        db.add_domain("a.com").await.unwrap();
-
-        // No JWT yet.
-        let before = db.list_domains().await.unwrap();
-        assert_eq!(
-            before.iter().find(|d| d.domain == "a.com").unwrap().jwt,
-            None
-        );
-
-        db.set_domain_jwt("a.com", "tok").await.unwrap();
-        // Writing an unknown domain updates zero rows, not an error.
-        db.set_domain_jwt("missing.com", "x").await.unwrap();
-
-        let after = db.list_domains().await.unwrap();
-        assert_eq!(
-            after
-                .iter()
-                .find(|d| d.domain == "a.com")
-                .unwrap()
-                .jwt
-                .as_deref(),
-            Some("tok")
-        );
+    async fn set_domain_jwt_round_trips() {
+        let db = super::LnurlRepository::new(setup_pool().await);
+        shared_tests::set_domain_jwt_round_trips(&db).await;
     }
 }

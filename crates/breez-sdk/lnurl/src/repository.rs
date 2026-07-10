@@ -197,3 +197,65 @@ pub struct WebhookPayloadData {
     pub sender_comment: Option<String>,
     pub domain: String,
 }
+
+/// Backend-agnostic tests for the domain-attribution repository methods, run
+/// against both the `SQLite` and `PostgreSQL` implementations. Assertions look
+/// up domains by name rather than by count, so they tolerate a shared test
+/// database with rows from other tests.
+#[cfg(test)]
+pub mod shared_tests {
+    use super::LnurlRepository;
+
+    /// `list_domains` surfaces a domain's `api_key` and reports `None` for a
+    /// keyless one added via `add_domain`. The caller seeds the keyed `a.com`
+    /// (`api_key` `key-a`) first, since setting a key is a direct row write with
+    /// no trait method (admins manage keys out-of-band).
+    pub async fn list_domains_surfaces_api_keys<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        db.add_domain("b.com").await.unwrap();
+
+        let domains = db.list_domains().await.unwrap();
+        let keyed = domains
+            .iter()
+            .find(|d| d.domain == "a.com")
+            .expect("seeded keyed domain");
+        assert_eq!(keyed.api_key.as_deref(), Some("key-a"));
+        let keyless = domains
+            .iter()
+            .find(|d| d.domain == "b.com")
+            .expect("keyless domain");
+        assert_eq!(keyless.api_key, None);
+    }
+
+    /// `set_domain_jwt` writes the `jwt` column (readable via `list_domains`),
+    /// and updating an unknown domain touches zero rows without erroring.
+    pub async fn set_domain_jwt_round_trips<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        db.add_domain("a.com").await.unwrap();
+
+        let before = db.list_domains().await.unwrap();
+        assert_eq!(
+            before.iter().find(|d| d.domain == "a.com").unwrap().jwt,
+            None
+        );
+
+        db.set_domain_jwt("a.com", "tok").await.unwrap();
+        // Writing an unknown domain updates zero rows, not an error.
+        db.set_domain_jwt("missing.com", "x").await.unwrap();
+
+        let after = db.list_domains().await.unwrap();
+        assert_eq!(
+            after
+                .iter()
+                .find(|d| d.domain == "a.com")
+                .unwrap()
+                .jwt
+                .as_deref(),
+            Some("tok")
+        );
+    }
+}

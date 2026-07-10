@@ -628,4 +628,88 @@ mod tests {
         );
         assert_eq!(headers.get(PARTNER_JWT_HEADER), Some(&make_jwt(exp)));
     }
+
+    /// End-to-end guard for the task-local seam: a real `ServiceProvider` (the
+    /// SSP client the wallet uses), pointed at a local server, must send
+    /// `x-partner-jwt` for the domain set via `with_domain`. This relies on the
+    /// SSP request dispatch calling `headers()` on the caller's task; if a future
+    /// refactor moves dispatch onto a spawned task, `CURRENT_DOMAIN` would not
+    /// propagate and this fails instead of silently dropping attribution.
+    #[tokio::test]
+    async fn ssp_request_carries_partner_jwt_for_scoped_domain() {
+        use axum::{Json, Router, http::HeaderMap};
+        use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+        use spark::session_store::{InMemorySessionStore, Session, SessionStore};
+        use spark::ssp::{RetryConfig, ServiceProvider, ServiceProviderConfig};
+        use spark_wallet::{DefaultSigner, Network, SparkSignerAdapter};
+
+        // Local server recording the headers of the last inbound request.
+        let captured: Arc<Mutex<Option<HeaderMap>>> = Arc::new(Mutex::new(None));
+        let sink = Arc::clone(&captured);
+        let app = Router::new().fallback(move |headers: HeaderMap| {
+            let sink = Arc::clone(&sink);
+            async move {
+                *sink.lock().unwrap() = Some(headers);
+                Json(serde_json::json!({ "data": null }))
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        // Seed a valid session for the SSP identity so the auth provider returns
+        // a cached token without a network handshake, leaving `x-partner-jwt` as
+        // the header the request must carry.
+        let secp = Secp256k1::new();
+        let identity =
+            PublicKey::from_secret_key(&secp, &SecretKey::from_slice(&[1u8; 32]).unwrap());
+        let session_store: Arc<dyn SessionStore> = Arc::new(InMemorySessionStore::default());
+        session_store
+            .set_session(
+                &identity,
+                Session {
+                    token: "sess".to_string(),
+                    expiration: 9_999_999_999,
+                },
+            )
+            .await
+            .unwrap();
+
+        // Partner-JWT provider warmed for a.com.
+        let exp = now_secs() + 3600;
+        let provider = test_provider(&[("a.com", Some("key-a"))]);
+        seed_cache(&provider, "a.com", exp).await;
+
+        let signer = Arc::new(DefaultSigner::new(&[1u8; 32], Network::Regtest).unwrap());
+        let ssp = ServiceProvider::new(
+            ServiceProviderConfig {
+                base_url: format!("http://{addr}"),
+                schema_endpoint: Some("graphql".to_string()),
+                identity_public_key: identity,
+                user_agent: None,
+                retry_config: RetryConfig::default(),
+            },
+            Arc::new(SparkSignerAdapter::new(signer)),
+            session_store,
+            Some(provider as Arc<dyn HeaderProvider>),
+        );
+
+        // Any SSP query, inside the domain scope. The response is bogus so the
+        // call errors, but the request is sent first; we assert on its headers.
+        let _ = with_domain("a.com".to_string(), ssp.get_swap_fee_estimate(1000)).await;
+
+        let headers = captured
+            .lock()
+            .unwrap()
+            .take()
+            .expect("server received a request");
+        assert_eq!(
+            headers
+                .get(PARTNER_JWT_HEADER)
+                .expect("x-partner-jwt present")
+                .to_str()
+                .unwrap(),
+            make_jwt(exp).as_str()
+        );
+    }
 }
