@@ -7,9 +7,9 @@ use crate::repository::{DomainConfig, LnurlRepository, LnurlRepositoryError};
 
 const REFRESH_INTERVAL: Duration = Duration::from_mins(1);
 
-/// Allowed domains mapped to their effective Breez API key: the domain's own
-/// key, or the configured default when it has none (exchanged for the partner
-/// JWT that carries Spark attribution). `None` only when neither is set.
+/// Allowed domains mapped to their own Breez API key, or `None` when the domain
+/// has none and falls back to the configured default. The api key is exchanged
+/// for the partner JWT that carries Spark attribution.
 pub type DomainMap = HashMap<String, Option<String>>;
 
 /// Load the allowed domains from the database and start a background task that
@@ -23,10 +23,10 @@ pub async fn start<DB>(
 where
     DB: LnurlRepository + Clone + Send + Sync + 'static,
 {
-    let (initial, keyless) = load(&db, default_api_key.as_deref()).await?;
+    let (initial, without_api_key) = load(&db).await?;
     log_loaded(&initial);
     if warn_missing_api_keys {
-        warn_keyless(&keyless, default_api_key.is_some());
+        warn_missing_api_key(&without_api_key, default_api_key.is_some());
     }
     let domains = Arc::new(RwLock::new(initial));
 
@@ -49,37 +49,23 @@ where
     Ok(domains)
 }
 
-/// Load the effective-key map together with the domains that have no key of
-/// their own (surfaced by the keyless warning, whether or not a default covers
-/// them).
-async fn load<DB>(
-    db: &DB,
-    default_api_key: Option<&str>,
-) -> Result<(DomainMap, Vec<String>), LnurlRepositoryError>
+/// Load the own-key map together with the domains that have no key of their own.
+async fn load<DB>(db: &DB) -> Result<(DomainMap, Vec<String>), LnurlRepositoryError>
 where
     DB: LnurlRepository,
 {
     let configs = db.list_domains().await?;
-    let keyless = keyless_domains(&configs);
-    Ok((to_map(configs, default_api_key), keyless))
+    let without_api_key = domains_without_api_key(&configs);
+    Ok((to_map(configs), without_api_key))
 }
 
-/// Build the domain -> effective-key map, falling back to `default_api_key` for any
-/// domain without its own.
-fn to_map(configs: Vec<DomainConfig>, default_api_key: Option<&str>) -> DomainMap {
-    configs
-        .into_iter()
-        .map(|d| {
-            (
-                d.domain,
-                d.api_key.or_else(|| default_api_key.map(String::from)),
-            )
-        })
-        .collect()
+/// Build the domain -> own-key map (`None` for a domain with no key of its own).
+fn to_map(configs: Vec<DomainConfig>) -> DomainMap {
+    configs.into_iter().map(|d| (d.domain, d.api_key)).collect()
 }
 
 /// Domains that have no Breez API key of their own.
-fn keyless_domains(configs: &[DomainConfig]) -> Vec<String> {
+fn domains_without_api_key(configs: &[DomainConfig]) -> Vec<String> {
     configs
         .iter()
         .filter(|d| d.api_key.is_none())
@@ -96,8 +82,8 @@ fn log_loaded(map: &DomainMap) {
 /// Warn about allowed domains without a Breez API key of their own. With a
 /// default configured they are still attributed (to the default); without one
 /// their lightning-address receives are recorded unattributed.
-fn warn_keyless(keyless: &[String], has_default: bool) {
-    for domain in keyless {
+fn warn_missing_api_key(without_api_key: &[String], has_default: bool) {
+    for domain in without_api_key {
         if has_default {
             warn!(
                 "allowed domain '{domain}' has no Breez API key of its own; using the default key"
@@ -118,7 +104,7 @@ async fn refresh_once<DB>(
 ) where
     DB: LnurlRepository,
 {
-    let (latest, keyless) = match load(db, default_api_key).await {
+    let (latest, without_api_key) = match load(db).await {
         Ok(loaded) => loaded,
         Err(e) => {
             error!("Failed to refresh allowed domains: {}", e);
@@ -135,7 +121,7 @@ async fn refresh_once<DB>(
     }
 
     if warn_missing_api_keys {
-        warn_keyless(&keyless, default_api_key.is_some());
+        warn_missing_api_key(&without_api_key, default_api_key.is_some());
     }
     *domains.write().await = latest;
 }
@@ -171,24 +157,19 @@ mod tests {
     }
 
     #[test]
-    fn to_map_falls_back_to_default_api_key() {
+    fn to_map_keeps_own_key() {
         let configs = vec![cfg("a.com", Some("own")), cfg("b.com", None)];
-
-        // With a default, a keyless domain inherits it; a keyed one keeps its own.
-        let map = to_map(configs.clone(), Some("default"));
+        let map = to_map(configs);
         assert_eq!(map.get("a.com"), Some(&Some("own".to_string())));
-        assert_eq!(map.get("b.com"), Some(&Some("default".to_string())));
-
-        // Without a default, a keyless domain stays unattributed (None).
-        let map = to_map(configs, None);
-        assert_eq!(map.get("a.com"), Some(&Some("own".to_string())));
+        // A domain with no api key maps to None; the default is applied when
+        // selecting the wallet, not here.
         assert_eq!(map.get("b.com"), Some(&None));
     }
 
     #[test]
-    fn keyless_domains_lists_those_without_own_key() {
+    fn lists_domains_without_an_api_key() {
         // Independent of any default: the warning tracks own keys.
         let configs = vec![cfg("a.com", Some("own")), cfg("b.com", None)];
-        assert_eq!(keyless_domains(&configs), vec!["b.com".to_string()]);
+        assert_eq!(domains_without_api_key(&configs), vec!["b.com".to_string()]);
     }
 }

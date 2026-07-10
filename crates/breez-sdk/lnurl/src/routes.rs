@@ -699,9 +699,9 @@ where
     }
 
     /// Create the lightning-address invoice for `username` on `domain` and build
-    /// the LNURL-pay response. The invoice is created by a per-request wallet
-    /// bound to `domain`, so its SSP receive call carries the domain's
-    /// `x-partner-jwt`.
+    /// the LNURL-pay response. A domain with its own api key creates the invoice
+    /// with a per-request wallet bound to that key, so its SSP receive call
+    /// carries the domain's `x-partner-jwt`; other domains use the shared wallet.
     #[allow(clippy::too_many_lines)]
     async fn handle_invoice_inner(
         state: State<DB>,
@@ -767,21 +767,30 @@ where
         };
 
         let pubkey = parse_pubkey(&user.pubkey)?;
-        // Per-request wallet bound to this domain, so the SSP receive call
-        // carries the domain's partner attribution. It shares the process
-        // signer, session, and connection pool, and starts no background tasks.
-        // If it can't be built, fall back to the shared wallet and create the
-        // invoice unattributed: attribution is best-effort and must never fail
-        // a receive. The shared wallet is already constructed, so it sidesteps
-        // per-request construction failures.
-        let wallet = match state.build_invoice_wallet(&domain).await {
-            Ok(wallet) => wallet,
-            Err(e) => {
-                warn!(
-                    "failed to build attributed wallet for '{domain}', creating the invoice unattributed via the shared wallet: {e}"
-                );
-                std::sync::Arc::clone(&state.wallet)
+        // Attribution routing: a domain with its own api key gets a per-request
+        // wallet attributed to that key; a domain with no api key of its own uses
+        // the shared wallet, which already carries the default attribution. A
+        // per-request build failure falls back to the shared wallet: attribution
+        // is best-effort and must never fail a receive, and the shared wallet is
+        // already constructed so it sidesteps per-request construction failures.
+        let has_api_key = state
+            .domains
+            .read()
+            .await
+            .get(&domain)
+            .is_some_and(Option::is_some);
+        let wallet = if has_api_key {
+            match state.build_invoice_wallet(&domain).await {
+                Ok(wallet) => wallet,
+                Err(e) => {
+                    warn!(
+                        "failed to build attributed wallet for '{domain}', using the shared wallet: {e}"
+                    );
+                    std::sync::Arc::clone(&state.wallet)
+                }
             }
+        } else {
+            std::sync::Arc::clone(&state.wallet)
         };
         let res = wallet
             .create_lightning_invoice(
@@ -1717,6 +1726,7 @@ mod tests {
         ) -> Result<(), LnurlRepositoryError> {
             Ok(())
         }
+
         async fn get_webhook_payloads(
             &self,
             _: &[String],

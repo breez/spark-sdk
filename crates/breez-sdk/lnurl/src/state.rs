@@ -32,11 +32,11 @@ pub struct State<DB> {
 }
 
 impl<DB> State<DB> {
-    /// Builds a per-request, background-less wallet for creating one invoice. It
-    /// shares the process signer, the pre-warmed session, and the connection
-    /// pool, and carries `domain`'s partner-JWT provider (when attribution is
-    /// enabled) so the invoice is attributed to that domain's partner. No
-    /// background tasks are started; the wallet is dropped after the request.
+    /// Builds a per-request, background-less wallet for creating one invoice,
+    /// attributed to `domain`'s own partner. Used for a domain with its own api
+    /// key; domains without one use the shared wallet instead. Shares the
+    /// process signer, pre-warmed session, and connection pool; starts no
+    /// background tasks and is dropped after the request.
     pub async fn build_invoice_wallet(
         &self,
         domain: &str,

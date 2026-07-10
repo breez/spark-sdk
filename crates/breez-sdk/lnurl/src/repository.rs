@@ -46,7 +46,7 @@ pub struct PendingZapReceipt {
 #[derive(Debug, Clone)]
 pub struct DomainConfig {
     pub domain: String,
-    /// The Breez API key associated to this domain.
+    /// The domain's own Breez API key, if set.
     pub api_key: Option<String>,
     /// The cached partner JWT if one has been fetched and persisted.
     pub jwt: Option<String>,
@@ -206,9 +206,9 @@ pub struct WebhookPayloadData {
 pub mod shared_tests {
     use super::LnurlRepository;
 
-    /// `list_domains` surfaces a domain's `api_key` and reports `None` for a
-    /// keyless one added via `add_domain`. The caller seeds the keyed `a.com`
-    /// (`api_key` `key-a`) first, since setting a key is a direct row write with
+    /// `list_domains` surfaces a domain's `api_key` and reports `None` for one
+    /// with no key, added via `add_domain`. The caller seeds `a.com` with an
+    /// `api_key` (`key-a`) first, since setting a key is a direct row write with
     /// no trait method (admins manage keys out-of-band).
     pub async fn list_domains_surfaces_api_keys<DB>(db: &DB)
     where
@@ -217,26 +217,26 @@ pub mod shared_tests {
         db.add_domain("b.com").await.unwrap();
 
         let domains = db.list_domains().await.unwrap();
-        let keyed = domains
+        let with_key = domains
             .iter()
             .find(|d| d.domain == "a.com")
-            .expect("seeded keyed domain");
-        assert_eq!(keyed.api_key.as_deref(), Some("key-a"));
-        let keyless = domains
+            .expect("seeded domain with an api key");
+        assert_eq!(with_key.api_key.as_deref(), Some("key-a"));
+        let without_key = domains
             .iter()
             .find(|d| d.domain == "b.com")
-            .expect("keyless domain");
-        assert_eq!(keyless.api_key, None);
+            .expect("domain with no api key");
+        assert_eq!(without_key.api_key, None);
     }
 
-    /// `set_domain_jwt` writes the `jwt` column (readable via `list_domains`),
-    /// and updating an unknown domain touches zero rows without erroring.
+    /// `set_domain_jwt` updates the cached JWT of a domain with an api key
+    /// (readable via `list_domains`); a domain with no attribution row is a
+    /// no-op, not an error. The caller seeds `a.com` with an api key (allowlisted
+    /// + `api_key` set) first, since a row can only be created by setting an api key.
     pub async fn set_domain_jwt_round_trips<DB>(db: &DB)
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        db.add_domain("a.com").await.unwrap();
-
         let before = db.list_domains().await.unwrap();
         assert_eq!(
             before.iter().find(|d| d.domain == "a.com").unwrap().jwt,
@@ -244,7 +244,7 @@ pub mod shared_tests {
         );
 
         db.set_domain_jwt("a.com", "tok").await.unwrap();
-        // Writing an unknown domain updates zero rows, not an error.
+        // A domain with no attribution row updates zero rows, not an error.
         db.set_domain_jwt("missing.com", "x").await.unwrap();
 
         let after = db.list_domains().await.unwrap();

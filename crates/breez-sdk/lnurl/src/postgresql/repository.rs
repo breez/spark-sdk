@@ -316,18 +316,11 @@ impl crate::repository::LnurlRepository for LnurlRepository {
     }
 
     async fn set_domain_jwt(&self, domain: &str, jwt: &str) -> Result<(), LnurlRepositoryError> {
-        // Upsert the cached JWT, but only for an allowed domain: the SELECT
-        // yields no row for an unknown one, so it's a no-op rather than an
-        // orphan. Touches only `jwt`, never a concurrently-set `api_key`.
-        sqlx::query(
-            "INSERT INTO domain_attribution (domain, jwt) \
-             SELECT domain, $2 FROM allowed_domains WHERE domain = $1 \
-             ON CONFLICT (domain) DO UPDATE SET jwt = excluded.jwt",
-        )
-        .bind(domain)
-        .bind(jwt)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("UPDATE domain_attribution SET jwt = $2 WHERE domain = $1")
+            .bind(domain)
+            .bind(jwt)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -895,19 +888,25 @@ mod postgres_tests {
         Some(pool)
     }
 
+    /// Seed `a.com` with an api key the way admins do: allowlist it, then set its
+    /// key in the attribution table.
+    async fn seed_domain_with_api_key(pool: &sqlx::PgPool) {
+        sqlx::query("INSERT INTO allowed_domains (domain) VALUES ('a.com')")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO domain_attribution (domain, api_key) VALUES ('a.com', 'key-a')")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn list_domains_surfaces_api_keys() {
         let Some(pool) = setup_pool().await else {
             return;
         };
-        sqlx::query("INSERT INTO allowed_domains (domain) VALUES ('a.com')")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO domain_attribution (domain, api_key) VALUES ('a.com', 'key-a')")
-            .execute(&pool)
-            .await
-            .unwrap();
+        seed_domain_with_api_key(&pool).await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::list_domains_surfaces_api_keys(&db).await;
     }
@@ -917,6 +916,7 @@ mod postgres_tests {
         let Some(pool) = setup_pool().await else {
             return;
         };
+        seed_domain_with_api_key(&pool).await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::set_domain_jwt_round_trips(&db).await;
     }

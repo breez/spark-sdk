@@ -1,4 +1,9 @@
-use crate::{repository::LnurlRepository, routes::LnurlServer, state::State};
+use crate::{
+    partner_jwt::{JwtCache, JwtStore, RepoJwtStore},
+    repository::LnurlRepository,
+    routes::LnurlServer,
+    state::State,
+};
 use anyhow::anyhow;
 use axum::{
     Extension, Router,
@@ -261,21 +266,24 @@ where
     // Fallback key for domains without their own, so none are unattributed.
     let default_api_key = is_mainnet.then(|| args.default_api_key.clone()).flatten();
 
-    let domains = domains::start(repository.clone(), is_mainnet, default_api_key).await?;
+    let domains = domains::start(repository.clone(), is_mainnet, default_api_key.clone()).await?;
 
-    // Shared per-domain partner-JWT cache (mainnet only). Its background task
-    // keeps a token warm per domain, persisting to the DB. `handle_invoice`
-    // builds a per-request wallet with a domain-bound provider off this cache,
-    // so each server-created invoice carries its own domain's `x-partner-jwt`.
+    // Shared partner-JWT cache (mainnet only). Its background task keeps a token
+    // warm for every domain with its own api key (persisted to the DB) and one
+    // for the default key. A domain with its own api key gets a per-request
+    // wallet; domains without one use the shared wallet below with the default
+    // attribution.
     let jwt_cache = if is_mainnet {
-        let store: Arc<dyn partner_jwt::JwtStore> =
-            Arc::new(partner_jwt::RepoJwtStore(repository.clone()));
-        Some(partner_jwt::JwtCache::start(Arc::clone(&domains), store).await)
+        let store: Arc<dyn JwtStore> = Arc::new(RepoJwtStore(repository.clone()));
+        Some(JwtCache::start(Arc::clone(&domains), default_api_key.clone(), store).await)
     } else {
         None
     };
 
-    // Create wallet using shared signer
+    let default_provider = jwt_cache
+        .as_ref()
+        .filter(|_| default_api_key.is_some())
+        .map(|c| c.default_provider() as Arc<dyn spark::header_provider::HeaderProvider>);
     let wallet = Arc::new(
         spark_wallet::SparkWallet::new(
             spark_config.clone(),
@@ -286,7 +294,7 @@ where
             Arc::clone(&connection_manager),
             None,
             None,
-            None,
+            default_provider,
             None,
             None,
         )
