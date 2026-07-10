@@ -70,7 +70,7 @@ LNURL payments have their own pair of methods, because completing them includes 
 
 ## Remote signers
 
-The signature does not have to come from a device holding the mnemonic. Any {{#name ExternalSparkSigner}} implementation can sign the package, including one backed by a remote signing service. For example, with a Turnkey signer ({{#name create_turnkey_signer}}), a policy can require the end user to approve the transfer signing activity (`SPARK_PREPARE_TRANSFER`) while allowing the server to run the rest of the signing (`SPARK_SIGN_FROST`). The payment then still cannot be sent without the user, and no key material leaves the enclave. See [Using an External Signer](external_signer.md) for the signer interfaces.
+The signature does not have to come from a device holding the mnemonic. Any {{#name ExternalSparkSigner}} implementation can sign the package, including one backed by a remote signing service. With Turnkey, a policy can require the end user to approve the transfer signing while the server runs the rest; see [Using Turnkey](turnkey.md#user-approved-payments).
 
 ## Limitations
 
