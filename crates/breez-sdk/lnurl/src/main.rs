@@ -263,16 +263,14 @@ where
 
     let domains = domains::start(repository.clone(), is_mainnet, default_api_key).await?;
 
-    // Per-domain Spark partner-JWT provider (mainnet only). Attached to the
-    // shared wallet so server-created lightning-address invoices carry
-    // `x-partner-jwt` for their own domain's partner. It hydrates its cache in
-    // the background (persisting to the DB), so it never blocks invoice creation.
-    let partner_header: Option<Arc<dyn spark::header_provider::HeaderProvider>> = if is_mainnet {
+    // Shared per-domain partner-JWT cache (mainnet only). Its background task
+    // keeps a token warm per domain, persisting to the DB. `handle_invoice`
+    // builds a per-request wallet with a domain-bound provider off this cache,
+    // so each server-created invoice carries its own domain's `x-partner-jwt`.
+    let jwt_cache = if is_mainnet {
         let store: Arc<dyn partner_jwt::JwtStore> =
             Arc::new(partner_jwt::RepoJwtStore(repository.clone()));
-        let provider =
-            partner_jwt::PerDomainJwtHeaderProvider::start(Arc::clone(&domains), store).await;
-        Some(provider as Arc<dyn spark::header_provider::HeaderProvider>)
+        Some(partner_jwt::JwtCache::start(Arc::clone(&domains), store).await)
     } else {
         None
     };
@@ -288,8 +286,8 @@ where
             Arc::clone(&connection_manager),
             None,
             None,
-            partner_header.clone(),
-            partner_header,
+            None,
+            None,
             None,
         )
         .await?,
@@ -405,6 +403,8 @@ where
         signer,
         session_store,
         service_provider,
+        spark_config,
+        jwt_cache,
         subscribed_keys,
         invoice_paid_trigger,
         webhook_secret,

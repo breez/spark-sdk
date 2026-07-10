@@ -281,9 +281,13 @@ impl crate::repository::LnurlRepository for LnurlRepository {
     }
 
     async fn list_domains(&self) -> Result<Vec<DomainConfig>, LnurlRepositoryError> {
-        let rows = sqlx::query("SELECT domain, api_key, jwt FROM allowed_domains")
-            .fetch_all(&self.pool)
-            .await?;
+        let rows = sqlx::query(
+            "SELECT d.domain, a.api_key, a.jwt \
+             FROM allowed_domains d \
+             LEFT JOIN domain_attribution a ON a.domain = d.domain",
+        )
+        .fetch_all(&self.pool)
+        .await?;
 
         let domains = rows
             .into_iter()
@@ -312,11 +316,18 @@ impl crate::repository::LnurlRepository for LnurlRepository {
     }
 
     async fn set_domain_jwt(&self, domain: &str, jwt: &str) -> Result<(), LnurlRepositoryError> {
-        sqlx::query("UPDATE allowed_domains SET jwt = $2 WHERE domain = $1")
-            .bind(domain)
-            .bind(jwt)
-            .execute(&self.pool)
-            .await?;
+        // Upsert the cached JWT, but only for an allowed domain: the SELECT
+        // yields no row for an unknown one, so it's a no-op rather than an
+        // orphan. Touches only `jwt`, never a concurrently-set `api_key`.
+        sqlx::query(
+            "INSERT INTO domain_attribution (domain, jwt) \
+             SELECT domain, $2 FROM allowed_domains WHERE domain = $1 \
+             ON CONFLICT (domain) DO UPDATE SET jwt = excluded.jwt",
+        )
+        .bind(domain)
+        .bind(jwt)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -873,6 +884,10 @@ mod postgres_tests {
         let url = std::env::var("LNURL_TEST_POSTGRES_URL").ok()?;
         let pool = sqlx::PgPool::connect(&url).await.ok()?;
         crate::postgresql::run_migrations(&pool).await.ok()?;
+        sqlx::query("DELETE FROM domain_attribution")
+            .execute(&pool)
+            .await
+            .ok()?;
         sqlx::query("DELETE FROM allowed_domains")
             .execute(&pool)
             .await
@@ -885,7 +900,11 @@ mod postgres_tests {
         let Some(pool) = setup_pool().await else {
             return;
         };
-        sqlx::query("INSERT INTO allowed_domains (domain, api_key) VALUES ('a.com', 'key-a')")
+        sqlx::query("INSERT INTO allowed_domains (domain) VALUES ('a.com')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO domain_attribution (domain, api_key) VALUES ('a.com', 'key-a')")
             .execute(&pool)
             .await
             .unwrap();

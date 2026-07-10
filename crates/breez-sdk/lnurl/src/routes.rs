@@ -695,19 +695,12 @@ where
 
         let username = sanitize_username(&identifier);
         let domain = sanitize_domain(&state, &host).await?;
-
-        // Run the whole invoice creation inside a `CURRENT_DOMAIN` scope so the
-        // wallet's SSP receive call carries this domain's `x-partner-jwt`.
-        crate::partner_jwt::with_domain(
-            domain.clone(),
-            Self::handle_invoice_inner(state, params, username, domain),
-        )
-        .await
+        Self::handle_invoice_inner(state, params, username, domain).await
     }
 
     /// Create the lightning-address invoice for `username` on `domain` and build
-    /// the LNURL-pay response. Runs inside the `CURRENT_DOMAIN` scope set by
-    /// `handle_invoice`, so the wallet's SSP receive call carries the domain's
+    /// the LNURL-pay response. The invoice is created by a per-request wallet
+    /// bound to `domain`, so its SSP receive call carries the domain's
     /// `x-partner-jwt`.
     #[allow(clippy::too_many_lines)]
     async fn handle_invoice_inner(
@@ -774,8 +767,23 @@ where
         };
 
         let pubkey = parse_pubkey(&user.pubkey)?;
-        let res = state
-            .wallet
+        // Per-request wallet bound to this domain, so the SSP receive call
+        // carries the domain's partner attribution. It shares the process
+        // signer, session, and connection pool, and starts no background tasks.
+        // If it can't be built, fall back to the shared wallet and create the
+        // invoice unattributed: attribution is best-effort and must never fail
+        // a receive. The shared wallet is already constructed, so it sidesteps
+        // per-request construction failures.
+        let wallet = match state.build_invoice_wallet(&domain).await {
+            Ok(wallet) => wallet,
+            Err(e) => {
+                warn!(
+                    "failed to build attributed wallet for '{domain}', creating the invoice unattributed via the shared wallet: {e}"
+                );
+                std::sync::Arc::clone(&state.wallet)
+            }
+        };
+        let res = wallet
             .create_lightning_invoice(
                 amount_msat / 1000,
                 Some(spark_wallet::InvoiceDescription::DescriptionHash(
