@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use breez_sdk_common::utils::now;
@@ -17,6 +17,12 @@ use crate::persist::Storage;
 const PARTNER_ID_HEADER: &str = "x-partner-jwt";
 const KEY_BREEZ_JWT: &str = "breez_jwt";
 const JWT_EXPIRY_GRACE_PERIOD_SECS: u64 = 60 * 5;
+/// Stop serving a token this many seconds before its real `exp`, as a
+/// clock-skew guard so we never hand out a token the server may already treat
+/// as expired. Distinct from the 5-minute refresh lead in
+/// [`JWT_EXPIRY_GRACE_PERIOD_SECS`]: the token stays servable through the
+/// refresh window, and is only withheld in this final margin before expiry.
+const JWT_SERVE_SKEW_SECS: u64 = 30;
 /// Fallback refresh interval used only if a freshly-fetched token has no
 /// parseable `exp` claim. In practice the server always returns a token with
 /// an `exp`, so this path is for malformed-response robustness.
@@ -49,7 +55,9 @@ struct CachedToken {
 struct Inner {
     token: RwLock<Option<CachedToken>>,
     api_key: String,
-    storage: Option<Arc<dyn Storage>>,
+    /// Bound once by [`BreezJwtHeaderProvider::start`] before the refresh task
+    /// spawns; empty when the provider persists nothing (in-memory only).
+    storage: OnceLock<Arc<dyn Storage>>,
     http_client: Arc<dyn HttpClient>,
 }
 
@@ -71,33 +79,48 @@ struct Inner {
 pub struct BreezJwtHeaderProvider {
     inner: Arc<Inner>,
     _shutdown_tx: oneshot::Sender<()>,
+    /// Holds the refresh task's shutdown receiver until [`start`](Self::start)
+    /// spawns the task. Taking it makes `start` idempotent.
+    pending_rx: Mutex<Option<oneshot::Receiver<()>>>,
 }
 
 impl BreezJwtHeaderProvider {
-    /// Constructs the provider and spawns its background refresh task.
-    /// Does not block on the initial JWT load.
+    /// Constructs the provider without starting its background refresh task.
+    /// Non-blocking. Call [`start`](Self::start) once storage is known to bind
+    /// it and begin refreshing.
     ///
     /// `http_client` is the shared client used for the JWT refresh fetch
     /// (typically supplied from the surrounding [`SdkContext`](crate::SdkContext)).
-    pub fn new(
-        api_key: String,
-        storage: Option<Arc<dyn Storage>>,
-        http_client: Arc<dyn HttpClient>,
-    ) -> Arc<Self> {
+    pub fn new(api_key: String, http_client: Arc<dyn HttpClient>) -> Arc<Self> {
         let inner = Arc::new(Inner {
             token: RwLock::new(None),
             api_key,
-            storage,
+            storage: OnceLock::new(),
             http_client,
         });
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        spawn_refresh_task(Arc::clone(&inner), shutdown_rx);
 
         Arc::new(Self {
             inner,
             _shutdown_tx: shutdown_tx,
+            pending_rx: Mutex::new(Some(shutdown_rx)),
         })
+    }
+
+    /// Binds `storage` (for warm-start and cross-restart persistence) and spawns
+    /// the refresh task. Idempotent: only the first call starts the task, so a
+    /// provider shared across SDK instances is started once. Pass `None` to run
+    /// in-memory only. Storage is bound before the task spawns, so its one-shot
+    /// `load_cached_token` observes it.
+    pub fn start(&self, storage: Option<Arc<dyn Storage>>) {
+        let Some(shutdown_rx) = self.pending_rx.lock().unwrap().take() else {
+            return;
+        };
+        if let Some(storage) = storage {
+            let _ = self.inner.storage.set(storage);
+        }
+        spawn_refresh_task(Arc::clone(&self.inner), shutdown_rx);
     }
 }
 
@@ -109,7 +132,7 @@ impl HeaderProvider for BreezJwtHeaderProvider {
             return Ok(HashMap::new());
         };
 
-        if is_expired(cached.exp) {
+        if is_past_serve_expiry(cached.exp) {
             return Ok(HashMap::new());
         }
 
@@ -121,7 +144,7 @@ impl HeaderProvider for BreezJwtHeaderProvider {
 }
 
 async fn load_cached_token(inner: &Inner) -> bool {
-    let Some(storage) = &inner.storage else {
+    let Some(storage) = inner.storage.get() else {
         return false;
     };
     let stored = match storage.get_cached_item(KEY_BREEZ_JWT.to_string()).await {
@@ -135,6 +158,12 @@ async fn load_cached_token(inner: &Inner) -> bool {
     let Some(exp) = jwt_exp(&stored) else {
         return false;
     };
+    // Warm-start gates on is_expired (5-min grace), not the tighter serve skew:
+    // a loaded token must be comfortably fresh so the spawn task's refresh-sleep
+    // shortcut holds. A near-expiry token would hit the 60s fallback (see
+    // spawn_refresh_task), installing an about-to-expire token then sleeping
+    // before the first fetch, so a restart in the last 5 min drops it and
+    // refetches now.
     if is_expired(exp) {
         return false;
     }
@@ -152,7 +181,7 @@ async fn store_token(inner: &Inner, token: String) {
         token: token.clone(),
         exp,
     });
-    if let Some(storage) = &inner.storage
+    if let Some(storage) = inner.storage.get()
         && let Err(err) = storage
             .set_cached_item(KEY_BREEZ_JWT.to_string(), token)
             .await
@@ -198,9 +227,19 @@ fn calculate_expiry(exp: u64) -> u64 {
 }
 
 /// Returns `true` when the cached `exp` is within (or past) the
-/// [`JWT_EXPIRY_GRACE_PERIOD_SECS`] grace window.
+/// [`JWT_EXPIRY_GRACE_PERIOD_SECS`] grace window. Drives refresh scheduling, not
+/// the serve decision: a token in this window is refreshed early but still
+/// served (see [`is_past_serve_expiry`]).
 fn is_expired(exp: u64) -> bool {
     calculate_expiry(exp) == 0
+}
+
+/// Returns `true` once the cached `exp` is within [`JWT_SERVE_SKEW_SECS`] of (or
+/// past) its real expiry, so the token must no longer be served. Unlike
+/// [`is_expired`], this keeps serving a still-valid token through the refresh
+/// window and withholds it only in the final clock-skew margin.
+fn is_past_serve_expiry(exp: u64) -> bool {
+    Into::<u64>::into(now()).saturating_add(JWT_SERVE_SKEW_SECS) >= exp
 }
 
 #[cfg(test)]
@@ -265,15 +304,18 @@ fn spawn_refresh_task(inner: Arc<Inner>, mut shutdown_rx: oneshot::Receiver<()>)
     );
 }
 
+/// Builds a syntactically valid JWT carrying the given `exp` claim (with a
+/// fake signature). Shared by the pure-function and persistence test modules.
+#[cfg(test)]
+fn make_jwt(exp: u64) -> String {
+    let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256","typ":"JWT"}"#);
+    let payload = URL_SAFE_NO_PAD.encode(format!(r#"{{"exp":{exp}}}"#));
+    format!("{header}.{payload}.fakesignature")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn make_jwt(exp: u64) -> String {
-        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256","typ":"JWT"}"#);
-        let payload = URL_SAFE_NO_PAD.encode(format!(r#"{{"exp":{exp}}}"#));
-        format!("{header}.{payload}.fakesignature")
-    }
 
     // --- jwt_exp ---
 
@@ -319,6 +361,35 @@ mod tests {
         assert!(is_jwt_expired("onlyone"));
     }
 
+    // --- is_past_serve_expiry ---
+
+    #[test]
+    fn test_is_past_serve_expiry_far_future() {
+        // Well beyond the skew margin: servable.
+        assert!(!is_past_serve_expiry(u64::from(now()) + 3600));
+    }
+
+    #[test]
+    fn test_is_past_serve_expiry_within_refresh_grace_still_served() {
+        // Expires in 2 minutes: inside the 5-minute refresh lead but outside the
+        // 30s serve margin, so it must still be served. This is the case the old
+        // grace check dropped, and is the core regression guard for this fix.
+        assert!(!is_past_serve_expiry(u64::from(now()) + 120));
+    }
+
+    #[test]
+    fn test_is_past_serve_expiry_within_skew_margin() {
+        // Expires in 10s: inside the 30s clock-skew margin, so stop serving.
+        assert!(is_past_serve_expiry(u64::from(now()) + 10));
+    }
+
+    #[test]
+    fn test_is_past_serve_expiry_past_and_sentinel() {
+        // Already past expiry, and the exp == 0 unparseable-token sentinel.
+        assert!(is_past_serve_expiry(u64::from(now()).saturating_sub(60)));
+        assert!(is_past_serve_expiry(0));
+    }
+
     // --- backoff_duration ---
 
     #[test]
@@ -339,5 +410,73 @@ mod tests {
             backoff_duration(u32::MAX),
             Duration::from_secs(JWT_BACKOFF_MAX_SECS)
         );
+    }
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod persistence_tests {
+    use super::*;
+    use crate::persist::sqlite::SqliteStorage;
+    use platform_utils::create_http_client;
+
+    /// Fresh on-disk `SQLite` storage in a unique temp directory.
+    fn temp_storage() -> Arc<dyn Storage> {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("breez-jwt-test-{}", uuid::Uuid::new_v4()));
+        Arc::new(SqliteStorage::new(&dir).expect("create sqlite storage"))
+    }
+
+    /// An `Inner` with the given storage (or none). The HTTP client is unused:
+    /// these tests exercise only the storage paths, which never fetch.
+    fn inner_with_storage(storage: Option<Arc<dyn Storage>>) -> Inner {
+        let cell = OnceLock::new();
+        if let Some(storage) = storage {
+            let _ = cell.set(storage);
+        }
+        Inner {
+            token: RwLock::new(None),
+            api_key: "test-key".to_string(),
+            storage: cell,
+            http_client: create_http_client(Some("jwt-test")),
+        }
+    }
+
+    #[tokio::test]
+    async fn store_then_load_round_trips_a_valid_token() {
+        let inner = inner_with_storage(Some(temp_storage()));
+        let token = make_jwt(u64::from(now()) + 3600);
+
+        store_token(&inner, token.clone()).await;
+        // Clear the in-memory copy so the reload must come from storage: this is
+        // the warm-start path that `start(Some(storage))` re-enables.
+        *inner.token.write().await = None;
+
+        assert!(load_cached_token(&inner).await);
+        assert_eq!(
+            inner.token.read().await.as_ref().map(|c| c.token.clone()),
+            Some(token)
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_persisted_token_is_not_loaded() {
+        let storage = temp_storage();
+        storage
+            .set_cached_item(KEY_BREEZ_JWT.to_string(), make_jwt(1))
+            .await
+            .expect("persist token");
+        let inner = inner_with_storage(Some(storage));
+
+        assert!(!load_cached_token(&inner).await);
+        assert!(inner.token.read().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn store_without_storage_stays_in_memory_only() {
+        // `start(None)` binds no storage: `store_token` updates the live token
+        // but persists nothing, so a later provider has no warm-start to load.
+        let inner = inner_with_storage(None);
+        store_token(&inner, make_jwt(u64::from(now()) + 3600)).await;
+        assert!(inner.token.read().await.is_some());
     }
 }

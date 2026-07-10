@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use futures::future::try_join_all;
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone)]
@@ -25,9 +24,13 @@ pub trait HeaderProvider: Send + Sync {
     }
 }
 
-/// Composes multiple [`HeaderProvider`]s by fanning out their `headers()`
-/// calls in parallel and merging the results. On key collisions, later
-/// providers win.
+/// Composes multiple [`HeaderProvider`]s by resolving their `headers()` in
+/// order and merging the results. On key collisions, later providers win.
+///
+/// Resolution is sequential, not parallel, so a later provider benefits from an
+/// earlier one's latency: pairing an auth provider (whose first call performs a
+/// challenge/response handshake) before a best-effort provider gives the latter
+/// the handshake window to hydrate before its header is snapshotted.
 pub struct CombinedHeaderProvider {
     providers: Vec<Arc<dyn HeaderProvider>>,
 }
@@ -41,23 +44,20 @@ impl CombinedHeaderProvider {
 #[macros::async_trait]
 impl HeaderProvider for CombinedHeaderProvider {
     async fn headers(&self) -> Result<HashMap<String, String>, HeaderProviderError> {
-        merge(try_join_all(self.providers.iter().map(|p| p.headers())).await?)
+        let mut merged = HashMap::new();
+        for provider in &self.providers {
+            merged.extend(provider.headers().await?);
+        }
+        Ok(merged)
     }
 
     async fn headers_refresh(&self) -> Result<HashMap<String, String>, HeaderProviderError> {
-        merge(try_join_all(self.providers.iter().map(|p| p.headers_refresh())).await?)
+        let mut merged = HashMap::new();
+        for provider in &self.providers {
+            merged.extend(provider.headers_refresh().await?);
+        }
+        Ok(merged)
     }
-}
-
-/// Merges header maps left to right; later providers win on key collisions.
-fn merge(
-    results: Vec<HashMap<String, String>>,
-) -> Result<HashMap<String, String>, HeaderProviderError> {
-    let mut merged = HashMap::new();
-    for headers in results {
-        merged.extend(headers);
-    }
-    Ok(merged)
 }
 
 #[cfg(test)]

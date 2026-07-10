@@ -104,9 +104,9 @@ impl SdkContextConfig {
 ///
 /// The returned `Arc` is cheap to clone and can back many SDK instances,
 /// sharing their HTTP client and operator gRPC channels.
-// Async-on-tokio so UniFFI runs it on the managed runtime: building the
-// shared resources `tokio::spawn`s internally (gRPC channel; mainnet JWT
-// task) and aborts off-runtime, despite no `.await` here.
+// `async` with no `.await`, and `async_runtime = "tokio"`: building the shared
+// gRPC client starts a background connection task that needs a tokio runtime,
+// so UniFFI must run this on its managed one.
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 pub async fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkContext>, SdkError> {
     let user_agent = default_user_agent();
@@ -125,7 +125,6 @@ pub async fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkC
     {
         Some(BreezJwtHeaderProvider::new(
             key.clone(),
-            None,
             http_client.clone(),
         ))
     } else {
