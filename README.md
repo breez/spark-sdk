@@ -2,16 +2,16 @@
 
 ## **Overview**
 
-The Breez SDK provides developers with an end-to-end solution for integrating instant, non-custodial bitcoin into their apps and services.
+The Breez SDK provides developers with an end-to-end solution for integrating instant, non-custodial bitcoin and stablecoins into their apps and services.
 It eliminates the need for third parties, simplifies the complexities of Bitcoin and Lightning, and enables seamless onboarding for billions of users to the future of value transfer.
 
 **The Breez SDK is free for developers.**
 
 ## **What is the Breez SDK - Spark?**
 
-It’s a nodeless integration that offers a non-custodial, end-to-end solution for integrating bitcoin, utilizing the Bitcoin-native Layer 2 Lightning & Spark, with on-chain interoperability. Using the Breez SDK, you’ll be able to:
+It’s a nodeless integration that offers a non-custodial, end-to-end solution for integrating bitcoin and stablecoins, utilizing the Bitcoin-native Layer 2 Lightning & Spark, with on-chain interoperability. Using the Breez SDK, you’ll be able to:
 
-- **Send payments** via various protocols such as: Lightning address, LNURL-Pay, Bolt11, BTC address, Spark address
+- **Send payments** via various protocols such as: Lightning address, LNURL-Pay, Bolt11, BTC address, Spark address, USDT/USDC
 - **Receive payments** via various protocols such as: Lightning address, LNURL-Pay, Bolt11, BTC address
 
 **Key Features**
@@ -36,7 +36,7 @@ It’s a nodeless integration that offers a non-custodial, end-to-end solution f
 
 ## Getting Started 
 
-Head over to the [Breez SDK documentation](https://sdk-doc-spark.breez.technology/) to start implementing bitcoin in your app.
+Head over to the [Breez SDK documentation](https://sdk-doc-spark.breez.technology/) to start implementing instant bitcoin in your app.
 
 You'll need an API key to use the Breez SDK. To request an API key is free - you just need to [complete this simple form](https://breez.technology/request-api-key/#contact-us-form-sdk).
 
