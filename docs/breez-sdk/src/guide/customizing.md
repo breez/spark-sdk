@@ -13,6 +13,7 @@ The shared-pool, shared-chain-service, and shared-connection-manager components 
 - [Fiat Service](#with-fiat-service) to provide Fiat currencies and exchange rates
 - Change the [Account Number](#with-account-number) to derive an independent wallet from the same seed
 - [Payment Observer](#with-payment-observer) to be notified before payments occur
+- [Session Store](#with-session-store) to customize how cached auth tokens are persisted (for example, at-rest encryption)
 - [Shared SDK Context](#with-shared-context) to share connection pools and HTTP/gRPC clients across SDK instances
 
 {{#tabs sdk_building:init-sdk-advanced}}
@@ -130,6 +131,28 @@ By implementing the Payment Observer interface you can be notified before a paym
 **Note:** Flutter currently does not support this.
 
 {{#tabs sdk_building:with-payment-observer}}
+
+<h2 id="with-session-store">
+    <a class="header" href="#with-session-store">With Session Store</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_session_store">API docs</a>
+</h2>
+
+The SDK caches the auth tokens it obtains from the Spark operators and the SSP in a session store, keyed by each service's identity. By default the store is provided by the storage backend (a `brz_`-prefixed table on the PostgreSQL/MySQL backends, an in-memory store otherwise), and tokens are stored as-is.
+
+Use {{#name with_session_store}} to provide your own {{#name SessionStore}}. This can be a completely different persistence layer, or a decorator that wraps the backend's own store to transform tokens on read and write while keeping its persistence: fetch the backend's store with {{#name default_session_store}}, then intercept {{#name get_session}} and {{#name set_session}}.
+
+At-rest encryption is one such transform (the SDK does not encrypt tokens itself), shown below: encrypt the token in {{#name set_session}} and decrypt it in {{#name get_session}}.
+
+{{#tabs sdk_building:with-session-store}}
+
+<div class="warning">
+<h4>Developer note</h4>
+
+When wrapping the backend's store, pass the same storage backend to both {{#name with_storage_backend}} and {{#name default_session_store}} so the session store shares the SDK's persistence. On the WASM binding {{#name default_session_store}} takes the storage config and the wallet identity public key (hex) instead of a backend.
+
+**Note:** Not supported in Flutter.
+
+</div>
 
 <h2 id="with-context">
     <a class="header" href="#with-shared-context">With Shared SDK Context</a>

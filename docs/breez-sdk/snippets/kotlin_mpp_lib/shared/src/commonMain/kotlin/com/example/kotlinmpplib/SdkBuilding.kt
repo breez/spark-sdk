@@ -75,6 +75,42 @@ class SdkBuilding {
     }
     // ANCHOR_END: with-payment-observer
 
+    // ANCHOR: with-session-store
+    class EncryptingSessionStore(
+        private val inner: SessionStore,
+    ) : SessionStore {
+        override suspend fun getSession(serviceIdentityKey: String): Session {
+            val session = inner.getSession(serviceIdentityKey)
+            // Decrypt session.token here before returning it.
+            return session
+        }
+
+        override suspend fun setSession(serviceIdentityKey: String, session: Session) {
+            // Encrypt session.token here before persisting it.
+            inner.setSession(serviceIdentityKey, session)
+        }
+    }
+
+    // `identity` is the wallet identity public key bytes, used to scope the store.
+    suspend fun withSessionStore(
+        config: breez_sdk_spark.Config,
+        seed: Seed,
+        identity: ByteArray,
+    ): SdkBuilder {
+        // Reuse one storage backend for both the SDK storage and the session store.
+        val backend = defaultStorage("./.data")
+
+        // Get the session store the backend provides, then wrap it to add encryption.
+        val inner = defaultSessionStore(backend, config.network, identity)
+        val sessionStore = EncryptingSessionStore(inner)
+
+        val builder = SdkBuilder(config, seed)
+        builder.withStorageBackend(backend)
+        builder.withSessionStore(sessionStore)
+        return builder
+    }
+    // ANCHOR_END: with-session-store
+
     suspend fun initSdkPostgres() {
         // ANCHOR: init-sdk-postgres
         // Construct the seed using a mnemonic, entropy or passkey

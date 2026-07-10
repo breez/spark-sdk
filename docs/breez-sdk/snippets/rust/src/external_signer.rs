@@ -34,3 +34,33 @@ async fn connect_example(signers: ExternalSigners) -> Result<BreezSdk, SdkError>
     Ok(sdk)
 }
 // ANCHOR_END: connect-with-signer
+
+// ANCHOR: sdk-builder-with-signer
+async fn build_with_signer(signers: ExternalSigners) -> Result<BreezSdk, SdkError> {
+    let mut config = default_config(Network::Mainnet);
+    config.api_key = Some("<breez api key>".to_string());
+
+    let builder = SdkBuilder::new_with_signer(config, signers.breez_signer, signers.spark_signer);
+    // let builder = builder.with_storage_backend(<your storage backend>);
+    // let builder = builder.with_shared_context(<your shared context>);
+    let sdk = builder.build().await?;
+
+    Ok(sdk)
+}
+// ANCHOR_END: sdk-builder-with-signer
+
+// ANCHOR: sdk-builder-with-signing-only-signer
+async fn build_with_signing_only_signer(
+    config: Config,
+    signers: SigningOnlyExternalSigners,
+) -> Result<BreezSdk, SdkError> {
+    let builder = SdkBuilder::new_with_signing_only_signer(
+        config,
+        signers.breez_signer,
+        signers.spark_signer,
+    );
+    let sdk = builder.build().await?;
+
+    Ok(sdk)
+}
+// ANCHOR_END: sdk-builder-with-signing-only-signer

@@ -7,7 +7,9 @@ use bitcoin::secp256k1::PublicKey;
 use platform_utils::tokio;
 use tracing::{debug, error, info, trace, warn};
 
-use crate::tree::{Leaves, ReservationPurpose, ReserveResult, SelectLeavesOptions, TreeNodeStatus};
+use crate::tree::{
+    LeafSelection, Leaves, ReservationPurpose, ReserveResult, SelectLeavesOptions, TreeNodeStatus,
+};
 use crate::{
     Network,
     operator::{
@@ -160,6 +162,30 @@ impl TreeService for SynchronousTreeService {
         }
     }
 
+    async fn reserve_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        self.state
+            .try_reserve_leaves_by_ids(leaf_ids, purpose)
+            .await
+    }
+
+    async fn select_leaves_for_package(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeafSelection, TreeServiceError> {
+        match self.state.try_select_leaves(target_amounts).await? {
+            LeafSelection::Exact(leaves) => Ok(LeafSelection::Exact(
+                self.renew_leaves_timelocks(leaves).await?,
+            )),
+            LeafSelection::SwapNeeded(leaves) => Ok(LeafSelection::SwapNeeded(
+                self.renew_leaves_timelocks(leaves).await?,
+            )),
+        }
+    }
+
     async fn refresh_leaves(&self) -> Result<(), TreeServiceError> {
         // Capture the start time before any network calls from the store's clock.
         // This uses the DB server time for database-backed stores to avoid clock skew.
@@ -233,27 +259,67 @@ impl TreeService for SynchronousTreeService {
             }
         }
 
-        for leaf in &coordinator_leaves {
-            if leaf.status != TreeNodeStatus::Available {
-                info!("Ignoring leaf {} due to status: {:?}", leaf.id, leaf.status);
-                ignored_leaves_map.insert(leaf.id.clone(), leaf.clone());
-                continue;
-            }
+        // Leaves not Available are ignored outright; the rest need an ownership
+        // check (our signing share + the operators' share must equal the
+        // verifying key).
+        let available_leaves: Vec<&TreeNode> = coordinator_leaves
+            .iter()
+            .filter(|leaf| {
+                if leaf.status == TreeNodeStatus::Available {
+                    true
+                } else {
+                    info!("Ignoring leaf {} due to status: {:?}", leaf.id, leaf.status);
+                    ignored_leaves_map.insert(leaf.id.clone(), (*leaf).clone());
+                    false
+                }
+            })
+            .collect();
 
-            let our_node_pubkey = self.spark_signer.get_public_key_for_leaf(&leaf.id).await?;
-            let other_node_pubkey = leaf.signing_keyshare.public_key;
-            let verifying_pubkey = leaf.verifying_public_key;
+        // Deriving our leaf pubkey is a network round-trip on a remote signer, so
+        // re-deriving every leaf each refresh would flood the signer and stall
+        // payments behind its rate limiter on large wallets. For remote signers we
+        // skip leaves already stored with matching keys (see `VerifiedLeafKeys`),
+        // re-checking only new or changed leaves. Local signers derive cheaply, so
+        // they skip the store read and verify every available leaf. Remaining
+        // fetches run concurrently, leaving the signer to bound its own
+        // concurrency; order is preserved for the zip below.
+        let already_verified = if self.spark_signer.is_remote() {
+            self.state.get_verified_leaf_keys().await?
+        } else {
+            HashMap::new()
+        };
+        let unverified_leaves: Vec<&TreeNode> = available_leaves
+            .iter()
+            .copied()
+            .filter(|leaf| {
+                !already_verified.get(&leaf.id).is_some_and(|keys| {
+                    keys.verifying_public_key == leaf.verifying_public_key
+                        && keys.signing_keyshare_public_key == leaf.signing_keyshare.public_key
+                })
+            })
+            .collect();
 
-            let combined_pubkey = our_node_pubkey.combine(&other_node_pubkey).map_err(|_| {
-                TreeServiceError::Generic("Failed to combine public keys".to_string())
-            })?;
+        let signer = &self.spark_signer;
+        let our_pubkeys: Vec<PublicKey> = futures::future::try_join_all(
+            unverified_leaves
+                .iter()
+                .map(|leaf| async move { signer.get_public_key_for_leaf(&leaf.id).await }),
+        )
+        .await?;
 
-            if combined_pubkey != verifying_pubkey {
+        for (leaf, our_node_pubkey) in unverified_leaves.iter().zip(our_pubkeys) {
+            let combined_pubkey = our_node_pubkey
+                .combine(&leaf.signing_keyshare.public_key)
+                .map_err(|_| {
+                    TreeServiceError::Generic("Failed to combine public keys".to_string())
+                })?;
+
+            if combined_pubkey != leaf.verifying_public_key {
                 warn!(
                     "Leaf {}'s verifying public key does not match the expected value",
                     leaf.id
                 );
-                ignored_leaves_map.insert(leaf.id.clone(), leaf.clone());
+                ignored_leaves_map.insert(leaf.id.clone(), (*leaf).clone());
             }
         }
 
@@ -625,6 +691,32 @@ impl SynchronousTreeService {
                 )))
             }
         }
+    }
+
+    async fn renew_leaves_timelocks(
+        &self,
+        leaves: Vec<TreeNode>,
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        let mut needs_renewal = false;
+        for leaf in &leaves {
+            if leaf.needs_refund_tx_renewed()? {
+                needs_renewal = true;
+                break;
+            }
+        }
+        if !needs_renewal {
+            return Ok(leaves);
+        }
+
+        let leaf_ids: Vec<TreeNodeId> = leaves.iter().map(|l| l.id.clone()).collect();
+        let reservation = self
+            .state
+            .try_reserve_leaves_by_ids(&leaf_ids, ReservationPurpose::Payment)
+            .await?;
+        let reservation = self.renew_reservation_timelocks(reservation).await?;
+        let renewed = reservation.leaves.clone();
+        self.cancel_reservation(reservation).await?;
+        Ok(renewed)
     }
 
     /// Renew timelocks for reserved leaves and handle partial failures.

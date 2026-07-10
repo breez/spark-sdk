@@ -184,6 +184,65 @@ impl TokenOutputService for SynchronousTokenOutputService {
         reservation.ok_or_else(|| TokenOutputServiceError::InsufficientFunds)
     }
 
+    async fn select_token_outputs(
+        &self,
+        token_identifier: &str,
+        target: ReservationTarget,
+        preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+        selection_strategy: Option<SelectionStrategy>,
+    ) -> Result<TokenOutputs, TokenOutputServiceError> {
+        let mut selected: Option<TokenOutputs> = None;
+
+        for i in 0..SELECT_TOKEN_OUTPUTS_MAX_RETRIES {
+            let select_res = self
+                .state
+                .select_token_outputs(
+                    token_identifier,
+                    target,
+                    preferred_outputs.clone(),
+                    selection_strategy,
+                )
+                .await;
+            if let Ok(token_outputs) = select_res {
+                selected = Some(token_outputs);
+                break;
+            }
+
+            info!("Failed to select token outputs, refreshing and retrying");
+            self.refresh_tokens_outputs().await?;
+            let token_balance = self
+                .state
+                .get_token_outputs(GetTokenOutputsFilter::Identifier(token_identifier))
+                .await?
+                .balance();
+            if let ReservationTarget::MinTotalValue(amount) = &target
+                && *amount > token_balance
+            {
+                info!(
+                    "Insufficient funds to select token outputs after refresh: requested {amount}, balance {token_balance}"
+                );
+                break;
+            }
+
+            if i < SELECT_TOKEN_OUTPUTS_MAX_RETRIES - 1 {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+
+        selected.ok_or_else(|| TokenOutputServiceError::InsufficientFunds)
+    }
+
+    async fn reserve_token_outputs_by_outpoints(
+        &self,
+        token_identifier: &str,
+        outpoints: &[(String, u32)],
+        purpose: ReservationPurpose,
+    ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
+        self.state
+            .reserve_token_outputs_by_outpoints(token_identifier, outpoints, purpose)
+            .await
+    }
+
     async fn cancel_reservation(
         &self,
         id: &TokenOutputsReservationId,

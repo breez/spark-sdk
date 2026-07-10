@@ -165,7 +165,7 @@ async fn prepare_sats_denominated(
     )
     .await?;
 
-    Ok(PrepareSendPaymentResponse {
+    let response = PrepareSendPaymentResponse {
         payment_method: SendPaymentMethod::Bolt11Invoice {
             invoice_details: invoice.clone(),
             spark_transfer_fee_sats,
@@ -175,7 +175,9 @@ async fn prepare_sats_denominated(
         token_identifier,
         conversion_estimate,
         fee_policy,
-    })
+    };
+
+    Ok(response)
 }
 
 /// Token-denominated Bolt11 prepare: `request.amount` is in token base units and

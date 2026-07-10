@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use bitcoin::hashes::sha256;
 use platform_utils::time::Duration;
-use spark_wallet::{SparkAddress, TransferId, TransferTokenOutput};
+use spark_wallet::{PreparedTokenTransfer, SparkAddress, TransferId, TransferTokenOutput};
 
 use crate::{
     ConversionOptions, ConversionPurpose, SendPaymentOptions, SparkHtlcOptions,
@@ -10,6 +10,9 @@ use crate::{
     models::{Payment, SendPaymentResponse},
     sdk::BreezSdk,
     sdk::payments::conversion,
+    signer::{
+        ExternalPrepareTransferRequest, ExternalPreparedTokenTransaction, ExternalPreparedTransfer,
+    },
     token_conversion::{ConversionAmount, TokenConversionResponse},
     utils::token::map_and_persist_token_transaction,
 };
@@ -36,13 +39,13 @@ pub(super) async fn send(
             ));
         }
 
-        return send_htlc(
+        return Box::pin(send_htlc(
             sdk,
             &spark_address,
             amount.try_into()?,
             htlc_options,
             idempotency_key,
-        )
+        ))
         .await;
     }
 
@@ -87,22 +90,72 @@ async fn send_htlc(
         .as_ref()
         .map(|key| TransferId::from_str(key))
         .transpose()?;
-    let transfer = sdk
-        .spark_wallet
-        .create_htlc(
-            amount_sat,
-            address,
-            &payment_hash,
-            expiry_duration,
-            transfer_id,
-        )
-        .await?;
+    let transfer = Box::pin(sdk.spark_wallet.create_htlc(
+        amount_sat,
+        address,
+        &payment_hash,
+        expiry_duration,
+        transfer_id,
+    ))
+    .await?;
 
     let payment: Payment = transfer.try_into()?;
 
     // Insert the payment into storage to make it immediately available for listing
     sdk.storage.apply_payment_update(payment.clone()).await?;
 
+    Ok(SendPaymentResponse { payment })
+}
+
+pub(super) async fn send_signed(
+    sdk: &BreezSdk,
+    prepare_transfer: &ExternalPrepareTransferRequest,
+    signed: &ExternalPreparedTransfer,
+    spark_invoice: Option<String>,
+) -> Result<SendPaymentResponse, SdkError> {
+    let transfer = sdk
+        .spark_wallet
+        .publish_transfer_package(
+            prepare_transfer.transfer_id()?,
+            prepare_transfer.receiver_pubkey()?,
+            prepare_transfer.leaf_ids()?,
+            spark_invoice,
+            signed.to_prepared_transfer()?,
+        )
+        .await?;
+
+    let payment: Payment = transfer.try_into()?;
+    sdk.storage.apply_payment_update(payment.clone()).await?;
+    Ok(SendPaymentResponse { payment })
+}
+
+pub(super) async fn broadcast_signed_token_package(
+    sdk: &BreezSdk,
+    token_context: &[u8],
+    signed: &ExternalPreparedTokenTransaction,
+) -> Result<spark_wallet::TokenTransaction, SdkError> {
+    let prepared: PreparedTokenTransfer = serde_json::from_slice(token_context)
+        .map_err(|e| SdkError::Generic(format!("Failed to deserialize token transfer: {e}")))?;
+    let signature = signed
+        .to_prepared_token_transaction()?
+        .signature
+        .serialize()
+        .to_vec();
+    Ok(sdk
+        .spark_wallet
+        .publish_token_package(prepared, signature)
+        .await?)
+}
+
+pub(super) async fn send_token_signed(
+    sdk: &BreezSdk,
+    token_context: &[u8],
+    signed: &ExternalPreparedTokenTransaction,
+) -> Result<SendPaymentResponse, SdkError> {
+    let token_transaction = broadcast_signed_token_package(sdk, token_context, signed).await?;
+    let payment =
+        map_and_persist_token_transaction(&sdk.spark_wallet, &sdk.storage, &token_transaction)
+            .await?;
     Ok(SendPaymentResponse { payment })
 }
 

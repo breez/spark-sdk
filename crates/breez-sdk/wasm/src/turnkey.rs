@@ -30,7 +30,9 @@ pub struct TurnkeyConfig {
     pub wallet_id: String,
     pub network: Network,
     pub account_number: Option<u32>,
+    pub identity_public_key: Option<String>,
     pub retry: Option<TurnkeyRetryConfig>,
+    pub max_rps: Option<u32>,
 }
 
 /// Builds the Turnkey-backed signers from `config`, then pass

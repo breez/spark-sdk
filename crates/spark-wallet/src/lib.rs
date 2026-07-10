@@ -41,19 +41,21 @@ pub use spark::{
     },
     ssp::*,
     token::{
-        BURN_PUBLIC_KEY, GetTokenOutputsFilter, InMemoryTokenOutputStore,
+        BURN_PUBLIC_KEY, GetTokenOutputsFilter, InMemoryTokenOutputStore, PreparedTokenPackage,
+        PreparedTokenReceiverOutput, PreparedTokenTransfer,
         ReservationPurpose as TokenReservationPurpose, ReservationTarget, SelectionStrategy,
-        TokenMetadata, TokenOutput, TokenOutputServiceError, TokenOutputStore,
+        TokenMetadata, TokenOutpoint, TokenOutput, TokenOutputServiceError, TokenOutputStore,
         TokenOutputWithPrevOut, TokenOutputs, TokenOutputsPerStatus, TokenOutputsReservation,
-        TokenOutputsReservationId, TokensConfig,
+        TokenOutputsReservationId, TokensConfig, select_token_outputs_from,
     },
     tree::{
         AutoOptimizationEvent, DEFAULT_MAX_CONCURRENT_RESERVATIONS, DEFAULT_RESERVATION_TIMEOUT,
-        InMemoryTreeStore, LeafLike, LeafOptimizationOptions, Leaves, LeavesReservation,
-        LeavesReservationId, OptimizationError, OptimizationOutcome, ReservationPurpose,
-        ReserveResult, SelectLeavesOptions, SigningKeyshare, TargetAmounts, TreeNode, TreeNodeId,
-        TreeNodeStatus, TreeServiceError, TreeStore, select_leaves_by_minimum_amount,
-        select_leaves_by_target_amounts,
+        InMemoryTreeStore, LeafLike, LeafOptimizationOptions, LeafSelection, Leaves,
+        LeavesReservation, LeavesReservationId, OptimizationError, OptimizationOutcome,
+        ReservationPurpose, ReserveResult, SelectLeavesOptions, SigningKeyshare, TargetAmounts,
+        TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore, VerifiedLeafKeys,
+        select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
+        verified_leaf_keys_from_leaves,
     },
     utils::frost::aggregate_frost,
     utils::{
@@ -61,7 +63,7 @@ pub use spark::{
         transactions::is_ephemeral_anchor_output,
     },
 };
-pub use wallet::SparkWallet;
+pub use wallet::{SendPackagePreparation, SparkWallet};
 pub use wallet_builder::WalletBuilder;
 
 #[cfg(feature = "test-utils")]

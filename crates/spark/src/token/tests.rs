@@ -268,6 +268,73 @@ pub async fn test_reserve_token_outputs(store: &dyn TokenOutputStore) {
     assert_eq!(stored_token1.available.len(), 2);
 }
 
+pub async fn test_select_token_outputs(store: &dyn TokenOutputStore) {
+    let token1 = create_token_outputs(1, vec![100, 200, 300]);
+    store
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .await
+        .unwrap();
+
+    let selected = store
+        .select_token_outputs("token-1", ReservationTarget::MinTotalValue(300), None, None)
+        .await
+        .unwrap();
+    assert_eq!(selected.metadata.identifier, "token-1");
+    let selected_total: u128 = selected.outputs.iter().map(|o| o.output.token_amount).sum();
+    assert!(selected_total >= 300);
+
+    // Selection is read-only: nothing is reserved.
+    let stored = store
+        .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+        .await
+        .unwrap();
+    assert_eq!(stored.available.len(), 3);
+    assert_eq!(stored.reserved_for_payment.len(), 0);
+}
+
+pub async fn test_reserve_token_outputs_by_outpoints(store: &dyn TokenOutputStore) {
+    let token1 = create_token_outputs(1, vec![100, 200, 300]);
+    store
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .await
+        .unwrap();
+
+    let selected = store
+        .select_token_outputs("token-1", ReservationTarget::MinTotalValue(300), None, None)
+        .await
+        .unwrap();
+    let outpoints: Vec<(String, u32)> = selected
+        .outputs
+        .iter()
+        .map(|o| (o.prev_tx_hash.clone(), o.prev_tx_vout))
+        .collect();
+
+    let reservation = store
+        .reserve_token_outputs_by_outpoints("token-1", &outpoints, ReservationPurpose::Payment)
+        .await
+        .unwrap();
+    assert_eq!(reservation.token_outputs.outputs.len(), outpoints.len());
+
+    let stored = store
+        .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+        .await
+        .unwrap();
+    assert_eq!(stored.reserved_for_payment.len(), outpoints.len());
+    assert_eq!(stored.available.len(), 3 - outpoints.len());
+
+    // An outpoint that is not available cannot be reserved.
+    assert!(matches!(
+        store
+            .reserve_token_outputs_by_outpoints(
+                "token-1",
+                &[("missing-tx".to_string(), 0)],
+                ReservationPurpose::Payment,
+            )
+            .await,
+        Err(TokenOutputServiceError::InsufficientFunds)
+    ));
+}
+
 pub async fn test_reserve_token_outputs_and_cancel(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200, 300]);
     let token2 = create_token_outputs(2, vec![500, 1000]);
@@ -765,6 +832,20 @@ pub async fn test_reserve_with_preferred_outputs_insufficient(store: &dyn TokenO
             ReservationTarget::MinTotalValue(500),
             ReservationPurpose::Payment,
             Some(preferred),
+            None,
+        )
+        .await;
+
+    assert!(result.is_err());
+
+    // An empty preferred set filters out every output, unlike None which
+    // selects from all of them.
+    let result = store
+        .reserve_token_outputs(
+            "token-1",
+            ReservationTarget::MinTotalValue(100),
+            ReservationPurpose::Payment,
+            Some(vec![]),
             None,
         )
         .await;

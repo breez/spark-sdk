@@ -1,4 +1,8 @@
 import {
+  type Config,
+  type ExternalSigners,
+  type SigningOnlyExternalSigners,
+  SdkBuilder,
   defaultExternalSigners,
   connectWithSigner,
   defaultConfig,
@@ -36,4 +40,36 @@ const exampleConnectWithSigner = async (
 }
 // ANCHOR_END: connect-with-signer
 
-export { createSigners, exampleConnectWithSigner }
+// ANCHOR: sdk-builder-with-signer
+const exampleBuildWithSigner = async (signers: ExternalSigners) => {
+  // Create the config
+  const config = defaultConfig(Network.Mainnet)
+  config.apiKey = '<breez api key>'
+
+  const builder = SdkBuilder.newWithSigner(config, signers.breezSigner, signers.sparkSigner)
+  // await builder.withStorage(<your storage implementation>)
+  // await builder.withAccountNumber(<account number>)
+  const sdk = await builder.build()
+}
+// ANCHOR_END: sdk-builder-with-signer
+
+// ANCHOR: sdk-builder-with-signing-only-signer
+const exampleBuildWithSigningOnlySigner = async (
+  config: Config,
+  signers: SigningOnlyExternalSigners
+) => {
+  const builder = SdkBuilder.newWithSigningOnlySigner(
+    config,
+    signers.breezSigner,
+    signers.sparkSigner
+  )
+  const sdk = await builder.build()
+}
+// ANCHOR_END: sdk-builder-with-signing-only-signer
+
+export {
+  createSigners,
+  exampleConnectWithSigner,
+  exampleBuildWithSigner,
+  exampleBuildWithSigningOnlySigner
+}

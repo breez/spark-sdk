@@ -35,4 +35,38 @@ class ExternalSignerSnippets {
         return sdk
     }
     // ANCHOR_END: connect-with-signer
+
+    // ANCHOR: sdk-builder-with-signer
+    func buildWithSigner(signers: ExternalSigners) async throws -> BreezSdk {
+        var config = defaultConfig(network: .mainnet)
+        config.apiKey = "<breez api key>"
+
+        let builder = SdkBuilder.newWithSigner(
+            config: config,
+            breezSigner: signers.breezSigner,
+            sparkSigner: signers.sparkSigner
+        )
+        // await builder.withStorageBackend(storage: <your storage backend>)
+        // await builder.withSharedContext(<your shared context>)
+        let sdk = try await builder.build()
+
+        return sdk
+    }
+    // ANCHOR_END: sdk-builder-with-signer
+
+    // ANCHOR: sdk-builder-with-signing-only-signer
+    func buildWithSigningOnlySigner(
+        config: Config,
+        signers: SigningOnlyExternalSigners
+    ) async throws -> BreezSdk {
+        let builder = SdkBuilder.newWithSigningOnlySigner(
+            config: config,
+            breezSigner: signers.breezSigner,
+            sparkSigner: signers.sparkSigner
+        )
+        let sdk = try await builder.build()
+
+        return sdk
+    }
+    // ANCHOR_END: sdk-builder-with-signing-only-signer
 }

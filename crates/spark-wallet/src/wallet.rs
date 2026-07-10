@@ -1,3 +1,5 @@
+mod external_signing;
+
 use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 
 use bitcoin::{
@@ -28,24 +30,25 @@ use spark::{
     services::{
         CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpUtxo, DepositService, ExitSpeed,
         Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription, LeafTxCpfpPsbts,
-        LightningReceivePayment, LightningSendPayment, LightningService, Preimage,
-        PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
+        LightningReceivePayment, LightningSendPayment, LightningService, PayLightningResult,
+        Preimage, PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
         QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap, TimelockManager,
         TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
         TransferTokenOutput, TransferType, UnilateralExitService, Utxo,
     },
     session_store::{InMemorySessionStore, SessionStore},
-    signer::SparkSigner,
+    signer::{PrepareTransferRequest, PreparedTransfer, SparkSigner},
     ssp::{ServiceProvider, SspTransfer, SspUserRequest},
     token::{
-        InMemoryTokenOutputStore, SelectionStrategy, SynchronousTokenOutputService, TokenMetadata,
-        TokenOutputService, TokenOutputStore, TokenOutputWithPrevOut, TokenService,
+        InMemoryTokenOutputStore, PreparedTokenPackage, PreparedTokenTransfer, SelectionStrategy,
+        SynchronousTokenOutputService, TokenMetadata, TokenOutputService, TokenOutputStore,
+        TokenOutputWithPrevOut, TokenService,
     },
     tree::{
         AutoOptimizationEvent, AutoOptimizationEventHandler, InMemoryTreeStore, LeafOptimizer,
-        OptimizationError, OptimizationOutcome, SelectLeavesOptions, SynchronousTreeService,
-        TargetAmounts, TreeNode, TreeNodeId, TreeService, TreeStore,
-        select_leaves_by_target_amounts, with_reserved_leaves,
+        LeafSelection, OptimizationError, OptimizationOutcome, ReservationPurpose,
+        SelectLeavesOptions, SynchronousTreeService, TargetAmounts, TreeNode, TreeNodeId,
+        TreeService, TreeStore, select_leaves_by_target_amounts, with_reserved_leaves,
     },
     utils::paging::{PagingFilter, PagingResult},
 };
@@ -63,6 +66,15 @@ use crate::{
 
 const SELECT_LEAVES_MAX_RETRIES: usize = 3;
 const MAX_LEAF_SPENT_RETRIES: usize = 3;
+
+pub enum SendPackagePreparation {
+    Ready(PrepareTransferRequest),
+    SwapRequired {
+        prepare_transfer: PrepareTransferRequest,
+        target_amounts: Vec<u64>,
+    },
+}
+
 /// Backoff for transient operator errors that clear on their own: rate limiting
 /// (ResourceExhausted) and leaves the operators have not finished finalizing yet
 /// (LEAF_UNAVAILABLE).
@@ -225,6 +237,7 @@ pub struct SparkWallet {
     coop_exit_service: Arc<CoopExitService>,
     unilateral_exit_service: Arc<UnilateralExitService>,
     transfer_service: Arc<TransferService>,
+    swap_service: Arc<Swap>,
     lightning_service: Arc<LightningService>,
     ssp_client: Arc<ServiceProvider>,
     token_service: Arc<TokenService>,
@@ -436,6 +449,7 @@ impl SparkWallet {
             coop_exit_service,
             unilateral_exit_service,
             transfer_service,
+            swap_service,
             lightning_service,
             ssp_client: service_provider.clone(),
             token_service,
@@ -508,8 +522,13 @@ impl SparkWallet {
             )
         )?;
 
-        // Collect the wallet transfer information from the lightning send payment result. If
-        // not present, we need to query for the SSP user request to get the transfer details.
+        self.finalize_pay_lightning(lightning_payment).await
+    }
+
+    async fn finalize_pay_lightning(
+        &self,
+        lightning_payment: PayLightningResult,
+    ) -> Result<PayLightningInvoiceResult, SparkWalletError> {
         let payment_hash = lightning_payment.payment_hash;
         let lightning_send_payment = lightning_payment.lightning_send_payment;
         let wallet_transfer = match &lightning_send_payment {
@@ -1577,12 +1596,10 @@ impl SparkWallet {
     /// # Arguments
     /// * `invoice` - The Spark invoice to fulfill
     /// * `amount` - The amount to pay in base units. Must be provided if the invoice doesn't include an amount. If it does, amount is ignored.
-    pub async fn fulfill_spark_invoice(
+    pub(crate) fn parse_and_validate_spark_invoice(
         &self,
         invoice_str: &str,
-        amount: Option<u128>,
-        transfer_id: Option<TransferId>,
-    ) -> Result<FulfillSparkInvoiceResult, SparkWalletError> {
+    ) -> Result<SparkAddress, SparkWalletError> {
         let invoice = SparkAddress::from_str(invoice_str)?;
 
         let Some(invoice_fields) = &invoice.spark_invoice_fields else {
@@ -1608,6 +1625,22 @@ impl SparkWallet {
             )));
         }
 
+        Ok(invoice)
+    }
+
+    pub async fn fulfill_spark_invoice(
+        &self,
+        invoice_str: &str,
+        amount: Option<u128>,
+        transfer_id: Option<TransferId>,
+    ) -> Result<FulfillSparkInvoiceResult, SparkWalletError> {
+        let invoice = self.parse_and_validate_spark_invoice(invoice_str)?;
+        let Some(invoice_fields) = &invoice.spark_invoice_fields else {
+            return Err(SparkWalletError::InvalidAddress(format!(
+                "Invoice does not include Spark invoice fields: {invoice:?}"
+            )));
+        };
+
         match &invoice_fields.payment_type {
             Some(SparkAddressPaymentType::SatsPayment(payment)) => {
                 let amount = payment.amount.or(amount.map(|a| a as u64)).ok_or(
@@ -1627,32 +1660,12 @@ impl SparkWallet {
 
                 Ok(FulfillSparkInvoiceResult::Transfer(Box::new(transfer)))
             }
-            Some(SparkAddressPaymentType::TokensPayment(payment)) => {
-                let Some(token_identifier) = &payment.token_identifier else {
-                    return Err(SparkWalletError::InvalidAddress(
-                        "Token invoice does not include token identifier".to_string(),
-                    ));
-                };
-                let amount = payment.amount.or(amount).ok_or(SparkWalletError::Generic(
-                    "Amount is required when invoice does not include an amount".to_string(),
-                ))?;
-
-                let execute_before_unix_micros =
-                    execute_before_from_expiry(invoice_fields.expiry_time);
-
+            Some(SparkAddressPaymentType::TokensPayment(_)) => {
+                let (output, execute_before_unix_micros) =
+                    token_output_from_invoice(&invoice, invoice_str, amount)?;
                 let tx = self
                     .token_service
-                    .transfer_tokens(
-                        vec![TransferTokenOutput {
-                            token_id: token_identifier.clone(),
-                            amount,
-                            receiver_address: invoice,
-                            spark_invoice: Some(invoice_str.to_string()),
-                        }],
-                        None,
-                        None,
-                        execute_before_unix_micros,
-                    )
+                    .transfer_tokens(vec![output], None, None, execute_before_unix_micros)
                     .await?;
 
                 Ok(FulfillSparkInvoiceResult::TokenTransaction(Box::new(tx)))
@@ -2479,6 +2492,40 @@ fn execute_before_from_expiry(expiry_time: Option<SystemTime>) -> Option<i64> {
             .ok()
             .and_then(|d| i64::try_from(d.as_micros()).ok())
     })
+}
+
+fn token_output_from_invoice(
+    invoice: &SparkAddress,
+    invoice_str: &str,
+    amount: Option<u128>,
+) -> Result<(TransferTokenOutput, Option<i64>), SparkWalletError> {
+    let Some(invoice_fields) = &invoice.spark_invoice_fields else {
+        return Err(SparkWalletError::InvalidAddress(format!(
+            "Invoice does not include Spark invoice fields: {invoice:?}"
+        )));
+    };
+    let Some(SparkAddressPaymentType::TokensPayment(payment)) = &invoice_fields.payment_type else {
+        return Err(SparkWalletError::InvalidAddress(
+            "Invoice does not include a token payment type".to_string(),
+        ));
+    };
+    let Some(token_identifier) = &payment.token_identifier else {
+        return Err(SparkWalletError::InvalidAddress(
+            "Token invoice does not include token identifier".to_string(),
+        ));
+    };
+    let amount = payment.amount.or(amount).ok_or(SparkWalletError::Generic(
+        "Amount is required when invoice does not include an amount".to_string(),
+    ))?;
+    Ok((
+        TransferTokenOutput {
+            token_id: token_identifier.clone(),
+            amount,
+            receiver_address: invoice.clone(),
+            spark_invoice: Some(invoice_str.to_string()),
+        },
+        execute_before_from_expiry(invoice_fields.expiry_time),
+    ))
 }
 
 #[cfg(test)]

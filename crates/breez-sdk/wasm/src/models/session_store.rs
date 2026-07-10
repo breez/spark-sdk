@@ -56,11 +56,52 @@ impl breez_sdk_spark::SessionStore for WasmSessionStore {
 // Hex-encoded PublicKey is exposed to JS as a `string`. The conversion lives
 // here so callers passing a `PublicKey` from Rust through WASM are accepted
 // transparently.
-#[allow(dead_code)]
 fn parse_pubkey(s: &str) -> Result<PublicKey, breez_sdk_spark::SessionStoreError> {
     PublicKey::from_str(s).map_err(|e| {
         breez_sdk_spark::SessionStoreError::Generic(format!("Invalid public key: {e}"))
     })
+}
+
+/// A JS handle to a backend's own session store (from `defaultSessionStore`),
+/// exposing the same `getSession` / `setSession` interface. Wrap it in a JS
+/// `SessionStore` decorator and pass that to `SdkBuilder.withSessionStore` to
+/// transform tokens while keeping the backend's persistence: for example
+/// at-rest encryption, which the SDK does not apply itself.
+#[wasm_bindgen]
+pub struct DefaultSessionStore {
+    pub(crate) inner: std::sync::Arc<dyn breez_sdk_spark::SessionStore>,
+}
+
+#[wasm_bindgen]
+impl DefaultSessionStore {
+    #[wasm_bindgen(js_name = "getSession")]
+    pub async fn get_session(&self, service_identity_key: String) -> Result<Session, JsValue> {
+        let pk = parse_pubkey(&service_identity_key).map_err(session_err_to_js)?;
+        let session = self
+            .inner
+            .get_session(pk)
+            .await
+            .map_err(session_err_to_js)?;
+        Ok(session.into())
+    }
+
+    #[wasm_bindgen(js_name = "setSession")]
+    pub async fn set_session(
+        &self,
+        service_identity_key: String,
+        session: Session,
+    ) -> Result<(), JsValue> {
+        let pk = parse_pubkey(&service_identity_key).map_err(session_err_to_js)?;
+        self.inner
+            .set_session(pk, session.into())
+            .await
+            .map_err(session_err_to_js)?;
+        Ok(())
+    }
+}
+
+fn session_err_to_js(e: breez_sdk_spark::SessionStoreError) -> JsValue {
+    JsValue::from_str(&e.to_string())
 }
 
 #[wasm_bindgen(typescript_custom_section)]

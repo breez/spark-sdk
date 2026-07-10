@@ -19,7 +19,7 @@ use crate::{
         },
     },
     services::{LeafKeyTweak, ServiceError, SigningResult, Transfer, TransferId, TransferService},
-    signer::{AggregateFrostRequest, SparkSigner},
+    signer::{AggregateFrostRequest, PrepareTransferRequest, PreparedTransfer, SparkSigner},
     ssp::{RequestSwapInput, ServiceProvider, ServiceProviderError, UserLeafInput},
     tree::{TreeNode, TreeNodeId},
     utils::frost::aggregate_frost,
@@ -67,6 +67,18 @@ impl Swap {
         leaves: &[TreeNode],
         maybe_target_amounts: Option<Vec<u64>>,
     ) -> Result<Vec<TreeNode>, ServiceError> {
+        let prepare_transfer = self.prepare_swap(leaves, maybe_target_amounts.clone())?;
+        let transfer_id = prepare_transfer.transfer_id.clone();
+        let prepared = self.spark_signer.prepare_transfer(prepare_transfer).await?;
+        self.submit_swap(transfer_id, leaves, maybe_target_amounts, prepared)
+            .await
+    }
+
+    pub fn prepare_swap(
+        &self,
+        leaves: &[TreeNode],
+        maybe_target_amounts: Option<Vec<u64>>,
+    ) -> Result<PrepareTransferRequest, ServiceError> {
         debug!(
             "Starting swap for {} leaves, with target amounts: {:?}",
             leaves.len(),
@@ -87,7 +99,6 @@ impl Swap {
 
         let leaf_sum: u64 = leaves.iter().map(|leaf| leaf.value).sum();
 
-        // If no target amounts are provided, the target sum is the sum of the leaf values.
         let target_sum: u64 = maybe_target_amounts
             .as_ref()
             .map(|target_amounts| target_amounts.iter().sum())
@@ -97,21 +108,31 @@ impl Swap {
             return Err(ServiceError::InsufficientFunds);
         }
 
-        // The target amounts are more than or equal to the leaf values. Continue with split.
+        let transfer_id = TransferId::generate();
+        let receiver_public_key = self.ssp_client.identity_public_key();
 
-        // TODO: split swap into batches (js sdk uses chunks of 100 leaves)
+        Ok(self.transfer_service.build_transfer_approval_request(
+            &transfer_id,
+            leaves,
+            &receiver_public_key,
+        ))
+    }
 
-        // Build leaf key tweaks to swap to the SSP. The new signing key for each
-        // leaf is generated inside `prepare_transfer`.
-        let mut leaf_key_tweaks = Vec::with_capacity(leaves.len());
-        for leaf in leaves {
-            leaf_key_tweaks.push(LeafKeyTweak {
+    pub async fn submit_swap(
+        &self,
+        transfer_id: TransferId,
+        leaves: &[TreeNode],
+        maybe_target_amounts: Option<Vec<u64>>,
+        prepared: PreparedTransfer,
+    ) -> Result<Vec<TreeNode>, ServiceError> {
+        let leaf_sum: u64 = leaves.iter().map(|leaf| leaf.value).sum();
+        let leaf_key_tweaks: Vec<LeafKeyTweak> = leaves
+            .iter()
+            .map(|leaf| LeafKeyTweak {
                 node: leaf.clone(),
                 incoming_key: None,
-            });
-        }
-
-        let transfer_id = TransferId::generate();
+            })
+            .collect();
         let expiry_time =
             SystemTime::now()
                 .checked_add(SWAP_EXPIRY_DURATION)
@@ -119,25 +140,20 @@ impl Swap {
                     "failed to compute swap expiry time".to_string(),
                 ))?;
         let receiver_public_key = self.ssp_client.identity_public_key();
-
-        // Pre-generate adaptor key (only CPFP path is used for swap v3)
         let secp = Secp256k1::new();
         let cpfp_adaptor_private_key = SecretKey::new(&mut OsRng);
         let cpfp_adaptor_public_key = PublicKey::from_secret_key(&secp, &cpfp_adaptor_private_key);
 
-        // Prepare the transfer request with signed refunds in the transfer_package.
-        // This internally gets signing commitments and signs the refunds with adaptor public key.
-        // The PreparedTransferRequest contains both the RPC request and the SignedTx data
-        // needed for later FROST aggregation.
         let mut prepared_transfer_request = self
             .transfer_service
-            .prepare_transfer_request(
+            .assemble_transfer_request_with_prepared(
                 &transfer_id,
                 &leaf_key_tweaks,
                 &receiver_public_key,
                 None,
                 Some(expiry_time),
                 Some(&cpfp_adaptor_public_key),
+                prepared,
             )
             .await?;
 
@@ -149,7 +165,10 @@ impl Swap {
             transfer_package.direct_from_cpfp_leaves_to_send.clear();
         }
 
-        let leaf_ids_for_log: Vec<String> = leaves.iter().map(|l| l.id.to_string()).collect();
+        let leaf_ids_for_log: Vec<String> = leaf_key_tweaks
+            .iter()
+            .map(|l| l.node.id.to_string())
+            .collect();
         debug!(
             "leaf_lifecycle swap_rpc_initiate: transfer_id={} leaf_ids={:?}",
             transfer_id, leaf_ids_for_log
@@ -276,7 +295,7 @@ impl Swap {
             total_amount_sats: leaf_sum,
             target_amount_sats: maybe_target_amounts
                 .clone()
-                .unwrap_or_else(|| vec![target_sum]),
+                .unwrap_or_else(|| vec![leaf_sum]),
             fee_sats: 0, // TODO: Request fee estimate from SSP
             user_leaves,
             user_outbound_transfer_external_id: transfer_id.to_string(),

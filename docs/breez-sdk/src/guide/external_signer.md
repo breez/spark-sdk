@@ -8,7 +8,7 @@ The External Signer feature allows you to provide custom signing logic for the S
 
 ## Using the Default External Signers
 
-The external signer interface is split into two parts: an `ExternalBreezSigner` for SDK-layer signing (LNURL-auth, sync, message signing, ECIES) and an `ExternalSparkSigner` for the Spark wallet flows (transfers, claims, FROST signing, deposits).
+The external signer interface is split into two parts: an `ExternalBreezSigner` for SDK-layer signing (LNURL-auth, sync, message signing, ECIES) and an `ExternalSparkSigner` for the Spark wallet flows (transfers, claims, FROST signing, deposits). The SDK also ships a Turnkey-backed implementation that keeps the keys in a secure enclave; see [Using Turnkey](turnkey.md).
 
 The SDK provides a convenient factory function {{#name default_external_signers}} that creates both signers from a mnemonic:
 
@@ -22,6 +22,16 @@ Provide both signers to the {{#name connect_with_signer}} method instead of the 
 <h4>Developer note</h4>
 When using an external signer, you don't provide a seed directly to the SDK. Instead, the signer handles all cryptographic operations internally.
 </div>
+
+## Advanced Setup with Sdk Builder
+
+To compose an external signer along with the options in [customizing the SDK](./customizing.md) (custom storage backends, a shared SDK context, an account number), build the SDK with {{#name new_with_signer}} instead. It takes the same two signers and returns an {{#name SdkBuilder}} you chain the customization methods on before calling {{#name build}}:
+
+{{#tabs external_signer:sdk-builder-with-signer}}
+
+For a signer that provides signing only (see [Signers Without Local ECIES/HMAC Support](#signers-without-local-ecieshmac-support)), use {{#name new_with_signing_only_signer}} the same way:
+
+{{#tabs external_signer:sdk-builder-with-signing-only-signer}}
 
 ## Implementing a Custom Signer
 
@@ -47,7 +57,6 @@ External signers are not supported in Flutter due to limitations with passing tr
 
 Some external signers can't perform the SDK's local ECIES/HMAC operations (for example, a policy-restricted enclave that won't release key material). For these, implement {{#name ExternalSigningSigner}} instead of {{#name ExternalBreezSigner}}, then connect with {{#name connect_with_signing_only_signer}}. With such a signer:
 
-- **Session tokens** are stored in plaintext instead of encrypted at rest.
 - **LNURL-auth** returns an error when called.
 - **Real-time sync** must be disabled: leave [{{#name real_time_sync_server_url}}](./config.md#real-time-sync-server-url) unset, or the build fails.
 - **Cross-chain** must be disabled: leave [{{#name cross_chain_config}}](./config.md#send-usdc-usdt) unset, or the build fails.

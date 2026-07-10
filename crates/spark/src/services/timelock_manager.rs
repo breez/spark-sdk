@@ -188,6 +188,10 @@ impl TimelockManager {
         info!("Renewing node: {:?}", node.id);
         let mut signing_jobs = Vec::new();
 
+        // Fetch the signing key from the signer, never derived from persisted
+        // tree data: the renewed refund pays to this key, so a coordinator that
+        // lied about the stored keyshare pubkey could otherwise steer the exit
+        // refund to a key it controls.
         let signing_public_key = self.spark_signer.get_public_key_for_leaf(&node.id).await?;
 
         let parent_node_tx = &parent_node.node_tx;
@@ -370,6 +374,10 @@ impl TimelockManager {
         info!("Renewing refund: {:?}", node.id);
         let mut signing_jobs = Vec::new();
 
+        // Fetch the signing key from the signer, never derived from persisted
+        // tree data: the renewed refund pays to this key, so a coordinator that
+        // lied about the stored keyshare pubkey could otherwise steer the exit
+        // refund to a key it controls.
         let signing_public_key = self.spark_signer.get_public_key_for_leaf(&node.id).await?;
 
         let parent_node_tx = &parent_node.node_tx;
@@ -517,6 +525,10 @@ impl TimelockManager {
         info!("Renewing zero timelock: {:?}", node.id);
         let mut signing_jobs = Vec::new();
 
+        // Fetch the signing key from the signer, never derived from persisted
+        // tree data: the renewed refund pays to this key, so a coordinator that
+        // lied about the stored keyshare pubkey could otherwise steer the exit
+        // refund to a key it controls.
         let signing_public_key = self.spark_signer.get_public_key_for_leaf(&node.id).await?;
 
         let node_tx = &node.node_tx;

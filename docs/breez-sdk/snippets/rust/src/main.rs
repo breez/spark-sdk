@@ -1,4 +1,5 @@
 mod buying_bitcoin;
+mod client_signing;
 mod config;
 mod contacts;
 mod cross_chain;
@@ -21,6 +22,7 @@ mod refunding_payments;
 mod sdk_building;
 mod send_payment;
 mod tokens;
+mod turnkey;
 mod user_settings;
 mod webhooks;
 

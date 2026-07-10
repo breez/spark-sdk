@@ -1189,6 +1189,7 @@ dependencies = [
  "chrono",
  "flashnet",
  "frost-secp256k1-tr",
+ "futures",
  "hex",
  "k256",
  "lnurl-models",

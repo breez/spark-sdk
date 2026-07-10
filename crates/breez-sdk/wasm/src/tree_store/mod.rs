@@ -1,6 +1,8 @@
 #[cfg(all(test, not(feature = "browser-tests")))]
 mod tests;
 
+use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use macros::async_trait;
@@ -8,8 +10,9 @@ use platform_utils::time::Instant;
 use platform_utils::tokio::sync::watch;
 use serde::{Deserialize, Serialize};
 use spark_wallet::{
-    Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
-    TargetAmounts, TreeNode, TreeServiceError, TreeStore,
+    LeafSelection, Leaves, LeavesReservation, LeavesReservationId, PublicKey, ReservationPurpose,
+    ReserveResult, TargetAmounts, TreeNode, TreeNodeId, TreeServiceError, TreeStore,
+    VerifiedLeafKeys,
 };
 use tracing::info;
 use wasm_bindgen::prelude::*;
@@ -141,6 +144,24 @@ impl From<WasmReserveResult> for ReserveResult {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum WasmLeafSelection {
+    Exact { leaves: Vec<TreeNode> },
+    SwapNeeded { leaves: Vec<TreeNode> },
+    InsufficientFunds,
+}
+
+impl WasmLeafSelection {
+    fn into_selection(self) -> Result<LeafSelection, TreeServiceError> {
+        match self {
+            WasmLeafSelection::Exact { leaves } => Ok(LeafSelection::Exact(leaves)),
+            WasmLeafSelection::SwapNeeded { leaves } => Ok(LeafSelection::SwapNeeded(leaves)),
+            WasmLeafSelection::InsufficientFunds => Err(TreeServiceError::InsufficientFunds),
+        }
+    }
+}
+
 // ===== Serialization types for JS calls =====
 
 #[derive(Serialize)]
@@ -214,6 +235,37 @@ impl TreeStore for WasmTreeStore {
 
         info!("WasmTreeStore::get_available_balance: {balance}, js_promise: {js_dt:?}");
         Ok(balance)
+    }
+
+    async fn get_verified_leaf_keys(
+        &self,
+    ) -> Result<HashMap<TreeNodeId, VerifiedLeafKeys>, TreeServiceError> {
+        let promise = self
+            .tree_store
+            .get_verified_leaf_keys()
+            .map_err(js_error_to_tree_error)?;
+        let result = JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_tree_error)?;
+
+        // Each row is `[id, verifyingPublicKeyHex, signingKeysharePublicKeyHex]`.
+        // Pubkeys cross the boundary as hex strings and are parsed here, sidestepping
+        // serde_wasm_bindgen's non-human-readable encoding of `PublicKey`.
+        let rows: Vec<(String, String, String)> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
+        let mut keys = HashMap::with_capacity(rows.len());
+        for (id, verifying, keyshare) in rows {
+            keys.insert(
+                TreeNodeId::from_str(&id).map_err(TreeServiceError::Generic)?,
+                VerifiedLeafKeys {
+                    verifying_public_key: PublicKey::from_str(&verifying)
+                        .map_err(|e| TreeServiceError::Generic(e.to_string()))?,
+                    signing_keyshare_public_key: PublicKey::from_str(&keyshare)
+                        .map_err(|e| TreeServiceError::Generic(e.to_string()))?,
+                },
+            );
+        }
+        Ok(keys)
     }
 
     async fn get_leaves(&self) -> Result<Leaves, TreeServiceError> {
@@ -394,6 +446,51 @@ impl TreeStore for WasmTreeStore {
         self.notify_balance_change();
         Ok(wasm_reservation.into())
     }
+
+    async fn try_reserve_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        let ids: Vec<String> = leaf_ids.iter().map(ToString::to_string).collect();
+        let ids_js = serde_wasm_bindgen::to_value(&ids)
+            .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
+        let promise = self
+            .tree_store
+            .try_reserve_leaves_by_ids(ids_js, purpose.to_string())
+            .map_err(js_error_to_tree_error)?;
+        let result = JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_tree_error)?;
+        let wasm_reservation: WasmLeavesReservation = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
+        self.notify_balance_change();
+        Ok(wasm_reservation.into())
+    }
+
+    async fn try_select_leaves(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeafSelection, TreeServiceError> {
+        let target_js = match target_amounts {
+            Some(t) => {
+                let wasm_target: WasmTargetAmounts = t.into();
+                serde_wasm_bindgen::to_value(&wasm_target)
+                    .map_err(|e| TreeServiceError::Generic(e.to_string()))?
+            }
+            None => JsValue::NULL,
+        };
+        let promise = self
+            .tree_store
+            .try_select_leaves(target_js)
+            .map_err(js_error_to_tree_error)?;
+        let result = JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_tree_error)?;
+        let wasm_selection: WasmLeafSelection = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
+        wasm_selection.into_selection()
+    }
 }
 
 // ===== TypeScript interface =====
@@ -431,16 +528,24 @@ type ReserveResult =
     | { type: 'insufficientFunds' }
     | { type: 'waitForPending'; needed: number; available: number; pending: number };
 
+type LeafSelection =
+    | { type: 'exact'; leaves: TreeNode[] }
+    | { type: 'swapNeeded'; leaves: TreeNode[] }
+    | { type: 'insufficientFunds' };
+
 export interface TreeStore {
     addLeaves: (leaves: TreeNode[]) => Promise<void>;
     getLeaves: () => Promise<Leaves>;
     getAvailableBalance: () => Promise<bigint>;
+    getVerifiedLeafKeys: () => Promise<[string, string, string][]>;
     setLeaves: (leaves: TreeNode[], missingLeaves: TreeNode[], refreshStartedAtMs: number) => Promise<void>;
     cancelReservation: (id: string, leavesToKeep: TreeNode[]) => Promise<void>;
     finalizeReservation: (id: string, newLeaves: TreeNode[] | null) => Promise<void>;
     tryReserveLeaves: (targetAmounts: TargetAmounts | null, exactOnly: boolean, purpose: string) => Promise<ReserveResult>;
     now: () => Promise<number>;
     updateReservation: (reservationId: string, reservedLeaves: TreeNode[], changeLeaves: TreeNode[]) => Promise<LeavesReservation>;
+    tryReserveLeavesByIds: (leafIds: string[], purpose: string) => Promise<LeavesReservation>;
+    trySelectLeaves: (targetAmounts: TargetAmounts | null) => Promise<LeafSelection>;
 }"#;
 
 #[wasm_bindgen]
@@ -456,6 +561,9 @@ extern "C" {
 
     #[wasm_bindgen(structural, method, js_name = getAvailableBalance, catch)]
     pub fn get_available_balance(this: &TreeStoreJs) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = getVerifiedLeafKeys, catch)]
+    pub fn get_verified_leaf_keys(this: &TreeStoreJs) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = setLeaves, catch)]
     pub fn set_leaves(
@@ -496,5 +604,18 @@ extern "C" {
         reservation_id: String,
         reserved_leaves: JsValue,
         change_leaves: JsValue,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = tryReserveLeavesByIds, catch)]
+    pub fn try_reserve_leaves_by_ids(
+        this: &TreeStoreJs,
+        leaf_ids: JsValue,
+        purpose: String,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = trySelectLeaves, catch)]
+    pub fn try_select_leaves(
+        this: &TreeStoreJs,
+        target_amounts: JsValue,
     ) -> Result<Promise, JsValue>;
 }

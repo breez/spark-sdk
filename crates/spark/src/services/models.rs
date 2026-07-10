@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::ecdsa::Signature;
@@ -20,12 +21,16 @@ use crate::address::SparkAddress;
 use crate::core::Network;
 use crate::operator::rpc as operator_rpc;
 use crate::operator::rpc::spark::PreimageRequestRole;
-use crate::signer::{EncryptedSecret, FrostSigningCommitmentsWithNonces};
+use crate::signer::{
+    EncryptedSecret, FrostDerivation, FrostJob, FrostShareResult,
+    FrostSigningCommitmentsWithNonces, SignerError, SparkSigner,
+};
 use crate::ssp::BitcoinNetwork;
 use crate::token::{HashableTokenTransaction, bech32m_encode_token_id};
 use crate::token::{TokenMetadata, TokenOutput, TokenOutputWithPrevOut};
 use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId, TreeNodeStatus};
 use crate::utils::byte_padding::BytePadding;
+use crate::utils::frost::sign_frost_batch;
 
 use super::ServiceError;
 
@@ -143,6 +148,215 @@ impl TryFrom<&SignedTx> for operator_rpc::spark::UserSignedTxSigningJob {
             additional_inputs: vec![],
         })
     }
+}
+
+/// One refund transaction's FROST job paired with the metadata that rebuilds its
+/// signed form once the batched share returns.
+pub(crate) struct RefundJob {
+    pub job: FrostJob,
+    pub pending: PendingRefundSignature,
+}
+
+/// A leaf's refund jobs: the cpfp variant always, the direct variants when the
+/// leaf carries them. Field position encodes the variant, so no runtime tag is
+/// needed and a share can never be routed to the wrong bucket.
+pub(crate) struct LeafRefundJobs {
+    pub cpfp: RefundJob,
+    pub direct: Option<RefundJob>,
+    pub direct_from_cpfp: Option<RefundJob>,
+}
+
+/// A leaf's signed refund transactions, mirroring `LeafRefundJobs` field for
+/// field.
+pub(crate) struct SignedLeafRefunds {
+    pub cpfp: SignedTx,
+    pub direct: Option<SignedTx>,
+    pub direct_from_cpfp: Option<SignedTx>,
+}
+
+/// The metadata that rebuilds a refund transaction's signed form once its
+/// batched FROST share returns.
+pub(crate) struct PendingRefundSignature {
+    pub node_id: TreeNodeId,
+    pub signing_public_key: PublicKey,
+    pub refund_tx: Transaction,
+    pub operator_commitments: BTreeMap<Identifier, SigningCommitments>,
+    pub network: Network,
+}
+
+impl PendingRefundSignature {
+    /// Combines the batched share into the signed refund transaction.
+    pub(crate) fn into_signed_tx(self, share: FrostShareResult) -> SignedTx {
+        SignedTx {
+            node_id: self.node_id,
+            signing_public_key: self.signing_public_key,
+            tx: self.refund_tx,
+            user_signature: share.signature_share,
+            signing_commitments: self.operator_commitments,
+            self_nonce_commitment: share.commitment,
+            network: self.network,
+        }
+    }
+}
+
+/// Which optional refund variants a leaf carries. Regroups a flat, field-ordered
+/// stream of signed refunds back into per-leaf buckets, matching the order
+/// [`LeafRefundJobs::flatten_into`] emitted them.
+struct LeafRefundShape {
+    has_direct: bool,
+    has_direct_from_cpfp: bool,
+}
+
+impl LeafRefundJobs {
+    /// Moves this leaf's jobs and pending metadata into the shared batch buffers
+    /// in field order (cpfp, then direct, then direct-from-cpfp), returning the
+    /// variant shape needed to regroup the shares.
+    fn flatten_into(
+        self,
+        jobs: &mut Vec<FrostJob>,
+        pending: &mut Vec<PendingRefundSignature>,
+    ) -> LeafRefundShape {
+        let shape = LeafRefundShape {
+            has_direct: self.direct.is_some(),
+            has_direct_from_cpfp: self.direct_from_cpfp.is_some(),
+        };
+        for refund in std::iter::once(self.cpfp)
+            .chain(self.direct)
+            .chain(self.direct_from_cpfp)
+        {
+            jobs.push(refund.job);
+            pending.push(refund.pending);
+        }
+        shape
+    }
+}
+
+impl LeafRefundShape {
+    /// Pulls one signed refund per present variant from `signed`, in the same
+    /// field order as [`LeafRefundJobs::flatten_into`].
+    fn rebuild(
+        self,
+        signed: &mut impl Iterator<Item = SignedTx>,
+    ) -> Result<SignedLeafRefunds, SignerError> {
+        let cpfp = next_signed(signed)?;
+        let direct = self.has_direct.then(|| next_signed(signed)).transpose()?;
+        let direct_from_cpfp = self
+            .has_direct_from_cpfp
+            .then(|| next_signed(signed))
+            .transpose()?;
+        Ok(SignedLeafRefunds {
+            cpfp,
+            direct,
+            direct_from_cpfp,
+        })
+    }
+}
+
+fn next_signed(signed: &mut impl Iterator<Item = SignedTx>) -> Result<SignedTx, SignerError> {
+    signed
+        .next()
+        .ok_or_else(|| SignerError::Generic("sign_frost returned too few shares".to_string()))
+}
+
+/// Signs every leaf's refund jobs in one batched `sign_frost` call, then
+/// reattaches the shares. Flatten and rebuild walk the same fields in the same
+/// order, and the count is length-checked inside `sign_frost_batch`, so the
+/// single reliance on share ordering is confined here.
+pub(crate) async fn sign_leaf_refunds(
+    spark_signer: &Arc<dyn SparkSigner>,
+    leaves: Vec<LeafRefundJobs>,
+) -> Result<Vec<SignedLeafRefunds>, SignerError> {
+    // Flatten to parallel job/pending buffers, remembering each leaf's variant
+    // shape so the flat share stream can be regrouped per leaf.
+    let mut jobs = Vec::new();
+    let mut pending = Vec::new();
+    let shapes: Vec<LeafRefundShape> = leaves
+        .into_iter()
+        .map(|leaf| leaf.flatten_into(&mut jobs, &mut pending))
+        .collect();
+
+    let signed = sign_frost_batch(spark_signer, jobs, pending).await?;
+    let mut signed = signed.into_iter().map(|(p, share)| p.into_signed_tx(share));
+    shapes
+        .into_iter()
+        .map(|shape| shape.rebuild(&mut signed))
+        .collect()
+}
+
+/// Splits signed leaf refunds into per-variant `SignedTx` buckets. Each bucket
+/// keeps leaf order.
+pub(crate) fn into_signed_tx_groups(
+    signed: Vec<SignedLeafRefunds>,
+) -> (Vec<SignedTx>, Vec<SignedTx>, Vec<SignedTx>) {
+    let mut cpfp = Vec::with_capacity(signed.len());
+    let mut direct = Vec::with_capacity(signed.len());
+    let mut direct_from_cpfp = Vec::with_capacity(signed.len());
+    for s in signed {
+        cpfp.push(s.cpfp);
+        if let Some(d) = s.direct {
+            direct.push(d);
+        }
+        if let Some(d) = s.direct_from_cpfp {
+            direct_from_cpfp.push(d);
+        }
+    }
+    (cpfp, direct, direct_from_cpfp)
+}
+
+/// Per-variant operator-facing signing jobs (cpfp, direct, direct-from-cpfp).
+pub(crate) type UserSignedJobGroups = (
+    Vec<operator_rpc::spark::UserSignedTxSigningJob>,
+    Vec<operator_rpc::spark::UserSignedTxSigningJob>,
+    Vec<operator_rpc::spark::UserSignedTxSigningJob>,
+);
+
+/// Splits signed leaf refunds into per-variant operator-facing signing jobs.
+pub(crate) fn into_user_signed_job_groups(
+    signed: Vec<SignedLeafRefunds>,
+) -> Result<UserSignedJobGroups, ServiceError> {
+    let (cpfp, direct, direct_from_cpfp) = into_signed_tx_groups(signed);
+    Ok((to_jobs(cpfp)?, to_jobs(direct)?, to_jobs(direct_from_cpfp)?))
+}
+
+fn to_jobs(
+    txs: Vec<SignedTx>,
+) -> Result<Vec<operator_rpc::spark::UserSignedTxSigningJob>, ServiceError> {
+    txs.iter().map(|tx| tx.try_into()).collect()
+}
+
+/// Builds the [`RefundJob`] for one refund transaction: the FROST job plus the
+/// metadata that rebuilds its signed form. Pure client-side work: no signing.
+/// Refund signing always uses the leaf's own (derived) signing key, keyed by the
+/// leaf's node id. Signature aggregation happens later, when the returned share
+/// is combined with operator signatures.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_refund_signing_job(
+    node_id: &TreeNodeId,
+    verifying_key: &PublicKey,
+    signing_public_key: &PublicKey,
+    refund_tx: Transaction,
+    sighash: [u8; 32],
+    operator_commitments: BTreeMap<Identifier, SigningCommitments>,
+    adaptor_public_key: Option<&PublicKey>,
+    network: Network,
+) -> RefundJob {
+    let job = FrostJob {
+        derivation: FrostDerivation::SigningLeaf {
+            leaf_id: node_id.clone(),
+        },
+        sighash,
+        verifying_key: *verifying_key,
+        operator_commitments: operator_commitments.clone(),
+        adaptor_public_key: adaptor_public_key.copied(),
+    };
+    let pending = PendingRefundSignature {
+        node_id: node_id.clone(),
+        signing_public_key: *signing_public_key,
+        refund_tx,
+        operator_commitments,
+        network,
+    };
+    RefundJob { job, pending }
 }
 
 pub(crate) struct SigningResult {

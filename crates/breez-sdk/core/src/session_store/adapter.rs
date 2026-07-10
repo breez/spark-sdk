@@ -44,3 +44,34 @@ impl spark_wallet::SessionStore for SessionStoreAdapter {
             .map_err(Into::into)
     }
 }
+
+/// Adapts a [`spark_wallet`] session store to the SDK-facing [`SessionStore`]
+/// trait (the reverse of [`SessionStoreAdapter`]), so a storage backend's own
+/// session store can be handed to an integrator (via
+/// [`default_session_store`](crate::default_session_store)) to wrap.
+pub(crate) struct SparkSessionStoreAdapter(pub(crate) Arc<dyn spark_wallet::SessionStore>);
+
+#[macros::async_trait]
+impl SessionStore for SparkSessionStoreAdapter {
+    async fn get_session(
+        &self,
+        service_identity_key: PublicKey,
+    ) -> Result<super::Session, super::SessionStoreError> {
+        self.0
+            .get_session(&service_identity_key)
+            .await
+            .map(Into::into)
+            .map_err(Into::into)
+    }
+
+    async fn set_session(
+        &self,
+        service_identity_key: PublicKey,
+        session: super::Session,
+    ) -> Result<(), super::SessionStoreError> {
+        self.0
+            .set_session(&service_identity_key, session.into())
+            .await
+            .map_err(Into::into)
+    }
+}

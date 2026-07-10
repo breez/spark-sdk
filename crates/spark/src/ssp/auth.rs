@@ -45,19 +45,21 @@ impl SspAuthHeaderProvider {
         }
     }
 
-    async fn get_or_authenticate(&self) -> GraphQLResult<Session> {
-        let cached = self
-            .session_store
-            .get_session(&self.ssp_identity_public_key)
-            .await;
-        match cached {
-            Ok(session) if session.is_valid() => return Ok(session),
-            Ok(_) => debug!("SSP session expired, authenticating"),
-            Err(SessionStoreError::NotFound) => {
-                debug!("SSP session not found, authenticating")
-            }
-            Err(SessionStoreError::Generic(e)) => {
-                error!("Failed to get SSP session from session store: {}", e)
+    async fn get_or_authenticate(&self, force_refresh: bool) -> GraphQLResult<Session> {
+        if !force_refresh {
+            let cached = self
+                .session_store
+                .get_session(&self.ssp_identity_public_key)
+                .await;
+            match cached {
+                Ok(session) if session.is_valid() => return Ok(session),
+                Ok(_) => debug!("SSP session expired, authenticating"),
+                Err(SessionStoreError::NotFound) => {
+                    debug!("SSP session not found, authenticating")
+                }
+                Err(SessionStoreError::Generic(e)) => {
+                    error!("Failed to get SSP session from session store: {}", e)
+                }
             }
         }
         let session = self.authenticate().await?;
@@ -134,16 +136,29 @@ impl SspAuthHeaderProvider {
     }
 }
 
-#[macros::async_trait]
-impl HeaderProvider for SspAuthHeaderProvider {
-    async fn headers(&self) -> Result<HashMap<String, String>, HeaderProviderError> {
+impl SspAuthHeaderProvider {
+    async fn auth_headers(
+        &self,
+        force_refresh: bool,
+    ) -> Result<HashMap<String, String>, HeaderProviderError> {
         let session = self
-            .get_or_authenticate()
+            .get_or_authenticate(force_refresh)
             .await
             .map_err(|e| HeaderProviderError::Generic(e.to_string()))?;
         Ok(HashMap::from([(
             "Authorization".to_string(),
             format!("Bearer {}", session.token),
         )]))
+    }
+}
+
+#[macros::async_trait]
+impl HeaderProvider for SspAuthHeaderProvider {
+    async fn headers(&self) -> Result<HashMap<String, String>, HeaderProviderError> {
+        self.auth_headers(false).await
+    }
+
+    async fn headers_refresh(&self) -> Result<HashMap<String, String>, HeaderProviderError> {
+        self.auth_headers(true).await
     }
 }

@@ -4,7 +4,8 @@ use tokio::sync::Mutex;
 
 use crate::{
     BitcoinChainService, BreezSdk, Config, Credentials, FiatService, PaymentObserver, RestClient,
-    SdkContext, SdkError, Seed, Storage, StorageBackend, chain::rest_client::ChainApiType,
+    SdkContext, SdkError, Seed, SessionStore, Storage, StorageBackend,
+    chain::rest_client::ChainApiType,
 };
 
 /// Builder for creating `BreezSdk` instances with customizable components.
@@ -99,6 +100,18 @@ impl SdkBuilder {
     pub async fn with_storage_backend(&self, storage: Arc<dyn StorageBackend>) {
         let mut builder = self.inner.lock().await;
         *builder = builder.clone().with_storage_backend(storage);
+    }
+
+    /// Overrides the session store used to cache auth tokens, replacing the one
+    /// the backend provides. Supply any [`SessionStore`]: for example one that
+    /// wraps the backend's own store (from
+    /// [`default_session_store`](crate::default_session_store)) to add at-rest
+    /// encryption, which the SDK does not apply itself.
+    /// Arguments:
+    /// - `session_store`: The session store to use in place of the backend's.
+    pub async fn with_session_store(&self, session_store: Arc<dyn SessionStore>) {
+        let mut builder = self.inner.lock().await;
+        *builder = builder.clone().with_session_store(session_store);
     }
 
     /// **Deprecated.** Use

@@ -13,6 +13,7 @@ breez-sdk-spark = { path = "../../../../crates/breez-sdk/core", features = [
     "postgres",
     "mysql",
     "passkey",
+    "turnkey",
 ] }
 log = "0.4"
 tokio = "1.42.0"

@@ -56,9 +56,7 @@ use crate::signer::{
     SecretBytes,
 };
 
-use super::accounts::{
-    decode_scalar_32, ecdsa_from_rs, schnorr_from_rs, spark_address_format, xpriv_from_secret,
-};
+use super::accounts::{decode_scalar_32, ecdsa_from_rs, schnorr_from_rs, xpriv_from_secret};
 use super::error::TurnkeyError;
 use super::transport::{OnConflict, TurnkeyClient};
 use super::types::{
@@ -268,6 +266,14 @@ fn ffi_public_key_map(
         .collect()
 }
 
+/// Maximum FROST jobs per `SPARK_SIGN_FROST` activity. Turnkey's enclave fails a
+/// single `sign_frost` with HTTP 500 (an internal ~15s timeout) past roughly 250
+/// to 300 jobs, far below its ~11 MB request-body cap. The batched send/coop-exit/
+/// claim/timelock paths can exceed that (a full-balance coop-exit signs every
+/// wallet leaf, one to three jobs each), so submissions are chunked with wide
+/// margin. Exercised by `breez-itest/tests/turnkey_sign_frost_chunking`.
+const MAX_FROST_JOBS_PER_ACTIVITY: usize = 100;
+
 pub(crate) struct TurnkeySparkSigner {
     client: Arc<TurnkeyClient>,
     account: u32,
@@ -289,13 +295,30 @@ pub(crate) struct TurnkeySparkSigner {
 
 impl TurnkeySparkSigner {
     pub(crate) fn new(client: Arc<TurnkeyClient>, network: Network, account: u32) -> Self {
+        Self::new_seeded(client, network, account, None, None)
+    }
+
+    /// Builds the signer with the wallet's stable identity pubkey and Spark
+    /// address pre-filled into their memos, so an init that supplies them serves
+    /// both without the identity fetch and Spark-account materialization `new`
+    /// would do on first use. Both are fixed per wallet (identity is
+    /// `HD(m/8797555'/{account}'/0')`, the Spark address is derived from it), so
+    /// seeding is always correct. `None`/`None` reproduces `new`. Leaf and
+    /// static-deposit keys are dynamic and stay lazy.
+    pub(crate) fn new_seeded(
+        client: Arc<TurnkeyClient>,
+        network: Network,
+        account: u32,
+        identity_pubkey: Option<PublicKey>,
+        spark_address: Option<String>,
+    ) -> Self {
         Self {
             client,
             account,
             network,
             secp: Secp256k1::new(),
-            identity_pubkey: Mutex::new(None),
-            spark_address: Mutex::new(None),
+            identity_pubkey: Mutex::new(identity_pubkey),
+            spark_address: Mutex::new(spark_address),
             leaf_pubkeys: Mutex::new(HashMap::new()),
             static_deposit_pubkeys: Mutex::new(HashMap::new()),
             static_deposit_secret_keys: Mutex::new(HashMap::new()),
@@ -376,20 +399,16 @@ impl TurnkeySparkSigner {
     /// The Spark-format identity address, used as `signWith` for Spark-protocol
     /// activities and BIP-340 Schnorr signing.
     ///
-    /// The identity path holds two accounts: a compressed one (created by the
-    /// factory, for ECDSA) and the Spark one ensured here. Turnkey allows both
-    /// formats at one path, but get-by-path is then ambiguous, so the address is
-    /// derived locally: it's the canonical Spark address for the identity key,
-    /// identical to what Turnkey assigns the Spark account.
+    /// Derived locally rather than fetched: it's the canonical Spark address for
+    /// the identity key, identical to what Turnkey assigns the Spark-format
+    /// account the factory materializes at this path. (Turnkey allows both the
+    /// compressed and Spark formats at one path, so get-by-path is ambiguous.)
+    /// The account is created by the factory, not here, so a seeded signer that
+    /// skips this derivation still has a materialized account to sign against.
     async fn spark_identity_address(&self) -> Result<String, SignerError> {
         if let Some(addr) = self.spark_address.lock().await.clone() {
             return Ok(addr);
         }
-        let path = format!("{}/0'", self.base_path());
-        self.client
-            .create_account(path, spark_address_format(self.network))
-            .await
-            .map_err(to_spark_err)?;
         let identity = self.identity_public_key().await?;
         let addr = SparkAddress::new(identity, self.network.into(), None)
             .to_address_string()
@@ -436,8 +455,29 @@ impl TurnkeySparkSigner {
         jobs: &[FrostJob],
     ) -> Result<Vec<FrostShareResult>, SignerError> {
         let sign_with = self.spark_identity_address().await?;
-        let mut signatures = Vec::with_capacity(jobs.len());
-        for job in jobs {
+        // One activity per chunk (see MAX_FROST_JOBS_PER_ACTIVITY), all fired
+        // concurrently and reassembled in job order. FROST jobs are independent,
+        // so splitting the batch is signing-equivalent to one call. The Turnkey
+        // client paces submissions to the per-suborg rate limit, so no concurrency
+        // cap is needed here.
+        let chunk_futures = jobs.chunks(MAX_FROST_JOBS_PER_ACTIVITY).map(|chunk| {
+            let sign_with = sign_with.clone();
+            async move { self.sign_frost_chunk(sign_with, chunk).await }
+        });
+        let chunk_shares: Vec<Vec<FrostShareResult>> =
+            futures::future::try_join_all(chunk_futures).await?;
+        Ok(chunk_shares.into_iter().flatten().collect())
+    }
+
+    /// Signs one chunk of FROST jobs as a single `SPARK_SIGN_FROST` activity,
+    /// returning the shares in job order.
+    async fn sign_frost_chunk(
+        &self,
+        sign_with: String,
+        chunk: &[FrostJob],
+    ) -> Result<Vec<FrostShareResult>, SignerError> {
+        let mut signatures = Vec::with_capacity(chunk.len());
+        for job in chunk {
             signatures.push(frost_job_to_request(job).map_err(to_spark_err)?);
         }
         let result: SparkSignFrostResult = self
@@ -454,10 +494,10 @@ impl TurnkeySparkSigner {
             )
             .await
             .map_err(to_spark_err)?;
-        if result.signatures.len() != jobs.len() {
+        if result.signatures.len() != chunk.len() {
             return Err(SignerError::Generic(format!(
                 "turnkey sign_frost: expected {} shares, got {}",
-                jobs.len(),
+                chunk.len(),
                 result.signatures.len()
             )));
         }
@@ -533,6 +573,10 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
         Ok(PublicKeyBytes::from_public_key(
             &self.leaf_public_key(&id).await?,
         ))
+    }
+
+    fn is_remote(&self) -> bool {
+        true
     }
 
     async fn get_static_deposit_public_key(
@@ -929,7 +973,9 @@ mod tests {
             wallet_id: "test-wallet".to_string(),
             network: Network::Regtest,
             account_number: Some(0),
+            identity_public_key: None,
             retry: None,
+            max_rps: None,
         };
         Arc::new(TurnkeyClient::new(&config, http).unwrap())
     }

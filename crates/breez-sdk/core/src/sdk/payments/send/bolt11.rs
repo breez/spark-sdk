@@ -8,6 +8,7 @@ use crate::{
     error::SdkError,
     models::{SendPaymentRequest, SendPaymentResponse},
     sdk::BreezSdk,
+    signer::{ExternalPrepareTransferRequest, ExternalPreparedTransfer},
     token_conversion::{ConversionAmount, TokenConversionResponse},
     utils::fees::fee_overpayment,
 };
@@ -81,6 +82,19 @@ pub(super) async fn send(
         .map(|a| Ok::<u64, SdkError>(a.try_into()?))
         .transpose()?;
 
+    // Under FeesIncluded, record the net amount reaching the receiver (the
+    // fee-deducted amount_to_send) rather than the gross total, so amount + fees
+    // equals what the user paid, consistent with the coop-exit, spark, and
+    // client-signing paths. Other flows keep the requested amount: LNURL runs
+    // internally as FeesExcluded and overpays the fixed invoice to drain the
+    // wallet, but that overpayment is paid to the SSP as fees, not to the
+    // receiver, so the displayed amount must stay the invoice amount.
+    let displayed_amount = if is_fees_included {
+        amount_to_send.unwrap_or(amount)
+    } else {
+        amount
+    };
+
     let payment = sdk
         .lightning_sender
         .pay_and_persist_lightning_invoice(
@@ -88,12 +102,49 @@ pub(super) async fn send(
             amount_to_send_sats,
             fee_sats,
             prefer_spark,
-            amount,
+            displayed_amount,
             transfer_id,
             completion_timeout_secs.unwrap_or(0).into(),
         )
         .await?;
 
+    Ok(SendPaymentResponse { payment })
+}
+
+#[expect(clippy::too_many_arguments)]
+pub(super) async fn send_signed(
+    sdk: &BreezSdk,
+    prepare_transfer: &ExternalPrepareTransferRequest,
+    signed: &ExternalPreparedTransfer,
+    bolt11: &str,
+    amount_sat: u64,
+    fee_sat: u64,
+    fee_policy: FeePolicy,
+    completion_timeout_secs: Option<u32>,
+) -> Result<SendPaymentResponse, SdkError> {
+    let amount_to_send = if fee_policy == FeePolicy::FeesIncluded {
+        receiver_amount_with_overpayment(sdk, bolt11, amount_sat, fee_sat).await?
+    } else {
+        amount_sat
+    };
+
+    let result = Box::pin(sdk.spark_wallet.publish_lightning_send_package(
+        prepare_transfer.transfer_id()?,
+        prepare_transfer.leaf_ids()?,
+        bolt11.to_string(),
+        Some(amount_to_send),
+        signed.to_prepared_transfer()?,
+    ))
+    .await?;
+
+    let payment = sdk
+        .lightning_sender
+        .payment_from_pay_result(
+            result,
+            u128::from(amount_to_send),
+            completion_timeout_secs.unwrap_or(0).into(),
+        )
+        .await?;
     Ok(SendPaymentResponse { payment })
 }
 
@@ -111,8 +162,15 @@ async fn calculate_fees_included_amount(
             "Amount too small to cover fees".to_string(),
         ));
     }
+    receiver_amount_with_overpayment(sdk, invoice, receiver_amount, stored_fee).await
+}
 
-    // Re-estimate current fee for receiver amount
+async fn receiver_amount_with_overpayment(
+    sdk: &BreezSdk,
+    invoice: &str,
+    receiver_amount: u64,
+    stored_fee: u64,
+) -> Result<u64, SdkError> {
     let current_fee = sdk
         .spark_wallet
         .fetch_lightning_send_fee_estimate(invoice, Some(receiver_amount))

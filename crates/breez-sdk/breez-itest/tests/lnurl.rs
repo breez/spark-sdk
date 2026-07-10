@@ -124,6 +124,74 @@ async fn setup_bob(use_postgres: bool) -> Result<SdkInstance> {
     .await
 }
 
+fn random_mnemonic() -> Result<String> {
+    let mut entropy = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut entropy);
+    Ok(bip39::Mnemonic::from_entropy(&entropy)?.to_string())
+}
+
+/// Alice for the client-signing tests: automatic leaf optimization is
+/// disabled so a background denomination swap cannot reserve the leaves
+/// between funding and the package build (the build's selection does not
+/// wait on swap-pending balance the way the normal send path does).
+async fn build_signing_alice(mnemonic: String, prefix: &str) -> Result<SdkInstance> {
+    let dir = tempfile::Builder::new().prefix(prefix).tempdir()?;
+    let path = dir.path().to_string_lossy().to_string();
+
+    let mut cfg = default_config(Network::Regtest);
+    cfg.leaf_optimization_config = LeafOptimizationConfig {
+        auto_enabled: false,
+        multiplicity: 15,
+    };
+    build_sdk_with_external_signer_and_config(path, mnemonic, cfg, Some(dir)).await
+}
+
+/// Drives the LNURL-pay client-signing build -> sign -> publish loop, rebuilding
+/// after any denomination swap, and returns the LNURL pay response.
+async fn client_sign_lnurl_pay(
+    alice: &SdkInstance,
+    signer: &Arc<dyn signer::ExternalSparkSigner>,
+    prepare_response: PrepareLnurlPayResponse,
+) -> Result<LnurlPayResponse> {
+    for _ in 0..10 {
+        let unsigned = alice
+            .sdk
+            .build_unsigned_lnurl_pay_package(BuildUnsignedLnurlPayPackageRequest {
+                prepare_response: prepare_response.clone(),
+            })
+            .await?;
+
+        let signature = match &unsigned {
+            UnsignedTransferPackage::Transfer {
+                prepare_transfer, ..
+            }
+            | UnsignedTransferPackage::Swap {
+                prepare_transfer, ..
+            } => TransferSignature::Transfer {
+                signed: signer.prepare_transfer(prepare_transfer.clone()).await?,
+            },
+            UnsignedTransferPackage::Token { .. } => {
+                panic!("unexpected token package for an LNURL pay")
+            }
+        };
+
+        match alice
+            .sdk
+            .publish_signed_lnurl_pay_package(PublishSignedLnurlPayPackageRequest {
+                signed_package: SignedTransferPackage {
+                    unsigned,
+                    signature,
+                },
+            })
+            .await?
+        {
+            PublishSignedLnurlPayResponse::SwapCompleted => continue,
+            PublishSignedLnurlPayResponse::PaymentSent { response } => return Ok(response),
+        }
+    }
+    anyhow::bail!("client-signing LNURL pay did not converge within 10 iterations")
+}
+
 // ---------------------
 // Tests
 // ---------------------
@@ -907,6 +975,19 @@ async fn test_08_lnurl_send_all_with_fee_overpayment(
     assert_eq!(alice_payment.payment_type, PaymentType::Send);
     assert_eq!(alice_payment.method, PaymentMethod::Lightning);
     assert_eq!(alice_payment.status, PaymentStatus::Completed);
+    // The recorded amount is the invoice amount the receiver got, and the
+    // overpayment (which is paid to the SSP, not the receiver) shows up in the
+    // fees: amount stays the invoice amount and fees carry the full prepared fee.
+    assert_eq!(
+        alice_payment.amount,
+        invoice_amount_sats.into(),
+        "LNURL send should record the invoice amount, not the overpaid amount"
+    );
+    assert_eq!(
+        alice_payment.fees,
+        expected_fee1.into(),
+        "the overpayment should appear in the fees, not the amount"
+    );
 
     info!(
         "Fee overpayment test passed! Expected overpayment: {} sats",
@@ -1307,5 +1388,345 @@ async fn test_13_transfer_to_self_rejected(#[case] use_postgres: bool) -> Result
     );
 
     info!("=== Test test_13_transfer_to_self_rejected PASSED ===");
+    Ok(())
+}
+
+/// Test LNURL-pay driven through the client-signing build/sign/publish loop
+/// (FeesExcluded, no conversion).
+#[test_log::test(tokio::test)]
+async fn test_14_client_signing_lnurl_pay() -> Result<()> {
+    info!("=== Starting test_14_client_signing_lnurl_pay ===");
+
+    let alice_mnemonic = random_mnemonic()?;
+    let mut alice =
+        build_signing_alice(alice_mnemonic.clone(), "breez-sdk-alice-lnurl-signing").await?;
+    let mut bob = setup_bob(false).await?;
+
+    let client_signer =
+        default_external_signers(alice_mnemonic, None, Network::Regtest, None)?.spark_signer;
+
+    let username = "bobclientsigning";
+    let description = "Bob's client-signing test Lightning address";
+    let payment_amount_sats = 5_000u64;
+    let payment_comment = "Client-signing LNURL payment from Alice";
+
+    let register_response = bob
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: username.to_string(),
+            description: Some(description.to_string()),
+        })
+        .await?;
+    let bob_lightning_address = register_response.lightning_address;
+    info!("Bob registered Lightning address: {bob_lightning_address}");
+
+    ensure_funded(&mut alice, 50_000).await?;
+    info!("Alice funded with sats");
+
+    let parse_response = alice.sdk.parse(&bob_lightning_address).await?;
+    let InputType::LightningAddress(details) = parse_response else {
+        anyhow::bail!("Expected Lightning address");
+    };
+
+    let prepare_response = alice
+        .sdk
+        .prepare_lnurl_pay(PrepareLnurlPayRequest {
+            amount: payment_amount_sats as u128,
+            pay_request: details.pay_request,
+            comment: Some(payment_comment.to_string()),
+            validate_success_action_url: None,
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+    info!(
+        "Alice prepared client-signing LNURL payment for {} sats",
+        prepare_response.amount_sats
+    );
+
+    let pay_response = client_sign_lnurl_pay(&alice, &client_signer, prepare_response).await?;
+    info!("Alice completed client-signing LNURL payment");
+
+    wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 30).await?;
+    let bob_payment_from_event =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
+
+    let alice_payment = alice
+        .sdk
+        .get_payment(GetPaymentRequest {
+            payment_id: pay_response.payment.id,
+        })
+        .await?
+        .payment;
+
+    assert_eq!(alice_payment.payment_type, PaymentType::Send);
+    assert_eq!(alice_payment.amount, payment_amount_sats as u128);
+    assert_eq!(alice_payment.method, PaymentMethod::Lightning);
+    assert_eq!(alice_payment.status, PaymentStatus::Completed);
+
+    let Some(PaymentDetails::Lightning { lnurl_pay_info, .. }) = alice_payment.details else {
+        anyhow::bail!("Expected Lightning payment");
+    };
+    let Some(lnurl_pay_info) = lnurl_pay_info else {
+        anyhow::bail!("Expected Lnurl pay info");
+    };
+    assert_eq!(lnurl_pay_info.ln_address, Some(bob_lightning_address));
+    assert_eq!(lnurl_pay_info.comment, Some(payment_comment.to_string()));
+    assert_eq!(
+        lnurl_pay_info.extract_description(),
+        Some(description.to_string())
+    );
+    info!("LNURL pay info verified on Alice's side");
+
+    let bob_payment = bob
+        .sdk
+        .get_payment(GetPaymentRequest {
+            payment_id: bob_payment_from_event.id,
+        })
+        .await?
+        .payment;
+    assert_eq!(bob_payment.payment_type, PaymentType::Receive);
+    assert_eq!(bob_payment.amount, payment_amount_sats as u128);
+    assert_eq!(bob_payment.method, PaymentMethod::Lightning);
+    assert_eq!(bob_payment.status, PaymentStatus::Completed);
+
+    info!("=== Test test_14_client_signing_lnurl_pay PASSED ===");
+    Ok(())
+}
+
+/// Test send-all LNURL-pay (FeesIncluded) driven through the client-signing
+/// build/sign/publish loop.
+#[test_log::test(tokio::test)]
+async fn test_15_client_signing_lnurl_pay_fees_included() -> Result<()> {
+    info!("=== Starting test_15_client_signing_lnurl_pay_fees_included ===");
+
+    let alice_mnemonic = random_mnemonic()?;
+    let mut alice =
+        build_signing_alice(alice_mnemonic.clone(), "breez-sdk-alice-lnurl-signing-fi").await?;
+    let mut bob = setup_bob(false).await?;
+
+    let client_signer =
+        default_external_signers(alice_mnemonic, None, Network::Regtest, None)?.spark_signer;
+
+    let register_response = bob
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: "bobsigningfullbalance".to_string(),
+            description: Some("Bob's client-signing full balance address".to_string()),
+        })
+        .await?;
+    let bob_lightning_address = register_response.lightning_address;
+
+    ensure_funded(&mut alice, 10_000).await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    info!("Alice balance after funding: {alice_balance} sats");
+
+    let parse_response = alice.sdk.parse(&bob_lightning_address).await?;
+    let InputType::LightningAddress(details) = parse_response else {
+        anyhow::bail!("Expected Lightning address");
+    };
+
+    let prepare_response = alice
+        .sdk
+        .prepare_lnurl_pay(PrepareLnurlPayRequest {
+            amount: alice_balance.into(),
+            pay_request: details.pay_request,
+            comment: Some("Client-signing FeesIncluded test".to_string()),
+            validate_success_action_url: None,
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: Some(FeePolicy::FeesIncluded),
+        })
+        .await?;
+
+    let invoice_amount_sats = prepare_response.invoice_details.amount_msat.unwrap() / 1000;
+    let expected_amount = alice_balance.saturating_sub(prepare_response.fee_sats);
+    assert_eq!(
+        invoice_amount_sats, expected_amount,
+        "Invoice amount should be exactly balance minus fees"
+    );
+
+    let pay_response = client_sign_lnurl_pay(&alice, &client_signer, prepare_response).await?;
+    info!("Alice completed client-signing FeesIncluded LNURL payment");
+
+    wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 30).await?;
+    let bob_payment =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
+
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_final = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    assert_eq!(alice_final, 0, "Alice's balance should be fully spent");
+
+    assert_eq!(
+        bob_payment.amount,
+        invoice_amount_sats.into(),
+        "Bob should receive exactly the prepared amount"
+    );
+    assert_eq!(pay_response.payment.payment_type, PaymentType::Send);
+
+    info!("=== Test test_15_client_signing_lnurl_pay_fees_included PASSED ===");
+    Ok(())
+}
+
+/// Publishing the same LNURL-pay package twice must be idempotent: the replay
+/// returns the same payment and retains its LNURL metadata (address, comment,
+/// description), without sending again.
+#[test_log::test(tokio::test)]
+async fn test_16_client_signing_lnurl_pay_publish_twice() -> Result<()> {
+    info!("=== Starting test_16_client_signing_lnurl_pay_publish_twice ===");
+
+    let alice_mnemonic = random_mnemonic()?;
+    let mut alice = build_signing_alice(
+        alice_mnemonic.clone(),
+        "breez-sdk-alice-lnurl-signing-twice",
+    )
+    .await?;
+    let mut bob = setup_bob(false).await?;
+
+    let client_signer =
+        default_external_signers(alice_mnemonic, None, Network::Regtest, None)?.spark_signer;
+
+    let payment_amount_sats = 5_000u64;
+    let payment_comment = "Client-signing LNURL replay test";
+    let description = "Bob's client-signing replay address";
+
+    let register_response = bob
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: "bobsigningreplay".to_string(),
+            description: Some(description.to_string()),
+        })
+        .await?;
+    let bob_lightning_address = register_response.lightning_address;
+
+    ensure_funded(&mut alice, 50_000).await?;
+
+    let parse_response = alice.sdk.parse(&bob_lightning_address).await?;
+    let InputType::LightningAddress(details) = parse_response else {
+        anyhow::bail!("Expected Lightning address");
+    };
+
+    let prepare_response = alice
+        .sdk
+        .prepare_lnurl_pay(PrepareLnurlPayRequest {
+            amount: payment_amount_sats as u128,
+            pay_request: details.pay_request,
+            comment: Some(payment_comment.to_string()),
+            validate_success_action_url: None,
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+
+    // Drive the build/sign/publish loop, but on the final (non-swap) package,
+    // publish it twice: the second publish must replay, not send again.
+    let (first, second) = loop {
+        let unsigned = alice
+            .sdk
+            .build_unsigned_lnurl_pay_package(BuildUnsignedLnurlPayPackageRequest {
+                prepare_response: prepare_response.clone(),
+            })
+            .await?;
+
+        let (UnsignedTransferPackage::Transfer {
+            prepare_transfer, ..
+        }
+        | UnsignedTransferPackage::Swap {
+            prepare_transfer, ..
+        }) = &unsigned
+        else {
+            panic!("unexpected token package for an LNURL pay");
+        };
+        let signature = TransferSignature::Transfer {
+            signed: client_signer
+                .prepare_transfer(prepare_transfer.clone())
+                .await?,
+        };
+        let signed_package = SignedTransferPackage {
+            unsigned,
+            signature,
+        };
+
+        match alice
+            .sdk
+            .publish_signed_lnurl_pay_package(PublishSignedLnurlPayPackageRequest {
+                signed_package: signed_package.clone(),
+            })
+            .await?
+        {
+            PublishSignedLnurlPayResponse::SwapCompleted => continue,
+            PublishSignedLnurlPayResponse::PaymentSent { response: first } => {
+                // Republish the identical package: this must replay.
+                let second = alice
+                    .sdk
+                    .publish_signed_lnurl_pay_package(PublishSignedLnurlPayPackageRequest {
+                        signed_package: signed_package.clone(),
+                    })
+                    .await?;
+                break (first, second);
+            }
+        }
+    };
+
+    let PublishSignedLnurlPayResponse::PaymentSent { response: second } = second else {
+        anyhow::bail!("republishing an LNURL package must return the sent payment");
+    };
+    assert_eq!(
+        first.payment.id, second.payment.id,
+        "republishing an LNURL package must return the same payment"
+    );
+
+    // Both responses carry the LNURL info.
+    for response in [&first, &second] {
+        let Some(PaymentDetails::Lightning {
+            lnurl_pay_info: Some(info),
+            ..
+        }) = &response.payment.details
+        else {
+            anyhow::bail!("expected LNURL pay info on the response");
+        };
+        assert_eq!(info.ln_address, Some(bob_lightning_address.clone()));
+    }
+
+    // The stored payment retains the LNURL metadata after the replay.
+    let stored = alice
+        .sdk
+        .get_payment(GetPaymentRequest {
+            payment_id: first.payment.id.clone(),
+        })
+        .await?
+        .payment;
+    let Some(PaymentDetails::Lightning {
+        lnurl_pay_info: Some(info),
+        ..
+    }) = stored.details
+    else {
+        anyhow::bail!("stored payment should retain LNURL info after the replay");
+    };
+    assert_eq!(info.ln_address, Some(bob_lightning_address.clone()));
+    assert_eq!(info.comment, Some(payment_comment.to_string()));
+    assert_eq!(info.extract_description(), Some(description.to_string()));
+
+    // Bob received the payment exactly once.
+    let bob_payment =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
+    assert_eq!(bob_payment.amount, payment_amount_sats as u128);
+
+    info!("=== Test test_16_client_signing_lnurl_pay_publish_twice PASSED ===");
     Ok(())
 }

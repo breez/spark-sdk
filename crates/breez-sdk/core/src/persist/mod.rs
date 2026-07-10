@@ -44,6 +44,7 @@ const TX_CACHE_KEY: &str = "tx_cache";
 // Note: the key "static_deposit_address" may still exist in storage from older versions.
 const TOKEN_METADATA_KEY_PREFIX: &str = "token_metadata_";
 const PAYMENT_METADATA_KEY_PREFIX: &str = "payment_metadata";
+const PUBLISHED_PACKAGE_KEY_PREFIX: &str = "published_package_";
 const SPARK_PRIVATE_MODE_INITIALIZED_KEY: &str = "spark_private_mode_initialized";
 pub(crate) const STABLE_BALANCE_ACTIVE_LABEL_KEY: &str = "stable_balance_active_label";
 const PENDING_CONVERSIONS_KEY: &str = "pending_conversions";
@@ -631,6 +632,33 @@ impl ObjectCacheRepository {
             Some(value) => Ok(Some(serde_json::from_str(&value)?)),
             None => Ok(None),
         }
+    }
+
+    /// Records a successfully published signed package under its package id
+    /// (swap transfer id or token partial-transaction digest), mapping to the
+    /// resulting payment id ("swap" for swap packages), so a replayed publish
+    /// can answer without re-submitting.
+    pub(crate) async fn save_published_package(
+        &self,
+        package_id: &str,
+        payment_id: &str,
+    ) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(
+                format!("{PUBLISHED_PACKAGE_KEY_PREFIX}{package_id}"),
+                payment_id.to_string(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_published_package(
+        &self,
+        package_id: &str,
+    ) -> Result<Option<String>, StorageError> {
+        self.storage
+            .get_cached_item(format!("{PUBLISHED_PACKAGE_KEY_PREFIX}{package_id}"))
+            .await
     }
 
     pub(crate) async fn save_tx(&self, txid: &str, value: &CachedTx) -> Result<(), StorageError> {

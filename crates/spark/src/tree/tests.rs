@@ -12,8 +12,8 @@ use frost_secp256k1_tr::Identifier;
 use platform_utils::time::SystemTime;
 
 use crate::tree::{
-    Leaves, LeavesReservation, ReservationPurpose, ReserveResult, TargetAmounts, TreeNode,
-    TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore,
+    LeafSelection, Leaves, LeavesReservation, ReservationPurpose, ReserveResult, TargetAmounts,
+    TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore,
 };
 
 /// Creates a test `TreeNode` with the given ID and value.
@@ -113,6 +113,56 @@ async fn get_all(store: &dyn TreeStore) -> Leaves {
 
 pub async fn test_new(store: &dyn TreeStore) {
     assert!(store.get_leaves().await.unwrap().available.is_empty());
+}
+
+pub async fn test_get_verified_leaf_keys(store: &dyn TreeStore) {
+    // `create_test_tree_node` uses one key for both fields; override these so a
+    // projection that swaps or drops a field is caught. Both are valid points.
+    let verifying = "02e6642fd69bd211f93f7f1f36ca51a26a5290eb2dd1b0d8279a87bb0d480c8443";
+    let keyshare = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+
+    let mut available = create_test_tree_node("verified-available", 1000);
+    available.verifying_public_key = PublicKey::from_str(verifying).unwrap();
+    available.signing_keyshare.public_key = PublicKey::from_str(keyshare).unwrap();
+
+    // Reserved leaves were verified before storage, so they must be included.
+    let reserved = create_test_tree_node("verified-reserved", 2000);
+
+    // Non-Available and unreserved: never verified, so it must be excluded.
+    let mut not_available = create_test_tree_node("verified-not-available", 3000);
+    not_available.status = TreeNodeStatus::TransferLocked;
+
+    store
+        .add_leaves(&[available.clone(), reserved.clone(), not_available.clone()])
+        .await
+        .unwrap();
+    store
+        .try_reserve_leaves_by_ids(
+            std::slice::from_ref(&reserved.id),
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+
+    let keys = store.get_verified_leaf_keys().await.unwrap();
+
+    // The override must agree with the canonical projection of `get_leaves`.
+    let expected = crate::tree::verified_leaf_keys_from_leaves(&store.get_leaves().await.unwrap());
+    assert_eq!(keys, expected);
+
+    // Available leaf verified with the right (non-swapped) keys.
+    let got = keys.get(&available.id).expect("available leaf verified");
+    assert_eq!(
+        got.verifying_public_key,
+        PublicKey::from_str(verifying).unwrap()
+    );
+    assert_eq!(
+        got.signing_keyshare_public_key,
+        PublicKey::from_str(keyshare).unwrap()
+    );
+    // Reserved leaf included; non-Available unreserved leaf excluded.
+    assert!(keys.contains_key(&reserved.id));
+    assert!(!keys.contains_key(&not_available.id));
 }
 
 pub async fn test_add_leaves(store: &dyn TreeStore) {
@@ -280,6 +330,139 @@ pub async fn test_reserve_leaves(store: &dyn TreeStore) {
     assert_eq!(all.available.len(), 1);
     assert_eq!(all.available[0].id, leaves[1].id);
     assert!(!reservation.id.is_empty());
+}
+
+pub async fn test_reserve_leaves_by_ids(store: &dyn TreeStore) {
+    let leaves = vec![
+        create_test_tree_node("node1", 100),
+        create_test_tree_node("node2", 200),
+        create_test_tree_node("node3", 300),
+    ];
+    store.add_leaves(&leaves).await.unwrap();
+
+    let ids = vec![leaves[0].id.clone(), leaves[2].id.clone()];
+    let reservation = store
+        .try_reserve_leaves_by_ids(&ids, ReservationPurpose::Payment)
+        .await
+        .unwrap();
+
+    assert_eq!(reservation.leaves.len(), 2);
+    assert!(reservation.leaves.iter().any(|l| l.id == leaves[0].id));
+    assert!(reservation.leaves.iter().any(|l| l.id == leaves[2].id));
+    assert!(!reservation.id.is_empty());
+
+    let all = get_all(store).await;
+    assert_eq!(all.reserved_for_payment.len(), 2);
+    assert_eq!(all.available.len(), 1);
+    assert_eq!(all.available[0].id, leaves[1].id);
+}
+
+pub async fn test_reserve_leaves_by_ids_not_available(store: &dyn TreeStore) {
+    let leaves = vec![create_test_tree_node("node1", 100)];
+    store.add_leaves(&leaves).await.unwrap();
+
+    let ids = vec![leaves[0].id.clone()];
+    store
+        .try_reserve_leaves_by_ids(&ids, ReservationPurpose::Payment)
+        .await
+        .unwrap();
+
+    // Already reserved: no longer available, so reserving it again must fail
+    // and reserve nothing.
+    assert!(matches!(
+        store
+            .try_reserve_leaves_by_ids(&ids, ReservationPurpose::Payment)
+            .await,
+        Err(TreeServiceError::NonReservableLeaves)
+    ));
+
+    // A nonexistent id is not reservable.
+    let missing = vec![TreeNodeId::from_str("missing_node").unwrap()];
+    assert!(matches!(
+        store
+            .try_reserve_leaves_by_ids(&missing, ReservationPurpose::Payment)
+            .await,
+        Err(TreeServiceError::NonReservableLeaves)
+    ));
+
+    // An empty request reserves nothing.
+    assert!(matches!(
+        store
+            .try_reserve_leaves_by_ids(&[], ReservationPurpose::Payment)
+            .await,
+        Err(TreeServiceError::NonReservableLeaves)
+    ));
+
+    // Duplicate ids must be rejected, not double-counted.
+    let available = vec![create_test_tree_node("node2", 200)];
+    store.add_leaves(&available).await.unwrap();
+    let duplicates = vec![available[0].id.clone(), available[0].id.clone()];
+    assert!(matches!(
+        store
+            .try_reserve_leaves_by_ids(&duplicates, ReservationPurpose::Payment)
+            .await,
+        Err(TreeServiceError::NonReservableLeaves)
+    ));
+}
+
+pub async fn test_reserve_leaves_by_ids_preserves_order(store: &dyn TreeStore) {
+    let leaves = vec![
+        create_test_tree_node("node1", 100),
+        create_test_tree_node("node2", 200),
+        create_test_tree_node("node3", 300),
+    ];
+    store.add_leaves(&leaves).await.unwrap();
+
+    // The per-leaf signing data in a signed package is positional, so the
+    // reservation must return leaves in the requested order.
+    let ids = vec![
+        leaves[2].id.clone(),
+        leaves[0].id.clone(),
+        leaves[1].id.clone(),
+    ];
+    let reservation = store
+        .try_reserve_leaves_by_ids(&ids, ReservationPurpose::Payment)
+        .await
+        .unwrap();
+
+    let got: Vec<TreeNodeId> = reservation.leaves.iter().map(|l| l.id.clone()).collect();
+    assert_eq!(got, ids);
+}
+
+pub async fn test_try_select_leaves(store: &dyn TreeStore) {
+    let leaves = vec![
+        create_test_tree_node("node1", 100),
+        create_test_tree_node("node2", 200),
+    ];
+    store.add_leaves(&leaves).await.unwrap();
+
+    let selection = store
+        .try_select_leaves(Some(&TargetAmounts::new_amount_and_fee(100, None)))
+        .await
+        .unwrap();
+    let LeafSelection::Exact(selected) = selection else {
+        panic!("expected Exact selection for an exact-change target");
+    };
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].id, leaves[0].id);
+
+    let selection = store
+        .try_select_leaves(Some(&TargetAmounts::new_amount_and_fee(250, None)))
+        .await
+        .unwrap();
+    assert!(matches!(selection, LeafSelection::SwapNeeded(_)));
+
+    assert!(matches!(
+        store
+            .try_select_leaves(Some(&TargetAmounts::new_amount_and_fee(500, None)))
+            .await,
+        Err(TreeServiceError::InsufficientFunds)
+    ));
+
+    // Selection is read-only: nothing is reserved.
+    let all = get_all(store).await;
+    assert_eq!(all.available.len(), 2);
+    assert_eq!(all.reserved_for_payment.len(), 0);
 }
 
 pub async fn test_cancel_reservation(store: &dyn TreeStore) {

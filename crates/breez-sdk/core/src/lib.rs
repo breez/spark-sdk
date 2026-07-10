@@ -46,7 +46,9 @@ pub use persist::{
     ConversionFilter, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,
     StorageListPaymentsRequest, StoragePaymentDetailsFilter, StoredCrossChainSwap,
     UpdateDepositPayload,
-    backend::{PrebuiltBackend, ResolvedStores, StorageBackend, custom_storage},
+    backend::{
+        PrebuiltBackend, ResolvedStores, StorageBackend, custom_storage, default_session_store,
+    },
     path::default_storage_path,
 };
 pub use sdk::{

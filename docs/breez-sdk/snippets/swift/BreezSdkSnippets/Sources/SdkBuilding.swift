@@ -1,3 +1,4 @@
+import Foundation
 import BreezSdkSpark
 
 func initSdkAdvanced() async throws -> BreezSdk {
@@ -68,6 +69,46 @@ func withPaymentObserver(builder: SdkBuilder) async {
     await builder.withPaymentObserver(paymentObserver: paymentObserver)
 }
 // ANCHOR_END: with-payment-observer
+
+// ANCHOR: with-session-store
+class EncryptingSessionStore: SessionStore {
+    let inner: SessionStore
+
+    init(inner: SessionStore) {
+        self.inner = inner
+    }
+
+    func getSession(serviceIdentityKey: String) async throws -> Session {
+        let session = try await inner.getSession(serviceIdentityKey: serviceIdentityKey)
+        // Decrypt session.token here before returning it.
+        return session
+    }
+
+    func setSession(serviceIdentityKey: String, session: Session) async throws {
+        // Encrypt session.token here before persisting it.
+        try await inner.setSession(serviceIdentityKey: serviceIdentityKey, session: session)
+    }
+}
+
+// `identity` is the wallet identity public key bytes, used to scope the store.
+func withSessionStore(config: Config, seed: Seed, identity: Data) async throws -> SdkBuilder {
+    // Reuse one storage backend for both the SDK storage and the session store.
+    let backend = defaultStorage(storageDir: "./.data")
+
+    // Get the session store the backend provides, then wrap it to add encryption.
+    let inner = try await defaultSessionStore(
+        backend: backend,
+        network: config.network,
+        identity: identity
+    )
+    let sessionStore = EncryptingSessionStore(inner: inner)
+
+    let builder = SdkBuilder(config: config, seed: seed)
+    await builder.withStorageBackend(storage: backend)
+    await builder.withSessionStore(sessionStore: sessionStore)
+    return builder
+}
+// ANCHOR_END: with-session-store
 
 func initSdkPostgres() async throws -> BreezSdk {
     // ANCHOR: init-sdk-postgres

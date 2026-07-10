@@ -20,6 +20,7 @@ pub use store::{
 };
 use tracing::trace;
 
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -62,6 +63,41 @@ impl Leaves {
     pub fn balance(&self) -> u64 {
         self.available_balance() + self.missing_operators_balance() + self.swap_reserved_balance()
     }
+}
+
+/// The two public keys needed to confirm a stored leaf's ownership was already
+/// verified, without loading the full node (and its transaction blobs). Its
+/// signing pubkey is a deterministic function of the leaf id, so a stored leaf
+/// whose verifying and signing-keyshare keys still match the coordinator's is
+/// known-good: re-running the ownership check would only confirm it again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifiedLeafKeys {
+    pub verifying_public_key: PublicKey,
+    pub signing_keyshare_public_key: PublicKey,
+}
+
+/// Projects the verified-leaf categories of `leaves` into the keys keyed by id.
+/// The set mirrors `Leaves::balance` inputs plus payment-reserved leaves: every
+/// category whose leaves passed the ownership check before being stored, and
+/// deliberately excludes `not_available` (never verified). Backends that
+/// override `TreeStore::get_verified_leaf_keys` must project the same set.
+pub fn verified_leaf_keys_from_leaves(leaves: &Leaves) -> HashMap<TreeNodeId, VerifiedLeafKeys> {
+    leaves
+        .available
+        .iter()
+        .chain(&leaves.available_missing_from_operators)
+        .chain(&leaves.reserved_for_payment)
+        .chain(&leaves.reserved_for_swap)
+        .map(|leaf| {
+            (
+                leaf.id.clone(),
+                VerifiedLeafKeys {
+                    verifying_public_key: leaf.verifying_public_key,
+                    signing_keyshare_public_key: leaf.signing_keyshare.public_key,
+                },
+            )
+        })
+        .collect()
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -536,6 +572,18 @@ pub trait TreeStore: Send + Sync {
         Ok(leaves.balance())
     }
 
+    /// Returns, keyed by leaf id, the keys needed to tell whether a stored
+    /// leaf's ownership was already verified (see [`VerifiedLeafKeys`]). Lets a
+    /// refresh skip re-deriving a signer pubkey for leaves that are unchanged
+    /// since they were stored. Default impl falls through to `get_leaves`;
+    /// storage backends should override to project only these columns and skip
+    /// loading full nodes (and their transaction blobs).
+    async fn get_verified_leaf_keys(
+        &self,
+    ) -> Result<HashMap<TreeNodeId, VerifiedLeafKeys>, TreeServiceError> {
+        Ok(verified_leaf_keys_from_leaves(&self.get_leaves().await?))
+    }
+
     /// Replaces all leaves in the store with the provided set.
     ///
     /// This method performs a complete replacement of the stored leaves,
@@ -671,6 +719,17 @@ pub trait TreeStore: Send + Sync {
         purpose: ReservationPurpose,
     ) -> Result<ReserveResult, TreeServiceError>;
 
+    async fn try_reserve_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError>;
+
+    async fn try_select_leaves(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeafSelection, TreeServiceError>;
+
     /// Returns the current time from the store's clock.
     ///
     /// For in-memory stores this returns `SystemTime::now()`. For database-backed
@@ -710,6 +769,11 @@ pub trait TreeStore: Send + Sync {
         reserved_leaves: &[TreeNode],
         change_leaves: &[TreeNode],
     ) -> Result<LeavesReservation, TreeServiceError>;
+}
+
+pub enum LeafSelection {
+    Exact(Vec<TreeNode>),
+    SwapNeeded(Vec<TreeNode>),
 }
 
 #[macros::async_trait]
@@ -888,6 +952,22 @@ pub trait TreeService: Send + Sync {
         purpose: ReservationPurpose,
         options: SelectLeavesOptions,
     ) -> Result<LeavesReservation, TreeServiceError>;
+
+    async fn reserve_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError>;
+
+    /// Selects leaves for a deferred-signing send package without reserving
+    /// them, renewing the node and refund timelocks of any selected leaf that
+    /// needs it so the package is signed over up-to-date leaves. Renewal
+    /// briefly reserves the leaves and persists the renewed data; when no
+    /// renewal is needed the selection is read-only.
+    async fn select_leaves_for_package(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeafSelection, TreeServiceError>;
 
     /// Cancels a leaf reservation and returns the reserved leaves to the available pool.
     ///

@@ -691,6 +691,7 @@ pub struct SparkConfig {
     pub ssp_config: SparkSspConfig,
     pub expected_withdraw_bond_sats: u64,
     pub expected_withdraw_relative_block_locktime: u64,
+    pub max_token_transaction_inputs: Option<u32>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SparkSigningOperator)]
@@ -1027,6 +1028,23 @@ pub struct LnurlPayResponse {
     pub success_action: Option<SuccessActionProcessed>,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BuildUnsignedLnurlPayPackageRequest)]
+pub struct BuildUnsignedLnurlPayPackageRequest {
+    pub prepare_response: PrepareLnurlPayResponse,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PublishSignedLnurlPayPackageRequest)]
+pub struct PublishSignedLnurlPayPackageRequest {
+    pub signed_package: SignedTransferPackage,
+}
+
+#[allow(clippy::large_enum_variant)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PublishSignedLnurlPayResponse)]
+pub enum PublishSignedLnurlPayResponse {
+    SwapCompleted,
+    PaymentSent { response: LnurlPayResponse },
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlWithdrawRequest)]
 pub struct LnurlWithdrawRequest {
     pub amount_sats: u64,
@@ -1038,6 +1056,93 @@ pub struct LnurlWithdrawRequest {
 pub struct LnurlWithdrawResponse {
     pub payment_request: String,
     pub payment: Option<Payment>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UnsignedTransferPackage)]
+pub enum UnsignedTransferPackage {
+    Swap {
+        prepare_transfer: crate::signer::ExternalPrepareTransferRequest,
+        target_amounts: Vec<u64>,
+        amount_sat: u64,
+        fee_sat: u64,
+    },
+    Transfer {
+        prepare_transfer: crate::signer::ExternalPrepareTransferRequest,
+        amount_sat: u64,
+        fee_sat: u64,
+        target: TransferTarget,
+    },
+    Token {
+        prepare_token_transaction: crate::signer::ExternalPrepareTokenTransactionRequest,
+        token_context: Vec<u8>,
+        token_identifier: String,
+        #[tsify(type = "string")]
+        #[serde(with = "serde_u128_as_string")]
+        amount: u128,
+        #[tsify(type = "string")]
+        #[serde(with = "serde_u128_as_string")]
+        fee: u128,
+        is_swap: bool,
+    },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TransferTarget)]
+pub enum TransferTarget {
+    Spark {
+        address: String,
+        spark_invoice: Option<String>,
+    },
+    Lightning {
+        bolt11: String,
+        lnurl_pay: Option<LnurlPayContext>,
+        fee_policy: FeePolicy,
+        completion_timeout_secs: Option<u32>,
+    },
+    CoopExit {
+        address: String,
+        fee_quote: SendOnchainFeeQuote,
+        confirmation_speed: OnchainConfirmationSpeed,
+    },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlPayContext)]
+pub struct LnurlPayContext {
+    pub pay_request: LnurlPayRequestDetails,
+    pub comment: Option<String>,
+    pub success_action: Option<SuccessAction>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SignedTransferPackage)]
+pub struct SignedTransferPackage {
+    pub unsigned: UnsignedTransferPackage,
+    pub signature: TransferSignature,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TransferSignature)]
+pub enum TransferSignature {
+    Transfer {
+        signed: crate::signer::ExternalPreparedTransfer,
+    },
+    Token {
+        signed: crate::signer::ExternalPreparedTokenTransaction,
+    },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BuildTransferPackageOptions)]
+pub enum BuildTransferPackageOptions {
+    BitcoinAddress {
+        confirmation_speed: OnchainConfirmationSpeed,
+    },
+    Bolt11Invoice {
+        prefer_spark: bool,
+        completion_timeout_secs: Option<u32>,
+    },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BuildUnsignedTransferPackageRequest)]
+pub struct BuildUnsignedTransferPackageRequest {
+    pub prepare_response: PrepareSendPaymentResponse,
+    pub options: Option<BuildTransferPackageOptions>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentRequest)]
@@ -1090,6 +1195,18 @@ pub struct SendPaymentRequest {
     pub prepare_response: PrepareSendPaymentResponse,
     pub options: Option<SendPaymentOptions>,
     pub idempotency_key: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PublishSignedTransferPackageRequest)]
+pub struct PublishSignedTransferPackageRequest {
+    pub signed_package: SignedTransferPackage,
+}
+
+#[allow(clippy::large_enum_variant)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PublishSignedTransferPackageResponse)]
+pub enum PublishSignedTransferPackageResponse {
+    SwapCompleted,
+    PaymentSent { payment: Payment },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendPaymentResponse)]
