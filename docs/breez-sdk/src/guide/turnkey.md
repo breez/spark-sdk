@@ -1,10 +1,10 @@
 # Using Turnkey
 
-[Turnkey](https://www.turnkey.com/) keeps the wallet's keys inside a secure enclave. The SDK ships Turnkey-backed signers, so a server can run wallets without ever holding key material: signing happens inside Turnkey, and what the server holds is an API credential whose permissions you control with Turnkey policies.
+[Turnkey](https://www.turnkey.com/) keeps the wallet's keys inside a secure enclave. The SDK ships Turnkey-backed signers, so a server can run wallets without holding any signing key material: signing happens inside Turnkey, and what the server holds is an API credential whose permissions you control with Turnkey policies.
 
 Turnkey is meant for server deployments (see [Server mode](server_mode.md)). Depending on the policy you attach to the server's credential, it supports two ways of sending payments: the server signs everything itself, or each payment is approved by the end user via [Client signing](client_signing.md).
 
-The SDK connects to an existing Spark wallet in your Turnkey organization or sub-organization. Creating the wallet itself is done with Turnkey directly and is out of the SDK's scope.
+The SDK connects to an existing Spark wallet in your Turnkey organization or sub-organization. Creating the wallet itself is done with Turnkey directly and is out of the SDK's scope (see [Turnkey's Spark support](https://docs.turnkey.com/features/networks/spark) for creating the wallet account).
 
 <h2 id="connecting">
     <a class="header" href="#connecting">Connecting</a>
@@ -23,7 +23,7 @@ A few notes on the configuration:
 
 ### Reconnecting without network calls
 
-Server deployments often build a fresh SDK instance per request. Setting {{#name identity_public_key}} makes the signer setup network-free: after the first connect, read {{#name identity_pubkey}} from {{#name get_info}}, store it alongside the wallet, and pass it in the config on later connects. It is a stable, non-secret value, but it must belong to the same wallet.
+Server deployments often build a fresh SDK instance per request. Setting {{#name identity_public_key}} makes the signer setup network-free. Obtain it once from a freshly built signer with {{#name get_identity_public_key}} (available right after {{#name create_turnkey_signer}}, no connect needed), or from {{#name identity_pubkey}} on {{#name get_info}} if you already have a connected SDK. Store it alongside the wallet and pass it in the config on later connects. It is a stable, non-secret value, but it must belong to the same wallet.
 
 ### Wallets under a deny-export policy
 
@@ -31,7 +31,7 @@ Server deployments often build a fresh SDK instance per request. Setting {{#name
 
 ## Signing models
 
-How payments are authorized is decided by the Turnkey policy attached to each credential, not by SDK code. Configure the policies in Turnkey; see the [Turnkey policy documentation](https://docs.turnkey.com/concepts/policies/overview) for the mechanics.
+How payments are authorized is decided by the Turnkey policy attached to each credential, not by SDK code. Configure the policies in Turnkey; see the [Turnkey policy documentation](https://docs.turnkey.com/concepts/policies/overview) for the mechanics and [Turnkey's Spark operations](https://docs.turnkey.com/features/networks/spark#supported-operations) for the activity names the policy scopes.
 
 ### Server-side signing
 
