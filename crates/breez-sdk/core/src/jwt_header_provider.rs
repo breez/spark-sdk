@@ -372,8 +372,7 @@ mod tests {
     #[test]
     fn test_is_past_serve_expiry_within_refresh_grace_still_served() {
         // Expires in 2 minutes: inside the 5-minute refresh lead but outside the
-        // 30s serve margin, so it must still be served. This is the case the old
-        // grace check dropped, and is the core regression guard for this fix.
+        // 30s serve margin, so it must still be served.
         assert!(!is_past_serve_expiry(u64::from(now()) + 120));
     }
 
