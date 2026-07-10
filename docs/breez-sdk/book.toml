@@ -5,8 +5,10 @@ title = "Breez SDK - Spark"
 
 [output.html]
 theme = "theme"
+default-theme = "navy"
+preferred-dark-theme = "navy"
 additional-css = ["styles.css", "theme/pagetoc.css"]
-additional-js = ["tabs.js", "theme/pagetoc.js"]
+additional-js = ["tabs.js", "theme/pagetoc.js", "brand-header.js"]
 git-repository-url = "https://github.com/breez/spark-sdk"
 edit-url-template = "https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/{path}"
 no-section-label = true
