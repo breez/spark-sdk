@@ -34,6 +34,7 @@ mod auth;
 mod domains;
 mod error;
 mod invoice_paid;
+mod partner_jwt;
 mod postgresql;
 mod repository;
 mod routes;
@@ -96,6 +97,12 @@ struct Args {
     /// domains here will be added to the database on startup.
     #[arg(long, default_value = "localhost:8080")]
     pub domains: String,
+
+    /// Fallback Breez API key used to attribute lightning-address receives for
+    /// any allowed domain that has no `api_key` of its own, so no domain is left
+    /// unattributed. Mainnet only.
+    #[arg(long)]
+    pub default_api_key: Option<String>,
 
     /// Nostr private key for zaps. If not set, zap requests will be ignored.
     #[arg(long)]
@@ -234,25 +241,8 @@ where
         None,
     ));
 
-    // Create wallet using shared signer
-    let wallet = Arc::new(
-        spark_wallet::SparkWallet::new(
-            spark_config.clone(),
-            spark_signer.clone(),
-            session_store.clone(),
-            Arc::new(InMemoryTreeStore::default()),
-            Arc::new(InMemoryTokenOutputStore::default()),
-            Arc::clone(&connection_manager),
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await?,
-    );
-    wallet.start_background_processing().await;
-
+    // Ensure config-provided domains exist, then start the domain refresher
+    // (domain -> Breez API key). The partner JWT provider shares this map.
     let config_domains: Vec<String> = args
         .domains
         .split(',')
@@ -265,7 +255,46 @@ where
         debug!("ensured domain '{}' exists in database", domain);
     }
 
-    let domains = domains::start(repository.clone()).await?;
+    // Partner attribution only works on mainnet: the Breez JWT endpoint is
+    // mainnet-only, so regtest/testnet have no API keys or partner JWTs.
+    let is_mainnet = matches!(args.network, Network::Mainnet);
+    // Fallback key for domains without their own, so none are unattributed.
+    let default_api_key = is_mainnet.then(|| args.default_api_key.clone()).flatten();
+
+    let domains = domains::start(repository.clone(), is_mainnet, default_api_key).await?;
+
+    // Per-domain Spark partner-JWT provider (mainnet only). Attached to the
+    // shared wallet so server-created lightning-address invoices carry
+    // `x-partner-jwt` for their own domain's partner. It hydrates its cache in
+    // the background (persisting to the DB), so it never blocks invoice creation.
+    let partner_header: Option<Arc<dyn spark::header_provider::HeaderProvider>> = if is_mainnet {
+        let store: Arc<dyn partner_jwt::JwtStore> =
+            Arc::new(partner_jwt::RepoJwtStore(repository.clone()));
+        let provider =
+            partner_jwt::PerDomainJwtHeaderProvider::start(Arc::clone(&domains), store).await;
+        Some(provider as Arc<dyn spark::header_provider::HeaderProvider>)
+    } else {
+        None
+    };
+
+    // Create wallet using shared signer
+    let wallet = Arc::new(
+        spark_wallet::SparkWallet::new(
+            spark_config.clone(),
+            spark_signer.clone(),
+            session_store.clone(),
+            Arc::new(InMemoryTreeStore::default()),
+            Arc::new(InMemoryTokenOutputStore::default()),
+            Arc::clone(&connection_manager),
+            None,
+            None,
+            partner_header.clone(),
+            partner_header,
+            None,
+        )
+        .await?,
+    );
+    wallet.start_background_processing().await;
 
     let ca_cert = args
         .ca_cert

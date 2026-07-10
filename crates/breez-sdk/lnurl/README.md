@@ -105,9 +105,10 @@ db_url = "postgres://user:password@localhost:5432/lnurl_db"
 # db_url = "lnurl.sqlite"
 
 # LNURL payment configuration
-min_sendable = 1000          # Minimum amount in millisatoshi (1 sat)
-max_sendable = 4000000000    # Maximum amount in millisatoshi (40,000 sats)
-domains = "yourdomain.com"   # Comma-separated list of allowed domains
+min_sendable = 1000                 # Minimum amount in millisatoshi (1 sat)
+max_sendable = 4000000000           # Maximum amount in millisatoshi (40,000 sats)
+domains = "yourdomain.com"          # Comma-separated list of allowed domains
+default_api_key = "<breez-api-key>" # Fallback Breez API key for partner attribution
 ```
 
 ### Important Configuration Options
@@ -118,6 +119,7 @@ domains = "yourdomain.com"   # Comma-separated list of allowed domains
 | `--auto-migrate` | Automatically apply database migrations | `false` |
 | `--db-url` | Database connection string | `""` |
 | `--domains` | Comma-separated list of allowed domains | `localhost:8080` |
+| `--default-api-key` | Fallback Breez API key for partner attribution | (none) |
 | `--log-level` | RUST_LOG style format (e.g., `info`, `lnurl=trace,info`, `lnurl=trace,spark_wallet=debug,info`) | `info` |
 | `--network` | Spark network (mainnet, testnet, regtest) | `mainnet` |
 | `--min-sendable` | Minimum payment amount (millisatoshi) | `1000` |
@@ -199,6 +201,7 @@ services:
       BREEZ_LNURL_DOMAINS: "yourdomain.com"
       BREEZ_LNURL_AUTO_MIGRATE: "true"
       BREEZ_LNURL_ADDRESS: "0.0.0.0:8080"
+      BREEZ_LNURL_DEFAULT_API_KEY: "<breez-api-key>"
     ports:
       - "8080:8080"
     depends_on:

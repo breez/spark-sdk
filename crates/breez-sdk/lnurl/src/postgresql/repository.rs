@@ -1,7 +1,9 @@
 use lnurl_models::ListMetadataMetadata;
 use sqlx::{PgPool, Row};
 
-use crate::repository::{Invoice, LnurlSenderComment, PendingZapReceipt, WebhookPayloadData};
+use crate::repository::{
+    DomainConfig, Invoice, LnurlSenderComment, PendingZapReceipt, WebhookPayloadData,
+};
 use crate::webhooks::repository::{
     NewWebhookDelivery, WebhookConfig, WebhookDelivery, WebhookRepositoryError,
 };
@@ -278,15 +280,21 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(metadata)
     }
 
-    async fn list_domains(&self) -> Result<Vec<String>, LnurlRepositoryError> {
-        let rows = sqlx::query("SELECT domain FROM allowed_domains")
+    async fn list_domains(&self) -> Result<Vec<DomainConfig>, LnurlRepositoryError> {
+        let rows = sqlx::query("SELECT domain, api_key, jwt FROM allowed_domains")
             .fetch_all(&self.pool)
             .await?;
 
         let domains = rows
             .into_iter()
-            .map(|row| row.try_get(0))
-            .collect::<Result<Vec<String>, sqlx::Error>>()?;
+            .map(|row| {
+                Ok(DomainConfig {
+                    domain: row.try_get(0)?,
+                    api_key: row.try_get(1)?,
+                    jwt: row.try_get(2)?,
+                })
+            })
+            .collect::<Result<Vec<DomainConfig>, sqlx::Error>>()?;
 
         Ok(domains)
     }
@@ -300,6 +308,15 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .bind(domain)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    async fn set_domain_jwt(&self, domain: &str, jwt: &str) -> Result<(), LnurlRepositoryError> {
+        sqlx::query("UPDATE allowed_domains SET jwt = $2 WHERE domain = $1")
+            .bind(domain)
+            .bind(jwt)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 

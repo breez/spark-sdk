@@ -43,6 +43,15 @@ pub struct PendingZapReceipt {
     pub next_retry_at: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct DomainConfig {
+    pub domain: String,
+    /// The Breez API key associated to this domain.
+    pub api_key: Option<String>,
+    /// The cached partner JWT if one has been fetched and persisted.
+    pub jwt: Option<String>,
+}
+
 #[async_trait::async_trait]
 pub trait LnurlRepository {
     async fn delete_user(&self, domain: &str, pubkey: &str) -> Result<(), LnurlRepositoryError>;
@@ -88,11 +97,14 @@ pub trait LnurlRepository {
         updated_after: Option<i64>,
     ) -> Result<Vec<ListMetadataMetadata>, LnurlRepositoryError>;
 
-    /// Get all allowed domains from the database
-    async fn list_domains(&self) -> Result<Vec<String>, LnurlRepositoryError>;
+    /// Get all allowed domains and their optional Breez API keys.
+    async fn list_domains(&self) -> Result<Vec<DomainConfig>, LnurlRepositoryError>;
 
     /// Insert a domain if it doesn't already exist
     async fn add_domain(&self, domain: &str) -> Result<(), LnurlRepositoryError>;
+
+    /// Store the cached partner JWT for a domain.
+    async fn set_domain_jwt(&self, domain: &str, jwt: &str) -> Result<(), LnurlRepositoryError>;
 
     /// Filter a list of payment hashes to only those the server already knows about
     /// (i.e. have an existing invoice, zap, or sender comment record).

@@ -683,7 +683,6 @@ where
         }))
     }
 
-    #[allow(clippy::too_many_lines)]
     pub async fn handle_invoice(
         Host(host): Host,
         Path(identifier): Path<String>,
@@ -696,6 +695,27 @@ where
 
         let username = sanitize_username(&identifier);
         let domain = sanitize_domain(&state, &host).await?;
+
+        // Run the whole invoice creation inside a `CURRENT_DOMAIN` scope so the
+        // wallet's SSP receive call carries this domain's `x-partner-jwt`.
+        crate::partner_jwt::with_domain(
+            domain.clone(),
+            Self::handle_invoice_inner(state, params, username, domain),
+        )
+        .await
+    }
+
+    /// Create the lightning-address invoice for `username` on `domain` and build
+    /// the LNURL-pay response. Runs inside the `CURRENT_DOMAIN` scope set by
+    /// `handle_invoice`, so the wallet's SSP receive call carries the domain's
+    /// `x-partner-jwt`.
+    #[allow(clippy::too_many_lines)]
+    async fn handle_invoice_inner(
+        state: State<DB>,
+        params: LnurlPayCallbackParams,
+        username: String,
+        domain: String,
+    ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
         let user = state
             .db
             .get_user_by_name(&domain, &username)
@@ -1490,7 +1510,7 @@ async fn sanitize_domain<DB>(
     let domain = domain.trim().to_lowercase();
     // If domains list is empty allow all domains (for testing)
     let domains = state.domains.read().await;
-    if domains.is_empty() || domains.contains(&domain) {
+    if domains.is_empty() || domains.contains_key(&domain) {
         return Ok(domain);
     }
     warn!("domain not allowed: {}", domain);
@@ -1500,7 +1520,9 @@ async fn sanitize_domain<DB>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repository::{Invoice, LnurlRepositoryError, LnurlSenderComment, PendingZapReceipt};
+    use crate::repository::{
+        DomainConfig, Invoice, LnurlRepositoryError, LnurlSenderComment, PendingZapReceipt,
+    };
     use crate::user::User;
     use crate::webhooks::repository::WebhookRepositoryError;
     use crate::zap::Zap;
@@ -1576,7 +1598,7 @@ mod tests {
         ) -> Result<Vec<ListMetadataMetadata>, LnurlRepositoryError> {
             Ok(vec![])
         }
-        async fn list_domains(&self) -> Result<Vec<String>, LnurlRepositoryError> {
+        async fn list_domains(&self) -> Result<Vec<DomainConfig>, LnurlRepositoryError> {
             Ok(vec![])
         }
         async fn add_domain(&self, _: &str) -> Result<(), LnurlRepositoryError> {
@@ -1678,6 +1700,14 @@ mod tests {
             default_value: &str,
         ) -> Result<String, LnurlRepositoryError> {
             Ok(default_value.to_string())
+        }
+
+        async fn set_domain_jwt(
+            &self,
+            _domain: &str,
+            _jwt: &str,
+        ) -> Result<(), LnurlRepositoryError> {
+            Ok(())
         }
         async fn get_webhook_payloads(
             &self,

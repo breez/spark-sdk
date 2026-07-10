@@ -1,7 +1,9 @@
 use lnurl_models::ListMetadataMetadata;
 use sqlx::{Row, SqlitePool};
 
-use crate::repository::{Invoice, LnurlSenderComment, PendingZapReceipt, WebhookPayloadData};
+use crate::repository::{
+    DomainConfig, Invoice, LnurlSenderComment, PendingZapReceipt, WebhookPayloadData,
+};
 use crate::webhooks::repository::{
     NewWebhookDelivery, WebhookConfig, WebhookDelivery, WebhookRepositoryError,
 };
@@ -267,15 +269,21 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(metadata)
     }
 
-    async fn list_domains(&self) -> Result<Vec<String>, LnurlRepositoryError> {
-        let rows = sqlx::query("SELECT domain FROM allowed_domains")
+    async fn list_domains(&self) -> Result<Vec<DomainConfig>, LnurlRepositoryError> {
+        let rows = sqlx::query("SELECT domain, api_key, jwt FROM allowed_domains")
             .fetch_all(&self.pool)
             .await?;
 
         let domains = rows
             .into_iter()
-            .map(|row| row.try_get(0))
-            .collect::<Result<Vec<String>, sqlx::Error>>()?;
+            .map(|row| {
+                Ok(DomainConfig {
+                    domain: row.try_get(0)?,
+                    api_key: row.try_get(1)?,
+                    jwt: row.try_get(2)?,
+                })
+            })
+            .collect::<Result<Vec<DomainConfig>, sqlx::Error>>()?;
 
         Ok(domains)
     }
@@ -289,6 +297,15 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .bind(domain)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    async fn set_domain_jwt(&self, domain: &str, jwt: &str) -> Result<(), LnurlRepositoryError> {
+        sqlx::query("UPDATE allowed_domains SET jwt = $2 WHERE domain = $1")
+            .bind(domain)
+            .bind(jwt)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -853,5 +870,65 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
             })
             .collect::<Result<Vec<_>, sqlx::Error>>()
             .map_err(|e| WebhookRepositoryError::General(e.into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LnurlRepository as SqliteRepository;
+    use crate::repository::LnurlRepository;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    #[tokio::test]
+    async fn list_domains_round_trips_api_key() {
+        let pool = SqlitePoolOptions::new().connect(":memory:").await.unwrap();
+        crate::sqlite::run_migrations(&pool).await.unwrap();
+
+        // A keyed domain (admins set `api_key` directly in the row) and a
+        // keyless one added via the config bootstrap path.
+        sqlx::query("INSERT INTO allowed_domains (domain, api_key) VALUES ('a.com', 'key-a')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let db = SqliteRepository::new(pool);
+        db.add_domain("b.com").await.unwrap();
+
+        let mut domains = db.list_domains().await.unwrap();
+        domains.sort_by(|x, y| x.domain.cmp(&y.domain));
+        assert_eq!(domains.len(), 2);
+        assert_eq!(domains[0].domain, "a.com");
+        assert_eq!(domains[0].api_key.as_deref(), Some("key-a"));
+        assert_eq!(domains[1].domain, "b.com");
+        assert_eq!(domains[1].api_key, None);
+    }
+
+    #[tokio::test]
+    async fn set_domain_jwt_round_trips_via_list_domains() {
+        let pool = SqlitePoolOptions::new().connect(":memory:").await.unwrap();
+        crate::sqlite::run_migrations(&pool).await.unwrap();
+        let db = SqliteRepository::new(pool);
+        db.add_domain("a.com").await.unwrap();
+
+        // No JWT yet.
+        let before = db.list_domains().await.unwrap();
+        assert_eq!(
+            before.iter().find(|d| d.domain == "a.com").unwrap().jwt,
+            None
+        );
+
+        db.set_domain_jwt("a.com", "tok").await.unwrap();
+        // Writing an unknown domain updates zero rows, not an error.
+        db.set_domain_jwt("missing.com", "x").await.unwrap();
+
+        let after = db.list_domains().await.unwrap();
+        assert_eq!(
+            after
+                .iter()
+                .find(|d| d.domain == "a.com")
+                .unwrap()
+                .jwt
+                .as_deref(),
+            Some("tok")
+        );
     }
 }

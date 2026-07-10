@@ -14,7 +14,7 @@ pub struct State<DB> {
     pub min_sendable: u64,
     pub max_sendable: u64,
     pub include_spark_address: bool,
-    pub domains: Arc<RwLock<HashSet<String>>>,
+    pub domains: Arc<RwLock<crate::domains::DomainMap>>,
     pub nostr_keys: Option<nostr::Keys>,
     pub ca_cert: Option<Vec<u8>>,
     pub crl_url: Option<String>,
