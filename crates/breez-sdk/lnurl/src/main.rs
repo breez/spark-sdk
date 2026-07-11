@@ -51,6 +51,10 @@ mod webhook_notify;
 mod webhooks;
 mod zap;
 
+fn default_user_agent() -> String {
+    concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")).to_string()
+}
+
 #[derive(Clone, Parser, Debug, Serialize, Deserialize)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -228,6 +232,8 @@ where
 
     let mut spark_config = SparkWalletConfig::default_config(args.network);
     spark_config.service_provider_config.schema_endpoint = Some("graphql/spark/rc".to_string());
+    // One HTTP client (one connection pool) shared by all SSP traffic.
+    let ssp_http_client = platform_utils::create_http_client(Some(&default_user_agent()));
 
     // Create shared infrastructure components
     let signer = Arc::new(DefaultSigner::new(&auth_seed, args.network)?);
@@ -239,11 +245,12 @@ where
     let connection_manager: Arc<dyn spark::operator::rpc::ConnectionManager> =
         Arc::new(DefaultConnectionManager::new());
     let coordinator = spark_config.operator_pool.get_coordinator().clone();
-    let service_provider = Arc::new(ServiceProvider::new(
+    let service_provider = Arc::new(ServiceProvider::new_with_client(
         spark_config.service_provider_config.clone(),
         spark_signer.clone(),
         session_store.clone(),
         None,
+        Arc::clone(&ssp_http_client),
     ));
 
     // Ensure config-provided domains exist, then start the domain refresher
@@ -292,7 +299,7 @@ where
             Arc::new(InMemoryTreeStore::default()),
             Arc::new(InMemoryTokenOutputStore::default()),
             Arc::clone(&connection_manager),
-            None,
+            Some(Arc::clone(&ssp_http_client)),
             None,
             default_provider,
             None,
@@ -412,6 +419,7 @@ where
         session_store,
         service_provider,
         spark_config,
+        ssp_http_client,
         jwt_cache,
         subscribed_keys,
         invoice_paid_trigger,

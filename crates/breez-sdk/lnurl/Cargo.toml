@@ -19,6 +19,7 @@ lightning-invoice = { version = "0.33.2", features = ["std"] }
 lnurl-models = { path = "../lnurl-models" }
 nostr = { version = "0.43.1", default-features = false, features = ["std", "nip57"] }
 nostr-sdk = { version = "0.43.0", default-features = false, features = ["nip57"] }
+platform-utils = { path = "../../platform-utils" }
 rand = "0.8"
 reqwest = { version = "0.12.23", default-features = false, features = ["json", "http2", "charset", "system-proxy", "rustls-tls"] }
 regex = "1.11.2"

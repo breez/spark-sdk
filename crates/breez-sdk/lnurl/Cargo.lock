@@ -2138,6 +2138,7 @@ dependencies = [
  "lnurl-models",
  "nostr",
  "nostr-sdk",
+ "platform-utils",
  "rand 0.8.5",
  "regex",
  "reqwest",
