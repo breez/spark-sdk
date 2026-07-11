@@ -472,8 +472,16 @@ impl SdkBuilder {
         let signers = build_signers(&self.config, self.signer_source)?;
         validate_signer_capabilities(&self.config, signers.ecies.is_some())?;
 
+        let creates_context = self.context.is_none();
         let context = resolve_context(self.context, &self.config).await?;
         let stores = resolve_storage(self.storage, &context, &signers.spark, &self.config).await?;
+        // Start the partner-JWT provider now that storage is resolved. When the builder
+        // creates its own context (no shared context supplied), bind the resolved
+        // storage so the token warm-starts and survives restarts; a shared context
+        // starts in-memory only.
+        if let Some(provider) = &context.jwt_header_provider {
+            provider.start(creates_context.then(|| Arc::clone(&stores.storage)));
+        }
         let chain_service = resolve_chain_service(
             self.chain_service,
             self.rest_chain_service_config,
