@@ -277,9 +277,7 @@ where
 
     // Shared partner-JWT cache (mainnet only). Its background task keeps a token
     // warm for every domain with its own api key (persisted to the DB) and one
-    // for the default key. A domain with its own api key gets a per-request
-    // wallet; domains without one use the shared wallet below with the default
-    // attribution.
+    // for the default key.
     let jwt_cache = if is_mainnet {
         let store: Arc<dyn JwtStore> = Arc::new(RepoJwtStore(repository.clone()));
         Some(JwtCache::start(Arc::clone(&domains), default_api_key.clone(), store).await)
@@ -287,7 +285,7 @@ where
         None
     };
 
-    let default_provider = jwt_cache
+    let default_jwt_provider = jwt_cache
         .as_ref()
         .filter(|_| default_api_key.is_some())
         .map(|c| c.default_provider() as Arc<dyn spark::header_provider::HeaderProvider>);
@@ -301,8 +299,8 @@ where
             Arc::clone(&connection_manager),
             Some(Arc::clone(&ssp_http_client)),
             None,
-            default_provider,
-            None,
+            default_jwt_provider.clone(),
+            default_jwt_provider,
             None,
         )
         .await?,

@@ -767,31 +767,7 @@ where
         };
 
         let pubkey = parse_pubkey(&user.pubkey)?;
-        // Attribution routing: a domain with its own api key gets a per-request
-        // wallet attributed to that key; a domain with no api key of its own uses
-        // the shared wallet, which already carries the default attribution. A
-        // per-request build failure falls back to the shared wallet: attribution
-        // is best-effort and must never fail a receive, and the shared wallet is
-        // already constructed so it sidesteps per-request construction failures.
-        let has_api_key = state
-            .domains
-            .read()
-            .await
-            .get(&domain)
-            .is_some_and(Option::is_some);
-        let wallet = if has_api_key {
-            match state.build_invoice_wallet(&domain).await {
-                Ok(wallet) => wallet,
-                Err(e) => {
-                    warn!(
-                        "failed to build attributed wallet for '{domain}', using the shared wallet: {e}"
-                    );
-                    std::sync::Arc::clone(&state.wallet)
-                }
-            }
-        } else {
-            std::sync::Arc::clone(&state.wallet)
-        };
+        let wallet = state.invoice_wallet(&domain).await;
         let res = wallet
             .create_lightning_invoice(
                 amount_msat / 1000,

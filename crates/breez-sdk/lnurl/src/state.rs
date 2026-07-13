@@ -5,6 +5,7 @@ use spark::ssp::ServiceProvider;
 use spark_wallet::DefaultSigner;
 use std::{collections::HashSet, sync::Arc};
 use tokio::sync::{Mutex, RwLock, watch};
+use tracing::warn;
 
 pub struct State<DB> {
     pub db: DB,
@@ -33,19 +34,21 @@ pub struct State<DB> {
 }
 
 impl<DB> State<DB> {
-    /// Builds a per-request, background-less wallet for creating one invoice,
-    /// attributed to `domain`'s own partner. Used for a domain with its own api
-    /// key; domains without one use the shared wallet instead. Shares the
-    /// process signer, pre-warmed session, and connection pool; starts no
-    /// background tasks and is dropped after the request.
-    pub async fn build_invoice_wallet(
-        &self,
-        domain: &str,
-    ) -> Result<Arc<spark_wallet::SparkWallet>, spark_wallet::SparkWalletError> {
-        let attribution = self.jwt_cache.as_ref().map(|c| {
-            c.provider_for(domain.to_string()) as Arc<dyn spark::header_provider::HeaderProvider>
-        });
-        let wallet = spark_wallet::SparkWallet::new(
+    /// The wallet to create an invoice for `domain` with.
+    ///
+    /// When partner attribution is active, builds a per-request, background-less
+    /// wallet whose provider serves `domain`'s own partner JWT, or the default
+    /// when `domain` has no api key of its own. It shares the process signer,
+    /// pre-warmed session, HTTP client, and connection pool, starts no background
+    /// tasks, and is dropped after the request. Falls back to the state wallet
+    /// when attribution is off (non-mainnet) or the per-request build fails.
+    pub async fn invoice_wallet(&self, domain: &str) -> Arc<spark_wallet::SparkWallet> {
+        let Some(cache) = &self.jwt_cache else {
+            return Arc::clone(&self.wallet);
+        };
+        let domain_jwt_provider = Some(cache.provider_for(domain.to_string())
+            as Arc<dyn spark::header_provider::HeaderProvider>);
+        let built = spark_wallet::SparkWallet::new(
             self.spark_config.clone(),
             Arc::new(spark_wallet::SparkSignerAdapter::new(self.signer.clone())),
             self.session_store.clone(),
@@ -54,12 +57,20 @@ impl<DB> State<DB> {
             Arc::clone(&self.connection_manager),
             Some(Arc::clone(&self.ssp_http_client)),
             None,
-            attribution.clone(),
-            attribution,
+            domain_jwt_provider.clone(),
+            domain_jwt_provider,
             None,
         )
-        .await?;
-        Ok(Arc::new(wallet))
+        .await;
+        match built {
+            Ok(wallet) => Arc::new(wallet),
+            Err(e) => {
+                warn!(
+                    "failed to build attributed wallet for '{domain}', using the state wallet: {e}"
+                );
+                Arc::clone(&self.wallet)
+            }
+        }
     }
 }
 

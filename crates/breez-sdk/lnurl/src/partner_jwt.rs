@@ -96,7 +96,7 @@ struct HydrateState {
 
 /// Shared partner-JWT cache. A background task keeps a token warm for every
 /// domain with its own api key (persisted, so restarts start warm) and one for
-/// the default key (the catch-all the shared wallet uses for domains without one).
+/// the default key (the catch-all served to domains without their own key).
 /// [`provider_for`](Self::provider_for) and [`default_provider`](Self::default_provider)
 /// hand out header providers that read this cache.
 pub struct JwtCache {
@@ -131,8 +131,8 @@ impl JwtCache {
         cache
     }
 
-    /// A header provider that emits `x-partner-jwt` for `domain`'s own key,
-    /// reading this shared cache. Cheap to build per request.
+    /// A header provider for `domain`: emits its own partner's `x-partner-jwt`,
+    /// falling back to the default key's when its own is not cached.
     pub fn provider_for(self: &Arc<Self>, domain: String) -> Arc<JwtHeaderProvider> {
         Arc::new(JwtHeaderProvider {
             cache: Arc::clone(self),
@@ -140,8 +140,7 @@ impl JwtCache {
         })
     }
 
-    /// A header provider that emits the default key's `x-partner-jwt`, used by
-    /// the shared wallet as the catch-all for domains with no api key of their own.
+    /// A header provider that always emits the default key's `x-partner-jwt`.
     pub fn default_provider(self: &Arc<Self>) -> Arc<JwtHeaderProvider> {
         Arc::new(JwtHeaderProvider {
             cache: Arc::clone(self),
@@ -194,6 +193,16 @@ impl JwtCache {
             .as_ref()
             .filter(|t| deadline < t.exp)
             .map(|t| t.token.clone())
+    }
+
+    /// Serve `domain`'s own token, falling back to the default api key's token
+    /// whenever its own is not cached: the domain has no api key, or its token
+    /// has not been fetched yet.
+    async fn serve_domain_or_default(&self, domain: &str) -> Option<String> {
+        match self.serve_domain(domain).await {
+            Some(token) => Some(token),
+            None => self.serve_default().await,
+        }
     }
 
     async fn hydrate_loop(&self) {
@@ -288,10 +297,8 @@ enum Target {
     Default,
 }
 
-/// Emits `x-partner-jwt` for one target (a domain's own key, or the default),
-/// reading the shared [`JwtCache`]. `headers()` never performs I/O and never
-/// returns `Err`, so a missing token yields no header rather than delaying or
-/// failing the invoice.
+/// Emits `x-partner-jwt` from the shared [`JwtCache`]: for a domain, its own
+/// token or the default when its own is not cached; or always the default.
 pub struct JwtHeaderProvider {
     cache: Arc<JwtCache>,
     target: Target,
@@ -301,7 +308,7 @@ pub struct JwtHeaderProvider {
 impl HeaderProvider for JwtHeaderProvider {
     async fn headers(&self) -> Result<HashMap<String, String>, HeaderProviderError> {
         let token = match &self.target {
-            Target::Domain(domain) => self.cache.serve_domain(domain).await,
+            Target::Domain(domain) => self.cache.serve_domain_or_default(domain).await,
             Target::Default => self.cache.serve_default().await,
         };
         Ok(match token {
@@ -661,8 +668,27 @@ mod tests {
             exp,
         });
         assert_eq!(served_default(&cache).await, Some(make_jwt(exp)));
-        // A domain with no api key has no per-domain token; the default provider covers it.
-        assert_eq!(served(&cache, "a.com").await, None);
+        // A domain with no api key of its own falls back to the default token.
+        assert_eq!(served(&cache, "a.com").await, Some(make_jwt(exp)));
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_default_until_own_token_is_cached() {
+        let cache = test_cache(&[("a.com", Some("key-a"))], Some("key-default"));
+        let default_exp = now_secs() + 3600;
+        *cache.default_token.write().await = Some(CachedToken {
+            api_key: "key-default".to_string(),
+            token: make_jwt(default_exp),
+            exp: default_exp,
+        });
+        // Its own token isn't cached yet (cold start): use the default rather
+        // than leave the receive unattributed.
+        assert_eq!(served(&cache, "a.com").await, Some(make_jwt(default_exp)));
+
+        // Once its own token is cached, that wins over the default.
+        let own_exp = now_secs() + 7200;
+        seed(&cache, "a.com", own_exp).await;
+        assert_eq!(served(&cache, "a.com").await, Some(make_jwt(own_exp)));
     }
 
     struct StubAuth;
