@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use bitcoin::{
-    self, Address, PrivateKey, Psbt, Txid, Witness,
+    self, Address, Amount, CompressedPublicKey, OutPoint, PrivateKey, Psbt, TxOut, Txid, Witness,
     bip32::{DerivationPath, Xpriv},
     consensus::encode::serialize_hex,
     ecdsa::Signature,
@@ -12,7 +12,8 @@ use bitcoin::{
 };
 use clap::Subcommand;
 use spark_wallet::{
-    Network, SparkWallet, SparkWalletError, TreeNodeId, is_ephemeral_anchor_output,
+    CpfpInput, ExitLeafSelection, ExitTxKind, Network, SparkWallet, SparkWalletError, TreeNodeId,
+    build_unilateral_exit, is_ephemeral_anchor_output, p2wpkh_input_weight,
 };
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -32,30 +33,32 @@ impl From<ExitSpeed> for spark_wallet::ExitSpeed {
     }
 }
 
-struct CpfpUtxo(spark_wallet::CpfpUtxo);
-
-impl std::str::FromStr for CpfpUtxo {
-    type Err = Box<dyn std::error::Error>;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 4 {
-            return Err("Invalid format, expected txid:vout:value:pubkey".into());
-        }
-
-        let txid = Txid::from_str(parts[0])?;
-        let vout = parts[1].parse::<u32>()?;
-        let value = parts[2].parse::<u64>()?;
-        let pubkey_bytes = hex::decode(parts[3])?;
-        let pubkey = PublicKey::from_slice(&pubkey_bytes)?;
-
-        Ok(CpfpUtxo(spark_wallet::CpfpUtxo {
-            txid,
-            vout,
-            value,
-            pubkey,
-        }))
+/// Parses a `txid:vout:value:pubkey` funding UTXO (hex pubkey) into a P2WPKH
+/// [`CpfpInput`] carrying the exact signed input weight so fees stay exact.
+fn parse_p2wpkh_funding(
+    s: &str,
+    network: Network,
+) -> Result<CpfpInput, Box<dyn std::error::Error>> {
+    let parts: Vec<&str> = s.split(':').collect();
+    if parts.len() != 4 {
+        return Err("Invalid format, expected txid:vout:value:pubkey".into());
     }
+
+    let txid = Txid::from_str(parts[0])?;
+    let vout = parts[1].parse::<u32>()?;
+    let value = parts[2].parse::<u64>()?;
+    let pubkey = PublicKey::from_slice(&hex::decode(parts[3])?)?;
+    let btc_network: bitcoin::Network = network.into();
+    let script_pubkey = Address::p2wpkh(&CompressedPublicKey(pubkey), btc_network).script_pubkey();
+
+    Ok(CpfpInput {
+        outpoint: OutPoint { txid, vout },
+        witness_utxo: TxOut {
+            value: Amount::from_sat(value),
+            script_pubkey,
+        },
+        signed_input_weight: p2wpkh_input_weight().to_wu(),
+    })
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -73,8 +76,8 @@ pub enum WithdrawCommand {
     },
     /// Prepare a unilateral exit package.
     UnilateralExit {
-        /// Fee rate in sats/vbyte.
-        fee_rate: u64,
+        /// Fee rate in satoshis per 1000 weight units (sat/kW).
+        fee_rate_sat_per_kw: u64,
         /// The leaf IDs of the tree nodes to unilateral exit. Defaults to all leaves.
         #[clap(short, long = "leaf")]
         leaf_ids: Vec<TreeNodeId>,
@@ -124,7 +127,7 @@ pub async fn handle_command(
             println!("{result:#?}");
         }
         WithdrawCommand::UnilateralExit {
-            fee_rate,
+            fee_rate_sat_per_kw,
             leaf_ids,
             utxos,
             signing_key,
@@ -134,26 +137,60 @@ pub async fn handle_command(
                 .transpose()?
                 .map(|pk| PrivateKey::new(pk, network));
 
-            let utxos = utxos
+            let inputs = utxos
                 .into_iter()
-                .map(|s| CpfpUtxo::from_str(&s).map(|wrapper| wrapper.0))
-                .collect::<Result<_, _>>()?;
-            let all_leaf_tx_cpfp_psbts = wallet.unilateral_exit(fee_rate, leaf_ids, utxos).await?;
+                .map(|s| parse_p2wpkh_funding(&s, network))
+                .collect::<Result<Vec<_>, _>>()?;
+            // No `--leaf` flags means exit every available leaf (Auto).
+            let selection = if leaf_ids.is_empty() {
+                ExitLeafSelection::Auto
+            } else {
+                ExitLeafSelection::Specific(leaf_ids)
+            };
+            let prepared = wallet
+                .prepare_unilateral_exit_plan(
+                    fee_rate_sat_per_kw,
+                    selection,
+                    inputs,
+                    // Sweep destination is a P2TR address (34-byte scriptPubKey);
+                    // only used here to size the fan-out fee.
+                    34,
+                )
+                .await?;
+            // No chain access here, so pass no observations: the exit resolves to
+            // a fresh full build (nothing recognized as already on-chain).
+            let exit = build_unilateral_exit(&prepared, &[], fee_rate_sat_per_kw)?;
 
-            for leaf_tx_cpfp_psbts in &all_leaf_tx_cpfp_psbts {
+            if let Some(fan_out) = &exit.fan_out
+                && let Some(psbt) = &fan_out.to_sign
+            {
                 println!();
-                println!("Leaf ID: {}", leaf_tx_cpfp_psbts.leaf_id);
+                println!("Fan-out TX (broadcast before any branch):");
+                let mut psbt = psbt.clone();
+                println!("PSBT (unsigned): {}", psbt.serialize_hex());
+                if let Some(signing_key) = &signing_key {
+                    sign_psbt(&mut psbt, signing_key)?;
+                    let signed_tx = psbt.extract_tx()?;
+                    println!("Signed TX ID: {}", signed_tx.compute_txid());
+                    println!("Signed TX: {}", serialize_hex(&signed_tx));
+                }
+                println!();
+            }
+
+            for branch in &exit.branches {
+                println!();
+                println!("Leaf ID: {}", branch.leaf_id);
                 println!();
 
-                let total_txs = leaf_tx_cpfp_psbts.tx_cpfp_psbts.len();
-                for (index, tx_cpfp_psbt) in leaf_tx_cpfp_psbts.tx_cpfp_psbts.iter().enumerate() {
+                let total_txs = branch.txs.len();
+                for (index, tx) in branch.txs.iter().enumerate() {
                     let index_str = format!("{}. ", index + 1);
                     let index_spaces = " ".repeat(index_str.len());
 
-                    // Order: Node TX(s), Leaf TX, Refund TX
-                    // The last item is always the Refund TX, second-to-last is Leaf TX
-                    let is_refund_tx = index == total_txs - 1;
-                    let is_leaf_tx = index == total_txs - 2;
+                    // Order: Node TX(s), Leaf TX, Refund TX. The last is the Refund
+                    // TX, second-to-last the Leaf TX (the leaf's own node_tx).
+                    let is_refund_tx = tx.kind == ExitTxKind::Refund;
+                    let is_leaf_tx = index == total_txs.saturating_sub(2);
                     let tx_type = if is_refund_tx {
                         "Refund TX"
                     } else if is_leaf_tx {
@@ -162,49 +199,38 @@ pub async fn handle_command(
                         "Node TX"
                     };
 
-                    let txid = tx_cpfp_psbt.parent_tx.compute_txid();
-                    let tx_hex = serialize_hex(&tx_cpfp_psbt.parent_tx);
+                    let txid = tx.txid;
+                    let tx_hex = serialize_hex(&tx.base_tx);
                     println!("{index_str}{tx_type} ID: {txid}");
                     println!("{index_spaces}{tx_type}: {tx_hex}");
 
-                    let mut psbt = tx_cpfp_psbt.child_psbt.clone();
-                    let psbt_hex = psbt.serialize_hex();
-                    println!("{index_spaces}PSBT (unsigned): {psbt_hex}");
-
-                    if let Some(signing_key) = &signing_key {
-                        sign_psbt(&mut psbt, signing_key)?;
-
-                        let signed_tx = psbt.extract_tx()?;
-                        let signed_txid = signed_tx.compute_txid();
-                        let signed_tx_hex = serialize_hex(&signed_tx);
-                        println!("{index_spaces}PSBT signed TX ID: {signed_txid}");
-                        println!("{index_spaces}PSBT signed TX: {signed_tx_hex}");
-                    }
-
-                    // Display CSV timelock for refund transaction
-                    if is_refund_tx && let Some(input) = tx_cpfp_psbt.parent_tx.input.first() {
-                        let sequence = input.sequence.to_consensus_u32();
-                        // CSV uses the lower 16 bits for the relative lock value
-                        // Bit 22 (0x00400000) indicates blocks vs time
-                        if sequence & 0x00400000 == 0 {
-                            let csv_blocks = sequence & 0xFFFF;
+                    if let Some(child) = &tx.to_sign {
+                        let mut psbt = child.clone();
+                        println!("{index_spaces}PSBT (unsigned): {}", psbt.serialize_hex());
+                        if let Some(signing_key) = &signing_key {
+                            sign_psbt(&mut psbt, signing_key)?;
+                            let signed_tx = psbt.extract_tx()?;
                             println!(
-                                "{index_spaces}Timelock: {} blocks after Leaf TX confirms",
-                                csv_blocks
+                                "{index_spaces}PSBT signed TX ID: {}",
+                                signed_tx.compute_txid()
+                            );
+                            println!(
+                                "{index_spaces}PSBT signed TX: {}",
+                                serialize_hex(&signed_tx)
                             );
                         }
                     }
 
-                    // Independent derivation path verification for refund TX
+                    // Display the CSV timelock for the refund transaction.
+                    if is_refund_tx && let Some(blocks) = tx.csv_timelock_blocks {
+                        println!("{index_spaces}Timelock: {blocks} blocks after Leaf TX confirms");
+                    }
+
+                    // Independent derivation-path verification for the refund TX.
                     if is_refund_tx {
                         println!();
                         println!();
-                        verify_refund_derivation_path(
-                            seed,
-                            network,
-                            &leaf_tx_cpfp_psbts.leaf_id,
-                            &tx_cpfp_psbt.parent_tx,
-                        )?;
+                        verify_refund_derivation_path(seed, network, &branch.leaf_id, &tx.base_tx)?;
                     }
 
                     println!();
@@ -323,9 +349,14 @@ fn sign_psbt(psbt: &mut Psbt, signing_key: &PrivateKey) -> Result<(), SparkWalle
             }
         }
     }
-    // Update the inputs partial sigs with the signatures
+    // Finalize each signed input with its P2WPKH witness stack (sig, pubkey).
+    // `extract_tx` reads only `final_script_witness`, so leaving the signature
+    // in `partial_sigs` would extract an unsigned funding input.
     for (i, pubkey, signature) in signatures.into_iter() {
-        psbt.inputs[i].partial_sigs.insert(pubkey, signature);
+        let mut witness = Witness::new();
+        witness.push(signature.to_vec());
+        witness.push(pubkey.to_bytes());
+        psbt.inputs[i].final_script_witness = Some(witness);
     }
     // Set an empty witness for the anchor input
     if let Some(anchor_index) = anchor_index {
