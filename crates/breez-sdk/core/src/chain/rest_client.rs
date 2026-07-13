@@ -13,7 +13,7 @@ use tracing::info;
 use crate::chain::RecommendedFees;
 use crate::{
     Network,
-    chain::{ChainServiceError, Utxo},
+    chain::{ChainServiceError, Outspend, Utxo},
 };
 
 use super::BitcoinChainService;
@@ -31,6 +31,17 @@ const BASE_BACKOFF_MILLIS: Duration = Duration::from_millis(256);
 struct TxInfo {
     txid: String,
     status: super::TxStatus,
+}
+
+/// Esplora `/address/:address` response (only the confirmed stats are read).
+#[derive(Deserialize)]
+struct AddressInfo {
+    chain_stats: AddressChainStats,
+}
+
+#[derive(Deserialize)]
+struct AddressChainStats {
+    funded_txo_count: u64,
 }
 
 pub struct BasicAuth {
@@ -277,6 +288,21 @@ impl RestClientChainServiceInner {
         Ok(utxos)
     }
 
+    async fn do_get_address_funded_txo_count(
+        &self,
+        address: String,
+    ) -> Result<u64, ChainServiceError> {
+        let address = address
+            .parse::<Address<NetworkUnchecked>>()?
+            .require_network(self.network.into())?;
+
+        let info = self
+            .get_response_json::<AddressInfo>(format!("/address/{address}").as_str())
+            .await?;
+
+        Ok(info.chain_stats.funded_txo_count)
+    }
+
     async fn do_get_transaction_status(
         &self,
         txid: String,
@@ -292,6 +318,17 @@ impl RestClientChainServiceInner {
             .get_response_text(format!("/tx/{txid}/hex").as_str())
             .await?;
         Ok(tx)
+    }
+
+    async fn do_get_outspend(
+        &self,
+        txid: String,
+        vout: u32,
+    ) -> Result<Outspend, ChainServiceError> {
+        let outspend = self
+            .get_response_json::<Outspend>(format!("/tx/{txid}/outspend/{vout}").as_str())
+            .await?;
+        Ok(outspend)
     }
 
     async fn do_broadcast_transaction(&self, tx: String) -> Result<(), ChainServiceError> {
@@ -315,6 +352,16 @@ impl BitcoinChainService for RestClientChainService {
             .await
     }
 
+    async fn get_address_funded_txo_count(
+        &self,
+        address: String,
+    ) -> Result<u64, ChainServiceError> {
+        self.run_on_runtime(
+            |inner| async move { inner.do_get_address_funded_txo_count(address).await },
+        )
+        .await
+    }
+
     async fn get_transaction_status(
         &self,
         txid: String,
@@ -325,6 +372,11 @@ impl BitcoinChainService for RestClientChainService {
 
     async fn get_transaction_hex(&self, txid: String) -> Result<String, ChainServiceError> {
         self.run_on_runtime(|inner| async move { inner.do_get_transaction_hex(txid).await })
+            .await
+    }
+
+    async fn get_outspend(&self, txid: String, vout: u32) -> Result<Outspend, ChainServiceError> {
+        self.run_on_runtime(move |inner| async move { inner.do_get_outspend(txid, vout).await })
             .await
     }
 

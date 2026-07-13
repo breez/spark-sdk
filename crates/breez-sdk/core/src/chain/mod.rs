@@ -38,8 +38,14 @@ impl From<bitcoin::address::ParseError> for ChainServiceError {
 #[macros::async_trait]
 pub trait BitcoinChainService: Send + Sync {
     async fn get_address_utxos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError>;
+    /// Number of confirmed outputs ever paid to `address` (Esplora
+    /// `chain_stats.funded_txo_count`). Must count spent outputs too, so a swept
+    /// refund reads as funded rather than as never broadcast.
+    async fn get_address_funded_txo_count(&self, address: String)
+    -> Result<u64, ChainServiceError>;
     async fn get_transaction_status(&self, txid: String) -> Result<TxStatus, ChainServiceError>;
     async fn get_transaction_hex(&self, txid: String) -> Result<String, ChainServiceError>;
+    async fn get_outspend(&self, txid: String, vout: u32) -> Result<Outspend, ChainServiceError>;
     async fn broadcast_transaction(&self, tx: String) -> Result<(), ChainServiceError>;
     async fn recommended_fees(&self) -> Result<RecommendedFees, ChainServiceError>;
 }
@@ -69,6 +75,79 @@ pub struct RecommendedFees {
     pub hour_fee: u64,
     pub economy_fee: u64,
     pub minimum_fee: u64,
+}
+
+/// The spend status of a transaction output (Esplora `/tx/:txid/outspend/:vout`).
+///
+/// An enum so an unspent output carries no spurious `txid`/`vin` and a spent one
+/// always names its spender. It (de)serializes to the flat Esplora shape
+/// `{ "spent": bool, "txid"?, "vin"?, "status"? }`, so chain services (including
+/// foreign ones over WASM/UniFFI) keep returning that object.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum Outspend {
+    /// The output has not been spent.
+    Unspent,
+    /// The output is spent by input `vin` of transaction `txid`; `status` is
+    /// that spending transaction's confirmation status.
+    Spent {
+        txid: String,
+        vin: u32,
+        status: TxStatus,
+    },
+}
+
+/// Flat Esplora wire form, converted to/from [`Outspend`].
+#[derive(Deserialize, Serialize)]
+struct RawOutspend {
+    spent: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    txid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    vin: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    status: Option<TxStatus>,
+}
+
+impl<'de> Deserialize<'de> for Outspend {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let raw = RawOutspend::deserialize(deserializer)?;
+        if !raw.spent {
+            return Ok(Outspend::Unspent);
+        }
+        Ok(Outspend::Spent {
+            txid: raw.txid.ok_or_else(|| Error::missing_field("txid"))?,
+            vin: raw.vin.ok_or_else(|| Error::missing_field("vin"))?,
+            // A spent output whose spender status is omitted is treated as
+            // unconfirmed rather than rejected.
+            status: raw.status.unwrap_or(TxStatus {
+                confirmed: false,
+                block_height: None,
+                block_time: None,
+            }),
+        })
+    }
+}
+
+impl Serialize for Outspend {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let raw = match self {
+            Outspend::Unspent => RawOutspend {
+                spent: false,
+                txid: None,
+                vin: None,
+                status: None,
+            },
+            Outspend::Spent { txid, vin, status } => RawOutspend {
+                spent: true,
+                txid: Some(txid.clone()),
+                vin: Some(*vin),
+                status: Some(status.clone()),
+            },
+        };
+        raw.serialize(serializer)
+    }
 }
 
 /// Constructs a shareable REST-based [`BitcoinChainService`].
