@@ -683,6 +683,7 @@ where
         }))
     }
 
+    #[allow(clippy::too_many_lines)]
     pub async fn handle_invoice(
         Host(host): Host,
         Path(identifier): Path<String>,
@@ -695,20 +696,7 @@ where
 
         let username = sanitize_username(&identifier);
         let domain = sanitize_domain(&state, &host).await?;
-        Self::handle_invoice_inner(state, params, username, domain).await
-    }
 
-    /// Create the lightning-address invoice for `username` on `domain` and build
-    /// the LNURL-pay response. A domain with its own api key creates the invoice
-    /// with a per-request wallet bound to that key, so its SSP receive call
-    /// carries the domain's `x-partner-jwt`; other domains use the shared wallet.
-    #[allow(clippy::too_many_lines)]
-    async fn handle_invoice_inner(
-        state: State<DB>,
-        params: LnurlPayCallbackParams,
-        username: String,
-        domain: String,
-    ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
         let user = state
             .db
             .get_user_by_name(&domain, &username)

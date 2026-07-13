@@ -875,16 +875,16 @@ mod postgres_tests {
     /// Returns `None` (skipping the test) when `LNURL_TEST_POSTGRES_URL` is unset.
     async fn setup_pool() -> Option<sqlx::PgPool> {
         let url = std::env::var("LNURL_TEST_POSTGRES_URL").ok()?;
-        let pool = sqlx::PgPool::connect(&url).await.ok()?;
-        crate::postgresql::run_migrations(&pool).await.ok()?;
+        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+        crate::postgresql::run_migrations(&pool).await.unwrap();
         sqlx::query("DELETE FROM domain_attribution")
             .execute(&pool)
             .await
-            .ok()?;
+            .unwrap();
         sqlx::query("DELETE FROM allowed_domains")
             .execute(&pool)
             .await
-            .ok()?;
+            .unwrap();
         Some(pool)
     }
 

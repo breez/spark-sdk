@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use anyhow::Context;
 use base64::Engine;
 use spark::header_provider::{HeaderProvider, HeaderProviderError};
 use tokio::sync::RwLock;
@@ -29,7 +30,7 @@ const BACKOFF_MAX_SECS: u64 = 5 * 60;
 /// Shared map of allowed domains to their own Breez API key, or `None` when
 /// the domain has none and falls back to the default. Kept in sync with the
 /// DB by the `domains` refresher.
-pub type DomainKeys = Arc<RwLock<HashMap<String, Option<String>>>>;
+pub type DomainKeys = Arc<RwLock<crate::domains::DomainMap>>;
 
 /// Persistence for per-domain JWTs, so restarts and sibling instances start
 /// warm instead of re-fetching every token.
@@ -51,16 +52,16 @@ where
     DB: LnurlRepository + Send + Sync,
 {
     async fn load_all(&self) -> Vec<(String, String)> {
-        self.0
-            .list_domains()
-            .await
-            .map(|domains| {
-                domains
-                    .into_iter()
-                    .filter_map(|d| d.jwt.map(|jwt| (d.domain, jwt)))
-                    .collect()
-            })
-            .unwrap_or_default()
+        match self.0.list_domains().await {
+            Ok(domains) => domains
+                .into_iter()
+                .filter_map(|d| d.jwt.map(|jwt| (d.domain, jwt)))
+                .collect(),
+            Err(e) => {
+                warn!("could not load persisted partner JWTs: {e}");
+                Vec::new()
+            }
+        }
     }
 
     async fn store(&self, domain: &str, jwt: &str) {
@@ -73,8 +74,7 @@ where
 struct CachedToken {
     api_key: String,
     token: String,
-    /// Unix expiry (seconds) parsed from the JWT `exp` claim; `0` if unparseable
-    /// (treated as already expired, so it is never served).
+    /// Unix expiry (seconds) parsed from the JWT `exp` claim.
     exp: u64,
 }
 
@@ -160,7 +160,7 @@ impl JwtCache {
             let Some(Some(api_key)) = domains.get(&domain) else {
                 continue;
             };
-            if let Some(exp) = jwt_exp(&token)
+            if let Ok(exp) = jwt_exp(&token)
                 && now < exp
             {
                 self.cache.write().await.insert(
@@ -271,9 +271,15 @@ impl JwtCache {
         if fresh || now < backoff.next_retry {
             return None;
         }
-        match fetch_jwt(&self.http, &self.jwt_url, api_key).await {
-            Ok(token) => {
-                let exp = jwt_exp(&token).unwrap_or(0);
+        let fetched = fetch_jwt(&self.http, &self.jwt_url, api_key)
+            .await
+            .and_then(|token| {
+                jwt_exp(&token)
+                    .map(|exp| (token, exp))
+                    .map_err(|e| format!("invalid token exp: {e}"))
+            });
+        match fetched {
+            Ok((token, exp)) => {
                 *backoff = Backoff::default();
                 Some(CachedToken {
                     api_key: api_key.to_string(),
@@ -282,8 +288,7 @@ impl JwtCache {
                 })
             }
             Err(e) => {
-                // The api key is a secret, so it is not logged.
-                warn!("could not fetch a partner JWT: {e}");
+                warn!("could not fetch a partner JWT with api key '{api_key}': {e}");
                 backoff.next_retry = now.saturating_add(backoff_secs(backoff.attempt));
                 backoff.attempt = backoff.attempt.saturating_add(1);
                 None
@@ -367,13 +372,14 @@ async fn fetch_jwt(http: &reqwest::Client, url: &str, api_key: &str) -> Result<S
 }
 
 /// Parse the `exp` claim from a JWT without verifying the signature.
-fn jwt_exp(token: &str) -> Option<u64> {
-    let payload_b64 = token.split('.').nth(1)?;
-    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(payload_b64)
-        .ok()?;
-    let claims: JwtClaims = serde_json::from_slice(&decoded).ok()?;
-    Some(claims.exp)
+fn jwt_exp(token: &str) -> anyhow::Result<u64> {
+    let payload_b64 = token
+        .split('.')
+        .nth(1)
+        .context("missing JWT payload segment")?;
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload_b64)?;
+    let claims: JwtClaims = serde_json::from_slice(&decoded)?;
+    Ok(claims.exp)
 }
 
 #[cfg(test)]
@@ -479,11 +485,11 @@ mod tests {
     #[test]
     fn test_jwt_exp() {
         use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-        assert_eq!(jwt_exp(&make_jwt(9_999_999_999)), Some(9_999_999_999));
-        assert_eq!(jwt_exp("not.a.jwt"), None);
-        assert_eq!(jwt_exp("onlyone"), None);
+        assert_eq!(jwt_exp(&make_jwt(9_999_999_999)).unwrap(), 9_999_999_999);
+        assert!(jwt_exp("not.a.jwt").is_err());
+        assert!(jwt_exp("onlyone").is_err());
         let no_exp = format!("h.{}.sig", URL_SAFE_NO_PAD.encode(r#"{"sub":"x"}"#));
-        assert_eq!(jwt_exp(&no_exp), None);
+        assert!(jwt_exp(&no_exp).is_err());
     }
 
     #[test]
