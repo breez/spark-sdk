@@ -2297,3 +2297,219 @@ pub struct UnregisterWebhookRequest {
     /// The unique identifier of the webhook to unregister.
     pub webhook_id: String,
 }
+
+// ===========================================================================
+// Unilateral exit
+// ===========================================================================
+
+/// A funding UTXO that pays the on-chain fees of a unilateral exit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum CpfpInput {
+    /// A P2WPKH (native segwit v0) UTXO controlled by `pubkey` (33-byte
+    /// compressed, hex).
+    P2wpkh {
+        txid: String,
+        vout: u32,
+        value: u64,
+        pubkey: String,
+    },
+    /// A P2TR (taproot, key-path) UTXO. `pubkey` (x-only or compressed, hex) is
+    /// the **internal** (untweaked, BIP86 key-path) public key whose secret signs
+    /// the input, not the tweaked on-chain output key. The SDK applies the BIP86
+    /// taproot tweak itself to derive the funding scriptPubKey, so passing the
+    /// already-tweaked output key here produces a scriptPubKey that does not match
+    /// the UTXO and the built transaction is rejected at broadcast.
+    P2tr {
+        txid: String,
+        vout: u32,
+        value: u64,
+        pubkey: String,
+    },
+    /// Any witness-program script, signed via a custom `CpfpSigner`. Legacy
+    /// (non-SegWit) scripts are rejected. `signed_input_weight` (weight units)
+    /// is an upper bound on the input's signed weight, so the fee stays exact,
+    /// or slightly conservative if the real signature is shorter.
+    Custom {
+        txid: String,
+        vout: u32,
+        value: u64,
+        script_pubkey_hex: String,
+        signed_input_weight: u64,
+    },
+}
+
+/// The kind of UTXO that will fund an exit's fees.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum CpfpFundingKind {
+    /// Fees paid from P2WPKH (native segwit v0) UTXOs.
+    P2wpkh,
+    /// Fees paid from P2TR (taproot, key-path) UTXOs.
+    P2tr,
+    /// Fees paid from a custom witness-program script (legacy scripts are
+    /// rejected). `script_pubkey_hex` (the funding scriptPubKey) sizes the
+    /// fan-out output and dust; `signed_input_weight` (weight units) is an upper
+    /// bound on the input's signed weight, so the quote stays exact or slightly
+    /// conservative.
+    Custom {
+        script_pubkey_hex: String,
+        signed_input_weight: u64,
+    },
+}
+
+/// Which leaves to exit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ExitLeafSelection {
+    /// Exit every leaf whose value exceeds its own marginal exit cost (its tree
+    /// and refund CPFP fees plus its sweep input). This per-leaf test does not
+    /// include the shared fan-out fee, so funding many leaves from a single UTXO
+    /// adds `fanout_fee_sat` on top: compare `recoverable_value_sat` with
+    /// `total_fee_sat`, or fund one UTXO per branch to avoid the fan-out. Leaves
+    /// that fail the per-leaf test are skipped.
+    Auto,
+    /// Exit exactly these leaves, regardless of profitability.
+    Specific { leaf_ids: Vec<String> },
+}
+
+/// The role of a transaction in the exit path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum UnilateralExitTxKind {
+    /// Splits the caller's funding into one output per branch. Present only
+    /// when the funding couldn't be matched one-to-one to branches.
+    FanOut,
+    /// A tree node transaction (root, intermediate, or leaf node).
+    Node,
+    /// A leaf's refund transaction.
+    Refund,
+    /// The final transaction sweeping all refund outputs to the destination.
+    Sweep,
+}
+
+/// Whether a transaction in the exit path is already on-chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ConfirmationStatus {
+    /// This transaction is confirmed in a block. It needs no action.
+    Confirmed,
+    /// This transaction is not yet confirmed. Mempool state is not consulted.
+    Unconfirmed,
+    /// The on-chain status could not be determined (the chain service errored).
+    /// Broadcasting may fail if a conflicting transaction already landed.
+    Unverified,
+}
+
+/// One transaction in the unilateral exit path, with everything needed to
+/// order and broadcast it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct UnilateralExitTransaction {
+    pub kind: UnilateralExitTxKind,
+    /// The tree node this transaction belongs to. Unset for the fan-out and the
+    /// sweep.
+    pub node_id: Option<String>,
+    pub txid: String,
+    pub tx_hex: String,
+    /// The signed CPFP child to broadcast alongside `tx_hex` as a package.
+    /// Unset for the fan-out and the sweep (no anchor to bump) and for a
+    /// `Confirmed` step (its CPFP is already on-chain).
+    pub cpfp_tx_hex: Option<String>,
+    /// Relative CSV timelock, in blocks, that must mature on the spent input
+    /// before this transaction can confirm. Unset when there is no timelock.
+    pub csv_timelock_blocks: Option<u32>,
+    /// Txids of other entries in this list that must be confirmed before this
+    /// one can be broadcast.
+    pub depends_on: Vec<String>,
+    pub status: ConfirmationStatus,
+}
+
+/// A leaf selected for exit, with its value.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct UnilateralExitLeaf {
+    pub leaf_id: String,
+    /// The leaf's value in satoshis.
+    pub value: u64,
+}
+
+/// Request for `prepare_unilateral_exit`, the exit quote.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PrepareUnilateralExitRequest {
+    /// Target fee rate in sat/vByte, applied to every CPFP child, the fan-out,
+    /// and the sweep.
+    pub fee_rate_sat_per_vbyte: u64,
+    pub funding_kind: CpfpFundingKind,
+    /// The Bitcoin address the swept funds are sent to.
+    pub destination: String,
+    pub selection: ExitLeafSelection,
+}
+
+/// How much to fund one branch of the exit to avoid a fan-out.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PerBranchFunding {
+    /// The leaf whose branch this funds.
+    pub leaf_id: String,
+    /// Fund a UTXO of at least this many satoshis for this branch.
+    pub funding_sat: u64,
+}
+
+/// Response from `prepare_unilateral_exit`: which leaves would exit, the exact
+/// fee at the requested rate, and how much to fund.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PrepareUnilateralExitResponse {
+    pub leaves: Vec<UnilateralExitLeaf>,
+    /// Total value of the selected leaves, in satoshis.
+    pub recoverable_value_sat: u64,
+    /// Total on-chain fee when funding with a single UTXO (fanned out across
+    /// branches), in satoshis. Exact for the given funding kind; nodes the
+    /// operators report on-chain are assumed already paid, so a partially-exited
+    /// tree quotes a lower fee than a fresh one.
+    pub total_fee_sat: u64,
+    /// The part of `total_fee_sat` paid for the fan-out transaction. Funding one
+    /// UTXO per branch (`per_branch_funding`) avoids it. Zero for a single
+    /// branch (no fan-out).
+    pub fanout_fee_sat: u64,
+    /// Fund a single UTXO of at least this many satoshis to exit with a fan-out.
+    pub single_utxo_funding_sat: u64,
+    /// To skip the fan-out, fund one UTXO per branch of at least the given
+    /// amount (one entry per selected leaf).
+    pub per_branch_funding: Vec<PerBranchFunding>,
+    /// The fee rate this quote was computed at, in sat/vByte.
+    pub fee_rate_sat_per_vbyte: u64,
+    pub destination: String,
+}
+
+/// Request for `unilateral_exit`: a `prepare_unilateral_exit` quote plus the
+/// funding UTXOs that pay its fees. The signer is passed separately (it is not a
+/// plain data value).
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct UnilateralExitRequest {
+    /// The quote returned by `prepare_unilateral_exit`, naming the leaves to exit.
+    pub prepared: PrepareUnilateralExitResponse,
+    /// The funding UTXOs that pay the exit's on-chain fees, meeting the quote's
+    /// `single_utxo_funding_sat` (one UTXO) or `per_branch_funding` (one per branch).
+    pub funding_inputs: Vec<CpfpInput>,
+}
+
+/// Result of `unilateral_exit`: a cost summary plus the complete, signed exit
+/// path.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct UnilateralExitResponse {
+    /// Total value of the selected leaves, in satoshis.
+    pub recoverable_value_sat: u64,
+    /// The actual total on-chain fee the returned transactions pay at the
+    /// requested rate, in satoshis. A resumed or partially-confirmed exit pays
+    /// less because already-confirmed steps are not rebuilt.
+    pub total_fee_sat: u64,
+    pub leaves: Vec<UnilateralExitLeaf>,
+    /// The full signed transaction set, in valid topological (broadcast) order
+    /// with shared ancestors appearing once and the sweep last.
+    pub transactions: Vec<UnilateralExitTransaction>,
+}
