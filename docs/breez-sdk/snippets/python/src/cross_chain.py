@@ -8,6 +8,8 @@ from breez_sdk_spark import (
     PaymentRequest,
     PrepareSendPaymentRequest,
     PrepareSendPaymentResponse,
+    ReceivePaymentMethod,
+    ReceivePaymentRequest,
     SendPaymentMethod,
     SendPaymentRequest,
 )
@@ -93,3 +95,64 @@ async def send_payment_cross_chain(
         logging.error(error)
         raise
     # ANCHOR_END: cross-chain-send
+
+
+async def get_cross_chain_receive_routes(sdk: BreezSdk):
+    # ANCHOR: cross-chain-get-receive-routes
+    try:
+        routes = await sdk.get_cross_chain_routes(
+            filter=CrossChainRouteFilter.RECEIVE(contract_address=None)
+        )
+
+        for route in routes:
+            logging.debug(
+                f"Route via {route.provider}: {route.chain}/{route.asset} -> Spark"
+            )
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: cross-chain-get-receive-routes
+
+
+async def receive_payment_cross_chain(sdk: BreezSdk, route: CrossChainRoutePair):
+    # ANCHOR: cross-chain-receive
+    # With the default FeesExcluded mode, amount is the receiver's net target
+    # on Spark in destination-asset base units (sats for BTC, token base units
+    # for USDB). The SDK pads the sender's deposit to cover fees + overpay.
+    # With FeesIncluded, amount is the sender's deposit in source-asset units.
+    amount = 1_000
+    # Optionally set the destination Spark-side asset. None = auto: active
+    # stable-balance token if the route supports it, otherwise BTC.
+    optional_destination = None
+    # Optionally set the maximum slippage in basis points (10 to 500)
+    optional_max_slippage_bps = 100
+    # Optionally override the overpay buffer (0 to 500 bps). Defaults to 15.
+    optional_target_overpay_bps = None
+    # Optionally override the fee mode. Defaults to FeesExcluded.
+    optional_fee_mode = None
+    try:
+        request = ReceivePaymentRequest(
+            payment_method=ReceivePaymentMethod.CROSS_CHAIN(
+                route=route,
+                amount=amount,
+                destination=optional_destination,
+                fee_mode=optional_fee_mode,
+                max_slippage_bps=optional_max_slippage_bps,
+                target_overpay_bps=optional_target_overpay_bps,
+            )
+        )
+        response = await sdk.receive_payment(request=request)
+        logging.debug(f"Payment request: {response.payment_request}")
+        info = response.cross_chain_info
+        if info is not None:
+            logging.debug(f"Deposit address: {info.deposit_address}")
+            logging.debug(f"Deposit amount: {info.deposit_amount}")
+            denom = "USDB" if info.token_identifier else "BTC"
+            logging.debug(
+                f"Expected received: {info.expected_received_amount} {denom}"
+            )
+            logging.debug(f"Expires at: {info.expires_at}")
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: cross-chain-receive

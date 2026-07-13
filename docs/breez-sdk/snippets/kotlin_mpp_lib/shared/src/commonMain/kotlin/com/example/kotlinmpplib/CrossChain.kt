@@ -90,4 +90,72 @@ class CrossChain {
         }
         // ANCHOR_END: cross-chain-send
     }
+
+    suspend fun getCrossChainReceiveRoutes(sdk: BreezSdk) {
+        // ANCHOR: cross-chain-get-receive-routes
+        try {
+            val routes = sdk.getCrossChainRoutes(
+                CrossChainRouteFilter.Receive(contractAddress = null)
+            )
+
+            for (route in routes) {
+                // Log.v(
+                //   "Breez",
+                //   "Route via ${route.provider}: ${route.chain}/${route.asset} -> Spark"
+                // )
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: cross-chain-get-receive-routes
+    }
+
+    suspend fun receivePaymentCrossChain(sdk: BreezSdk, route: CrossChainRoutePair) {
+        // ANCHOR: cross-chain-receive
+        // With the default FeesExcluded mode, amount is the receiver's net
+        // target on Spark in destination-asset base units (sats for BTC,
+        // token base units for USDB). The SDK pads the sender's deposit to
+        // cover fees + overpay. With FeesIncluded, amount is the sender's
+        // deposit in source-asset units.
+        val amount = BigInteger.fromLong(1_000L)
+        // Optionally set the destination Spark-side asset. null = auto:
+        // active stable-balance token if the route supports it, otherwise BTC.
+        val optionalDestination: SparkAsset? = null
+        // Optionally set the maximum slippage in basis points (10 to 500)
+        val optionalMaxSlippageBps: UInt? = 100u
+        // Optionally override the overpay buffer (0 to 500 bps). Defaults to 15.
+        val optionalTargetOverpayBps: UInt? = null
+        // Optionally override the fee mode. Defaults to FeesExcluded.
+        val optionalFeeMode: CrossChainFeeMode? = null
+        try {
+            val req = ReceivePaymentRequest(
+                paymentMethod = ReceivePaymentMethod.CrossChain(
+                    route = route,
+                    amount = amount,
+                    destination = optionalDestination,
+                    feeMode = optionalFeeMode,
+                    maxSlippageBps = optionalMaxSlippageBps,
+                    targetOverpayBps = optionalTargetOverpayBps,
+                ),
+            )
+            val response = sdk.receivePayment(req)
+            val paymentRequest = response.paymentRequest
+            // Log.v("Breez", "Payment request: $paymentRequest")
+            val info = response.crossChainInfo
+            if (info != null) {
+                val depositAddress = info.depositAddress
+                val depositAmount = info.depositAmount
+                val expected = info.expectedReceivedAmount
+                val denom = if (info.tokenIdentifier != null) "USDB" else "BTC"
+                val expiresAt = info.expiresAt
+                // Log.v("Breez", "Deposit address: $depositAddress")
+                // Log.v("Breez", "Deposit amount: $depositAmount")
+                // Log.v("Breez", "Expected received: $expected $denom")
+                // Log.v("Breez", "Expires at: $expiresAt")
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: cross-chain-receive
+    }
 }

@@ -85,3 +85,66 @@ async fn send_payment_cross_chain(
     // ANCHOR_END: cross-chain-send
     Ok(())
 }
+
+async fn get_cross_chain_receive_routes(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: cross-chain-get-receive-routes
+    let routes = sdk
+        .get_cross_chain_routes(&CrossChainRouteFilter::Receive {
+            contract_address: None,
+        })
+        .await?;
+
+    for route in &routes {
+        info!(
+            "Route via {:?}: {}/{} -> Spark",
+            route.provider, route.chain, route.asset
+        );
+    }
+    // ANCHOR_END: cross-chain-get-receive-routes
+    Ok(())
+}
+
+async fn receive_payment_cross_chain(sdk: &BreezSdk, route: CrossChainRoutePair) -> Result<()> {
+    // ANCHOR: cross-chain-receive
+    // With the default FeesExcluded mode, amount is the receiver's net target
+    // on Spark in destination-asset base units (sats for BTC, token base units
+    // for USDB). The SDK pads the sender's deposit to cover fees + overpay.
+    // With FeesIncluded, amount is the sender's deposit in source-asset units.
+    let amount = 1_000u128;
+    // Optionally set the destination Spark-side asset. None = auto: active
+    // stable-balance token if the route supports it, otherwise BTC.
+    let optional_destination: Option<SparkAsset> = None;
+    // Optionally set the maximum slippage in basis points (10 to 500)
+    let optional_max_slippage_bps = Some(100);
+    // Optionally override the overpay buffer (0 to 500 bps). Defaults to 15.
+    let optional_target_overpay_bps: Option<u32> = None;
+    // Optionally override the fee mode. Defaults to FeesExcluded.
+    let optional_fee_mode: Option<CrossChainFeeMode> = None;
+
+    let response = sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::CrossChain {
+                route,
+                amount,
+                destination: optional_destination,
+                fee_mode: optional_fee_mode,
+                max_slippage_bps: optional_max_slippage_bps,
+                target_overpay_bps: optional_target_overpay_bps,
+            },
+        })
+        .await?;
+
+    info!("Payment request: {}", response.payment_request);
+    if let Some(info) = response.cross_chain_info {
+        info!("Deposit address: {}", info.deposit_address);
+        info!("Deposit amount: {}", info.deposit_amount);
+        let denom = if info.token_identifier.is_some() { "USDB" } else { "BTC" };
+        info!(
+            "Expected received: {} {denom}",
+            info.expected_received_amount
+        );
+        info!("Expires at: {}", info.expires_at);
+    }
+    // ANCHOR_END: cross-chain-receive
+    Ok(())
+}

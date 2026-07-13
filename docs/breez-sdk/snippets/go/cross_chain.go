@@ -97,3 +97,74 @@ func SendPaymentCrossChain(
 	// ANCHOR_END: cross-chain-send
 	return &response, nil
 }
+
+func GetCrossChainReceiveRoutes(sdk *breez_sdk_spark.BreezSdk) ([]breez_sdk_spark.CrossChainRoutePair, error) {
+	// ANCHOR: cross-chain-get-receive-routes
+	filter := breez_sdk_spark.CrossChainRouteFilterReceive{ContractAddress: nil}
+	routes, err := sdk.GetCrossChainRoutes(filter)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, route := range routes {
+		log.Printf(
+			"Route via %v: %s/%s -> Spark",
+			route.Provider, route.Chain, route.Asset,
+		)
+	}
+	// ANCHOR_END: cross-chain-get-receive-routes
+	return routes, nil
+}
+
+func ReceivePaymentCrossChain(
+	sdk *breez_sdk_spark.BreezSdk,
+	route breez_sdk_spark.CrossChainRoutePair,
+) (*breez_sdk_spark.ReceivePaymentResponse, error) {
+	// ANCHOR: cross-chain-receive
+	// With the default FeesExcluded mode, amount is the receiver's net target
+	// on Spark in destination-asset base units (sats for BTC, token base units
+	// for USDB). The SDK pads the sender's deposit to cover fees + overpay.
+	// With FeesIncluded, amount is the sender's deposit in source-asset units.
+	amount := new(big.Int).SetInt64(1_000)
+	// Optionally set the destination Spark-side asset. nil = auto: active
+	// stable-balance token if the route supports it, otherwise BTC.
+	var optionalDestination *breez_sdk_spark.SparkAsset = nil
+	// Optionally set the maximum slippage in basis points (10 to 500)
+	optionalMaxSlippageBps := uint32(100)
+	// Optionally override the overpay buffer (0 to 500 bps). Defaults to 15.
+	var optionalTargetOverpayBps *uint32 = nil
+	// Optionally override the fee mode. Defaults to FeesExcluded.
+	var optionalFeeMode *breez_sdk_spark.CrossChainFeeMode = nil
+
+	request := breez_sdk_spark.ReceivePaymentRequest{
+		PaymentMethod: breez_sdk_spark.ReceivePaymentMethodCrossChain{
+			Route:             route,
+			Amount:            amount,
+			Destination:       optionalDestination,
+			FeeMode:           optionalFeeMode,
+			MaxSlippageBps:    &optionalMaxSlippageBps,
+			TargetOverpayBps:  optionalTargetOverpayBps,
+		},
+	}
+	response, err := sdk.ReceivePayment(request)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("Payment request: %s", response.PaymentRequest)
+	if info := response.CrossChainInfo; info != nil {
+		log.Printf("Deposit address: %s", info.DepositAddress)
+		log.Printf("Deposit amount: %v", info.DepositAmount)
+		denom := "BTC"
+		if info.TokenIdentifier != nil {
+			denom = "USDB"
+		}
+		log.Printf(
+			"Expected received: %v %s",
+			info.ExpectedReceivedAmount, denom,
+		)
+		log.Printf("Expires at: %d", info.ExpiresAt)
+	}
+	// ANCHOR_END: cross-chain-receive
+	return &response, nil
+}

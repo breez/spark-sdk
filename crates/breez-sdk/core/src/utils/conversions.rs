@@ -396,6 +396,7 @@ pub fn build_crosschain_conversion(
             chain,
             chain_id,
             asset,
+            asset_amount_in,
             estimated_out,
             delivered_amount,
             status,
@@ -403,16 +404,8 @@ pub fn build_crosschain_conversion(
             asset_decimals,
             asset_contract,
             ..
-        } => Some(Conversion {
-            provider: ConversionProvider::Orchestra,
-            status: status.clone(),
-            from: ConversionSide {
-                chain: from_side.chain,
-                asset: from_side.asset,
-                amount: source_payment.amount,
-                fee: 0,
-            },
-            to: ConversionSide {
+        } => {
+            let external_side = |amount| ConversionSide {
                 chain: ConversionChain::External {
                     name: chain.clone(),
                     chain_id: chain_id.clone(),
@@ -422,11 +415,34 @@ pub fn build_crosschain_conversion(
                     identifier: asset_contract.clone(),
                     decimals: *asset_decimals,
                 },
-                amount: delivered_amount.unwrap_or(*estimated_out),
+                amount,
                 fee: fee_amount.unwrap_or(0),
-            },
-            amount_adjustment: None,
-        }),
+            };
+            let spark_side = ConversionSide {
+                chain: from_side.chain,
+                asset: from_side.asset,
+                amount: source_payment.amount,
+                fee: 0,
+            };
+            // The payment row sits on the Spark side: on send it's the
+            // outgoing transfer (the from); on receive it's the inbound
+            // transfer (the to). `asset_amount_in` is the source-asset
+            // amount the sender deposited on receive.
+            let (from, to) = match source_payment.payment_type {
+                PaymentType::Send => (
+                    spark_side,
+                    external_side(delivered_amount.unwrap_or(*estimated_out)),
+                ),
+                PaymentType::Receive => (external_side(asset_amount_in.unwrap_or(0)), spark_side),
+            };
+            Some(Conversion {
+                provider: ConversionProvider::Orchestra,
+                status: status.clone(),
+                from,
+                to,
+                amount_adjustment: None,
+            })
+        }
         ConversionInfo::Boltz {
             chain,
             chain_id,
@@ -865,6 +881,61 @@ mod tests {
         // spread is exposed separately as `service_fee_amount`.
         assert_eq!(conv.to.fee, 500_000);
         assert_eq!(conv.to.asset.decimals, 6);
+    }
+
+    #[test]
+    fn orchestra_to_spark_on_receive() {
+        // Receive: external (USDC on base) → Spark (BTC sats).
+        // The payment row sits on the Spark side; its amount is what
+        // landed (= delivered_amount). The external side carries the
+        // source-asset deposit (asset_amount_in) and the fee.
+        let info = orchestra_info(ConversionStatus::Completed);
+        let mut payment = spark_payment("p1", PaymentType::Receive, 1_542, 0, info.clone());
+        // Patch payment.amount to delivered_amount for realism.
+        payment.amount = 1_542;
+        let info = if let ConversionInfo::Orchestra { .. } = &info {
+            ConversionInfo::Orchestra {
+                order_id: "ord_1".to_string(),
+                quote_id: "q_1".to_string(),
+                chain: "base".to_string(),
+                chain_id: Some("8453".to_string()),
+                asset: "USDC".to_string(),
+                recipient_address: "0x1234".to_string(),
+                asset_amount_in: Some(1_000_000),
+                estimated_out: 1_572,
+                delivered_amount: Some(1_542),
+                status: ConversionStatus::Completed,
+                fee_amount: Some(20_980),
+                service_fee_amount: Some(20_980),
+                service_fee_asset: Some("USDC".to_string()),
+                read_token: None,
+                asset_decimals: 6,
+                asset_contract: Some("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string()),
+            }
+        } else {
+            unreachable!()
+        };
+
+        let conv = build_crosschain_conversion(&info, &payment).unwrap();
+        assert_eq!(conv.provider, ConversionProvider::Orchestra);
+        assert_eq!(
+            conv.from.chain,
+            ConversionChain::External {
+                name: "base".to_string(),
+                chain_id: Some("8453".to_string()),
+            }
+        );
+        assert_eq!(conv.from.asset.ticker, "USDC");
+        assert_eq!(
+            conv.from.asset.identifier,
+            Some("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string())
+        );
+        assert_eq!(conv.from.amount, 1_000_000);
+        assert_eq!(conv.from.fee, 20_980);
+        assert_eq!(conv.to.chain, ConversionChain::Spark);
+        assert_eq!(conv.to.asset.ticker, "BTC");
+        assert_eq!(conv.to.amount, 1_542);
+        assert_eq!(conv.to.fee, 0);
     }
 
     #[test]

@@ -259,8 +259,8 @@ pub struct _CrossChainAddressDetails {
     pub amount: Option<u128>,
 }
 
-#[frb(mirror(SourceAsset))]
-pub enum _SourceAsset {
+#[frb(mirror(SparkAsset))]
+pub enum _SparkAsset {
     Bitcoin,
     Token { token_identifier: String },
 }
@@ -280,7 +280,16 @@ pub struct _CrossChainRoutePair {
     pub contract_address: Option<String>,
     pub decimals: u8,
     pub exact_out_eligible: bool,
-    pub supported_sources: Vec<SourceAsset>,
+    pub spark_assets: Vec<SparkAsset>,
+}
+
+#[frb(mirror(CrossChainReceiveInfo))]
+pub struct _CrossChainReceiveInfo {
+    pub deposit_address: String,
+    pub deposit_amount: u128,
+    pub expected_received_amount: u128,
+    pub token_identifier: Option<String>,
+    pub expires_at: u64,
 }
 
 #[frb(mirror(CrossChainProviderContext))]
@@ -670,6 +679,14 @@ pub enum _ReceivePaymentMethod {
         expiry_secs: Option<u32>,
         payment_hash: Option<String>,
     },
+    CrossChain {
+        route: CrossChainRoutePair,
+        amount: u128,
+        destination: Option<SparkAsset>,
+        fee_mode: Option<CrossChainFeeMode>,
+        max_slippage_bps: Option<u32>,
+        target_overpay_bps: Option<u32>,
+    },
 }
 
 #[frb(mirror(ReceivePaymentRequest))]
@@ -681,6 +698,7 @@ pub struct _ReceivePaymentRequest {
 pub struct _ReceivePaymentResponse {
     pub payment_request: String,
     pub fee: u128,
+    pub cross_chain_info: Option<CrossChainReceiveInfo>,
 }
 
 #[frb(mirror(RefundDepositRequest))]
