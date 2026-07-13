@@ -44,6 +44,8 @@ pub enum _SdkError {
     Signer(String),
     OptimizationAlreadyRunning,
     OptimizationCancelled,
+    InsufficientCpfpFunds { required_sat: u64 },
+    FundingUtxoConflict { txid: String, vout: u32 },
     Generic(String),
 }
 

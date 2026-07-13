@@ -1,6 +1,7 @@
 pub mod chain_service;
 pub mod errors;
 pub mod events;
+pub mod exit_signer;
 mod frb_generated;
 pub mod issuer;
 pub mod logger;
