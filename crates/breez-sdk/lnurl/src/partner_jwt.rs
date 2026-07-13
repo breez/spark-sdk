@@ -237,7 +237,10 @@ impl JwtCache {
                 (t.api_key == *api_key).then_some(t.exp)
             });
             let backoff = state.per_domain.entry(domain.clone()).or_default();
-            if let Some(token) = self.refetch(api_key, current_exp, backoff, now).await {
+            if let Some(token) = self
+                .refetch(Some(domain.as_str()), api_key, current_exp, backoff, now)
+                .await
+            {
                 if let Some(store) = &self.store {
                     store.store(domain, &token.token).await;
                 }
@@ -248,7 +251,7 @@ impl JwtCache {
         if let Some(default_key) = &self.default_key {
             let current_exp = self.default_token.read().await.as_ref().map(|t| t.exp);
             if let Some(token) = self
-                .refetch(default_key, current_exp, &mut state.default, now)
+                .refetch(None, default_key, current_exp, &mut state.default, now)
                 .await
             {
                 *self.default_token.write().await = Some(token);
@@ -262,6 +265,7 @@ impl JwtCache {
     /// existing one and try again later.
     async fn refetch(
         &self,
+        domain: Option<&str>,
         api_key: &str,
         current_exp: Option<u64>,
         backoff: &mut Backoff,
@@ -288,7 +292,8 @@ impl JwtCache {
                 })
             }
             Err(e) => {
-                warn!("could not fetch a partner JWT with api key '{api_key}': {e}");
+                let target = domain.unwrap_or("default key");
+                warn!("could not fetch a partner JWT for {target}: {e}");
                 backoff.next_retry = now.saturating_add(backoff_secs(backoff.attempt));
                 backoff.attempt = backoff.attempt.saturating_add(1);
                 None
