@@ -1498,3 +1498,78 @@ impl ExternalSparkSignerHandle {
             .map_err(spark_handle_js_err)
     }
 }
+
+#[wasm_bindgen(typescript_custom_section)]
+const CPFP_SIGNER_INTERFACE: &'static str = r#"export interface CpfpSigner {
+    signPsbt(psbtBytes: Uint8Array): Promise<Uint8Array>;
+}"#;
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(typescript_type = "CpfpSigner")]
+    pub type JsCpfpSigner;
+
+    #[wasm_bindgen(structural, method, js_name = "signPsbt", catch)]
+    pub fn sign_psbt(this: &JsCpfpSigner, psbt_bytes: Vec<u8>) -> Result<Promise, JsValue>;
+}
+
+pub struct WasmCpfpSigner {
+    inner: JsCpfpSigner,
+}
+
+// Wasm runs single-threaded, so the non-Send JS handle is safe to mark Send+Sync.
+unsafe impl Send for WasmCpfpSigner {}
+unsafe impl Sync for WasmCpfpSigner {}
+
+impl WasmCpfpSigner {
+    pub fn new(inner: JsCpfpSigner) -> Self {
+        Self { inner }
+    }
+}
+
+#[macros::async_trait]
+impl breez_sdk_spark::signer::CpfpSigner for WasmCpfpSigner {
+    async fn sign_psbt(
+        &self,
+        psbt_bytes: Vec<u8>,
+    ) -> Result<Vec<u8>, breez_sdk_spark::SignerError> {
+        let promise = self
+            .inner
+            .sign_psbt(psbt_bytes)
+            .map_err(|e| breez_sdk_spark::SignerError::Generic(format!("JS error: {e:?}")))?;
+        let future = wasm_bindgen_futures::JsFuture::from(promise);
+        let result = future
+            .await
+            .map_err(|e| breez_sdk_spark::SignerError::Generic(format!("JS error: {e:?}")))?;
+        let bytes: Vec<u8> = serde_wasm_bindgen::from_value(result).map_err(|e| {
+            breez_sdk_spark::SignerError::Generic(format!("Failed to deserialize signed PSBT: {e}"))
+        })?;
+        Ok(bytes)
+    }
+}
+
+/// A CPFP signer matching the `CpfpSigner` TypeScript interface.
+#[wasm_bindgen]
+pub struct DefaultCpfpSigner {
+    pub(crate) inner: std::sync::Arc<dyn breez_sdk_spark::signer::CpfpSigner>,
+}
+
+unsafe impl Send for DefaultCpfpSigner {}
+unsafe impl Sync for DefaultCpfpSigner {}
+
+impl DefaultCpfpSigner {
+    pub fn new(inner: std::sync::Arc<dyn breez_sdk_spark::signer::CpfpSigner>) -> Self {
+        Self { inner }
+    }
+}
+
+#[wasm_bindgen]
+impl DefaultCpfpSigner {
+    #[wasm_bindgen(js_name = "signPsbt")]
+    pub async fn sign_psbt(&self, psbt_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        self.inner
+            .sign_psbt(psbt_bytes)
+            .await
+            .map_err(|e| JsValue::from_str(&format!("{e:?}")))
+    }
+}

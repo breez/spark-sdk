@@ -757,6 +757,118 @@ pub struct ExternalInputParser {
     pub parser_url: String,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CpfpInput)]
+pub enum CpfpInput {
+    P2wpkh {
+        txid: String,
+        vout: u32,
+        value: u64,
+        pubkey: String,
+    },
+    P2tr {
+        txid: String,
+        vout: u32,
+        value: u64,
+        pubkey: String,
+    },
+    Custom {
+        txid: String,
+        vout: u32,
+        value: u64,
+        script_pubkey_hex: String,
+        signed_input_weight: u64,
+    },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CpfpFundingKind)]
+pub enum CpfpFundingKind {
+    P2wpkh,
+    P2tr,
+    Custom {
+        script_pubkey_hex: String,
+        signed_input_weight: u64,
+    },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ExitLeafSelection)]
+pub enum ExitLeafSelection {
+    Auto,
+    Specific { leaf_ids: Vec<String> },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitTxKind)]
+pub enum UnilateralExitTxKind {
+    FanOut,
+    Node,
+    Refund,
+    Sweep,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConfirmationStatus)]
+pub enum ConfirmationStatus {
+    Confirmed,
+    Unconfirmed,
+    Unverified,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitTransaction)]
+pub struct UnilateralExitTransaction {
+    pub kind: UnilateralExitTxKind,
+    pub node_id: Option<String>,
+    pub txid: String,
+    pub tx_hex: String,
+    pub cpfp_tx_hex: Option<String>,
+    pub csv_timelock_blocks: Option<u32>,
+    pub depends_on: Vec<String>,
+    pub status: ConfirmationStatus,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitLeaf)]
+pub struct UnilateralExitLeaf {
+    pub leaf_id: String,
+    pub value: u64,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PerBranchFunding)]
+pub struct PerBranchFunding {
+    pub leaf_id: String,
+    pub funding_sat: u64,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareUnilateralExitRequest)]
+pub struct PrepareUnilateralExitRequest {
+    pub fee_rate_sat_per_vbyte: u64,
+    pub funding_kind: CpfpFundingKind,
+    pub destination: String,
+    pub selection: ExitLeafSelection,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareUnilateralExitResponse)]
+pub struct PrepareUnilateralExitResponse {
+    pub leaves: Vec<UnilateralExitLeaf>,
+    pub recoverable_value_sat: u64,
+    pub total_fee_sat: u64,
+    pub fanout_fee_sat: u64,
+    pub single_utxo_funding_sat: u64,
+    pub per_branch_funding: Vec<PerBranchFunding>,
+    pub fee_rate_sat_per_vbyte: u64,
+    pub destination: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitRequest)]
+pub struct UnilateralExitRequest {
+    pub prepared: PrepareUnilateralExitResponse,
+    pub funding_inputs: Vec<CpfpInput>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitResponse)]
+pub struct UnilateralExitResponse {
+    pub recoverable_value_sat: u64,
+    pub total_fee_sat: u64,
+    pub leaves: Vec<UnilateralExitLeaf>,
+    pub transactions: Vec<UnilateralExitTransaction>,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Credentials)]
 pub struct Credentials {
     pub username: String,
