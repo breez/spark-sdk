@@ -23,6 +23,7 @@ mod sdk_building;
 mod send_payment;
 mod tokens;
 mod turnkey;
+mod unilateral_exit;
 mod user_settings;
 mod webhooks;
 
