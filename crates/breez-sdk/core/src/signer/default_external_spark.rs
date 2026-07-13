@@ -174,6 +174,20 @@ impl ExternalSparkSigner for DefaultExternalSparkSigner {
         Ok(EcdsaSignatureBytes::from_signature(&sig))
     }
 
+    async fn sign_leaf_refund_spend(
+        &self,
+        leaf_id: ExternalTreeNodeId,
+        sighash: Vec<u8>,
+    ) -> Result<SchnorrSignatureBytes, SignerError> {
+        let id = leaf_id.to_tree_node_id().map_err(err)?;
+        let sig = self
+            .inner
+            .sign_leaf_refund_spend(&id, &sighash)
+            .await
+            .map_err(err)?;
+        Ok(SchnorrSignatureBytes::from_signature(&sig))
+    }
+
     async fn sign_frost(
         &self,
         jobs: Vec<ExternalFrostJob>,

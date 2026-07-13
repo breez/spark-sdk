@@ -210,6 +210,17 @@ impl SparkSigner for SparkSignerAdapter {
             .await
     }
 
+    async fn sign_leaf_refund_spend(
+        &self,
+        leaf_id: &crate::tree::TreeNodeId,
+        sighash: &[u8],
+    ) -> Result<bitcoin::secp256k1::schnorr::Signature, SignerError> {
+        let secret = SecretSource::Derived(signing_path(leaf_id)?);
+        self.signer
+            .sign_hash_schnorr_with_tweak(&secret, sighash, None)
+            .await
+    }
+
     async fn sign_authentication_challenge(
         &self,
         challenge: &[u8],

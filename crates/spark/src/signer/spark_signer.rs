@@ -359,6 +359,14 @@ pub trait SparkSigner: Send + Sync + 'static {
     /// separately from session authentication.
     async fn sign_message(&self, message: &[u8]) -> Result<ecdsa::Signature, SignerError>;
 
+    /// Schnorr-sign `sighash` to spend a tree leaf's P2TR refund output as a
+    /// BIP341 key-path spend, with the leaf key as sole signer.
+    async fn sign_leaf_refund_spend(
+        &self,
+        leaf_id: &TreeNodeId,
+        sighash: &[u8],
+    ) -> Result<schnorr::Signature, SignerError>;
+
     /// Produce FROST shares for a batch of jobs (maps to `SPARK_SIGN_FROST`).
     /// Used directly by deposit tree creation, transfer/coop-exit refund
     /// signing, timelock renewal, static-deposit refund, lightning send, and

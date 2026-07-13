@@ -1026,6 +1026,22 @@ impl breez_sdk_spark::signer::ExternalSparkSigner for WasmExternalSparkSigner {
         Ok(v.into())
     }
 
+    async fn sign_leaf_refund_spend(
+        &self,
+        leaf_id: core_types::ExternalTreeNodeId,
+        sighash: Vec<u8>,
+    ) -> Result<core_types::SchnorrSignatureBytes, SignerError> {
+        let wasm_leaf: ExternalTreeNodeId = leaf_id.into();
+        let promise = self
+            .inner
+            .sign_leaf_refund_spend(wasm_leaf, sighash)
+            .map_err(spark_js_err)?;
+        let result = JsFuture::from(promise).await.map_err(spark_js_err)?;
+        let v: SchnorrSignatureBytes =
+            serde_wasm_bindgen::from_value(result).map_err(spark_de_err)?;
+        Ok(v.into())
+    }
+
     async fn sign_frost(
         &self,
         jobs: Vec<core_spark::ExternalFrostJob>,
@@ -1214,6 +1230,13 @@ extern "C" {
     #[wasm_bindgen(structural, method, js_name = "signMessage", catch)]
     pub fn sign_message(this: &JsExternalSparkSigner, message: Vec<u8>)
     -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "signLeafRefundSpend", catch)]
+    pub fn sign_leaf_refund_spend(
+        this: &JsExternalSparkSigner,
+        leaf_id: ExternalTreeNodeId,
+        sighash: Vec<u8>,
+    ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "signFrost", catch)]
     pub fn sign_frost(this: &JsExternalSparkSigner, jobs: JsValue) -> Result<Promise, JsValue>;

@@ -20,6 +20,7 @@ use super::external_spark_types::{
 };
 use super::external_types::{
     EcdsaSignatureBytes, ExternalFrostSignature, ExternalTreeNodeId, PublicKeyBytes,
+    SchnorrSignatureBytes,
 };
 
 /// FFI-compatible mirror of `spark_wallet::SparkSigner`.
@@ -60,6 +61,14 @@ pub trait ExternalSparkSigner: Send + Sync {
 
     /// ECDSA-sign an arbitrary user message with the identity key.
     async fn sign_message(&self, message: Vec<u8>) -> Result<EcdsaSignatureBytes, SignerError>;
+
+    /// Schnorr-sign `sighash` to spend a tree leaf's P2TR refund output as a
+    /// BIP341 key-path spend (empty script tree).
+    async fn sign_leaf_refund_spend(
+        &self,
+        leaf_id: ExternalTreeNodeId,
+        sighash: Vec<u8>,
+    ) -> Result<SchnorrSignatureBytes, SignerError>;
 
     /// Produce FROST shares for a batch of jobs.
     async fn sign_frost(

@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use bitcoin::secp256k1::{PublicKey, ecdsa};
+use bitcoin::secp256k1::{PublicKey, ecdsa, schnorr};
 use spark_wallet::{
     FrostJob, FrostShareResult, PrepareClaimRequest, PrepareLightningReceiveRequest,
     PrepareStaticDepositClaimRequest, PrepareStaticDepositRequest, PrepareTokenTransactionRequest,
@@ -94,6 +94,20 @@ impl spark_wallet::SparkSigner for ExternalSparkSignerAdapter {
     async fn sign_message(&self, message: &[u8]) -> Result<ecdsa::Signature, SignerError> {
         self.inner
             .sign_message(message.to_vec())
+            .await
+            .map_err(to_spark_err)?
+            .to_signature()
+            .map_err(to_spark_err)
+    }
+
+    async fn sign_leaf_refund_spend(
+        &self,
+        leaf_id: &TreeNodeId,
+        sighash: &[u8],
+    ) -> Result<schnorr::Signature, SignerError> {
+        let ext = ExternalTreeNodeId::from_tree_node_id(leaf_id).map_err(to_spark_err)?;
+        self.inner
+            .sign_leaf_refund_spend(ext, sighash.to_vec())
             .await
             .map_err(to_spark_err)?
             .to_signature()
