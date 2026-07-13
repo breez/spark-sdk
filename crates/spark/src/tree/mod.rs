@@ -253,7 +253,7 @@ impl TreeNode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct TreeNodeId(String);
 
 impl TreeNodeId {
@@ -834,6 +834,15 @@ pub trait TreeService: Send + Sync {
     /// # }
     /// ```
     async fn list_leaves(&self) -> Result<Leaves, TreeServiceError>;
+
+    /// Fetches specific tree nodes by ID from the operators, optionally
+    /// including each node's ancestors up to the root. Used by unilateral exit
+    /// to source the full exit chain for a set of leaves.
+    async fn fetch_nodes(
+        &self,
+        node_ids: &[TreeNodeId],
+        include_parents: bool,
+    ) -> Result<Vec<TreeNode>, TreeServiceError>;
 
     /// Refreshes the tree state by fetching the latest leaves from the server.
     ///
