@@ -1,3 +1,4 @@
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 
@@ -71,6 +72,89 @@ pub struct TransferService {
     split_secret_threshold: u32,
     operator_pool: Arc<OperatorPool>,
     transfer_observer: Option<Arc<dyn TransferObserver>>,
+    claim_locks: ClaimLocks,
+}
+
+/// One lock per transfer being claimed. Callers may drive claims for the same
+/// transfer from several concurrent tasks; without the lock, each of those would
+/// submit its own claim and race the others at the coordinator.
+#[derive(Default)]
+struct ClaimLocks {
+    locks: Mutex<HashMap<TransferId, ClaimLockEntry>>,
+}
+
+/// A transfer's claim lock, and how many claims are holding it. The count is tracked
+/// rather than read back off the `Arc`, so that every change to it happens under
+/// `ClaimLocks::locks`: a handle's `Arc` is released after its guard's `Drop` has
+/// already let that mutex go, so its strong count is not a sound thing to reason with.
+struct ClaimLockEntry {
+    lock: Arc<tokio::sync::Mutex<()>>,
+    holders: usize,
+}
+
+impl ClaimLocks {
+    /// Locks the registry, recovering from poisoning. The map is consistent at every
+    /// point a panic could escape the critical sections, and `release` runs from a
+    /// `Drop` impl, where propagating the poison panic would abort the process if it
+    /// happened during unwinding.
+    fn locked(&self) -> MutexGuard<'_, HashMap<TransferId, ClaimLockEntry>> {
+        self.locks.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Takes a handle on the claim lock for `transfer_id`, creating it if no claim
+    /// holds one. The handle releases it on drop.
+    fn acquire(&self, transfer_id: &TransferId) -> ClaimLockGuard<'_> {
+        let mut locks = self.locked();
+        let entry = locks
+            .entry(transfer_id.clone())
+            .or_insert_with(|| ClaimLockEntry {
+                lock: Arc::new(tokio::sync::Mutex::new(())),
+                holders: 0,
+            });
+        entry.holders += 1;
+
+        ClaimLockGuard {
+            claim_locks: self,
+            transfer_id: transfer_id.clone(),
+            lock: Arc::clone(&entry.lock),
+        }
+    }
+
+    /// Drops the claim lock for `transfer_id` once no claim still holds it, so the map
+    /// does not grow without bound.
+    ///
+    /// Dropping it while another claim is still waiting on it would leave that claim
+    /// blocked on a lock no new arrival can find, letting two claims for the same
+    /// transfer run at once.
+    fn release(&self, transfer_id: &TransferId) {
+        let mut locks = self.locked();
+        let Some(entry) = locks.get_mut(transfer_id) else {
+            return;
+        };
+        entry.holders -= 1;
+        if entry.holders == 0 {
+            locks.remove(transfer_id);
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.locked().len()
+    }
+}
+
+/// A claim's handle on a transfer's claim lock. Releasing on drop covers the claim
+/// being cancelled as well as it running to completion.
+struct ClaimLockGuard<'a> {
+    claim_locks: &'a ClaimLocks,
+    transfer_id: TransferId,
+    lock: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl Drop for ClaimLockGuard<'_> {
+    fn drop(&mut self) {
+        self.claim_locks.release(&self.transfer_id);
+    }
 }
 
 impl TransferService {
@@ -87,6 +171,7 @@ impl TransferService {
             split_secret_threshold,
             operator_pool,
             transfer_observer,
+            claim_locks: ClaimLocks::default(),
         }
     }
 
@@ -485,10 +570,56 @@ impl TransferService {
 
     /// Claims a transfer with retry logic and automatic leaf preparation.
     ///
-    /// Returns the claimed leaves on success. If a concurrent instance of this
-    /// wallet wins the race and finalizes the transfer, the coordinator's finalized
-    /// leaves are returned uniformly — callers do not need to distinguish this case.
+    /// Returns the claimed leaves on success. If another claim for this transfer
+    /// wins the race and finalizes it, whether from this wallet or a concurrent
+    /// instance of it, the coordinator's finalized leaves are returned uniformly:
+    /// callers do not need to distinguish this case.
     pub async fn claim_transfer(
+        &self,
+        transfer: &Transfer,
+        config: Option<ClaimTransferConfig>,
+    ) -> Result<Vec<TreeNode>, ServiceError> {
+        let claim_lock = self.claim_locks.acquire(&transfer.id);
+        self.claim_transfer_locked(&claim_lock, transfer, config)
+            .await
+    }
+
+    /// Claims a transfer while holding its claim lock.
+    ///
+    /// If a claim for this transfer is already in flight, waits for it and takes its
+    /// outcome instead of submitting a competing one: two claims for the same
+    /// transfer race at the coordinator, and the loser wastes a full verify / sign /
+    /// finalize round before failing.
+    async fn claim_transfer_locked(
+        &self,
+        claim_lock: &ClaimLockGuard<'_>,
+        transfer: &Transfer,
+        config: Option<ClaimTransferConfig>,
+    ) -> Result<Vec<TreeNode>, ServiceError> {
+        let _permit = match claim_lock.lock.try_lock() {
+            Ok(permit) => permit,
+            Err(_) => {
+                debug!(
+                    "Claim already in flight for transfer {}, waiting for it",
+                    transfer.id
+                );
+                let permit = claim_lock.lock.lock().await;
+                if let Some(leaves) = self.finalized_leaves_if_already_claimed(&transfer.id).await {
+                    return Ok(leaves);
+                }
+                // The claim we waited for did not finalize the transfer, so claim it
+                // ourselves while holding the lock.
+                permit
+            }
+        };
+
+        // Boxed to keep the retry loop's large future out of the size of every
+        // future that awaits a claim.
+        Box::pin(self.claim_transfer_with_retries(transfer, config)).await
+    }
+
+    /// Claims a transfer, retrying on failure with exponential backoff.
+    async fn claim_transfer_with_retries(
         &self,
         transfer: &Transfer,
         config: Option<ClaimTransferConfig>,
@@ -517,7 +648,7 @@ impl TransferService {
                 Err(e) => {
                     error!("Failed to claim transfer: {}", e);
                     // A concurrent instance of this wallet may have finalized the
-                    // transfer — if so, use its leaves instead of retrying.
+                    // transfer. If so, use its leaves instead of retrying.
                     if let Some(leaves) =
                         self.finalized_leaves_if_already_claimed(&transfer.id).await
                     {
@@ -540,10 +671,11 @@ impl TransferService {
     }
 
     /// If the transfer is `Completed` on the coordinator, returns its finalized
-    /// leaves. Used after a failed claim attempt to detect that another instance
-    /// of this wallet already finalized the claim concurrently.
+    /// leaves. Lets a claim that lost to a concurrent one, whether an in-process
+    /// claim it waited on via `ClaimLocks` or one from another instance of this
+    /// wallet, adopt the finalized result instead of resubmitting.
     ///
-    /// A failed coordinator query is non-fatal here — it's logged and treated as
+    /// A failed coordinator query is non-fatal here: it's logged and treated as
     /// "not completed" so the caller falls through to its normal error handling.
     async fn finalized_leaves_if_already_claimed(
         &self,
@@ -558,7 +690,7 @@ impl TransferService {
             }
         };
         debug!(
-            "Transfer {transfer_id} already claimed by another instance; using coordinator's finalized leaves"
+            "Transfer {transfer_id} already claimed concurrently; using coordinator's finalized leaves"
         );
         let our_pubkey = self.spark_signer.get_identity_public_key().await.ok()?;
         let leaves: Vec<TreeNode> = completed
@@ -1131,5 +1263,101 @@ impl TransferService {
             }
             None => Ok(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ClaimLocks, TransferId};
+
+    #[test]
+    fn claim_lock_serializes_claims_for_the_same_transfer() {
+        let claim_locks = ClaimLocks::default();
+        let transfer = TransferId::generate();
+
+        let claiming = claim_locks.acquire(&transfer);
+        let permit = claiming
+            .lock
+            .try_lock()
+            .expect("first claim should take the lock");
+
+        // A second trigger for the same transfer finds the claim in flight, so it
+        // waits for it rather than submitting a competing claim.
+        let contending = claim_locks.acquire(&transfer);
+        assert!(
+            contending.lock.try_lock().is_err(),
+            "a claim for a transfer already being claimed must not proceed"
+        );
+
+        // An unrelated transfer is unaffected.
+        let other = TransferId::generate();
+        assert!(
+            claim_locks.acquire(&other).lock.try_lock().is_ok(),
+            "an unrelated transfer should still be claimable"
+        );
+
+        // Once the in-flight claim finishes, the next trigger can claim again. This
+        // is what lets a failed claim be retried.
+        drop(permit);
+        assert!(
+            contending.lock.try_lock().is_ok(),
+            "the lock must be reusable once the in-flight claim finishes"
+        );
+    }
+
+    #[test]
+    fn claim_lock_is_released_only_once_no_claim_holds_it() {
+        let claim_locks = ClaimLocks::default();
+        let transfer = TransferId::generate();
+
+        let claiming = claim_locks.acquire(&transfer);
+        let waiter = claim_locks.acquire(&transfer);
+        assert_eq!(claim_locks.len(), 1);
+
+        // A claim finishing while another still holds the lock must leave it in place,
+        // otherwise the waiter would serialize against a lock nobody else can see and
+        // the coalescing would silently stop working.
+        drop(claiming);
+        assert_eq!(claim_locks.len(), 1, "lock dropped while still in use");
+
+        // The last claim to finish drops it, so the map does not grow without bound.
+        drop(waiter);
+        assert_eq!(claim_locks.len(), 0, "lock outlived the last claim");
+    }
+
+    #[test]
+    fn claim_lock_is_released_when_holders_finish_together() {
+        let claim_locks = ClaimLocks::default();
+        let transfer = TransferId::generate();
+
+        let first = claim_locks.acquire(&transfer);
+        let second = claim_locks.acquire(&transfer);
+        assert_eq!(claim_locks.len(), 1);
+
+        // Two claims finishing at once must still hand the lock back. Inferring the
+        // holder count from the Arc cannot see this: each guard releases its reference
+        // after it has already stopped looking at the map, so both can believe the other
+        // is still holding on and neither cleans up.
+        drop((first, second));
+
+        assert_eq!(
+            claim_locks.len(),
+            0,
+            "concurrent claims finishing together stranded their lock"
+        );
+    }
+
+    #[test]
+    fn cancelled_claim_releases_its_lock() {
+        let claim_locks = ClaimLocks::default();
+        let transfer = TransferId::generate();
+
+        // A claim's future can be dropped before it finishes. Releasing on drop is
+        // what keeps the map from growing for the lifetime of the service.
+        let cancelled = claim_locks.acquire(&transfer);
+        assert_eq!(claim_locks.len(), 1);
+        drop(cancelled);
+
+        assert_eq!(claim_locks.len(), 0, "a cancelled claim stranded its lock");
     }
 }
