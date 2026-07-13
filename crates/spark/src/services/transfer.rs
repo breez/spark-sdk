@@ -1,5 +1,8 @@
 use std::time::Duration;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
+};
 
 use crate::Network;
 use crate::address::SparkAddress;
@@ -71,6 +74,53 @@ pub struct TransferService {
     split_secret_threshold: u32,
     operator_pool: Arc<OperatorPool>,
     transfer_observer: Option<Arc<dyn TransferObserver>>,
+    /// Transfers with an in-flight claim. The wallet drives claims from several
+    /// unsynchronized triggers (incoming-transfer event, stream reconnect,
+    /// periodic sync, explicit API call, and counter-swap), which can otherwise
+    /// submit identical claims for the same transfer concurrently and race each
+    /// other at the coordinator. This coalesces them onto a single claim per
+    /// transfer.
+    claims_in_flight: ClaimsInFlight,
+}
+
+/// Set of transfers with an in-flight claim, used to coalesce the wallet's
+/// unsynchronized claim triggers onto a single submission per transfer. The
+/// mutex is only ever held for the insert/remove, never across an await.
+#[derive(Default)]
+struct ClaimsInFlight {
+    ids: Mutex<HashSet<TransferId>>,
+}
+
+impl ClaimsInFlight {
+    /// Reserves a claim slot for `transfer_id`. Returns `Some(guard)` if no
+    /// claim was in flight — the guard releases the slot on drop — or `None`
+    /// if one already is, in which case the caller should skip.
+    fn begin(&self, transfer_id: &TransferId) -> Option<ClaimInFlightGuard<'_>> {
+        let mut ids = self.ids.lock().expect("claims_in_flight mutex poisoned");
+        if ids.insert(transfer_id.clone()) {
+            Some(ClaimInFlightGuard {
+                claims: self,
+                transfer_id: transfer_id.clone(),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+/// Releases the reserved slot in [`ClaimsInFlight`] on drop, so a claim that
+/// fails (or panics) frees its slot and can be retried by a later trigger.
+struct ClaimInFlightGuard<'a> {
+    claims: &'a ClaimsInFlight,
+    transfer_id: TransferId,
+}
+
+impl Drop for ClaimInFlightGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut ids) = self.claims.ids.lock() {
+            ids.remove(&self.transfer_id);
+        }
+    }
 }
 
 impl TransferService {
@@ -87,6 +137,7 @@ impl TransferService {
             split_secret_threshold,
             operator_pool,
             transfer_observer,
+            claims_in_flight: ClaimsInFlight::default(),
         }
     }
 
@@ -488,11 +539,24 @@ impl TransferService {
     /// Returns the claimed leaves on success. If a concurrent instance of this
     /// wallet wins the race and finalizes the transfer, the coordinator's finalized
     /// leaves are returned uniformly — callers do not need to distinguish this case.
+    ///
+    /// Single-flight: if another trigger is already claiming this transfer, the
+    /// duplicate call returns `Ok(vec![])` without submitting. The in-flight
+    /// claim finalizes the transfer; if it fails, its guard is released and the
+    /// next periodic sync / reconnect retries.
     pub async fn claim_transfer(
         &self,
         transfer: &Transfer,
         config: Option<ClaimTransferConfig>,
     ) -> Result<Vec<TreeNode>, ServiceError> {
+        let Some(_in_flight_guard) = self.claims_in_flight.begin(&transfer.id) else {
+            debug!(
+                "Claim already in flight for transfer {}, skipping duplicate",
+                transfer.id
+            );
+            return Ok(Vec::new());
+        };
+
         let config = config.unwrap_or_default();
 
         let mut retry_count = 0;
@@ -1131,5 +1195,36 @@ impl TransferService {
             }
             None => Ok(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ClaimsInFlight, TransferId};
+
+    #[test]
+    fn claims_in_flight_is_single_flight_per_transfer() {
+        let claims = ClaimsInFlight::default();
+        let id = TransferId::generate();
+
+        let guard = claims.begin(&id);
+        assert!(guard.is_some(), "first claim should reserve the slot");
+        assert!(
+            claims.begin(&id).is_none(),
+            "a second claim for the same transfer while one is in flight must be skipped"
+        );
+
+        // A different transfer is unaffected by an in-flight claim.
+        let other = TransferId::generate();
+        assert!(
+            claims.begin(&other).is_some(),
+            "an unrelated transfer should still be claimable"
+        );
+
+        drop(guard);
+        assert!(
+            claims.begin(&id).is_some(),
+            "the slot must be reusable once the in-flight guard is dropped"
+        );
     }
 }
