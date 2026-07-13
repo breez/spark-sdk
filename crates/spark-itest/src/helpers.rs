@@ -1,8 +1,15 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
-use bitcoin::Amount;
+use anyhow::{Result, bail};
+use bitcoin::{
+    Address, Amount, CompressedPublicKey, OutPoint, Psbt, Transaction, TxOut, Witness,
+    ecdsa::Signature as EcdsaSignature,
+    hashes::Hash as _,
+    key::{Secp256k1, TapTweak as _},
+    secp256k1::SecretKey,
+    sighash::{self, SighashCache},
+};
 use rand::Rng;
 use rstest::*;
 use spark_mysql::{
@@ -12,8 +19,8 @@ use spark_postgres::{
     PostgresSessionStore, PostgresTokenStore, PostgresTreeStore, default_postgres_storage_config,
 };
 use spark_wallet::{
-    DefaultSigner, Network, SessionStore, Signer, SparkSigner, SparkSignerAdapter, SparkWallet,
-    SparkWalletConfig, WalletBuilder, WalletEvent,
+    CpfpInput, DefaultSigner, Network, SessionStore, Signer, SparkSigner, SparkSignerAdapter,
+    SparkWallet, SparkWalletConfig, WalletBuilder, WalletEvent, is_ephemeral_anchor_output,
 };
 use tokio::sync::broadcast::Receiver;
 use tracing::{debug, info};
@@ -417,4 +424,304 @@ where
 
         tokio::time::sleep(poll_interval).await;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Unilateral exit test helpers: fund regtest CPFP UTXOs, sign CPFP PSBTs, and
+// submit parent+child packages.
+// ---------------------------------------------------------------------------
+
+/// A funded regtest UTXO ready for use as a CPFP input.
+pub struct FundedUtxo {
+    pub secret_key: SecretKey,
+    pub outpoint: OutPoint,
+    pub witness_utxo: TxOut,
+    pub address: Address,
+}
+
+/// Fund a new P2TR address from bitcoind and return the UTXO details.
+pub async fn fund_p2tr_utxo(bitcoind: &BitcoindFixture, amount: Amount) -> Result<FundedUtxo> {
+    fund_p2tr_utxo_with_key(bitcoind, amount, &SecretKey::new(&mut rand::thread_rng())).await
+}
+
+/// Fund a new P2TR address but leave the funding transaction unconfirmed in the
+/// mempool (no block mined).
+pub async fn fund_p2tr_utxo_unmined(
+    bitcoind: &BitcoindFixture,
+    amount: Amount,
+) -> Result<FundedUtxo> {
+    let secp = Secp256k1::new();
+    let secret_key = SecretKey::new(&mut rand::thread_rng());
+    let pubkey = secret_key.public_key(&secp);
+    let (xonly, _) = pubkey.x_only_public_key();
+    let address = Address::p2tr(&secp, xonly, None, bitcoin::Network::Regtest);
+
+    let txid = bitcoind.fund_address(&address, amount).await?;
+    let tx = bitcoind.get_transaction(&txid).await?;
+    let vout = tx
+        .output
+        .iter()
+        .position(|o| o.script_pubkey == address.script_pubkey())
+        .expect("P2TR output not found") as u32;
+
+    Ok(FundedUtxo {
+        secret_key,
+        outpoint: OutPoint { txid, vout },
+        witness_utxo: TxOut {
+            value: amount,
+            script_pubkey: address.script_pubkey(),
+        },
+        address,
+    })
+}
+
+/// Fund a P2TR address for a caller-supplied key.
+pub async fn fund_p2tr_utxo_with_key(
+    bitcoind: &BitcoindFixture,
+    amount: Amount,
+    secret_key: &SecretKey,
+) -> Result<FundedUtxo> {
+    let secp = Secp256k1::new();
+    let pubkey = secret_key.public_key(&secp);
+    let (xonly, _) = pubkey.x_only_public_key();
+    let address = Address::p2tr(&secp, xonly, None, bitcoin::Network::Regtest);
+
+    let txid = bitcoind.fund_address(&address, amount).await?;
+    bitcoind.generate_blocks(1).await?;
+    bitcoind.wait_for_tx_confirmation(&txid, 1).await?;
+
+    let tx = bitcoind.get_transaction(&txid).await?;
+    let vout = tx
+        .output
+        .iter()
+        .position(|o| o.script_pubkey == address.script_pubkey())
+        .expect("P2TR output not found") as u32;
+
+    Ok(FundedUtxo {
+        secret_key: *secret_key,
+        outpoint: OutPoint { txid, vout },
+        witness_utxo: TxOut {
+            value: amount,
+            script_pubkey: address.script_pubkey(),
+        },
+        address,
+    })
+}
+
+/// Fund a new P2WPKH address from bitcoind and return the UTXO details.
+pub async fn fund_p2wpkh_utxo(bitcoind: &BitcoindFixture, amount: Amount) -> Result<FundedUtxo> {
+    fund_p2wpkh_utxo_with_key(bitcoind, amount, &SecretKey::new(&mut rand::thread_rng())).await
+}
+
+/// Fund a P2WPKH address for a caller-supplied key.
+pub async fn fund_p2wpkh_utxo_with_key(
+    bitcoind: &BitcoindFixture,
+    amount: Amount,
+    secret_key: &SecretKey,
+) -> Result<FundedUtxo> {
+    let secp = Secp256k1::new();
+    let pubkey = secret_key.public_key(&secp);
+    let compressed = CompressedPublicKey(pubkey);
+    let address = Address::p2wpkh(&compressed, bitcoin::Network::Regtest);
+
+    let txid = bitcoind.fund_address(&address, amount).await?;
+    bitcoind.generate_blocks(1).await?;
+    bitcoind.wait_for_tx_confirmation(&txid, 1).await?;
+
+    let tx = bitcoind.get_transaction(&txid).await?;
+    let vout = tx
+        .output
+        .iter()
+        .position(|o| o.script_pubkey == address.script_pubkey())
+        .expect("P2WPKH output not found") as u32;
+
+    Ok(FundedUtxo {
+        secret_key: *secret_key,
+        outpoint: OutPoint { txid, vout },
+        witness_utxo: TxOut {
+            value: amount,
+            script_pubkey: address.script_pubkey(),
+        },
+        address,
+    })
+}
+
+/// Build a `CpfpInput` from a funded UTXO with the given signed input weight.
+pub fn make_cpfp_input(utxo: &FundedUtxo, weight: u64) -> CpfpInput {
+    CpfpInput {
+        outpoint: utxo.outpoint,
+        witness_utxo: utxo.witness_utxo.clone(),
+        signed_input_weight: weight,
+    }
+}
+
+/// Finalize all ephemeral anchor inputs in a PSBT with an empty witness.
+fn finalize_anchor_inputs(psbt: &mut Psbt) {
+    for input in &mut psbt.inputs {
+        if let Some(ref tx_out) = input.witness_utxo
+            && is_ephemeral_anchor_output(tx_out)
+        {
+            input.final_script_witness = Some(Witness::new());
+        }
+    }
+}
+
+/// Sign a CPFP PSBT with P2TR external inputs, finalizing anchor + P2TR inputs.
+pub fn sign_cpfp_psbt_p2tr(psbt: &Psbt, secret_key: &SecretKey) -> Result<Transaction> {
+    let mut psbt = psbt.clone();
+    finalize_anchor_inputs(&mut psbt);
+
+    let secp = Secp256k1::new();
+    let keypair = bitcoin::key::Keypair::from_secret_key(&secp, secret_key)
+        .tap_tweak(&secp, None)
+        .to_keypair();
+
+    let prevouts: Vec<TxOut> = psbt
+        .inputs
+        .iter()
+        .map(|i| i.witness_utxo.clone().unwrap_or(TxOut::NULL))
+        .collect();
+    let prevouts_ref = sighash::Prevouts::All(&prevouts);
+
+    let taproot_indices: Vec<usize> = psbt
+        .inputs
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| {
+            i.final_script_witness.is_none()
+                && i.witness_utxo
+                    .as_ref()
+                    .is_some_and(|o| o.script_pubkey.is_p2tr())
+        })
+        .map(|(idx, _)| idx)
+        .collect();
+
+    let mut cache = SighashCache::new(&psbt.unsigned_tx);
+    for i in taproot_indices {
+        let sighash = cache.taproot_key_spend_signature_hash(
+            i,
+            &prevouts_ref,
+            sighash::TapSighashType::Default,
+        )?;
+        let msg = bitcoin::secp256k1::Message::from_digest(sighash.to_byte_array());
+        let schnorr_sig = secp.sign_schnorr_no_aux_rand(&msg, &keypair);
+        let tap_sig = bitcoin::taproot::Signature {
+            signature: schnorr_sig,
+            sighash_type: sighash::TapSighashType::Default,
+        };
+        let mut witness = Witness::new();
+        witness.push(tap_sig.to_vec());
+        psbt.inputs[i].final_script_witness = Some(witness);
+    }
+
+    Ok(psbt.extract_tx_unchecked_fee_rate())
+}
+
+/// Sign a CPFP PSBT with P2WPKH external inputs, finalizing anchor + P2WPKH inputs.
+pub fn sign_cpfp_psbt_p2wpkh(psbt: &Psbt, secret_key: &SecretKey) -> Result<Transaction> {
+    let mut psbt = psbt.clone();
+    finalize_anchor_inputs(&mut psbt);
+
+    let secp = Secp256k1::new();
+    let pubkey = secret_key.public_key(&secp);
+    let bitcoin_pubkey = bitcoin::PublicKey::new(pubkey);
+
+    let wpkh_indices: Vec<usize> = psbt
+        .inputs
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| {
+            i.final_script_witness.is_none()
+                && i.witness_utxo
+                    .as_ref()
+                    .is_some_and(|o| o.script_pubkey.is_p2wpkh())
+        })
+        .map(|(idx, _)| idx)
+        .collect();
+
+    let mut cache = SighashCache::new(&psbt.unsigned_tx);
+    for i in wpkh_indices {
+        let (msg, ecdsa_type) = psbt
+            .sighash_ecdsa(i, &mut cache)
+            .map_err(|e| anyhow::anyhow!("ECDSA sighash error: {e}"))?;
+        let sig = secp.sign_ecdsa(&msg, secret_key);
+        let signature = EcdsaSignature {
+            signature: sig,
+            sighash_type: ecdsa_type,
+        };
+        let mut witness = Witness::new();
+        witness.push(signature.to_vec());
+        witness.push(bitcoin_pubkey.to_bytes());
+        psbt.inputs[i].final_script_witness = Some(witness);
+    }
+
+    Ok(psbt.extract_tx_unchecked_fee_rate())
+}
+
+/// Sign a CPFP PSBT using a caller-provided closure (custom signer), after
+/// finalizing the ephemeral anchor inputs.
+pub fn sign_cpfp_psbt_custom<F>(psbt: &Psbt, signer: F) -> Result<Transaction>
+where
+    F: FnOnce(&mut Psbt) -> Result<()>,
+{
+    let mut psbt = psbt.clone();
+    finalize_anchor_inputs(&mut psbt);
+    signer(&mut psbt)?;
+    Ok(psbt.extract_tx_unchecked_fee_rate())
+}
+
+/// Submit a signed parent+child package, retrying once after mining the
+/// required blocks if the first attempt fails on a BIP68 CSV timelock.
+pub async fn submit_package_with_csv_retry(
+    bitcoind: &BitcoindFixture,
+    parent: &Transaction,
+    child: &Transaction,
+) -> Result<()> {
+    let result = bitcoind.submit_package(&[parent, child]).await?;
+    let pkg_msg = result
+        .get("package_msg")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    if pkg_msg == "success" {
+        return Ok(());
+    }
+
+    let has_bip68_error = result
+        .get("tx-results")
+        .and_then(|v| v.as_object())
+        .is_some_and(|txs| {
+            txs.values().any(|d| {
+                d.get("error")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|e| e.contains("non-BIP68-final"))
+            })
+        });
+    if !has_bip68_error {
+        bail!(
+            "Package failed: {}",
+            serde_json::to_string_pretty(&result).unwrap_or_default()
+        );
+    }
+    // BIP68: every input's relative lock must be satisfied, so mine enough
+    // blocks to cover the max across all block-based CSVs.
+    let csv_blocks: u32 = parent
+        .input
+        .iter()
+        .filter_map(|i| match i.sequence.to_relative_lock_time()? {
+            bitcoin::relative::LockTime::Blocks(h) => Some(u32::from(h.value())),
+            bitcoin::relative::LockTime::Time(_) => None,
+        })
+        .max()
+        .unwrap_or(0);
+    bitcoind.generate_blocks(csv_blocks.into()).await?;
+
+    let retry = bitcoind.submit_package(&[parent, child]).await?;
+    let retry_msg = retry
+        .get("package_msg")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    if retry_msg != "success" {
+        bail!("Package still failed after CSV: {retry:?}");
+    }
+    Ok(())
 }

@@ -1,7 +1,11 @@
+#[cfg(feature = "local-itest")]
+pub mod chain_service;
 pub mod concurrent_scenarios;
 pub mod faucet;
 pub mod fixtures;
 pub mod helpers;
+#[cfg(feature = "local-itest")]
+pub mod local_sdk;
 mod log;
 pub mod session_store_scenarios;
 #[cfg(feature = "turnkey")]
@@ -9,6 +13,8 @@ pub mod turnkey;
 
 use std::sync::Arc;
 
+#[cfg(feature = "local-itest")]
+pub use chain_service::LocalBitcoindChainService;
 pub use concurrent_scenarios::{
     RuntimeMode, run_concurrent_multi_instance_operations, run_concurrent_token_operations,
 };
@@ -17,6 +23,8 @@ pub use fixtures::data_sync::{DataSyncFixture, DataSyncImageConfig};
 pub use fixtures::lnurl::{LnurlFixture, LnurlImageConfig};
 pub use fixtures::*;
 pub use helpers::*;
+#[cfg(feature = "local-itest")]
+pub use local_sdk::{LocalSdk, build_local_sdk};
 pub use rand;
 pub use session_store_scenarios::{SessionRow, run_session_persistence_across_restart};
 pub use tempfile;

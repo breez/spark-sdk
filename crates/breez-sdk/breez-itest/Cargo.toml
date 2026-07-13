@@ -12,11 +12,19 @@ path = "src/lib.rs"
 # TURNKEY_* credentials at runtime and fail without them; leave the feature off
 # to exclude them entirely.
 turnkey = ["breez-sdk-spark/turnkey", "breez-sdk-spark/turnkey-p256"]
+# Compiles the local-operator-cluster tests (unilateral exit) and their harness.
+# Each test stands up its own docker operator cluster, so they run only under
+# `make itest` (--test-threads=2); off by default keeps them out of the
+# high-concurrency `make breez-itest` (--test-threads=8), where 8 concurrent
+# clusters starve the runner.
+local-itest = []
 
 [dependencies]
 # Breez SDK under test (enable test-utils for direct helpers)
 breez-sdk-spark = { workspace = true, features = ["test-utils", "sqlite", "postgres", "mysql"] }
 breez-sdk-common = { workspace = true }
+spark-itest.workspace = true
+spark-wallet.workspace = true
 testcontainers-modules = { workspace = true, features = ["postgres", "mysql"] }
 
 # PostgreSQL for database creation utilities
