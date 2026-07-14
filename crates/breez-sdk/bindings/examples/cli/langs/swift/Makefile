@@ -19,6 +19,7 @@ setup: ## Build local Swift bindings from Rust source
 	install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/Versions/A/breez_sdk_sparkFFI $(MACOS_FW)/breez_sdk_sparkFFI
 	ln -sf Versions/Current/breez_sdk_sparkFFI $(MACOS_FW_DIR)/breez_sdk_sparkFFI
 	$(SWIFT) package resolve
+	$(SWIFT) package unedit breez-sdk-spark-swift 2>/dev/null || true
 	$(SWIFT) package edit breez-sdk-spark-swift --path $(SDK_PKG_DIR)
 	@echo "Local bindings built. Run 'make build' to compile the CLI."
 
