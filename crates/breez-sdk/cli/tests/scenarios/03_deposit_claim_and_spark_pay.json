@@ -1,0 +1,79 @@
+{
+  "name": "faucet-funded deposit claim, then spark pay between two wallets",
+  "requires": ["faucet"],
+  "sessions": [
+    {
+      "wallet": "bob",
+      "steps": [
+        {
+          "cmd": "receive -m sparkaddress",
+          "expect_json": {
+            "payment_request": { "exists": true }
+          },
+          "capture": { "bob_address": "payment_request" }
+        }
+      ]
+    },
+    {
+      "wallet": "alice",
+      "steps": [
+        {
+          "cmd": "receive -m bitcoin",
+          "expect_json": {
+            "payment_request": { "exists": true }
+          },
+          "capture": { "alice_deposit_address": "payment_request" }
+        },
+        {
+          "faucet_fund": { "address": "${alice_deposit_address}", "amount_sats": 50000 }
+        },
+        {
+          "cmd": "get-info -e true",
+          "retry": { "timeout_secs": 180, "interval_secs": 5 },
+          "expect_json": {
+            "balance_sats": { "gte": 40000 }
+          }
+        },
+        {
+          "cmd": "pay -r ${bob_address} -a 1000",
+          "stdin": ["n"],
+          "expect_json": {
+            "payment.status": "completed",
+            "payment.payment_type": "send",
+            "payment.amount": 1000
+          },
+          "capture": { "payment_id": "payment.id" }
+        },
+        {
+          "cmd": "get-payment ${payment_id}",
+          "expect_json": {
+            "payment.id": "${payment_id}"
+          }
+        },
+        {
+          "cmd": "list-payments -t send",
+          "expect_contains": ["${payment_id}"]
+        }
+      ]
+    },
+    {
+      "wallet": "bob",
+      "steps": [
+        {
+          "cmd": "get-info -e true",
+          "retry": { "timeout_secs": 90, "interval_secs": 5 },
+          "expect_json": {
+            "balance_sats": { "gte": 1000 }
+          }
+        },
+        {
+          "cmd": "list-payments -t receive",
+          "expect_json": {
+            "payments.0.payment_type": "receive",
+            "payments.0.amount": 1000
+          }
+        }
+      ]
+    }
+  ]
+}
