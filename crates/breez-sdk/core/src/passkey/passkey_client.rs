@@ -569,6 +569,18 @@ mod tests {
         client_with_store(prf_provider, config).0
     }
 
+    /// Poll until the spawned label publish lands, since it no longer
+    /// completes before `register` returns.
+    async fn wait_for_stored(store: &Arc<Mutex<StoreCalls>>, expected: &str) {
+        for _ in 0..100 {
+            if store.lock().unwrap().stored.iter().any(|l| l == expected) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        panic!("label '{expected}' was not stored");
+    }
+
     #[macros::async_test_all]
     async fn register_returns_credential_and_publishes_label() {
         let provider = Arc::new(MockProvider::new([7u8; 32]));
@@ -593,7 +605,9 @@ mod tests {
         assert_eq!(credential.backup_eligible, Some(true));
         assert_eq!(*provider.create_calls.lock().unwrap(), 1);
         assert_eq!(response.wallet.label, "alice");
-        // Registration publishes the label to the store exactly once.
+        // Registration publishes the label exactly once. It now happens off
+        // the setup path, so wait for the spawned task before asserting.
+        wait_for_stored(&store, "alice").await;
         assert_eq!(store.lock().unwrap().stored, vec!["alice".to_string()]);
     }
 
