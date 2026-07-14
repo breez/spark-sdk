@@ -83,12 +83,17 @@ struct ClaimLocks {
     locks: Mutex<HashMap<TransferId, ClaimLockEntry>>,
 }
 
+/// The claim lock for one transfer. The guarded slot carries the claimed leaves once
+/// a claim succeeds, so claims that waited on it reuse them instead of re-fetching
+/// the transfer from the coordinator.
+type ClaimLock = tokio::sync::Mutex<Option<Vec<TreeNode>>>;
+
 /// A transfer's claim lock, and how many claims are holding it. The count is tracked
 /// rather than read back off the `Arc`, so that every change to it happens under
 /// `ClaimLocks::locks`: a handle's `Arc` is released after its guard's `Drop` has
 /// already let that mutex go, so its strong count is not a sound thing to reason with.
 struct ClaimLockEntry {
-    lock: Arc<tokio::sync::Mutex<()>>,
+    lock: Arc<ClaimLock>,
     holders: usize,
 }
 
@@ -108,7 +113,7 @@ impl ClaimLocks {
         let entry = locks
             .entry(transfer_id.clone())
             .or_insert_with(|| ClaimLockEntry {
-                lock: Arc::new(tokio::sync::Mutex::new(())),
+                lock: Arc::new(ClaimLock::new(None)),
                 holders: 0,
             });
         entry.holders += 1;
@@ -148,7 +153,7 @@ impl ClaimLocks {
 struct ClaimLockGuard<'a> {
     claim_locks: &'a ClaimLocks,
     transfer_id: TransferId,
-    lock: Arc<tokio::sync::Mutex<()>>,
+    lock: Arc<ClaimLock>,
 }
 
 impl Drop for ClaimLockGuard<'_> {
@@ -589,33 +594,42 @@ impl TransferService {
     /// If a claim for this transfer is already in flight, waits for it and takes its
     /// outcome instead of submitting a competing one: two claims for the same
     /// transfer race at the coordinator, and the loser wastes a full verify / sign /
-    /// finalize round before failing.
+    /// finalize round before failing. The outcome is normally read straight from the
+    /// lock's slot; an empty slot after waiting means the claim we waited for failed,
+    /// or was cancelled after the coordinator finalized the transfer, so the
+    /// coordinator is checked before claiming ourselves.
     async fn claim_transfer_locked(
         &self,
         claim_lock: &ClaimLockGuard<'_>,
         transfer: &Transfer,
         config: Option<ClaimTransferConfig>,
     ) -> Result<Vec<TreeNode>, ServiceError> {
-        let _permit = match claim_lock.lock.try_lock() {
-            Ok(permit) => permit,
+        let (mut permit, waited) = match claim_lock.lock.try_lock() {
+            Ok(permit) => (permit, false),
             Err(_) => {
                 debug!(
                     "Claim already in flight for transfer {}, waiting for it",
                     transfer.id
                 );
-                let permit = claim_lock.lock.lock().await;
-                if let Some(leaves) = self.finalized_leaves_if_already_claimed(&transfer.id).await {
-                    return Ok(leaves);
-                }
-                // The claim we waited for did not finalize the transfer, so claim it
-                // ourselves while holding the lock.
-                permit
+                (claim_lock.lock.lock().await, true)
             }
         };
 
+        if let Some(leaves) = permit.as_ref() {
+            return Ok(leaves.clone());
+        }
+
+        if waited && let Some(leaves) = self.finalized_leaves_if_already_claimed(&transfer.id).await
+        {
+            *permit = Some(leaves.clone());
+            return Ok(leaves);
+        }
+
         // Boxed to keep the retry loop's large future out of the size of every
         // future that awaits a claim.
-        Box::pin(self.claim_transfer_with_retries(transfer, config)).await
+        let leaves = Box::pin(self.claim_transfer_with_retries(transfer, config)).await?;
+        *permit = Some(leaves.clone());
+        Ok(leaves)
     }
 
     /// Claims a transfer, retrying on failure with exponential backoff.
@@ -1344,6 +1358,29 @@ mod tests {
             claim_locks.len(),
             0,
             "concurrent claims finishing together stranded their lock"
+        );
+    }
+
+    #[test]
+    fn waiters_see_the_outcome_published_by_the_winning_claim() {
+        let claim_locks = ClaimLocks::default();
+        let transfer = TransferId::generate();
+
+        let winner = claim_locks.acquire(&transfer);
+        let waiter = claim_locks.acquire(&transfer);
+
+        // A successful claim publishes its leaves before releasing the lock.
+        let mut permit = winner.lock.try_lock().expect("winner takes the lock");
+        *permit = Some(Vec::new());
+        drop(permit);
+
+        // The waiter reads them from the slot instead of asking the coordinator. An
+        // empty slot here would send it down the fallback path, re-fetching a result
+        // the process already holds.
+        let permit = waiter.lock.try_lock().expect("waiter takes the lock next");
+        assert!(
+            permit.is_some(),
+            "the winner's outcome must be visible to the claims that waited on it"
         );
     }
 
