@@ -53,6 +53,12 @@ When a Rust feature uses a platform-specific crate (e.g., `ctap-hid-fido2`, `yub
 
 **Direction of sync**: Only sync Rust → {{LANG_NAME}} (add missing features, fix outdated API calls). If the {{LANG_NAME}} CLI has additions not in Rust (e.g., success messages, extra help text, UX improvements), keep them: note them in findings as suggestions for the Rust CLI, but do not remove them.
 
+#### Test files are never ported
+
+Rust test code (`#[cfg(test)]` modules and everything under `crates/breez-sdk/cli/tests/`) is NOT part of the CLI surface to port. In particular, the scenario JSON files under `crates/breez-sdk/cli/tests/scenarios/` are shared verbatim test data: language-specific runners consume them directly, so do not copy, port, or edit them.
+
+Those scenario runners drive the CLI over piped stdin and answer interactive prompts positionally. When the diff touches interactive prompts, preserve the exact prompt order and count in the {{LANG_NAME}} CLI, and keep its REPL drivable with non-TTY stdin (no dropped lines, clean exit on end of input).
+
 ### Step 3: File mapping
 
 {{FILE_MAPPING}}

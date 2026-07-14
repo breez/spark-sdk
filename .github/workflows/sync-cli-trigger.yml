@@ -11,6 +11,9 @@ on:
     paths:
       - 'crates/breez-sdk/cli/src/**'
       - 'crates/breez-sdk/cli/README.md'
+      # Shared behavioral scenarios: a change can pin behavior the ports do
+      # not implement yet, so re-run the sync to surface the drift.
+      - 'crates/breez-sdk/cli/tests/scenarios/*.json'
 
 jobs:
   dispatch:
