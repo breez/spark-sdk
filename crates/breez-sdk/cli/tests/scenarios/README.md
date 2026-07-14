@@ -12,6 +12,13 @@ Current runners:
 |---|---|---|---|
 | Rust | `crates/breez-sdk/cli` binary | `crates/breez-sdk/cli/tests/scenarios.rs` (`make cli-itest`) | step in `Breez integration tests` (shares its toolchain, faucet limits, and lnurl image) |
 | JS/WASM | `bindings/examples/cli/langs/wasm` port (consumes the locally built `packages/wasm` npm package) | `packages/wasm/itest/scenarios.test.js` (`make wasm-itest`) | `WASM binding tests` job |
+| Swift | `bindings/examples/cli/langs/swift` port (local uniffi bindings) | the Rust runner with `SCENARIO_CLI` pointing at the built binary (`make swift-itest`) | step in `CLI / swift` (macOS; lnurl scenarios skip: no docker) |
+| Kotlin | `bindings/examples/cli/langs/kotlin-multiplatform` port's JVM target (shares the generated uniffi surface with Android) | the Rust runner with `SCENARIO_CLI="java -jar ..."` (`make kotlin-itest`) | step in `CLI / kotlin-multiplatform` |
+
+The Rust runner is generic: `SCENARIO_CLI` (a command line) and `SCENARIO_CLI_CWD`
+point it at any CLI port, so most languages need no runner code at all, just a
+make target. The JS runner exists separately because it also hosts the npm-API
+smoke suite.
 
 When adding a language runner, prefer attaching its `make <lang>-itest` step
 to the CI job that already has that language's toolchain and the faucet

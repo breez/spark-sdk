@@ -34,6 +34,8 @@ make itest              # Integration tests (requires Docker)
 make breez-itest        # Breez integration tests (requires faucet credentials)
 make cli-itest          # Shared CLI scenarios via the Rust CLI (faucet credentials; Docker for lnurl)
 make wasm-itest         # Same scenarios via the wasm CLI port + npm-API smoke suite (Node 22)
+make swift-itest        # Same scenarios via the swift CLI port (macOS)
+make kotlin-itest       # Same scenarios via the kotlin-multiplatform CLI port (JVM)
 ```
 
 Shared behavioral scenarios (JSON, shared verbatim across language CLI runners,

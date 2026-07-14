@@ -117,8 +117,11 @@ fun objToJson(value: Any?): JsonElement {
             // Enumerate declared fields (including private ones from data/sealed classes)
             val fields = clazz.declaredFields
             for (field in fields) {
-                // Skip synthetic fields, companion references, etc.
+                // Skip synthetic fields, companion references, etc. Static
+                // fields include a Kotlin object's self-referencing INSTANCE,
+                // which would recurse forever.
                 if (field.isSynthetic) continue
+                if (java.lang.reflect.Modifier.isStatic(field.modifiers)) continue
                 if (field.name == "Companion") continue
                 if (field.name.startsWith("\$")) continue
 
@@ -128,11 +131,22 @@ fun objToJson(value: Any?): JsonElement {
                 obj.add(fieldName, objToJson(fieldValue))
             }
 
-            // If we only have "type" and nothing else, try using toString for simple wrappers
-            if (obj.size() == 0) {
-                return JsonPrimitive(value.toString())
+            // A sealed variant wrapping one positional payload (uniffi names
+            // it v1) flattens the payload beside "type", matching the other
+            // ports' tagged-enum rendering. Named fields stay nested.
+            if (variantName != null && obj.size() == 2) {
+                val payload = obj.get("v1")
+                if (payload != null && payload.isJsonObject) {
+                    val flattened = JsonObject()
+                    flattened.addProperty("type", variantName)
+                    for ((k, v) in payload.asJsonObject.entrySet()) {
+                        flattened.add(k, v)
+                    }
+                    return flattened
+                }
             }
 
+            // Field-less records print as {} like the other ports
             obj
         }
     }

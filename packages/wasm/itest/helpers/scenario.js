@@ -36,6 +36,28 @@ function sleep(ms) {
 // --------------------------------------------------------------------------
 
 /**
+ * Strip echoed REPL prompts from line starts (mirror of the Rust harness;
+ * some CLI ports echo the prompt with no trailing newline).
+ *
+ * @param {string} chunk
+ * @returns {string}
+ */
+function stripPrompts(chunk) {
+  return chunk
+    .split('\n')
+    .map((line) => {
+      for (;;) {
+        const match = /^breez-spark-cli \[(regtest|mainnet)\]> /.exec(line)
+        if (!match) {
+          return line
+        }
+        line = line.slice(match[0].length)
+      }
+    })
+    .join('\n')
+}
+
+/**
  * Extract the JSON documents a transcript chunk contains. A document starts
  * at a line whose first column is `{` or `[` and ends when the accumulated
  * lines parse.
@@ -78,10 +100,14 @@ function normalize(s) {
  * the current object (stays in place).
  *
  * @param {any} root
- * @param {string} pathExpr
+ * @param {string} pathExpr - dot-separated; the empty path addresses the
+ *   document itself
  * @returns {any} the value, or undefined when the path does not resolve
  */
 function lookupPath(root, pathExpr) {
+  if (pathExpr === '') {
+    return root
+  }
   let current = root
   for (const segment of pathExpr.split('.')) {
     const wanted = normalize(segment)
@@ -278,6 +304,7 @@ class CliSession {
 
 /** Check a step's expectations against its chunk; returns captured vars. */
 function evaluate(chunk, step, vars) {
+  chunk = stripPrompts(chunk)
   const docs = extractJsonDocs(chunk)
   const last = docs.length > 0 ? docs[docs.length - 1] : undefined
 

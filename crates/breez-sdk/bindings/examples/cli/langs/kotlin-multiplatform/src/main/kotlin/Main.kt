@@ -71,6 +71,7 @@ fun main(args: Array<String>) {
     var storeLabel = false
     var rpId: String? = null
     var serverMode = false
+    var lnurlDomain: String? = null
 
     // Simple argument parsing
     var i = 0
@@ -129,6 +130,10 @@ fun main(args: Array<String>) {
             "--server-mode" -> {
                 serverMode = true
             }
+            "--lnurl-domain" -> {
+                i++
+                if (i < args.size) lnurlDomain = args[i]
+            }
             "--help", "-h" -> {
                 println("Usage: breez-sdk-spark-cli [OPTIONS]")
                 println()
@@ -147,6 +152,7 @@ fun main(args: Array<String>) {
                 println("  --store-label                                Publish the label to Nostr (requires --passkey and --label)")
                 println("  --rpid <ID>                                  Relying party ID for FIDO2 provider (requires --passkey)")
                 println("  --server-mode                                Run in server mode (no background tasks)")
+                println("  --lnurl-domain <DOMAIN>                      LNURL server domain for lightning address registration")
                 println("  -h, --help                                   Show this help message")
                 return
             }
@@ -238,6 +244,7 @@ fun main(args: Array<String>) {
             mysqlConnectionString,
             stableBalanceConfig,
             passkeyConfig,
+            lnurlDomain,
         )
     }
 }
@@ -251,6 +258,7 @@ suspend fun runInteractiveMode(
     mysqlConnectionString: String?,
     stableBalanceConfig: StableBalanceConfig?,
     passkeyConfig: PasskeyConfig?,
+    lnurlDomain: String?,
 ) {
     // Init logging
     try {
@@ -276,6 +284,9 @@ suspend fun runInteractiveMode(
     config.stableBalanceConfig = stableBalanceConfig
     if (network == Network.MAINNET) {
         config.crossChainConfig = CrossChainConfig()
+    }
+    if (lnurlDomain != null) {
+        config.lnurlDomain = lnurlDomain
     }
 
     // Resolve seed: passkey or mnemonic

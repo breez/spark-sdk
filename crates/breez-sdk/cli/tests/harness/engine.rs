@@ -7,7 +7,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
-use super::{FaucetFund, Scenario, Step, assert, faucet, interpolate, session::CliSession};
+use super::session::{CliLaunch, CliSession};
+use super::{FaucetFund, Scenario, Step, assert, faucet, interpolate};
 
 /// Marker-wait ceiling for a single command; commands that need longer
 /// (claims, syncs) wrap in `retry` at the scenario level.
@@ -38,6 +39,7 @@ pub async fn run_scenario(name: &str) -> Result<()> {
     let mut vars: HashMap<String, String> = HashMap::new();
     let _fixtures = start_fixtures(&scenario, &mut vars).await?;
 
+    let launch = CliLaunch::from_env()?;
     let mut wallet_dirs: HashMap<String, tempfile::TempDir> = HashMap::new();
     for (session_index, session) in scenario.sessions.iter().enumerate() {
         let dir = match wallet_dirs.entry(session.wallet.clone()) {
@@ -52,7 +54,7 @@ pub async fn run_scenario(name: &str) -> Result<()> {
             .map(|a| interpolate(a, &vars))
             .collect::<Result<Vec<_>>>()?;
 
-        let mut cli = CliSession::spawn(dir.path(), &extra_args)?;
+        let mut cli = CliSession::spawn(&launch, dir.path(), &extra_args)?;
         for (step_index, step) in session.steps.iter().enumerate() {
             run_step(&mut cli, step, &mut vars).await.with_context(|| {
                 format!(
@@ -135,6 +137,7 @@ fn evaluate(
     step: &Step,
     vars: &HashMap<String, String>,
 ) -> Result<HashMap<String, String>> {
+    let chunk = &assert::strip_prompts(chunk);
     let docs = assert::extract_json_docs(chunk);
     let last = docs.last();
 

@@ -29,6 +29,11 @@ test('path bridges enum tags', () => {
   }
 })
 
+test('empty path addresses the document', () => {
+  assert.deepEqual(lookupPath({}, ''), {})
+  checkMatcher({}, lookupPath({}, ''))
+})
+
 test('path indexes arrays', () => {
   const doc = { payments: [{ id: 'x' }, { id: 'y' }] }
   assert.equal(lookupPath(doc, 'payments.1.id'), 'y')

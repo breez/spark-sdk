@@ -20,7 +20,9 @@ use tokio::process::{Child, ChildStdin};
 const QUIESCE: Duration = Duration::from_millis(200);
 const POLL: Duration = Duration::from_millis(100);
 
-/// Append everything the reader produces to the shared transcript.
+/// Append everything the reader produces to the shared transcript, whole
+/// lines at a time so concurrent stdout/stderr writers (e.g. async event
+/// logs) cannot interleave mid-line and corrupt a JSON document.
 fn pump<R>(reader: R, transcript: Arc<Mutex<String>>)
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
@@ -28,16 +30,60 @@ where
     tokio::spawn(async move {
         let mut reader = reader;
         let mut buf = [0u8; 4096];
+        let mut partial = String::new();
         loop {
             match reader.read(&mut buf).await {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    let text = String::from_utf8_lossy(&buf[..n]).into_owned();
-                    transcript.lock().expect("transcript lock").push_str(&text);
+                    partial.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    if let Some(last_newline) = partial.rfind('\n') {
+                        let complete: String = partial.drain(..=last_newline).collect();
+                        transcript
+                            .lock()
+                            .expect("transcript lock")
+                            .push_str(&complete);
+                    }
                 }
             }
         }
+        if !partial.is_empty() {
+            transcript
+                .lock()
+                .expect("transcript lock")
+                .push_str(&partial);
+        }
     });
+}
+
+/// How to launch the CLI under test. Defaults to this crate's binary;
+/// `SCENARIO_CLI` (a shlex command line, e.g. `node src/main.js`) and
+/// `SCENARIO_CLI_CWD` select a language CLI port instead, so every port is
+/// driven by this same runner.
+pub struct CliLaunch {
+    program: String,
+    args: Vec<String>,
+    cwd: Option<std::path::PathBuf>,
+}
+
+impl CliLaunch {
+    pub fn from_env() -> Result<Self> {
+        let (program, args) = match std::env::var("SCENARIO_CLI") {
+            Ok(command_line) => {
+                let mut parts = shlex::split(&command_line)
+                    .with_context(|| format!("unparseable SCENARIO_CLI '{command_line}'"))?;
+                if parts.is_empty() {
+                    anyhow::bail!("SCENARIO_CLI is empty");
+                }
+                let program = parts.remove(0);
+                (program, parts)
+            }
+            Err(_) => (env!("CARGO_BIN_EXE_cli").to_string(), Vec::new()),
+        };
+        let cwd = std::env::var("SCENARIO_CLI_CWD")
+            .ok()
+            .map(std::path::PathBuf::from);
+        Ok(Self { program, args, cwd })
+    }
 }
 
 pub struct CliSession {
@@ -49,18 +95,23 @@ pub struct CliSession {
 }
 
 impl CliSession {
-    pub fn spawn(data_dir: &Path, extra_args: &[String]) -> Result<Self> {
-        let exe = env!("CARGO_BIN_EXE_cli");
-        let mut child = tokio::process::Command::new(exe)
+    pub fn spawn(launch: &CliLaunch, data_dir: &Path, extra_args: &[String]) -> Result<Self> {
+        let mut command = tokio::process::Command::new(&launch.program);
+        command
+            .args(&launch.args)
             .arg("--data-dir")
             .arg(data_dir)
             .args(extra_args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
+            .kill_on_drop(true);
+        if let Some(cwd) = &launch.cwd {
+            command.current_dir(cwd);
+        }
+        let mut child = command
             .spawn()
-            .with_context(|| format!("failed to spawn {exe}"))?;
+            .with_context(|| format!("failed to spawn {}", launch.program))?;
 
         let stdin = child.stdin.take().expect("piped stdin");
         let stdout = child.stdout.take().expect("piped stdout");

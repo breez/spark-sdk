@@ -10,6 +10,25 @@
 use anyhow::{Result, bail};
 use serde_json::Value;
 
+/// Strip echoed REPL prompts from line starts. Some ports (`JLine`'s dumb
+/// terminal) write the prompt with no trailing newline, so a result document
+/// opens as `breez-spark-cli [regtest]> {` instead of at column 0.
+pub fn strip_prompts(chunk: &str) -> String {
+    let mut out = String::with_capacity(chunk.len());
+    for line in chunk.lines() {
+        let mut line = line;
+        while let Some(rest) = line
+            .strip_prefix("breez-spark-cli [regtest]> ")
+            .or_else(|| line.strip_prefix("breez-spark-cli [mainnet]> "))
+        {
+            line = rest;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
 /// Extract the JSON documents a transcript chunk contains. A document starts
 /// at a line whose first column is `{` or `[` and ends when the accumulated
 /// lines parse; interleaved log lines never start with a brace.
@@ -47,8 +66,12 @@ fn normalize(s: &str) -> String {
 /// Resolve a dot-separated path against a JSON value. Object keys match
 /// after normalization; numeric segments index arrays. An enum-tag segment
 /// matches either an externally tagged wrapper key (descends into its value)
-/// or a `type` field on the current object (stays in place).
+/// or a `type` field on the current object (stays in place). The empty path
+/// addresses the document itself.
 pub fn lookup_path<'a>(root: &'a Value, path: &str) -> Option<&'a Value> {
+    if path.is_empty() {
+        return Some(root);
+    }
     let mut current = root;
     for segment in path.split('.') {
         let wanted = normalize(segment);
@@ -139,6 +162,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn strips_echoed_prompts_from_line_starts() {
+        let chunk = "breez-spark-cli [regtest]> {\n  \"a\": 1\n}\nplain line\n";
+        let stripped = strip_prompts(chunk);
+        assert_eq!(extract_json_docs(&stripped), vec![json!({"a": 1})]);
+        assert!(stripped.contains("plain line"));
+    }
+
+    #[test]
     fn extracts_pretty_and_inline_docs_and_skips_noise() {
         let chunk =
             "Breez SDK: noise\n{\n  \"a\": 1\n}\nError: nope\n{\"b\": 2}\nEvent: {\"c\": 3}\n";
@@ -168,6 +199,13 @@ mod tests {
                 Some(&json!(7)),
             );
         }
+    }
+
+    #[test]
+    fn empty_path_addresses_the_document() {
+        let doc = json!({});
+        assert_eq!(lookup_path(&doc, ""), Some(&doc));
+        check_matcher(&json!({}), lookup_path(&doc, "")).unwrap();
     }
 
     #[test]

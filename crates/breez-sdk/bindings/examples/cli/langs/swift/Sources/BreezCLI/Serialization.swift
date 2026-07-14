@@ -42,8 +42,10 @@ func objToSerializable(_ value: Any?) -> Any? {
         return data.map { String(format: "%02x", $0) }.joined()
     }
 
-    // [UInt8] → hex string
-    if let bytes = value as? [UInt8] {
+    // [UInt8] → hex string. An empty array bridges to [UInt8] regardless of
+    // its declared element type, so empty arrays fall through and render as
+    // [] like every other port.
+    if let bytes = value as? [UInt8], !bytes.isEmpty {
         return bytes.map { String(format: "%02x", $0) }.joined()
     }
 
@@ -99,6 +101,11 @@ func objToSerializable(_ value: Any?) -> Any? {
     // Struct / class — enumerate fields via Mirror
     if mirror.displayStyle == .struct || mirror.displayStyle == .class || mirror.displayStyle == nil {
         if mirror.children.isEmpty {
+            // Field-less records print as {} like the other ports; opaque
+            // non-reflectable values keep their description.
+            if mirror.displayStyle != nil {
+                return [String: Any?]()
+            }
             return String(describing: value)
         }
         var result: [String: Any?] = [:]

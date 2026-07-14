@@ -97,6 +97,23 @@ wasm-itest:
 	$(MAKE) -C crates/breez-sdk/bindings/examples/cli/langs/wasm setup
 	cd packages/wasm/itest && npm install && npm test
 
+# Swift binding e2e tests: the shared CLI scenarios driven through the swift
+# CLI port (macOS only). Same gating as cli-itest; the lnurl scenario skips
+# where docker is unavailable (macOS CI runners).
+swift-itest:
+	$(MAKE) -C crates/breez-sdk/bindings/examples/cli/langs/swift setup build
+	SCENARIO_CLI="$(CURDIR)/crates/breez-sdk/bindings/examples/cli/langs/swift/.build/debug/breez-cli" \
+		cargo xtask test --package cli --test scenarios -- --test-threads=2
+
+# Kotlin binding e2e tests: the shared CLI scenarios driven through the
+# kotlin-multiplatform CLI port's JVM target, which shares the generated
+# uniffi binding surface with Android. Same gating as cli-itest.
+kotlin-itest:
+	$(MAKE) -C crates/breez-sdk/bindings/examples/cli/langs/kotlin-multiplatform setup
+	cd crates/breez-sdk/bindings/examples/cli/langs/kotlin-multiplatform && ./gradlew jar -q --console=plain
+	SCENARIO_CLI="java -jar $(CURDIR)/crates/breez-sdk/bindings/examples/cli/langs/kotlin-multiplatform/build/libs/breez-sdk-spark-cli-1.0-SNAPSHOT.jar" \
+		cargo xtask test --package cli --test scenarios -- --test-threads=2
+
 breez-itest:
 	cargo xtask test --package breez-sdk-itest -- --test-threads=8
 

@@ -13,7 +13,9 @@
         },
         {
           "cmd": "sync",
-          "expect_contains": ["{}"]
+          "expect_json": {
+            "": {}
+          }
         },
         {
           "cmd": "list-payments",

@@ -107,4 +107,14 @@ content = """
 **BIP39:**
 - Full BIP39 English wordlist + mnemonic generation in BIP39.swift
 - Uses CommonCrypto for SHA-256 and SecRandomCopyBytes for entropy
+
+**Scenario runner contract:**
+This CLI is executed end-to-end on CI by the shared scenario runner
+(crates/breez-sdk/cli/tests/, `make swift-itest`) against the scenarios in
+`crates/breez-sdk/cli/tests/scenarios/` (never port those files). Keep the
+REPL drivable with piped, non-TTY stdin: `editlineRead` falls back to plain
+`readLine` when stdin is not a terminal (libedit echo corrupts piped
+output); preserve that fallback, keep prompt order and count identical to
+the Rust CLI, and keep results printed as JSON documents starting at
+column 0 (empty records as {}, empty arrays as []).
 """
