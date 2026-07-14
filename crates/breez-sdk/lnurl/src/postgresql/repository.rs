@@ -1,7 +1,9 @@
 use lnurl_models::ListMetadataMetadata;
 use sqlx::{PgPool, Row};
 
-use crate::repository::{Invoice, LnurlSenderComment, PendingZapReceipt, WebhookPayloadData};
+use crate::repository::{
+    DomainConfig, Invoice, LnurlSenderComment, PendingZapReceipt, WebhookPayloadData,
+};
 use crate::webhooks::repository::{
     NewWebhookDelivery, WebhookConfig, WebhookDelivery, WebhookRepositoryError,
 };
@@ -278,15 +280,25 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(metadata)
     }
 
-    async fn list_domains(&self) -> Result<Vec<String>, LnurlRepositoryError> {
-        let rows = sqlx::query("SELECT domain FROM allowed_domains")
-            .fetch_all(&self.pool)
-            .await?;
+    async fn list_domains(&self) -> Result<Vec<DomainConfig>, LnurlRepositoryError> {
+        let rows = sqlx::query(
+            "SELECT d.domain, a.api_key, a.jwt \
+             FROM allowed_domains d \
+             LEFT JOIN domain_attribution a ON a.domain = d.domain",
+        )
+        .fetch_all(&self.pool)
+        .await?;
 
         let domains = rows
             .into_iter()
-            .map(|row| row.try_get(0))
-            .collect::<Result<Vec<String>, sqlx::Error>>()?;
+            .map(|row| {
+                Ok(DomainConfig {
+                    domain: row.try_get(0)?,
+                    api_key: row.try_get(1)?,
+                    jwt: row.try_get(2)?,
+                })
+            })
+            .collect::<Result<Vec<DomainConfig>, sqlx::Error>>()?;
 
         Ok(domains)
     }
@@ -300,6 +312,15 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .bind(domain)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    async fn set_domain_jwt(&self, domain: &str, jwt: &str) -> Result<(), LnurlRepositoryError> {
+        sqlx::query("UPDATE domain_attribution SET jwt = $2 WHERE domain = $1")
+            .bind(domain)
+            .bind(jwt)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -841,5 +862,62 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
             })
             .collect::<Result<Vec<_>, sqlx::Error>>()
             .map_err(|e| WebhookRepositoryError::General(e.into()))
+    }
+}
+
+// PostgreSQL tests - only run when LNURL_TEST_POSTGRES_URL is set.
+// Example: LNURL_TEST_POSTGRES_URL="postgres://user:pass@localhost/lnurl_test" cargo test
+#[cfg(test)]
+mod postgres_tests {
+    use crate::repository::shared_tests;
+
+    /// Connects, migrates, and clears `allowed_domains` for a clean slate.
+    /// Returns `None` (skipping the test) when `LNURL_TEST_POSTGRES_URL` is unset.
+    async fn setup_pool() -> Option<sqlx::PgPool> {
+        let url = std::env::var("LNURL_TEST_POSTGRES_URL").ok()?;
+        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+        crate::postgresql::run_migrations(&pool).await.unwrap();
+        sqlx::query("DELETE FROM domain_attribution")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM allowed_domains")
+            .execute(&pool)
+            .await
+            .unwrap();
+        Some(pool)
+    }
+
+    /// Seed `a.com` with an api key the way admins do: allowlist it, then set its
+    /// key in the attribution table.
+    async fn seed_domain_with_api_key(pool: &sqlx::PgPool) {
+        sqlx::query("INSERT INTO allowed_domains (domain) VALUES ('a.com')")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO domain_attribution (domain, api_key) VALUES ('a.com', 'key-a')")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_domains_surfaces_api_keys() {
+        let Some(pool) = setup_pool().await else {
+            return;
+        };
+        seed_domain_with_api_key(&pool).await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::list_domains_surfaces_api_keys(&db).await;
+    }
+
+    #[tokio::test]
+    async fn set_domain_jwt_round_trips() {
+        let Some(pool) = setup_pool().await else {
+            return;
+        };
+        seed_domain_with_api_key(&pool).await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::set_domain_jwt_round_trips(&db).await;
     }
 }

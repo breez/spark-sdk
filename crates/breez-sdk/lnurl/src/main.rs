@@ -1,4 +1,9 @@
-use crate::{repository::LnurlRepository, routes::LnurlServer, state::State};
+use crate::{
+    partner_jwt::{JwtCache, JwtStore, RepoJwtStore},
+    repository::LnurlRepository,
+    routes::LnurlServer,
+    state::State,
+};
 use anyhow::anyhow;
 use axum::{
     Extension, Router,
@@ -34,6 +39,7 @@ mod auth;
 mod domains;
 mod error;
 mod invoice_paid;
+mod partner_jwt;
 mod postgresql;
 mod repository;
 mod routes;
@@ -44,6 +50,10 @@ mod user;
 mod webhook_notify;
 mod webhooks;
 mod zap;
+
+fn default_user_agent() -> String {
+    concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")).to_string()
+}
 
 #[derive(Clone, Parser, Debug, Serialize, Deserialize)]
 #[command(version, about, long_about = None)]
@@ -96,6 +106,12 @@ struct Args {
     /// domains here will be added to the database on startup.
     #[arg(long, default_value = "localhost:8080")]
     pub domains: String,
+
+    /// Fallback Breez API key used to attribute lightning-address receives for
+    /// any allowed domain that has no `api_key` of its own, so no domain is left
+    /// unattributed. Mainnet only.
+    #[arg(long)]
+    pub default_api_key: Option<String>,
 
     /// Nostr private key for zaps. If not set, zap requests will be ignored.
     #[arg(long)]
@@ -216,6 +232,8 @@ where
 
     let mut spark_config = SparkWalletConfig::default_config(args.network);
     spark_config.service_provider_config.schema_endpoint = Some("graphql/spark/rc".to_string());
+    // One HTTP client (one connection pool) shared by all SSP traffic.
+    let ssp_http_client = platform_utils::create_http_client(Some(&default_user_agent()));
 
     // Create shared infrastructure components
     let signer = Arc::new(DefaultSigner::new(&auth_seed, args.network)?);
@@ -227,32 +245,16 @@ where
     let connection_manager: Arc<dyn spark::operator::rpc::ConnectionManager> =
         Arc::new(DefaultConnectionManager::new());
     let coordinator = spark_config.operator_pool.get_coordinator().clone();
-    let service_provider = Arc::new(ServiceProvider::new(
+    let service_provider = Arc::new(ServiceProvider::new_with_client(
         spark_config.service_provider_config.clone(),
         spark_signer.clone(),
         session_store.clone(),
         None,
+        Arc::clone(&ssp_http_client),
     ));
 
-    // Create wallet using shared signer
-    let wallet = Arc::new(
-        spark_wallet::SparkWallet::new(
-            spark_config.clone(),
-            spark_signer.clone(),
-            session_store.clone(),
-            Arc::new(InMemoryTreeStore::default()),
-            Arc::new(InMemoryTokenOutputStore::default()),
-            Arc::clone(&connection_manager),
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await?,
-    );
-    wallet.start_background_processing().await;
-
+    // Ensure config-provided domains exist, then start the domain refresher
+    // (domain -> Breez API key). The partner JWT provider shares this map.
     let config_domains: Vec<String> = args
         .domains
         .split(',')
@@ -265,7 +267,45 @@ where
         debug!("ensured domain '{}' exists in database", domain);
     }
 
-    let domains = domains::start(repository.clone()).await?;
+    // Partner attribution only works on mainnet: the Breez JWT endpoint is
+    // mainnet-only, so regtest/testnet have no API keys or partner JWTs.
+    let is_mainnet = matches!(args.network, Network::Mainnet);
+    // Fallback key for domains without their own, so none are unattributed.
+    let default_api_key = is_mainnet.then(|| args.default_api_key.clone()).flatten();
+
+    let domains = domains::start(repository.clone(), is_mainnet, default_api_key.clone()).await?;
+
+    // Shared partner-JWT cache (mainnet only). Its background task keeps a token
+    // warm for every domain with its own api key (persisted to the DB) and one
+    // for the default key.
+    let jwt_cache = if is_mainnet {
+        let store: Arc<dyn JwtStore> = Arc::new(RepoJwtStore(repository.clone()));
+        Some(JwtCache::start(Arc::clone(&domains), default_api_key.clone(), store).await)
+    } else {
+        None
+    };
+
+    let default_jwt_provider = jwt_cache
+        .as_ref()
+        .filter(|_| default_api_key.is_some())
+        .map(|c| c.default_provider() as Arc<dyn spark::header_provider::HeaderProvider>);
+    let wallet = Arc::new(
+        spark_wallet::SparkWallet::new(
+            spark_config.clone(),
+            spark_signer.clone(),
+            session_store.clone(),
+            Arc::new(InMemoryTreeStore::default()),
+            Arc::new(InMemoryTokenOutputStore::default()),
+            Arc::clone(&connection_manager),
+            Some(Arc::clone(&ssp_http_client)),
+            None,
+            default_jwt_provider.clone(),
+            default_jwt_provider,
+            None,
+        )
+        .await?,
+    );
+    wallet.start_background_processing().await;
 
     let ca_cert = args
         .ca_cert
@@ -376,6 +416,9 @@ where
         signer,
         session_store,
         service_provider,
+        spark_config,
+        ssp_http_client,
+        jwt_cache,
         subscribed_keys,
         invoice_paid_trigger,
         webhook_secret,

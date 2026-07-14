@@ -696,6 +696,7 @@ where
 
         let username = sanitize_username(&identifier);
         let domain = sanitize_domain(&state, &host).await?;
+
         let user = state
             .db
             .get_user_by_name(&domain, &username)
@@ -754,8 +755,8 @@ where
         };
 
         let pubkey = parse_pubkey(&user.pubkey)?;
-        let res = state
-            .wallet
+        let wallet = state.invoice_wallet(&domain).await;
+        let res = wallet
             .create_lightning_invoice(
                 amount_msat / 1000,
                 Some(spark_wallet::InvoiceDescription::DescriptionHash(
@@ -1490,7 +1491,7 @@ async fn sanitize_domain<DB>(
     let domain = domain.trim().to_lowercase();
     // If domains list is empty allow all domains (for testing)
     let domains = state.domains.read().await;
-    if domains.is_empty() || domains.contains(&domain) {
+    if domains.is_empty() || domains.contains_key(&domain) {
         return Ok(domain);
     }
     warn!("domain not allowed: {}", domain);
@@ -1500,7 +1501,9 @@ async fn sanitize_domain<DB>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repository::{Invoice, LnurlRepositoryError, LnurlSenderComment, PendingZapReceipt};
+    use crate::repository::{
+        DomainConfig, Invoice, LnurlRepositoryError, LnurlSenderComment, PendingZapReceipt,
+    };
     use crate::user::User;
     use crate::webhooks::repository::WebhookRepositoryError;
     use crate::zap::Zap;
@@ -1576,7 +1579,7 @@ mod tests {
         ) -> Result<Vec<ListMetadataMetadata>, LnurlRepositoryError> {
             Ok(vec![])
         }
-        async fn list_domains(&self) -> Result<Vec<String>, LnurlRepositoryError> {
+        async fn list_domains(&self) -> Result<Vec<DomainConfig>, LnurlRepositoryError> {
             Ok(vec![])
         }
         async fn add_domain(&self, _: &str) -> Result<(), LnurlRepositoryError> {
@@ -1679,6 +1682,15 @@ mod tests {
         ) -> Result<String, LnurlRepositoryError> {
             Ok(default_value.to_string())
         }
+
+        async fn set_domain_jwt(
+            &self,
+            _domain: &str,
+            _jwt: &str,
+        ) -> Result<(), LnurlRepositoryError> {
+            Ok(())
+        }
+
         async fn get_webhook_payloads(
             &self,
             _: &[String],

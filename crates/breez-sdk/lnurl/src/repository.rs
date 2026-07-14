@@ -43,6 +43,15 @@ pub struct PendingZapReceipt {
     pub next_retry_at: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct DomainConfig {
+    pub domain: String,
+    /// The domain's own Breez API key, if set.
+    pub api_key: Option<String>,
+    /// The cached partner JWT if one has been fetched and persisted.
+    pub jwt: Option<String>,
+}
+
 #[async_trait::async_trait]
 pub trait LnurlRepository {
     async fn delete_user(&self, domain: &str, pubkey: &str) -> Result<(), LnurlRepositoryError>;
@@ -88,11 +97,14 @@ pub trait LnurlRepository {
         updated_after: Option<i64>,
     ) -> Result<Vec<ListMetadataMetadata>, LnurlRepositoryError>;
 
-    /// Get all allowed domains from the database
-    async fn list_domains(&self) -> Result<Vec<String>, LnurlRepositoryError>;
+    /// Get all allowed domains and their optional Breez API keys.
+    async fn list_domains(&self) -> Result<Vec<DomainConfig>, LnurlRepositoryError>;
 
     /// Insert a domain if it doesn't already exist
     async fn add_domain(&self, domain: &str) -> Result<(), LnurlRepositoryError>;
+
+    /// Store the cached partner JWT for a domain.
+    async fn set_domain_jwt(&self, domain: &str, jwt: &str) -> Result<(), LnurlRepositoryError>;
 
     /// Filter a list of payment hashes to only those the server already knows about
     /// (i.e. have an existing invoice, zap, or sender comment record).
@@ -184,4 +196,66 @@ pub struct WebhookPayloadData {
     pub lightning_address: Option<String>,
     pub sender_comment: Option<String>,
     pub domain: String,
+}
+
+/// Backend-agnostic tests for the domain-attribution repository methods, run
+/// against both the `SQLite` and `PostgreSQL` implementations. Assertions look
+/// up domains by name rather than by count, so they tolerate a shared test
+/// database with rows from other tests.
+#[cfg(test)]
+pub mod shared_tests {
+    use super::LnurlRepository;
+
+    /// `list_domains` surfaces a domain's `api_key` and reports `None` for one
+    /// with no key, added via `add_domain`. The caller seeds `a.com` with an
+    /// `api_key` (`key-a`) first, since setting a key is a direct row write with
+    /// no trait method (admins manage keys out-of-band).
+    pub async fn list_domains_surfaces_api_keys<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        db.add_domain("b.com").await.unwrap();
+
+        let domains = db.list_domains().await.unwrap();
+        let with_key = domains
+            .iter()
+            .find(|d| d.domain == "a.com")
+            .expect("seeded domain with an api key");
+        assert_eq!(with_key.api_key.as_deref(), Some("key-a"));
+        let without_key = domains
+            .iter()
+            .find(|d| d.domain == "b.com")
+            .expect("domain with no api key");
+        assert_eq!(without_key.api_key, None);
+    }
+
+    /// `set_domain_jwt` updates the cached JWT of a domain with an api key
+    /// (readable via `list_domains`); a domain with no attribution row is a
+    /// no-op, not an error. The caller seeds `a.com` with an api key (allowlisted
+    /// + `api_key` set) first, since a row can only be created by setting an api key.
+    pub async fn set_domain_jwt_round_trips<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let before = db.list_domains().await.unwrap();
+        assert_eq!(
+            before.iter().find(|d| d.domain == "a.com").unwrap().jwt,
+            None
+        );
+
+        db.set_domain_jwt("a.com", "tok").await.unwrap();
+        // A domain with no attribution row updates zero rows, not an error.
+        db.set_domain_jwt("missing.com", "x").await.unwrap();
+
+        let after = db.list_domains().await.unwrap();
+        assert_eq!(
+            after
+                .iter()
+                .find(|d| d.domain == "a.com")
+                .unwrap()
+                .jwt
+                .as_deref(),
+            Some("tok")
+        );
+    }
 }
