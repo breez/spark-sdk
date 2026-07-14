@@ -344,3 +344,49 @@ async fn main() -> Result<(), anyhow::Error> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod parse_command_tests {
+    use super::*;
+
+    #[test]
+    fn exit_and_quit_are_special_cased() {
+        assert!(matches!(parse_command("exit").unwrap(), Command::Exit));
+        assert!(matches!(parse_command("quit").unwrap(), Command::Exit));
+        assert!(matches!(parse_command("  exit  ").unwrap(), Command::Exit));
+    }
+
+    #[test]
+    fn parses_a_command_line() {
+        assert!(matches!(
+            parse_command("get-info -e true").unwrap(),
+            Command::GetInfo {
+                ensure_synced: Some(true)
+            }
+        ));
+    }
+
+    #[test]
+    fn splits_quoted_arguments() {
+        let Command::Parse { input } = parse_command("parse \"two words\"").unwrap() else {
+            panic!("expected Parse");
+        };
+        assert_eq!(input, "two words");
+    }
+
+    #[test]
+    fn rejects_unbalanced_quotes() {
+        let Err(err) = parse_command("parse \"unbalanced") else {
+            panic!("expected parse failure");
+        };
+        assert!(err.to_string().contains("Failed to parse input string"));
+    }
+
+    #[test]
+    fn wraps_clap_errors() {
+        let Err(err) = parse_command("not-a-command") else {
+            panic!("expected parse failure");
+        };
+        assert!(err.to_string().contains("Command parsing error"));
+    }
+}
