@@ -1,0 +1,51 @@
+# Runs the shared behavioral scenarios (crates/breez-sdk/cli/tests/scenarios/)
+# through each language's runner. The rust entry drives the Rust CLI (the
+# source of truth): when a binding entry fails while rust is green, the defect
+# is in that binding or its CLI port, not in the scenario or the SDK.
+#
+# Suites soft-skip without the faucet secrets (fork PRs), and lnurl scenarios
+# skip without docker. To add a language: add a runner for its CLI port, a
+# make target, and a matrix entry here.
+
+name: Binding tests
+
+on:
+  workflow_call:
+
+jobs:
+  test:
+    name: ${{ matrix.lang }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lang: rust
+            target: cli-itest
+          - lang: wasm
+            target: wasm-itest
+            node-version: 22
+            wasm-pack: true
+    env:
+      FAUCET_USERNAME: ${{ secrets.FAUCET_USERNAME }}
+      FAUCET_PASSWORD: ${{ secrets.FAUCET_PASSWORD }}
+      FAUCET_CONCURRENCY: "2"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        if: matrix.node-version
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install wasm-pack
+        if: matrix.wasm-pack
+        run: which wasm-pack || cargo install wasm-pack
+
+      - name: Run ${{ matrix.lang }} binding tests
+        run: make ${{ matrix.target }}

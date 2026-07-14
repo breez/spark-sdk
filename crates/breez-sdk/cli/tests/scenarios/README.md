@@ -6,7 +6,8 @@ surface, and they are **shared verbatim across languages**: each language CLI
 port gets a thin runner that executes the same files, so a behavior is
 defined once and enforced everywhere.
 
-Current runners:
+Current runners (one matrix entry each in the `Binding tests` CI workflow,
+`.github/workflows/binding-tests.yml`):
 
 | Runner | Drives | Entry point |
 |---|---|---|
@@ -16,8 +17,8 @@ Current runners:
 ## The sync contract
 
 - **Scenarios are data, never ported.** Adding or changing behavior means
-  changing the Rust CLI and the scenario in the same PR; the `cli-itest` job
-  proves the new behavior.
+  changing the Rust CLI and the scenario in the same PR; the `Binding tests /
+  rust` CI job (`make cli-itest`) proves the new behavior.
 - **Runners are per-language and thin.** They only know how to spawn their
   CLI, feed stdin, and evaluate the assertions below. Adding a language means
   adding one runner, not porting tests.

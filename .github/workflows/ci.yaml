@@ -146,48 +146,10 @@ jobs:
       - name: Run Tests
         run: make breez-itest
 
-  cli-itest:
-    name: CLI scenario tests
-    runs-on: ubuntu-latest
-    env:
-      FAUCET_USERNAME: ${{ secrets.FAUCET_USERNAME }}
-      FAUCET_PASSWORD: ${{ secrets.FAUCET_PASSWORD }}
-      FAUCET_CONCURRENCY: "2"
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup build environment
-        uses: ./.github/actions/setup-build
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Run CLI scenarios
-        run: make cli-itest
-
-  wasm-itest:
-    name: WASM binding tests
-    runs-on: ubuntu-latest
-    env:
-      FAUCET_USERNAME: ${{ secrets.FAUCET_USERNAME }}
-      FAUCET_PASSWORD: ${{ secrets.FAUCET_PASSWORD }}
-      FAUCET_CONCURRENCY: "2"
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup build environment
-        uses: ./.github/actions/setup-build
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install wasm-pack
-        run: which wasm-pack || cargo install wasm-pack
-
-      - name: Run WASM binding tests
-        run: make wasm-itest
+  binding-tests:
+    name: Binding tests
+    uses: ./.github/workflows/binding-tests.yml
+    secrets: inherit
 
   wasm-clippy:
     name: Wasm clippy
