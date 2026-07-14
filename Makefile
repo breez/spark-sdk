@@ -89,6 +89,13 @@ compat-itest:
 cli-itest:
 	cargo xtask test --package cli --test scenarios -- --test-threads=2
 
+# WASM binding e2e tests: the shared CLI scenarios driven through the wasm
+# CLI port, plus an npm-API smoke suite. Builds the local npm package first.
+# Same gating as cli-itest. Requires Node 22.
+wasm-itest:
+	$(MAKE) -C crates/breez-sdk/bindings/examples/cli/langs/wasm setup
+	cd packages/wasm/itest && npm install && node --test
+
 breez-itest:
 	cargo xtask test --package breez-sdk-itest -- --test-threads=8
 

@@ -44,7 +44,8 @@ function parseCliArgs() {
     label: undefined,
     listLabels: false,
     storeLabel: false,
-    rpid: undefined
+    rpid: undefined,
+    lnurlDomain: undefined
   }
 
   for (let i = 0; i < args.length; i++) {
@@ -92,6 +93,9 @@ function parseCliArgs() {
       case '--server-mode':
         opts.serverMode = true
         break
+      case '--lnurl-domain':
+        opts.lnurlDomain = args[++i]
+        break
       case '-h':
       case '--help':
         console.log('Usage: node src/main.js [OPTIONS]')
@@ -111,6 +115,7 @@ function parseCliArgs() {
         console.log('  --store-label                                Publish the label to Nostr (requires --passkey and --label)')
         console.log('  --rpid <id>                                  Relying party ID for FIDO2 provider (requires --passkey)')
         console.log('  --server-mode                                Run in server mode (background_tasks_enabled=false)')
+        console.log('  --lnurl-domain <domain>                      LNURL server domain for lightning address registration')
         console.log('  -h, --help                                   Show this help message')
         process.exit(0)
         break
@@ -243,6 +248,10 @@ async function main() {
 
   if (network === 'mainnet') {
     config.crossChainConfig = {}
+  }
+
+  if (opts.lnurlDomain !== undefined) {
+    config.lnurlDomain = opts.lnurlDomain
   }
 
   // Stable balance config

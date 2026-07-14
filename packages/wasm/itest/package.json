@@ -1,0 +1,16 @@
+{
+  "name": "breez-sdk-spark-itest",
+  "version": "0.0.0",
+  "private": true,
+  "description": "End-to-end tests for the WASM bindings: shared CLI scenarios and an npm-API smoke suite",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@breeztech/breez-sdk-spark": "file:..",
+    "dotenv": "^16.0.0"
+  }
+}
