@@ -82,6 +82,13 @@ spark-itest-mysql:
 compat-itest:
 	cargo xtask compat-itest
 
+# Behavioral scenarios driven through the Rust CLI REPL against the remote
+# regtest network (see crates/breez-sdk/cli/tests/scenarios/README.md).
+# Soft-skips without FAUCET_USERNAME/FAUCET_PASSWORD; lnurl scenarios also
+# need Docker. Two threads to bound faucet pressure.
+cli-itest:
+	cargo xtask test --package cli --test scenarios -- --test-threads=2
+
 breez-itest:
 	cargo xtask test --package breez-sdk-itest -- --test-threads=8
 

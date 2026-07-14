@@ -1,0 +1,27 @@
+{
+  "name": "get-info, sync, and list-payments on a fresh wallet",
+  "sessions": [
+    {
+      "wallet": "alice",
+      "steps": [
+        {
+          "cmd": "get-info",
+          "expect_json": {
+            "identity_pubkey": { "exists": true },
+            "balance_sats": 0
+          }
+        },
+        {
+          "cmd": "sync",
+          "expect_contains": ["{}"]
+        },
+        {
+          "cmd": "list-payments",
+          "expect_json": {
+            "payments": []
+          }
+        }
+      ]
+    }
+  ]
+}

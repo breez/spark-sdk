@@ -27,5 +27,10 @@ shlex.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing.workspace = true
 
+[dev-dependencies]
+platform-utils.workspace = true
+tempfile = "3"
+tokio = { workspace = true, features = ["io-util", "process", "time"] }
+
 [lints]
 workspace = true
