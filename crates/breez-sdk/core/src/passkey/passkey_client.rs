@@ -380,6 +380,10 @@ mod tests {
 
     use super::super::error::PrfProviderError;
     use super::super::{DeriveSeedsOutput, DeriveSeedsRequest};
+    // Wasm-safe tokio (tokio_with_wasm under wasm-bindgen-test) so the sleep in
+    // wait_for_stored uses web timers instead of std::time, which is unsupported
+    // on wasm32-unknown-unknown.
+    use platform_utils::tokio;
 
     /// Salt-aware mock that produces deterministic per-salt PRF
     /// outputs so multi-salt ceremonies can round-trip through tests.
