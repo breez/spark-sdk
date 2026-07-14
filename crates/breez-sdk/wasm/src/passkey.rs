@@ -132,8 +132,8 @@ pub struct ConnectWithPasskeyResponse {
 #[wasm_bindgen]
 pub struct PasskeyClient {
     inner: breez_sdk_spark::passkey::PasskeyClient,
-    /// Kept to fold the browser immediate-mediation capability into
-    /// `checkAvailability` (the core defaults it to native-`true`).
+    /// Kept so `supportsImmediateMediation` can query the provider
+    /// directly: the core client does not expose this capability.
     provider: Arc<WasmPrfProvider>,
 }
 
