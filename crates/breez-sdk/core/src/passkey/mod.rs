@@ -272,9 +272,24 @@ impl Passkey {
 
         if request.publish_label
             && let Ok(client) = self.nostr_client().await
-            && let Err(e) = client.store_label(&label).await
         {
-            warn!("setup_wallet: store_label failed, returning wallet anyway: {e}");
+            // The label publish is a non-fatal discovery convenience, so run
+            // it off the critical path rather than blocking on slow relays.
+            // store_label is idempotent, so the bounded retry is safe.
+            let label = label.clone();
+            tokio::spawn(async move {
+                for attempt in 0..3u32 {
+                    match client.store_label(&label).await {
+                        Ok(()) => return,
+                        Err(e) => warn!(
+                            "setup_wallet: background store_label attempt {attempt} failed: {e}"
+                        ),
+                    }
+                    if attempt < 2 {
+                        tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt))).await;
+                    }
+                }
+            });
         }
 
         Ok(WalletSetup {
