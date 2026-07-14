@@ -6,19 +6,24 @@ surface, and they are **shared verbatim across languages**: each language CLI
 port gets a thin runner that executes the same files, so a behavior is
 defined once and enforced everywhere.
 
-Current runners (one matrix entry each in the `Binding tests` CI workflow,
-`.github/workflows/binding-tests.yml`):
+Current runners:
 
-| Runner | Drives | Entry point |
-|---|---|---|
-| Rust | `crates/breez-sdk/cli` binary | `crates/breez-sdk/cli/tests/scenarios.rs` (`make cli-itest`) |
-| JS/WASM | `bindings/examples/cli/langs/wasm` port (consumes the locally built `packages/wasm` npm package) | `packages/wasm/itest/scenarios.test.js` (`make wasm-itest`) |
+| Runner | Drives | Entry point | CI home |
+|---|---|---|---|
+| Rust | `crates/breez-sdk/cli` binary | `crates/breez-sdk/cli/tests/scenarios.rs` (`make cli-itest`) | step in `Breez integration tests` (shares its toolchain, faucet limits, and lnurl image) |
+| JS/WASM | `bindings/examples/cli/langs/wasm` port (consumes the locally built `packages/wasm` npm package) | `packages/wasm/itest/scenarios.test.js` (`make wasm-itest`) | `WASM binding tests` job |
+
+When adding a language runner, prefer attaching its `make <lang>-itest` step
+to the CI job that already has that language's toolchain and the faucet
+secrets rather than adding a fresh job (the rust runner rides along with the
+breez itests for exactly that reason).
 
 ## The sync contract
 
 - **Scenarios are data, never ported.** Adding or changing behavior means
-  changing the Rust CLI and the scenario in the same PR; the `Binding tests /
-  rust` CI job (`make cli-itest`) proves the new behavior.
+  changing the Rust CLI and the scenario in the same PR; the rust runner
+  (`make cli-itest`, a step in the `Breez integration tests` CI job) proves
+  the new behavior.
 - **Runners are per-language and thin.** They only know how to spawn their
   CLI, feed stdin, and evaluate the assertions below. Adding a language means
   adding one runner, not porting tests.
