@@ -41,9 +41,10 @@
           "cmd": "lnurl-pay ${bob_ln_address} -c \"scenario comment\"",
           "stdin": ["1500", "y"],
           "expect_json": {
-            "payment.status": "completed",
-            "payment.payment_type": "send"
-          }
+            "payment.payment_type": "send",
+            "payment.id": { "exists": true }
+          },
+          "capture": { "lnurl_payment_id": "payment.id" }
         }
       ]
     },
@@ -62,6 +63,18 @@
           "cmd": "list-payments -t receive",
           "expect_json": {
             "payments.0.payment_type": "receive"
+          }
+        }
+      ]
+    },
+    {
+      "wallet": "alice",
+      "steps": [
+        {
+          "cmd": "get-payment ${lnurl_payment_id}",
+          "retry": { "timeout_secs": 120, "interval_secs": 5 },
+          "expect_json": {
+            "payment.status": "completed"
           }
         }
       ]

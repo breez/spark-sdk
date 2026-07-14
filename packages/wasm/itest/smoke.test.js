@@ -149,8 +149,18 @@ test('npm API smoke: connect, receive, parse, pay, list, lnurl-pay', async (t) =
         payRequest: lnAddress.payRequest,
         comment: 'smoke comment'
       })
+      // The payment can return pending: completion needs the receiver to
+      // claim, so poll until the preimage is released.
       const paid = await alice.sdk.lnurlPay({ prepareResponse: preparedLnurl })
-      assert.equal(paid.payment.status, 'completed')
+      const deadline = Date.now() + 120_000
+      let status = paid.payment.status
+      while (status !== 'completed') {
+        if (Date.now() >= deadline) {
+          throw new Error(`lnurl payment stayed ${status}`)
+        }
+        await sleep(5000)
+        status = (await alice.sdk.getPayment({ paymentId: paid.payment.id })).payment.status
+      }
     } else {
       console.error('skipping lnurl-pay part: docker not available')
     }
