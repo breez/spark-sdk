@@ -7,6 +7,7 @@
 pub mod assert;
 pub mod engine;
 pub mod faucet;
+pub mod lnurl;
 pub mod session;
 
 use std::collections::HashMap;

@@ -21,3 +21,8 @@ async fn scenario_02_receive_and_parse() -> Result<()> {
 async fn scenario_03_deposit_claim_and_spark_pay() -> Result<()> {
     harness::engine::run_scenario("03_deposit_claim_and_spark_pay").await
 }
+
+#[tokio::test]
+async fn scenario_04_lnurl_pay() -> Result<()> {
+    harness::engine::run_scenario("04_lnurl_pay").await
+}

@@ -36,7 +36,7 @@ pub async fn run_scenario(name: &str) -> Result<()> {
     }
 
     let mut vars: HashMap<String, String> = HashMap::new();
-    let _fixtures = start_fixtures(&scenario, &mut vars)?;
+    let _fixtures = start_fixtures(&scenario, &mut vars).await?;
 
     let mut wallet_dirs: HashMap<String, tempfile::TempDir> = HashMap::new();
     for (session_index, session) in scenario.sessions.iter().enumerate() {
@@ -179,10 +179,20 @@ fn docker_available() -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// Fixture handles that clean up on drop. Only "lnurl" exists.
-fn start_fixtures(scenario: &Scenario, _vars: &mut HashMap<String, String>) -> Result<Vec<()>> {
-    if let Some(fixture) = scenario.fixtures.first() {
-        bail!("unknown fixture '{fixture}'");
+/// Fixture handles that clean up on drop. "lnurl" exposes `${lnurl_url}`.
+async fn start_fixtures(
+    scenario: &Scenario,
+    vars: &mut HashMap<String, String>,
+) -> Result<Vec<super::lnurl::LnurlFixture>> {
+    let mut fixtures = Vec::new();
+    for fixture in &scenario.fixtures {
+        if fixture == "lnurl" {
+            let lnurl = super::lnurl::LnurlFixture::start().await?;
+            vars.insert("lnurl_url".to_string(), lnurl.http_url.clone());
+            fixtures.push(lnurl);
+        } else {
+            bail!("unknown fixture '{fixture}'");
+        }
     }
-    Ok(Vec::new())
+    Ok(fixtures)
 }

@@ -1,0 +1,70 @@
+{
+  "name": "lnurl-pay to a registered lightning address via the docker lnurl fixture",
+  "requires": ["faucet", "docker"],
+  "fixtures": ["lnurl"],
+  "sessions": [
+    {
+      "wallet": "bob",
+      "extra_args": ["--lnurl-domain", "${lnurl_url}"],
+      "steps": [
+        {
+          "cmd": "register-lightning-address bobtest \"bob test address\"",
+          "expect_json": {
+            "lightning_address": { "exists": true },
+            "username": "bobtest"
+          },
+          "capture": { "bob_ln_address": "lightning_address" }
+        }
+      ]
+    },
+    {
+      "wallet": "alice",
+      "steps": [
+        {
+          "cmd": "receive -m bitcoin",
+          "expect_json": {
+            "payment_request": { "exists": true }
+          },
+          "capture": { "alice_deposit_address": "payment_request" }
+        },
+        {
+          "faucet_fund": { "address": "${alice_deposit_address}", "amount_sats": 50000 }
+        },
+        {
+          "cmd": "get-info -e true",
+          "retry": { "timeout_secs": 180, "interval_secs": 5 },
+          "expect_json": {
+            "balance_sats": { "gte": 40000 }
+          }
+        },
+        {
+          "cmd": "lnurl-pay ${bob_ln_address} -c \"scenario comment\"",
+          "stdin": ["1500", "y"],
+          "expect_json": {
+            "payment.status": "completed",
+            "payment.payment_type": "send"
+          }
+        }
+      ]
+    },
+    {
+      "wallet": "bob",
+      "extra_args": ["--lnurl-domain", "${lnurl_url}"],
+      "steps": [
+        {
+          "cmd": "get-info -e true",
+          "retry": { "timeout_secs": 120, "interval_secs": 5 },
+          "expect_json": {
+            "balance_sats": { "gte": 1000 }
+          }
+        },
+        {
+          "cmd": "list-payments -t receive",
+          "expect_json": {
+            "payments.0.payment_type": "receive"
+          }
+        }
+      ]
+    }
+  ]
+}
