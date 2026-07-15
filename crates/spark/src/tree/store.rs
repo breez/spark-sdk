@@ -67,7 +67,6 @@ struct ReservationEntry {
 #[derive(Default)]
 struct LeavesState {
     /// Every unreserved leaf, whether or not the operators all reported it.
-    /// Keyed by leaf id, so a leaf can never be counted twice.
     leaves: HashMap<TreeNodeId, StoredLeaf>,
     leaves_reservations: HashMap<LeavesReservationId, ReservationEntry>,
     /// Leaf IDs that have been finalized (spent) with their spent timestamp.
