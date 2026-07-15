@@ -596,6 +596,13 @@ pub fn evaluate_leaf_exit_costs(
 /// Partitions the CPFP inputs across branches so each is funded by its own
 /// subset, avoiding a fan-out. Greedy, costliest branch first, holding one input
 /// in reserve per not-yet-funded branch. `None` when no partition fits.
+///
+/// Returned in `selected_leaves` order (value-descending, as
+/// [`evaluate_leaf_exit_costs`] emits), not the internal greedy order. The
+/// funding sizes each branch assuming a shared ancestor is charged to the first
+/// leaf in value order; `build_exit` charges it to the first branch it iterates.
+/// Returning in value order keeps those two the same branch, so no branch is
+/// left short of a shared ancestor's fee and fails its dust check.
 pub fn assign_inputs_to_leaves(
     inputs: &[CpfpInput],
     selected_leaves: &[SelectedLeaf],
@@ -619,7 +626,8 @@ pub fn assign_inputs_to_leaves(
     });
 
     let leaf_count = sorted_leaves.len();
-    let mut assignments: Vec<(TreeNodeId, Vec<CpfpInput>)> = Vec::with_capacity(leaf_count);
+    let mut assigned_by_leaf: HashMap<TreeNodeId, Vec<CpfpInput>> =
+        HashMap::with_capacity(leaf_count);
     for (i, leaf) in sorted_leaves.iter().enumerate() {
         let required = leaf.estimated_cost.saturating_add(change_dust_limit);
         let branches_left_after = leaf_count.saturating_sub(i + 1);
@@ -633,9 +641,19 @@ pub fn assign_inputs_to_leaves(
             sum = sum.saturating_add(input.witness_utxo.value.to_sat());
             assigned.push(input.clone());
         }
-        assignments.push((leaf.id.clone(), assigned));
+        assigned_by_leaf.insert(leaf.id.clone(), assigned);
     }
-    Some(assignments)
+    Some(
+        selected_leaves
+            .iter()
+            .map(|leaf| {
+                (
+                    leaf.id.clone(),
+                    assigned_by_leaf.remove(&leaf.id).unwrap_or_default(),
+                )
+            })
+            .collect(),
+    )
 }
 
 /// Builds an unsigned fan-out PSBT with one output per selected leaf. No change
@@ -1203,6 +1221,21 @@ mod tests {
             let got = assign_inputs_to_leaves(&inputs, &leaves, 330).expect("should fit");
             assert_eq!(got.len(), 2);
             assert!(got.iter().all(|(_, ins)| ins.len() == 1));
+        }
+
+        #[test_all]
+        fn assign_inputs_returns_value_order_when_richest_is_not_costliest() {
+            // Leaf "a" is richer but cheaper; "b" is poorer but costlier. Input
+            // is value order (a, b); the greedy pass runs costliest-first (b, a).
+            let inputs = vec![cpfp_input(10_000, 0), cpfp_input(5_000, 1)];
+            let leaves = vec![selected("a", 50_000, 1_000), selected("b", 20_000, 3_000)];
+            let got = assign_inputs_to_leaves(&inputs, &leaves, 330).expect("should fit");
+            // Returned in value order, matching evaluate_leaf_exit_costs.
+            assert_eq!(got[0].0, leaves[0].id);
+            assert_eq!(got[1].0, leaves[1].id);
+            // The costlier branch still greedily took the larger input.
+            assert_eq!(got[1].1[0].witness_utxo.value.to_sat(), 10_000);
+            assert_eq!(got[0].1[0].witness_utxo.value.to_sat(), 5_000);
         }
 
         #[test_all]
