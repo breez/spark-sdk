@@ -26,6 +26,29 @@ pub const DEFAULT_RESERVATION_TIMEOUT: Duration = Duration::from_secs(60);
 struct StoredLeaf {
     node: TreeNode,
     added_at: SystemTime,
+    /// The coordinator returned this leaf but at least one operator did not.
+    /// It still counts towards the wallet balance, but cannot be selected to
+    /// back a payment or a swap until every operator reports it again.
+    /// Mirrors the `is_missing_from_operators` column of the SQL stores.
+    missing_from_operators: bool,
+}
+
+impl StoredLeaf {
+    fn available(node: &TreeNode, added_at: SystemTime) -> Self {
+        StoredLeaf {
+            node: node.clone(),
+            added_at,
+            missing_from_operators: false,
+        }
+    }
+
+    fn missing_from_operators(node: &TreeNode, added_at: SystemTime) -> Self {
+        StoredLeaf {
+            node: node.clone(),
+            added_at,
+            missing_from_operators: true,
+        }
+    }
 }
 
 /// Entry in the reservation map, containing leaves, purpose, and the semaphore permit.
@@ -43,8 +66,9 @@ struct ReservationEntry {
 
 #[derive(Default)]
 struct LeavesState {
+    /// Every unreserved leaf, whether or not the operators all reported it.
+    /// Keyed by leaf id, so a leaf can never be counted twice.
     leaves: HashMap<TreeNodeId, StoredLeaf>,
-    missing_operators_leaves: HashMap<TreeNodeId, StoredLeaf>,
     leaves_reservations: HashMap<LeavesReservationId, ReservationEntry>,
     /// Leaf IDs that have been finalized (spent) with their spent timestamp.
     /// Prevents re-adding during refresh. Cleaned up when leaf is no longer
@@ -57,11 +81,19 @@ struct LeavesState {
 }
 
 impl LeavesState {
-    /// Calculate the available balance (unreserved available leaves).
+    /// The pool leaf selection draws from: unreserved, available, and reported
+    /// by every operator.
+    fn selectable_leaves(&self) -> impl Iterator<Item = &StoredLeaf> {
+        self.leaves.values().filter(|stored| {
+            stored.node.status == TreeNodeStatus::Available && !stored.missing_from_operators
+        })
+    }
+
+    /// Total value of the selectable pool. Not the wallet balance:
+    /// `TreeStore::get_available_balance` also counts missing-from-operators and
+    /// swap-reserved leaves.
     fn available_balance(&self) -> u64 {
-        self.leaves
-            .values()
-            .filter(|stored| stored.node.status == TreeNodeStatus::Available)
+        self.selectable_leaves()
             .map(|stored| stored.node.value)
             .sum()
     }
@@ -345,13 +377,13 @@ impl InMemoryTreeStore {
                 "leaf_lifecycle add_leaves: leaf={} value={} cleared_spent_marker={}",
                 leaf.id, leaf.value, was_spent
             );
-            state.leaves.insert(
-                leaf.id.clone(),
-                StoredLeaf {
-                    node: leaf.clone(),
-                    added_at: now,
-                },
-            );
+            // Overwrites any missing-from-operators entry for the same id: a
+            // refresh racing an in-flight claim classifies the claimed leaves as
+            // missing (the coordinator has them, a lagging operator does not),
+            // and the claim then adds the very same leaves.
+            state
+                .leaves
+                .insert(leaf.id.clone(), StoredLeaf::available(leaf, now));
         }
         Ok(())
     }
@@ -372,25 +404,25 @@ impl InMemoryTreeStore {
             }
         }
 
+        let mut available = Vec::new();
+        let mut not_available = Vec::new();
+        let mut available_missing_from_operators = Vec::new();
+        for stored in state.leaves.values() {
+            let is_available = stored.node.status == TreeNodeStatus::Available;
+            match (stored.missing_from_operators, is_available) {
+                (true, true) => available_missing_from_operators.push(stored.node.clone()),
+                // A leaf the operators no longer report and that is not available
+                // is not spendable under any classification: leave it out.
+                (true, false) => (),
+                (false, true) => available.push(stored.node.clone()),
+                (false, false) => not_available.push(stored.node.clone()),
+            }
+        }
+
         Ok(Leaves {
-            available: state
-                .leaves
-                .values()
-                .filter(|stored| stored.node.status == TreeNodeStatus::Available)
-                .map(|stored| stored.node.clone())
-                .collect(),
-            not_available: state
-                .leaves
-                .values()
-                .filter(|stored| stored.node.status != TreeNodeStatus::Available)
-                .map(|stored| stored.node.clone())
-                .collect(),
-            available_missing_from_operators: state
-                .missing_operators_leaves
-                .values()
-                .filter(|stored| stored.node.status == TreeNodeStatus::Available)
-                .map(|stored| stored.node.clone())
-                .collect(),
+            available,
+            not_available,
+            available_missing_from_operators,
             reserved_for_payment,
             reserved_for_swap,
         })
@@ -443,7 +475,6 @@ impl InMemoryTreeStore {
             .retain(|_, spent_at| *spent_at >= refresh_started_at);
 
         let old_leaves = std::mem::take(&mut state.leaves);
-        let old_missing = std::mem::take(&mut state.missing_operators_leaves);
 
         let now = SystemTime::now();
         for leaf in leaves {
@@ -455,13 +486,9 @@ impl InMemoryTreeStore {
                         leaf.id, leaf.value
                     );
                 }
-                state.leaves.insert(
-                    leaf.id.clone(),
-                    StoredLeaf {
-                        node: leaf.clone(),
-                        added_at: now,
-                    },
-                );
+                state
+                    .leaves
+                    .insert(leaf.id.clone(), StoredLeaf::available(leaf, now));
             } else {
                 trace!(
                     "leaf_lifecycle set_leaves: skipped leaf={} (in spent_leaf_ids)",
@@ -469,42 +496,26 @@ impl InMemoryTreeStore {
                 );
             }
         }
+        // Applied after the available leaves so that a leaf the coordinator
+        // reports in both lists ends up flagged missing, matching the upsert
+        // order of the SQL stores.
         for leaf in missing_operators_leaves {
             if !state.spent_leaf_ids.contains_key(&leaf.id) {
-                state.missing_operators_leaves.insert(
+                state.leaves.insert(
                     leaf.id.clone(),
-                    StoredLeaf {
-                        node: leaf.clone(),
-                        added_at: now,
-                    },
+                    StoredLeaf::missing_from_operators(leaf, now),
                 );
             }
         }
 
         let mut preserved_count = 0u32;
         for (id, stored) in old_leaves {
-            if stored.added_at >= refresh_started_at
-                && !state.leaves.contains_key(&id)
-                && !state.missing_operators_leaves.contains_key(&id)
-            {
+            if stored.added_at >= refresh_started_at && !state.leaves.contains_key(&id) {
                 trace!(
-                    "leaf_lifecycle set_leaves: preserved old leaf={} value={} (added after refresh started)",
-                    id, stored.node.value
+                    "leaf_lifecycle set_leaves: preserved old leaf={} value={} missing_from_operators={} (added after refresh started)",
+                    id, stored.node.value, stored.missing_from_operators
                 );
                 state.leaves.insert(id, stored);
-                preserved_count += 1;
-            }
-        }
-        for (id, stored) in old_missing {
-            if stored.added_at >= refresh_started_at
-                && !state.leaves.contains_key(&id)
-                && !state.missing_operators_leaves.contains_key(&id)
-            {
-                trace!(
-                    "leaf_lifecycle set_leaves: preserved old missing leaf={} value={}",
-                    id, stored.node.value
-                );
-                state.missing_operators_leaves.insert(id, stored);
                 preserved_count += 1;
             }
         }
@@ -514,16 +525,18 @@ impl InMemoryTreeStore {
             for stored in &mut entry.leaves {
                 if let Some(fresh) = state.leaves.remove(&stored.node.id) {
                     *stored = fresh;
-                } else if let Some(fresh) = state.missing_operators_leaves.remove(&stored.node.id) {
-                    *stored = fresh;
                 }
             }
         }
 
         trace!(
-            "set_leaves: {} leaves, {} missing, {} preserved from previous state",
+            "set_leaves: {} leaves ({} missing from operators), {} preserved from previous state",
             state.leaves.len(),
-            state.missing_operators_leaves.len(),
+            state
+                .leaves
+                .values()
+                .filter(|stored| stored.missing_from_operators)
+                .count(),
             preserved_count
         );
 
@@ -545,11 +558,8 @@ impl InMemoryTreeStore {
         let available = state.available_balance();
         let pending = state.pending_balance();
 
-        // Filter available leaves
         let leaves: Vec<TreeNode> = state
-            .leaves
-            .values()
-            .filter(|stored| stored.node.status == TreeNodeStatus::Available)
+            .selectable_leaves()
             .map(|stored| stored.node.clone())
             .collect();
 
@@ -625,9 +635,7 @@ impl InMemoryTreeStore {
         target_amounts: Option<&TargetAmounts>,
     ) -> Result<LeafSelection, TreeServiceError> {
         let leaves: Vec<TreeNode> = state
-            .leaves
-            .values()
-            .filter(|stored| stored.node.status == TreeNodeStatus::Available)
+            .selectable_leaves()
             .map(|stored| stored.node.clone())
             .collect();
 
@@ -677,13 +685,9 @@ impl InMemoryTreeStore {
 
         let now = SystemTime::now();
         for leaf in leaves_to_keep {
-            state.leaves.insert(
-                leaf.id.clone(),
-                StoredLeaf {
-                    node: leaf.clone(),
-                    added_at: now,
-                },
-            );
+            state
+                .leaves
+                .insert(leaf.id.clone(), StoredLeaf::available(leaf, now));
         }
     }
 
@@ -718,13 +722,9 @@ impl InMemoryTreeStore {
                     "leaf_lifecycle finalize: adding new leaf={} value={} reservation={}",
                     leaf.id, leaf.value, id
                 );
-                state.leaves.insert(
-                    leaf.id.clone(),
-                    StoredLeaf {
-                        node: leaf.clone(),
-                        added_at: now,
-                    },
-                );
+                state
+                    .leaves
+                    .insert(leaf.id.clone(), StoredLeaf::available(leaf, now));
             }
         }
         trace!("Finalized leaves reservation: {}", id);
@@ -756,23 +756,16 @@ impl InMemoryTreeStore {
                 "leaf_lifecycle update_reservation: adding change leaf={} value={} reservation={}",
                 leaf.id, leaf.value, reservation_id
             );
-            state.leaves.insert(
-                leaf.id.clone(),
-                StoredLeaf {
-                    node: leaf.clone(),
-                    added_at: now,
-                },
-            );
+            state
+                .leaves
+                .insert(leaf.id.clone(), StoredLeaf::available(leaf, now));
         }
 
         // Re-insert the reservation with updated leaves but same permit
         // Pending change is cleared since the swap completed
         let reserved: Vec<StoredLeaf> = reserved_leaves
             .iter()
-            .map(|leaf| StoredLeaf {
-                node: leaf.clone(),
-                added_at: now,
-            })
+            .map(|leaf| StoredLeaf::available(leaf, now))
             .collect();
         state.leaves_reservations.insert(
             reservation_id.clone(),
@@ -811,7 +804,13 @@ impl InMemoryTreeStore {
             return Err(TreeServiceError::NonReservableLeaves);
         }
         for leaf in leaves {
-            if !state.leaves.contains_key(&leaf.id) {
+            // A leaf the operators no longer report cannot back a payment or a
+            // swap, even though it still counts towards the balance.
+            let reservable = state
+                .leaves
+                .get(&leaf.id)
+                .is_some_and(|stored| !stored.missing_from_operators);
+            if !reservable {
                 return Err(TreeServiceError::NonReservableLeaves);
             }
         }
@@ -1353,6 +1352,20 @@ mod tests {
     async fn test_missing_operators_replaced_on_set_leaves() {
         shared_tests::test_missing_operators_replaced_on_set_leaves(&InMemoryTreeStore::new())
             .await;
+    }
+
+    #[async_test_all]
+    async fn test_add_leaves_clears_missing_from_operators() {
+        shared_tests::test_add_leaves_clears_missing_from_operators(&InMemoryTreeStore::new())
+            .await;
+    }
+
+    #[async_test_all]
+    async fn test_missing_from_operators_leaves_are_not_selectable() {
+        shared_tests::test_missing_from_operators_leaves_are_not_selectable(
+            &InMemoryTreeStore::new(),
+        )
+        .await;
     }
 
     #[async_test_all]

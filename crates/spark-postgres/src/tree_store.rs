@@ -1924,6 +1924,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_add_leaves_clears_missing_from_operators() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_add_leaves_clears_missing_from_operators(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_missing_from_operators_leaves_are_not_selectable() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_missing_from_operators_leaves_are_not_selectable(&fixture.store).await;
+    }
+
+    #[tokio::test]
     async fn test_reserve_with_none_target_reserves_all() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_reserve_with_none_target_reserves_all(&fixture.store).await;
