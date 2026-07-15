@@ -67,6 +67,7 @@ Running the container:
 docker run -p 8080:8080 \
   -e BREEZ_LNURL_DB_URL="postgres://user:password@postgres_host:5432/lnurl_db" \
   -e BREEZ_LNURL_DOMAINS="yourdomain.com" \
+  -e BREEZ_LNURL_DEFAULT_API_KEY="<breez-api-key>" \
   -e BREEZ_LNURL_AUTO_MIGRATE=true \
   lnurl-server
 ```
@@ -76,7 +77,7 @@ docker run -p 8080:8080 \
 If you've built the binary, you can run it directly:
 
 ```shell
-./target/release/lnurl --db-url="lnurl.sqlite" --domains="yourdomain.com" --auto-migrate
+./target/release/lnurl --db-url="lnurl.sqlite" --domains="yourdomain.com" --default-api-key="<breez-api-key>" --auto-migrate
 ```
 
 ## Configuration
@@ -112,7 +113,7 @@ db_url = "postgres://user:password@localhost:5432/lnurl_db"
 min_sendable = 1000                 # Minimum amount in millisatoshi (1 sat)
 max_sendable = 4000000000           # Maximum amount in millisatoshi (4,000,000 sats)
 domains = "yourdomain.com"          # Comma-separated list of allowed domains
-default_api_key = "<breez-api-key>" # Fallback Breez API key for partner attribution
+default_api_key = "<breez-api-key>" # Fallback Breez API key for partner attribution (required on mainnet)
 ```
 
 ### Important Configuration Options
@@ -123,7 +124,7 @@ default_api_key = "<breez-api-key>" # Fallback Breez API key for partner attribu
 | `--auto-migrate` | Automatically apply database migrations | `false` |
 | `--db-url` | Database connection string | `""` |
 | `--domains` | Comma-separated list of allowed domains | `localhost:8080` |
-| `--default-api-key` | Fallback Breez API key for partner attribution | (none) |
+| `--default-api-key` | Fallback Breez API key for partner attribution (**required on mainnet**) | (none) |
 | `--log-level` | RUST_LOG style format (e.g., `info`, `lnurl=trace,info`, `lnurl=trace,spark_wallet=debug,info`) | `info` |
 | `--network` | Spark network (mainnet, testnet, regtest) | `mainnet` |
 | `--min-sendable` | Minimum payment amount (millisatoshi) | `1000` |
@@ -141,6 +142,14 @@ For a complete list of options, run:
 ```shell
 lnurl --help
 ```
+
+### Partner Attribution
+
+This server creates invoices on behalf of its users, so each lightning-address receive is attributed to a partner when the invoice is created.
+
+A receive is attributed to the domain's own Breez API key when one is configured for that domain, otherwise to the **default API key** (`--default-api-key` / `BREEZ_LNURL_DEFAULT_API_KEY`).
+
+On **mainnet the default API key is required**, and the server will not start without it. This ensures a self-hosted server attributes all of its receives (to its own partner) instead of leaving any unattributed.
 
 ### Database Support
 
