@@ -996,7 +996,7 @@ impl CrossChainService for OrchestraService {
                      (destination_decimals={destination_decimals}, source_decimals={})",
                     route.decimals,
                 );
-                let required_in_raw = self
+                let required_in = self
                     .estimate_required_source_amount(
                         &route.chain,
                         &route.asset,
@@ -1007,19 +1007,6 @@ impl CrossChainService for OrchestraService {
                         apply_stable_buffers,
                     )
                     .await?;
-                // Floor to the nearest cent so wallets scanning the QR (or
-                // users typing the value manually) get a clean dollars-and-
-                // cents figure. Drops up to $0.01 from the deposit; the
-                // buffer's headroom absorbs it. Only applied to stable
-                // sources where "cent" is the natural unit.
-                let required_in = if apply_stable_buffers {
-                    required_in_raw
-                        .checked_div(10_000)
-                        .and_then(|c| c.checked_mul(10_000))
-                        .unwrap_or(required_in_raw)
-                } else {
-                    required_in_raw
-                };
                 // Drift check uses the ORIGINAL `amount`, not `inflated_target`.
                 (required_in, Some(amount))
             }
@@ -1059,21 +1046,21 @@ impl CrossChainService for OrchestraService {
 
         let deposit_amount = parse_amount(&quote.amount_in, "amountIn")?;
         let quote_estimated_out = parse_amount(&quote.estimated_out, "estimatedOut")?;
+        let expires_at_secs = parse_rfc3339_to_unix_seconds(&quote.expires_at)?;
+
+        // When FeesExcluded reject the quote if Orchestra's own delivery
+        // estimate drifts outside the slippage tolerance.
+        if let Some(target) = target_destination_amount {
+            verify_quote_not_drifted(target, quote_estimated_out, max_slippage_bps)?;
+        }
         // Shave Orchestra's own delivery estimate by the external overhead
-        // we model on the input side. Drift check uses this shaved value so
-        // slippage is measured against our honest expectation.
+        // we model on the input side. Orchestea don't estimate the external
+        // delivery costs of routing the payment.
         let shaved_expected = if apply_stable_buffers {
             quote_estimated_out.saturating_sub(RECEIVE_EXTERNAL_FEE_STABLE_BASE_UNITS)
         } else {
             quote_estimated_out
         };
-        let expires_at_secs = parse_rfc3339_to_unix_seconds(&quote.expires_at)?;
-
-        // FeesExcluded: reject the quote if the realized delivery drifts
-        // outside the slippage tolerance. Reuses the send-side helper.
-        if let Some(target) = target_destination_amount {
-            verify_quote_not_drifted(target, shaved_expected, max_slippage_bps)?;
-        }
         // Buffer sizing guarantees delivered ≥ target, so target is a floor
         // on what the receiver will actually see. Reporting the shaved value
         // when it dips below target would under-promise something the buffer
