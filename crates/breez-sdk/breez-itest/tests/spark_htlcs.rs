@@ -330,9 +330,10 @@ async fn test_03_reconcile_stale_pending_payment(
 
     ensure_funded(&mut alice, 200).await?;
 
-    // Step 1: Alice sends a Spark HTLC with a 60-second expiry.
-    // 60 seconds is long enough such that the offset advances past it,
-    // yet short enough to fail well before the 120s test timeout.
+    // Step 1: Alice sends a Spark HTLC with a 30-second expiry. The expiry only
+    // needs to outlast steps 2-3 below, so the HTLC is still Pending when the
+    // offset advances past it. The operators then mark it Returned ~60s after
+    // expiry, so the reconcile event lands late (see the generous wait below).
     let (_, payment_hash) = generate_preimage_hash_pair();
 
     let bob_spark_address = bob
@@ -363,14 +364,14 @@ async fn test_03_reconcile_stale_pending_payment(
             options: Some(SendPaymentOptions::SparkAddress {
                 htlc_options: Some(SparkHtlcOptions {
                     payment_hash: payment_hash.clone(),
-                    expiry_duration_secs: 60,
+                    expiry_duration_secs: 30,
                 }),
             }),
             idempotency_key: None,
         })
         .await?;
 
-    info!("Alice sent HTLC (75s expiry) — payment is Pending at position N");
+    info!("Alice sent HTLC (30s expiry): payment is Pending at position N");
 
     // Step 2: Alice sends a regular (non-HTLC) Spark to advance the sync offset past the
     // HTLC's position. Once the auto-sync processes both transfers, the stored
@@ -427,9 +428,9 @@ async fn test_03_reconcile_stale_pending_payment(
     );
 
     // Step 4: Wait for the paymentFailed event emitted by reconciliation.
-    info!("Waiting for paymentFailed event from reconciliation (up to 120s)...");
+    info!("Waiting for paymentFailed event from reconciliation (up to 180s)...");
     let failed_payment =
-        wait_for_payment_failed_event(&mut alice.events, PaymentType::Send, 120).await?;
+        wait_for_payment_failed_event(&mut alice.events, PaymentType::Send, 180).await?;
 
     assert_eq!(failed_payment.status, PaymentStatus::Failed);
     assert_eq!(failed_payment.amount, 5);
