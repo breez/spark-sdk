@@ -90,8 +90,12 @@ impl crate::repository::LnurlRepository for LnurlRepository {
 
     async fn upsert_user(&self, user: &User) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
-            "REPLACE INTO users (domain, pubkey, name, description, updated_at)
-            VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO users (domain, pubkey, name, description, updated_at)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT(domain, pubkey) DO UPDATE
+            SET name = excluded.name
+            ,   description = excluded.description
+            ,   updated_at = excluded.updated_at",
         )
         .bind(&user.domain)
         .bind(&user.pubkey)
@@ -915,5 +919,12 @@ mod sqlite_tests {
         seed_domain_with_api_key(&pool).await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::set_domain_jwt_round_trips(&db).await;
+    }
+
+    #[tokio::test]
+    async fn registering_taken_name_with_other_pubkey_is_rejected() {
+        let pool = setup_pool().await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::registering_taken_name_with_other_pubkey_is_rejected(&db).await;
     }
 }

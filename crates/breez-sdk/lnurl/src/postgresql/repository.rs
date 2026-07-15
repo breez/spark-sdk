@@ -920,4 +920,13 @@ mod postgres_tests {
         let db = super::LnurlRepository::new(pool);
         shared_tests::set_domain_jwt_round_trips(&db).await;
     }
+
+    #[tokio::test]
+    async fn registering_taken_name_with_other_pubkey_is_rejected() {
+        let Some(pool) = setup_pool().await else {
+            return;
+        };
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::registering_taken_name_with_other_pubkey_is_rejected(&db).await;
+    }
 }

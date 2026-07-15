@@ -204,7 +204,48 @@ pub struct WebhookPayloadData {
 /// database with rows from other tests.
 #[cfg(test)]
 pub mod shared_tests {
-    use super::LnurlRepository;
+    use super::{LnurlRepository, LnurlRepositoryError};
+    use crate::user::User;
+
+    /// Upserting a name already owned by a different pubkey returns `NameTaken`
+    /// and leaves the existing owner's row intact, rather than replacing it.
+    pub async fn registering_taken_name_with_other_pubkey_is_rejected<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        db.upsert_user(&User {
+            domain: "a.com".into(),
+            pubkey: "aaaa".into(),
+            name: "alice".into(),
+            description: "alice".into(),
+        })
+        .await
+        .unwrap();
+
+        let result = db
+            .upsert_user(&User {
+                domain: "a.com".into(),
+                pubkey: "bbbb".into(),
+                name: "alice".into(),
+                description: "bob".into(),
+            })
+            .await;
+        assert!(
+            matches!(result, Err(LnurlRepositoryError::NameTaken)),
+            "expected NameTaken, got {result:?}"
+        );
+
+        let owner = db
+            .get_user_by_name("a.com", "alice")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            owner.pubkey, "aaaa",
+            "existing owner was replaced, now resolves to pubkey {}",
+            owner.pubkey
+        );
+    }
 
     /// `list_domains` surfaces a domain's `api_key` and reports `None` for one
     /// with no key, added via `add_domain`. The caller seeds `a.com` with an
