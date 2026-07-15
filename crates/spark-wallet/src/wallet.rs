@@ -135,6 +135,22 @@ fn is_leaf_unavailable_error(error: &OperatorRpcError) -> bool {
     operator_error_reason(error).as_deref() == Some(LEAF_UNAVAILABLE_REASON)
 }
 
+/// `ErrorInfo` reason the operators set when the on-chain UTXO backing a static
+/// deposit refund is not indexed yet: their chain watcher lags the coordinator,
+/// which already reveals the UTXO. Transient, clears once the operators catch up.
+const MISSING_ENTITY_REASON: &str = "MISSING_ENTITY";
+
+/// Checks if the operators report the refund UTXO is not indexed yet. Surfaces
+/// right after a deposit becomes visible, so the caller backs off and retries.
+fn is_missing_entity_error(error: &OperatorRpcError) -> bool {
+    operator_error_reason(error).as_deref() == Some(MISSING_ENTITY_REASON)
+}
+
+/// Retry window for a static deposit refund rejected with MISSING_ENTITY,
+/// matching the SDK's claim-transfer lookup: 3 attempts, 500ms base, exponential.
+const REFUND_MISSING_ENTITY_MAX_ATTEMPTS: u32 = 3;
+const REFUND_MISSING_ENTITY_BASE_DELAY_MS: u64 = 500;
+
 /// Checks if an error is a transient operator condition that clears on its own
 /// and should be retried after a backoff delay.
 fn is_backoff_retryable_error(error: &OperatorRpcError) -> bool {
@@ -763,10 +779,35 @@ impl SparkWallet {
             .require_network(self.config.network.into())
             .map_err(|_| SparkWalletError::InvalidNetwork)?;
 
-        let refund_tx = self
-            .deposit_service
-            .refund_static_deposit(tx, output_index, refund_address, fee)
-            .await?;
+        // The operators reject the refund with MISSING_ENTITY until their chain
+        // watcher indexes the deposit UTXO the coordinator already revealed. Back
+        // off and retry that transient window; every attempt re-signs from scratch
+        // with a fresh nonce, and a rejected attempt commits nothing on the server.
+        let mut attempt: u32 = 0;
+        let refund_tx = loop {
+            match self
+                .deposit_service
+                .refund_static_deposit(tx.clone(), output_index, refund_address.clone(), fee)
+                .await
+            {
+                Ok(refund_tx) => break refund_tx,
+                Err(ServiceError::ServiceConnectionError(e))
+                    if is_missing_entity_error(&e)
+                        && attempt + 1 < REFUND_MISSING_ENTITY_MAX_ATTEMPTS =>
+                {
+                    let delay_ms = REFUND_MISSING_ENTITY_BASE_DELAY_MS
+                        .saturating_mul(2u64.saturating_pow(attempt));
+                    info!(
+                        "Static deposit refund UTXO not indexed yet (attempt {}/{}), backing off {delay_ms}ms",
+                        attempt + 1,
+                        REFUND_MISSING_ENTITY_MAX_ATTEMPTS
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    attempt += 1;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        };
 
         Ok(refund_tx)
     }
@@ -2602,5 +2643,25 @@ mod tests {
             "boom",
         )));
         assert!(!is_backoff_retryable_error(&terminal));
+    }
+
+    #[test]
+    fn missing_entity_error_matches_error_info_reason() {
+        let err = error_with_reason(tonic::Code::NotFound, MISSING_ENTITY_REASON);
+        assert!(is_missing_entity_error(&err));
+    }
+
+    #[test]
+    fn missing_entity_error_ignores_other_reasons() {
+        let err = error_with_reason(tonic::Code::NotFound, "SOME_OTHER_REASON");
+        assert!(!is_missing_entity_error(&err));
+    }
+
+    #[test]
+    fn missing_entity_is_not_a_leaf_selection_backoff_error() {
+        // The refund retry is scoped to its own predicate: folding MISSING_ENTITY
+        // into is_backoff_retryable_error would change the leaf-selection paths.
+        let err = error_with_reason(tonic::Code::NotFound, MISSING_ENTITY_REASON);
+        assert!(!is_backoff_retryable_error(&err));
     }
 }
