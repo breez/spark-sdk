@@ -94,8 +94,7 @@ pub use external_types::*;
 pub(crate) use adapter::{ExternalBreezSignerAdapter, ExternalSigningSignerAdapter};
 pub(crate) use default_external::DefaultExternalSigner;
 pub(crate) use default_external_spark::DefaultExternalSparkSigner;
-// Public so an integrator (or test) holding an `ExternalSparkSigner` can obtain
-// a native `spark_wallet::SparkSigner` for a standalone `SparkWallet`.
+// Re-exported for standalone `SparkWallet` construction.
 pub use external_spark_adapter::ExternalSparkSignerAdapter;
 pub mod breez;
 pub mod cpfp;

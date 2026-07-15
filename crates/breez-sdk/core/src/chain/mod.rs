@@ -38,9 +38,9 @@ impl From<bitcoin::address::ParseError> for ChainServiceError {
 #[macros::async_trait]
 pub trait BitcoinChainService: Send + Sync {
     async fn get_address_utxos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError>;
-    /// Number of confirmed outputs ever paid to `address` (Esplora
-    /// `chain_stats.funded_txo_count`). Must count spent outputs too, so a swept
-    /// refund reads as funded rather than as never broadcast.
+    /// Number of confirmed outputs ever paid to `address`. Must count spent
+    /// outputs too, so a swept refund reads as funded rather than as never
+    /// broadcast.
     async fn get_address_funded_txo_count(&self, address: String)
     -> Result<u64, ChainServiceError>;
     async fn get_transaction_status(&self, txid: String) -> Result<TxStatus, ChainServiceError>;
@@ -77,16 +77,10 @@ pub struct RecommendedFees {
     pub minimum_fee: u64,
 }
 
-/// The spend status of a transaction output (Esplora `/tx/:txid/outspend/:vout`).
-///
-/// An enum so an unspent output carries no spurious `txid`/`vin` and a spent one
-/// always names its spender. It (de)serializes to the flat Esplora shape
-/// `{ "spent": bool, "txid"?, "vin"?, "status"? }`, so chain services (including
-/// foreign ones over WASM/UniFFI) keep returning that object.
+/// The spend status of a transaction output.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum Outspend {
-    /// The output has not been spent.
     Unspent,
     /// The output is spent by input `vin` of transaction `txid`; `status` is
     /// that spending transaction's confirmation status.

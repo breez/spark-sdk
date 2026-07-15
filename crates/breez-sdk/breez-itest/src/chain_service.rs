@@ -224,7 +224,6 @@ impl BitcoinChainService for LocalBitcoindChainService {
     }
 
     async fn recommended_fees(&self) -> Result<RecommendedFees, ChainServiceError> {
-        // Not exercised by unilateral_exit tests.
         Ok(RecommendedFees {
             fastest_fee: 1,
             half_hour_fee: 1,

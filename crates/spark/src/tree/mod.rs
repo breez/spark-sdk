@@ -836,8 +836,7 @@ pub trait TreeService: Send + Sync {
     async fn list_leaves(&self) -> Result<Leaves, TreeServiceError>;
 
     /// Fetches specific tree nodes by ID from the operators, optionally
-    /// including each node's ancestors up to the root. Used by unilateral exit
-    /// to source the full exit chain for a set of leaves.
+    /// including each node's ancestors up to the root.
     async fn fetch_nodes(
         &self,
         node_ids: &[TreeNodeId],

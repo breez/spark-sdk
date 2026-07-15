@@ -57,8 +57,7 @@ impl BreezSdk {
             .map_err(|e| SdkError::InvalidInput(format!("Address network mismatch: {e}")))?;
         let dest_script_len = destination.script_pubkey().len();
 
-        // Leaf auto-resolution lives in the wallet; this only translates the
-        // public request into the wallet's selection type.
+        // Leaf auto-resolution lives in the wallet.
         let selection = match request.selection {
             ExitLeafSelection::Auto => spark_wallet::ExitLeafSelection::Auto,
             ExitLeafSelection::Specific { leaf_ids } => {
@@ -430,9 +429,8 @@ fn funding_kind_params(kind: &CpfpFundingKind) -> Result<(u64, ScriptBuf), SdkEr
 }
 
 impl ModelCpfpInput {
-    /// Converts into the spark-wallet funding type. Takes `network` to derive the
-    /// P2WPKH/P2TR script from a pubkey, so it can't be a bare `TryInto` (and the
-    /// orphan rule rejects `TryFrom<(Self, Network)>` for foreign `CpfpInput`).
+    /// Converts into the spark-wallet funding type. Takes `network` to derive
+    /// the P2WPKH/P2TR script from a pubkey.
     fn into_funding_input(self, network: bitcoin::Network) -> Result<CpfpInput, SdkError> {
         let parse_txid = |s: &str| {
             Txid::from_str(s)

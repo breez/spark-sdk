@@ -2353,14 +2353,6 @@ async fn test_sweep_recovers_direct_from_cpfp_refund(#[case] backend: SignerBack
 // funding, and whose change pays a script the exit does not recognize) must
 // still resume, funding the remaining frontier from our own supplied inputs.
 //
-// This exercises the "not ours" branch of the resume logic in
-// `spark-wallet/src/unilateral_exit.rs`: `walk_branch` marks the confirmed node
-// `ConfirmedCpfp { change: None }`, `resolve_confirmed_changes` finds no output
-// paying our funding script, and `build_exit` then funds the frontier below the
-// confirmed node from `usable_supplied` (our freshly-supplied funding). Today
-// only resumes confirmed by OUR OWN packages are covered
-// (`test_first_package_confirmed_resumes`, `test_all_nodes_confirmed_resumes_at_refund`).
-//
 // TREE SHAPE: a claimed deposit is a single-node tree — `create_tree_root`
 // (spark `services/deposit.rs`) creates exactly one node that is simultaneously
 // the ROOT and the LEAF, plus that leaf's refund. So:

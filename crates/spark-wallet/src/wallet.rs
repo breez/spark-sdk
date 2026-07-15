@@ -1352,14 +1352,10 @@ impl SparkWallet {
             .collect();
         for leaf_id in leaf_ids {
             let Some(leaf) = tree_nodes.get(leaf_id).cloned() else {
-                // Offline sourcing from local storage is deferred; a leaf the
-                // operators omit stays absent and is reported un-exitable.
+                // Offline sourcing from local storage is deferred.
                 warn!("Requested leaf {leaf_id} not returned by the operators; cannot exit it");
                 continue;
             };
-            // Clone so the future owns (not borrows) the tree service: a
-            // `&self` borrow across the await isn't `Send` and would reject the
-            // uniffi-exported async callers.
             let tree_service = self.tree_service.clone();
             if let Err(e) =
                 spark::services::build_unilateral_exit_chain(leaf, &mut tree_nodes, move |ids| {
@@ -1435,8 +1431,7 @@ impl SparkWallet {
 
     /// Prepares a unilateral exit of the selected leaves: sources the exit tree,
     /// plans it, and derives each leaf's P2TR refund address. `Auto` keeps only
-    /// profitable leaves; `Specific` exits every requested one. The caller then
-    /// builds the transactions with [`build_unilateral_exit`](crate::build_unilateral_exit).
+    /// profitable leaves; `Specific` exits every requested one.
     pub async fn prepare_unilateral_exit_plan(
         &self,
         fee_rate_sat_per_kw: u64,
