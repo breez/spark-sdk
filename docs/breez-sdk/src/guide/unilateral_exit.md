@@ -78,7 +78,7 @@ The set it builds depends on what is already on-chain. Because each CPFP child s
 
 The CPFP children and the fan-out spend your funding UTXOs, so they have to be signed. The SDK does not hold your funding keys; it hands each unsigned transaction to a signer you provide.
 
-The built-in single-key signer covers the common case: it signs P2WPKH and P2TR inputs from one secret key. For {{#enum CpfpInput::P2tr}} funding, pass the **internal, untweaked (BIP86)** key, not the tweaked on-chain output key: the tweaked key derives a scriptPubKey that does not match the UTXO, so the transaction is rejected at broadcast. For anything else (a multisig, a hardware wallet, or keeping key material out of the SDK entirely) implement the `CpfpSigner` interface and describe the funding with {{#enum CpfpFundingKind::Custom}} (in the quote) and {{#enum CpfpInput::Custom}} (in the build). Those carry the funding `script_pubkey_hex` and an upper-bound `signed_input_weight` so the fee stays exact for any witness program. The signer receives a serialized PSBT, signs the inputs that are not already finalized, and returns the serialized signed PSBT:
+The built-in single-key signer covers the common case: it signs P2WPKH and P2TR inputs from one secret key. For {{#enum CpfpInput::P2tr}} funding, pass the **internal, untweaked (BIP86)** key, not the tweaked on-chain output key: the tweaked key derives a scriptPubKey that does not match the UTXO, so the transaction is rejected at broadcast. For anything else (a multisig, a hardware wallet, or keeping key material out of the SDK entirely) implement the {{#name CpfpSigner}} interface and describe the funding with {{#enum CpfpFundingKind::Custom}} (in the quote) and {{#enum CpfpInput::Custom}} (in the build). Those carry the funding {{#name script_pubkey_hex}} and an upper-bound {{#name signed_input_weight}} so the fee stays exact for any witness program. The signer receives a serialized PSBT, signs the inputs that are not already finalized, and returns the serialized signed PSBT:
 
 Whichever signer you use, the funding inputs must be **native SegWit** (a witness-program script; P2WPKH or P2TR with the built-in signer, any other witness program with a custom one). The exit refers to each transaction by an id it computes before signing, which only stays stable when the signature lives in the witness (native SegWit) rather than in the input script; legacy scripts are rejected, so your signer only ever has to sign native SegWit inputs.
 
@@ -86,7 +86,7 @@ Whichever signer you use, the funding inputs must be **native SegWit** (a witnes
 
 <div class="warning">
 <h4>Flutter</h4>
-Flutter cannot pass a foreign <code>CpfpSigner</code>, so it exposes two exit calls. {{#name unilateral_exit}} takes the funding secret key bytes and uses the built-in single-key signer. {{#name unilateral_exit_with_signer}} takes a <code>signPsbt</code> callback that receives the serialized PSBT, signs the inputs that are not already finalized (any scheme), and returns the serialized signed PSBT.
+Flutter cannot pass a foreign <code>CpfpSigner</code>, so it exposes two exit calls. <code>unilateralExit</code> takes the funding secret key bytes and uses the built-in single-key signer. <code>unilateralExitWithSigner</code> takes a <code>signPsbt</code> callback that receives the serialized PSBT, signs the inputs that are not already finalized (any scheme), and returns the serialized signed PSBT.
 </div>
 
 ## Broadcast the transactions
@@ -147,7 +147,7 @@ Confirmed *CPFP* transactions hold funds the same way: once one confirms, your f
 | {{#enum SdkError::InsufficientCpfpFunds}} | Funding is below what the exit needs | Fund at least {{#name single_utxo_funding_sat}}, or the amount in each {{#name PerBranchFunding}} |
 | {{#enum SdkError::FundingUtxoConflict}} | A funding UTXO was already spent (e.g. a previous attempt) | Supply fresh, unspent funding; the error names the conflicting outpoint |
 | "min relay fee not met" when broadcasting | The package fee is too low for the network | Increase {{#name fee_rate_sat_per_vbyte}}, rebuild, and re-broadcast (RBF) |
-| "mandatory-script-verify-flag-failed" | A CPFP child was not signed correctly | Ensure your `CpfpSigner` signs every non-finalized input |
+| "mandatory-script-verify-flag-failed" | A CPFP child was not signed correctly | Ensure your {{#name CpfpSigner}} signs every non-finalized input |
 | "non-BIP68-final" | A relative timelock has not matured | Wait the required {{#name csv_timelock_blocks}} after the parent confirms |
 | A tree transaction is rejected on its own | The zero-fee parent was broadcast without its child | Broadcast the parent and its {{#name cpfp_tx_hex}} together as a package |
 | The sweep is rejected | Not every refund it spends has confirmed | Wait for all of the sweep's {{#name depends_on}} to confirm first |

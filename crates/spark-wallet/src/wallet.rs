@@ -32,12 +32,12 @@ use spark::{
     },
     services::{
         CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpInput, DepositService, ExitSpeed,
-        Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription, LeafFilter,
-        LightningReceivePayment, LightningSendPayment, LightningService, PayLightningResult,
-        Preimage, PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
+        Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription, LightningReceivePayment,
+        LightningSendPayment, LightningService, PayLightningResult, Preimage,
+        PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
         QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap, TimelockManager,
         TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
-        TransferTokenOutput, TransferType, Utxo,
+        TransferTokenOutput, TransferType, UnilateralExitLeafFilter, Utxo,
     },
     session_store::{InMemorySessionStore, SessionStore},
     signer::{PrepareTransferRequest, PreparedTransfer, SparkSigner},
@@ -1361,16 +1361,17 @@ impl SparkWallet {
             // `&self` borrow across the await isn't `Send` and would reject the
             // uniffi-exported async callers.
             let tree_service = self.tree_service.clone();
-            if let Err(e) = spark::services::build_exit_chain(leaf, &mut tree_nodes, move |ids| {
-                let tree_service = tree_service.clone();
-                async move {
-                    tree_service
-                        .fetch_nodes(&ids, true)
-                        .await
-                        .map_err(|e| ServiceError::Generic(format!("{e}")))
-                }
-            })
-            .await
+            if let Err(e) =
+                spark::services::build_unilateral_exit_chain(leaf, &mut tree_nodes, move |ids| {
+                    let tree_service = tree_service.clone();
+                    async move {
+                        tree_service
+                            .fetch_nodes(&ids, true)
+                            .await
+                            .map_err(|e| ServiceError::Generic(format!("{e}")))
+                    }
+                })
+                .await
             {
                 debug!("Exit chain for leaf {leaf_id} incomplete while sourcing tree nodes: {e}");
             }
@@ -1390,7 +1391,7 @@ impl SparkWallet {
     async fn resolve_leaf_selection(
         &self,
         selection: ExitLeafSelection,
-    ) -> Result<(Vec<TreeNodeId>, LeafFilter), SparkWalletError> {
+    ) -> Result<(Vec<TreeNodeId>, UnilateralExitLeafFilter), SparkWalletError> {
         match selection {
             ExitLeafSelection::Auto => {
                 let mut leaf_ids: Vec<TreeNodeId> = self
@@ -1402,9 +1403,9 @@ impl SparkWallet {
                     .map(|l| l.id)
                     .collect();
                 leaf_ids.sort();
-                Ok((leaf_ids, LeafFilter::ProfitableOnly))
+                Ok((leaf_ids, UnilateralExitLeafFilter::ProfitableOnly))
             }
-            ExitLeafSelection::Specific(leaf_ids) => Ok((leaf_ids, LeafFilter::All)),
+            ExitLeafSelection::Specific(leaf_ids) => Ok((leaf_ids, UnilateralExitLeafFilter::All)),
         }
     }
 
@@ -1417,10 +1418,10 @@ impl SparkWallet {
         funding_output_script_len: usize,
         change_dust_limit: u64,
         destination_script_len: usize,
-    ) -> Result<spark::services::ExitQuote, SparkWalletError> {
+    ) -> Result<spark::services::UnilateralExitQuote, SparkWalletError> {
         let (leaf_ids, filter) = self.resolve_leaf_selection(selection).await?;
         let tree_nodes = self.source_exit_tree_nodes(&leaf_ids).await?;
-        Ok(spark::services::quote_exit(
+        Ok(spark::services::quote_unilateral_exit(
             &tree_nodes,
             &leaf_ids,
             filter,
@@ -1445,7 +1446,7 @@ impl SparkWallet {
     ) -> Result<PreparedUnilateralExit, SparkWalletError> {
         let (leaf_ids, filter) = self.resolve_leaf_selection(selection).await?;
         let tree_nodes = self.source_exit_tree_nodes(&leaf_ids).await?;
-        let plan = spark::services::plan_exit(
+        let plan = spark::services::plan_unilateral_exit(
             tree_nodes,
             &leaf_ids,
             filter,

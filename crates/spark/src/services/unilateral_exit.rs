@@ -29,7 +29,7 @@ const EXIT_CHAIN_STATUSES: [TreeNodeStatus; 4] = [
 /// Returns a leaf's ancestor chain, root → leaf, stopping above any node outside
 /// [`EXIT_CHAIN_STATUSES`]. `Err(parent_id)` names the first ancestor missing
 /// from `node_map` for the caller to re-fetch.
-pub fn walk_exit_chain<'a>(
+pub fn walk_unilateral_exit_chain<'a>(
     node_map: &'a HashMap<TreeNodeId, TreeNode>,
     leaf: &'a TreeNode,
 ) -> Result<Vec<&'a TreeNode>, TreeNodeId> {
@@ -41,7 +41,7 @@ pub fn walk_exit_chain<'a>(
             break;
         }
         // Cycle guard on semi-trusted parent ids. Returning an id already in the
-        // map is how `build_exit_chain` tells a cycle from a missing parent.
+        // map is how `build_unilateral_exit_chain` tells a cycle from a missing parent.
         if !visited.insert(current.id.clone()) {
             return Err(current.id.clone());
         }
@@ -61,7 +61,7 @@ pub fn walk_exit_chain<'a>(
 /// Builds a leaf's exit chain from `node_map`, re-fetching absent ancestors via
 /// `fetch_by_ids`. Re-fetch is needed because the SO's ancestor expansion skips
 /// the root for legacy mainnet trees, omitting it from the bulk response.
-pub async fn build_exit_chain<F, Fut>(
+pub async fn build_unilateral_exit_chain<F, Fut>(
     leaf: TreeNode,
     node_map: &mut HashMap<TreeNodeId, TreeNode>,
     mut fetch_by_ids: F,
@@ -71,7 +71,7 @@ where
     Fut: std::future::Future<Output = Result<Vec<TreeNode>, ServiceError>>,
 {
     loop {
-        match walk_exit_chain(node_map, &leaf) {
+        match walk_unilateral_exit_chain(node_map, &leaf) {
             Ok(chain) => return Ok(chain.into_iter().cloned().collect()),
             Err(missing) => {
                 // Already in the map => a cycle, not an absent parent.
@@ -113,8 +113,8 @@ pub struct CpfpChild {
 }
 
 #[derive(Clone, Debug)]
-pub struct ExitPlan {
-    pub selected_leaves: Vec<SelectedLeaf>,
+pub struct UnilateralExitPlan {
+    pub selected_leaves: Vec<UnilateralExitSelectedLeaf>,
     /// Set when inputs can't be matched 1:1 to branches; one output per branch.
     pub fan_out_psbt: Option<psbt::Psbt>,
     /// Leaf id -> the inputs funding that branch's first CPFP child.
@@ -125,21 +125,21 @@ pub struct ExitPlan {
 /// Selects which leaves to exit and maps funding inputs to branches. Never
 /// fetches: works offline as long as `tree_nodes` holds each selected leaf's
 /// full ancestor chain.
-pub fn plan_exit(
+pub fn plan_unilateral_exit(
     tree_nodes: HashMap<TreeNodeId, TreeNode>,
     leaf_ids: &[TreeNodeId],
-    filter: LeafFilter,
+    filter: UnilateralExitLeafFilter,
     inputs: Vec<CpfpInput>,
     fee_rate_sat_per_kw: u64,
     destination_script_len: usize,
-) -> Result<ExitPlan, ServiceError> {
+) -> Result<UnilateralExitPlan, ServiceError> {
     if inputs.is_empty() {
         return Err(ServiceError::ValidationError(
             "At least one CPFP input is required".to_string(),
         ));
     }
     if leaf_ids.is_empty() {
-        return Ok(ExitPlan {
+        return Ok(UnilateralExitPlan {
             selected_leaves: vec![],
             fan_out_psbt: None,
             per_branch_funding: vec![],
@@ -148,7 +148,7 @@ pub fn plan_exit(
     }
 
     let change_script = &inputs[0].witness_utxo.script_pubkey;
-    let params = LeafExitCostParams {
+    let params = UnilateralExitLeafCostParams {
         initial_cpfp_input_weight: Weight::from_wu(
             inputs
                 .iter()
@@ -166,9 +166,9 @@ pub fn plan_exit(
         fee_rate_sat_per_kw,
     };
 
-    let selected = evaluate_leaf_exit_costs(&tree_nodes, leaf_ids, &params, filter)?;
+    let selected = evaluate_unilateral_exit_leaf_costs(&tree_nodes, leaf_ids, &params, filter)?;
     if selected.is_empty() {
-        return Ok(ExitPlan {
+        return Ok(UnilateralExitPlan {
             selected_leaves: vec![],
             fan_out_psbt: None,
             per_branch_funding: vec![],
@@ -198,7 +198,7 @@ pub fn plan_exit(
         )
     };
 
-    let plan = ExitPlan {
+    let plan = UnilateralExitPlan {
         selected_leaves: selected,
         fan_out_psbt,
         per_branch_funding,
@@ -209,15 +209,15 @@ pub fn plan_exit(
         branches = plan.per_branch_funding.len(),
         has_fan_out = plan.fan_out_psbt.is_some(),
         tree_nodes = plan.tree_nodes.len(),
-        "plan_exit: planned"
+        "plan_unilateral_exit: planned"
     );
     Ok(plan)
 }
 
 /// A chain-independent unilateral-exit quote: which leaves would exit and the
 /// funding they need, sized from the funding kind's weight with no actual UTXOs.
-pub struct ExitQuote {
-    pub selected_leaves: Vec<SelectedLeaf>,
+pub struct UnilateralExitQuote {
+    pub selected_leaves: Vec<UnilateralExitSelectedLeaf>,
     /// Per-branch funding to avoid a fan-out: (leaf id, minimum sats).
     pub per_branch_funding: Vec<(TreeNodeId, u64)>,
     pub single_utxo_funding_sat: u64,
@@ -225,20 +225,20 @@ pub struct ExitQuote {
     pub total_fee_sat: u64,
 }
 
-/// Like [`plan_exit`] but sizes fees from a funding kind's weight with no actual
+/// Like [`plan_unilateral_exit`] but sizes fees from a funding kind's weight with no actual
 /// UTXOs and never rejects on budget: it only reports the funding required.
 #[allow(clippy::too_many_arguments)]
-pub fn quote_exit(
+pub fn quote_unilateral_exit(
     tree_nodes: &HashMap<TreeNodeId, TreeNode>,
     leaf_ids: &[TreeNodeId],
-    filter: LeafFilter,
+    filter: UnilateralExitLeafFilter,
     funding_input_weight: u64,
     funding_output_script_len: usize,
     change_dust_limit: u64,
     fee_rate_sat_per_kw: u64,
     destination_script_len: usize,
-) -> Result<ExitQuote, ServiceError> {
-    let params = LeafExitCostParams {
+) -> Result<UnilateralExitQuote, ServiceError> {
+    let params = UnilateralExitLeafCostParams {
         initial_cpfp_input_weight: Weight::from_wu(funding_input_weight),
         single_cpfp_input_weight: Weight::from_wu(funding_input_weight),
         change_script_len: funding_output_script_len,
@@ -248,9 +248,9 @@ pub fn quote_exit(
         fee_rate_sat_per_kw,
     };
 
-    let selected = evaluate_leaf_exit_costs(tree_nodes, leaf_ids, &params, filter)?;
+    let selected = evaluate_unilateral_exit_leaf_costs(tree_nodes, leaf_ids, &params, filter)?;
     if selected.is_empty() {
-        return Ok(ExitQuote {
+        return Ok(UnilateralExitQuote {
             selected_leaves: vec![],
             per_branch_funding: vec![],
             single_utxo_funding_sat: 0,
@@ -288,7 +288,7 @@ pub fn quote_exit(
         )
     };
 
-    Ok(ExitQuote {
+    Ok(UnilateralExitQuote {
         single_utxo_funding_sat: leaves_total.saturating_add(fanout_fee_sat),
         total_fee_sat: sum_estimated.saturating_add(fanout_fee_sat),
         selected_leaves: selected,
@@ -321,7 +321,7 @@ pub fn p2wpkh_input_weight() -> Weight {
 }
 
 #[derive(Debug, Clone)]
-pub struct SelectedLeaf {
+pub struct UnilateralExitSelectedLeaf {
     pub id: TreeNodeId,
     pub value: u64,
     /// Marginal exit cost (CPFP fees + sweep input fee). Order-dependent: a shared
@@ -329,7 +329,7 @@ pub struct SelectedLeaf {
     pub estimated_cost: u64,
 }
 
-pub struct LeafExitCostParams {
+pub struct UnilateralExitLeafCostParams {
     /// Weight of the first CPFP child's inputs in a leaf's chain.
     pub initial_cpfp_input_weight: Weight,
     /// Weight of each subsequent child's single (chained-change) input.
@@ -438,21 +438,21 @@ pub fn fan_out_fee(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LeafFilter {
+pub enum UnilateralExitLeafFilter {
     /// Keep every requested leaf, even when its exit cost exceeds its value.
     All,
     /// Keep only leaves whose value strictly exceeds their marginal exit cost.
     ProfitableOnly,
 }
 
-/// A leaf the caller named ([`LeafFilter::All`]) that can't be exited is an
-/// error; under [`LeafFilter::ProfitableOnly`] it is warned and skipped.
+/// A leaf the caller named ([`UnilateralExitLeafFilter::All`]) that can't be exited is an
+/// error; under [`UnilateralExitLeafFilter::ProfitableOnly`] it is warned and skipped.
 fn report_unexitable(
-    filter: LeafFilter,
+    filter: UnilateralExitLeafFilter,
     leaf_id: &TreeNodeId,
     reason: &str,
 ) -> Result<(), ServiceError> {
-    if filter == LeafFilter::All {
+    if filter == UnilateralExitLeafFilter::All {
         return Err(ServiceError::ValidationError(format!(
             "Leaf {leaf_id} cannot be exited: {reason}"
         )));
@@ -465,12 +465,12 @@ fn report_unexitable(
 /// its value exceeds its marginal cost (CPFP fees for its not-yet-covered
 /// ancestors and refund, plus the incremental sweep input). A shared ancestor is
 /// charged only to the first leaf reaching it, so order matters; `All` keeps all.
-pub fn evaluate_leaf_exit_costs(
+pub fn evaluate_unilateral_exit_leaf_costs(
     tree_nodes: &HashMap<TreeNodeId, TreeNode>,
     leaf_ids: &[TreeNodeId],
-    params: &LeafExitCostParams,
-    filter: LeafFilter,
-) -> Result<Vec<SelectedLeaf>, ServiceError> {
+    params: &UnilateralExitLeafCostParams,
+    filter: UnilateralExitLeafFilter,
+) -> Result<Vec<UnilateralExitSelectedLeaf>, ServiceError> {
     let mut leaves: Vec<(&TreeNodeId, &TreeNode)> = Vec::with_capacity(leaf_ids.len());
     for id in leaf_ids {
         match tree_nodes.get(id) {
@@ -480,7 +480,7 @@ pub fn evaluate_leaf_exit_costs(
     }
     leaves.sort_by(|a, b| b.1.value.cmp(&a.1.value).then_with(|| a.0.cmp(b.0)));
 
-    let mut selected: Vec<SelectedLeaf> = Vec::new();
+    let mut selected: Vec<UnilateralExitSelectedLeaf> = Vec::new();
     let mut covered_txids: HashSet<bitcoin::Txid> = HashSet::new();
     let mut total_cpfp_cost: u64 = 0;
 
@@ -489,7 +489,7 @@ pub fn evaluate_leaf_exit_costs(
             report_unexitable(filter, leaf_id, "no refund transaction")?;
             continue;
         };
-        let ancestors = match walk_exit_chain(tree_nodes, leaf) {
+        let ancestors = match walk_unilateral_exit_chain(tree_nodes, leaf) {
             Ok(ancestors) => ancestors,
             Err(missing) => {
                 report_unexitable(
@@ -564,8 +564,8 @@ pub fn evaluate_leaf_exit_costs(
 
         let total_marginal_cost = cpfp_cost.saturating_add(sweep_cost);
 
-        if filter == LeafFilter::All || leaf.value > total_marginal_cost {
-            selected.push(SelectedLeaf {
+        if filter == UnilateralExitLeafFilter::All || leaf.value > total_marginal_cost {
+            selected.push(UnilateralExitSelectedLeaf {
                 id: (*leaf_id).clone(),
                 value: leaf.value,
                 estimated_cost: total_marginal_cost,
@@ -598,14 +598,14 @@ pub fn evaluate_leaf_exit_costs(
 /// in reserve per not-yet-funded branch. `None` when no partition fits.
 ///
 /// Returned in `selected_leaves` order (value-descending, as
-/// [`evaluate_leaf_exit_costs`] emits), not the internal greedy order. The
+/// [`evaluate_unilateral_exit_leaf_costs`] emits), not the internal greedy order. The
 /// funding sizes each branch assuming a shared ancestor is charged to the first
 /// leaf in value order; `build_exit` charges it to the first branch it iterates.
 /// Returning in value order keeps those two the same branch, so no branch is
 /// left short of a shared ancestor's fee and fails its dust check.
 pub fn assign_inputs_to_leaves(
     inputs: &[CpfpInput],
-    selected_leaves: &[SelectedLeaf],
+    selected_leaves: &[UnilateralExitSelectedLeaf],
     change_dust_limit: u64,
 ) -> Option<Vec<(TreeNodeId, Vec<CpfpInput>)>> {
     if inputs.len() < selected_leaves.len() {
@@ -618,7 +618,7 @@ pub fn assign_inputs_to_leaves(
             .cmp(&a.witness_utxo.value)
             .then_with(|| a.outpoint.cmp(&b.outpoint))
     });
-    let mut sorted_leaves: Vec<&SelectedLeaf> = selected_leaves.iter().collect();
+    let mut sorted_leaves: Vec<&UnilateralExitSelectedLeaf> = selected_leaves.iter().collect();
     sorted_leaves.sort_by(|a, b| {
         b.estimated_cost
             .cmp(&a.estimated_cost)
@@ -663,7 +663,7 @@ pub fn assign_inputs_to_leaves(
 /// unconfirmed fan-out can be replaced.
 pub fn build_fan_out_psbt(
     inputs: &[CpfpInput],
-    selected_leaves: &[SelectedLeaf],
+    selected_leaves: &[UnilateralExitSelectedLeaf],
     fee_rate_sat_per_kw: u64,
     change_dust_limit: u64,
 ) -> Result<(psbt::Psbt, Vec<(TreeNodeId, CpfpInput)>), ServiceError> {
@@ -834,7 +834,7 @@ pub fn build_cpfp_child(
     let change_script_pubkey = funding_inputs[0].witness_utxo.script_pubkey.clone();
     let first_signed_input_weight = funding_inputs[0].signed_input_weight;
 
-    let rbf_sequence = Sequence(0xffff_fffd);
+    let rbf_sequence = Sequence::ENABLE_RBF_NO_LOCKTIME;
     let mut tx_inputs = Vec::with_capacity(funding_inputs.len() + 1);
     for cpfp_input in funding_inputs {
         tx_inputs.push(TxIn {
@@ -1001,7 +1001,7 @@ mod tests {
                 .collect();
 
             let mut fetched = false;
-            let chain = super::super::build_exit_chain(leaf, &mut map, |_ids| {
+            let chain = super::super::build_unilateral_exit_chain(leaf, &mut map, |_ids| {
                 fetched = true;
                 async move { Ok(Vec::new()) }
             })
@@ -1030,12 +1030,16 @@ mod tests {
                 [(root.id.clone(), root.clone())].into_iter().collect();
             let mut requested: Vec<TreeNodeId> = Vec::new();
 
-            let chain = super::super::build_exit_chain(leaf, &mut map, |ids: Vec<TreeNodeId>| {
-                requested.extend_from_slice(&ids);
-                let nodes: Vec<TreeNode> =
-                    ids.iter().filter_map(|i| server.get(i).cloned()).collect();
-                async move { Ok(nodes) }
-            })
+            let chain = super::super::build_unilateral_exit_chain(
+                leaf,
+                &mut map,
+                |ids: Vec<TreeNodeId>| {
+                    requested.extend_from_slice(&ids);
+                    let nodes: Vec<TreeNode> =
+                        ids.iter().filter_map(|i| server.get(i).cloned()).collect();
+                    async move { Ok(nodes) }
+                },
+            )
             .await
             .unwrap();
 
@@ -1054,10 +1058,11 @@ mod tests {
                 .map(|n| (n.id.clone(), n.clone()))
                 .collect();
 
-            let chain =
-                super::super::build_exit_chain(leaf, &mut map, |_ids| async { Ok(Vec::new()) })
-                    .await
-                    .unwrap();
+            let chain = super::super::build_unilateral_exit_chain(leaf, &mut map, |_ids| async {
+                Ok(Vec::new())
+            })
+            .await
+            .unwrap();
 
             assert_eq!(chain_ids(&chain), vec![ROOT, MID, LEAF]);
         }
@@ -1073,10 +1078,11 @@ mod tests {
                 .map(|n| (n.id.clone(), n.clone()))
                 .collect();
 
-            let chain =
-                super::super::build_exit_chain(leaf, &mut map, |_ids| async { Ok(Vec::new()) })
-                    .await
-                    .unwrap();
+            let chain = super::super::build_unilateral_exit_chain(leaf, &mut map, |_ids| async {
+                Ok(Vec::new())
+            })
+            .await
+            .unwrap();
 
             assert_eq!(chain_ids(&chain), vec![LEAF]);
         }
@@ -1091,9 +1097,11 @@ mod tests {
                 .map(|n| (n.id.clone(), n.clone()))
                 .collect();
 
-            let err = super::super::build_exit_chain(leaf, &mut map, async |_ids| Ok(Vec::new()))
-                .await
-                .unwrap_err();
+            let err = super::super::build_unilateral_exit_chain(leaf, &mut map, async |_ids| {
+                Ok(Vec::new())
+            })
+            .await
+            .unwrap_err();
 
             match err {
                 ServiceError::ValidationError(msg) => {
@@ -1115,7 +1123,7 @@ mod tests {
                 .collect();
 
             let mut fetched = false;
-            let err = super::super::build_exit_chain(leaf, &mut map, |_ids| {
+            let err = super::super::build_unilateral_exit_chain(leaf, &mut map, |_ids| {
                 fetched = true;
                 async move { Ok(Vec::new()) }
             })
@@ -1141,11 +1149,15 @@ mod tests {
                 .collect();
 
             let mut calls = 0u32;
-            let err = super::super::build_exit_chain(leaf, &mut map, |_ids: Vec<TreeNodeId>| {
-                calls += 1;
-                let nodes = vec![other.clone()];
-                async move { Ok(nodes) }
-            })
+            let err = super::super::build_unilateral_exit_chain(
+                leaf,
+                &mut map,
+                |_ids: Vec<TreeNodeId>| {
+                    calls += 1;
+                    let nodes = vec![other.clone()];
+                    async move { Ok(nodes) }
+                },
+            )
             .await
             .unwrap_err();
 
@@ -1182,8 +1194,8 @@ mod tests {
             }
         }
 
-        fn selected(id: &str, value: u64, cost: u64) -> SelectedLeaf {
-            SelectedLeaf {
+        fn selected(id: &str, value: u64, cost: u64) -> UnilateralExitSelectedLeaf {
+            UnilateralExitSelectedLeaf {
                 id: TreeNodeId::from_str(id).unwrap(),
                 value,
                 estimated_cost: cost,
@@ -1230,7 +1242,7 @@ mod tests {
             let inputs = vec![cpfp_input(10_000, 0), cpfp_input(5_000, 1)];
             let leaves = vec![selected("a", 50_000, 1_000), selected("b", 20_000, 3_000)];
             let got = assign_inputs_to_leaves(&inputs, &leaves, 330).expect("should fit");
-            // Returned in value order, matching evaluate_leaf_exit_costs.
+            // Returned in value order, matching evaluate_unilateral_exit_leaf_costs.
             assert_eq!(got[0].0, leaves[0].id);
             assert_eq!(got[1].0, leaves[1].id);
             // The costlier branch still greedily took the larger input.
@@ -1319,8 +1331,8 @@ mod tests {
             n
         }
 
-        fn cost_params() -> LeafExitCostParams {
-            LeafExitCostParams {
+        fn cost_params() -> UnilateralExitLeafCostParams {
+            UnilateralExitLeafCostParams {
                 initial_cpfp_input_weight: Weight::from_wu(272),
                 single_cpfp_input_weight: Weight::from_wu(272),
                 change_script_len: 22,
@@ -1337,11 +1349,11 @@ mod tests {
             let id = node.id.clone();
             let nodes: HashMap<TreeNodeId, TreeNode> = [(id.clone(), node)].into_iter().collect();
 
-            let sel = evaluate_leaf_exit_costs(
+            let sel = evaluate_unilateral_exit_leaf_costs(
                 &nodes,
                 std::slice::from_ref(&id),
                 &cost_params(),
-                LeafFilter::ProfitableOnly,
+                UnilateralExitLeafFilter::ProfitableOnly,
             )
             .unwrap();
             assert_eq!(sel.len(), 1);
@@ -1350,11 +1362,11 @@ mod tests {
             let sid = small.id.clone();
             let small_nodes: HashMap<TreeNodeId, TreeNode> =
                 [(sid.clone(), small)].into_iter().collect();
-            let sel = evaluate_leaf_exit_costs(
+            let sel = evaluate_unilateral_exit_leaf_costs(
                 &small_nodes,
                 &[sid],
                 &cost_params(),
-                LeafFilter::ProfitableOnly,
+                UnilateralExitLeafFilter::ProfitableOnly,
             )
             .unwrap();
             assert!(sel.is_empty());
@@ -1366,10 +1378,14 @@ mod tests {
             let pid = probe.id.clone();
             let probe_nodes: HashMap<TreeNodeId, TreeNode> =
                 [(pid.clone(), probe)].into_iter().collect();
-            let cost =
-                evaluate_leaf_exit_costs(&probe_nodes, &[pid], &cost_params(), LeafFilter::All)
-                    .unwrap()[0]
-                    .estimated_cost;
+            let cost = evaluate_unilateral_exit_leaf_costs(
+                &probe_nodes,
+                &[pid],
+                &cost_params(),
+                UnilateralExitLeafFilter::All,
+            )
+            .unwrap()[0]
+                .estimated_cost;
             assert!(
                 cost > 1,
                 "cost must exceed 1 sat for the boundary to be meaningful"
@@ -1380,11 +1396,11 @@ mod tests {
             let at_nodes: HashMap<TreeNodeId, TreeNode> =
                 [(at_id.clone(), at)].into_iter().collect();
             assert!(
-                evaluate_leaf_exit_costs(
+                evaluate_unilateral_exit_leaf_costs(
                     &at_nodes,
                     &[at_id],
                     &cost_params(),
-                    LeafFilter::ProfitableOnly
+                    UnilateralExitLeafFilter::ProfitableOnly
                 )
                 .unwrap()
                 .is_empty(),
@@ -1395,11 +1411,11 @@ mod tests {
             let above_id = above.id.clone();
             let above_nodes: HashMap<TreeNodeId, TreeNode> =
                 [(above_id.clone(), above)].into_iter().collect();
-            let sel = evaluate_leaf_exit_costs(
+            let sel = evaluate_unilateral_exit_leaf_costs(
                 &above_nodes,
                 &[above_id],
                 &cost_params(),
-                LeafFilter::ProfitableOnly,
+                UnilateralExitLeafFilter::ProfitableOnly,
             )
             .unwrap();
             assert_eq!(
@@ -1415,8 +1431,13 @@ mod tests {
             let small = leaf_node("leaf", 10);
             let sid = small.id.clone();
             let nodes: HashMap<TreeNodeId, TreeNode> = [(sid.clone(), small)].into_iter().collect();
-            let sel =
-                evaluate_leaf_exit_costs(&nodes, &[sid], &cost_params(), LeafFilter::All).unwrap();
+            let sel = evaluate_unilateral_exit_leaf_costs(
+                &nodes,
+                &[sid],
+                &cost_params(),
+                UnilateralExitLeafFilter::All,
+            )
+            .unwrap();
             assert_eq!(sel.len(), 1);
         }
 
@@ -1428,17 +1449,21 @@ mod tests {
             let nodes: HashMap<TreeNodeId, TreeNode> = [(id.clone(), node)].into_iter().collect();
 
             assert!(
-                evaluate_leaf_exit_costs(
+                evaluate_unilateral_exit_leaf_costs(
                     &nodes,
                     std::slice::from_ref(&id),
                     &cost_params(),
-                    LeafFilter::All
+                    UnilateralExitLeafFilter::All
                 )
                 .is_err()
             );
-            let sel =
-                evaluate_leaf_exit_costs(&nodes, &[id], &cost_params(), LeafFilter::ProfitableOnly)
-                    .unwrap();
+            let sel = evaluate_unilateral_exit_leaf_costs(
+                &nodes,
+                &[id],
+                &cost_params(),
+                UnilateralExitLeafFilter::ProfitableOnly,
+            )
+            .unwrap();
             assert!(sel.is_empty());
         }
 
@@ -1450,10 +1475,10 @@ mod tests {
             let id = node.id.clone();
             let nodes: HashMap<TreeNodeId, TreeNode> = [(id.clone(), node)].into_iter().collect();
 
-            let quote = quote_exit(
+            let quote = quote_unilateral_exit(
                 &nodes,
                 &[id],
-                LeafFilter::ProfitableOnly,
+                UnilateralExitLeafFilter::ProfitableOnly,
                 272,
                 22,
                 DUST,
@@ -1479,10 +1504,10 @@ mod tests {
             let nodes: HashMap<TreeNodeId, TreeNode> =
                 [(ida.clone(), a), (idb.clone(), b)].into_iter().collect();
 
-            let quote = quote_exit(
+            let quote = quote_unilateral_exit(
                 &nodes,
                 &[ida, idb],
-                LeafFilter::ProfitableOnly,
+                UnilateralExitLeafFilter::ProfitableOnly,
                 272,
                 22,
                 DUST,
@@ -1537,11 +1562,11 @@ mod tests {
             };
             let leaf_id = TreeNodeId::from_str("leaf").unwrap();
             let cost_of = |nodes: &HashMap<TreeNodeId, TreeNode>| {
-                evaluate_leaf_exit_costs(
+                evaluate_unilateral_exit_leaf_costs(
                     nodes,
                     std::slice::from_ref(&leaf_id),
                     &cost_params(),
-                    LeafFilter::All,
+                    UnilateralExitLeafFilter::All,
                 )
                 .unwrap()[0]
                     .estimated_cost
@@ -1562,10 +1587,10 @@ mod tests {
             let id = node.id.clone();
             let nodes: HashMap<TreeNodeId, TreeNode> = [(id.clone(), node)].into_iter().collect();
 
-            let quote = quote_exit(
+            let quote = quote_unilateral_exit(
                 &nodes,
                 &[id],
-                LeafFilter::ProfitableOnly,
+                UnilateralExitLeafFilter::ProfitableOnly,
                 272,
                 22,
                 DUST,

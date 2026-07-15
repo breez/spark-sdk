@@ -4,7 +4,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::models::{
     Credentials, Network,
-    chain_service::{ChainApiType, RecommendedFees, TxStatus, Utxo},
+    chain_service::{ChainApiType, Outspend, RecommendedFees, TxStatus, Utxo},
 };
 
 /// Rust-built implementation of the JS `BitcoinChainService` interface.
@@ -60,6 +60,17 @@ impl BitcoinChainServiceHandle {
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(JsValue::from_str(&hex))
+    }
+
+    #[wasm_bindgen(js_name = "getOutspend")]
+    pub async fn get_outspend(&self, txid: String, vout: u32) -> Result<JsValue, JsValue> {
+        let outspend = self
+            .inner
+            .get_outspend(txid, vout)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let outspend: Outspend = outspend.into();
+        serde_wasm_bindgen::to_value(&outspend).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     #[wasm_bindgen(js_name = "broadcastTransaction")]

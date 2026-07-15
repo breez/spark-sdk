@@ -1189,6 +1189,7 @@ const SPARK_SIGNER_INTERFACE: &'static str = r#"export interface ExternalSparkSi
     getStaticDepositPublicKey(index: number): Promise<PublicKeyBytes>;
     signAuthenticationChallenge(challenge: Uint8Array): Promise<EcdsaSignatureBytes>;
     signMessage(message: Uint8Array): Promise<EcdsaSignatureBytes>;
+    signLeafRefundSpend(leafId: ExternalTreeNodeId, sighash: Uint8Array): Promise<SchnorrSignatureBytes>;
     signFrost(jobs: ExternalFrostJob[]): Promise<ExternalFrostShareResult[]>;
     prepareTransfer(request: ExternalPrepareTransferRequest): Promise<ExternalPreparedTransfer>;
     prepareClaim(request: ExternalPrepareClaimRequest): Promise<ExternalPreparedClaim>;
@@ -1372,6 +1373,19 @@ impl ExternalSparkSignerHandle {
     pub async fn sign_message(&self, message: Vec<u8>) -> Result<EcdsaSignatureBytes, JsValue> {
         self.inner
             .sign_message(message)
+            .await
+            .map(Into::into)
+            .map_err(spark_handle_js_err)
+    }
+
+    #[wasm_bindgen(js_name = "signLeafRefundSpend")]
+    pub async fn sign_leaf_refund_spend(
+        &self,
+        leaf_id: ExternalTreeNodeId,
+        sighash: Vec<u8>,
+    ) -> Result<SchnorrSignatureBytes, JsValue> {
+        self.inner
+            .sign_leaf_refund_spend(leaf_id.into(), sighash)
             .await
             .map(Into::into)
             .map_err(spark_handle_js_err)

@@ -3,7 +3,8 @@ use std::collections::{HashMap, HashSet};
 use bitcoin::{Address, Amount, OutPoint, ScriptBuf, Transaction, TxOut, Txid};
 use spark::{
     services::{
-        CpfpInput, ExitPlan, ServiceError, build_cpfp_child, csv_timelock, walk_exit_chain,
+        CpfpInput, ServiceError, UnilateralExitPlan, build_cpfp_child, csv_timelock,
+        walk_unilateral_exit_chain,
     },
     tree::{TreeNode, TreeNodeId, TreeNodeStatus},
     utils::transactions::is_ephemeral_anchor_output,
@@ -25,7 +26,7 @@ pub enum ExitLeafSelection {
 /// addresses. Feed to [`next_chain_queries`], then [`build_unilateral_exit`].
 #[derive(Clone, Debug)]
 pub struct PreparedUnilateralExit {
-    pub plan: ExitPlan,
+    pub plan: UnilateralExitPlan,
     /// Every refund variant pays the same leaf key, so this one P2TR address
     /// recognizes an on-chain refund of any variant, and is where the sweep pulls.
     pub leaf_refund_addresses: HashMap<TreeNodeId, Address>,
@@ -381,7 +382,7 @@ fn interpret_chain(
 /// reaches it — the branch that drives it — i.e. the script its CPFP change pays.
 fn node_funding_scripts(
     node_map: &HashMap<TreeNodeId, TreeNode>,
-    plan: &ExitPlan,
+    plan: &UnilateralExitPlan,
 ) -> HashMap<TreeNodeId, ScriptBuf> {
     let mut map: HashMap<TreeNodeId, ScriptBuf> = HashMap::new();
     for (leaf_id, funding) in &plan.per_branch_funding {
@@ -391,7 +392,7 @@ fn node_funding_scripts(
         let Some(leaf) = node_map.get(leaf_id) else {
             continue;
         };
-        let Ok(chain) = walk_exit_chain(node_map, leaf) else {
+        let Ok(chain) = walk_unilateral_exit_chain(node_map, leaf) else {
             continue;
         };
         for node in chain {
@@ -412,7 +413,7 @@ fn branch_has_tracked_change(
     let Some(leaf) = node_map.get(leaf_id) else {
         return false;
     };
-    let Ok(chain) = walk_exit_chain(node_map, leaf) else {
+    let Ok(chain) = walk_unilateral_exit_chain(node_map, leaf) else {
         return false;
     };
     chain.iter().any(|n| {
@@ -428,7 +429,7 @@ fn branch_has_tracked_change(
 /// unresolved lookup leaves the change `None`.
 fn resolve_confirmed_changes(
     node_map: &HashMap<TreeNodeId, TreeNode>,
-    plan: &ExitPlan,
+    plan: &UnilateralExitPlan,
     nodes: &mut HashMap<TreeNodeId, NodeState>,
     needs_change: &HashSet<TreeNodeId>,
     observed: &[Observation],
@@ -501,7 +502,7 @@ fn resolve_confirmed_changes(
 /// output per branch to the funding script), not by txid, so a prior fan-out at
 /// any fee rate is adopted; a differently-shaped spender is a `FundingUtxoConflict`.
 fn interpret_fan_out(
-    plan: &ExitPlan,
+    plan: &UnilateralExitPlan,
     observed: &[Observation],
     pending: &mut Vec<ChainQuery>,
 ) -> Result<(Option<ConfirmedFanOut>, bool), SparkWalletError> {
@@ -605,7 +606,7 @@ fn walk_branch(
     let Some(leaf) = node_map.get(leaf_id) else {
         return;
     };
-    let Ok(chain_nodes) = walk_exit_chain(node_map, leaf) else {
+    let Ok(chain_nodes) = walk_unilateral_exit_chain(node_map, leaf) else {
         return;
     };
     let Some(root) = chain_nodes.first() else {
@@ -832,7 +833,7 @@ fn flag_unverified_txs(build: &mut UnilateralExitBuild, interpretation: &ChainIn
 /// Assembles the unsigned transactions from a `plan` and a `resolved` on-chain
 /// state, chain-independently. See [`build_unilateral_exit`].
 pub(crate) fn build_exit(
-    plan: &ExitPlan,
+    plan: &UnilateralExitPlan,
     resolved: &ResolvedExitState,
     fee_rate_sat_per_kw: u64,
 ) -> Result<UnilateralExitBuild, SparkWalletError> {
@@ -856,7 +857,7 @@ pub(crate) fn build_exit(
         let leaf = node_map.get(leaf_id).ok_or_else(|| {
             SparkWalletError::Generic(format!("Leaf {leaf_id} missing from exit plan"))
         })?;
-        let chain = walk_exit_chain(&node_map, leaf).map_err(|missing| {
+        let chain = walk_unilateral_exit_chain(&node_map, leaf).map_err(|missing| {
             SparkWalletError::Generic(format!(
                 "Incomplete ancestor chain for leaf {leaf_id}: parent {missing} missing"
             ))
@@ -1100,7 +1101,7 @@ pub(crate) fn build_exit(
 
 /// The fee a freshly-broadcast fan-out pays (its inputs minus its outputs). Zero
 /// when there is no fan-out or it was adopted already-confirmed (fee paid).
-fn fresh_fan_out_fee(plan: &ExitPlan, fan_out: Option<&ExitTx>) -> u64 {
+fn fresh_fan_out_fee(plan: &UnilateralExitPlan, fan_out: Option<&ExitTx>) -> u64 {
     let (Some(psbt), Some(fan_out)) = (&plan.fan_out_psbt, fan_out) else {
         return 0;
     };
@@ -1139,14 +1140,14 @@ fn refund_output_value(
 }
 
 /// The CPFP inputs funding each branch's first child, keyed by leaf id (the
-/// shape of [`ExitPlan::per_branch_funding`]).
+/// shape of [`UnilateralExitPlan::per_branch_funding`]).
 type BranchFunding = Vec<(TreeNodeId, Vec<CpfpInput>)>;
 
 /// Resolves the fan-out step and the per-branch funding it feeds. A confirmed
 /// fan-out replaces each branch's first input with its real output; a fresh one
 /// is returned unsigned to broadcast first; no fan-out assigns funding directly.
 fn resolve_fan_out_funding(
-    plan: &ExitPlan,
+    plan: &UnilateralExitPlan,
     resolved: &ResolvedExitState,
 ) -> Result<(Option<ExitTx>, BranchFunding), SparkWalletError> {
     let Some(fan_out_psbt) = &plan.fan_out_psbt else {
@@ -1229,7 +1230,7 @@ mod exit_build_tests {
     };
     use spark::{
         Identifier,
-        services::SelectedLeaf,
+        services::UnilateralExitSelectedLeaf,
         tree::{SigningKeyshare, TreeNodeStatus},
     };
     use std::str::FromStr;
@@ -1300,13 +1301,13 @@ mod exit_build_tests {
         }
     }
 
-    fn single_leaf_plan() -> ExitPlan {
+    fn single_leaf_plan() -> UnilateralExitPlan {
         let root = node("root", None, anchor_tx(1), None);
         let leaf = node("leaf", Some("root"), anchor_tx(2), Some(anchor_tx(3)));
         plan_of(root, leaf)
     }
 
-    fn direct_leaf_plan() -> ExitPlan {
+    fn direct_leaf_plan() -> UnilateralExitPlan {
         let root = node("root", None, anchor_tx(1), None);
         let mut leaf = node("leaf", Some("root"), anchor_tx(2), Some(anchor_tx(3)));
         leaf.direct_tx = Some(anchor_tx(4));
@@ -1314,9 +1315,9 @@ mod exit_build_tests {
         plan_of(root, leaf)
     }
 
-    fn plan_of(root: TreeNode, leaf: TreeNode) -> ExitPlan {
-        ExitPlan {
-            selected_leaves: vec![SelectedLeaf {
+    fn plan_of(root: TreeNode, leaf: TreeNode) -> UnilateralExitPlan {
+        UnilateralExitPlan {
+            selected_leaves: vec![UnilateralExitSelectedLeaf {
                 id: leaf.id.clone(),
                 value: 100_000,
                 estimated_cost: 2_000,
@@ -1519,8 +1520,8 @@ mod exit_build_tests {
             output: vec![branch_output.witness_utxo.clone()],
         };
         let fan_out_psbt = bitcoin::Psbt::from_unsigned_tx(fan_out_tx).unwrap();
-        let plan = ExitPlan {
-            selected_leaves: vec![SelectedLeaf {
+        let plan = UnilateralExitPlan {
+            selected_leaves: vec![UnilateralExitSelectedLeaf {
                 id: leaf.id.clone(),
                 value: 100_000,
                 estimated_cost: 2_000,
@@ -1715,19 +1716,19 @@ mod exit_build_tests {
         assert!(build.cpfp_change_inputs.is_empty());
     }
 
-    fn shared_ancestor_plan() -> ExitPlan {
+    fn shared_ancestor_plan() -> UnilateralExitPlan {
         let root = node("root", None, anchor_tx(1), None);
         let mid = node("mid", Some("root"), anchor_tx(2), None);
         let leaf_a = node("leafA", Some("mid"), anchor_tx(3), Some(anchor_tx(4)));
         let leaf_b = node("leafB", Some("mid"), anchor_tx(5), Some(anchor_tx(6)));
-        ExitPlan {
+        UnilateralExitPlan {
             selected_leaves: vec![
-                SelectedLeaf {
+                UnilateralExitSelectedLeaf {
                     id: leaf_a.id.clone(),
                     value: 100_000,
                     estimated_cost: 2_000,
                 },
-                SelectedLeaf {
+                UnilateralExitSelectedLeaf {
                     id: leaf_b.id.clone(),
                     value: 100_000,
                     estimated_cost: 2_000,
@@ -1905,7 +1906,7 @@ mod interpret_tests {
     fn prepared_of(root: TreeNode, leaf: TreeNode) -> PreparedUnilateralExit {
         let leaf_id = leaf.id.clone();
         PreparedUnilateralExit {
-            plan: ExitPlan {
+            plan: UnilateralExitPlan {
                 selected_leaves: vec![],
                 fan_out_psbt: None,
                 per_branch_funding: vec![(leaf_id.clone(), vec![])],
@@ -2065,7 +2066,7 @@ mod interpret_tests {
         });
 
         let prepared = PreparedUnilateralExit {
-            plan: ExitPlan {
+            plan: UnilateralExitPlan {
                 selected_leaves: vec![],
                 fan_out_psbt: Some(fan_out_psbt),
                 per_branch_funding: vec![(id("a"), vec![]), (id("b"), vec![])],
@@ -2458,7 +2459,7 @@ mod interpret_tests {
             signed_input_weight: 272,
         };
         let prepared = PreparedUnilateralExit {
-            plan: ExitPlan {
+            plan: UnilateralExitPlan {
                 selected_leaves: vec![],
                 fan_out_psbt: None,
                 per_branch_funding: vec![(leaf_id.clone(), vec![funding_input])],

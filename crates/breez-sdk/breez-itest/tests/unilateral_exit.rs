@@ -162,7 +162,7 @@ fn is_package(entry: &UnilateralExitTransaction) -> bool {
 /// funded: the summary fields agree with each other and echo the request.
 /// `dust` is the funding kind's terminal-change dust reserve (330 for P2TR).
 ///
-/// Grounded in `spark::services::quote_exit`: `per_branch[i] = estimated_cost +
+/// Grounded in `spark::services::quote_unilateral_exit`: `per_branch[i] = estimated_cost +
 /// dust`, `single_utxo_funding = sum(per_branch) + fanout_fee`, `total_fee =
 /// sum(estimated_cost) + fanout_fee`, so `single_utxo_funding - total_fee ==
 /// n*dust` and `fanout_fee == 0` iff a single branch.
@@ -215,7 +215,7 @@ fn assert_quote_consistent(
         "fan-out fee is part of the total fee"
     );
 
-    // Funding identities from quote_exit.
+    // Funding identities from quote_unilateral_exit.
     assert_eq!(
         quote.single_utxo_funding_sat,
         quote
