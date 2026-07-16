@@ -66,9 +66,13 @@ where
         invoice.updated_at = now;
         db.upsert_invoice(&invoice).await?;
         debug!("Stored preimage for invoice {}", payment_hash);
-
-        crate::zap::enqueue_zap_receipt(db, payment_hash).await?;
     }
+
+    // Enqueue on every call, not just when the preimage was newly stored, so the
+    // zap receipt is still queued if a prior attempt stored the preimage but
+    // failed before enqueueing. Idempotent via ON CONFLICT DO NOTHING, and the
+    // background publisher drops receipts that were already published.
+    crate::zap::enqueue_zap_receipt(db, payment_hash).await?;
 
     // Notify for all payment hashes, not just newly-affected ones, so that
     // webhooks are delivered even if the server crashed after storing preimages
@@ -162,9 +166,13 @@ where
 
     if !affected.is_empty() {
         debug!("Stored preimages for {} invoices", affected.len());
-
-        crate::zap::enqueue_zap_receipts(db, &affected).await?;
     }
+
+    // Enqueue for all known hashes, not just newly-affected ones, so a zap receipt
+    // is still queued if a prior attempt stored the preimage but failed before
+    // enqueueing. Idempotent via ON CONFLICT DO NOTHING, and the background
+    // publisher drops receipts that were already published.
+    crate::zap::enqueue_zap_receipts(db, &payment_hashes).await?;
 
     // Notify for all payment hashes, not just newly-affected ones, so that
     // webhooks are delivered even if the server crashed after storing preimages
@@ -351,6 +359,124 @@ mod shared_tests {
         assert_eq!(stored.invoice, invoice_str);
     }
 
+    /// Regression: a prior attempt stored the preimage but failed before
+    /// enqueueing the zap receipt. A subsequent call must still enqueue it,
+    /// rather than skip because the preimage is already present.
+    pub async fn invoice_paid_enqueues_zap_when_preimage_already_stored<DB>(db: &DB)
+    where
+        DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
+    {
+        let (trigger, _rx) = watch::channel(());
+        let webhook_service = WebhookService::new(db.clone());
+
+        let preimage_bytes = [7u8; 32];
+        let (preimage_hex, payment_hash, invoice_str) = generate_test_invoice(&preimage_bytes);
+        let user_pubkey = "test_user_pubkey";
+
+        db.upsert_zap(&crate::zap::Zap {
+            payment_hash: payment_hash.clone(),
+            zap_request: r#"{"kind":9734}"#.to_string(),
+            zap_event: None,
+            user_pubkey: user_pubkey.to_string(),
+            invoice_expiry: i64::MAX,
+            updated_at: 1000,
+            is_user_nostr_key: false,
+        })
+        .await
+        .unwrap();
+
+        // Simulate the stuck state: preimage already stored, no zap enqueued.
+        db.upsert_invoice(&Invoice {
+            payment_hash: payment_hash.clone(),
+            user_pubkey: user_pubkey.to_string(),
+            invoice: invoice_str,
+            preimage: Some(preimage_hex.clone()),
+            invoice_expiry: i64::MAX,
+            created_at: 1000,
+            updated_at: 1000,
+            domain: None,
+            amount_received_sat: None,
+        })
+        .await
+        .unwrap();
+
+        handle_invoice_paid(
+            db,
+            &webhook_service,
+            &payment_hash,
+            &preimage_hex,
+            None,
+            &trigger,
+        )
+        .await
+        .unwrap();
+
+        let pending = db.take_pending_zap_receipts(100).await.unwrap();
+        assert!(
+            pending.iter().any(|p| p.payment_hash == payment_hash),
+            "zap receipt must be enqueued even when the preimage was already stored"
+        );
+    }
+
+    /// Batch variant of the regression above: an already-paid invoice is not in
+    /// `affected`, so the zap must be enqueued from the full known-hash set.
+    pub async fn invoices_paid_enqueues_zap_when_preimage_already_stored<DB>(db: &DB)
+    where
+        DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
+    {
+        let (trigger, _rx) = watch::channel(());
+        let webhook_service = WebhookService::new(db.clone());
+
+        let preimage_bytes = [8u8; 32];
+        let (preimage_hex, payment_hash, invoice_str) = generate_test_invoice(&preimage_bytes);
+        let user_pubkey = "test_user_pubkey";
+
+        db.upsert_zap(&crate::zap::Zap {
+            payment_hash: payment_hash.clone(),
+            zap_request: r#"{"kind":9734}"#.to_string(),
+            zap_event: None,
+            user_pubkey: user_pubkey.to_string(),
+            invoice_expiry: i64::MAX,
+            updated_at: 1000,
+            is_user_nostr_key: false,
+        })
+        .await
+        .unwrap();
+
+        db.upsert_invoice(&Invoice {
+            payment_hash: payment_hash.clone(),
+            user_pubkey: user_pubkey.to_string(),
+            invoice: invoice_str.clone(),
+            preimage: Some(preimage_hex.clone()),
+            invoice_expiry: i64::MAX,
+            created_at: 1000,
+            updated_at: 1000,
+            domain: None,
+            amount_received_sat: None,
+        })
+        .await
+        .unwrap();
+
+        handle_invoices_paid(
+            db,
+            &webhook_service,
+            &[PaidInvoice {
+                preimage: preimage_hex,
+                invoice: invoice_str,
+            }],
+            user_pubkey,
+            &trigger,
+        )
+        .await
+        .unwrap();
+
+        let pending = db.take_pending_zap_receipts(100).await.unwrap();
+        assert!(
+            pending.iter().any(|p| p.payment_hash == payment_hash),
+            "zap receipt must be enqueued even when the preimage was already stored"
+        );
+    }
+
     pub async fn invoices_paid_ignores_unknown_payment_hash<DB>(db: &DB)
     where
         DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
@@ -498,6 +624,18 @@ mod sqlite_tests {
     }
 
     #[tokio::test]
+    async fn invoice_paid_enqueues_zap_when_preimage_already_stored() {
+        let db = setup_test_db().await;
+        shared_tests::invoice_paid_enqueues_zap_when_preimage_already_stored(&db).await;
+    }
+
+    #[tokio::test]
+    async fn invoices_paid_enqueues_zap_when_preimage_already_stored() {
+        let db = setup_test_db().await;
+        shared_tests::invoices_paid_enqueues_zap_when_preimage_already_stored(&db).await;
+    }
+
+    #[tokio::test]
     async fn invoices_paid_ignores_unknown_payment_hash() {
         let db = setup_test_db().await;
         shared_tests::invoices_paid_ignores_unknown_payment_hash(&db).await;
@@ -564,6 +702,22 @@ mod postgres_tests {
             return;
         };
         shared_tests::invoices_paid_creates_invoice_when_only_zap_exists(&db).await;
+    }
+
+    #[tokio::test]
+    async fn invoice_paid_enqueues_zap_when_preimage_already_stored() {
+        let Some(db) = setup_test_db().await else {
+            return;
+        };
+        shared_tests::invoice_paid_enqueues_zap_when_preimage_already_stored(&db).await;
+    }
+
+    #[tokio::test]
+    async fn invoices_paid_enqueues_zap_when_preimage_already_stored() {
+        let Some(db) = setup_test_db().await else {
+            return;
+        };
+        shared_tests::invoices_paid_enqueues_zap_when_preimage_already_stored(&db).await;
     }
 
     #[tokio::test]

@@ -2223,19 +2223,24 @@ mod tests {
         );
         let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
 
-        let result = process_webhook(
-            &repo,
-            &crate::webhooks::WebhookService::new(repo.clone()),
-            TEST_WEBHOOK_SECRET,
-            &trigger,
-            &headers,
-            &body,
-        )
-        .await;
-        assert!(result.is_ok());
+        // Process the same webhook twice; it must be idempotent.
+        for _ in 0..2 {
+            let result = process_webhook(
+                &repo,
+                &crate::webhooks::WebhookService::new(repo.clone()),
+                TEST_WEBHOOK_SECRET,
+                &trigger,
+                &headers,
+                &body,
+            )
+            .await;
+            assert!(result.is_ok());
+        }
 
-        // No pending zap receipt should be created for an already-paid invoice
-        assert!(repo.pending_zap_receipts.lock().unwrap().is_empty());
+        // The zap receipt is enqueued so a prior partial failure can recover, but
+        // repeated processing does not create duplicate pending entries
+        // (ON CONFLICT DO NOTHING), and the publisher drops it if already published.
+        assert_eq!(repo.pending_zap_receipts.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
