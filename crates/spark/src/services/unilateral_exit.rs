@@ -148,15 +148,11 @@ pub fn plan_unilateral_exit(
     }
 
     let change_script = &inputs[0].witness_utxo.script_pubkey;
+    let change_dust_limit = change_script.minimal_non_dust().to_sat();
     let params = UnilateralExitLeafCostParams {
         initial_cpfp_input_weight: Weight::from_wu(inputs[0].signed_input_weight),
         single_cpfp_input_weight: Weight::from_wu(inputs[0].signed_input_weight),
         change_script_len: change_script.len(),
-        change_dust_limit: change_script.minimal_non_dust().to_sat(),
-        total_cpfp_budget: inputs
-            .iter()
-            .map(|i| i.witness_utxo.value.to_sat())
-            .fold(0u64, u64::saturating_add),
         destination_script_len,
         fee_rate_sat_per_kw,
     };
@@ -172,18 +168,27 @@ pub fn plan_unilateral_exit(
     }
 
     let (per_branch_funding, fan_out_psbt) = if selected.len() == 1 {
+        // The single-leaf arm hands every input to the one branch, so unlike the
+        // multi-branch paths it has no partition step to reject underfunding.
+        // Gate it here, on the same basis assign/fan-out use, so a short exit
+        // fails at plan time rather than later in build_cpfp_child.
+        let required = branch_required_funding(&selected[0], change_dust_limit);
+        let available = inputs
+            .iter()
+            .map(|i| i.witness_utxo.value.to_sat())
+            .fold(0u64, u64::saturating_add);
+        if available < required {
+            return Err(ServiceError::InsufficientCpfpBudget {
+                required_sat: required,
+            });
+        }
         (vec![(selected[0].id.clone(), inputs)], None)
-    } else if let Some(assignment) =
-        assign_inputs_to_leaves(&inputs, &selected, params.change_dust_limit)
+    } else if let Some(assignment) = assign_inputs_to_leaves(&inputs, &selected, change_dust_limit)
     {
         (assignment, None)
     } else {
-        let (psbt, per_leaf) = build_fan_out_psbt(
-            &inputs,
-            &selected,
-            fee_rate_sat_per_kw,
-            params.change_dust_limit,
-        )?;
+        let (psbt, per_leaf) =
+            build_fan_out_psbt(&inputs, &selected, fee_rate_sat_per_kw, change_dust_limit)?;
         (
             per_leaf
                 .into_iter()
@@ -237,8 +242,6 @@ pub fn quote_unilateral_exit(
         initial_cpfp_input_weight: Weight::from_wu(funding_input_weight),
         single_cpfp_input_weight: Weight::from_wu(funding_input_weight),
         change_script_len: funding_output_script_len,
-        change_dust_limit,
-        total_cpfp_budget: u64::MAX,
         destination_script_len,
         fee_rate_sat_per_kw,
     };
@@ -256,12 +259,7 @@ pub fn quote_unilateral_exit(
 
     let per_branch_funding: Vec<(TreeNodeId, u64)> = selected
         .iter()
-        .map(|l| {
-            (
-                l.id.clone(),
-                l.estimated_cost.saturating_add(change_dust_limit),
-            )
-        })
+        .map(|l| (l.id.clone(), branch_required_funding(l, change_dust_limit)))
         .collect();
     let leaves_total: u64 = per_branch_funding
         .iter()
@@ -330,10 +328,16 @@ pub struct UnilateralExitLeafCostParams {
     /// Weight of each subsequent child's single (chained-change) input.
     pub single_cpfp_input_weight: Weight,
     pub change_script_len: usize,
-    pub change_dust_limit: u64,
-    pub total_cpfp_budget: u64,
     pub destination_script_len: usize,
     pub fee_rate_sat_per_kw: u64,
+}
+
+/// Sats a branch's funding inputs must provide: its marginal exit cost plus the
+/// terminal CPFP-change output, which the sweep later consumes so it must clear
+/// dust. Single source of truth every affordability gate and the quote share.
+#[inline]
+pub fn branch_required_funding(leaf: &UnilateralExitSelectedLeaf, change_dust_limit: u64) -> u64 {
+    leaf.estimated_cost.saturating_add(change_dust_limit)
 }
 
 /// Signed weight of one input with the given witness-element lengths.
@@ -477,7 +481,6 @@ pub fn evaluate_unilateral_exit_leaf_costs(
 
     let mut selected: Vec<UnilateralExitSelectedLeaf> = Vec::new();
     let mut covered_txids: HashSet<bitcoin::Txid> = HashSet::new();
-    let mut total_cpfp_cost: u64 = 0;
 
     for (leaf_id, leaf) in &leaves {
         let Some(refund_tx) = &leaf.refund_tx else {
@@ -565,23 +568,9 @@ pub fn evaluate_unilateral_exit_leaf_costs(
                 value: leaf.value,
                 estimated_cost: total_marginal_cost,
             });
-            total_cpfp_cost = total_cpfp_cost.saturating_add(cpfp_cost);
             for ancestor in &ancestors {
                 covered_txids.insert(ancestor.node_tx.compute_txid());
             }
-        }
-    }
-
-    if !selected.is_empty() {
-        // Each branch's CPFP chain ends in a terminal change output the sweep
-        // consumes, so reserve one dust limit per branch.
-        let terminal_change_reserve =
-            (selected.len() as u64).saturating_mul(params.change_dust_limit);
-        let required_budget = total_cpfp_cost.saturating_add(terminal_change_reserve);
-        if required_budget > params.total_cpfp_budget {
-            return Err(ServiceError::InsufficientCpfpBudget {
-                required_sat: required_budget,
-            });
         }
     }
 
@@ -624,7 +613,7 @@ pub fn assign_inputs_to_leaves(
     let mut assigned_by_leaf: HashMap<TreeNodeId, Vec<CpfpInput>> =
         HashMap::with_capacity(leaf_count);
     for (i, leaf) in sorted_leaves.iter().enumerate() {
-        let required = leaf.estimated_cost.saturating_add(change_dust_limit);
+        let required = branch_required_funding(leaf, change_dust_limit);
         let branches_left_after = leaf_count.saturating_sub(i + 1);
         let mut assigned: Vec<CpfpInput> = Vec::new();
         let mut sum: u64 = 0;
@@ -687,7 +676,7 @@ pub fn build_fan_out_psbt(
 
     let per_leaf_value: Vec<u64> = selected_leaves
         .iter()
-        .map(|l| l.estimated_cost.saturating_add(change_dust_limit))
+        .map(|l| branch_required_funding(l, change_dust_limit))
         .collect();
     let leaves_total: u64 = per_leaf_value
         .iter()
@@ -1427,8 +1416,6 @@ mod tests {
                 initial_cpfp_input_weight: Weight::from_wu(272),
                 single_cpfp_input_weight: Weight::from_wu(272),
                 change_script_len: 22,
-                change_dust_limit: 330,
-                total_cpfp_budget: 1_000_000,
                 destination_script_len: 22,
                 fee_rate_sat_per_kw: 250,
             }
@@ -1722,6 +1709,56 @@ mod tests {
 
             // One sat under the quoted single-UTXO amount and the fan-out can't be funded.
             assert!(fund_one(quote.single_utxo_funding_sat - 1).is_err());
+        }
+
+        #[test_all]
+        fn plan_single_leaf_funding_boundary_is_exact() {
+            let a = leaf_node_n("a", 1_000_000, 1);
+            let id = a.id.clone();
+            let nodes: HashMap<TreeNodeId, TreeNode> = [(id.clone(), a)].into_iter().collect();
+
+            // Quote against the real script dust plan derives from the funding UTXO,
+            // so quote and plan size the single branch identically.
+            let dust = test_script().minimal_non_dust().to_sat();
+            let quote = quote_unilateral_exit(
+                &nodes,
+                std::slice::from_ref(&id),
+                UnilateralExitLeafFilter::ProfitableOnly,
+                272,
+                22,
+                dust,
+                250,
+                22,
+            )
+            .unwrap();
+            // One branch, no fan-out fee: the single-UTXO amount is the branch's own.
+            let required = quote.per_branch_funding[0].1;
+            assert_eq!(quote.single_utxo_funding_sat, required);
+
+            let fund = |sat: u64| {
+                plan_unilateral_exit(
+                    nodes.clone(),
+                    std::slice::from_ref(&id),
+                    UnilateralExitLeafFilter::ProfitableOnly,
+                    vec![cpfp_input(sat, 0)],
+                    250,
+                    22,
+                )
+            };
+
+            // Funded at exactly the quote: one branch, one input, no fan-out.
+            let plan = fund(required).unwrap();
+            assert!(plan.fan_out_psbt.is_none());
+            assert_eq!(plan.per_branch_funding.len(), 1);
+
+            // One sat short: plan rejects up front with the exact requirement, rather
+            // than deferring the failure to build_cpfp_child.
+            match fund(required - 1) {
+                Err(ServiceError::InsufficientCpfpBudget { required_sat }) => {
+                    assert_eq!(required_sat, required);
+                }
+                other => panic!("expected InsufficientCpfpBudget, got {other:?}"),
+            }
         }
 
         fn anchor_tx_n(nonce: u32) -> Transaction {

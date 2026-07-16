@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use bitcoin::{Address, Amount, OutPoint, ScriptBuf, Transaction, TxOut, Txid};
 use spark::{
     services::{
-        CpfpInput, ServiceError, UnilateralExitPlan, build_cpfp_child, csv_timelock,
-        walk_unilateral_exit_chain,
+        CpfpInput, ServiceError, UnilateralExitPlan, branch_required_funding, build_cpfp_child,
+        csv_timelock, walk_unilateral_exit_chain,
     },
     tree::{TreeNode, TreeNodeId, TreeNodeStatus},
     utils::transactions::is_ephemeral_anchor_output,
@@ -1170,11 +1170,8 @@ fn resolve_fan_out_funding(
 
     // Adopt the confirmed fan-out's real outputs. Each is fixed at the fee it was
     // built with, so it must still cover the branch cost plus terminal change dust.
-    let branch_cost: HashMap<&TreeNodeId, u64> = plan
-        .selected_leaves
-        .iter()
-        .map(|l| (&l.id, l.estimated_cost))
-        .collect();
+    let leaf_by_id: HashMap<&TreeNodeId, _> =
+        plan.selected_leaves.iter().map(|l| (&l.id, l)).collect();
     let mut per_branch = plan.per_branch_funding.clone();
     for (leaf_id, funding) in &mut per_branch {
         let adopted = confirmed.branch_outputs.get(leaf_id).ok_or_else(|| {
@@ -1186,12 +1183,11 @@ fn resolve_fan_out_funding(
         let Some(first) = funding.first_mut() else {
             continue;
         };
+        // Dust from the branch's own funding script, not the plan's change_dust_limit.
         let dust = first.witness_utxo.script_pubkey.minimal_non_dust().to_sat();
-        let required = branch_cost
+        let required = leaf_by_id
             .get(leaf_id)
-            .copied()
-            .unwrap_or(0)
-            .saturating_add(dust);
+            .map_or(dust, |leaf| branch_required_funding(leaf, dust));
         if adopted.value < required {
             return Err(SparkWalletError::ServiceError(
                 ServiceError::InsufficientCpfpBudget {
