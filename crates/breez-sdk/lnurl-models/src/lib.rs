@@ -89,13 +89,6 @@ pub struct ListMetadataMetadata {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct PublishZapReceiptRequest {
-    pub signature: String,
-    pub timestamp: u64,
-    pub zap_receipt: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub struct InvoicePaidRequest {
     pub signature: String,
     pub timestamp: u64,
@@ -113,12 +106,6 @@ pub struct InvoicesPaidRequest {
 pub struct PaidInvoice {
     pub preimage: String,
     pub invoice: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PublishZapReceiptResponse {
-    pub published: bool,
-    pub zap_receipt: String,
 }
 
 pub fn sanitize_username(username: &str) -> String {
