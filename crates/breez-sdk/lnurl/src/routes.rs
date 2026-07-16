@@ -719,6 +719,8 @@ where
             return Err(lnurl_error("amount must be a whole sat amount"));
         }
 
+        validate_amount_bounds(amount_msat, state.min_sendable, state.max_sendable)?;
+
         let nostr_pubkey = state
             .nostr_keys
             .as_ref()
@@ -1322,6 +1324,24 @@ fn validate_username(username: &str) -> Result<(), (StatusCode, Json<Value>)> {
     Ok(())
 }
 
+/// Enforce the advertised LUD-06 min/max sendable bounds on the callback. The
+/// sending wallet is expected to honor them, but a direct client can request
+/// any amount, so the service rejects out-of-bounds amounts itself. Bounds and
+/// `amount_msat` are all in millisatoshi.
+fn validate_amount_bounds(
+    amount_msat: u64,
+    min_sendable: u64,
+    max_sendable: u64,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    if amount_msat < min_sendable || amount_msat > max_sendable {
+        trace!(
+            "amount out of bounds: {amount_msat} msat, allowed {min_sendable}..={max_sendable} msat"
+        );
+        return Err(lnurl_error("amount out of bounds"));
+    }
+    Ok(())
+}
+
 fn validate_description(description: &str) -> Result<(), (StatusCode, Json<Value>)> {
     if description.chars().take(256).count() > 255 {
         return Err((
@@ -1489,9 +1509,13 @@ async fn sanitize_domain<DB>(
     domain: &str,
 ) -> Result<String, (StatusCode, Json<Value>)> {
     let domain = domain.trim().to_lowercase();
-    // If domains list is empty allow all domains (for testing)
     let domains = state.domains.read().await;
-    if domains.is_empty() || domains.contains_key(&domain) {
+    if domains.contains_key(&domain) {
+        return Ok(domain);
+    }
+    // An empty allow-list falls open to any host, for local/test setups only.
+    // Never on mainnet: there it must be an explicit deny.
+    if domains.is_empty() && !state.is_mainnet {
         return Ok(domain);
     }
     warn!("domain not allowed: {}", domain);
@@ -2451,6 +2475,27 @@ mod tests {
                 verify_signature_ecdsa(&secp, &other, &sig, &alice_pubkey).is_err(),
                 "signature must not verify against a different message: {other}"
             );
+        }
+    }
+
+    #[test]
+    fn amount_bounds_accepts_within_range() {
+        for amount in [1_000, 2_500_000, 4_000_000_000] {
+            assert!(
+                validate_amount_bounds(amount, 1_000, 4_000_000_000).is_ok(),
+                "{amount} msat is within bounds and must be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn amount_bounds_rejects_out_of_range() {
+        // Below min (including zero) and above max must both be rejected.
+        for amount in [0, 999, 4_000_000_001] {
+            let err = validate_amount_bounds(amount, 1_000, 4_000_000_000)
+                .expect_err("out-of-bounds amount must be rejected");
+            assert_eq!(err.0, StatusCode::OK, "LNURL errors use HTTP 200");
+            assert_eq!(err.1.0["reason"], "amount out of bounds");
         }
     }
 }

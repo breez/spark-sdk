@@ -13,7 +13,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use base64::{Engine, prelude::BASE64_STANDARD};
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, Parser};
 use figment::{
     Figment,
     providers::{Env, Format, Serialized, Toml},
@@ -82,7 +82,8 @@ struct Args {
     #[arg(long, default_value = "mainnet")]
     pub network: Network,
 
-    /// Scheme prefix for lnurl urls.
+    /// Scheme prefix for generated lnurl URLs only. The server binds plain HTTP
+    /// and does not terminate TLS itself: run it behind a TLS-terminating proxy.
     #[arg(long, default_value = "https")]
     pub scheme: String,
 
@@ -143,14 +144,25 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    let args = Args::parse();
+    let matches = Args::command().get_matches();
+    let args = Args::from_arg_matches(&matches)?;
     let config_file = std::fs::canonicalize(&args.config).ok();
-    let mut figment = Figment::new().merge(Serialized::defaults(args));
+
+    // Precedence, highest first: explicit CLI args > env > TOML > clap defaults.
+    // The fully-parsed args (which carry clap's default for every unset flag) are
+    // the lowest layer, so real env/TOML values override those defaults. The flags
+    // the user actually typed are re-applied as the top layer via
+    // `explicit_cli_overrides`, so they win over env and TOML.
+    let mut figment = Figment::new().merge(Serialized::defaults(&args));
     if let Some(config_file) = &config_file {
         figment = figment.merge(Toml::file(config_file));
     }
+    figment = figment.merge(Env::prefixed("BREEZ_LNURL_"));
+    figment = figment.merge(Serialized::defaults(explicit_cli_overrides(
+        &args, &matches,
+    )));
 
-    let args: Args = figment.merge(Env::prefixed("BREEZ_LNURL_")).extract()?;
+    let args: Args = figment.extract()?;
 
     tracing_subscriber::registry()
         .with(EnvFilter::new(&args.log_level))
@@ -208,19 +220,40 @@ async fn main() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn parse_auth_seed(hex_str: Option<&str>) -> [u8; 32] {
+/// The flags the user set explicitly on the command line, as a serde map keyed
+/// by field name. Flags left at their clap default are excluded so they do not
+/// override values coming from the environment or the config file, letting
+/// command-line arguments sit at the top of the precedence order.
+fn explicit_cli_overrides(args: &Args, matches: &clap::ArgMatches) -> serde_json::Value {
+    let explicit: HashSet<&str> = matches
+        .ids()
+        .filter(|id| {
+            matches.value_source(id.as_str()) == Some(clap::parser::ValueSource::CommandLine)
+        })
+        .map(clap::Id::as_str)
+        .collect();
+
+    let serde_json::Value::Object(map) = serde_json::to_value(args).unwrap_or_default() else {
+        return serde_json::Value::Object(serde_json::Map::new());
+    };
+    serde_json::Value::Object(
+        map.into_iter()
+            .filter(|(k, _)| explicit.contains(k.as_str()))
+            .collect(),
+    )
+}
+
+fn parse_auth_seed(hex_str: Option<&str>) -> Result<[u8; 32], anyhow::Error> {
+    // Unset is a deliberate "generate an ephemeral identity" case. A malformed
+    // seed is not: silently substituting a random identity would swap the
+    // server's SSP-auth key without notice, so treat it as fatal.
     let Some(hex_str) = hex_str else {
-        return rand::random();
+        return Ok(rand::random());
     };
-    let Ok(bytes) = hex::decode(hex_str) else {
-        error!("invalid ssp_auth_seed hex, using random seed");
-        return rand::random();
-    };
-    let Ok(seed) = bytes.try_into() else {
-        error!("ssp_auth_seed must be 32 bytes, using random seed");
-        return rand::random();
-    };
-    seed
+    let bytes = hex::decode(hex_str).map_err(|e| anyhow!("invalid ssp_auth_seed hex: {e}"))?;
+    bytes
+        .try_into()
+        .map_err(|_| anyhow!("ssp_auth_seed must be 32 bytes"))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -228,7 +261,7 @@ async fn run_server<DB>(args: Args, repository: DB) -> Result<(), anyhow::Error>
 where
     DB: LnurlRepository + webhooks::WebhookRepository + Clone + Send + Sync + 'static,
 {
-    let auth_seed = parse_auth_seed(args.ssp_auth_seed.as_deref());
+    let auth_seed = parse_auth_seed(args.ssp_auth_seed.as_deref())?;
 
     let mut spark_config = SparkWalletConfig::default_config(args.network);
     spark_config.service_provider_config.schema_endpoint = Some("graphql/spark/rc".to_string());
@@ -320,16 +353,28 @@ where
         .transpose()?;
 
     let crl: HashSet<String> = if let Some(url) = &args.crl_url {
-        let client = reqwest::Client::new();
-        let body = client
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| anyhow!("failed to build crl http client: {e:?}"))?;
+        let response = client
             .get(url)
             .send()
             .await
-            .map_err(|e| anyhow!("failed to fetch crl from {url}: {e:?}"))?
+            .map_err(|e| anyhow!("failed to fetch crl from {url}: {e:?}"))?;
+        // Guard against parsing an error page (404/500 body) as revocation entries.
+        let response = response
+            .error_for_status()
+            .map_err(|e| anyhow!("crl fetch from {url} returned an error status: {e:?}"))?;
+        let body = response
             .text()
             .await
             .map_err(|e| anyhow!("failed to read crl response body: {e:?}"))?;
-        body.split(',').map(str::to_string).collect()
+        body.split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect()
     } else {
         HashSet::new()
     };
@@ -393,6 +438,7 @@ where
         db: repository,
         webhook_service,
         wallet,
+        is_mainnet,
         scheme: args.scheme,
         min_sendable: args.min_sendable,
         max_sendable: args.max_sendable,
@@ -530,4 +576,83 @@ fn register_webhook(service_provider: Arc<ServiceProvider>, webhook_url: String,
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Args, explicit_cli_overrides, parse_auth_seed};
+    use clap::{CommandFactory, FromArgMatches};
+    use figment::{Figment, providers::Serialized};
+
+    #[test]
+    fn explicit_cli_overrides_excludes_defaults() {
+        let matches = Args::command()
+            .try_get_matches_from(["lnurl", "--scheme", "http"])
+            .expect("args parse");
+        let args = Args::from_arg_matches(&matches).expect("from matches");
+        let overrides = explicit_cli_overrides(&args, &matches);
+        let obj = overrides.as_object().expect("object");
+
+        // The flag the user typed is present.
+        assert_eq!(obj.get("scheme").and_then(|v| v.as_str()), Some("http"));
+        // Flags left at their clap default must not appear (else they would
+        // clobber env/TOML values).
+        assert!(!obj.contains_key("min_sendable"));
+        assert!(!obj.contains_key("network"));
+    }
+
+    #[test]
+    fn cli_wins_over_lower_layer_but_default_does_not() {
+        // Mirrors main()'s layering. A second `Serialized` layer stands in for
+        // the TOML/env sources: precedence is decided purely by merge order, so
+        // this faithfully exercises "explicit CLI beats a lower layer" and
+        // "a non-passed flag lets the lower layer beat the clap default".
+        let matches = Args::command()
+            .try_get_matches_from(["lnurl", "--scheme", "http"])
+            .expect("args parse");
+        let args = Args::from_arg_matches(&matches).expect("from matches");
+        let lower_layer = serde_json::json!({ "scheme": "https", "min_sendable": 5000u64 });
+
+        let resolved: Args = Figment::new()
+            .merge(Serialized::defaults(&args))
+            .merge(Serialized::defaults(lower_layer))
+            .merge(Serialized::defaults(explicit_cli_overrides(
+                &args, &matches,
+            )))
+            .extract()
+            .expect("extract");
+
+        assert_eq!(
+            resolved.scheme, "http",
+            "CLI-passed flag must win over lower layer"
+        );
+        assert_eq!(
+            resolved.min_sendable, 5000,
+            "un-passed flag must take the lower-layer value, not the clap default"
+        );
+    }
+
+    #[test]
+    fn auth_seed_valid_hex_is_parsed() {
+        let hex = "11".repeat(32);
+        let seed = parse_auth_seed(Some(&hex)).expect("valid 32-byte hex must parse");
+        assert_eq!(seed, [0x11u8; 32]);
+    }
+
+    #[test]
+    fn auth_seed_unset_generates_random() {
+        // Unset is a deliberate ephemeral-identity case, not an error.
+        assert!(parse_auth_seed(None).is_ok());
+    }
+
+    #[test]
+    fn auth_seed_invalid_hex_is_fatal() {
+        assert!(parse_auth_seed(Some("nothex")).is_err());
+    }
+
+    #[test]
+    fn auth_seed_wrong_length_is_fatal() {
+        // 31 bytes, valid hex but wrong length.
+        assert!(parse_auth_seed(Some(&"22".repeat(31))).is_err());
+    }
 }

@@ -81,11 +81,14 @@ If you've built the binary, you can run it directly:
 
 ## Configuration
 
-The server can be configured in three ways (in order of precedence):
+The server can be configured in three ways (highest precedence first):
 
 1. Command-line arguments
 2. Environment variables (prefixed with `BREEZ_LNURL_`)
 3. Config file (TOML format)
+
+Only flags actually passed on the command line take precedence; a flag left at
+its default does not override a value set via environment variable or config file.
 
 ### Configuration File
 
@@ -97,7 +100,8 @@ address = "0.0.0.0:8080"
 auto_migrate = true
 log_level = "info"
 network = "mainnet"
-scheme = "https"
+scheme = "https"                     # Scheme for generated URLs only; the server
+                                    # binds plain HTTP, terminate TLS at a proxy
 
 # Database configuration
 db_url = "postgres://user:password@localhost:5432/lnurl_db"
@@ -106,7 +110,7 @@ db_url = "postgres://user:password@localhost:5432/lnurl_db"
 
 # LNURL payment configuration
 min_sendable = 1000                 # Minimum amount in millisatoshi (1 sat)
-max_sendable = 4000000000           # Maximum amount in millisatoshi (40,000 sats)
+max_sendable = 4000000000           # Maximum amount in millisatoshi (4,000,000 sats)
 domains = "yourdomain.com"          # Comma-separated list of allowed domains
 default_api_key = "<breez-api-key>" # Fallback Breez API key for partner attribution
 ```
