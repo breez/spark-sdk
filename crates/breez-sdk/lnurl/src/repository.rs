@@ -81,10 +81,6 @@ pub trait LnurlRepository {
     ) -> Result<(), LnurlRepositoryError>;
 
     async fn upsert_zap(&self, zap: &Zap) -> Result<(), LnurlRepositoryError>;
-    async fn get_zap_by_payment_hash(
-        &self,
-        payment_hash: &str,
-    ) -> Result<Option<Zap>, LnurlRepositoryError>;
     async fn insert_lnurl_sender_comment(
         &self,
         comment: &LnurlSenderComment,

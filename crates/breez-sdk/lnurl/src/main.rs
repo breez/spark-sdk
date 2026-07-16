@@ -490,10 +490,6 @@ where
             get(LnurlServer::<DB>::list_metadata),
         )
         .route(
-            "/lnurlpay/{pubkey}/metadata/{payment_hash}/zap",
-            post(LnurlServer::<DB>::publish_zap_receipt),
-        )
-        .route(
             "/lnurlpay/{pubkey}/invoice-paid",
             post(LnurlServer::<DB>::invoice_paid),
         )
