@@ -1390,15 +1390,19 @@ impl SparkWallet {
     ) -> Result<(Vec<TreeNodeId>, UnilateralExitLeafFilter), SparkWalletError> {
         match selection {
             ExitLeafSelection::Auto => {
-                let mut leaf_ids: Vec<TreeNodeId> = self
-                    .tree_service
-                    .list_leaves()
-                    .await?
+                // Include non-available leaves (e.g. a mid-exit leaf the operators
+                // now report OnChain) so Auto resumes a partially-exited leaf, not
+                // just fresh ones. The planner skips any that turn out un-exitable
+                // under ProfitableOnly.
+                let leaves = self.tree_service.list_leaves().await?;
+                let mut leaf_ids: Vec<TreeNodeId> = leaves
                     .available
                     .into_iter()
+                    .chain(leaves.not_available)
                     .map(|l| l.id)
                     .collect();
                 leaf_ids.sort();
+                leaf_ids.dedup();
                 Ok((leaf_ids, UnilateralExitLeafFilter::ProfitableOnly))
             }
             ExitLeafSelection::Specific(leaf_ids) => Ok((leaf_ids, UnilateralExitLeafFilter::All)),
