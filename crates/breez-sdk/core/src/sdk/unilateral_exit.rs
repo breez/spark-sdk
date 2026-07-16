@@ -11,7 +11,7 @@ use bitcoin::{
 
 use spark_wallet::{
     AddressUtxo, ChainQuery, ChainResult, CpfpInput, ExitTxKind, ExitTxStatus, Observation,
-    PreparedUnilateralExit, SpendInfo, TreeNodeId, build_unilateral_exit,
+    PreparedUnilateralExit, SpendInfo, TreeNodeId, UnilateralExitBuild, build_unilateral_exit,
     is_ephemeral_anchor_output, next_chain_queries,
 };
 
@@ -231,6 +231,8 @@ impl BreezSdk {
         let build = build_unilateral_exit(&prepared_exit, &observed, fee_rate_sat_per_kw)?;
         let recoverable_value_sat = build.recoverable_value_sat;
         let build_fee_sat = build.total_fee_sat;
+        // Captured before the loop below consumes `build.branches`.
+        let sweep_status = sweep_confirmation_status(&build);
         debug!(
             has_fan_out = build.fan_out.is_some(),
             branches = build.branches.len(),
@@ -331,7 +333,6 @@ impl BreezSdk {
         let actual_sweep_fee = sweep_fee(&sweep_psbt);
         let total_fee_sat = build_fee_sat.saturating_add(actual_sweep_fee);
         let sweep_txid = sweep_psbt.unsigned_tx.compute_txid();
-        let sweep_status = tx_confirmation(chain, sweep_txid).await;
         trace!(
             txid = %sweep_txid,
             status = ?sweep_status,
@@ -668,22 +669,30 @@ fn confirmation_status(status: ExitTxStatus) -> ConfirmationStatus {
     }
 }
 
+/// The sweep's status, derived from the refunds it spends. A verified refund is
+/// spent-and-dropped once its sweep confirms (the exit then returns with no
+/// sweep), so a freshly-returned sweep over verified refunds is never yet
+/// on-chain: `Unconfirmed`. An unverified refund (its chain lookup failed) could
+/// already be on-chain and swept without us knowing, so the sweep is `Unverified`.
+fn sweep_confirmation_status(build: &UnilateralExitBuild) -> ConfirmationStatus {
+    let any_refund_unverified = build
+        .branches
+        .iter()
+        .flat_map(|b| b.txs.iter())
+        .any(|t| t.kind == ExitTxKind::Refund && t.status == ExitTxStatus::Unverified);
+    if any_refund_unverified {
+        ConfirmationStatus::Unverified
+    } else {
+        ConfirmationStatus::Unconfirmed
+    }
+}
+
 fn empty_exit_response() -> UnilateralExitResponse {
     UnilateralExitResponse {
         recoverable_value_sat: 0,
         total_fee_sat: 0,
         leaves: Vec::new(),
         transactions: Vec::new(),
-    }
-}
-
-/// Confirmation status from the transaction status directly, for txs with no
-/// ephemeral anchor output to detect confirmation against.
-async fn tx_confirmation(chain: &dyn BitcoinChainService, txid: Txid) -> ConfirmationStatus {
-    match chain.get_transaction_status(txid.to_string()).await {
-        Ok(s) if s.confirmed => ConfirmationStatus::Confirmed,
-        Ok(_) => ConfirmationStatus::Unconfirmed,
-        Err(_) => ConfirmationStatus::Unverified,
     }
 }
 
@@ -751,9 +760,58 @@ mod tests {
     use super::*;
     use crate::error::SignerError;
     use bitcoin::hashes::Hash;
+    use spark_wallet::{ExitBranch, ExitTx};
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    fn refund_tx(status: ExitTxStatus) -> ExitTx {
+        ExitTx {
+            kind: ExitTxKind::Refund,
+            node_id: None,
+            txid: Txid::from_byte_array([3; 32]),
+            base_tx: Transaction {
+                version: bitcoin::transaction::Version::TWO,
+                lock_time: bitcoin::absolute::LockTime::ZERO,
+                input: vec![],
+                output: vec![],
+            },
+            to_sign: None,
+            csv_timelock_blocks: None,
+            depends_on: vec![],
+            status,
+        }
+    }
+
+    fn build_with_refund(status: ExitTxStatus) -> UnilateralExitBuild {
+        UnilateralExitBuild {
+            fan_out: None,
+            branches: vec![ExitBranch {
+                leaf_id: TreeNodeId::from_str("leaf").unwrap(),
+                txs: vec![refund_tx(status)],
+            }],
+            refund_outputs: vec![],
+            cpfp_change_inputs: vec![],
+            recoverable_value_sat: 0,
+            total_fee_sat: 0,
+        }
+    }
+
+    #[test]
+    fn sweep_status_is_unconfirmed_when_refunds_are_verified() {
+        assert_eq!(
+            sweep_confirmation_status(&build_with_refund(ExitTxStatus::Unconfirmed)),
+            ConfirmationStatus::Unconfirmed
+        );
+    }
+
+    #[test]
+    fn sweep_status_is_unverified_when_a_refund_is_unverified() {
+        assert_eq!(
+            sweep_confirmation_status(&build_with_refund(ExitTxStatus::Unverified)),
+            ConfirmationStatus::Unverified
+        );
+    }
 
     fn unsigned_two_input_psbt() -> bitcoin::Psbt {
         let tx = Transaction {
