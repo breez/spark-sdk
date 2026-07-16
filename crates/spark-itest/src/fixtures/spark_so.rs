@@ -76,16 +76,6 @@ fn generate_self_signed_certificate(host_names: &[String]) -> Result<(String, St
 }
 
 impl SparkSoFixture {
-    /// Stops every operator container (and its postgres backend), simulating a
-    /// full operator outage. bitcoind is untouched.
-    pub async fn stop(&self) -> Result<()> {
-        for op in &self.operators {
-            op.container.stop().await?;
-            op.postgres.stop().await?;
-        }
-        Ok(())
-    }
-
     pub async fn new(fixture_id: &FixtureId, bitcoind_fixture: &BitcoindFixture) -> Result<Self> {
         // Namespaced by `fixture_id`: `testdir!()` keys only on the test's case
         // name, so parametrized cases that share a name (all our `case_1_seed`s)

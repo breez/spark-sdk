@@ -4,7 +4,6 @@ use std::time::Duration;
 use anyhow::{Result, bail};
 use bitcoin::{
     Address, Amount, CompressedPublicKey, OutPoint, Psbt, Transaction, TxOut, Witness,
-    ecdsa::Signature as EcdsaSignature,
     hashes::Hash as _,
     key::{Secp256k1, TapTweak as _},
     secp256k1::SecretKey,
@@ -19,8 +18,8 @@ use spark_postgres::{
     PostgresSessionStore, PostgresTokenStore, PostgresTreeStore, default_postgres_storage_config,
 };
 use spark_wallet::{
-    CpfpInput, DefaultSigner, Network, SessionStore, Signer, SparkSigner, SparkSignerAdapter,
-    SparkWallet, SparkWalletConfig, WalletBuilder, WalletEvent, is_ephemeral_anchor_output,
+    DefaultSigner, Network, SessionStore, Signer, SparkSigner, SparkSignerAdapter, SparkWallet,
+    SparkWalletConfig, WalletBuilder, WalletEvent, is_ephemeral_anchor_output,
 };
 use tokio::sync::broadcast::Receiver;
 use tracing::{debug, info};
@@ -546,15 +545,6 @@ pub async fn fund_p2wpkh_utxo_with_key(
     })
 }
 
-/// Build a `CpfpInput` from a funded UTXO with the given signed input weight.
-pub fn make_cpfp_input(utxo: &FundedUtxo, weight: u64) -> CpfpInput {
-    CpfpInput {
-        outpoint: utxo.outpoint,
-        witness_utxo: utxo.witness_utxo.clone(),
-        signed_input_weight: weight,
-    }
-}
-
 /// Finalize all ephemeral anchor inputs in a PSBT with an empty witness.
 fn finalize_anchor_inputs(psbt: &mut Psbt) {
     for input in &mut psbt.inputs {
@@ -614,59 +604,6 @@ pub fn sign_cpfp_psbt_p2tr(psbt: &Psbt, secret_key: &SecretKey) -> Result<Transa
         psbt.inputs[i].final_script_witness = Some(witness);
     }
 
-    Ok(psbt.extract_tx_unchecked_fee_rate())
-}
-
-/// Sign a CPFP PSBT with P2WPKH external inputs, finalizing anchor + P2WPKH inputs.
-pub fn sign_cpfp_psbt_p2wpkh(psbt: &Psbt, secret_key: &SecretKey) -> Result<Transaction> {
-    let mut psbt = psbt.clone();
-    finalize_anchor_inputs(&mut psbt);
-
-    let secp = Secp256k1::new();
-    let pubkey = secret_key.public_key(&secp);
-    let bitcoin_pubkey = bitcoin::PublicKey::new(pubkey);
-
-    let wpkh_indices: Vec<usize> = psbt
-        .inputs
-        .iter()
-        .enumerate()
-        .filter(|(_, i)| {
-            i.final_script_witness.is_none()
-                && i.witness_utxo
-                    .as_ref()
-                    .is_some_and(|o| o.script_pubkey.is_p2wpkh())
-        })
-        .map(|(idx, _)| idx)
-        .collect();
-
-    let mut cache = SighashCache::new(&psbt.unsigned_tx);
-    for i in wpkh_indices {
-        let (msg, ecdsa_type) = psbt
-            .sighash_ecdsa(i, &mut cache)
-            .map_err(|e| anyhow::anyhow!("ECDSA sighash error: {e}"))?;
-        let sig = secp.sign_ecdsa(&msg, secret_key);
-        let signature = EcdsaSignature {
-            signature: sig,
-            sighash_type: ecdsa_type,
-        };
-        let mut witness = Witness::new();
-        witness.push(signature.to_vec());
-        witness.push(bitcoin_pubkey.to_bytes());
-        psbt.inputs[i].final_script_witness = Some(witness);
-    }
-
-    Ok(psbt.extract_tx_unchecked_fee_rate())
-}
-
-/// Sign a CPFP PSBT using a caller-provided closure (custom signer), after
-/// finalizing the ephemeral anchor inputs.
-pub fn sign_cpfp_psbt_custom<F>(psbt: &Psbt, signer: F) -> Result<Transaction>
-where
-    F: FnOnce(&mut Psbt) -> Result<()>,
-{
-    let mut psbt = psbt.clone();
-    finalize_anchor_inputs(&mut psbt);
-    signer(&mut psbt)?;
     Ok(psbt.extract_tx_unchecked_fee_rate())
 }
 
