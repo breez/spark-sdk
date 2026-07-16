@@ -20,12 +20,13 @@ use crate::{signer::SparkSigner, tree::TreeNode};
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
 use hex::ToHex;
-use lightning_invoice::Bolt11Invoice;
+use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescriptionRef};
 use platform_utils::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::warn;
 
 use super::models::LightningSendRequestStatus;
 
@@ -199,6 +200,98 @@ pub struct PayLightningResult {
     pub payment_hash: sha256::Hash,
 }
 
+/// Verify an SSP-returned receive invoice commits to the parameters we requested.
+///
+/// A swapped payment hash is settled by whoever holds its preimage (the SSP),
+/// leaving the receiver uncredited. The operators reject a hash that disagrees
+/// with the invoice in `store_preimage_share_v2`, but HODL invoices store no
+/// share and so reach no operator: there this is the only hash check. Amount,
+/// network and description hash are validated nowhere else.
+///
+/// Memo and expiry only warn: neither is critical, so a future SSP bug degrades
+/// them rather than blocking the receive outright.
+fn validate_received_invoice(
+    decoded_invoice: &Bolt11Invoice,
+    payment_hash: sha256::Hash,
+    network: bitcoin::Network,
+    amount_sats: u64,
+    description_hash: Option<[u8; 32]>,
+    memo: Option<&str>,
+    expiry_secs: u32,
+) -> Result<(), ServiceError> {
+    if *decoded_invoice.payment_hash() != payment_hash {
+        return Err(ServiceError::ValidationError(
+            "SSP invoice payment hash does not match the requested hash".to_string(),
+        ));
+    }
+    if decoded_invoice.network() != network {
+        return Err(ServiceError::ValidationError(
+            "SSP invoice network does not match the requested network".to_string(),
+        ));
+    }
+    // A zero request asks for an amountless invoice, so a fixed amount is as much
+    // of a mismatch as the wrong one: it pins the payer to an amount we never asked for.
+    let expected_amount_msats = (amount_sats > 0).then(|| amount_sats.saturating_mul(1000));
+    if decoded_invoice.amount_milli_satoshis() != expected_amount_msats {
+        return Err(ServiceError::ValidationError(
+            "SSP invoice amount does not match the requested amount".to_string(),
+        ));
+    }
+    if let Some(expected) = description_hash
+        && !matches!(
+            decoded_invoice.description(),
+            Bolt11InvoiceDescriptionRef::Hash(h) if h.0.to_byte_array() == expected
+        )
+    {
+        return Err(ServiceError::ValidationError(
+            "SSP invoice description hash does not match the requested hash".to_string(),
+        ));
+    }
+    // Compare the raw string: `UntrustedString`'s `Display` sanitizes control
+    // characters, so it would report a mismatch for an identical memo.
+    if let Some(memo) = memo
+        && !matches!(
+            decoded_invoice.description(),
+            Bolt11InvoiceDescriptionRef::Direct(d) if d.as_inner().0 == memo
+        )
+    {
+        warn!("SSP invoice description does not match the requested memo");
+    }
+    let expiry = decoded_invoice.expiry_time();
+    if expiry != Duration::from_secs(u64::from(expiry_secs)) {
+        warn!("SSP invoice expiry {expiry:?} does not match the requested {expiry_secs}s");
+    }
+    Ok(())
+}
+
+/// Verify the Spark address embedded in an SSP-returned receive invoice is ours,
+/// and is there only if we asked for one.
+///
+/// A payer that finds an address here transfers to it directly and settles nothing
+/// over Lightning, so an injected address is paid instead of us with no payment
+/// hash, preimage or operator involved to catch it. The address rides in a route
+/// hint, so an invoice correct in every other respect can still carry one.
+fn validate_received_spark_address(
+    spark_address: Option<&SparkAddress>,
+    include_spark_address: bool,
+    identity_pubkey: PublicKey,
+) -> Result<(), ServiceError> {
+    match (spark_address, include_spark_address) {
+        (Some(_), false) => Err(ServiceError::ValidationError(
+            "SSP invoice carries a Spark address that was not requested".to_string(),
+        )),
+        (Some(address), true) if address.identity_public_key != identity_pubkey => {
+            Err(ServiceError::ValidationError(
+                "SSP invoice Spark address does not match our identity".to_string(),
+            ))
+        }
+        (None, true) => Err(ServiceError::ValidationError(
+            "SSP invoice is missing the requested Spark address".to_string(),
+        )),
+        _ => Ok(()),
+    }
+}
+
 pub struct LightningService {
     operator_pool: Arc<OperatorPool>,
     ssp_client: Arc<ServiceProvider>,
@@ -360,7 +453,7 @@ impl LightningService {
                 payment_hash: payment_hash.encode_hex(),
                 description_hash: description_hash.map(|h| h.encode_hex()),
                 expiry_secs: Some(expiry.into()),
-                memo,
+                memo: memo.clone(),
                 include_spark_address,
                 spark_invoice: None,
             })
@@ -368,20 +461,22 @@ impl LightningService {
         let decoded_invoice = Bolt11Invoice::from_str(&invoice.invoice.encoded_invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
 
-        // check if the spark address in the invoice matches the identity pubkey only
-        if include_spark_address {
-            let spark_address = self.extract_spark_address(&decoded_invoice);
-            let Some(spark_address) = spark_address else {
-                return Err(ServiceError::SSPswapError(
-                    "Invalid invoice. Spark address not found".to_string(),
-                ));
-            };
-            if spark_address.identity_public_key != identity_pubkey {
-                return Err(ServiceError::SSPswapError(
-                    "Invalid invoice. Spark address mismatch".to_string(),
-                ));
-            }
-        }
+        // Must precede the preimage share store and the return: a mismatch has to
+        // abort the receive before the invoice can reach a payer.
+        validate_received_invoice(
+            &decoded_invoice,
+            payment_hash,
+            self.network.into(),
+            amount_sats,
+            description_hash,
+            memo.as_deref(),
+            expiry,
+        )?;
+        validate_received_spark_address(
+            self.extract_spark_address(&decoded_invoice).as_ref(),
+            include_spark_address,
+            identity_pubkey,
+        )?;
 
         if let Some(prepared) = prepared_receive {
             // The signer already Feldman-split the preimage and ECIES-encrypted
@@ -776,4 +871,315 @@ fn get_invoice_amount_sats(
     }
 
     Ok(to_pay_sat)
+}
+
+#[cfg(test)]
+mod validate_received_invoice_tests {
+    use super::{
+        ServiceError, SparkAddress, validate_received_invoice, validate_received_spark_address,
+    };
+    use bitcoin::hashes::{Hash, sha256};
+    use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+    use lightning_invoice::{Bolt11Invoice, Currency, InvoiceBuilder, PaymentSecret};
+
+    const EXPIRY_SECS: u32 = 3600;
+
+    fn pubkey(byte: u8) -> PublicKey {
+        let secp = Secp256k1::new();
+        SecretKey::from_slice(&[byte; 32])
+            .unwrap()
+            .public_key(&secp)
+    }
+
+    fn hash(byte: u8) -> sha256::Hash {
+        sha256::Hash::from_byte_array([byte; 32])
+    }
+
+    fn invoice(
+        currency: Currency,
+        payment_hash: sha256::Hash,
+        amount_msat: Option<u64>,
+        desc_hash: Option<sha256::Hash>,
+    ) -> Bolt11Invoice {
+        let secp = Secp256k1::new();
+        let key = SecretKey::from_slice(&[0x11; 32]).unwrap();
+        let sign = |m: &_| secp.sign_ecdsa_recoverable(m, &key);
+        // `InvoiceBuilder` encodes description kind and amount in its type, so no
+        // shared base builder is possible and each arm chains in full. Only one arm
+        // runs, so `sign` moving into each is fine.
+        match (desc_hash, amount_msat) {
+            (Some(dh), Some(amt)) => InvoiceBuilder::new(currency)
+                .description_hash(dh)
+                .payment_hash(payment_hash)
+                .payment_secret(PaymentSecret([0x22; 32]))
+                .duration_since_epoch(std::time::Duration::from_secs(1_700_000_000))
+                .min_final_cltv_expiry_delta(144)
+                .expiry_time(std::time::Duration::from_secs(EXPIRY_SECS as u64))
+                .amount_milli_satoshis(amt)
+                .build_signed(sign)
+                .unwrap(),
+            (Some(dh), None) => InvoiceBuilder::new(currency)
+                .description_hash(dh)
+                .payment_hash(payment_hash)
+                .payment_secret(PaymentSecret([0x22; 32]))
+                .duration_since_epoch(std::time::Duration::from_secs(1_700_000_000))
+                .min_final_cltv_expiry_delta(144)
+                .expiry_time(std::time::Duration::from_secs(EXPIRY_SECS as u64))
+                .build_signed(sign)
+                .unwrap(),
+            (None, Some(amt)) => InvoiceBuilder::new(currency)
+                .description("test".to_string())
+                .payment_hash(payment_hash)
+                .payment_secret(PaymentSecret([0x22; 32]))
+                .duration_since_epoch(std::time::Duration::from_secs(1_700_000_000))
+                .min_final_cltv_expiry_delta(144)
+                .expiry_time(std::time::Duration::from_secs(EXPIRY_SECS as u64))
+                .amount_milli_satoshis(amt)
+                .build_signed(sign)
+                .unwrap(),
+            (None, None) => InvoiceBuilder::new(currency)
+                .description("test".to_string())
+                .payment_hash(payment_hash)
+                .payment_secret(PaymentSecret([0x22; 32]))
+                .duration_since_epoch(std::time::Duration::from_secs(1_700_000_000))
+                .min_final_cltv_expiry_delta(144)
+                .expiry_time(std::time::Duration::from_secs(EXPIRY_SECS as u64))
+                .build_signed(sign)
+                .unwrap(),
+        }
+    }
+
+    /// Assert the validation failed, and specifically on the guard identified by
+    /// `needle`. Every check returns `ValidationError`, so asserting the message
+    /// keyword proves the intended guard fired rather than an unrelated one.
+    fn assert_rejected(result: Result<(), ServiceError>, needle: &str) {
+        match result {
+            Err(ServiceError::ValidationError(msg)) => assert!(
+                msg.contains(needle),
+                "expected a `{needle}` validation error, got: {msg}"
+            ),
+            other => panic!("expected a `{needle}` ValidationError, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accepts_matching_invoice() {
+        let inv = invoice(Currency::Regtest, hash(1), Some(50_000), None);
+        assert!(
+            validate_received_invoice(
+                &inv,
+                hash(1),
+                bitcoin::Network::Regtest,
+                50,
+                None,
+                None,
+                EXPIRY_SECS
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn rejects_payment_hash_mismatch() {
+        let inv = invoice(Currency::Regtest, hash(1), Some(50_000), None);
+        assert_rejected(
+            validate_received_invoice(
+                &inv,
+                hash(2),
+                bitcoin::Network::Regtest,
+                50,
+                None,
+                None,
+                EXPIRY_SECS,
+            ),
+            "payment hash",
+        );
+    }
+
+    #[test]
+    fn rejects_network_mismatch() {
+        let inv = invoice(Currency::Regtest, hash(1), Some(50_000), None);
+        assert_rejected(
+            validate_received_invoice(
+                &inv,
+                hash(1),
+                bitcoin::Network::Bitcoin,
+                50,
+                None,
+                None,
+                EXPIRY_SECS,
+            ),
+            "network",
+        );
+    }
+
+    #[test]
+    fn rejects_amount_mismatch() {
+        let inv = invoice(Currency::Regtest, hash(1), Some(50_000), None);
+        assert_rejected(
+            validate_received_invoice(
+                &inv,
+                hash(1),
+                bitcoin::Network::Regtest,
+                60,
+                None,
+                None,
+                EXPIRY_SECS,
+            ),
+            "amount",
+        );
+    }
+
+    #[test]
+    fn accepts_amountless_invoice_when_amountless_requested() {
+        let inv = invoice(Currency::Regtest, hash(1), None, None);
+        assert!(
+            validate_received_invoice(
+                &inv,
+                hash(1),
+                bitcoin::Network::Regtest,
+                0,
+                None,
+                None,
+                EXPIRY_SECS
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn accepts_matching_description_hash() {
+        let dh = hash(9);
+        let inv = invoice(Currency::Regtest, hash(1), Some(50_000), Some(dh));
+        assert!(
+            validate_received_invoice(
+                &inv,
+                hash(1),
+                bitcoin::Network::Regtest,
+                50,
+                Some(dh.to_byte_array()),
+                None,
+                EXPIRY_SECS,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn rejects_description_hash_mismatch() {
+        let inv = invoice(Currency::Regtest, hash(1), Some(50_000), Some(hash(9)));
+        assert_rejected(
+            validate_received_invoice(
+                &inv,
+                hash(1),
+                bitcoin::Network::Regtest,
+                50,
+                Some(hash(8).to_byte_array()),
+                None,
+                EXPIRY_SECS,
+            ),
+            "description hash",
+        );
+    }
+
+    #[test]
+    fn rejects_direct_description_when_hash_requested() {
+        // The invoice carries a plain-text description, but we requested a
+        // description hash: the wrong description *type* must be rejected too.
+        let inv = invoice(Currency::Regtest, hash(1), Some(50_000), None);
+        assert_rejected(
+            validate_received_invoice(
+                &inv,
+                hash(1),
+                bitcoin::Network::Regtest,
+                50,
+                Some(hash(9).to_byte_array()),
+                None,
+                EXPIRY_SECS,
+            ),
+            "description hash",
+        );
+    }
+
+    #[test]
+    fn rejects_fixed_amount_when_amountless_requested() {
+        let inv = invoice(Currency::Regtest, hash(1), Some(50_000), None);
+        assert_rejected(
+            validate_received_invoice(
+                &inv,
+                hash(1),
+                bitcoin::Network::Regtest,
+                0,
+                None,
+                None,
+                EXPIRY_SECS,
+            ),
+            "amount",
+        );
+    }
+
+    /// Memo and expiry are advisory, so a mismatch must still return `Ok`.
+    #[test]
+    fn memo_and_expiry_mismatch_are_accepted() {
+        // `invoice` builds a "test" description and an `EXPIRY_SECS` expiry.
+        let inv = invoice(Currency::Regtest, hash(1), Some(50_000), None);
+        assert!(
+            validate_received_invoice(
+                &inv,
+                hash(1),
+                bitcoin::Network::Regtest,
+                50,
+                None,
+                Some("not the memo we asked for"),
+                EXPIRY_SECS + 1,
+            )
+            .is_ok()
+        );
+    }
+
+    fn spark_address(byte: u8) -> SparkAddress {
+        SparkAddress::new(pubkey(byte), crate::core::Network::Regtest, None)
+    }
+
+    #[test]
+    fn accepts_requested_spark_address_matching_identity() {
+        assert!(
+            validate_received_spark_address(Some(&spark_address(0x11)), true, pubkey(0x11)).is_ok()
+        );
+    }
+
+    #[test]
+    fn rejects_requested_spark_address_for_another_identity() {
+        assert_rejected(
+            validate_received_spark_address(Some(&spark_address(0x22)), true, pubkey(0x11)),
+            "does not match our identity",
+        );
+    }
+
+    #[test]
+    fn rejects_missing_spark_address_when_requested() {
+        assert_rejected(
+            validate_received_spark_address(None, true, pubkey(0x11)),
+            "missing the requested Spark address",
+        );
+    }
+
+    /// A payer transfers straight to an address found in the invoice, so one we
+    /// never asked for is a redirect of the funds even when it names our identity.
+    #[test]
+    fn rejects_unrequested_spark_address() {
+        assert_rejected(
+            validate_received_spark_address(Some(&spark_address(0x22)), false, pubkey(0x11)),
+            "not requested",
+        );
+        assert_rejected(
+            validate_received_spark_address(Some(&spark_address(0x11)), false, pubkey(0x11)),
+            "not requested",
+        );
+    }
+
+    #[test]
+    fn accepts_absent_spark_address_when_not_requested() {
+        assert!(validate_received_spark_address(None, false, pubkey(0x11)).is_ok());
+    }
 }
