@@ -37,6 +37,12 @@ Exiting several leaves at once starts with a **fan-out** transaction that splits
 
 ![Multi-leaf unilateral exit](images/unilateral_exit_multi_leaf.svg)
 
+## Leaf denominations and exit cost
+
+Every leaf is exited by its own chain of transactions, so it carries its own on-chain fee whatever its value. The more leaves your balance is spread across, and the smaller they are, the more of it goes to fees on the way out, and the more low-value leaves an {{#enum ExitLeafSelection::Auto}} exit abandons as uneconomical dust.
+
+How the balance is split into leaves is governed by the SDK's leaf optimization, which balances everyday payment experience against unilateral exit value. More, smaller denominations let payments go out without leaf swaps, while fewer, larger denominations cost less to exit. The default leans toward payment experience, which suits most wallets, since a unilateral exit is a rare last resort. See [Custom leaf optimization](optimize.md) to understand this tradeoff and adjust it if your use case calls for it.
+
 ## Quote the exit
 
 Call {{#name prepare_unilateral_exit}} with the target {{#name fee_rate_sat_per_vbyte}}, the {{#name funding_kind}} of UTXO you will pay fees with, your {{#name destination}} address, and a {{#name selection}}. {{#enum ExitLeafSelection::Auto}} exits every leaf worth more than its own exit cost; {{#enum ExitLeafSelection::Specific}} exits exactly the leaves you name.
@@ -131,6 +137,8 @@ Each {{#name UnilateralExitTransaction}} in {{#name transactions}} carries:
 
 {{#name unilateral_exit}} is safe to call again. It reads confirmed on-chain state on every call, so any step already confirmed comes back as {{#enum ConfirmationStatus::Confirmed}}, and an interrupted exit resumes from where it stopped instead of starting over. You never re-supply a previously built exit transaction: the SDK re-discovers the confirmed steps — including a confirmed fan-out — from chain state itself. The only thing you ever pass back in is a confirmed fan-out's *outputs*, and only as fresh funding UTXOs when a higher fee rate needs more than they provide (as described just below).
 
+For the most reliable resume, re-quote with {{#enum ExitLeafSelection::Specific}} naming the same leaves as your original quote, rather than {{#enum ExitLeafSelection::Auto}}, then call {{#name unilateral_exit}} again. Persist the leaf ids from that first quote so you can name them. Naming the leaves explicitly is the most dependable way to pick up an interrupted exit, including a leaf still waiting out its refund timelock.
+
 The reported fee reflects on-chain progress. {{#name unilateral_exit}}'s {{#name total_fee_sat}} is the actual fee of only the transactions it still returns, so a resume costs less than a fresh exit — already-confirmed steps are free. {{#name prepare_unilateral_exit}} works from the operators' reported node state rather than a chain lookup, so it treats any node the operators already consider on-chain as paid; a partially-exited leaf therefore quotes cheaper, and its {{#name per_branch_funding}} drops to match.
 
 To re-broadcast the same leaves at a higher fee, quote again with the same {{#enum ExitLeafSelection::Specific}} leaves and a higher {{#name fee_rate_sat_per_vbyte}}, then call {{#name unilateral_exit}} again. The not-yet-confirmed transactions are rebuilt at the higher fee and replace the earlier ones by RBF; confirmed steps are left as they are. Once a fan-out has confirmed its outputs are fixed at the fee they were built with, so if the higher rate needs more than they provide the call returns {{#enum SdkError::InsufficientCpfpFunds}}; because those outputs pay to your own funding script, you recover by quoting again and passing them back in as funding UTXOs, together with any extra funding needed.
@@ -142,6 +150,7 @@ Confirmed *CPFP* transactions hold funds the same way: once one confirms, your f
 | Problem | Cause | Solution |
 |---------|-------|----------|
 | {{#name prepare_unilateral_exit}} returns no {{#name leaves}} | Under {{#enum ExitLeafSelection::Auto}}, no leaf is worth exiting at the current rate | Lower {{#name fee_rate_sat_per_vbyte}} or wait for cheaper on-chain fees (this is not an error) |
+| A leaf you are mid-exit on is missing from a resumed {{#enum ExitLeafSelection::Auto}} quote | The resume reselected leaves with {{#enum ExitLeafSelection::Auto}} instead of naming them | Re-quote with {{#enum ExitLeafSelection::Specific}}, naming the leaves from your original quote |
 | {{#name total_fee_sat}} is close to or above {{#name recoverable_value_sat}} | The shared fan-out fee makes a single-UTXO multi-leaf exit uneconomical | Fund one UTXO per branch ({{#name per_branch_funding}}) to drop the fan-out fee, exit fewer leaves with {{#enum ExitLeafSelection::Specific}}, or wait for a lower fee rate |
 | The build/sweep fails with a "below the dust limit" error | The recoverable value net of fees is below the destination's dust limit | Exit higher-value leaves with {{#enum ExitLeafSelection::Specific}}, lower the {{#name fee_rate_sat_per_vbyte}}, or wait for a cheaper fee rate |
 | {{#enum SdkError::InsufficientCpfpFunds}} | Funding is below what the exit needs | Fund at least {{#name single_utxo_funding_sat}}, or the amount in each {{#name PerBranchFunding}} |
