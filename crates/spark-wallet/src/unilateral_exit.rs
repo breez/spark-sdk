@@ -321,6 +321,8 @@ fn interpret_chain(
         &mut pending,
     );
 
+    flag_unresolved_change_branches(&node_map, plan, &nodes, &mut unverified);
+
     // Runs per leaf independently of the walk; an adopted refund overrides it.
     for (leaf_id, address) in &prepared.leaf_refund_addresses {
         interpret_refund(
@@ -422,6 +424,41 @@ fn branch_has_tracked_change(
             Some(NodeState::ConfirmedCpfp { change: Some(_) })
         )
     })
+}
+
+/// Marks the driven txs of a branch unverified when one of its confirmed cpfp
+/// nodes has an unresolved change (the lookup failed, or the operator-OnChain
+/// fallback fired). That change is the only safe funding for the next driven
+/// child; without it the build refunds from the original supplied input the
+/// confirmed child already spent, a double-spend. Flagging (not the `Unconfirmed`
+/// the build would otherwise emit) tells the caller not to broadcast; a later run
+/// on a healthy chain resolves the change and funds correctly. Only `Unconfirmed`
+/// txs are upgraded downstream, so confirmed nodes on the branch keep their state.
+fn flag_unresolved_change_branches(
+    node_map: &HashMap<TreeNodeId, TreeNode>,
+    plan: &UnilateralExitPlan,
+    nodes: &HashMap<TreeNodeId, NodeState>,
+    unverified: &mut HashSet<TreeNodeId>,
+) {
+    for (leaf_id, _) in &plan.per_branch_funding {
+        let Some(leaf) = node_map.get(leaf_id) else {
+            continue;
+        };
+        let Ok(chain) = walk_unilateral_exit_chain(node_map, leaf) else {
+            continue;
+        };
+        let has_unresolved_change = chain.iter().any(|n| {
+            matches!(
+                nodes.get(&n.id),
+                Some(NodeState::ConfirmedCpfp { change: None })
+            )
+        });
+        if has_unresolved_change {
+            for n in &chain {
+                unverified.insert(n.id.clone());
+            }
+        }
+    }
 }
 
 /// Resolves each `needs_change` node's on-chain CPFP-child change (the output
@@ -1861,6 +1898,56 @@ mod exit_build_tests {
         );
     }
 
+    #[test]
+    fn flag_unverified_preserves_confirmed_downstream_tx() {
+        // Both txs are in the unverified set, but only the unconfirmed one is
+        // upgraded: a confirmed child on the same branch keeps its status.
+        let node_tx = |nonce| ExitTx {
+            kind: ExitTxKind::Node,
+            node_id: Some(id(if nonce == 1 { "mid" } else { "leaf" })),
+            txid: anchor_tx(nonce).compute_txid(),
+            base_tx: anchor_tx(nonce),
+            to_sign: None,
+            csv_timelock_blocks: None,
+            depends_on: vec![],
+            status: if nonce == 1 {
+                ExitTxStatus::Confirmed
+            } else {
+                ExitTxStatus::Unconfirmed
+            },
+        };
+        let mut build = UnilateralExitBuild {
+            fan_out: None,
+            branches: vec![ExitBranch {
+                leaf_id: id("leaf"),
+                txs: vec![node_tx(1), node_tx(2)],
+            }],
+            refund_outputs: vec![],
+            cpfp_change_inputs: vec![],
+            recoverable_value_sat: 0,
+            total_fee_sat: 0,
+        };
+        let interpretation = ChainInterpretation {
+            resolved: ResolvedExitState::default(),
+            pending: vec![],
+            unverified: [id("mid"), id("leaf")].into_iter().collect(),
+            fan_out_unverified: false,
+        };
+        flag_unverified_txs(&mut build, &interpretation);
+
+        let txs = &build.branches[0].txs;
+        assert_eq!(
+            txs[0].status,
+            ExitTxStatus::Confirmed,
+            "a confirmed downstream tx is not downgraded"
+        );
+        assert_eq!(
+            txs[1].status,
+            ExitTxStatus::Unverified,
+            "the unconfirmed driven tx is upgraded to unverified"
+        );
+    }
+
     fn psbt_fee(psbt: &bitcoin::Psbt) -> u64 {
         let ins: u64 = psbt
             .inputs
@@ -2475,6 +2562,50 @@ mod interpret_tests {
         assert_eq!(
             interp.resolved.nodes.get(&leaf_id),
             Some(&NodeState::ConfirmedCpfp { change: None })
+        );
+    }
+
+    #[test]
+    fn interpret_flags_driven_child_below_unresolved_change() {
+        // root confirms via its cpfp node_tx but carries no anchor output, so its
+        // CPFP change can't be resolved; the leaf below it is the unspent frontier.
+        let deposit = OutPoint {
+            txid: Txid::from_byte_array([1u8; 32]),
+            vout: 0,
+        };
+        let root = treenode("root", None, tx_spending(deposit, 1), 0);
+        let root_txid = root.node_tx.compute_txid();
+        let leaf_parent = OutPoint {
+            txid: root_txid,
+            vout: 0,
+        };
+        let leaf = treenode("leaf", Some("root"), tx_spending(leaf_parent, 2), 0);
+        let leaf_id = leaf.id.clone();
+        let prepared = prepared_of(root, leaf);
+
+        let observed = vec![
+            spent(deposit, root_txid),
+            Observation {
+                query: ChainQuery::Outspend(leaf_parent),
+                result: ChainResult::Spend(None),
+            },
+            no_refund(&leaf_id),
+            not_funded(&leaf_id),
+        ];
+        let interp = interpret_chain(&prepared, &observed).unwrap();
+
+        assert_eq!(
+            interp.resolved.nodes.get(&id("root")),
+            Some(&NodeState::ConfirmedCpfp { change: None }),
+            "root is confirmed but its change is unresolved"
+        );
+        assert!(
+            !interp.resolved.nodes.contains_key(&leaf_id),
+            "the leaf is the driven frontier"
+        );
+        assert!(
+            interp.unverified.contains(&leaf_id),
+            "a driven child below an unresolved-change node is flagged unverified"
         );
     }
 
