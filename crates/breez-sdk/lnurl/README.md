@@ -100,7 +100,7 @@ address = "0.0.0.0:8080"
 auto_migrate = true
 log_level = "info"
 network = "mainnet"
-scheme = "https"                     # Scheme for generated URLs only; the server
+scheme = "https"                    # Scheme for generated URLs only; the server
                                     # binds plain HTTP, terminate TLS at a proxy
 
 # Database configuration
@@ -130,6 +130,12 @@ default_api_key = "<breez-api-key>" # Fallback Breez API key for partner attribu
 | `--max-sendable` | Maximum payment amount (millisatoshi) | `4000000000` |
 | `--webhook-domain` | Domain for the webhook URL registered with the SSP | (none) |
 | `--ssp-auth-seed` | Hex-encoded 32-byte seed for SSP authentication | (random) |
+
+The allowed domains are the ones stored in the database, which the server refreshes
+periodically and to which `--domains` is added on startup. If that list ends up empty
+(`--domains=""` and no domains in the database), requests for any host are accepted on
+testnet and regtest, which is intended for local and test setups only. On mainnet an
+empty list rejects every request instead of falling open.
 
 For a complete list of options, run:
 ```shell
