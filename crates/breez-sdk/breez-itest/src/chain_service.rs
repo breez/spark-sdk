@@ -169,16 +169,13 @@ impl BitcoinChainService for LocalBitcoindChainService {
         Ok(utxos)
     }
 
-    async fn get_address_funded_txo_count(
-        &self,
-        address: String,
-    ) -> Result<u64, ChainServiceError> {
+    async fn get_address_txos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError> {
         let parsed: Address<_> = address.parse().map_err(to_chain_err)?;
         let checked = parsed
             .require_network(bitcoin::Network::Regtest)
             .map_err(to_chain_err)?;
         let script_hex = checked.script_pubkey().to_hex_string();
-        count_confirmed_funding(&self.bitcoind, &script_hex)
+        confirmed_txos_for_script(&self.bitcoind, &script_hex)
             .await
             .map_err(to_chain_err)
     }
@@ -234,42 +231,58 @@ impl BitcoinChainService for LocalBitcoindChainService {
     }
 }
 
-/// Counts confirmed outputs ever paid to `script_hex`. bitcoind has no address
-/// index, so scan every block (as `find_spender_in_blocks` does), matching each
-/// output's scriptPubKey against the target.
-async fn count_confirmed_funding(bitcoind: &BitcoindRpc, script_hex: &str) -> Result<u64> {
+/// Every confirmed output ever paid to `script_hex`, spent or not. bitcoind has
+/// no address index, so scan every block (as `find_spender_in_blocks` does),
+/// matching each output's scriptPubKey against the target.
+async fn confirmed_txos_for_script(bitcoind: &BitcoindRpc, script_hex: &str) -> Result<Vec<Utxo>> {
     let tip_info: Value = bitcoind.rpc("getblockchaininfo", &[]).await?;
     let tip_height = tip_info
         .get("blocks")
         .and_then(|v| v.as_u64())
         .ok_or_else(|| anyhow::anyhow!("missing blocks in getblockchaininfo"))?;
 
-    let mut count = 0u64;
+    let mut txos = Vec::new();
     for height in 0..=tip_height {
         let block_hash: String = bitcoind.rpc("getblockhash", &[json!(height)]).await?;
         let block: Value = bitcoind
             .rpc("getblock", &[json!(block_hash), json!(2)])
             .await?;
+        let block_time = block.get("time").and_then(|v| v.as_u64());
         let Some(txs) = block.get("tx").and_then(|v| v.as_array()) else {
             continue;
         };
         for tx in txs {
+            let Some(txid) = tx.get("txid").and_then(|v| v.as_str()) else {
+                continue;
+            };
             let Some(vouts) = tx.get("vout").and_then(|v| v.as_array()) else {
                 continue;
             };
-            for vout in vouts {
-                let matches = vout
+            for out in vouts {
+                let matches = out
                     .get("scriptPubKey")
                     .and_then(|s| s.get("hex"))
                     .and_then(|h| h.as_str())
                     .is_some_and(|h| h == script_hex);
-                if matches {
-                    count += 1;
+                if !matches {
+                    continue;
                 }
+                let n = out.get("n").and_then(|v| v.as_u64()).unwrap_or(0);
+                let value_btc = out.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                txos.push(Utxo {
+                    txid: txid.to_string(),
+                    vout: u32::try_from(n).unwrap_or(0),
+                    value: (value_btc * 100_000_000.0).round() as u64,
+                    status: TxStatus {
+                        confirmed: true,
+                        block_height: u32::try_from(height).ok(),
+                        block_time,
+                    },
+                });
             }
         }
     }
-    Ok(count)
+    Ok(txos)
 }
 
 async fn find_spender_in_mempool(

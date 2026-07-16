@@ -38,11 +38,11 @@ impl From<bitcoin::address::ParseError> for ChainServiceError {
 #[macros::async_trait]
 pub trait BitcoinChainService: Send + Sync {
     async fn get_address_utxos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError>;
-    /// Number of confirmed outputs ever paid to `address`. Must count spent
-    /// outputs too, so a swept refund reads as funded rather than as never
-    /// broadcast.
-    async fn get_address_funded_txo_count(&self, address: String)
-    -> Result<u64, ChainServiceError>;
+    /// Every output ever paid to `address`, spent or not, unlike
+    /// [`get_address_utxos`](Self::get_address_utxos) which omits spent ones.
+    /// Recovers an output's outpoint and value after it has been spent, so a
+    /// swept refund can still be distinguished from one never broadcast.
+    async fn get_address_txos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError>;
     async fn get_transaction_status(&self, txid: String) -> Result<TxStatus, ChainServiceError>;
     async fn get_transaction_hex(&self, txid: String) -> Result<String, ChainServiceError>;
     async fn get_outspend(&self, txid: String, vout: u32) -> Result<Outspend, ChainServiceError>;

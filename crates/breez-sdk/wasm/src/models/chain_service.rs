@@ -68,19 +68,19 @@ impl breez_sdk_spark::BitcoinChainService for WasmBitcoinChainService {
         Ok(utxos.into_iter().map(|p| p.into()).collect())
     }
 
-    async fn get_address_funded_txo_count(
+    async fn get_address_txos(
         &self,
         address: String,
-    ) -> Result<u64, breez_sdk_spark::ChainServiceError> {
+    ) -> Result<Vec<breez_sdk_spark::Utxo>, breez_sdk_spark::ChainServiceError> {
         let promise = self
             .inner
-            .get_address_funded_txo_count(address)
+            .get_address_txos(address)
             .map_err(js_error_to_chain_service_error)?;
         let future = JsFuture::from(promise);
         let result = future.await.map_err(js_error_to_chain_service_error)?;
-        let count: u64 = serde_wasm_bindgen::from_value(result)
+        let txos: Vec<Utxo> = serde_wasm_bindgen::from_value(result)
             .map_err(|e| breez_sdk_spark::ChainServiceError::Generic(e.to_string()))?;
-        Ok(count)
+        Ok(txos.into_iter().map(|p| p.into()).collect())
     }
 
     async fn get_transaction_status(
@@ -160,7 +160,7 @@ impl breez_sdk_spark::BitcoinChainService for WasmBitcoinChainService {
 #[wasm_bindgen(typescript_custom_section)]
 const EVENT_INTERFACE: &'static str = r#"export interface BitcoinChainService {
     getAddressUtxos(address: string): Promise<Utxo[]>;
-    getAddressFundedTxoCount(address: string): Promise<number>;
+    getAddressTxos(address: string): Promise<Utxo[]>;
     getTransactionStatus(txid: string): Promise<TxStatus>;
     getTransactionHex(txid: string): Promise<string>;
     getOutspend(txid: string, vout: number): Promise<Outspend>;
@@ -179,8 +179,8 @@ extern "C" {
         address: String,
     ) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = "getAddressFundedTxoCount", catch)]
-    pub fn get_address_funded_txo_count(
+    #[wasm_bindgen(structural, method, js_name = "getAddressTxos", catch)]
+    pub fn get_address_txos(
         this: &BitcoinChainService,
         address: String,
     ) -> Result<Promise, JsValue>;

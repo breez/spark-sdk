@@ -31,14 +31,15 @@ impl BitcoinChainServiceHandle {
         serde_wasm_bindgen::to_value(&utxos).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
-    #[wasm_bindgen(js_name = "getAddressFundedTxoCount")]
-    pub async fn get_address_funded_txo_count(&self, address: String) -> Result<JsValue, JsValue> {
-        let count = self
+    #[wasm_bindgen(js_name = "getAddressTxos")]
+    pub async fn get_address_txos(&self, address: String) -> Result<JsValue, JsValue> {
+        let txos = self
             .inner
-            .get_address_funded_txo_count(address)
+            .get_address_txos(address)
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        serde_wasm_bindgen::to_value(&count).map_err(|e| JsValue::from_str(&e.to_string()))
+        let txos: Vec<Utxo> = txos.into_iter().map(Into::into).collect();
+        serde_wasm_bindgen::to_value(&txos).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     #[wasm_bindgen(js_name = "getTransactionStatus")]

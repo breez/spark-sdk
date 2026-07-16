@@ -189,14 +189,9 @@ pub enum ChainQuery {
     /// Is this output spent, and by which (confirmed?) transaction?
     Outspend(OutPoint),
     Transaction(Txid),
-    /// Scan this leaf's refund address for a confirmed refund of any variant.
+    /// Scan this leaf's refund address for its refund output of any variant,
+    /// spent or not, so a swept refund is recognized as well as an unspent one.
     RefundAddress {
-        leaf_id: TreeNodeId,
-        address: Address,
-    },
-    /// Separates an already-swept refund (funded, now spent) from one not yet
-    /// on-chain.
-    RefundAddressFunded {
         leaf_id: TreeNodeId,
         address: Address,
     },
@@ -209,10 +204,8 @@ pub enum ChainResult {
     /// `None` if unspent.
     Spend(Option<SpendInfo>),
     Transaction(Transaction),
+    /// Every output ever paid to the address, spent or not.
     AddressUtxos(Vec<AddressUtxo>),
-    /// Count of confirmed outputs ever paid to the address; greater than zero with
-    /// no unspent UTXO means the refund was swept.
-    AddressFunded(u64),
     Unavailable,
 }
 
@@ -223,7 +216,7 @@ pub struct SpendInfo {
     pub confirmed: bool,
 }
 
-/// A UTXO found at a refund address.
+/// An output found at a refund address, spent or not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AddressUtxo {
     pub txid: Txid,
@@ -755,8 +748,18 @@ fn walk_branch(
     }
 }
 
-/// Scans a leaf's refund address; adopts a confirmed refund of any variant,
-/// emitting the address scan then the tx fetch into `pending` as needed.
+/// Resolves a leaf's refund from its address. The address scan returns every
+/// output paid to it, spent or not, so its one refund output is found even after
+/// a sweep spends it. The refund's own [`ChainQuery::Outspend`] then separates the
+/// three post-broadcast states:
+///
+/// - unspent: [`RefundState::Adopted`], swept by the build,
+/// - spent by a confirmed tx: [`RefundState::Swept`], nothing left to do,
+/// - spent by an unconfirmed tx: still [`RefundState::Adopted`], so a sweep sitting
+///   in the mempool is rebuilt and handed back to rebroadcast rather than dropped.
+///
+/// No confirmed output means the refund was never broadcast: left unresolved to
+/// drive fresh.
 fn interpret_refund(
     leaf_id: &TreeNodeId,
     address: &Address,
@@ -773,36 +776,46 @@ fn interpret_refund(
         pending.push(scan_query);
         return;
     };
-    let utxos = match result {
-        ChainResult::AddressUtxos(utxos) => utxos,
+    let txos = match result {
+        ChainResult::AddressUtxos(txos) => txos,
         ChainResult::Unavailable => {
             unverified.insert(leaf_id.clone());
             return;
         }
         _ => return,
     };
-    let Some(utxo) = utxos.iter().find(|u| u.confirmed) else {
-        // No unspent confirmed refund: never broadcast (drive fresh) or confirmed
-        // then swept. The funded count separates the two so a completed exit is not
-        // re-driven.
-        let funded_query = ChainQuery::RefundAddressFunded {
-            leaf_id: leaf_id.clone(),
-            address: address.clone(),
-        };
-        match result_for(observed, &funded_query) {
-            None => pending.push(funded_query),
-            Some(ChainResult::AddressFunded(count)) if *count > 0 => {
-                refunds.insert(leaf_id.clone(), RefundState::Swept);
-            }
-            Some(ChainResult::Unavailable) => {
-                unverified.insert(leaf_id.clone());
-            }
-            // Not funded (or unexpected): leave unresolved to drive fresh.
-            Some(_) => {}
-        }
+    // The refund address receives exactly one output (the landed variant); no
+    // confirmed one means the refund is not on-chain yet.
+    let Some(txo) = txos.iter().find(|t| t.confirmed) else {
         return;
     };
-    let tx_query = ChainQuery::Transaction(utxo.txid);
+    let refund_outpoint = OutPoint {
+        txid: txo.txid,
+        vout: txo.vout,
+    };
+
+    let outspend_query = ChainQuery::Outspend(refund_outpoint);
+    let Some(spend) = result_for(observed, &outspend_query) else {
+        pending.push(outspend_query);
+        return;
+    };
+    match spend {
+        // Spent by a confirmed tx: the sweep landed, nothing to drive or sweep.
+        ChainResult::Spend(Some(info)) if info.confirmed => {
+            trace!(%leaf_id, txid = %txo.txid, "interpret_chain: refund swept");
+            refunds.insert(leaf_id.clone(), RefundState::Swept);
+            return;
+        }
+        ChainResult::Unavailable => {
+            unverified.insert(leaf_id.clone());
+            return;
+        }
+        // Unspent, or spent only by an unconfirmed sweep: adopt so the sweep is
+        // (re)built.
+        _ => {}
+    }
+
+    let tx_query = ChainQuery::Transaction(txo.txid);
     let Some(result) = result_for(observed, &tx_query) else {
         pending.push(tx_query);
         return;
@@ -815,16 +828,13 @@ fn interpret_refund(
         }
         _ => return,
     };
-    trace!(%leaf_id, txid = %utxo.txid, value = utxo.value, "interpret_chain: adopting on-chain refund");
+    trace!(%leaf_id, txid = %txo.txid, value = txo.value, "interpret_chain: adopting on-chain refund");
     refunds.insert(
         leaf_id.clone(),
         RefundState::Adopted(ConfirmedRefund {
             tx,
-            outpoint: OutPoint {
-                txid: utxo.txid,
-                vout: utxo.vout,
-            },
-            value: utxo.value,
+            outpoint: refund_outpoint,
+            value: txo.value,
         }),
     );
 }
@@ -1010,9 +1020,6 @@ pub(crate) fn build_exit(
                         depends_on,
                         status,
                     });
-                    // Flip only when a node is actually emitted: a branch whose
-                    // first nodes are shared ancestors emitted elsewhere still needs
-                    // the fan-out dependency on its own first driven node.
                     first_in_branch = false;
                 }
             }
@@ -2107,18 +2114,36 @@ mod interpret_tests {
         }
     }
 
-    fn funded(leaf_id: &TreeNodeId, count: u64) -> Observation {
+    fn refund_scan(leaf_id: &TreeNodeId, refund_txid: Txid, value: u64) -> Observation {
         Observation {
-            query: ChainQuery::RefundAddressFunded {
+            query: ChainQuery::RefundAddress {
                 leaf_id: leaf_id.clone(),
                 address: leaf_addr(),
             },
-            result: ChainResult::AddressFunded(count),
+            result: ChainResult::AddressUtxos(vec![AddressUtxo {
+                txid: refund_txid,
+                vout: 0,
+                value,
+                confirmed: true,
+            }]),
         }
     }
 
-    fn not_funded(leaf_id: &TreeNodeId) -> Observation {
-        funded(leaf_id, 0)
+    fn unspent(outpoint: OutPoint) -> Observation {
+        Observation {
+            query: ChainQuery::Outspend(outpoint),
+            result: ChainResult::Spend(None),
+        }
+    }
+
+    fn spent_unconfirmed(outpoint: OutPoint, spender: Txid) -> Observation {
+        Observation {
+            query: ChainQuery::Outspend(outpoint),
+            result: ChainResult::Spend(Some(SpendInfo {
+                spender_txid: spender,
+                confirmed: false,
+            })),
+        }
     }
 
     #[test]
@@ -2183,7 +2208,6 @@ mod interpret_tests {
             spent(deposit, root_txid),
             spent(leaf_parent_out, leaf_direct_txid),
             no_refund(&leaf_id),
-            not_funded(&leaf_id),
         ];
         let interp = interpret_chain(&prepared, &observed).unwrap();
 
@@ -2303,7 +2327,6 @@ mod interpret_tests {
         let observed = vec![
             spent(deposit, Txid::from_byte_array([9u8; 32])),
             no_refund(&leaf_id),
-            not_funded(&leaf_id),
         ];
         let interp = interpret_chain(&prepared, &observed).unwrap();
 
@@ -2349,21 +2372,15 @@ mod interpret_tests {
         );
         let refund_txid = refund_tx.compute_txid();
 
+        let refund_outpoint = OutPoint {
+            txid: refund_txid,
+            vout: 0,
+        };
         let observed = vec![
             spent(deposit, root_txid),
             spent(leaf_parent_out, leaf_cpfp_txid),
-            Observation {
-                query: ChainQuery::RefundAddress {
-                    leaf_id: leaf_id.clone(),
-                    address: leaf_addr(),
-                },
-                result: ChainResult::AddressUtxos(vec![AddressUtxo {
-                    txid: refund_txid,
-                    vout: 0,
-                    value: 42_000,
-                    confirmed: true,
-                }]),
-            },
+            refund_scan(&leaf_id, refund_txid, 42_000),
+            unspent(refund_outpoint),
             Observation {
                 query: ChainQuery::Transaction(refund_txid),
                 result: ChainResult::Transaction(refund_tx),
@@ -2379,6 +2396,61 @@ mod interpret_tests {
             }
             other => panic!("expected an adopted refund, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn interpret_readopts_pending_swept_refund() {
+        let deposit = OutPoint {
+            txid: Txid::from_byte_array([1u8; 32]),
+            vout: 0,
+        };
+        let root_tx = tx_spending(deposit, 1);
+        let root_txid = root_tx.compute_txid();
+        let root = treenode("root", None, root_tx, 0);
+        let leaf_parent_out = OutPoint {
+            txid: root_txid,
+            vout: 0,
+        };
+        let leaf_cpfp = tx_spending(leaf_parent_out, 2);
+        let leaf_cpfp_txid = leaf_cpfp.compute_txid();
+        let leaf = treenode("leaf", Some("root"), leaf_cpfp, 0);
+        let leaf_id = leaf.id.clone();
+        let prepared = prepared_of(root, leaf);
+
+        let refund_tx = tx_spending(
+            OutPoint {
+                txid: leaf_cpfp_txid,
+                vout: 0,
+            },
+            5,
+        );
+        let refund_txid = refund_tx.compute_txid();
+        let refund_outpoint = OutPoint {
+            txid: refund_txid,
+            vout: 0,
+        };
+        // The refund is confirmed but spent by an unconfirmed sweep (a sweep sitting
+        // in the mempool), so it must be re-adopted, not treated as done.
+        let observed = vec![
+            spent(deposit, root_txid),
+            spent(leaf_parent_out, leaf_cpfp_txid),
+            refund_scan(&leaf_id, refund_txid, 42_000),
+            spent_unconfirmed(refund_outpoint, Txid::from_byte_array([7u8; 32])),
+            Observation {
+                query: ChainQuery::Transaction(refund_txid),
+                result: ChainResult::Transaction(refund_tx),
+            },
+        ];
+        let interp = interpret_chain(&prepared, &observed).unwrap();
+
+        assert!(interp.pending.is_empty());
+        assert!(
+            matches!(
+                interp.resolved.refunds.get(&leaf_id),
+                Some(RefundState::Adopted(_))
+            ),
+            "a refund spent only by an unconfirmed sweep is re-adopted, not swept"
+        );
     }
 
     #[test]
@@ -2400,11 +2472,17 @@ mod interpret_tests {
         let leaf_id = leaf.id.clone();
         let prepared = prepared_of(root, leaf);
 
+        let refund_txid = Txid::from_byte_array([5u8; 32]);
+        let refund_outpoint = OutPoint {
+            txid: refund_txid,
+            vout: 0,
+        };
+        // The refund is confirmed and spent by a confirmed sweep: fully done.
         let observed = vec![
             spent(deposit, root_txid),
             spent(leaf_parent_out, leaf_cpfp_txid),
-            no_refund(&leaf_id),
-            funded(&leaf_id, 1),
+            refund_scan(&leaf_id, refund_txid, 42_000),
+            spent(refund_outpoint, Txid::from_byte_array([7u8; 32])),
         ];
         let interp = interpret_chain(&prepared, &observed).unwrap();
 
@@ -2414,12 +2492,12 @@ mod interpret_tests {
                 interp.resolved.refunds.get(&leaf_id),
                 Some(RefundState::Swept)
             ),
-            "a funded-but-empty refund address is swept"
+            "a refund spent by a confirmed sweep is swept"
         );
     }
 
     #[test]
-    fn interpret_funded_zero_leaves_refund_unresolved() {
+    fn interpret_empty_scan_leaves_refund_unresolved() {
         let deposit = OutPoint {
             txid: Txid::from_byte_array([1u8; 32]),
             vout: 0,
@@ -2441,7 +2519,6 @@ mod interpret_tests {
             spent(deposit, root_txid),
             spent(leaf_parent_out, leaf_cpfp_txid),
             no_refund(&leaf_id),
-            not_funded(&leaf_id),
         ];
         let interp = interpret_chain(&prepared, &observed).unwrap();
 
@@ -2453,7 +2530,7 @@ mod interpret_tests {
     }
 
     #[test]
-    fn next_query_probes_funded_after_empty_scan() {
+    fn next_query_probes_outspend_after_refund_found() {
         let deposit = OutPoint {
             txid: Txid::from_byte_array([1u8; 32]),
             vout: 0,
@@ -2474,12 +2551,15 @@ mod interpret_tests {
         let leaf_id = leaf.id.clone();
         let prepared = prepared_of(root, leaf);
 
-        let queries = next_chain_queries(&prepared, &[no_refund(&leaf_id)]).unwrap();
-        assert!(
-            queries
-                .iter()
-                .any(|q| matches!(q, ChainQuery::RefundAddressFunded { .. }))
-        );
+        // Once a confirmed refund output is found, its spend is probed to tell an
+        // adoptable refund from an already-swept one.
+        let refund_txid = Txid::from_byte_array([5u8; 32]);
+        let queries =
+            next_chain_queries(&prepared, &[refund_scan(&leaf_id, refund_txid, 42_000)]).unwrap();
+        assert!(queries.contains(&ChainQuery::Outspend(OutPoint {
+            txid: refund_txid,
+            vout: 0,
+        })));
     }
 
     #[test]
@@ -2510,7 +2590,6 @@ mod interpret_tests {
                 result: ChainResult::Unavailable,
             },
             no_refund(&leaf_id),
-            not_funded(&leaf_id),
         ];
         let interp = interpret_chain(&prepared, &observed).unwrap();
 
@@ -2550,7 +2629,6 @@ mod interpret_tests {
             },
             spent(leaf_parent_out, leaf_cpfp_txid),
             no_refund(&leaf_id),
-            not_funded(&leaf_id),
         ];
         let interp = interpret_chain(&prepared, &observed).unwrap();
 
@@ -2590,7 +2668,6 @@ mod interpret_tests {
                 result: ChainResult::Spend(None),
             },
             no_refund(&leaf_id),
-            not_funded(&leaf_id),
         ];
         let interp = interpret_chain(&prepared, &observed).unwrap();
 
@@ -2708,7 +2785,6 @@ mod interpret_tests {
                 result: ChainResult::Spend(None),
             },
             no_refund(&leaf_id),
-            not_funded(&leaf_id),
         ];
         let interp = interpret_chain(&prepared, &observed).unwrap();
 

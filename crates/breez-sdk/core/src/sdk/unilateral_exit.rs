@@ -612,9 +612,9 @@ async fn execute_chain_query(chain: &dyn BitcoinChainService, query: &ChainQuery
             }
         },
         ChainQuery::RefundAddress { leaf_id, address } => {
-            match chain.get_address_utxos(address.to_string()).await {
-                Ok(utxos) => {
-                    let utxos: Vec<AddressUtxo> = utxos
+            match chain.get_address_txos(address.to_string()).await {
+                Ok(txos) => {
+                    let txos: Vec<AddressUtxo> = txos
                         .into_iter()
                         .filter_map(|u| match Txid::from_str(&u.txid) {
                             Ok(txid) => Some(AddressUtxo {
@@ -624,36 +624,21 @@ async fn execute_chain_query(chain: &dyn BitcoinChainService, query: &ChainQuery
                                 confirmed: u.status.confirmed,
                             }),
                             Err(e) => {
-                                warn!("skipping refund utxo {} for leaf {leaf_id}: {e}", u.txid);
+                                warn!("skipping refund txo {} for leaf {leaf_id}: {e}", u.txid);
                                 None
                             }
                         })
                         .collect();
                     trace!(
                         %leaf_id,
-                        utxos = utxos.len(),
-                        confirmed = utxos.iter().filter(|u| u.confirmed).count(),
+                        txos = txos.len(),
+                        confirmed = txos.iter().filter(|u| u.confirmed).count(),
                         "chain: refund address scanned"
                     );
-                    ChainResult::AddressUtxos(utxos)
+                    ChainResult::AddressUtxos(txos)
                 }
                 Err(e) => {
-                    warn!("get_address_utxos for leaf {leaf_id} failed: {e}");
-                    ChainResult::Unavailable
-                }
-            }
-        }
-        ChainQuery::RefundAddressFunded { leaf_id, address } => {
-            match chain
-                .get_address_funded_txo_count(address.to_string())
-                .await
-            {
-                Ok(count) => {
-                    trace!(%leaf_id, count, "chain: refund address funded count");
-                    ChainResult::AddressFunded(count)
-                }
-                Err(e) => {
-                    warn!("get_address_funded_txo_count for leaf {leaf_id} failed: {e}");
+                    warn!("get_address_txos for leaf {leaf_id} failed: {e}");
                     ChainResult::Unavailable
                 }
             }
@@ -731,8 +716,9 @@ async fn finalize_sweep(psbt: bitcoin::Psbt, signer: &dyn CpfpSigner) -> Result<
             .sign_psbt(psbt.serialize())
             .await
             .map_err(|e| SdkError::Signer(format!("Sweep signer error: {e}")))?;
-        bitcoin::Psbt::deserialize(&out_bytes)
-            .map_err(|e| SdkError::Generic(format!("Failed to deserialize signed sweep PSBT: {e}")))?
+        bitcoin::Psbt::deserialize(&out_bytes).map_err(|e| {
+            SdkError::Generic(format!("Failed to deserialize signed sweep PSBT: {e}"))
+        })?
     } else {
         psbt
     };
