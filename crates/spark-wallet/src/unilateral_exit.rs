@@ -973,8 +973,11 @@ pub(crate) fn build_exit(
                         depends_on,
                         status,
                     });
+                    // Flip only when a node is actually emitted: a branch whose
+                    // first nodes are shared ancestors emitted elsewhere still needs
+                    // the fan-out dependency on its own first driven node.
+                    first_in_branch = false;
                 }
-                first_in_branch = false;
             }
         }
 
@@ -1771,6 +1774,91 @@ mod exit_build_tests {
         );
 
         assert_eq!(build.refund_outputs.len(), 2);
+    }
+
+    /// Two branches sharing root and mid, funded by a single fan-out that pays
+    /// each branch one output.
+    fn shared_ancestor_plan_with_fan_out() -> UnilateralExitPlan {
+        let root = node("root", None, anchor_tx(1), None);
+        let mid = node("mid", Some("root"), anchor_tx(2), None);
+        let leaf_a = node("leafA", Some("mid"), anchor_tx(3), Some(anchor_tx(4)));
+        let leaf_b = node("leafB", Some("mid"), anchor_tx(5), Some(anchor_tx(6)));
+
+        let mut fund_a = funding(100_000);
+        fund_a.outpoint.vout = 0;
+        let mut fund_b = funding(100_000);
+        fund_b.outpoint.vout = 1;
+
+        let fan_out_tx = Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: OutPoint {
+                    txid: Txid::from_byte_array([0x99; 32]),
+                    vout: 0,
+                },
+                ..Default::default()
+            }],
+            output: vec![fund_a.witness_utxo.clone(), fund_b.witness_utxo.clone()],
+        };
+        let fan_out_psbt = bitcoin::Psbt::from_unsigned_tx(fan_out_tx).unwrap();
+
+        UnilateralExitPlan {
+            selected_leaves: vec![
+                UnilateralExitSelectedLeaf {
+                    id: leaf_a.id.clone(),
+                    value: 100_000,
+                    estimated_cost: 2_000,
+                },
+                UnilateralExitSelectedLeaf {
+                    id: leaf_b.id.clone(),
+                    value: 100_000,
+                    estimated_cost: 2_000,
+                },
+            ],
+            fan_out_psbt: Some(fan_out_psbt),
+            per_branch_funding: vec![
+                (leaf_a.id.clone(), vec![fund_a]),
+                (leaf_b.id.clone(), vec![fund_b]),
+            ],
+            tree_nodes: vec![root, mid, leaf_a, leaf_b],
+        }
+    }
+
+    #[test]
+    fn build_fanout_shared_ancestor_threads_fanout_dependency() {
+        let plan = shared_ancestor_plan_with_fan_out();
+        let fan_out_txid = plan
+            .fan_out_psbt
+            .as_ref()
+            .unwrap()
+            .unsigned_tx
+            .compute_txid();
+        let build = build_exit(&plan, &ResolvedExitState::default(), FEE_RATE).unwrap();
+
+        // The first branch drives root first, so its root depends on the fan-out.
+        let first_root = build.branches[0]
+            .txs
+            .iter()
+            .find(|t| t.node_id.as_ref() == Some(&id("root")))
+            .expect("the first branch emits root");
+        assert!(
+            first_root.depends_on.contains(&fan_out_txid),
+            "the first branch's first driven node depends on the fan-out"
+        );
+
+        // The second branch shares root and mid (already emitted), so its own leaf
+        // is its first driven node. Its CPFP child spends the fan-out's per-branch
+        // output, so it must depend on the fan-out too.
+        let second_first = build.branches[1]
+            .txs
+            .iter()
+            .find(|t| t.kind == ExitTxKind::Node)
+            .expect("the second branch emits its own leaf node");
+        assert!(
+            second_first.depends_on.contains(&fan_out_txid),
+            "the second branch's first driven node must depend on the fan-out"
+        );
     }
 
     fn psbt_fee(psbt: &bitcoin::Psbt) -> u64 {
