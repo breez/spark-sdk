@@ -706,6 +706,7 @@ async fn sign_psbt_via(
         .map_err(|e| SdkError::Signer(format!("CPFP signer error: {e}")))?;
     let out_psbt = bitcoin::Psbt::deserialize(&out_bytes)
         .map_err(|e| SdkError::Generic(format!("Failed to deserialize signed PSBT: {e}")))?;
+    ensure_all_inputs_finalized(&out_psbt)?;
     Ok(serialize_hex(&out_psbt.extract_tx_unchecked_fee_rate()))
 }
 
@@ -716,14 +717,122 @@ async fn finalize_sweep(psbt: bitcoin::Psbt, signer: &dyn CpfpSigner) -> Result<
         .inputs
         .iter()
         .any(|input| input.final_script_witness.is_none());
-    if !needs_signer {
-        return Ok(serialize_hex(&psbt.extract_tx_unchecked_fee_rate()));
+    let psbt = if needs_signer {
+        let out_bytes = signer
+            .sign_psbt(psbt.serialize())
+            .await
+            .map_err(|e| SdkError::Signer(format!("Sweep signer error: {e}")))?;
+        bitcoin::Psbt::deserialize(&out_bytes)
+            .map_err(|e| SdkError::Generic(format!("Failed to deserialize signed sweep PSBT: {e}")))?
+    } else {
+        psbt
+    };
+    ensure_all_inputs_finalized(&psbt)?;
+    Ok(serialize_hex(&psbt.extract_tx_unchecked_fee_rate()))
+}
+
+/// Rejects a PSBT with any input the signer left unfinalized (neither a witness
+/// nor a scriptSig), so a missing signature fails here instead of at broadcast.
+fn ensure_all_inputs_finalized(psbt: &bitcoin::Psbt) -> Result<(), SdkError> {
+    if let Some(index) = psbt
+        .inputs
+        .iter()
+        .position(|input| input.final_script_witness.is_none() && input.final_script_sig.is_none())
+    {
+        return Err(SdkError::Signer(format!(
+            "PSBT input {index} was not signed"
+        )));
     }
-    let out_bytes = signer
-        .sign_psbt(psbt.serialize())
-        .await
-        .map_err(|e| SdkError::Signer(format!("Sweep signer error: {e}")))?;
-    let out_psbt = bitcoin::Psbt::deserialize(&out_bytes)
-        .map_err(|e| SdkError::Generic(format!("Failed to deserialize signed sweep PSBT: {e}")))?;
-    Ok(serialize_hex(&out_psbt.extract_tx_unchecked_fee_rate()))
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::SignerError;
+    use bitcoin::hashes::Hash;
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    fn unsigned_two_input_psbt() -> bitcoin::Psbt {
+        let tx = Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![
+                bitcoin::TxIn {
+                    previous_output: OutPoint {
+                        txid: Txid::from_byte_array([1; 32]),
+                        vout: 0,
+                    },
+                    ..Default::default()
+                },
+                bitcoin::TxIn {
+                    previous_output: OutPoint {
+                        txid: Txid::from_byte_array([2; 32]),
+                        vout: 0,
+                    },
+                    ..Default::default()
+                },
+            ],
+            output: vec![TxOut {
+                value: Amount::from_sat(1_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+        let mut psbt = bitcoin::Psbt::from_unsigned_tx(tx).unwrap();
+        for input in &mut psbt.inputs {
+            input.witness_utxo = Some(TxOut {
+                value: Amount::from_sat(2_000),
+                script_pubkey: ScriptBuf::new(),
+            });
+        }
+        psbt
+    }
+
+    fn finalize_input(input: &mut bitcoin::psbt::Input) {
+        let mut witness = bitcoin::Witness::new();
+        witness.push([0x01u8]);
+        input.final_script_witness = Some(witness);
+    }
+
+    /// A `CpfpSigner` that finalizes only the first `finalize` inputs.
+    struct PartialSigner {
+        finalize: usize,
+    }
+
+    #[macros::async_trait]
+    impl CpfpSigner for PartialSigner {
+        async fn sign_psbt(&self, psbt_bytes: Vec<u8>) -> Result<Vec<u8>, SignerError> {
+            let mut psbt = bitcoin::Psbt::deserialize(&psbt_bytes).unwrap();
+            for input in psbt.inputs.iter_mut().take(self.finalize) {
+                finalize_input(input);
+            }
+            Ok(psbt.serialize())
+        }
+    }
+
+    #[test]
+    fn ensure_all_inputs_finalized_rejects_unsigned() {
+        assert!(ensure_all_inputs_finalized(&unsigned_two_input_psbt()).is_err());
+    }
+
+    #[test]
+    fn ensure_all_inputs_finalized_accepts_finalized() {
+        let mut psbt = unsigned_two_input_psbt();
+        psbt.inputs.iter_mut().for_each(finalize_input);
+        assert!(ensure_all_inputs_finalized(&psbt).is_ok());
+    }
+
+    #[macros::async_test_all]
+    async fn sign_psbt_via_errors_when_an_input_is_left_unsigned() {
+        let result = sign_psbt_via(unsigned_two_input_psbt(), &PartialSigner { finalize: 1 }).await;
+        assert!(matches!(result, Err(SdkError::Signer(_))));
+    }
+
+    #[macros::async_test_all]
+    async fn sign_psbt_via_succeeds_when_every_input_is_signed() {
+        let result = sign_psbt_via(unsigned_two_input_psbt(), &PartialSigner { finalize: 2 }).await;
+        assert!(result.is_ok());
+    }
 }
