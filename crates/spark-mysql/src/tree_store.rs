@@ -380,8 +380,8 @@ impl TreeStore for MysqlTreeStore {
     async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
         // Server-side aggregation: counts the same set as `Leaves::balance()`
-        // (available + missing-from-operators is excluded; swap-reserved is
-        // included). Avoids fetching every leaf's `data` JSON when callers
+        // (available + missing-from-operators + swap-reserved; payment-reserved
+        // is excluded). Avoids fetching every leaf's `data` JSON when callers
         // only need the spendable total.
         let row: Option<i64> = conn
             .exec_first(
@@ -2160,6 +2160,18 @@ mod tests {
     async fn test_missing_operators_replaced_on_set_leaves() {
         let fixture = MysqlTreeStoreTestFixture::new().await;
         shared_tests::test_missing_operators_replaced_on_set_leaves(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_add_leaves_clears_missing_from_operators() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_add_leaves_clears_missing_from_operators(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_missing_from_operators_leaves_are_not_selectable() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_missing_from_operators_leaves_are_not_selectable(&fixture.store).await;
     }
 
     #[tokio::test]

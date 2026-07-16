@@ -380,6 +380,21 @@ async fn test_missing_operators_replaced_on_set_leaves() {
 }
 
 #[wasm_bindgen_test]
+async fn test_add_leaves_clears_missing_from_operators() {
+    let store = create_test_tree_store("mysql_tree_add_clears_missing_ops").await;
+    breez_sdk_spark::tree_store_tests::test_add_leaves_clears_missing_from_operators(&store).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_missing_from_operators_leaves_are_not_selectable() {
+    let store = create_test_tree_store("mysql_tree_missing_not_selectable").await;
+    breez_sdk_spark::tree_store_tests::test_missing_from_operators_leaves_are_not_selectable(
+        &store,
+    )
+    .await;
+}
+
+#[wasm_bindgen_test]
 async fn test_reserve_with_none_target_reserves_all() {
     let store = create_test_tree_store("mysql_tree_none_target").await;
     breez_sdk_spark::tree_store_tests::test_reserve_with_none_target_reserves_all(&store).await;

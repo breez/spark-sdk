@@ -1833,6 +1833,89 @@ pub async fn test_missing_operators_replaced_on_set_leaves(store: &dyn TreeStore
     );
 }
 
+/// A leaf must never be both available and missing-from-operators: `balance()`
+/// sums the two sets.
+pub async fn test_add_leaves_clears_missing_from_operators(store: &dyn TreeStore) {
+    let leaf = create_test_tree_node("leaf1", 49_901);
+
+    let refresh_start = future_refresh_start(store).await;
+    store
+        .set_leaves(&[], std::slice::from_ref(&leaf), refresh_start)
+        .await
+        .unwrap();
+    assert_eq!(get_all(store).await.balance(), 49_901);
+
+    store.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
+
+    let all = get_all(store).await;
+    assert_eq!(
+        all.balance(),
+        49_901,
+        "leaf counted twice: available={}, missing_from_operators={}",
+        all.available_balance(),
+        all.missing_operators_balance()
+    );
+    assert_eq!(store.get_available_balance().await.unwrap(), 49_901);
+    assert_eq!(all.available.len(), 1);
+    assert!(
+        all.available_missing_from_operators.is_empty(),
+        "add_leaves must clear the missing-from-operators entry"
+    );
+}
+
+/// A leaf an operator no longer reports still counts towards the balance, but
+/// cannot back a payment or a swap: signing needs every operator.
+pub async fn test_missing_from_operators_leaves_are_not_selectable(store: &dyn TreeStore) {
+    let available = create_test_tree_node("available1", 1_000);
+    let missing = create_test_tree_node("missing1", 500);
+
+    let refresh_start = future_refresh_start(store).await;
+    store
+        .set_leaves(
+            std::slice::from_ref(&available),
+            std::slice::from_ref(&missing),
+            refresh_start,
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_all(store).await.balance(), 1_500);
+
+    let by_ids = store
+        .try_reserve_leaves_by_ids(
+            std::slice::from_ref(&missing.id),
+            ReservationPurpose::Payment,
+        )
+        .await;
+    assert!(
+        matches!(by_ids, Err(TreeServiceError::NonReservableLeaves)),
+        "reserving a missing-from-operators leaf by id must fail"
+    );
+
+    // The 1_500 balance includes the missing leaf, but only 1_000 is selectable.
+    let too_large = reserve_leaves(
+        store,
+        Some(&TargetAmounts::new_amount_and_fee(1_500, None)),
+        false,
+        ReservationPurpose::Payment,
+    )
+    .await;
+    assert!(
+        matches!(too_large, Err(TreeServiceError::InsufficientFunds)),
+        "a missing-from-operators leaf must not be selected to reach the target"
+    );
+
+    let reservation = reserve_leaves(
+        store,
+        Some(&TargetAmounts::new_amount_and_fee(1_000, None)),
+        true,
+        ReservationPurpose::Payment,
+    )
+    .await
+    .unwrap();
+    assert_eq!(reservation.leaves.len(), 1);
+    assert_eq!(reservation.leaves[0].id, available.id);
+}
+
 pub async fn test_reserve_with_none_target_reserves_all(store: &dyn TreeStore) {
     let leaves = vec![
         create_test_tree_node("node1", 100),
