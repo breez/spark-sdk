@@ -149,12 +149,7 @@ pub fn plan_unilateral_exit(
 
     let change_script = &inputs[0].witness_utxo.script_pubkey;
     let params = UnilateralExitLeafCostParams {
-        initial_cpfp_input_weight: Weight::from_wu(
-            inputs
-                .iter()
-                .map(|i| i.signed_input_weight)
-                .fold(0u64, u64::saturating_add),
-        ),
+        initial_cpfp_input_weight: Weight::from_wu(inputs[0].signed_input_weight),
         single_cpfp_input_weight: Weight::from_wu(inputs[0].signed_input_weight),
         change_script_len: change_script.len(),
         change_dust_limit: change_script.minimal_non_dust().to_sat(),
@@ -1206,10 +1201,7 @@ mod tests {
         fn cpfp_package_fee_is_exact() {
             let (parent, input) = (Weight::from_wu(400), Weight::from_wu(272));
             assert_eq!(compute_cpfp_package_fee(parent, input, 22, 500), 502);
-            assert!(
-                compute_cpfp_package_fee(parent, input, 22, 1000)
-                    > compute_cpfp_package_fee(parent, input, 22, 500)
-            );
+            assert_eq!(compute_cpfp_package_fee(parent, input, 22, 1000), 1003);
         }
 
         #[test_all]
@@ -1232,7 +1224,24 @@ mod tests {
             let leaves = vec![selected("a", 50_000, 3_000), selected("b", 20_000, 1_000)];
             let got = assign_inputs_to_leaves(&inputs, &leaves, 330).expect("should fit");
             assert_eq!(got.len(), 2);
-            assert!(got.iter().all(|(_, ins)| ins.len() == 1));
+            assert_eq!(got[0].0, leaves[0].id);
+            assert_eq!(
+                got[0]
+                    .1
+                    .iter()
+                    .map(|i| i.witness_utxo.value.to_sat())
+                    .collect::<Vec<_>>(),
+                vec![10_000]
+            );
+            assert_eq!(got[1].0, leaves[1].id);
+            assert_eq!(
+                got[1]
+                    .1
+                    .iter()
+                    .map(|i| i.witness_utxo.value.to_sat())
+                    .collect::<Vec<_>>(),
+                vec![5_000]
+            );
         }
 
         #[test_all]
@@ -1260,17 +1269,39 @@ mod tests {
             let leaves = vec![selected("a", 50_000, 3_000), selected("b", 20_000, 1_500)];
             let got = assign_inputs_to_leaves(&inputs, &leaves, 330).expect("should fit");
             assert_eq!(got.len(), 2);
-            let total_inputs: usize = got.iter().map(|(_, ins)| ins.len()).sum();
-            assert_eq!(total_inputs, 3);
-            assert!(got.iter().any(|(_, ins)| ins.len() == 2));
+            // b (cost 1_500 + 330 dust) needs both small inputs; a takes the 10_000.
+            assert_eq!(
+                got[0]
+                    .1
+                    .iter()
+                    .map(|i| i.witness_utxo.value.to_sat())
+                    .collect::<Vec<_>>(),
+                vec![10_000]
+            );
+            assert_eq!(
+                got[1]
+                    .1
+                    .iter()
+                    .map(|i| i.witness_utxo.value.to_sat())
+                    .collect::<Vec<_>>(),
+                vec![1_000, 1_000]
+            );
         }
 
         #[test_all]
-        fn assign_inputs_rejects_too_few_or_underfunded() {
+        fn assign_inputs_rejects_fewer_inputs_than_branches() {
             let leaves = vec![selected("a", 50_000, 3_000), selected("b", 20_000, 1_000)];
             assert!(assign_inputs_to_leaves(&[cpfp_input(10_000, 0)], &leaves, 330).is_none());
-            let small = vec![cpfp_input(3_000, 0), cpfp_input(1_000, 1)];
-            assert!(assign_inputs_to_leaves(&small, &leaves, 330).is_none());
+        }
+
+        #[test_all]
+        fn assign_inputs_funding_boundary_is_exact() {
+            // Per-branch requirement is estimated_cost + dust: a needs 3_330, b 1_330.
+            let leaves = vec![selected("a", 50_000, 3_000), selected("b", 20_000, 1_000)];
+            let exact = vec![cpfp_input(3_330, 0), cpfp_input(1_330, 1)];
+            assert!(assign_inputs_to_leaves(&exact, &leaves, 330).is_some());
+            let short = vec![cpfp_input(3_330, 0), cpfp_input(1_329, 1)];
+            assert!(assign_inputs_to_leaves(&short, &leaves, 330).is_none());
         }
 
         #[test_all]
@@ -1280,8 +1311,16 @@ mod tests {
             let (psbt, per_leaf) = build_fan_out_psbt(&inputs, &leaves, 250, 330).unwrap();
             assert_eq!(psbt.unsigned_tx.output.len(), 2);
             assert_eq!(per_leaf.len(), 2);
-            assert!(per_leaf[0].1.witness_utxo.value.to_sat() > 3_000 + 330);
-            assert!(per_leaf[1].1.witness_utxo.value.to_sat() > 2_000 + 330);
+            // 100_000 - 141 fee - 5_660 base is split by cost (3:2), remainder to a.
+            assert_eq!(per_leaf[0].1.witness_utxo.value.to_sat(), 59_850);
+            assert_eq!(per_leaf[1].1.witness_utxo.value.to_sat(), 40_009);
+            let out_total: u64 = psbt
+                .unsigned_tx
+                .output
+                .iter()
+                .map(|o| o.value.to_sat())
+                .sum();
+            assert_eq!(out_total, 100_000 - 141);
             assert_eq!(per_leaf[0].1.outpoint.vout, 0);
             assert_eq!(per_leaf[1].1.outpoint.vout, 1);
             assert_eq!(
@@ -1296,10 +1335,11 @@ mod tests {
         }
 
         #[test_all]
-        fn fan_out_rejects_insufficient_funding() {
-            let inputs = vec![cpfp_input(4_000, 0)];
+        fn fan_out_funding_boundary_is_exact() {
+            // base 5_660 (two branches at cost + 330 dust) + 141 fan-out fee = 5_801.
             let leaves = vec![selected("a", 50_000, 3_000), selected("b", 40_000, 2_000)];
-            assert!(build_fan_out_psbt(&inputs, &leaves, 250, 330).is_err());
+            assert!(build_fan_out_psbt(&[cpfp_input(5_801, 0)], &leaves, 250, 330).is_ok());
+            assert!(build_fan_out_psbt(&[cpfp_input(5_800, 0)], &leaves, 250, 330).is_err());
         }
 
         #[test_all]
@@ -1314,20 +1354,34 @@ mod tests {
                 child.change_input.outpoint.txid,
                 child.psbt.unsigned_tx.compute_txid()
             );
-            assert!(child.change_input.witness_utxo.value.to_sat() < 10_000);
+            assert_eq!(child.fee_sat, 872);
+            assert_eq!(child.change_input.witness_utxo.value.to_sat(), 10_000 - 872);
         }
 
         #[test_all]
-        fn cpfp_child_rejects_dust_change() {
+        fn cpfp_child_dust_boundary_is_exact() {
             let parent = create_test_transaction_with_anchor();
-            let funding = vec![cpfp_input(200, 0)];
-            assert!(build_cpfp_child(&parent, &funding, 12500).is_err());
+            let dust = test_script().minimal_non_dust().to_sat();
+            let fee = compute_cpfp_package_fee(parent.weight(), Weight::from_wu(272), 22, 1250);
+            let exact = build_cpfp_child(&parent, &[cpfp_input(fee + dust, 0)], 1250).unwrap();
+            assert_eq!(exact.change_input.witness_utxo.value.to_sat(), dust);
+            assert!(build_cpfp_child(&parent, &[cpfp_input(fee + dust - 1, 0)], 1250).is_err());
         }
 
         fn leaf_node(id: &str, value: u64) -> TreeNode {
             let mut n = crate::tree::tests::create_test_tree_node(id, value);
             n.node_tx = create_test_transaction_with_anchor();
             n.refund_tx = Some(create_test_transaction_with_anchor());
+            n
+        }
+
+        /// A leaf whose node and refund txs are unique to `nonce`, so independent
+        /// leaves don't collide on a shared txid (which the ancestor walk would
+        /// treat as an already-covered ancestor).
+        fn leaf_node_n(id: &str, value: u64, nonce: u32) -> TreeNode {
+            let mut n = crate::tree::tests::create_test_tree_node(id, value);
+            n.node_tx = anchor_tx_n(nonce);
+            n.refund_tx = Some(anchor_tx_n(nonce + 1_000));
             n
         }
 
@@ -1386,10 +1440,7 @@ mod tests {
             )
             .unwrap()[0]
                 .estimated_cost;
-            assert!(
-                cost > 1,
-                "cost must exceed 1 sat for the boundary to be meaningful"
-            );
+            assert_eq!(cost, 517);
 
             let at = leaf_node("leaf", cost);
             let at_id = at.id.clone();
@@ -1488,6 +1539,7 @@ mod tests {
             .unwrap();
             assert_eq!(quote.selected_leaves.len(), 1);
             let est = quote.selected_leaves[0].estimated_cost;
+            assert_eq!(est, 517);
 
             assert_eq!(quote.fanout_fee_sat, 0);
             assert_eq!(quote.per_branch_funding.len(), 1);
@@ -1498,8 +1550,8 @@ mod tests {
 
         #[test_all]
         fn quote_two_leaves_adds_fanout_fee() {
-            let a = leaf_node("a", 1_000_000);
-            let b = leaf_node("b", 1_000_000);
+            let a = leaf_node_n("a", 1_000_000, 1);
+            let b = leaf_node_n("b", 1_000_000, 3);
             let (ida, idb) = (a.id.clone(), b.id.clone());
             let nodes: HashMap<TreeNodeId, TreeNode> =
                 [(ida.clone(), a), (idb.clone(), b)].into_iter().collect();
@@ -1515,23 +1567,124 @@ mod tests {
                 22,
             )
             .unwrap();
-            assert_eq!(quote.selected_leaves.len(), 2);
 
-            let expected_fanout = fan_out_fee(Weight::from_wu(272), 22, 2, 250);
-            assert!(expected_fanout > 0);
-            assert_eq!(quote.fanout_fee_sat, expected_fanout);
-
-            let sum_est: u64 = quote.selected_leaves.iter().map(|l| l.estimated_cost).sum();
-            let leaves_total: u64 = quote.per_branch_funding.iter().map(|(_, s)| *s).sum();
-            assert_eq!(leaves_total, sum_est + 2 * DUST);
-            assert_eq!(quote.total_fee_sat, sum_est + expected_fanout);
+            // a is the first selected, so it carries the initial CPFP input and a
+            // full sweep input (517); b's sweep cost is only the incremental input
+            // (476). The fan-out fee (141) is charged once over both branches.
+            let est: Vec<u64> = quote
+                .selected_leaves
+                .iter()
+                .map(|l| l.estimated_cost)
+                .collect();
+            assert_eq!(est, vec![517, 476]);
+            assert_eq!(quote.fanout_fee_sat, 141);
+            let funding: Vec<u64> = quote.per_branch_funding.iter().map(|(_, s)| *s).collect();
+            assert_eq!(funding, vec![517 + DUST, 476 + DUST]);
+            assert_eq!(quote.total_fee_sat, 517 + 476 + 141);
             assert_eq!(
                 quote.single_utxo_funding_sat,
-                leaves_total + expected_fanout
+                (517 + DUST) + (476 + DUST) + 141
             );
-            for (_, sat) in &quote.per_branch_funding {
-                assert!(*sat >= DUST);
-            }
+        }
+
+        #[test_all]
+        fn plan_multi_leaf_funded_at_quote_amounts_needs_no_fan_out() {
+            let a = leaf_node_n("a", 1_000_000, 1);
+            let b = leaf_node_n("b", 1_000_000, 3);
+            let (ida, idb) = (a.id.clone(), b.id.clone());
+            let nodes: HashMap<TreeNodeId, TreeNode> =
+                [(ida.clone(), a), (idb.clone(), b)].into_iter().collect();
+
+            // Quote against the real script dust that plan_unilateral_exit derives
+            // from the funding UTXO, so quote and plan size the branches identically.
+            let dust = test_script().minimal_non_dust().to_sat();
+            let quote = quote_unilateral_exit(
+                &nodes,
+                &[ida.clone(), idb.clone()],
+                UnilateralExitLeafFilter::ProfitableOnly,
+                272,
+                22,
+                dust,
+                250,
+                22,
+            )
+            .unwrap();
+            let funding: Vec<u64> = quote.per_branch_funding.iter().map(|(_, s)| *s).collect();
+            assert_eq!(funding, vec![811, 770]);
+
+            let fund_at = |a_sat: u64, b_sat: u64| {
+                plan_unilateral_exit(
+                    nodes.clone(),
+                    &[ida.clone(), idb.clone()],
+                    UnilateralExitLeafFilter::ProfitableOnly,
+                    vec![cpfp_input(a_sat, 0), cpfp_input(b_sat, 1)],
+                    250,
+                    22,
+                )
+            };
+
+            // Funded at exactly the quote: a clean one-UTXO-per-branch plan, no fan-out.
+            let plan = fund_at(811, 770).unwrap();
+            assert!(plan.fan_out_psbt.is_none());
+            assert_eq!(plan.per_branch_funding.len(), 2);
+            assert!(
+                plan.per_branch_funding
+                    .iter()
+                    .all(|(_, ins)| ins.len() == 1)
+            );
+
+            // One sat short on either branch and the exit can no longer be funded.
+            assert!(fund_at(810, 770).is_err());
+            assert!(fund_at(811, 769).is_err());
+        }
+
+        #[test_all]
+        fn plan_single_utxo_funding_amount_fans_out() {
+            let a = leaf_node_n("a", 1_000_000, 1);
+            let b = leaf_node_n("b", 1_000_000, 3);
+            let (ida, idb) = (a.id.clone(), b.id.clone());
+            let nodes: HashMap<TreeNodeId, TreeNode> =
+                [(ida.clone(), a), (idb.clone(), b)].into_iter().collect();
+
+            let dust = test_script().minimal_non_dust().to_sat();
+            let quote = quote_unilateral_exit(
+                &nodes,
+                &[ida.clone(), idb.clone()],
+                UnilateralExitLeafFilter::ProfitableOnly,
+                272,
+                22,
+                dust,
+                250,
+                22,
+            )
+            .unwrap();
+            // Two per-branch amounts (811 + 770) plus one fan-out fee (141).
+            assert_eq!(quote.single_utxo_funding_sat, 1_722);
+
+            let fund_one = |sat: u64| {
+                plan_unilateral_exit(
+                    nodes.clone(),
+                    &[ida.clone(), idb.clone()],
+                    UnilateralExitLeafFilter::ProfitableOnly,
+                    vec![cpfp_input(sat, 0)],
+                    250,
+                    22,
+                )
+            };
+
+            // One UTXO can't fund two branches directly, so the plan fans out. At the
+            // exact quote there is no surplus, so each branch output is its quoted amount.
+            let plan = fund_one(quote.single_utxo_funding_sat).unwrap();
+            assert!(plan.fan_out_psbt.is_some());
+            let branch_outputs: Vec<u64> = plan
+                .per_branch_funding
+                .iter()
+                .map(|(_, ins)| ins[0].witness_utxo.value.to_sat())
+                .collect();
+            assert_eq!(branch_outputs, vec![811, 770]);
+
+            // One sat under the quoted single-UTXO amount and the fan-out can't be funded.
+            assert!(fund_one(quote.single_utxo_funding_sat - 1).is_err());
         }
 
         fn anchor_tx_n(nonce: u32) -> Transaction {
@@ -1572,13 +1725,12 @@ mod tests {
                     .estimated_cost
             };
 
+            // Available root: root + leaf + refund each bumped (175) plus the sweep
+            // input (167). OnChain root is already paid, dropping its 175 bump.
             let cost_all = cost_of(&chain(TreeNodeStatus::Available));
             let cost_onchain = cost_of(&chain(TreeNodeStatus::OnChain));
-            assert!(
-                cost_onchain < cost_all,
-                "an OnChain ancestor is already paid, so it must lower the estimated cost \
-                 ({cost_onchain} vs {cost_all})"
-            );
+            assert_eq!(cost_all, 692);
+            assert_eq!(cost_onchain, 517);
         }
 
         #[test_all]
