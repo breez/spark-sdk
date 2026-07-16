@@ -861,9 +861,12 @@ pub fn build_cpfp_child(
     let adjusted_output_value = total_input_value.saturating_sub(fee_amount);
     let dust_limit = change_script_pubkey.minimal_non_dust().to_sat();
     if adjusted_output_value < dust_limit {
-        return Err(ServiceError::ValidationError(format!(
-            "CPFP change output ({adjusted_output_value} sats) is below the dust limit ({dust_limit} sats) for the input address"
-        )));
+        // The authoritative funding check: computed from the real inputs, this is
+        // where a branch the plan sized on one input but funded with several
+        // surfaces. The floor is the fee plus a non-dust change.
+        return Err(ServiceError::InsufficientCpfpBudget {
+            required_sat: fee_amount.saturating_add(dust_limit),
+        });
     }
     trace!(
         parent_txid = %parent_tx.compute_txid(),
@@ -1365,7 +1368,41 @@ mod tests {
             let fee = compute_cpfp_package_fee(parent.weight(), Weight::from_wu(272), 22, 1250);
             let exact = build_cpfp_child(&parent, &[cpfp_input(fee + dust, 0)], 1250).unwrap();
             assert_eq!(exact.change_input.witness_utxo.value.to_sat(), dust);
-            assert!(build_cpfp_child(&parent, &[cpfp_input(fee + dust - 1, 0)], 1250).is_err());
+
+            // One sat under the floor: the gate rejects with the exact funding the
+            // input needed (fee + non-dust change), so the caller can top up precisely.
+            match build_cpfp_child(&parent, &[cpfp_input(fee + dust - 1, 0)], 1250).map(|_| ()) {
+                Err(ServiceError::InsufficientCpfpBudget { required_sat }) => {
+                    assert_eq!(required_sat, fee + dust);
+                }
+                other => panic!("expected InsufficientCpfpBudget, got {other:?}"),
+            }
+        }
+
+        #[test_all]
+        fn cpfp_child_two_input_funding_boundary_is_exact() {
+            // A branch the plan sized on one input but funded with two UTXOs pays
+            // the higher two-input fee, so its real floor is fee_2 + dust, above the
+            // one-input floor the plan assumed. build_cpfp_child is where that
+            // shortfall surfaces, reported exactly.
+            let parent = create_test_transaction_with_anchor();
+            let dust = test_script().minimal_non_dust().to_sat();
+            let fee_1 = compute_cpfp_package_fee(parent.weight(), Weight::from_wu(272), 22, 1250);
+            let fee_2 = compute_cpfp_package_fee(parent.weight(), Weight::from_wu(544), 22, 1250);
+            assert!(fee_2 > fee_1);
+
+            let split =
+                |total: u64| vec![cpfp_input(total / 2, 0), cpfp_input(total - total / 2, 1)];
+
+            let ok = build_cpfp_child(&parent, &split(fee_2 + dust), 1250).unwrap();
+            assert_eq!(ok.change_input.witness_utxo.value.to_sat(), dust);
+
+            match build_cpfp_child(&parent, &split(fee_2 + dust - 1), 1250).map(|_| ()) {
+                Err(ServiceError::InsufficientCpfpBudget { required_sat }) => {
+                    assert_eq!(required_sat, fee_2 + dust);
+                }
+                other => panic!("expected InsufficientCpfpBudget, got {other:?}"),
+            }
         }
 
         fn leaf_node(id: &str, value: u64) -> TreeNode {
