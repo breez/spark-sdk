@@ -169,10 +169,11 @@ pub fn plan_unilateral_exit(
 
     let (per_branch_funding, fan_out_psbt) = if selected.len() == 1 {
         // The single-leaf arm hands every input to the one branch, so unlike the
-        // multi-branch paths it has no partition step to reject underfunding.
-        // Gate it here, on the same basis assign/fan-out use, so a short exit
-        // fails at plan time rather than later in build_cpfp_child.
-        let required = branch_required_funding(&selected[0], change_dust_limit);
+        // multi-branch paths it has no partition step to reject underfunding. Gate
+        // it on build_cpfp_child's physical floor (CPFP fees + dust); the sweep is
+        // paid from the swept value, not this funding UTXO, so estimated_cost's
+        // sweep component (the quote's headroom) must not inflate the hard gate.
+        let required = selected[0].cpfp_cost.saturating_add(change_dust_limit);
         let available = inputs
             .iter()
             .map(|i| i.witness_utxo.value.to_sat())
@@ -320,6 +321,10 @@ pub struct UnilateralExitSelectedLeaf {
     /// Marginal exit cost (CPFP fees + sweep input fee). Order-dependent: a shared
     /// ancestor is charged to the first selected leaf reaching it, not a fair share.
     pub estimated_cost: u64,
+    /// CPFP package fees only, without the sweep input fee: the physical funding
+    /// floor, since the sweep is paid from the swept value rather than the funding
+    /// UTXO. Always `<= estimated_cost`.
+    pub cpfp_cost: u64,
 }
 
 pub struct UnilateralExitLeafCostParams {
@@ -567,6 +572,7 @@ pub fn evaluate_unilateral_exit_leaf_costs(
                 id: (*leaf_id).clone(),
                 value: leaf.value,
                 estimated_cost: total_marginal_cost,
+                cpfp_cost,
             });
             for ancestor in &ancestors {
                 covered_txids.insert(ancestor.node_tx.compute_txid());
@@ -1186,6 +1192,7 @@ mod tests {
                 id: TreeNodeId::from_str(id).unwrap(),
                 value,
                 estimated_cost: cost,
+                cpfp_cost: cost,
             }
         }
 
@@ -1717,8 +1724,6 @@ mod tests {
             let id = a.id.clone();
             let nodes: HashMap<TreeNodeId, TreeNode> = [(id.clone(), a)].into_iter().collect();
 
-            // Quote against the real script dust plan derives from the funding UTXO,
-            // so quote and plan size the single branch identically.
             let dust = test_script().minimal_non_dust().to_sat();
             let quote = quote_unilateral_exit(
                 &nodes,
@@ -1731,9 +1736,10 @@ mod tests {
                 22,
             )
             .unwrap();
-            // One branch, no fan-out fee: the single-UTXO amount is the branch's own.
-            let required = quote.per_branch_funding[0].1;
-            assert_eq!(quote.single_utxo_funding_sat, required);
+            // One branch, no fan-out fee: the single-UTXO recommendation is the
+            // branch's own, and reserves sweep-fee headroom over the hard floor.
+            let recommended = quote.per_branch_funding[0].1;
+            assert_eq!(quote.single_utxo_funding_sat, recommended);
 
             let fund = |sat: u64| {
                 plan_unilateral_exit(
@@ -1746,16 +1752,25 @@ mod tests {
                 )
             };
 
-            // Funded at exactly the quote: one branch, one input, no fan-out.
-            let plan = fund(required).unwrap();
+            // The plan's hard floor is build_cpfp_child's basis (CPFP fees + dust),
+            // below the recommendation by the sweep fee the funding UTXO need not
+            // cover (the sweep is paid from the swept value).
+            let floor = match fund(0) {
+                Err(ServiceError::InsufficientCpfpBudget { required_sat }) => required_sat,
+                other => panic!("expected InsufficientCpfpBudget, got {other:?}"),
+            };
+            assert!(
+                floor < recommended,
+                "floor {floor} not below recommendation {recommended}"
+            );
+
+            // Exactly the floor plans; one sat short rejects up front with that floor.
+            let plan = fund(floor).unwrap();
             assert!(plan.fan_out_psbt.is_none());
             assert_eq!(plan.per_branch_funding.len(), 1);
-
-            // One sat short: plan rejects up front with the exact requirement, rather
-            // than deferring the failure to build_cpfp_child.
-            match fund(required - 1) {
+            match fund(floor - 1) {
                 Err(ServiceError::InsufficientCpfpBudget { required_sat }) => {
-                    assert_eq!(required_sat, required);
+                    assert_eq!(required_sat, floor);
                 }
                 other => panic!("expected InsufficientCpfpBudget, got {other:?}"),
             }
