@@ -181,34 +181,6 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(())
     }
 
-    async fn get_zap_by_payment_hash(
-        &self,
-        payment_hash: &str,
-    ) -> Result<Option<Zap>, LnurlRepositoryError> {
-        let maybe_zap = sqlx::query(
-            "SELECT payment_hash, zap_request, zap_event, user_pubkey
-            , invoice_expiry, updated_at, is_user_nostr_key
-             FROM zaps
-             WHERE payment_hash = $1",
-        )
-        .bind(payment_hash)
-        .fetch_optional(&self.pool)
-        .await?
-        .map(|row| {
-            Ok::<_, sqlx::Error>(Zap {
-                payment_hash: row.try_get(0)?,
-                zap_request: row.try_get(1)?,
-                zap_event: row.try_get(2)?,
-                user_pubkey: row.try_get(3)?,
-                invoice_expiry: row.try_get(4)?,
-                updated_at: row.try_get(5)?,
-                is_user_nostr_key: row.try_get(6)?,
-            })
-        })
-        .transpose()?;
-        Ok(maybe_zap)
-    }
-
     async fn insert_lnurl_sender_comment(
         &self,
         comment: &LnurlSenderComment,
