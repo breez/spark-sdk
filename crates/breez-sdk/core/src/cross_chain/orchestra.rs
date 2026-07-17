@@ -12,8 +12,8 @@ use breez_sdk_common::fiat::FiatService;
 use breez_sdk_common::input::CrossChainAddressFamily;
 use chrono::DateTime;
 use flashnet::orchestra::{
-    AmountMode, EstimateRequest, EstimateResponse, OrderStatus, QuoteRequest, QuoteResponse, Route,
-    RouteAsset, StatusResponse, SubmitResponse,
+    AmountMode, EstimateRequest, EstimateResponse, Order, OrderStatus, QuoteRequest, QuoteResponse,
+    Route, RouteAsset, StatusResponse, SubmitResponse,
 };
 use flashnet::{FlashnetError, OrchestraClient, OrchestraConfig, OrchestraConfigResolver};
 use platform_utils::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -23,20 +23,21 @@ use tokio::{
     select,
     sync::{broadcast, watch},
 };
-use tracing::{Instrument, debug, error, info};
+use tracing::{Instrument, debug, error, info, warn};
 
 use crate::error::SdkError;
 use crate::persist::{ConversionFilter, StorageListPaymentsRequest, StoragePaymentDetailsFilter};
 use crate::{ConversionInfo, ConversionStatus, PaymentDetails, Storage};
 
 use super::{
-    CrossChainFeeMode, CrossChainPrepared, CrossChainProvider, CrossChainProviderContext,
-    CrossChainRouteFilter, CrossChainRoutePair, CrossChainService, SourceAsset,
-    derive_btc_leg_transfer_id,
+    CrossChainFeeMode, CrossChainProvider, CrossChainProviderContext, CrossChainReceiveInfo,
+    CrossChainReceivePrepared, CrossChainRouteFilter, CrossChainRoutePair, CrossChainSendPrepared,
+    CrossChainService, SparkAsset, derive_btc_leg_transfer_id,
+    orchestra_storage_adapter::{OrchestraStorageAdapter, OrchestraSwapData},
 };
 
 use crate::utils::{
-    payments::fetch_and_process_payment,
+    payments::{fetch_and_process_payment, resolve_and_insert_payment_metadata},
     polling::{PollSchedule, poll_until},
 };
 
@@ -45,10 +46,25 @@ const DEFAULT_AFFILIATE_ID: &str = "breez_sdk";
 const SEND_POLL_INITIAL_DELAY_MS: u64 = 500;
 const SEND_POLL_MAX_DELAY_MS: u64 = 2000;
 const SEND_POLL_TIMEOUT_SECS: u64 = 30;
-/// The canonical Spark source chain string used by Orchestra.
-const SPARK_SOURCE_CHAIN: &str = "spark";
+/// The canonical Spark chain string used by Orchestra.
+const SPARK_CHAIN: &str = "spark";
 /// How often the background monitor polls in-flight orders.
 const MONITOR_INTERVAL: Duration = Duration::from_secs(30);
+/// Grace period to keep probing a receive quote before giving up.
+const RECEIVE_GRACE_SECS: u64 = 24 * 60 * 60;
+
+/// Approximate fixed external cost per USD-stable receive that Orchestra
+/// passes through but doesn't itemize in `total_fee_amount` (bridge /
+/// aggregator / gas / rounding).
+///
+/// Empirically observed at ~$0.037-$0.038 across order sizes on USDC → USDB;
+/// sized to $0.04 with a small margin for observed external drift up to
+/// $0.045. Expressed in destination base units under the assumption of
+/// 6-decimal USD stables. Applied only when the receive destination is in
+/// `USD_STABLE_ASSETS`; call-site gate lives in `prepare_receive`. USDB cent
+/// flooring is itemized inside Orchestra's own `total_fee_amount` as
+/// `rounding_fee_amount`, so no separate grid buffer is needed here.
+const RECEIVE_EXTERNAL_FEE_STABLE_BASE_UNITS: u128 = 40_000;
 
 /// Resolves the Orchestra config from Breez server.
 ///
@@ -86,7 +102,7 @@ impl OrchestraConfigResolver for BreezServerOrchestraConfigResolver {
 
 /// Source-side identity of an Orchestra route after `(dest, source)` matching.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ResolvedSourceAsset {
+struct ResolvedSparkAsset {
     /// Wire symbol (e.g. `"BTC"`, `"USDB"`).
     asset: String,
     /// Source-asset decimals.
@@ -138,15 +154,29 @@ impl OrchestraService {
         monitor_trigger: &broadcast::Sender<()>,
     ) {
         let storage = Arc::clone(&self.storage);
+        let swap_storage = OrchestraStorageAdapter::new(Arc::clone(&storage));
         let client = Arc::clone(&self.client);
+        let spark_wallet = Arc::clone(&self.spark_wallet);
+        let fiat_service = Arc::clone(&self.fiat_service);
         let mut trigger_receiver = monitor_trigger.subscribe();
         let span = tracing::Span::current();
 
         tokio::spawn(
             async move {
                 loop {
-                    if let Err(e) = Self::poll_in_flight_orders(&storage, &client).await {
-                        error!("Orchestra monitor poll failed: {e:?}");
+                    if let Err(e) = Self::poll_in_flight_sends(&storage, &client).await {
+                        error!("Orchestra send-monitor poll failed: {e:?}");
+                    }
+                    if let Err(e) = Self::poll_in_flight_receives(
+                        &storage,
+                        &swap_storage,
+                        &client,
+                        &spark_wallet,
+                        fiat_service.as_ref(),
+                    )
+                    .await
+                    {
+                        error!("Orchestra receive-monitor poll failed: {e:?}");
                     }
 
                     select! {
@@ -165,18 +195,17 @@ impl OrchestraService {
         );
     }
 
-    /// Polls Orchestra for status updates on in-flight cross-chain orders.
+    /// Polls Orchestra for status updates on in-flight cross-chain send orders.
     ///
     /// Queries storage for payments with `ConversionFilter::OrchestraPending`,
     /// calls the Orchestra `/status` endpoint for each, and updates the
     /// `ConversionInfo::Orchestra` metadata when the order reaches a terminal
     /// state (replacing the estimated output with the real `amount_out`).
     #[allow(clippy::too_many_lines)]
-    async fn poll_in_flight_orders(
+    async fn poll_in_flight_sends(
         storage: &Arc<dyn Storage>,
         client: &Arc<OrchestraClient>,
     ) -> Result<(), SdkError> {
-        debug!("Orchestra monitor: polling for in-flight orders");
         let pending = storage
             .list_payments(StorageListPaymentsRequest {
                 payment_details_filter: Some(vec![
@@ -194,7 +223,10 @@ impl OrchestraService {
             })
             .await?;
 
-        debug!("Orchestra monitor: found {} pending orders", pending.len());
+        debug!(
+            "Orchestra monitor: found {} pending send orders",
+            pending.len()
+        );
         for payment in &pending {
             let Some(
                 PaymentDetails::Spark {
@@ -295,6 +327,183 @@ impl OrchestraService {
         Ok(())
     }
 
+    /// Polls Orchestra for status updates on active cross-chain receive orders.
+    ///
+    /// Dispatch to one of two helpers based on whether Orchestra has created an
+    /// order handle yet:
+    /// * No order yet → [`Self::check_receive_deposit`]: probe `/submit`
+    ///   with a fresh idempotency key; a 200 means the deposit was
+    ///   detected and the order handle is now stored on the row.
+    /// * Order in flight → [`Self::poll_receive_order_status`]: poll
+    ///   `/status` to terminal and either attach metadata (Completed) or
+    ///   close (Failed / Refunded).
+    async fn poll_in_flight_receives(
+        storage: &Arc<dyn Storage>,
+        swap_storage: &OrchestraStorageAdapter,
+        client: &Arc<OrchestraClient>,
+        spark_wallet: &Arc<SparkWallet>,
+        fiat_service: &dyn FiatService,
+    ) -> Result<(), SdkError> {
+        let active = swap_storage.list_active().await?;
+        debug!(
+            "Orchestra monitor: found {} active receive rows",
+            active.len()
+        );
+
+        for (row, data) in active {
+            let quote_id = data.quote_id.clone();
+            // Long-stop for unfunded quotes
+            if data.order_id.is_none() && is_past_receive_grace(&data) {
+                info!(
+                    "Orchestra receive {quote_id}: unfunded {RECEIVE_GRACE_SECS}s past expiry, closing row"
+                );
+                if let Err(e) = swap_storage.mark_terminal(row).await {
+                    error!(
+                        "Orchestra receive {quote_id}: failed to mark unfunded row terminal: {e:?}"
+                    );
+                }
+                continue;
+            }
+
+            let (row, data, order_id) = match data.order_id.clone() {
+                Some(order_id) => (row, data, order_id),
+                None => {
+                    match Self::check_for_receive_deposit(swap_storage, client, row, data).await {
+                        // Deposit detected
+                        Ok(Some((row, data, order_id))) => (row, data, order_id),
+                        Ok(None) => continue,
+                        Err(e) => {
+                            error!("Orchestra receive {quote_id}: deposit check failed: {e:?}");
+                            continue;
+                        }
+                    }
+                }
+            };
+            if let Err(e) = Self::poll_receive_order_status(
+                storage,
+                swap_storage,
+                client,
+                spark_wallet,
+                fiat_service,
+                row,
+                data,
+                &order_id,
+            )
+            .await
+            {
+                error!("Orchestra receive {quote_id}: status poll failed: {e:?}");
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Probe `/submit` with a fresh idempotency key to see whether
+    /// Orchestra has detected the inbound deposit on the external chain.
+    /// Any error (including the `invalid_tx_hash` 400 Orchestra returns
+    /// before the deposit arrives) leaves the row non-terminal so the next
+    /// tick retries. A 200 means the deposit was detected and Orchestra
+    /// has created the order handle, which the adapter persists for the
+    /// status-polling phase. Returns the updated `(row, data, order_id)`
+    /// so the caller can chain straight into a status poll.
+    async fn check_for_receive_deposit(
+        swap_storage: &OrchestraStorageAdapter,
+        client: &Arc<OrchestraClient>,
+        row: crate::StoredCrossChainSwap,
+        data: OrchestraSwapData,
+    ) -> Result<Option<(crate::StoredCrossChainSwap, OrchestraSwapData, String)>, SdkError> {
+        let quote_id = data.quote_id.clone();
+        let request = flashnet::orchestra::SubmitRequest {
+            quote_id: quote_id.clone(),
+            spark_tx_hash: None,
+            source_spark_address: None,
+        };
+        let idempotency_key = uuid::Uuid::new_v4().to_string();
+        match client.submit(request, idempotency_key).await {
+            Ok(resp) => {
+                info!(
+                    "Orchestra receive {quote_id}: detected deposit, orderId={}",
+                    resp.order_id
+                );
+                let order_id = resp.order_id.clone();
+                let (row, data) = swap_storage
+                    .attach_order_handle(row, data, resp.order_id, resp.read_token)
+                    .await?;
+                Ok(Some((row, data, order_id)))
+            }
+            Err(e) => {
+                debug!("Orchestra receive {quote_id}: no deposit yet: {e}");
+                Ok(None)
+            }
+        }
+    }
+
+    /// Poll `/status` for an order whose handle has already been created by
+    /// `check_receive_deposit`. On terminal `Completed` attach metadata to
+    /// the inbound Spark Payment (or cache it if the Payment row is not
+    /// visible yet); on terminal `Failed` / `Refunded` close the row with
+    /// no metadata.
+    #[allow(clippy::too_many_arguments)]
+    async fn poll_receive_order_status(
+        storage: &Arc<dyn Storage>,
+        swap_storage: &OrchestraStorageAdapter,
+        client: &Arc<OrchestraClient>,
+        spark_wallet: &Arc<SparkWallet>,
+        fiat_service: &dyn FiatService,
+        row: crate::StoredCrossChainSwap,
+        data: OrchestraSwapData,
+        order_id: &str,
+    ) -> Result<(), SdkError> {
+        let quote_id = data.quote_id.clone();
+        let resp = match client
+            .status_by_id(order_id, data.read_token.as_deref())
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                debug!(
+                    "Orchestra receive {quote_id}: status request failed for orderId={order_id}: {e}"
+                );
+                return Ok(());
+            }
+        };
+        let order = resp.order;
+        debug!("Orchestra receive {quote_id}: order response: {order:?}");
+        match order.status {
+            OrderStatus::Completed => {
+                match attach_receive_metadata(storage, spark_wallet, fiat_service, &data, &order)
+                    .await
+                {
+                    Ok(true) => {
+                        info!("Orchestra receive {quote_id} → Completed, metadata attached");
+                        swap_storage.mark_terminal(row).await?;
+                    }
+                    Ok(false) => {
+                        // Order Completed but no sparkTxHash yet — no key to
+                        // link or cache against. Leave row non-terminal and
+                        // retry on the next tick once Orchestra populates it.
+                        debug!(
+                            "Orchestra receive {quote_id} Completed without sparkTxHash; will retry"
+                        );
+                    }
+                    Err(e) => {
+                        error!("Orchestra receive {quote_id} metadata attach failed: {e:?}");
+                    }
+                }
+            }
+            OrderStatus::Failed | OrderStatus::Refunded => {
+                info!(
+                    "Orchestra receive {quote_id} → {:?}, closing row without metadata",
+                    order.status
+                );
+                swap_storage.mark_terminal(row).await?;
+            }
+            // Non-terminal status.
+            _ => {}
+        }
+        Ok(())
+    }
+
     /// Resolves the Orchestra-side `source_asset` wire symbol (e.g. `"BTC"`,
     /// `"USDB"`) for the given destination route + Spark source.
     ///
@@ -310,7 +519,7 @@ impl OrchestraService {
         &self,
         dest: &CrossChainRoutePair,
         token_identifier: Option<&str>,
-    ) -> Result<ResolvedSourceAsset, SdkError> {
+    ) -> Result<ResolvedSparkAsset, SdkError> {
         let raw_routes = self.client.spark_routes(true).await?;
         find_source_asset(&raw_routes, dest, token_identifier).ok_or_else(|| {
             SdkError::InvalidInput(format!(
@@ -326,7 +535,7 @@ impl OrchestraService {
     /// fiat rate; USD-stable token source rescales between decimals.
     async fn compute_target_destination_amount(
         &self,
-        source_asset: &ResolvedSourceAsset,
+        source_asset: &ResolvedSparkAsset,
         route: &CrossChainRoutePair,
         amount: u128,
     ) -> Result<u128, SdkError> {
@@ -343,22 +552,59 @@ impl OrchestraService {
         }
     }
 
+    /// Destination-units `target` → source-units rough deposit, used as the
+    /// probe seed for Orchestra's `/estimate` on `FeesExcluded` receives.
+    /// Symmetric inverse of [`Self::compute_target_destination_amount`]:
+    /// BTC destination fetches the fiat rate; USD-stable destination rescales
+    /// decimals at par.
+    async fn compute_target_source_amount(
+        &self,
+        destination: &SparkAsset,
+        destination_decimals: u32,
+        route: &CrossChainRoutePair,
+        target: u128,
+    ) -> Result<u128, SdkError> {
+        match destination {
+            SparkAsset::Bitcoin => {
+                let btc_usd = super::fetch_btc_usd_rate(self.fiat_service.as_ref()).await?;
+                super::convert_sats_to_destination_amount(target, btc_usd, route.decimals.into())
+            }
+            SparkAsset::Token { .. } => {
+                super::rescale_decimals(target, destination_decimals, route.decimals.into())
+            }
+        }
+    }
+
     /// Probes the live delivery ratio via an `ExactIn` estimate, then scales
     /// `source_amount` up to deliver `destination_amount`. Floored at
     /// `source_amount`. Sends the affiliate id so the probe sees the same
     /// fee schedule the real quote will.
+    ///
+    /// Direction-agnostic: callers supply `source_chain` / `source_asset` and
+    /// `destination_chain` / `destination_asset` explicitly. Send passes
+    /// `source_chain = "spark"`; receive passes `destination_chain = "spark"`.
+    ///
+    /// `apply_stable_receive_buffers` shaves the raw estimate by the
+    /// external-fee and grid-hop buffers before scaling. Only set on receives
+    /// that land a 6-decimal USD stable on Spark: the constants assume
+    /// 6-decimal units, and the cent-floor motivation for the grid-hop buffer
+    /// only applies to USDB.
+    #[allow(clippy::too_many_arguments)]
     async fn estimate_required_source_amount(
         &self,
+        source_chain: &str,
         source_asset: &str,
-        route: &CrossChainRoutePair,
+        destination_chain: &str,
+        destination_asset: &str,
         source_amount: u128,
         destination_amount: u128,
+        apply_stable_receive_buffers: bool,
     ) -> Result<u128, SdkError> {
         let request = EstimateRequest {
-            source_chain: SPARK_SOURCE_CHAIN.to_string(),
+            source_chain: source_chain.to_string(),
             source_asset: source_asset.to_string(),
-            destination_chain: route.chain.clone(),
-            destination_asset: route.asset.clone(),
+            destination_chain: destination_chain.to_string(),
+            destination_asset: destination_asset.to_string(),
             amount: source_amount.to_string(),
             amount_mode: Some(AmountMode::ExactIn),
             affiliate_id: Some(DEFAULT_AFFILIATE_ID.to_string()),
@@ -374,7 +620,25 @@ impl OrchestraService {
         let estimate: EstimateResponse = self.client.estimate(request).await?;
         debug!("Orchestra: estimate response: {:?}", estimate);
         let delivered = parse_amount(&estimate.estimated_out, "estimatedOut")?;
-        proportional_inflation(source_amount, destination_amount, delivered)
+        let adjusted_delivered = if apply_stable_receive_buffers {
+            adjust_estimate_for_receive_buffers(delivered)?
+        } else {
+            delivered
+        };
+        let required_in =
+            proportional_inflation(source_amount, destination_amount, adjusted_delivered)?;
+        // ratio_bps = delivered / source × 10000, so 10000 = 100% (par).
+        // Reported on the RAW estimate for comparability across orders.
+        let ratio_bps = delivered
+            .saturating_mul(10_000)
+            .checked_div(source_amount)
+            .unwrap_or(0);
+        debug!(
+            "Orchestra: estimate scaling: source_probe={source_amount} \
+             estimated_delivered={delivered} adjusted_delivered={adjusted_delivered} \
+             ratio_bps={ratio_bps} target={destination_amount} → required_in={required_in}",
+        );
+        Ok(required_in)
     }
 }
 
@@ -382,6 +646,23 @@ fn parse_amount(value: &str, field: &str) -> Result<u128, SdkError> {
     value
         .parse::<u128>()
         .map_err(|e| SdkError::Generic(format!("Orchestra returned invalid {field}: {e}")))
+}
+
+/// Shaves Orchestra's `estimated_out` by the external-fee buffer before it's
+/// used to scale `required_in`. Orchestra's estimate covers their own platform
+/// fees (including cent-floor rounding) but not the pass-through
+/// bridge/aggregator/gas costs. See
+/// [`RECEIVE_EXTERNAL_FEE_STABLE_BASE_UNITS`] for provenance.
+fn adjust_estimate_for_receive_buffers(delivered: u128) -> Result<u128, SdkError> {
+    let adjusted = delivered.saturating_sub(RECEIVE_EXTERNAL_FEE_STABLE_BASE_UNITS);
+    if adjusted == 0 {
+        return Err(SdkError::InvalidInput(
+            "Cross-chain receive amount too small: Orchestra's estimate is at or below \
+             the external fee floor. Increase the target."
+                .to_string(),
+        ));
+    }
+    Ok(adjusted)
 }
 
 /// Returns `source_amount * destination_amount / estimated_delivered`, floored
@@ -414,6 +695,19 @@ fn verify_quote_not_drifted(
         .saturating_mul(u128::from(10_000u32.saturating_sub(max_slippage_bps)))
         / 10_000u128;
     if quoted_estimated_out < min_acceptable {
+        // drift_bps = (target − delivered) / target × 10000. Capped at
+        // 10000 so an upstream anomaly (e.g. delivered = 0) doesn't
+        // overflow the log line.
+        let drift_bps = destination_amount
+            .saturating_sub(quoted_estimated_out)
+            .saturating_mul(10_000)
+            .checked_div(destination_amount)
+            .unwrap_or(0);
+        warn!(
+            "Cross-chain quote drift: target={destination_amount} \
+             delivered={quoted_estimated_out} min_acceptable={min_acceptable} \
+             drift_bps={drift_bps} slippage_budget_bps={max_slippage_bps}"
+        );
         return Err(SdkError::InvalidInput(format!(
             "Cross-chain quote rate drift: expected destination amount {destination_amount}, got {quoted_estimated_out}. Please re-prepare."
         )));
@@ -421,38 +715,82 @@ fn verify_quote_not_drifted(
     Ok(())
 }
 
-/// Finds the Orchestra-side source asset for the given `(dest, source)` pair.
+/// Finds the Spark-side asset of a raw route matching `(external_pair,
+/// spark_asset)`. Direction picks which side of the [`Route`] is Spark:
+/// `is_send = true` → Spark is `source` (and the external pair is the
+/// destination); `is_send = false` → Spark is `destination`.
 ///
 /// Match semantics:
-/// - destination matches by `(chain, asset, contract_address)` exactly.
-/// - source matches by **case-insensitive** asset symbol when
-///   `token_identifier` is `None` (BTC source); otherwise by the source's
-///   `contract_address` (which on the Spark side is the bech32m token
-///   identifier) equalling `token_identifier`.
+/// - external side: exact match on `(chain, asset, contract_address)`.
+/// - Spark side: BTC matches by case-insensitive asset symbol; Token
+///   matches by `contract_address` equalling the token identifier (which
+///   on the Spark side is the bech32m token id).
 ///
-/// Returns the matched route's source asset symbol and decimals. `None` if no
+/// Returns the matched Spark side's wire symbol + decimals; `None` if no
 /// route matches.
+fn find_spark_side(
+    routes: &[Route],
+    external_pair: &CrossChainRoutePair,
+    spark_asset: &SparkAsset,
+    is_send: bool,
+) -> Option<ResolvedSparkAsset> {
+    routes
+        .iter()
+        .find(|r| {
+            let (external, spark) = if is_send {
+                (&r.destination, &r.source)
+            } else {
+                (&r.source, &r.destination)
+            };
+            external.chain == external_pair.chain
+                && external.asset == external_pair.asset
+                && external.contract_address == external_pair.contract_address
+                && match spark_asset {
+                    SparkAsset::Bitcoin => spark.asset.eq_ignore_ascii_case("BTC"),
+                    SparkAsset::Token { token_identifier } => {
+                        spark.contract_address.as_deref() == Some(token_identifier.as_str())
+                    }
+                }
+        })
+        .map(|r| {
+            let spark = if is_send { &r.source } else { &r.destination };
+            ResolvedSparkAsset {
+                asset: spark.asset.clone(),
+                decimals: spark.decimals,
+            }
+        })
+}
+
+/// Finds the Orchestra source asset for an outbound (Spark → external)
+/// route. Thin wrapper over [`find_spark_side`] in the send direction.
+/// `token_identifier == None` means BTC source; otherwise the Spark token
+/// id (bech32m).
 fn find_source_asset(
     routes: &[Route],
     dest: &CrossChainRoutePair,
     token_identifier: Option<&str>,
-) -> Option<ResolvedSourceAsset> {
-    routes
-        .iter()
-        .find(|r| {
-            let dest_matches = r.destination.chain == dest.chain
-                && r.destination.asset == dest.asset
-                && r.destination.contract_address == dest.contract_address;
-            let source_matches = match token_identifier {
-                None => r.source.asset.eq_ignore_ascii_case("BTC"),
-                Some(tid) => r.source.contract_address.as_deref() == Some(tid),
-            };
-            dest_matches && source_matches
-        })
-        .map(|r| ResolvedSourceAsset {
-            asset: r.source.asset.clone(),
-            decimals: r.source.decimals,
-        })
+) -> Option<ResolvedSparkAsset> {
+    let spark = match token_identifier {
+        None => SparkAsset::Bitcoin,
+        Some(tid) => SparkAsset::Token {
+            token_identifier: tid.to_string(),
+        },
+    };
+    find_spark_side(routes, dest, &spark, true)
+}
+
+/// Finds the Orchestra destination asset symbol for an inbound (external
+/// → Spark) route. Thin wrapper over [`find_spark_side`] in the receive
+/// direction, projecting away the decimals. Test-only — production now
+/// calls `find_spark_side` directly because the receive flow needs the
+/// destination's decimals too.
+#[cfg(test)]
+fn find_destination_asset_symbol(
+    routes: &[Route],
+    pair: &CrossChainRoutePair,
+    destination: &SparkAsset,
+) -> Option<String> {
+    find_spark_side(routes, pair, destination, false).map(|r| r.asset)
 }
 
 #[macros::async_trait]
@@ -486,7 +824,7 @@ impl CrossChainService for OrchestraService {
         ))
     }
 
-    async fn prepare(
+    async fn prepare_send(
         &self,
         recipient_address: &str,
         route: &CrossChainRoutePair,
@@ -494,7 +832,7 @@ impl CrossChainService for OrchestraService {
         token_identifier: Option<String>,
         max_slippage_bps: u32,
         fee_mode: CrossChainFeeMode,
-    ) -> Result<CrossChainPrepared, SdkError> {
+    ) -> Result<CrossChainSendPrepared, SdkError> {
         let source_asset = self
             .resolve_source_asset(route, token_identifier.as_deref())
             .await?;
@@ -510,10 +848,13 @@ impl CrossChainService for OrchestraService {
                     .await?;
                 let required_in = self
                     .estimate_required_source_amount(
+                        SPARK_CHAIN,
                         &source_asset.asset,
-                        route,
+                        &route.chain,
+                        &route.asset,
                         amount,
                         destination_amount,
+                        false,
                     )
                     .await?;
                 (required_in, Some(destination_amount))
@@ -521,7 +862,7 @@ impl CrossChainService for OrchestraService {
         };
 
         let request = QuoteRequest {
-            source_chain: SPARK_SOURCE_CHAIN.to_string(),
+            source_chain: SPARK_CHAIN.to_string(),
             source_asset: source_asset.asset.clone(),
             destination_chain: route.chain.clone(),
             destination_asset: route.asset.clone(),
@@ -567,7 +908,7 @@ impl CrossChainService for OrchestraService {
             deposit_amount: amount_in,
         };
 
-        Ok(CrossChainPrepared {
+        Ok(CrossChainSendPrepared {
             amount_in,
             asset_amount_in,
             estimated_out,
@@ -589,9 +930,189 @@ impl CrossChainService for OrchestraService {
         })
     }
 
+    async fn prepare_receive(
+        &self,
+        route: &CrossChainRoutePair,
+        recipient_address: &str,
+        amount: u128,
+        max_slippage_bps: u32,
+        destination: &SparkAsset,
+        fee_mode: CrossChainFeeMode,
+        target_overpay_bps: u32,
+    ) -> Result<CrossChainReceivePrepared, SdkError> {
+        // Resolve the destination's Spark-side wire symbol (e.g. "BTC",
+        // "USDB") and decimals by reading them off the matching raw route.
+        // The caller has already validated `destination` against
+        // `route.spark_assets`.
+        let raw_routes = self.client.spark_routes(false).await?;
+        let resolved_destination = find_spark_side(&raw_routes, route, destination, false)
+            .ok_or_else(|| {
+                SdkError::Generic(format!(
+                    "Orchestra route {}/{} has no entry matching destination {:?}",
+                    route.chain, route.asset, destination
+                ))
+            })?;
+        let destination_asset_symbol = resolved_destination.asset;
+        let destination_decimals = u32::from(resolved_destination.decimals);
+        let destination_token_identifier = match destination {
+            SparkAsset::Bitcoin => None,
+            SparkAsset::Token { token_identifier } => Some(token_identifier.clone()),
+        };
+        let apply_stable_buffers = super::USD_STABLE_ASSETS
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case(&destination_asset_symbol));
+
+        // FeesExcluded inflates the source deposit so Orchestra delivers
+        // `amount` (already overpay-padded by the dispatcher) on the Spark
+        // side; FeesIncluded passes `amount` through verbatim as the
+        // deposit (the original receive behaviour).
+        let (source_amount, target_destination_amount) = match fee_mode {
+            CrossChainFeeMode::FeesIncluded => (amount, None),
+            CrossChainFeeMode::FeesExcluded => {
+                // Apply `target_overpay_bps` for SIZING only: Orchestra gets
+                // a wider target to work with so the deposit is padded, but
+                // the drift check (below) still uses `amount` — the user's
+                // actual ask. Applying the pad to both would raise the
+                // drift-accept threshold in lockstep with the deposit,
+                // negating the overpay's purpose.
+                //
+                // `route.asset` is the cross-chain SOURCE on receive, and
+                // the SDK's `get_cross_chain_routes` aggregator already
+                // restricts it to USD-stable tickers (USDC / USDT / …), so
+                // the par rescale / fiat anchor used inside the probe is
+                // well-defined.
+                let inflated_target = super::inflate_target_amount(amount, target_overpay_bps);
+                let probe_source = self
+                    .compute_target_source_amount(
+                        destination,
+                        destination_decimals,
+                        route,
+                        inflated_target,
+                    )
+                    .await?;
+                debug!(
+                    "Orchestra receive probe: destination_target={amount} \
+                     inflated_target={inflated_target} → probe_source={probe_source} \
+                     (destination_decimals={destination_decimals}, source_decimals={})",
+                    route.decimals,
+                );
+                let required_in = self
+                    .estimate_required_source_amount(
+                        &route.chain,
+                        &route.asset,
+                        SPARK_CHAIN,
+                        &destination_asset_symbol,
+                        probe_source,
+                        inflated_target,
+                        apply_stable_buffers,
+                    )
+                    .await?;
+                // Drift check uses the ORIGINAL `amount`, not `inflated_target`.
+                (required_in, Some(amount))
+            }
+        };
+
+        let request = QuoteRequest {
+            // Routes returned from `get_routes(Receive)` describe the
+            // non-Spark side, so on receive the route is the SOURCE and
+            // the DESTINATION is Spark.
+            source_chain: route.chain.clone(),
+            source_asset: route.asset.clone(),
+            destination_chain: SPARK_CHAIN.to_string(),
+            destination_asset: destination_asset_symbol.clone(),
+            amount: source_amount.to_string(),
+            recipient_address: recipient_address.to_string(),
+            // ExactIn: deposit amount is fixed (caller-picked on FeesIncluded,
+            // SDK-computed on FeesExcluded); Orchestra forward-computes what
+            // the receiver gets net of fees.
+            amount_mode: Some(AmountMode::ExactIn),
+            refund_address: None,
+            slippage_bps: Some(max_slippage_bps),
+            zeroconf_enabled: None,
+            app_fees: Vec::new(),
+            affiliate_id: Some(DEFAULT_AFFILIATE_ID.to_string()),
+        };
+
+        debug!(
+            "Orchestra: requesting receive quote: {}/{} -> {}/{} amount={}",
+            request.source_chain,
+            request.source_asset,
+            request.destination_chain,
+            request.destination_asset,
+            request.amount
+        );
+        let quote: QuoteResponse = self.client.quote(request).await?;
+        debug!("Orchestra: receive quote response: {:?}", quote);
+
+        let deposit_amount = parse_amount(&quote.amount_in, "amountIn")?;
+        let quote_estimated_out = parse_amount(&quote.estimated_out, "estimatedOut")?;
+        let expires_at_secs = parse_rfc3339_to_unix_seconds(&quote.expires_at)?;
+
+        // When FeesExcluded reject the quote if Orchestra's own delivery
+        // estimate drifts outside the slippage tolerance.
+        if let Some(target) = target_destination_amount {
+            verify_quote_not_drifted(target, quote_estimated_out, max_slippage_bps)?;
+        }
+        // Shave Orchestra's own delivery estimate by the external overhead
+        // we model on the input side. Orchestea don't estimate the external
+        // delivery costs of routing the payment.
+        let shaved_expected = if apply_stable_buffers {
+            quote_estimated_out.saturating_sub(RECEIVE_EXTERNAL_FEE_STABLE_BASE_UNITS)
+        } else {
+            quote_estimated_out
+        };
+        // Buffer sizing guarantees delivered ≥ target, so target is a floor
+        // on what the receiver will actually see. Reporting the shaved value
+        // when it dips below target would under-promise something the buffer
+        // was designed to make impossible.
+        let expected_received_amount = target_destination_amount
+            .map_or(shaved_expected, |t| shaved_expected.max(t));
+
+        let data = OrchestraSwapData {
+            quote_id: quote.quote_id.clone(),
+            order_id: None,
+            read_token: None,
+            recipient_address: recipient_address.to_string(),
+            source_chain: route.chain.clone(),
+            source_asset: route.asset.clone(),
+            source_chain_id: route.chain_id.clone(),
+            source_contract_address: route.contract_address.clone(),
+            source_decimals: u32::from(route.decimals),
+            destination_chain: SPARK_CHAIN.to_string(),
+            destination_asset: destination_asset_symbol,
+            destination_decimals,
+            token_identifier: destination_token_identifier.clone(),
+            amount_in: quote.amount_in.clone(),
+            expected_amount_out: expected_received_amount.to_string(),
+            fee_amount: Some(quote.total_fee_amount.clone()),
+            expires_at: expires_at_secs,
+        };
+
+        let adapter = OrchestraStorageAdapter::new(Arc::clone(&self.storage));
+        adapter.upsert(&data).await?;
+
+        let payment_request = super::build_receive_payment_request(
+            &quote.deposit_address,
+            route.chain_id.as_deref(),
+            route.contract_address.as_deref(),
+            deposit_amount,
+        )?;
+
+        Ok(CrossChainReceivePrepared {
+            payment_request,
+            info: CrossChainReceiveInfo {
+                deposit_address: quote.deposit_address,
+                deposit_amount,
+                expected_received_amount,
+                token_identifier: destination_token_identifier,
+                expires_at: expires_at_secs,
+            },
+        })
+    }
+
     async fn send(
         &self,
-        prepared: &CrossChainPrepared,
+        prepared: &CrossChainSendPrepared,
         idempotency_key: Option<String>,
     ) -> Result<crate::Payment, SdkError> {
         let CrossChainProviderContext::Orchestra {
@@ -643,13 +1164,17 @@ impl CrossChainService for OrchestraService {
         } else {
             None
         };
+        let idempotency_key = flashnet::orchestra::derive_idempotency_key("submit", quote_id);
         let submit_res: Result<SubmitResponse, _> = self
             .client
-            .submit_spark(flashnet::orchestra::SubmitRequestSpark {
-                quote_id: quote_id.clone(),
-                spark_tx_hash: spark_tx_hash.clone(),
-                source_spark_address,
-            })
+            .submit(
+                flashnet::orchestra::SubmitRequest {
+                    quote_id: quote_id.clone(),
+                    spark_tx_hash: Some(spark_tx_hash.clone()),
+                    source_spark_address,
+                },
+                idempotency_key,
+            )
             .await;
         debug!("Orchestra: submit response: {:?}", submit_res);
 
@@ -735,7 +1260,7 @@ impl CrossChainService for OrchestraService {
             Ok(payment) => Ok(payment),
             Err(e) => {
                 // Operator sync still in flight — the metadata is already
-                // cached, and `poll_in_flight_orders` will reconcile the
+                // cached, and `poll_in_flight_sends` will reconcile the
                 // payment row as soon as it lands. Surface a payment built
                 // from the deposit transfer (with the Orchestra
                 // `ConversionInfo` attached) so callers see the send as
@@ -903,13 +1428,155 @@ fn apply_terminal_status(
     })
 }
 
-/// Rejects an expired quote at send time so the caller can re-prepare
-/// instead of getting a less helpful error from `/submit`.
-fn validate_quote_expiry(expires_at: &str) -> Result<(), SdkError> {
+/// Reads `order.sparkTxHash` (the linking key on receive), resolves it to the
+/// inbound Spark `Payment` id, and upserts `ConversionInfo::Orchestra` onto it.
+/// `spark_tx_hash` may be a Spark transfer id (BTC receive) or a token tx hash
+/// (USDB receive — token payment ids carry a `:vout` suffix that `spark_tx_hash`
+/// alone doesn't), so the resolution is delegated to `resolve_and_insert_payment_metadata`,
+/// which also caches the metadata if the Payment row hasn't been synced yet.
+///
+/// Returns `Ok(false)` when the order is `Completed` but `spark_tx_hash` is
+/// not yet populated — there's nothing to link or even cache against, so the
+/// caller leaves the row non-terminal for the next tick. `Ok(true)` means
+/// metadata was either attached or cached for sync to reapply.
+async fn attach_receive_metadata(
+    storage: &Arc<dyn Storage>,
+    spark_wallet: &SparkWallet,
+    fiat_service: &dyn FiatService,
+    data: &OrchestraSwapData,
+    order: &Order,
+) -> Result<bool, SdkError> {
+    let Some(spark_tx_hash) = order.spark_tx_hash.as_deref() else {
+        debug!(
+            "Orchestra receive {}: order Completed but no sparkTxHash yet",
+            data.quote_id
+        );
+        return Ok(false);
+    };
+    let conversion_info = build_orchestra_receive_conversion_info(data, order, fiat_service).await;
+    let metadata = crate::PaymentMetadata {
+        conversion_info: Some(conversion_info),
+        ..Default::default()
+    };
+    // tx_inputs_are_ours = false: on receive, the inbound token tx is funded
+    // by Orchestra's counterparty, not us.
+    resolve_and_insert_payment_metadata(spark_tx_hash, metadata, spark_wallet, storage, false)
+        .await?;
+    Ok(true)
+}
+
+/// Mirrors the send-side helper [`apply_terminal_status`] for receive: pulls
+/// the live-ish bits from the `Order` and the quote-time bits from the
+/// stashed `OrchestraSwapData`. `chain/asset` describes the non-Spark side
+/// (the source on receive) so the SDK's existing UI surface renders symmetric
+/// to send.
+///
+/// Prefers `order.amount_in` (what the sender actually deposited) over the
+/// quote-time `data.amount_in` (the requested deposit). They differ when a
+/// late deposit gets repriced or the sender rounds.
+///
+/// Fee is computed in source-asset base units:
+/// - **USDB destination**: `amount_in − rescale_decimals(amount_out, dst, src)`.
+///   USDC/USDT and USDB are all USD-stable ~1:1, so rescaling the destination
+///   amount into source-asset decimals before subtracting is the realized
+///   fee. The rescale is the identity when both sides share decimals.
+/// - **BTC destination**: `amount_in − sats_to_source(amount_out)`, using the
+///   live BTC/USD rate to convert delivered sats into source-asset units.
+/// - **Fallback**: the quote-time `data.fee_amount` if either input is
+///   missing or the fiat lookup fails.
+async fn build_orchestra_receive_conversion_info(
+    data: &OrchestraSwapData,
+    order: &Order,
+    fiat_service: &dyn FiatService,
+) -> ConversionInfo {
+    let asset_amount_in = order
+        .amount_in
+        .as_deref()
+        .and_then(|s| s.parse::<u128>().ok())
+        .or_else(|| data.amount_in.parse::<u128>().ok());
+    let estimated_out = data.expected_amount_out.parse::<u128>().unwrap_or(0);
+    let delivered_amount = order
+        .amount_out
+        .as_deref()
+        .and_then(|s| s.parse::<u128>().ok());
+    let quote_fee_amount = data
+        .fee_amount
+        .as_deref()
+        .and_then(|s| s.parse::<u128>().ok());
+
+    let fee_amount = compute_receive_fee(data, asset_amount_in, delivered_amount, fiat_service)
+        .await
+        .or(quote_fee_amount);
+
+    ConversionInfo::Orchestra {
+        order_id: order.id.clone(),
+        quote_id: data.quote_id.clone(),
+        read_token: None,
+        chain: data.source_chain.clone(),
+        chain_id: data.source_chain_id.clone(),
+        asset: data.source_asset.clone(),
+        recipient_address: data.recipient_address.clone(),
+        asset_amount_in,
+        estimated_out,
+        delivered_amount,
+        status: ConversionStatus::Completed,
+        // Realized total fee in source-asset units.
+        fee_amount,
+        service_fee_amount: quote_fee_amount,
+        service_fee_asset: Some(data.source_asset.clone()),
+        asset_decimals: data.source_decimals,
+        asset_contract: data.source_contract_address.clone(),
+    }
+}
+
+/// Whether a pre-order receive row is past the local grace window past
+/// `expires_at`. Used by the long-stop in `poll_in_flight_receives` so
+/// quotes that never get funded eventually stop generating /submit traffic.
+fn is_past_receive_grace(data: &OrchestraSwapData) -> bool {
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    now_secs >= data.expires_at.saturating_add(RECEIVE_GRACE_SECS)
+}
+
+/// Computes the realized cross-chain receive fee in source-asset base units.
+/// Returns `None` if any input is missing, the fiat lookup fails, or the
+/// converted delivered amount exceeds the deposit (numerical drift in
+/// sats→USD conversion, repricing oddities, a stale fiat rate). The caller
+/// falls back to the quote-time estimate in any of these cases.
+async fn compute_receive_fee(
+    data: &OrchestraSwapData,
+    asset_amount_in: Option<u128>,
+    delivered_amount: Option<u128>,
+    fiat_service: &dyn FiatService,
+) -> Option<u128> {
+    let amount_in = asset_amount_in?;
+    let amount_out = delivered_amount?;
+    let delivered_in_source = if data.token_identifier.is_some() {
+        // Token destination (USDB): source and destination are both USD-stable.
+        // Rescale destination units to source-asset decimals and subtract.
+        super::rescale_decimals(amount_out, data.destination_decimals, data.source_decimals).ok()?
+    } else {
+        // BTC destination (sats): convert sats to source-asset units via the
+        // BTC/USD rate, then subtract.
+        let btc_usd = super::fetch_btc_usd_rate(fiat_service).await.ok()?;
+        super::convert_sats_to_destination_amount(amount_out, btc_usd, data.source_decimals).ok()?
+    };
+    amount_in.checked_sub(delivered_in_source)
+}
+
+/// Parses Orchestra's RFC3339 `expires_at` into unix seconds.
+fn parse_rfc3339_to_unix_seconds(expires_at: &str) -> Result<u64, SdkError> {
     let exp = DateTime::parse_from_rfc3339(expires_at).map_err(|e| {
         SdkError::Generic(format!("Orchestra: invalid expires_at {expires_at:?}: {e}"))
     })?;
-    let exp_secs = u64::try_from(exp.timestamp()).unwrap_or(0);
+    Ok(u64::try_from(exp.timestamp()).unwrap_or(0))
+}
+
+/// Rejects an expired quote at send time so the caller can re-prepare
+/// instead of getting a less helpful error from `/submit`.
+fn validate_quote_expiry(expires_at: &str) -> Result<(), SdkError> {
+    let exp_secs = parse_rfc3339_to_unix_seconds(expires_at)?;
     let now_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| SdkError::Generic("Failed to read current time".to_string()))?
@@ -924,7 +1591,7 @@ fn validate_quote_expiry(expires_at: &str) -> Result<(), SdkError> {
 
 /// Dedupes Orchestra's raw `Route` list into the SDK's [`CrossChainRoutePair`]
 /// shape — one pair per `(chain, asset, contract_address)` endpoint with the
-/// supported Spark-side source variants accumulated into `supported_sources`.
+/// supported Spark-side source variants accumulated into `spark_assets`.
 ///
 /// Multiple raw routes can exist for the same external chain (e.g.
 /// `BTC→USDT-on-tron` and `USDB→USDT-on-tron`); the caller wants to see one
@@ -955,14 +1622,14 @@ fn dedupe_routes(
         // token identifier (`btkn1...`).
         let spark_side = if is_send { &r.source } else { &r.destination };
         let source_variant = if spark_side.asset.eq_ignore_ascii_case("BTC") {
-            Some(SourceAsset::Bitcoin)
+            Some(SparkAsset::Bitcoin)
         } else {
             // Non-BTC Spark source without a token identifier: defensive skip.
             // Shouldn't happen per current Orchestra behavior.
             spark_side
                 .contract_address
                 .as_ref()
-                .map(|tid| SourceAsset::Token {
+                .map(|tid| SparkAsset::Token {
                     token_identifier: tid.clone(),
                 })
         };
@@ -973,9 +1640,9 @@ fn dedupe_routes(
         });
 
         if let Some(variant) = source_variant
-            && !entry.supported_sources.contains(&variant)
+            && !entry.spark_assets.contains(&variant)
         {
-            entry.supported_sources.push(variant);
+            entry.spark_assets.push(variant);
         }
     }
 
@@ -999,17 +1666,147 @@ fn side_to_route_pair(side: &RouteAsset, exact_out_eligible: bool) -> CrossChain
         contract_address: side.contract_address.clone(),
         decimals: side.decimals,
         exact_out_eligible,
-        supported_sources: Vec::new(),
+        spark_assets: Vec::new(),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use breez_sdk_common::error::ServiceConnectivityError;
+    use breez_sdk_common::fiat::{FiatCurrency, Rate};
+
     use super::*;
-    use macros::test_all;
+    use macros::{async_test_all, test_all};
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    /// A `FiatService` that fails every call. The receive-fee builder uses
+    /// it to exercise the quote-time fallback path.
+    struct FailingFiat;
+
+    #[macros::async_trait]
+    impl FiatService for FailingFiat {
+        async fn fetch_fiat_currencies(
+            &self,
+        ) -> Result<Vec<FiatCurrency>, ServiceConnectivityError> {
+            Err(ServiceConnectivityError::Other("not used".to_string()))
+        }
+        async fn fetch_fiat_rates(&self) -> Result<Vec<Rate>, ServiceConnectivityError> {
+            Err(ServiceConnectivityError::Other("upstream down".to_string()))
+        }
+    }
+
+    #[async_test_all]
+    async fn build_receive_conversion_info_pulls_quote_time_and_live_fields() {
+        let data = OrchestraSwapData {
+            quote_id: "q_xyz".to_string(),
+            order_id: Some("ord_xyz".to_string()),
+            read_token: Some("rt_xyz".to_string()),
+            recipient_address: "sp1rcv".to_string(),
+            source_chain: "ethereum".to_string(),
+            source_asset: "USDC".to_string(),
+            source_chain_id: Some("1".to_string()),
+            source_contract_address: Some("0xUSDC".to_string()),
+            source_decimals: 6,
+            destination_chain: "spark".to_string(),
+            destination_asset: "BTC".to_string(),
+            destination_decimals: 8,
+            token_identifier: None,
+            amount_in: "100".to_string(),             // quote-time
+            expected_amount_out: "50000".to_string(), // quote-time
+            fee_amount: Some("250".to_string()),      // quote-time
+            expires_at: 1_700_000_120,
+        };
+        let order = Order {
+            id: "ord_xyz".to_string(),
+            status: OrderStatus::Completed,
+            kind: Some("order".to_string()),
+            quote_id: Some("q_xyz".to_string()),
+            source_chain: None,
+            source_asset: None,
+            source_address: None,
+            source_tx_hash: Some("0xeth-tx".to_string()),
+            source_tx_vout: None,
+            sweep_tx_hash: None,
+            destination_chain: None,
+            destination_asset: None,
+            destination_address: None,
+            destination_tx_hash: None,
+            deposit_address: None,
+            recipient_address: None,
+            amount_in: None,
+            amount_out: Some("49500".to_string()), // live
+            amount_fiat_usd: None,
+            amount_fiat_currency: None,
+            spot_usd_per_btc: None,
+            fee_bps: None,
+            fee_amount: None,
+            fee_asset: None,
+            rounding_fee_amount: None,
+            slippage_bps: None,
+            flashnet_request_id: None,
+            spark_tx_hash: Some("spark-tx-hash".to_string()),
+            refund_asset: None,
+            refund_amount: None,
+            refund_tx_hash: None,
+            error_code: None,
+            error_message: None,
+            total_fee_bps: None,
+            total_fee_amount: None,
+            created_at: "now".to_string(),
+            updated_at: "now".to_string(),
+            completed_at: None,
+        };
+        let info = build_orchestra_receive_conversion_info(&data, &order, &FailingFiat).await;
+        match info {
+            ConversionInfo::Orchestra {
+                order_id,
+                quote_id,
+                chain,
+                asset,
+                recipient_address,
+                asset_amount_in,
+                estimated_out,
+                delivered_amount,
+                status,
+                ..
+            } => {
+                assert_eq!(order_id, "ord_xyz");
+                assert_eq!(quote_id, "q_xyz");
+                // chain/asset describe the NON-Spark side (source on receive).
+                assert_eq!(chain, "ethereum");
+                assert_eq!(asset, "USDC");
+                assert_eq!(recipient_address, "sp1rcv");
+                assert_eq!(asset_amount_in, Some(100));
+                assert_eq!(estimated_out, 50_000);
+                assert_eq!(delivered_amount, Some(49_500));
+                assert_eq!(status, ConversionStatus::Completed);
+            }
+            _ => panic!("expected Orchestra variant"),
+        }
+    }
+
+    /// Future RFC3339 round-trips to the exact unix timestamp. The fixed
+    /// value pins the conversion semantics so a silent drift (e.g. a TZ
+    /// regression) surfaces here, not as UI bugs downstream.
+    #[test_all]
+    fn parse_rfc3339_to_unix_seconds_accepts_future_timestamps() {
+        let ts = parse_rfc3339_to_unix_seconds("2099-01-01T00:00:00Z").unwrap();
+        assert_eq!(ts, 4_070_908_800);
+    }
+
+    /// Malformed input surfaces as a descriptive error rather than a panic
+    /// or a silent zero — the receive flow surfaces this to the integrator.
+    #[test_all]
+    fn parse_rfc3339_to_unix_seconds_rejects_malformed_input() {
+        let err =
+            parse_rfc3339_to_unix_seconds("not-a-date").expect_err("malformed input must fail");
+        match err {
+            SdkError::Generic(msg) => assert!(msg.contains("invalid expires_at"), "{msg}"),
+            other => panic!("expected Generic, got {other:?}"),
+        }
+    }
 
     fn test_route_asset(chain: &str, chain_id: Option<&str>) -> RouteAsset {
         RouteAsset {
@@ -1082,7 +1879,7 @@ mod tests {
     fn dedupe_routes_accumulates_source_variants() {
         // Same external endpoint (tron/USDT) fronted by two Spark sources
         // (BTC and a USDB token). Caller should see one pair with both
-        // variants in `supported_sources`.
+        // variants in `spark_assets`.
         let usdb_contract = "btkn1usdb_contract";
         let routes = vec![
             route(
@@ -1105,8 +1902,8 @@ mod tests {
         let p = &pairs[0];
         assert_eq!(p.chain, "tron");
         assert_eq!(p.asset, "USDT");
-        assert!(p.supported_sources.contains(&SourceAsset::Bitcoin));
-        assert!(p.supported_sources.contains(&SourceAsset::Token {
+        assert!(p.spark_assets.contains(&SparkAsset::Bitcoin));
+        assert!(p.spark_assets.contains(&SparkAsset::Token {
             token_identifier: usdb_contract.to_string(),
         }));
     }
@@ -1158,8 +1955,8 @@ mod tests {
 
         assert_eq!(pairs.len(), 1, "receive dedup groups by source side");
         assert_eq!(pairs[0].chain, "base");
-        assert!(pairs[0].supported_sources.contains(&SourceAsset::Bitcoin));
-        assert!(pairs[0].supported_sources.contains(&SourceAsset::Token {
+        assert!(pairs[0].spark_assets.contains(&SparkAsset::Bitcoin));
+        assert!(pairs[0].spark_assets.contains(&SparkAsset::Token {
             token_identifier: "btkn1usdb".to_string(),
         }));
     }
@@ -1379,23 +2176,39 @@ mod tests {
             order: flashnet::orchestra::Order {
                 id: "ord1".to_string(),
                 status,
-                quote_id: "q1".to_string(),
-                source_chain: "spark".to_string(),
-                source_asset: "BTC".to_string(),
+                kind: Some("order".to_string()),
+                quote_id: Some("q1".to_string()),
+                source_chain: Some("spark".to_string()),
+                source_asset: Some("BTC".to_string()),
                 source_address: None,
-                source_tx_hash: "txh".to_string(),
+                source_tx_hash: Some("txh".to_string()),
                 source_tx_vout: None,
-                deposit_address: "dep".to_string(),
-                destination_chain: "base".to_string(),
-                destination_asset: "USDC".to_string(),
-                recipient_address: "0xabc".to_string(),
-                amount_in: "1000".to_string(),
+                sweep_tx_hash: None,
+                deposit_address: Some("dep".to_string()),
+                destination_chain: Some("base".to_string()),
+                destination_asset: Some("USDC".to_string()),
+                destination_address: None,
+                destination_tx_hash: None,
+                recipient_address: Some("0xabc".to_string()),
+                amount_in: Some("1000".to_string()),
                 amount_out: amount_out.map(str::to_string),
-                fee_bps: 50,
-                fee_amount: "50".to_string(),
-                slippage_bps: 100,
+                amount_fiat_usd: None,
+                amount_fiat_currency: None,
+                spot_usd_per_btc: None,
+                fee_bps: Some(50),
+                fee_amount: Some("50".to_string()),
+                fee_asset: None,
+                rounding_fee_amount: None,
+                slippage_bps: Some(100),
+                flashnet_request_id: None,
+                spark_tx_hash: None,
+                refund_asset: None,
+                refund_amount: None,
+                refund_tx_hash: None,
                 error_code: None,
                 error_message: None,
+                total_fee_bps: None,
+                total_fee_amount: None,
                 created_at: "0".to_string(),
                 updated_at: "0".to_string(),
                 completed_at: None,
@@ -1564,7 +2377,7 @@ mod tests {
             contract_address: contract.map(str::to_string),
             decimals: 6,
             exact_out_eligible: false,
-            supported_sources: Vec::new(),
+            spark_assets: Vec::new(),
         }
     }
 
@@ -1630,6 +2443,96 @@ mod tests {
         assert_eq!(found.asset, "BTC");
     }
 
+    // ---- find_destination_asset_symbol ----
+
+    /// Build a [`CrossChainRoutePair`] describing the external (source)
+    /// side of a receive-direction route. Mirrors `dest_pair` in shape but
+    /// reads naturally from receive call sites.
+    fn external_pair(chain: &str, asset: &str, contract: Option<&str>) -> CrossChainRoutePair {
+        CrossChainRoutePair {
+            provider: CrossChainProvider::Orchestra,
+            chain: chain.to_string(),
+            chain_id: None,
+            asset: asset.to_string(),
+            contract_address: contract.map(str::to_string),
+            decimals: 6,
+            exact_out_eligible: false,
+            spark_assets: Vec::new(),
+        }
+    }
+
+    /// Bitcoin destination resolves to the wire symbol "BTC" from the
+    /// matching raw route's Spark side.
+    #[test_all]
+    fn find_destination_asset_symbol_resolves_bitcoin() {
+        let routes = vec![
+            // On receive routes, source = external, destination = Spark.
+            route(ra("base", "USDC", Some("0xUSDC")), ra("spark", "BTC", None)),
+            route(
+                ra("base", "USDC", Some("0xUSDC")),
+                ra("spark", "USDB", Some("btkn1usdb")),
+            ),
+        ];
+        let pair = external_pair("base", "USDC", Some("0xUSDC"));
+        let sym = find_destination_asset_symbol(&routes, &pair, &SparkAsset::Bitcoin);
+        assert_eq!(sym.as_deref(), Some("BTC"));
+    }
+
+    /// Token destination picks the raw route whose Spark-side
+    /// `contract_address` matches the requested token id, and surfaces
+    /// that route's asset symbol.
+    #[test_all]
+    fn find_destination_asset_symbol_resolves_token_by_identifier() {
+        let routes = vec![
+            route(ra("base", "USDC", Some("0xUSDC")), ra("spark", "BTC", None)),
+            route(
+                ra("base", "USDC", Some("0xUSDC")),
+                ra("spark", "USDB", Some("btkn1usdb")),
+            ),
+        ];
+        let pair = external_pair("base", "USDC", Some("0xUSDC"));
+        let sym = find_destination_asset_symbol(
+            &routes,
+            &pair,
+            &SparkAsset::Token {
+                token_identifier: "btkn1usdb".to_string(),
+            },
+        );
+        assert_eq!(sym.as_deref(), Some("USDB"));
+    }
+
+    /// A token id that no raw route exposes returns `None` — the SDK
+    /// validation upstream should have caught this already; the helper
+    /// just reports its truthful answer.
+    #[test_all]
+    fn find_destination_asset_symbol_returns_none_for_unknown_token() {
+        let routes = vec![route(
+            ra("base", "USDC", Some("0xUSDC")),
+            ra("spark", "BTC", None),
+        )];
+        let pair = external_pair("base", "USDC", Some("0xUSDC"));
+        let sym = find_destination_asset_symbol(
+            &routes,
+            &pair,
+            &SparkAsset::Token {
+                token_identifier: "btkn1nothing".to_string(),
+            },
+        );
+        assert!(sym.is_none());
+    }
+
+    /// An external pair the route catalogue doesn't carry returns `None`.
+    #[test_all]
+    fn find_destination_asset_symbol_returns_none_when_external_pair_unknown() {
+        let routes = vec![route(
+            ra("base", "USDC", Some("0xUSDC")),
+            ra("spark", "BTC", None),
+        )];
+        let pair = external_pair("solana", "USDC", Some("USDCsol"));
+        let sym = find_destination_asset_symbol(&routes, &pair, &SparkAsset::Bitcoin);
+        assert!(sym.is_none());
+    }
+
     // `rescale_decimals` and `is_usd_stable_asset` live in cross_chain/mod.rs;
     // tests for them are colocated there.
 
@@ -1661,6 +2564,37 @@ mod tests {
     fn proportional_inflation_rejects_zero_delivered() {
         let err = proportional_inflation(10_000, 6_000_000, 0).unwrap_err();
         assert!(matches!(err, SdkError::Generic(ref m) if m.contains("zero delivered")));
+    }
+
+    // ---- adjust_estimate_for_receive_buffers ----
+
+    /// Estimate at or below the buffer floor is rejected with `InvalidInput`
+    /// so the caller can surface a "too small" error at prepare time.
+    #[test_all]
+    fn adjust_estimate_rejects_below_buffer_floor() {
+        let floor = super::RECEIVE_EXTERNAL_FEE_STABLE_BASE_UNITS;
+        let err = adjust_estimate_for_receive_buffers(floor).unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
+        let err = adjust_estimate_for_receive_buffers(floor - 1).unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    /// Estimate above the floor is shaved by exactly the external buffer.
+    /// Feeding the adjusted value into `proportional_inflation` produces a
+    /// `required_in` larger than the pre-fix version by roughly
+    /// `(buffer × source / delivered)`.
+    #[test_all]
+    fn adjust_estimate_shaves_by_external_buffer_and_scales_required_in_up() {
+        let external = super::RECEIVE_EXTERNAL_FEE_STABLE_BASE_UNITS;
+        let raw_delivered = 990_000u128;
+        let adjusted = adjust_estimate_for_receive_buffers(raw_delivered).unwrap();
+        assert_eq!(adjusted, raw_delivered - external);
+
+        let source = 1_000_000u128;
+        let target = 1_000_000u128;
+        let pre_fix = proportional_inflation(source, target, raw_delivered).unwrap();
+        let post_fix = proportional_inflation(source, target, adjusted).unwrap();
+        assert!(post_fix > pre_fix);
     }
 
     #[test_all]
@@ -1738,8 +2672,8 @@ mod tests {
         let pairs = dedupe_routes(&routes, true, None, None);
 
         // The route still produces a pair (the destination still matters),
-        // but `supported_sources` is empty.
+        // but `spark_assets` is empty.
         assert_eq!(pairs.len(), 1);
-        assert!(pairs[0].supported_sources.is_empty());
+        assert!(pairs[0].spark_assets.is_empty());
     }
 }

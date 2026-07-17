@@ -1292,6 +1292,39 @@ pub enum ReceivePaymentMethod {
         /// `claim_htlc_payment` or the HTLC expires.
         payment_hash: Option<String>,
     },
+    CrossChain {
+        /// The selected cross-chain route in the receive direction.
+        route: crate::cross_chain::CrossChainRoutePair,
+        /// The amount, with semantics determined by `fee_mode`:
+        /// - `FeesExcluded` (default): net amount the receiver wants to
+        ///   land on the Spark side, in destination-asset base units
+        ///   (sats when the destination is BTC; token base units when
+        ///   the destination is a Spark token like USDB). The SDK pads
+        ///   the sender's deposit to cover provider fees + the
+        ///   `target_overpay_bps` safety buffer.
+        /// - `FeesIncluded`: the deposit the sender will pay, in the
+        ///   route's source-asset base units (e.g. USDC base units when
+        ///   the source asset is USDC). The receiver lands `amount`
+        ///   minus fees.
+        amount: u128,
+        /// Spark-side asset the receiver wants delivered. When absent, the
+        /// SDK auto-selects: the wallet's active stable-balance token if
+        /// the route supports it, otherwise Bitcoin (sats). When set, the
+        /// value must appear in the route's `spark_assets`.
+        destination: Option<crate::cross_chain::SparkAsset>,
+        /// How `amount` should be interpreted. When absent, defaults to
+        /// `FeesExcluded`.
+        fee_mode: Option<crate::cross_chain::CrossChainFeeMode>,
+        /// Maximum slippage in basis points. When absent, the SDK default
+        /// (100 bps) is used.
+        max_slippage_bps: Option<u32>,
+        /// Per-request override for the overpay buffer applied to the
+        /// sender's deposit when `fee_mode == FeesExcluded`. Range 0..=500.
+        /// When absent, falls back to `CrossChainConfig::default_target_overpay_bps`
+        /// then the built-in default (15 bps). Ignored when `fee_mode`
+        /// is `FeesIncluded`.
+        target_overpay_bps: Option<u32>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1398,6 +1431,8 @@ pub struct ReceivePaymentResponse {
     /// Fee to pay to receive the payment
     /// Denominated in sats or token base units
     pub fee: u128,
+    /// Optional information populated only for cross-chain receives.
+    pub cross_chain_info: Option<crate::cross_chain::CrossChainReceiveInfo>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
