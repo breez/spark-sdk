@@ -88,26 +88,6 @@ pub struct ListMetadataMetadata {
     pub preimage: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct InvoicePaidRequest {
-    pub signature: String,
-    pub timestamp: u64,
-    pub preimage: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct InvoicesPaidRequest {
-    pub signature: String,
-    pub timestamp: u64,
-    pub invoices: Vec<PaidInvoice>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PaidInvoice {
-    pub preimage: String,
-    pub invoice: String,
-}
-
 pub fn sanitize_username(username: &str) -> String {
     username.trim().to_lowercase()
 }

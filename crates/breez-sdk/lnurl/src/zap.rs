@@ -32,30 +32,6 @@ where
     db.insert_pending_zap_receipt(&pending).await
 }
 
-/// Enqueue multiple zap receipts for background publishing.
-pub async fn enqueue_zap_receipts<DB>(
-    db: &DB,
-    payment_hashes: &[String],
-) -> Result<(), LnurlRepositoryError>
-where
-    DB: LnurlRepository,
-{
-    if payment_hashes.is_empty() {
-        return Ok(());
-    }
-    let now = now_millis();
-    let pending: Vec<PendingZapReceipt> = payment_hashes
-        .iter()
-        .map(|payment_hash| PendingZapReceipt {
-            payment_hash: payment_hash.clone(),
-            created_at: now,
-            retry_count: 0,
-            next_retry_at: now,
-        })
-        .collect();
-    db.insert_pending_zap_receipt_batch(&pending).await
-}
-
 // -- Background processor for publishing zap receipts to nostr relays ----------
 
 use nostr::{JsonUtil, TagStandard};
