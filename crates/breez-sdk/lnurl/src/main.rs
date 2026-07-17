@@ -109,8 +109,7 @@ struct Args {
     pub domains: String,
 
     /// Fallback Breez API key used to attribute lightning-address receives for
-    /// any allowed domain that has no `api_key` of its own, so no domain is left
-    /// unattributed. Mainnet only.
+    /// any allowed domain that has no `api_key` of its own. Required on mainnet.
     #[arg(long)]
     pub default_api_key: Option<String>,
 
@@ -256,6 +255,22 @@ fn parse_auth_seed(hex_str: Option<&str>) -> Result<[u8; 32], anyhow::Error> {
         .map_err(|_| anyhow!("ssp_auth_seed must be 32 bytes"))
 }
 
+fn resolve_default_api_key(
+    arg: Option<&str>,
+    is_mainnet: bool,
+) -> Result<Option<String>, anyhow::Error> {
+    let key = arg
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .map(str::to_string);
+    if is_mainnet && key.is_none() {
+        return Err(anyhow!(
+            "a default API key is required on mainnet: set --default-api-key (or BREEZ_LNURL_DEFAULT_API_KEY)"
+        ));
+    }
+    Ok(key.filter(|_| is_mainnet))
+}
+
 #[allow(clippy::too_many_lines)]
 async fn run_server<DB>(args: Args, repository: DB) -> Result<(), anyhow::Error>
 where
@@ -304,7 +319,8 @@ where
     // mainnet-only, so regtest/testnet have no API keys or partner JWTs.
     let is_mainnet = matches!(args.network, Network::Mainnet);
     // Fallback key for domains without their own, so none are unattributed.
-    let default_api_key = is_mainnet.then(|| args.default_api_key.clone()).flatten();
+    // Mandatory on mainnet (fails startup if missing), ignored otherwise.
+    let default_api_key = resolve_default_api_key(args.default_api_key.as_deref(), is_mainnet)?;
 
     let domains = domains::start(repository.clone(), is_mainnet, default_api_key.clone()).await?;
 
@@ -580,7 +596,7 @@ fn register_webhook(service_provider: Arc<ServiceProvider>, webhook_url: String,
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, explicit_cli_overrides, parse_auth_seed};
+    use super::{Args, explicit_cli_overrides, parse_auth_seed, resolve_default_api_key};
     use clap::{CommandFactory, FromArgMatches};
     use figment::{Figment, providers::Serialized};
 
@@ -654,5 +670,25 @@ mod tests {
     fn auth_seed_wrong_length_is_fatal() {
         // 31 bytes, valid hex but wrong length.
         assert!(parse_auth_seed(Some(&"22".repeat(31))).is_err());
+    }
+
+    #[test]
+    fn default_api_key_required_on_mainnet() {
+        // Present and trimmed on mainnet.
+        assert_eq!(
+            resolve_default_api_key(Some("  key  "), true).unwrap(),
+            Some("key".to_string())
+        );
+        // Missing or blank is a startup error on mainnet.
+        assert!(resolve_default_api_key(None, true).is_err());
+        assert!(resolve_default_api_key(Some(""), true).is_err());
+        assert!(resolve_default_api_key(Some("   "), true).is_err());
+    }
+
+    #[test]
+    fn default_api_key_ignored_off_mainnet() {
+        // No JWT endpoint off mainnet, so no key is required and any key is dropped.
+        assert_eq!(resolve_default_api_key(None, false).unwrap(), None);
+        assert_eq!(resolve_default_api_key(Some("key"), false).unwrap(), None);
     }
 }
