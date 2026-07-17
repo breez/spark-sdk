@@ -1,8 +1,4 @@
-use std::str::FromStr;
-
 use bitcoin::hashes::{Hash, sha256};
-use lightning_invoice::Bolt11Invoice;
-use lnurl_models::PaidInvoice;
 use tokio::sync::watch;
 use tracing::{debug, error};
 
@@ -12,8 +8,6 @@ use crate::webhooks::{WebhookRepository, WebhookService};
 
 #[derive(Debug, thiserror::Error)]
 pub enum HandleInvoicePaidError {
-    #[error("invalid invoice: {0}")]
-    InvalidInvoice(String),
     #[error("invalid preimage: {0}")]
     InvalidPreimage(String),
     #[error(transparent)]
@@ -91,105 +85,6 @@ where
     Ok(())
 }
 
-/// Handle multiple invoices being paid by storing preimages and queueing for background
-/// processing in batch. Only processes invoices for payment hashes the server already
-/// knows about (has an existing invoice, zap, or sender comment record).
-/// Existing invoices are only updated if they belong to the same user and don't already
-/// have a preimage.
-pub async fn handle_invoices_paid<DB>(
-    db: &DB,
-    webhook_service: &WebhookService<DB>,
-    items: &[PaidInvoice],
-    user_pubkey: &str,
-    trigger: &watch::Sender<()>,
-) -> Result<(), HandleInvoicePaidError>
-where
-    DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
-{
-    let now = now_millis();
-    let mut invoices = Vec::with_capacity(items.len());
-
-    for item in items {
-        let preimage_bytes = hex::decode(&item.preimage).map_err(|e| {
-            HandleInvoicePaidError::InvalidPreimage(format!("could not hex-decode preimage: {e}"))
-        })?;
-        let payment_hash = sha256::Hash::hash(&preimage_bytes).to_string();
-
-        let bolt11 = Bolt11Invoice::from_str(&item.invoice).map_err(|e| {
-            HandleInvoicePaidError::InvalidInvoice(format!("invalid bolt11 invoice: {e}"))
-        })?;
-
-        if bolt11.payment_hash().to_string() != payment_hash {
-            return Err(HandleInvoicePaidError::InvalidPreimage(format!(
-                "invoice payment hash does not match preimage for hash {payment_hash}"
-            )));
-        }
-
-        let invoice_expiry = bolt11
-            .expires_at()
-            .map_or(0, |t| i64::try_from(t.as_millis()).unwrap_or(i64::MAX));
-
-        invoices.push(Invoice {
-            payment_hash,
-            user_pubkey: user_pubkey.to_string(),
-            invoice: item.invoice.clone(),
-            preimage: Some(item.preimage.clone()),
-            invoice_expiry,
-            created_at: now,
-            updated_at: now,
-            domain: None,
-            amount_received_sat: None,
-        });
-    }
-
-    // Only process invoices for payment hashes the server already knows about
-    // (has an existing invoice, zap, or sender comment).
-    let all_hashes: Vec<String> = invoices.iter().map(|i| i.payment_hash.clone()).collect();
-    let known_hashes: std::collections::HashSet<String> = db
-        .filter_known_payment_hashes(&all_hashes)
-        .await?
-        .into_iter()
-        .collect();
-
-    let invoices: Vec<Invoice> = invoices
-        .into_iter()
-        .filter(|i| known_hashes.contains(&i.payment_hash))
-        .collect();
-
-    if invoices.is_empty() {
-        debug!("No known payment hashes in invoices-paid request, skipping");
-        return Ok(());
-    }
-
-    let payment_hashes: Vec<String> = invoices.iter().map(|i| i.payment_hash.clone()).collect();
-    let affected = db.upsert_invoices_paid(&invoices).await?;
-
-    if !affected.is_empty() {
-        debug!("Stored preimages for {} invoices", affected.len());
-    }
-
-    // Enqueue for all known hashes, not just newly-affected ones, so a zap receipt
-    // is still queued if a prior attempt stored the preimage but failed before
-    // enqueueing. Idempotent via ON CONFLICT DO NOTHING, and the background
-    // publisher drops receipts that were already published.
-    crate::zap::enqueue_zap_receipts(db, &payment_hashes).await?;
-
-    // Notify for all payment hashes, not just newly-affected ones, so that
-    // webhooks are delivered even if the server crashed after storing preimages
-    // but before enqueueing webhooks. Idempotent via ON CONFLICT DO NOTHING.
-    if let Err(e) =
-        crate::webhook_notify::notify_webhooks(db, webhook_service, &payment_hashes).await
-    {
-        error!("Failed to enqueue webhooks: {}", e);
-    }
-
-    if trigger.send(()).is_err() {
-        error!("Failed to trigger background processor - receiver dropped");
-    }
-
-    Ok(())
-}
-
 /// Create a new invoice record for LUD-21 and NIP-57 support.
 pub async fn create_invoice<DB>(
     db: &DB,
@@ -252,112 +147,8 @@ mod test_helpers {
 #[cfg(test)]
 mod shared_tests {
     use super::*;
-    use crate::repository::LnurlSenderComment;
 
     use super::test_helpers::generate_test_invoice;
-
-    pub async fn invoices_paid_creates_invoice_when_only_comment_exists<DB>(db: &DB)
-    where
-        DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
-    {
-        let (trigger, _rx) = watch::channel(());
-        let webhook_service = WebhookService::new(db.clone());
-
-        let preimage_bytes = [1u8; 32];
-        let (preimage_hex, payment_hash, invoice_str) = generate_test_invoice(&preimage_bytes);
-        let user_pubkey = "test_user_pubkey";
-
-        db.insert_lnurl_sender_comment(&LnurlSenderComment {
-            comment: "hello from sender".to_string(),
-            payment_hash: payment_hash.clone(),
-            user_pubkey: user_pubkey.to_string(),
-            updated_at: 1000,
-        })
-        .await
-        .unwrap();
-
-        assert!(
-            db.get_invoice_by_payment_hash(&payment_hash)
-                .await
-                .unwrap()
-                .is_none()
-        );
-
-        handle_invoices_paid(
-            db,
-            &webhook_service,
-            &[PaidInvoice {
-                preimage: preimage_hex.clone(),
-                invoice: invoice_str.clone(),
-            }],
-            user_pubkey,
-            &trigger,
-        )
-        .await
-        .unwrap();
-
-        let stored = db
-            .get_invoice_by_payment_hash(&payment_hash)
-            .await
-            .unwrap()
-            .expect("invoice should have been created");
-        assert_eq!(stored.preimage.as_deref(), Some(preimage_hex.as_str()));
-        assert_eq!(stored.user_pubkey, user_pubkey);
-        assert_eq!(stored.invoice, invoice_str);
-    }
-
-    pub async fn invoices_paid_creates_invoice_when_only_zap_exists<DB>(db: &DB)
-    where
-        DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
-    {
-        let (trigger, _rx) = watch::channel(());
-        let webhook_service = WebhookService::new(db.clone());
-
-        let preimage_bytes = [2u8; 32];
-        let (preimage_hex, payment_hash, invoice_str) = generate_test_invoice(&preimage_bytes);
-        let user_pubkey = "test_user_pubkey";
-
-        db.upsert_zap(&crate::zap::Zap {
-            payment_hash: payment_hash.clone(),
-            zap_request: r#"{"kind":9734}"#.to_string(),
-            zap_event: None,
-            user_pubkey: user_pubkey.to_string(),
-            invoice_expiry: i64::MAX,
-            updated_at: 1000,
-            is_user_nostr_key: false,
-        })
-        .await
-        .unwrap();
-
-        assert!(
-            db.get_invoice_by_payment_hash(&payment_hash)
-                .await
-                .unwrap()
-                .is_none()
-        );
-
-        handle_invoices_paid(
-            db,
-            &webhook_service,
-            &[PaidInvoice {
-                preimage: preimage_hex.clone(),
-                invoice: invoice_str.clone(),
-            }],
-            user_pubkey,
-            &trigger,
-        )
-        .await
-        .unwrap();
-
-        let stored = db
-            .get_invoice_by_payment_hash(&payment_hash)
-            .await
-            .unwrap()
-            .expect("invoice should have been created");
-        assert_eq!(stored.preimage.as_deref(), Some(preimage_hex.as_str()));
-        assert_eq!(stored.user_pubkey, user_pubkey);
-        assert_eq!(stored.invoice, invoice_str);
-    }
 
     /// Regression: a prior attempt stored the preimage but failed before
     /// enqueueing the zap receipt. A subsequent call must still enqueue it,
@@ -418,155 +209,6 @@ mod shared_tests {
         );
     }
 
-    /// Batch variant of the regression above: an already-paid invoice is not in
-    /// `affected`, so the zap must be enqueued from the full known-hash set.
-    pub async fn invoices_paid_enqueues_zap_when_preimage_already_stored<DB>(db: &DB)
-    where
-        DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
-    {
-        let (trigger, _rx) = watch::channel(());
-        let webhook_service = WebhookService::new(db.clone());
-
-        let preimage_bytes = [8u8; 32];
-        let (preimage_hex, payment_hash, invoice_str) = generate_test_invoice(&preimage_bytes);
-        let user_pubkey = "test_user_pubkey";
-
-        db.upsert_zap(&crate::zap::Zap {
-            payment_hash: payment_hash.clone(),
-            zap_request: r#"{"kind":9734}"#.to_string(),
-            zap_event: None,
-            user_pubkey: user_pubkey.to_string(),
-            invoice_expiry: i64::MAX,
-            updated_at: 1000,
-            is_user_nostr_key: false,
-        })
-        .await
-        .unwrap();
-
-        db.upsert_invoice(&Invoice {
-            payment_hash: payment_hash.clone(),
-            user_pubkey: user_pubkey.to_string(),
-            invoice: invoice_str.clone(),
-            preimage: Some(preimage_hex.clone()),
-            invoice_expiry: i64::MAX,
-            created_at: 1000,
-            updated_at: 1000,
-            domain: None,
-            amount_received_sat: None,
-        })
-        .await
-        .unwrap();
-
-        handle_invoices_paid(
-            db,
-            &webhook_service,
-            &[PaidInvoice {
-                preimage: preimage_hex,
-                invoice: invoice_str,
-            }],
-            user_pubkey,
-            &trigger,
-        )
-        .await
-        .unwrap();
-
-        let pending = db.take_pending_zap_receipts(100).await.unwrap();
-        assert!(
-            pending.iter().any(|p| p.payment_hash == payment_hash),
-            "zap receipt must be enqueued even when the preimage was already stored"
-        );
-    }
-
-    pub async fn invoices_paid_ignores_unknown_payment_hash<DB>(db: &DB)
-    where
-        DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
-    {
-        let (trigger, _rx) = watch::channel(());
-        let webhook_service = WebhookService::new(db.clone());
-
-        let preimage_bytes = [3u8; 32];
-        let (preimage_hex, payment_hash, invoice_str) = generate_test_invoice(&preimage_bytes);
-        let user_pubkey = "test_user_pubkey";
-
-        handle_invoices_paid(
-            db,
-            &webhook_service,
-            &[PaidInvoice {
-                preimage: preimage_hex,
-                invoice: invoice_str,
-            }],
-            user_pubkey,
-            &trigger,
-        )
-        .await
-        .unwrap();
-
-        assert!(
-            db.get_invoice_by_payment_hash(&payment_hash)
-                .await
-                .unwrap()
-                .is_none(),
-            "invoice should not be created for unknown payment hash"
-        );
-    }
-
-    pub async fn invoices_paid_filters_mixed_batch<DB>(db: &DB)
-    where
-        DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
-    {
-        let (trigger, _rx) = watch::channel(());
-        let webhook_service = WebhookService::new(db.clone());
-        let user_pubkey = "test_user_pubkey";
-
-        let known_preimage = [4u8; 32];
-        let (known_hex, known_hash, known_invoice) = generate_test_invoice(&known_preimage);
-        db.insert_lnurl_sender_comment(&LnurlSenderComment {
-            comment: "known".to_string(),
-            payment_hash: known_hash.clone(),
-            user_pubkey: user_pubkey.to_string(),
-            updated_at: 1000,
-        })
-        .await
-        .unwrap();
-
-        let unknown_preimage = [5u8; 32];
-        let (unknown_hex, unknown_hash, unknown_invoice) = generate_test_invoice(&unknown_preimage);
-
-        handle_invoices_paid(
-            db,
-            &webhook_service,
-            &[
-                PaidInvoice {
-                    preimage: known_hex.clone(),
-                    invoice: known_invoice.clone(),
-                },
-                PaidInvoice {
-                    preimage: unknown_hex,
-                    invoice: unknown_invoice,
-                },
-            ],
-            user_pubkey,
-            &trigger,
-        )
-        .await
-        .unwrap();
-
-        let stored = db
-            .get_invoice_by_payment_hash(&known_hash)
-            .await
-            .unwrap()
-            .expect("known invoice should have been created");
-        assert_eq!(stored.preimage.as_deref(), Some(known_hex.as_str()));
-
-        assert!(
-            db.get_invoice_by_payment_hash(&unknown_hash)
-                .await
-                .unwrap()
-                .is_none(),
-            "unknown invoice should not be created"
-        );
-    }
-
     pub async fn get_or_create_setting_returns_default_on_first_call<DB>(db: &DB)
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
@@ -612,39 +254,9 @@ mod sqlite_tests {
     }
 
     #[tokio::test]
-    async fn invoices_paid_creates_invoice_when_only_comment_exists() {
-        let db = setup_test_db().await;
-        shared_tests::invoices_paid_creates_invoice_when_only_comment_exists(&db).await;
-    }
-
-    #[tokio::test]
-    async fn invoices_paid_creates_invoice_when_only_zap_exists() {
-        let db = setup_test_db().await;
-        shared_tests::invoices_paid_creates_invoice_when_only_zap_exists(&db).await;
-    }
-
-    #[tokio::test]
     async fn invoice_paid_enqueues_zap_when_preimage_already_stored() {
         let db = setup_test_db().await;
         shared_tests::invoice_paid_enqueues_zap_when_preimage_already_stored(&db).await;
-    }
-
-    #[tokio::test]
-    async fn invoices_paid_enqueues_zap_when_preimage_already_stored() {
-        let db = setup_test_db().await;
-        shared_tests::invoices_paid_enqueues_zap_when_preimage_already_stored(&db).await;
-    }
-
-    #[tokio::test]
-    async fn invoices_paid_ignores_unknown_payment_hash() {
-        let db = setup_test_db().await;
-        shared_tests::invoices_paid_ignores_unknown_payment_hash(&db).await;
-    }
-
-    #[tokio::test]
-    async fn invoices_paid_filters_mixed_batch() {
-        let db = setup_test_db().await;
-        shared_tests::invoices_paid_filters_mixed_batch(&db).await;
     }
 
     #[tokio::test]
@@ -689,51 +301,11 @@ mod postgres_tests {
     }
 
     #[tokio::test]
-    async fn invoices_paid_creates_invoice_when_only_comment_exists() {
-        let Some(db) = setup_test_db().await else {
-            return;
-        };
-        shared_tests::invoices_paid_creates_invoice_when_only_comment_exists(&db).await;
-    }
-
-    #[tokio::test]
-    async fn invoices_paid_creates_invoice_when_only_zap_exists() {
-        let Some(db) = setup_test_db().await else {
-            return;
-        };
-        shared_tests::invoices_paid_creates_invoice_when_only_zap_exists(&db).await;
-    }
-
-    #[tokio::test]
     async fn invoice_paid_enqueues_zap_when_preimage_already_stored() {
         let Some(db) = setup_test_db().await else {
             return;
         };
         shared_tests::invoice_paid_enqueues_zap_when_preimage_already_stored(&db).await;
-    }
-
-    #[tokio::test]
-    async fn invoices_paid_enqueues_zap_when_preimage_already_stored() {
-        let Some(db) = setup_test_db().await else {
-            return;
-        };
-        shared_tests::invoices_paid_enqueues_zap_when_preimage_already_stored(&db).await;
-    }
-
-    #[tokio::test]
-    async fn invoices_paid_ignores_unknown_payment_hash() {
-        let Some(db) = setup_test_db().await else {
-            return;
-        };
-        shared_tests::invoices_paid_ignores_unknown_payment_hash(&db).await;
-    }
-
-    #[tokio::test]
-    async fn invoices_paid_filters_mixed_batch() {
-        let Some(db) = setup_test_db().await else {
-            return;
-        };
-        shared_tests::invoices_paid_filters_mixed_batch(&db).await;
     }
 
     #[tokio::test]

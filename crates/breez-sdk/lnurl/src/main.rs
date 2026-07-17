@@ -505,14 +505,6 @@ where
             "/lnurlpay/{pubkey}/metadata",
             get(LnurlServer::<DB>::list_metadata),
         )
-        .route(
-            "/lnurlpay/{pubkey}/invoice-paid",
-            post(LnurlServer::<DB>::invoice_paid),
-        )
-        .route(
-            "/lnurlpay/{pubkey}/invoices-paid",
-            post(LnurlServer::<DB>::invoices_paid),
-        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::auth::<DB>,

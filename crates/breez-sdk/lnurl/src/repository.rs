@@ -102,23 +102,8 @@ pub trait LnurlRepository {
     /// Store the cached partner JWT for a domain.
     async fn set_domain_jwt(&self, domain: &str, jwt: &str) -> Result<(), LnurlRepositoryError>;
 
-    /// Filter a list of payment hashes to only those the server already knows about
-    /// (i.e. have an existing invoice, zap, or sender comment record).
-    async fn filter_known_payment_hashes(
-        &self,
-        payment_hashes: &[String],
-    ) -> Result<Vec<String>, LnurlRepositoryError>;
-
     /// Insert or update an invoice
     async fn upsert_invoice(&self, invoice: &Invoice) -> Result<(), LnurlRepositoryError>;
-
-    /// Batch upsert invoices with preimages. Inserts new records, or updates existing
-    /// ones only if they belong to the same user and don't already have a preimage.
-    /// Returns payment hashes that were actually inserted or updated.
-    async fn upsert_invoices_paid(
-        &self,
-        invoices: &[Invoice],
-    ) -> Result<Vec<String>, LnurlRepositoryError>;
 
     /// Get an invoice by payment hash
     async fn get_invoice_by_payment_hash(
@@ -135,12 +120,6 @@ pub trait LnurlRepository {
     async fn insert_pending_zap_receipt(
         &self,
         pending: &PendingZapReceipt,
-    ) -> Result<(), LnurlRepositoryError>;
-
-    /// Batch insert pending zap receipts into the queue
-    async fn insert_pending_zap_receipt_batch(
-        &self,
-        pending: &[PendingZapReceipt],
     ) -> Result<(), LnurlRepositoryError>;
 
     /// Get pending zap receipts ready for processing (`next_retry_at` <= now),

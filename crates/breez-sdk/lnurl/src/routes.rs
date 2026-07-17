@@ -12,8 +12,8 @@ use bitcoin::{
 };
 use lightning_invoice::Bolt11Invoice;
 use lnurl_models::{
-    CheckUsernameAvailableResponse, InvoicePaidRequest, InvoicesPaidRequest, ListMetadataRequest,
-    ListMetadataResponse, RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
+    CheckUsernameAvailableResponse, ListMetadataRequest, ListMetadataResponse,
+    RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
     RegisterLnurlPayResponse, TransferLnurlPayRequest, TransferLnurlPayResponse,
     UnregisterLnurlPayRequest, sanitize_username,
 };
@@ -26,9 +26,7 @@ use std::str::FromStr;
 use tracing::{debug, error, trace, warn};
 
 use crate::{
-    invoice_paid::{
-        HandleInvoicePaidError, create_invoice, handle_invoice_paid, handle_invoices_paid,
-    },
+    invoice_paid::{create_invoice, handle_invoice_paid},
     repository::LnurlSenderComment,
     time::{now_millis, now_u64},
     zap::Zap,
@@ -624,150 +622,6 @@ where
             "preimage": invoice.preimage,
             "pr": invoice.invoice
         }))
-    }
-
-    /// Invoice-paid notification endpoint (single invoice).
-    /// Deprecated: use `invoices_paid` instead, which supports batch notifications.
-    /// TODO: Remove this endpoint after all clients have migrated to `invoices_paid`.
-    pub async fn invoice_paid(
-        Path(pubkey): Path<String>,
-        Extension(state): Extension<State<DB>>,
-        Json(payload): Json<InvoicePaidRequest>,
-    ) -> Result<(), (StatusCode, Json<Value>)> {
-        let pubkey = validate(
-            &pubkey,
-            &payload.signature,
-            &payload.preimage,
-            payload.timestamp,
-            &state,
-        )
-        .await?;
-
-        let preimage_bytes = hex::decode(&payload.preimage).map_err(|e| {
-            trace!("invalid preimage, could not decode: {}", e);
-            (
-                StatusCode::BAD_REQUEST,
-                Json(Value::String("invalid preimage".into())),
-            )
-        })?;
-        let payment_hash = bitcoin::hashes::sha256::Hash::hash(&preimage_bytes);
-        let payment_hash_hex = payment_hash.to_string();
-
-        // Verify the invoice belongs to this user
-        let invoice = state
-            .db
-            .get_invoice_by_payment_hash(&payment_hash_hex)
-            .await
-            .map_err(|e| {
-                error!("Failed to get invoice: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(Value::String("internal server error".into())),
-                )
-            })?
-            .ok_or_else(|| {
-                trace!("invoice not found for payment hash: {}", payment_hash_hex);
-                (
-                    StatusCode::NOT_FOUND,
-                    Json(Value::String("invoice not found".into())),
-                )
-            })?;
-
-        if invoice.user_pubkey != pubkey.to_string() {
-            trace!("invoice does not belong to this user");
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(Value::String("invoice not found".into())),
-            ));
-        }
-
-        // Use the central invoice paid handler
-        handle_invoice_paid(
-            &state.db,
-            &state.webhook_service,
-            &payment_hash_hex,
-            &payload.preimage,
-            None,
-            &state.invoice_paid_trigger,
-        )
-        .await
-        .map_err(|e| {
-            error!("Failed to handle invoice paid: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(Value::String("internal server error".into())),
-            )
-        })?;
-
-        debug!(
-            "Invoice paid notification received for payment hash {}",
-            payment_hash_hex
-        );
-        Ok(())
-    }
-
-    /// Batch invoices-paid notification endpoint.
-    /// Client notifies server that multiple invoices were paid with their preimages.
-    pub async fn invoices_paid(
-        Path(pubkey): Path<String>,
-        Extension(state): Extension<State<DB>>,
-        Json(payload): Json<InvoicesPaidRequest>,
-    ) -> Result<(), (StatusCode, Json<Value>)> {
-        const MAX_PREIMAGES: usize = 100;
-
-        if payload.invoices.is_empty() {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(Value::String("invoices must not be empty".into())),
-            ));
-        }
-
-        if payload.invoices.len() > MAX_PREIMAGES {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(Value::String(format!(
-                    "too many invoices, max is {MAX_PREIMAGES}"
-                ))),
-            ));
-        }
-
-        let pubkey = validate(
-            &pubkey,
-            &payload.signature,
-            &pubkey,
-            payload.timestamp,
-            &state,
-        )
-        .await?;
-
-        handle_invoices_paid(
-            &state.db,
-            &state.webhook_service,
-            &payload.invoices,
-            &pubkey.to_string(),
-            &state.invoice_paid_trigger,
-        )
-        .await
-        .map_err(|e| match &e {
-            HandleInvoicePaidError::InvalidInvoice(msg)
-            | HandleInvoicePaidError::InvalidPreimage(msg) => {
-                trace!("Invalid input in invoices-paid: {}", msg);
-                (StatusCode::BAD_REQUEST, Json(Value::String(msg.clone())))
-            }
-            HandleInvoicePaidError::Repository(_) => {
-                error!("Failed to handle invoices paid: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(Value::String("internal server error".into())),
-                )
-            }
-        })?;
-
-        debug!(
-            "Invoices paid notification received for {} invoices",
-            payload.invoices.len()
-        );
-        Ok(())
     }
 
     /// Webhook endpoint for SSP payment notifications.
@@ -1394,34 +1248,6 @@ mod tests {
                 .lock()
                 .unwrap()
                 .remove(payment_hash);
-            Ok(())
-        }
-        async fn filter_known_payment_hashes(
-            &self,
-            _payment_hashes: &[String],
-        ) -> Result<Vec<String>, LnurlRepositoryError> {
-            Ok(vec![])
-        }
-        async fn upsert_invoices_paid(
-            &self,
-            invoices: &[Invoice],
-        ) -> Result<Vec<String>, LnurlRepositoryError> {
-            let mut store = self.invoices.lock().unwrap();
-            let mut updated = Vec::new();
-            for invoice in invoices {
-                store.insert(invoice.payment_hash.clone(), invoice.clone());
-                updated.push(invoice.payment_hash.clone());
-            }
-            Ok(updated)
-        }
-        async fn insert_pending_zap_receipt_batch(
-            &self,
-            pending: &[PendingZapReceipt],
-        ) -> Result<(), LnurlRepositoryError> {
-            let mut store = self.pending_zap_receipts.lock().unwrap();
-            for p in pending {
-                store.insert(p.payment_hash.clone(), p.clone());
-            }
             Ok(())
         }
         async fn get_or_create_setting(
