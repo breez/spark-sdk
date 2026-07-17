@@ -299,16 +299,11 @@ where
                 debug!(
                     "unregister signature names '{username}', not the address pubkey {pubkey} holds"
                 );
-                return Err((
-                    StatusCode::CONFLICT,
-                    Json(Value::String(
-                        "signature does not cover the registered address".into(),
-                    )),
-                ));
+                return Err(unregister_name_mismatch());
             }
         }
 
-        state
+        let removed = state
             .db
             .delete_user(&domain, &pubkey.to_string(), &username)
             .await
@@ -319,6 +314,12 @@ where
                     Json(Value::String("internal server error".into())),
                 )
             })?;
+
+        if !removed {
+            debug!("address for pubkey {pubkey} changed while unregistering '{username}'");
+            return Err(unregister_name_mismatch());
+        }
+
         debug!("unregistered user for pubkey {}", pubkey);
         Ok(())
     }
@@ -1116,10 +1117,8 @@ fn validate_description(description: &str) -> Result<(), (StatusCode, Json<Value
     Ok(())
 }
 
-/// Parse a signed request and bound it in time.
-///
-/// Everything here is independent of the message the signature covers, so
-/// `validate_any` runs it once rather than per candidate message.
+/// Parse a signed request and bound it in time. Independent of the message the
+/// signature covers.
 fn parse_signed_request(
     pubkey: &str,
     signature: &str,
@@ -1180,6 +1179,17 @@ fn unregister_candidate_messages(username: &str) -> Vec<String> {
     vec![format!("unregister:{username}"), username.to_string()]
 }
 
+/// The response when the signed name is not the one the pubkey holds, whether
+/// the read saw that or the delete raced with a change.
+fn unregister_name_mismatch() -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::CONFLICT,
+        Json(Value::String(
+            "signature does not cover the registered address".into(),
+        )),
+    )
+}
+
 /// What an unregister request does to the address a pubkey holds.
 #[derive(Debug, PartialEq, Eq)]
 enum UnregisterAction {
@@ -1212,6 +1222,7 @@ async fn validate_any<DB>(
     timestamp: u64,
     state: &State<DB>,
 ) -> Result<PublicKey, (StatusCode, Json<Value>)> {
+    // Hoisted out of the loop below: parsing does not depend on the message.
     let (pubkey, signature) = parse_signed_request(pubkey, signature, timestamp)?;
 
     for message in messages {
@@ -1378,8 +1389,13 @@ mod tests {
 
     #[async_trait::async_trait]
     impl LnurlRepository for MockRepository {
-        async fn delete_user(&self, _: &str, _: &str, _: &str) -> Result<(), LnurlRepositoryError> {
-            Ok(())
+        async fn delete_user(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<bool, LnurlRepositoryError> {
+            Ok(true)
         }
         async fn get_user_by_name(
             &self,

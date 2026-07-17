@@ -32,14 +32,15 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         domain: &str,
         pubkey: &str,
         name: &str,
-    ) -> Result<(), LnurlRepositoryError> {
-        sqlx::query("DELETE FROM users WHERE domain = $1 AND pubkey = $2 AND name = $3")
-            .bind(domain)
-            .bind(pubkey)
-            .bind(name)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
+    ) -> Result<bool, LnurlRepositoryError> {
+        let result =
+            sqlx::query("DELETE FROM users WHERE domain = $1 AND pubkey = $2 AND name = $3")
+                .bind(domain)
+                .bind(pubkey)
+                .bind(name)
+                .execute(&self.pool)
+                .await?;
+        Ok(result.rows_affected() > 0)
     }
 
     async fn get_user_by_name(
