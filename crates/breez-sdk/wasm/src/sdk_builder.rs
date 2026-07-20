@@ -24,7 +24,7 @@ use crate::{
     sdk::BreezSdk,
     sdk_context::{SharedMysqlPool, SharedPostgresPool, WasmSdkContext},
     token_store::WasmTokenStore,
-    tree_store::WasmTreeStore,
+    tree_store::{TreeStoreJs, WasmTreeStore},
 };
 use bitcoin::secp256k1::PublicKey;
 use breez_sdk_spark::{PrebuiltBackend, SessionStoreAdapter, StorageBackend, identity_public_key};
@@ -492,7 +492,14 @@ async fn resolve_storage_config(
             let storage = Arc::new(WasmStorage {
                 storage: default_storage(&storage_dir, network, &identity_pub_key).await?,
             });
-            Ok(Arc::new(PrebuiltBackend::new(storage, None, None, None)))
+            let tree_store_js =
+                default_tree_store(&storage_dir, network, &identity_pub_key).await?;
+            Ok(Arc::new(PrebuiltBackend::new(
+                storage,
+                Some(Arc::new(WasmTreeStore::new(tree_store_js))),
+                None,
+                None,
+            )))
         }
         WasmStorageConfigKind::Postgres { config } => {
             let run_migration = config.run_migration;
@@ -652,6 +659,18 @@ async fn default_storage(
     Ok(create_default_storage(db_path.to_string_lossy().as_ref(), logger_ref).await?)
 }
 
+/// Builds the default durable tree store: `IndexedDB` in the browser, `SQLite` in
+/// Node.
+async fn default_tree_store(
+    data_dir: &str,
+    network: &breez_sdk_spark::Network,
+    identity_pub_key: &PublicKey,
+) -> WasmResult<TreeStoreJs> {
+    let db_path = breez_sdk_spark::default_storage_path(data_dir, network, identity_pub_key)?;
+    let logger_ref = get_wasm_logger_ref();
+    Ok(create_default_tree_store(db_path.to_string_lossy().as_ref(), logger_ref).await?)
+}
+
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_name = "createDefaultStorage", catch)]
@@ -659,4 +678,10 @@ extern "C" {
         data_dir: &str,
         logger: Option<&Logger>,
     ) -> Result<crate::persist::Storage, JsValue>;
+
+    #[wasm_bindgen(js_name = "createDefaultTreeStore", catch)]
+    async fn create_default_tree_store(
+        data_dir: &str,
+        logger: Option<&Logger>,
+    ) -> Result<TreeStoreJs, JsValue>;
 }

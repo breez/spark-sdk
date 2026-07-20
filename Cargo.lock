@@ -1515,6 +1515,7 @@ dependencies = [
  "serde_json",
  "spark-mysql",
  "spark-postgres",
+ "spark-sqlite",
  "spark-wallet",
  "testcontainers",
  "testcontainers-modules",
