@@ -297,7 +297,9 @@ impl LnurlServerClient for DefaultLnurlServerClient {
     ) -> Result<(), LnurlServerError> {
         let pubkey = self.wallet.get_identity_public_key();
 
-        let (signature, timestamp) = self.sign_message(&request.username).await?;
+        let (signature, timestamp) = self
+            .sign_message(&format!("unregister:{}", request.username))
+            .await?;
 
         let api_request = UnregisterLnurlPayRequest {
             username: request.username.clone(),

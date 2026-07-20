@@ -54,7 +54,19 @@ pub struct DomainConfig {
 
 #[async_trait::async_trait]
 pub trait LnurlRepository {
-    async fn delete_user(&self, domain: &str, pubkey: &str) -> Result<(), LnurlRepositoryError>;
+    /// Delete `pubkey`'s row in `domain`, but only while it still holds `name`.
+    /// Returns whether a row was removed.
+    ///
+    /// `name` is part of the condition so the caller's authorization check and
+    /// the delete cannot disagree: a row that changed name in between is left
+    /// alone rather than deleted on the strength of a stale read. The caller
+    /// reads before deleting, so `false` means the row changed in between.
+    async fn delete_user(
+        &self,
+        domain: &str,
+        pubkey: &str,
+        name: &str,
+    ) -> Result<bool, LnurlRepositoryError>;
     async fn get_user_by_name(
         &self,
         domain: &str,
@@ -219,6 +231,48 @@ pub mod shared_tests {
             owner.pubkey, "aaaa",
             "existing owner was replaced, now resolves to pubkey {}",
             owner.pubkey
+        );
+    }
+
+    /// `delete_user` removes the row only while it still holds the named
+    /// address, so an unregister authorized for one name cannot delete another.
+    ///
+    /// Uses its own pubkey and name: the postgres harness shares one database
+    /// across tests that run in parallel, and `users` is keyed by
+    /// `(domain, pubkey)` with `name` unique per domain.
+    pub async fn deleting_a_name_the_pubkey_no_longer_holds_is_a_no_op<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        db.upsert_user(&User {
+            domain: "a.com".into(),
+            pubkey: "dddd".into(),
+            name: "dave".into(),
+            description: "dave".into(),
+        })
+        .await
+        .unwrap();
+
+        let removed = db.delete_user("a.com", "dddd", "erin").await.unwrap();
+        assert!(
+            !removed,
+            "deleting 'erin' must report that it removed nothing"
+        );
+        let held = db.get_user_by_pubkey("a.com", "dddd").await.unwrap();
+        assert_eq!(
+            held.map(|u| u.name),
+            Some("dave".to_string()),
+            "deleting 'erin' must not touch the 'dave' the pubkey holds"
+        );
+
+        let removed = db.delete_user("a.com", "dddd", "dave").await.unwrap();
+        assert!(removed, "deleting the held name must report the removal");
+        assert!(
+            db.get_user_by_pubkey("a.com", "dddd")
+                .await
+                .unwrap()
+                .is_none(),
+            "deleting the held name must remove the row"
         );
     }
 

@@ -264,18 +264,20 @@ where
         Json(payload): Json<UnregisterLnurlPayRequest>,
     ) -> Result<(), (StatusCode, Json<Value>)> {
         let username = sanitize_username(&payload.username);
-        let pubkey = validate(
+        let messages = unregister_candidate_messages(&username);
+        let pubkey = validate_any(
             &pubkey,
             &payload.signature,
-            &username,
+            &messages,
             payload.timestamp,
             &state,
         )
         .await?;
+        let domain = sanitize_domain(&state, &host).await?;
 
-        state
+        let registered = state
             .db
-            .delete_user(&sanitize_domain(&state, &host).await?, &pubkey.to_string())
+            .get_user_by_pubkey(&domain, &pubkey.to_string())
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -284,6 +286,38 @@ where
                     Json(Value::String("internal server error".into())),
                 )
             })?;
+
+        match unregister_action(&username, registered.as_ref()) {
+            UnregisterAction::Delete => {}
+            UnregisterAction::AlreadyGone => {
+                debug!("pubkey {pubkey} holds no address, nothing to unregister");
+                return Ok(());
+            }
+            UnregisterAction::NameMismatch => {
+                debug!(
+                    "unregister signature names '{username}', not the address pubkey {pubkey} holds"
+                );
+                return Err(unregister_name_mismatch());
+            }
+        }
+
+        let removed = state
+            .db
+            .delete_user(&domain, &pubkey.to_string(), &username)
+            .await
+            .map_err(|e| {
+                error!("failed to execute query: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(Value::String("internal server error".into())),
+                )
+            })?;
+
+        if !removed {
+            debug!("address for pubkey {pubkey} changed while unregistering '{username}'");
+            return Err(unregister_name_mismatch());
+        }
+
         debug!("unregistered user for pubkey {}", pubkey);
         Ok(())
     }
@@ -937,13 +971,13 @@ fn validate_description(description: &str) -> Result<(), (StatusCode, Json<Value
     Ok(())
 }
 
-async fn validate<DB>(
+/// Parse a signed request and bound it in time. Independent of the message the
+/// signature covers.
+fn parse_signed_request(
     pubkey: &str,
     signature: &str,
-    message: &str,
     timestamp: u64,
-    state: &State<DB>,
-) -> Result<PublicKey, (StatusCode, Json<Value>)> {
+) -> Result<(PublicKey, Signature), (StatusCode, Json<Value>)> {
     let pubkey = parse_pubkey(pubkey)?;
     let signature = hex::decode(signature).map_err(|e| {
         trace!("invalid signature, could not decode: {}", e);
@@ -973,19 +1007,94 @@ async fn validate<DB>(
         ));
     }
 
-    state
-        .wallet
-        .verify_message(&format!("{message}-{timestamp}"), &signature, &pubkey)
-        .await
-        .map_err(|e| {
-            trace!("invalid signature with timestamp, could not verify: {}", e);
-            (
-                StatusCode::BAD_REQUEST,
-                Json(Value::String("invalid signature".into())),
-            )
-        })?;
+    Ok((pubkey, signature))
+}
 
-    Ok(pubkey)
+async fn validate<DB>(
+    pubkey: &str,
+    signature: &str,
+    message: &str,
+    timestamp: u64,
+    state: &State<DB>,
+) -> Result<PublicKey, (StatusCode, Json<Value>)> {
+    validate_any(pubkey, signature, &[message.to_string()], timestamp, state).await
+}
+
+/// The messages an unregister signature may cover, most-preferred first.
+///
+/// The `unregister:` prefix domain-separates deletion from the other signed
+/// messages, so a signature captured from another route cannot authorize one.
+/// The bare form is `register`'s and stays interchangeable with it, which keeps
+/// a captured register request replayable as a deletion.
+///
+/// TODO: Remove the bare candidate after all clients have migrated to the
+/// prefix, and flip `register_signature_authorizes_unregister_until_the_legacy_form_is_dropped`.
+fn unregister_candidate_messages(username: &str) -> Vec<String> {
+    vec![format!("unregister:{username}"), username.to_string()]
+}
+
+/// The response when the signed name is not the one the pubkey holds, whether
+/// the read saw that or the delete raced with a change.
+fn unregister_name_mismatch() -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::CONFLICT,
+        Json(Value::String(
+            "signature does not cover the registered address".into(),
+        )),
+    )
+}
+
+/// What an unregister request does to the address a pubkey holds.
+#[derive(Debug, PartialEq, Eq)]
+enum UnregisterAction {
+    /// The signature names the registered address: remove it.
+    Delete,
+    /// The pubkey holds no address, so the request's goal already holds.
+    AlreadyGone,
+    /// The pubkey holds an address the signature does not name.
+    NameMismatch,
+}
+
+/// Decide an unregister from the name the signature covers and the address the
+/// pubkey holds.
+///
+/// The signature approves removing one specific name, so a name it does not
+/// cover is never removed, whichever address the pubkey currently holds.
+fn unregister_action(signed_name: &str, registered: Option<&User>) -> UnregisterAction {
+    match registered {
+        None => UnregisterAction::AlreadyGone,
+        Some(user) if user.name == signed_name => UnregisterAction::Delete,
+        Some(_) => UnregisterAction::NameMismatch,
+    }
+}
+
+/// Verify `signature` against each candidate message, accepting the first match.
+async fn validate_any<DB>(
+    pubkey: &str,
+    signature: &str,
+    messages: &[String],
+    timestamp: u64,
+    state: &State<DB>,
+) -> Result<PublicKey, (StatusCode, Json<Value>)> {
+    // Hoisted out of the loop below: parsing does not depend on the message.
+    let (pubkey, signature) = parse_signed_request(pubkey, signature, timestamp)?;
+
+    for message in messages {
+        if state
+            .wallet
+            .verify_message(&format!("{message}-{timestamp}"), &signature, &pubkey)
+            .await
+            .is_ok()
+        {
+            return Ok(pubkey);
+        }
+    }
+
+    trace!("invalid signature, no candidate message verified");
+    Err((
+        StatusCode::BAD_REQUEST,
+        Json(Value::String("invalid signature".into())),
+    ))
 }
 
 /// Verify a transfer-route signature over the canonical message
@@ -1134,8 +1243,13 @@ mod tests {
 
     #[async_trait::async_trait]
     impl LnurlRepository for MockRepository {
-        async fn delete_user(&self, _: &str, _: &str) -> Result<(), LnurlRepositoryError> {
-            Ok(())
+        async fn delete_user(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<bool, LnurlRepositoryError> {
+            Ok(true)
         }
         async fn get_user_by_name(
             &self,
@@ -2053,5 +2167,123 @@ mod tests {
             assert_eq!(err.0, StatusCode::OK, "LNURL errors use HTTP 200");
             assert_eq!(err.1.0["reason"], "amount out of bounds");
         }
+    }
+
+    // -- unregister signature domain separation --------------------------------
+
+    const TEST_TIMESTAMP: u64 = 1_752_000_000;
+
+    /// Whether `signature` authorizes unregistering `username`, mirroring what
+    /// the route accepts.
+    fn authorizes_unregister(
+        public_key: &PublicKey,
+        signature: &Signature,
+        username: &str,
+        timestamp: u64,
+    ) -> bool {
+        let secp = Secp256k1::new();
+        unregister_candidate_messages(username)
+            .iter()
+            .any(|message| {
+                spark::utils::verify_signature::verify_signature_ecdsa(
+                    &secp,
+                    format!("{message}-{timestamp}"),
+                    signature,
+                    public_key,
+                )
+                .is_ok()
+            })
+    }
+
+    fn registered_as(name: &str) -> User {
+        User {
+            domain: "example.com".to_string(),
+            pubkey: "02abc123".to_string(),
+            name: name.to_string(),
+            description: String::new(),
+        }
+    }
+
+    #[test]
+    fn unregister_accepts_the_prefixed_and_legacy_messages() {
+        assert_eq!(
+            unregister_candidate_messages("alice"),
+            vec!["unregister:alice".to_string(), "alice".to_string()]
+        );
+    }
+
+    #[test]
+    fn unregister_signature_authorizes_unregister() {
+        let (secret_key, public_key) = transfer_key(0x11);
+        let signature = sign(&secret_key, &format!("unregister:alice-{TEST_TIMESTAMP}"));
+
+        assert!(authorizes_unregister(
+            &public_key,
+            &signature,
+            "alice",
+            TEST_TIMESTAMP
+        ));
+    }
+
+    #[test]
+    fn register_signature_authorizes_unregister_until_the_legacy_form_is_dropped() {
+        let (secret_key, public_key) = transfer_key(0x11);
+        let signature = sign(&secret_key, &format!("alice-{TEST_TIMESTAMP}"));
+
+        // Register's format is still accepted while clients migrate. Flip this to
+        // assert!(!...) when the legacy candidate is removed.
+        assert!(authorizes_unregister(
+            &public_key,
+            &signature,
+            "alice",
+            TEST_TIMESTAMP
+        ));
+    }
+
+    #[test]
+    fn a_pubkey_signature_does_not_delete_the_registered_address() {
+        // recover and list_metadata sign "{pubkey}-{timestamp}", and a metadata
+        // signature travels in the request URL. That signature does verify against
+        // the legacy candidate, so the name it covers is what stops the deletion.
+        let (secret_key, public_key) = transfer_key(0x11);
+        let pubkey_hex = public_key.to_string();
+        let signature = sign(&secret_key, &format!("{pubkey_hex}-{TEST_TIMESTAMP}"));
+
+        assert!(
+            authorizes_unregister(&public_key, &signature, &pubkey_hex, TEST_TIMESTAMP),
+            "the signature itself still verifies while the legacy form is accepted"
+        );
+        assert_eq!(
+            unregister_action(&pubkey_hex, Some(&registered_as("alice"))),
+            UnregisterAction::NameMismatch
+        );
+    }
+
+    #[test]
+    fn deleting_requires_the_signed_name_to_be_the_registered_one() {
+        assert_eq!(
+            unregister_action("alice", Some(&registered_as("alice"))),
+            UnregisterAction::Delete
+        );
+        assert_eq!(
+            unregister_action("bob", Some(&registered_as("alice"))),
+            UnregisterAction::NameMismatch
+        );
+    }
+
+    #[test]
+    fn unregistering_an_address_that_is_already_gone_succeeds() {
+        // Nothing to remove, so the request's goal already holds. Reporting
+        // success is what lets a client holding a stale name clear it.
+        assert_eq!(
+            unregister_action("alice", None),
+            UnregisterAction::AlreadyGone
+        );
+    }
+
+    #[test]
+    fn username_cannot_forge_the_unregister_prefix() {
+        // The prefix only separates because ':' is outside the username charset.
+        assert!(validate_username("unregister:alice").is_err());
     }
 }

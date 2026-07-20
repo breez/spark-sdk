@@ -27,13 +27,20 @@ impl LnurlRepository {
 
 #[async_trait::async_trait]
 impl crate::repository::LnurlRepository for LnurlRepository {
-    async fn delete_user(&self, domain: &str, pubkey: &str) -> Result<(), LnurlRepositoryError> {
-        sqlx::query("DELETE FROM users WHERE domain = $1 AND pubkey = $2")
-            .bind(domain)
-            .bind(pubkey)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
+    async fn delete_user(
+        &self,
+        domain: &str,
+        pubkey: &str,
+        name: &str,
+    ) -> Result<bool, LnurlRepositoryError> {
+        let result =
+            sqlx::query("DELETE FROM users WHERE domain = $1 AND pubkey = $2 AND name = $3")
+                .bind(domain)
+                .bind(pubkey)
+                .bind(name)
+                .execute(&self.pool)
+                .await?;
+        Ok(result.rows_affected() > 0)
     }
 
     async fn get_user_by_name(
@@ -793,5 +800,12 @@ mod sqlite_tests {
         let pool = setup_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::registering_taken_name_with_other_pubkey_is_rejected(&db).await;
+    }
+
+    #[tokio::test]
+    async fn deleting_a_name_the_pubkey_no_longer_holds_is_a_no_op() {
+        let pool = setup_pool().await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::deleting_a_name_the_pubkey_no_longer_holds_is_a_no_op(&db).await;
     }
 }

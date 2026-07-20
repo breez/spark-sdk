@@ -4,7 +4,7 @@ use lnurl_models::sanitize_username;
 use crate::{
     AuthorizeTransferRequest, CheckLightningAddressRequest, ClaimTransferRequest,
     LightningAddressInfo, LnurlInfo, RegisterLightningAddressRequest, TransferAuthorization,
-    error::SdkError, persist::ObjectCacheRepository,
+    error::SdkError, lnurl::LnurlServerError, persist::ObjectCacheRepository,
 };
 
 use super::BreezSdk;
@@ -153,7 +153,24 @@ impl BreezSdk {
             username: address_info.username,
         };
 
-        client.unregister_lightning_address(&params).await?;
+        match client.unregister_lightning_address(&params).await {
+            Ok(()) => {}
+            // A 409 means the cached username is not the address the server
+            // holds, so the signature authorized deleting a name this wallet no
+            // longer has (another device re-registered under the same identity
+            // key). Resync from the server, which leaves a retry signing the
+            // real address.
+            Err(
+                e @ LnurlServerError::Network {
+                    statuscode: 409, ..
+                },
+            ) => {
+                self.recover_lightning_address().await?;
+                return Err(e.into());
+            }
+            Err(e) => return Err(e.into()),
+        }
+
         cache.delete_lightning_address(false).await?;
         Ok(())
     }
