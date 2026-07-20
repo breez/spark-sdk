@@ -119,7 +119,9 @@ pub struct UnilateralExitPlan {
     pub fan_out_psbt: Option<psbt::Psbt>,
     /// Leaf id -> the inputs funding that branch's first CPFP child.
     pub per_branch_funding: Vec<(TreeNodeId, Vec<CpfpInput>)>,
-    pub tree_nodes: Vec<TreeNode>,
+    /// The exit tree, keyed by node id. Every selected leaf's full ancestor chain
+    /// is present, so the build resolves offline without re-fetching.
+    pub tree_nodes: HashMap<TreeNodeId, TreeNode>,
 }
 
 /// Selects which leaves to exit and maps funding inputs to branches. Never
@@ -143,7 +145,7 @@ pub fn plan_unilateral_exit(
             selected_leaves: vec![],
             fan_out_psbt: None,
             per_branch_funding: vec![],
-            tree_nodes: tree_nodes.into_values().collect(),
+            tree_nodes,
         });
     }
 
@@ -163,7 +165,7 @@ pub fn plan_unilateral_exit(
             selected_leaves: vec![],
             fan_out_psbt: None,
             per_branch_funding: vec![],
-            tree_nodes: tree_nodes.into_values().collect(),
+            tree_nodes,
         });
     }
 
@@ -229,7 +231,7 @@ pub fn plan_unilateral_exit(
         selected_leaves: selected,
         fan_out_psbt,
         per_branch_funding,
-        tree_nodes: tree_nodes.into_values().collect(),
+        tree_nodes,
     };
     debug!(
         selected_leaves = plan.selected_leaves.len(),

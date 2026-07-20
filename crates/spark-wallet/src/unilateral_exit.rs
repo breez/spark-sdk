@@ -276,11 +276,7 @@ fn interpret_chain(
     observed: &[Observation],
 ) -> Result<ChainInterpretation, SparkWalletError> {
     let plan = &prepared.plan;
-    let node_map: HashMap<TreeNodeId, TreeNode> = plan
-        .tree_nodes
-        .iter()
-        .map(|n| (n.id.clone(), n.clone()))
-        .collect();
+    let node_map = &plan.tree_nodes;
 
     let mut pending: Vec<ChainQuery> = Vec::new();
     let mut unverified: HashSet<TreeNodeId> = HashSet::new();
@@ -294,7 +290,7 @@ fn interpret_chain(
     let mut operator_confirmed: HashSet<TreeNodeId> = HashSet::new();
     for (leaf_id, _) in &plan.per_branch_funding {
         walk_branch(
-            &node_map,
+            node_map,
             leaf_id,
             observed,
             &mut nodes,
@@ -308,7 +304,7 @@ fn interpret_chain(
     }
 
     resolve_confirmed_changes(
-        &node_map,
+        node_map,
         plan,
         &mut nodes,
         &needs_change,
@@ -316,7 +312,7 @@ fn interpret_chain(
         &mut pending,
     );
 
-    flag_unverifiable_confirmation_branches(&node_map, plan, &operator_confirmed, &mut unverified);
+    flag_unverifiable_confirmation_branches(node_map, plan, &operator_confirmed, &mut unverified);
 
     // Runs per leaf independently of the walk; an adopted refund overrides it.
     for (leaf_id, address) in &prepared.leaf_refund_addresses {
@@ -336,7 +332,7 @@ fn interpret_chain(
     let mut spent_funding: HashSet<OutPoint> = HashSet::new();
     if plan.fan_out_psbt.is_none() {
         for (leaf_id, funding) in &plan.per_branch_funding {
-            if !branch_has_tracked_change(&node_map, leaf_id, &nodes) {
+            if !branch_has_tracked_change(node_map, leaf_id, &nodes) {
                 continue;
             }
             for input in funding {
@@ -885,11 +881,7 @@ pub(crate) fn build_exit(
     resolved: &ResolvedExitState,
     fee_rate_sat_per_kw: u64,
 ) -> Result<UnilateralExitBuild, SparkWalletError> {
-    let node_map: HashMap<TreeNodeId, TreeNode> = plan
-        .tree_nodes
-        .iter()
-        .map(|n| (n.id.clone(), n.clone()))
-        .collect();
+    let node_map = &plan.tree_nodes;
 
     let (fan_out, per_branch_funding) = resolve_fan_out_funding(plan, resolved)?;
     let fan_out_txid = fan_out.as_ref().map(|f| f.txid);
@@ -905,7 +897,7 @@ pub(crate) fn build_exit(
         let leaf = node_map.get(leaf_id).ok_or_else(|| {
             SparkWalletError::Generic(format!("Leaf {leaf_id} missing from exit plan"))
         })?;
-        let chain = walk_unilateral_exit_chain(&node_map, leaf).map_err(|missing| {
+        let chain = walk_unilateral_exit_chain(node_map, leaf).map_err(|missing| {
             SparkWalletError::Generic(format!(
                 "Incomplete ancestor chain for leaf {leaf_id}: parent {missing} missing"
             ))
@@ -1266,6 +1258,11 @@ fn resolve_fan_out_funding(
 }
 
 #[cfg(test)]
+fn to_node_map(nodes: Vec<TreeNode>) -> HashMap<TreeNodeId, TreeNode> {
+    nodes.into_iter().map(|n| (n.id.clone(), n)).collect()
+}
+
+#[cfg(test)]
 mod exit_build_tests {
     use super::*;
     use bitcoin::{
@@ -1376,7 +1373,7 @@ mod exit_build_tests {
             }],
             fan_out_psbt: None,
             per_branch_funding: vec![(leaf.id.clone(), vec![funding(100_000)])],
-            tree_nodes: vec![root, leaf],
+            tree_nodes: to_node_map(vec![root, leaf]),
         }
     }
 
@@ -1581,7 +1578,7 @@ mod exit_build_tests {
             }],
             fan_out_psbt: Some(fan_out_psbt),
             per_branch_funding: vec![(leaf.id.clone(), vec![branch_output.clone()])],
-            tree_nodes: vec![root, leaf],
+            tree_nodes: to_node_map(vec![root, leaf]),
         };
         let change_outpoint = OutPoint {
             txid: Txid::from_byte_array([0x55; 32]),
@@ -1794,7 +1791,7 @@ mod exit_build_tests {
                 (leaf_a.id.clone(), vec![funding(100_000)]),
                 (leaf_b.id.clone(), vec![funding(100_000)]),
             ],
-            tree_nodes: vec![root, mid, leaf_a, leaf_b],
+            tree_nodes: to_node_map(vec![root, mid, leaf_a, leaf_b]),
         }
     }
 
@@ -1879,7 +1876,7 @@ mod exit_build_tests {
                 (leaf_a.id.clone(), vec![fund_a]),
                 (leaf_b.id.clone(), vec![fund_b]),
             ],
-            tree_nodes: vec![root, mid, leaf_a, leaf_b],
+            tree_nodes: to_node_map(vec![root, mid, leaf_a, leaf_b]),
         }
     }
 
@@ -2260,7 +2257,7 @@ mod interpret_tests {
                 selected_leaves: vec![],
                 fan_out_psbt: None,
                 per_branch_funding: vec![(leaf_id.clone(), vec![])],
-                tree_nodes: vec![root, leaf],
+                tree_nodes: to_node_map(vec![root, leaf]),
             },
             leaf_refund_addresses: [(leaf_id, leaf_addr())].into_iter().collect(),
         }
@@ -2437,7 +2434,7 @@ mod interpret_tests {
                 selected_leaves: vec![],
                 fan_out_psbt: Some(fan_out_psbt),
                 per_branch_funding: vec![(id("a"), vec![]), (id("b"), vec![])],
-                tree_nodes: vec![],
+                tree_nodes: to_node_map(vec![]),
             },
             leaf_refund_addresses: HashMap::new(),
         };
@@ -2972,7 +2969,7 @@ mod interpret_tests {
                 selected_leaves: vec![],
                 fan_out_psbt: None,
                 per_branch_funding: vec![(leaf_id.clone(), vec![funding_input])],
-                tree_nodes: vec![root, leaf],
+                tree_nodes: to_node_map(vec![root, leaf]),
             },
             leaf_refund_addresses: [(leaf_id.clone(), leaf_addr())].into_iter().collect(),
         };
