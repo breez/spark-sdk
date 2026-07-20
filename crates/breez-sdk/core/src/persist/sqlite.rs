@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use macros::async_trait;
 use rusqlite::{
@@ -53,15 +54,25 @@ impl SqliteStorage {
         std::fs::create_dir_all(path)
             .map_err(|e| StorageError::InitializationError(e.to_string()))?;
 
+        // The durable tree store shares this file and runs it in WAL. Opt into WAL
+        // here too (it persists in the header) rather than inheriting it as a side
+        // effect, so the journal mode is the same however the stores initialize.
+        storage
+            .get_connection()?
+            .pragma_update(None, "journal_mode", "WAL")?;
         storage.migrate()?;
         Ok(storage)
     }
 
     pub(crate) fn get_connection(&self) -> Result<Connection, StorageError> {
-        Ok(Connection::open(self.get_db_path())?)
+        let conn = Connection::open(self.get_db_path())?;
+        // Wait for the lock instead of failing with SQLITE_BUSY when the shared-file
+        // tree store is mid-write.
+        conn.busy_timeout(Duration::from_secs(5))?;
+        Ok(conn)
     }
 
-    fn get_db_path(&self) -> PathBuf {
+    pub(crate) fn get_db_path(&self) -> PathBuf {
         self.db_dir.join(DEFAULT_DB_FILENAME)
     }
 
