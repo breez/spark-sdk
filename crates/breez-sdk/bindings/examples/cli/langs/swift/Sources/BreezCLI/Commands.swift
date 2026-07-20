@@ -138,7 +138,8 @@ func printHelp(_ registry: [String: CommandEntry]) {
         let cmd = registry[name]!
         print("  \(name.padding(toLength: 40, withPad: " ", startingAt: 0))\(cmd.description)")
     }
-    print("\n  \("issuer <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Token issuer commands (use 'issuer help' for details)")
+    print("\n  \("advanced <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Expert-only commands (use 'advanced help' for details)")
+    print("  \("issuer <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Token issuer commands (use 'issuer help' for details)")
     print("  \("contacts <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Contacts commands (use 'contacts help' for details)")
     print("  \("webhooks <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Webhook commands (use 'webhooks help' for details)")
     print("  \("stable-balance <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Stable balance commands (use 'stable-balance help' for details)")

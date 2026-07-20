@@ -318,6 +318,7 @@ suspend fun runInteractiveMode(
 
     // Build command registries
     val commandRegistry = buildCommandRegistry()
+    val advancedRegistry = buildAdvancedRegistry()
     val issuerRegistry = buildIssuerRegistry()
     val contactsRegistry = buildContactsRegistry()
     val webhooksRegistry = buildWebhooksRegistry()
@@ -326,6 +327,8 @@ suspend fun runInteractiveMode(
     // Build completion list
     val allCommands = mutableListOf<String>()
     allCommands.addAll(COMMAND_NAMES)
+    allCommands.addAll(ADVANCED_COMMAND_NAMES.map { "advanced $it" })
+    allCommands.add("advanced")
     allCommands.addAll(ISSUER_COMMAND_NAMES.map { "issuer $it" })
     allCommands.add("issuer")
     allCommands.addAll(CONTACTS_COMMAND_NAMES.map { "contacts $it" })
@@ -376,7 +379,7 @@ suspend fun runInteractiveMode(
         }
 
         if (trimmed == "help") {
-            printHelp(commandRegistry, issuerRegistry, contactsRegistry, webhooksRegistry, stableBalanceRegistry)
+            printHelp(commandRegistry, advancedRegistry, issuerRegistry, contactsRegistry, webhooksRegistry, stableBalanceRegistry)
             continue
         }
 
@@ -386,6 +389,7 @@ suspend fun runInteractiveMode(
 
         try {
             when (cmdName) {
+                "advanced" -> dispatchAdvancedCommand(cmdArgs, sdk, advancedRegistry, lineReader)
                 "issuer" -> dispatchIssuerCommand(cmdArgs, tokenIssuer, issuerRegistry, lineReader)
                 "contacts" -> dispatchContactsCommand(cmdArgs, sdk, contactsRegistry, lineReader)
                 "webhooks" -> dispatchWebhooksCommand(cmdArgs, sdk, webhooksRegistry, lineReader)
@@ -415,6 +419,7 @@ suspend fun runInteractiveMode(
 
 fun printHelp(
     commandRegistry: Map<String, CliCommand>,
+    advancedRegistry: Map<String, AdvancedCliCommand>,
     issuerRegistry: Map<String, IssuerCliCommand>,
     contactsRegistry: Map<String, ContactsCliCommand>,
     webhooksRegistry: Map<String, WebhooksCliCommand>,
@@ -426,6 +431,7 @@ fun printHelp(
         val cmd = commandRegistry[name]!!
         println("  %-40s %s".format(name, cmd.description))
     }
+    println("  %-40s %s".format("advanced <subcommand>", "Expert-only commands (use 'advanced help' for details)"))
     println("  %-40s %s".format("issuer <subcommand>", "Token issuer commands (use 'issuer help' for details)"))
     println("  %-40s %s".format("contacts <subcommand>", "Contacts commands (use 'contacts help' for details)"))
     println("  %-40s %s".format("webhooks <subcommand>", "Webhook commands (use 'webhooks help' for details)"))

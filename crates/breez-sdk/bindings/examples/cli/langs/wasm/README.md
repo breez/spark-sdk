@@ -99,6 +99,8 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 
 **Stable Balance**: `stable-balance get`, `stable-balance set`, `stable-balance unset`
 
+**Advanced**: `advanced unilateral-exit`
+
 **Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`
 
 Each command supports `--help` for detailed usage, e.g., `receive --help`.

@@ -342,6 +342,7 @@ static async Task RunInteractiveMode(
     // Set up tab-completion
     var allCommands = new List<string>();
     allCommands.AddRange(CommandNames.All);
+    allCommands.AddRange(AdvancedCommandNames.All);
     allCommands.AddRange(IssuerCommandNames.All);
     allCommands.AddRange(ContactCommandNames.All);
     allCommands.AddRange(WebhookCommandNames.All);
@@ -428,7 +429,11 @@ static async Task RunInteractiveMode(
 
         try
         {
-            if (cmdName == "issuer")
+            if (cmdName == "advanced")
+            {
+                await AdvancedCommands.DispatchCommand(cmdArgs, sdk, Readline);
+            }
+            else if (cmdName == "issuer")
             {
                 await IssuerCommands.DispatchCommand(cmdArgs, tokenIssuer, Readline);
             }

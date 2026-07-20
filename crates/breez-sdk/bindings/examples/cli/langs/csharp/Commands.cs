@@ -254,6 +254,7 @@ public static class Commands
         {
             Console.WriteLine($"  {name,-40} {registry[name].Description}");
         }
+        Console.WriteLine($"  {"advanced <subcommand>",-40} Expert-only commands (use 'advanced help' for details)");
         Console.WriteLine($"  {"issuer <subcommand>",-40} Token issuer commands (use 'issuer help' for details)");
         Console.WriteLine($"  {"contacts <subcommand>",-40} Contact commands (use 'contacts help' for details)");
         Console.WriteLine($"  {"webhooks <subcommand>",-40} Webhook commands (use 'webhooks help' for details)");

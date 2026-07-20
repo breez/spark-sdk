@@ -103,7 +103,8 @@ func PrintHelp(registry map[string]Command) {
 		cmd := registry[name]
 		fmt.Printf("  %-40s %s\n", name, cmd.Description)
 	}
-	fmt.Printf("\n  %-40s %s\n", "issuer <subcommand>", "Token issuer commands (use 'issuer help' for details)")
+	fmt.Printf("\n  %-40s %s\n", "advanced <subcommand>", "Expert-only commands (use 'advanced help' for details)")
+	fmt.Printf("  %-40s %s\n", "issuer <subcommand>", "Token issuer commands (use 'issuer help' for details)")
 	fmt.Printf("  %-40s %s\n", "contacts <subcommand>", "Contacts commands (use 'contacts help' for details)")
 	fmt.Printf("  %-40s %s\n", "webhooks <subcommand>", "Webhook commands (use 'webhooks help' for details)")
 	fmt.Printf("  %-40s %s\n", "stable-balance <subcommand>", "Stable balance commands (use 'stable-balance help' for details)")
