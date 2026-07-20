@@ -47,8 +47,6 @@ const SEND_POLL_MAX_DELAY_MS: u64 = 2000;
 const SEND_POLL_TIMEOUT_SECS: u64 = 30;
 /// The canonical Spark source chain string used by Orchestra.
 const SPARK_SOURCE_CHAIN: &str = "spark";
-/// How often the background monitor polls in-flight orders.
-const MONITOR_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Resolves the Orchestra config from Breez server.
 ///
@@ -157,7 +155,7 @@ impl OrchestraService {
                         _ = trigger_receiver.recv() => {
                             debug!("Orchestra monitor triggered");
                         }
-                        () = tokio::time::sleep(MONITOR_INTERVAL) => {}
+                        () = tokio::time::sleep(super::MONITOR_INTERVAL) => {}
                     }
                 }
             }
