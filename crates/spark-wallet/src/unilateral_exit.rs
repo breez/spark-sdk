@@ -2194,6 +2194,52 @@ mod exit_build_tests {
         let build = build_exit(&plan, &ResolvedExitState::default(), FEE_RATE).unwrap();
         assert_eq!(build.branches.len(), 2);
     }
+
+    #[test]
+    fn plan_three_leaves_two_utxos_fans_out_and_builds() {
+        // Case e: more leaves than funding UTXOs. The plan fans out (2 inputs, 3
+        // outputs) and build_exit threads all three branches off that fan-out.
+        let leaf_a = node("leafA", None, anchor_tx(1), Some(anchor_tx(2)));
+        let leaf_b = node("leafB", None, anchor_tx(3), Some(anchor_tx(4)));
+        let leaf_c = node("leafC", None, anchor_tx(5), Some(anchor_tx(6)));
+        let (a_id, b_id, c_id) = (leaf_a.id.clone(), leaf_b.id.clone(), leaf_c.id.clone());
+        let nodes: HashMap<TreeNodeId, TreeNode> = [
+            (a_id.clone(), leaf_a),
+            (b_id.clone(), leaf_b),
+            (c_id.clone(), leaf_c),
+        ]
+        .into_iter()
+        .collect();
+
+        // Two UTXOs cannot be matched one-per-branch across three leaves. Funded
+        // generously so the fan-out itself is affordable.
+        let two = |v: u64| {
+            let mut a = funding(v);
+            a.outpoint.vout = 0;
+            let mut b = funding(v);
+            b.outpoint.vout = 1;
+            vec![a, b]
+        };
+        let change_len = funding(0).witness_utxo.script_pubkey.len();
+        let plan = plan_unilateral_exit(
+            nodes,
+            &[a_id, b_id, c_id],
+            UnilateralExitLeafFilter::ProfitableOnly,
+            two(50_000),
+            FEE_RATE,
+            change_len,
+        )
+        .unwrap();
+        assert!(
+            plan.fan_out_psbt.is_some(),
+            "two UTXOs for three leaves must fan out"
+        );
+        assert_eq!(plan.per_branch_funding.len(), 3);
+
+        let build = build_exit(&plan, &ResolvedExitState::default(), FEE_RATE).unwrap();
+        assert!(build.fan_out.is_some());
+        assert_eq!(build.branches.len(), 3);
+    }
 }
 
 #[cfg(test)]

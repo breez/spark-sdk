@@ -2021,6 +2021,38 @@ mod tests {
             );
         }
 
+        #[test_all]
+        fn plan_three_leaves_two_utxos_fans_out() {
+            // Case e: more leaves than funding UTXOs. The count check routes to a
+            // multi-input fan-out (2 inputs, 3 outputs), a shape no single-UTXO
+            // fan-out test exercises.
+            let a = leaf_node_n("a", 1_000_000, 1);
+            let b = leaf_node_n("b", 1_000_000, 3);
+            let c = leaf_node_n("c", 1_000_000, 5);
+            let (ida, idb, idc) = (a.id.clone(), b.id.clone(), c.id.clone());
+            let nodes: HashMap<TreeNodeId, TreeNode> =
+                [(ida.clone(), a), (idb.clone(), b), (idc.clone(), c)]
+                    .into_iter()
+                    .collect();
+
+            // Two UTXOs, three leaves: unmatchable one-per-branch, so the plan fans
+            // out. Funded generously so the fan-out itself is affordable.
+            let plan = plan_unilateral_exit(
+                nodes,
+                &[ida, idb, idc],
+                UnilateralExitLeafFilter::ProfitableOnly,
+                vec![cpfp_input(10_000, 0), cpfp_input(10_000, 1)],
+                250,
+                22,
+            )
+            .unwrap();
+            assert!(plan.fan_out_psbt.is_some());
+            assert_eq!(plan.per_branch_funding.len(), 3);
+            let fan_out = plan.fan_out_psbt.as_ref().unwrap();
+            assert_eq!(fan_out.unsigned_tx.input.len(), 2);
+            assert_eq!(fan_out.unsigned_tx.output.len(), 3);
+        }
+
         fn anchor_tx_n(nonce: u32) -> Transaction {
             Transaction {
                 version: Version::non_standard(3),
