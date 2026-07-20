@@ -304,6 +304,46 @@ class TreeStoreMigrationManager {
              ADD PRIMARY KEY (user_id)`,
         ],
       },
+      {
+        // Mirrors Rust migration 4 in spark-postgres/src/tree_store.rs.
+        // Ancestor chain: intermediate nodes a leaf's exit chain walks through,
+        // kept separate from the spendable leaf pool and carrying no pool
+        // metadata. Multi-tenant from creation.
+        name: "Add ancestor chain table",
+        sql: [
+          `CREATE TABLE IF NOT EXISTS brz_tree_ancestors (
+            user_id BYTEA NOT NULL,
+            id TEXT NOT NULL,
+            parent_node_id TEXT,
+            status TEXT NOT NULL,
+            value BIGINT NOT NULL DEFAULT 0,
+            verifying_public_key TEXT NOT NULL DEFAULT '',
+            data JSONB NOT NULL,
+            PRIMARY KEY (user_id, id)
+          )`,
+          `CREATE INDEX IF NOT EXISTS brz_idx_tree_ancestors_user_parent
+             ON brz_tree_ancestors(user_id, parent_node_id)`,
+        ],
+      },
+      {
+        // Promote the four JSON fields that queries pull out of `data` into
+        // dedicated columns (value, parent_node_id, verifying_public_key,
+        // signing_public_key), then backfill from the existing blob. Balance,
+        // selection, exit-chain, and key-verification queries read the columns
+        // instead of re-parsing JSON. Everything else stays in `data`.
+        name: "Promote leaf JSON fields to columns",
+        sql: [
+          `ALTER TABLE brz_tree_leaves ADD COLUMN IF NOT EXISTS value BIGINT NOT NULL DEFAULT 0`,
+          `ALTER TABLE brz_tree_leaves ADD COLUMN IF NOT EXISTS parent_node_id TEXT`,
+          `ALTER TABLE brz_tree_leaves ADD COLUMN IF NOT EXISTS verifying_public_key TEXT NOT NULL DEFAULT ''`,
+          `ALTER TABLE brz_tree_leaves ADD COLUMN IF NOT EXISTS signing_public_key TEXT NOT NULL DEFAULT ''`,
+          `UPDATE brz_tree_leaves SET
+             value = (data->>'value')::bigint,
+             parent_node_id = data->>'parent_node_id',
+             verifying_public_key = data->>'verifying_public_key',
+             signing_public_key = data->'signing_keyshare'->>'public_key'`,
+        ],
+      },
     ];
   }
 }

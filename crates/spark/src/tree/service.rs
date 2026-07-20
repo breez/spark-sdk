@@ -1,5 +1,5 @@
 use futures::future::join_all;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,7 +8,8 @@ use platform_utils::tokio;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::tree::{
-    LeafSelection, Leaves, ReservationPurpose, ReserveResult, SelectLeavesOptions, TreeNodeStatus,
+    LeafPedigree, LeafSelection, Leaves, ReservationPurpose, ReserveResult, SelectLeavesOptions,
+    TreeNodeStatus,
 };
 use crate::{
     Network,
@@ -22,7 +23,7 @@ use crate::{
             },
         },
     },
-    services::{ServiceError, Swap, TimelockManager},
+    services::{Swap, TimelockManager},
     signer::SparkSigner,
     tree::{
         LeavesReservation, LeavesReservationId, TargetAmounts, TreeNodeId, TreeService, TreeStore,
@@ -65,6 +66,15 @@ impl TreeService for SynchronousTreeService {
             .await
     }
 
+    async fn load_exit_chains(
+        &self,
+        leaf_ids: &[TreeNodeId],
+    ) -> Result<Vec<LeafPedigree>, TreeServiceError> {
+        // The store resolves every chain in one query; no operator top-up, so this
+        // stays usable with the operators offline.
+        self.state.get_exit_chains(leaf_ids).await
+    }
+
     async fn cancel_reservation(
         &self,
         reservation: LeavesReservation,
@@ -78,29 +88,53 @@ impl TreeService for SynchronousTreeService {
     async fn finalize_reservation(
         &self,
         id: LeavesReservationId,
-        new_leaves: Option<&[TreeNode]>,
+        new_leaves: Option<&[LeafPedigree]>,
     ) -> Result<(), TreeServiceError> {
         self.state.finalize_reservation(&id, new_leaves).await
     }
 
     async fn insert_leaves(
         &self,
-        leaves: Vec<TreeNode>,
+        leaves: Vec<LeafPedigree>,
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
-        let result_nodes = self
-            .check_renew_nodes(leaves, async |e| {
-                // If this is a partial check timelock error, the extend node timelock failed
-                // but we can still update the leaves that were refreshed
-                if let ServiceError::PartialCheckTimelockError(ref nodes) = e
-                    && let Err(e) = self.state.add_leaves(nodes).await
-                {
-                    error!("Failed to add leaves: {e:?}");
-                }
-            })
-            .await?;
+        // The caller supplies each leaf's ancestors, and a renewal rebuilds the chain
+        // of anything it reparents from those ancestors plus the new split node it
+        // returns, so the pedigrees come back complete with nothing fetched here.
+        let pedigrees = self.check_renew_nodes(leaves).await?;
+        self.state.add_leaves(&pedigrees).await?;
+        Ok(pedigrees.into_iter().map(|p| p.leaf).collect())
+    }
 
-        self.state.add_leaves(&result_nodes).await?;
-        Ok(result_nodes)
+    async fn fetch_pedigrees_from_operators(&self, leaves: &[TreeNode]) -> Vec<LeafPedigree> {
+        if leaves.is_empty() {
+            return Vec::new();
+        }
+        let leaf_ids: Vec<TreeNodeId> = leaves.iter().map(|l| l.id.clone()).collect();
+        match self.fetch_nodes(&leaf_ids, true).await {
+            Ok(nodes) => {
+                let mut node_map: HashMap<TreeNodeId, TreeNode> =
+                    nodes.into_iter().map(|n| (n.id.clone(), n)).collect();
+                // The passed leaves are authoritative over the query's copy.
+                for leaf in leaves {
+                    node_map.insert(leaf.id.clone(), leaf.clone());
+                }
+                assemble_exit_chains(&node_map, &leaf_ids)
+            }
+            Err(e) => {
+                // Not fatal: keep the leaves, drop the ancestors. A later refresh
+                // fills the chains; until then these leaves are not offline-exitable.
+                warn!(
+                    "Failed to fetch ancestors from operators, storing leaves without them: {e:?}"
+                );
+                leaves
+                    .iter()
+                    .map(|leaf| LeafPedigree {
+                        leaf: leaf.clone(),
+                        ancestors: Vec::new(),
+                    })
+                    .collect()
+            }
+        }
     }
 
     /// Selects leaves from the tree that sum up to exactly the target amounts.
@@ -216,8 +250,12 @@ impl TreeService for SynchronousTreeService {
             .map(|op| (op.id, op.client.clone()))
             .collect();
 
+        // Ask the coordinator for each leaf's ancestors in the same round-trip
+        // (`include_parents`), so the pedigree builds below complete their chains
+        // from this response instead of re-fetching. The operator queries only feed
+        // the leaf-level comparison, so they stay leaves-only.
         let coord_fut =
-            self.query_nodes(&coordinator_client, false, None, available_leaf_statuses());
+            self.query_nodes(&coordinator_client, true, None, available_leaf_statuses());
         let op_futs = operators.iter().map(|(id, client)| async move {
             (
                 *id,
@@ -227,7 +265,20 @@ impl TreeService for SynchronousTreeService {
         });
 
         let (coordinator_leaves_res, operator_results) = tokio::join!(coord_fut, join_all(op_futs));
-        let coordinator_leaves = coordinator_leaves_res?;
+        // Split the coordinator response: the Available nodes are the leaves (what
+        // the query matched); the rest are the ancestors it included, kept as a
+        // seed. Every downstream consumer uses the Available leaves exactly as
+        // before, so this keeps behavior identical when `include_parents` returns
+        // nothing extra.
+        let (coordinator_leaves, ancestor_seed): (Vec<TreeNode>, Vec<TreeNode>) =
+            coordinator_leaves_res?
+                .into_iter()
+                .partition(|n| n.status == TreeNodeStatus::Available);
+        debug!(
+            leaves = coordinator_leaves.len(),
+            seeded_ancestors = ancestor_seed.len(),
+            "refresh_leaves: fetched leaves and their ancestors in one query"
+        );
 
         // Propagate any operator query error to preserve original behavior and
         // collect successful operator leaves for later comparison
@@ -351,29 +402,29 @@ impl TreeService for SynchronousTreeService {
             .filter(|leaf_id| !ignored_leaves_map.contains_key(&leaf_id.id))
             .cloned()
             .collect::<Vec<_>>();
-        let refreshed_leaves = self
-            .check_renew_nodes(new_leaves, async |e| {
-                // If this is a partial check timelock error, the extend node timelock failed
-                // but we can still update the leaves that were refreshed
-                if let ServiceError::PartialCheckTimelockError(ref nodes) = e
-                    && let Err(e) = self
-                        .state
-                        .set_leaves(nodes, &missing_operator_leaves, refresh_started_at)
-                        .await
-                {
-                    error!("Failed to set leaves: {e:?}");
-                }
-            })
-            .await?;
-
+        // The coordinator's `include_parents` response already carries every reported
+        // leaf's full chain (as the seed), which we trust as complete, so assemble the
+        // pedigrees in memory: no store read, no extra fetch. Missing-from-operator
+        // leaves are still coordinator-reported, so they draw from the same seed and
+        // stay offline-exitable.
+        let mut node_map: HashMap<TreeNodeId, TreeNode> = ancestor_seed
+            .into_iter()
+            .map(|n| (n.id.clone(), n))
+            .collect();
+        for leaf in new_leaves.iter().chain(missing_operator_leaves.iter()) {
+            node_map.insert(leaf.id.clone(), leaf.clone());
+        }
+        let missing_operator_ids: Vec<TreeNodeId> = missing_operator_leaves
+            .iter()
+            .map(|l| l.id.clone())
+            .collect();
+        let new_leaf_ids: Vec<TreeNodeId> = new_leaves.iter().map(|l| l.id.clone()).collect();
+        let missing_operator_pedigrees = assemble_exit_chains(&node_map, &missing_operator_ids);
+        let refreshed_pedigrees = assemble_exit_chains(&node_map, &new_leaf_ids);
+        let pedigrees = self.check_renew_nodes(refreshed_pedigrees).await?;
         self.state
-            .set_leaves(
-                &refreshed_leaves,
-                &missing_operator_leaves,
-                refresh_started_at,
-            )
+            .set_leaves(&pedigrees, &missing_operator_pedigrees, refresh_started_at)
             .await?;
-
         Ok(())
     }
 
@@ -496,29 +547,29 @@ impl SynchronousTreeService {
         );
 
         // Select the exact leaves that match the target amounts
+        let new_leaf_nodes: Vec<TreeNode> = new_leaves.iter().map(|p| p.leaf.clone()).collect();
         let target_leaves =
-            select_helper::select_leaves_by_target_amounts(&new_leaves, target_amounts)?;
+            select_helper::select_leaves_by_target_amounts(&new_leaf_nodes, target_amounts)?;
         let reserved_leaves = [
             target_leaves.amount_leaves,
             target_leaves.fee_leaves.unwrap_or_default(),
         ]
         .concat();
 
-        // Change leaves are the remaining leaves after selection
-        let reserved_ids: std::collections::HashSet<_> =
-            reserved_leaves.iter().map(|l| &l.id).collect();
-        let change_leaves: Vec<_> = new_leaves
-            .iter()
-            .filter(|l| !reserved_ids.contains(&l.id))
-            .cloned()
-            .collect();
+        // The swap outputs already carry the ancestors fetched during the swap, so
+        // they go into the pool complete and stay offline-exitable.
+        let reserved_ids: HashSet<_> = reserved_leaves.iter().map(|l| l.id.clone()).collect();
+        let (reserved_pedigrees, change_pedigrees): (Vec<LeafPedigree>, Vec<LeafPedigree>) =
+            new_leaves
+                .into_iter()
+                .partition(|p| reserved_ids.contains(&p.leaf.id));
 
         // Update the existing reservation with the selected leaves.
         // Change leaves are added to the pool atomically, preventing
         // race conditions where another request could grab them.
         let update_result = self
             .state
-            .update_reservation(&reservation.id, &reserved_leaves, &change_leaves)
+            .update_reservation(&reservation.id, &reserved_pedigrees, &change_pedigrees)
             .await;
 
         match update_result {
@@ -534,11 +585,15 @@ impl SynchronousTreeService {
                 // Update failed - finalize the reservation to release the permit.
                 // We use finalize (not cancel) because the OLD leaves were
                 // consumed by the swap and no longer exist.
-                // Pass the new swap output to preserve them in the pool.
+                // Preserve the new swap output in the pool with the ancestors it came with.
                 error!("Failed to update reservation after swap: {e:?}, finalizing");
+                let pedigrees: Vec<LeafPedigree> = reserved_pedigrees
+                    .into_iter()
+                    .chain(change_pedigrees)
+                    .collect();
                 if let Err(finalize_err) = self
                     .state
-                    .finalize_reservation(&reservation.id, Some(&new_leaves))
+                    .finalize_reservation(&reservation.id, Some(&pedigrees))
                     .await
                 {
                     error!("Failed to finalize reservation after update error: {finalize_err:?}");
@@ -690,23 +745,14 @@ impl SynchronousTreeService {
         Ok(nodes.items)
     }
 
-    async fn check_renew_nodes<F>(
+    async fn check_renew_nodes(
         &self,
-        nodes: Vec<TreeNode>,
-        error_fn: impl FnOnce(ServiceError) -> F,
-    ) -> Result<Vec<TreeNode>, TreeServiceError>
-    where
-        F: Future<Output = ()>,
-    {
-        match self.timelock_manager.check_renew_nodes(nodes).await {
-            Ok(nodes) => Ok(nodes),
-            Err(e) => {
-                error_fn(e.clone()).await;
-                Err(TreeServiceError::Generic(format!(
-                    "Failed to check time lock: {e:?}"
-                )))
-            }
-        }
+        pedigrees: Vec<LeafPedigree>,
+    ) -> Result<Vec<LeafPedigree>, TreeServiceError> {
+        self.timelock_manager
+            .check_renew_nodes(pedigrees)
+            .await
+            .map_err(|e| TreeServiceError::Generic(format!("Failed to check time lock: {e:?}")))
     }
 
     async fn renew_leaves_timelocks(
@@ -735,27 +781,48 @@ impl SynchronousTreeService {
         Ok(renewed)
     }
 
-    /// Renew timelocks for reserved leaves and handle partial failures.
+    /// Renew timelocks for reserved leaves. On a renewal failure the reservation is
+    /// cancelled so its leaves return to the pool.
     async fn renew_reservation_timelocks(
         &self,
         reservation: LeavesReservation,
     ) -> Result<LeavesReservation, TreeServiceError> {
+        // Renewal reparents and re-signs a leaf. When no reserved leaf has an
+        // expiring refund timelock there is nothing to renew, so skip the storage
+        // read and rewrite that would otherwise run on every send.
+        let mut needs_renewal = false;
+        for leaf in &reservation.leaves {
+            if leaf.needs_refund_tx_renewed()? {
+                needs_renewal = true;
+                break;
+            }
+        }
+        if !needs_renewal {
+            return Ok(reservation);
+        }
+
         let id = reservation.id.clone();
         let cancel_input = reservation.clone();
-        let new_leaves = self
-            .check_renew_nodes(reservation.leaves, async |e| {
+
+        // The reserved leaves' chains are already in local storage (gc keeps a
+        // reservation's ancestors), so read them there rather than fetching.
+        let leaf_ids: Vec<TreeNodeId> = reservation.leaves.iter().map(|l| l.id.clone()).collect();
+        let pedigrees = self.state.get_exit_chains(&leaf_ids).await?;
+
+        let renewed = match self.check_renew_nodes(pedigrees).await {
+            Ok(renewed) => renewed,
+            Err(e) => {
                 if let Err(err) = self.cancel_reservation(cancel_input).await {
                     error!("Failed to cancel reservation: {err:?}");
-                    return;
                 }
-                if let ServiceError::PartialCheckTimelockError(ref nodes) = e
-                    && let Err(e) = self.state.add_leaves(nodes).await
-                {
-                    error!("Failed to add leaves: {e:?}");
-                }
-            })
-            .await?;
+                return Err(e);
+            }
+        };
 
+        // Persist so a later cancel or finalize returns the (possibly renewed) leaves
+        // with a complete chain from local state.
+        self.state.add_leaves(&renewed).await?;
+        let new_leaves = renewed.into_iter().map(|p| p.leaf).collect();
         Ok(LeavesReservation::new(new_leaves, id))
     }
 
@@ -768,7 +835,7 @@ impl SynchronousTreeService {
         &self,
         leaves: &[TreeNode],
         target_amounts: Option<&TargetAmounts>,
-    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+    ) -> Result<Vec<LeafPedigree>, TreeServiceError> {
         if leaves.is_empty() {
             return Err(TreeServiceError::Generic("no leaves to swap".to_string()));
         }
@@ -791,17 +858,49 @@ impl SynchronousTreeService {
             .swap_leaves(leaves, target_amounts)
             .await?;
 
-        // Check/renew timelocks on the new leaves, but don't add to store yet.
-        // The caller will add them atomically with the reservation update.
-        let result_nodes = self
-            .check_renew_nodes(claimed_nodes, async |_| {
-                // On partial failure, we can't do much here since the leaves
-                // aren't in the store yet. The caller will handle the error.
-            })
-            .await?;
-
-        Ok(result_nodes)
+        // The swap outputs are fresh, so resolve their ancestors from the operators
+        // (best-effort), then renew any expiring timelock (renewal rebuilds a
+        // reparented leaf's chain from these). Not added to the store yet: the caller
+        // adds them atomically with the reservation update.
+        let pedigrees = self.fetch_pedigrees_from_operators(&claimed_nodes).await;
+        self.check_renew_nodes(pedigrees).await
     }
+}
+
+/// A leaf's ancestors, child first, walking `parent_node_id` through `nodes` and
+/// stopping at the root, a gap, or a cycle in the semi-trusted parent ids.
+fn walk_ancestors(leaf: &TreeNode, nodes: &HashMap<TreeNodeId, TreeNode>) -> Vec<TreeNode> {
+    let mut ancestors = Vec::new();
+    let mut visited: HashSet<TreeNodeId> = HashSet::new();
+    let mut current = leaf.parent_node_id.clone();
+    while let Some(id) = current {
+        if !visited.insert(id.clone()) {
+            break;
+        }
+        let Some(node) = nodes.get(&id) else { break };
+        current = node.parent_node_id.clone();
+        ancestors.push(node.clone());
+    }
+    ancestors
+}
+
+/// Shapes a batch of exit chains from a node lookup. A store loads its leaves and
+/// their ancestors into `nodes` with a single query, then calls this to pair each
+/// requested leaf with its chain. A leaf id absent from `nodes` is skipped; a chain
+/// that hits a gap comes back partial (the exit can still use as much as is present,
+/// and completeness is checkable from the root having no parent).
+pub fn assemble_exit_chains(
+    nodes: &HashMap<TreeNodeId, TreeNode>,
+    leaf_ids: &[TreeNodeId],
+) -> Vec<LeafPedigree> {
+    leaf_ids
+        .iter()
+        .filter_map(|id| {
+            let leaf = nodes.get(id)?.clone();
+            let ancestors = walk_ancestors(&leaf, nodes);
+            Some(LeafPedigree { leaf, ancestors })
+        })
+        .collect()
 }
 
 fn available_leaf_statuses() -> Vec<i32> {

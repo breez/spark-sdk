@@ -9,18 +9,50 @@ const MIGRATION_LOCK_NAME = "breez_mysql_tree_store_migration_lock";
 const MIGRATION_LOCK_TIMEOUT = 60;
 
 /**
- * Runs a single migration step. Plain strings are run as-is; tagged objects
- * (`{ op: 'dropPrimaryKey', table }`, `{ op: 'dropForeignKey', table, name }`)
- * are guarded against partial-apply replay (and against the `Disabled`
- * foreign-key mode where the FK was never created) by checking
- * `information_schema` first. MySQL DDL implicitly commits, so if the
- * migration crashes between two DDL statements the version row never gets
- * recorded — and on retry, an unguarded DROP would fail because the
- * constraint is already gone.
+ * Runs a single migration step. Plain strings must be idempotent on their own
+ * (e.g. `CREATE TABLE IF NOT EXISTS`, or an `ALTER` that re-applies to the same
+ * end state); anything whose bare form fails on replay is a tagged object
+ * (`dropPrimaryKey`, `dropForeignKey`, `addForeignKey`, `createIndex`,
+ * `addColumn`, `dropColumn`, `dropIndex`) guarded by an `information_schema`
+ * check (which also covers the `Disabled` foreign-key mode where the FK was
+ * never created). MySQL DDL implicitly commits, so if a migration crashes
+ * between two DDL statements the version row never gets recorded, and on retry
+ * an unguarded DROP/CREATE would fail because the object already exists or is
+ * already gone.
  */
 async function runMigrationStep(conn, step) {
   if (typeof step === "string") {
     await conn.query(step);
+    return;
+  }
+  if (step.op === "createIndex") {
+    if (!(await _mysqlIndexExists(conn, step.table, step.name))) {
+      await conn.query(
+        `CREATE INDEX \`${step.name}\` ON \`${step.table}\` ${step.definition}`
+      );
+    }
+    return;
+  }
+  if (step.op === "addColumn") {
+    if (!(await _mysqlColumnExists(conn, step.table, step.name))) {
+      await conn.query(
+        `ALTER TABLE \`${step.table}\` ADD COLUMN \`${step.name}\` ${step.definition}`
+      );
+    }
+    return;
+  }
+  if (step.op === "dropColumn") {
+    if (await _mysqlColumnExists(conn, step.table, step.name)) {
+      await conn.query(
+        `ALTER TABLE \`${step.table}\` DROP COLUMN \`${step.name}\``
+      );
+    }
+    return;
+  }
+  if (step.op === "dropIndex") {
+    if (await _mysqlIndexExists(conn, step.table, step.name)) {
+      await conn.query(`DROP INDEX \`${step.name}\` ON \`${step.table}\``);
+    }
     return;
   }
   if (step.op === "dropPrimaryKey") {
@@ -263,10 +295,24 @@ class MysqlTreeStoreMigrationManager {
             leaf_id VARCHAR(255) NOT NULL PRIMARY KEY,
             spent_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
           )`,
-          `CREATE INDEX brz_idx_tree_leaves_available
-            ON brz_tree_leaves(status, is_missing_from_operators)`,
-          `CREATE INDEX brz_idx_tree_leaves_reservation ON brz_tree_leaves(reservation_id)`,
-          `CREATE INDEX brz_idx_tree_leaves_added_at ON brz_tree_leaves(added_at)`,
+          {
+            op: "createIndex",
+            table: "brz_tree_leaves",
+            name: "brz_idx_tree_leaves_available",
+            definition: "(status, is_missing_from_operators)",
+          },
+          {
+            op: "createIndex",
+            table: "brz_tree_leaves",
+            name: "brz_idx_tree_leaves_reservation",
+            definition: "(reservation_id)",
+          },
+          {
+            op: "createIndex",
+            table: "brz_tree_leaves",
+            name: "brz_idx_tree_leaves_added_at",
+            definition: "(added_at)",
+          },
     ];
     if (foreignKeyModeEnforced) {
       initialSql.push({
@@ -297,13 +343,22 @@ class MysqlTreeStoreMigrationManager {
       {
         name: "Promote leaf value to BIGINT column with covering index",
         sql: [
-          `ALTER TABLE brz_tree_leaves
-            ADD COLUMN value BIGINT NOT NULL DEFAULT 0`,
+          {
+            op: "addColumn",
+            table: "brz_tree_leaves",
+            name: "value",
+            definition: "BIGINT NOT NULL DEFAULT 0",
+          },
           `UPDATE brz_tree_leaves
             SET value = CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED)
             WHERE value = 0`,
-          `CREATE INDEX brz_idx_tree_leaves_slim
-            ON brz_tree_leaves(status, is_missing_from_operators, reservation_id, value)`,
+          {
+            op: "createIndex",
+            table: "brz_tree_leaves",
+            name: "brz_idx_tree_leaves_slim",
+            definition:
+              "(status, is_missing_from_operators, reservation_id, value)",
+          },
         ],
       },
       {
@@ -318,14 +373,26 @@ class MysqlTreeStoreMigrationManager {
             name: "brz_fk_tree_leaves_reservation",
           },
 
-          // brz_tree_reservations: scope by user_id.
-          `ALTER TABLE brz_tree_reservations ADD COLUMN user_id VARBINARY(33) NULL`,
+          // brz_tree_reservations: scope by user_id. The combined DROP/ADD
+          // PRIMARY KEY re-applies to the same composite key, so it is left raw;
+          // ADD COLUMN would fail on replay, so it is guarded.
+          {
+            op: "addColumn",
+            table: "brz_tree_reservations",
+            name: "user_id",
+            definition: "VARBINARY(33) NULL",
+          },
           `UPDATE brz_tree_reservations SET user_id = ${idLit} WHERE user_id IS NULL`,
           `ALTER TABLE brz_tree_reservations MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
           `ALTER TABLE brz_tree_reservations DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, id)`,
 
           // brz_tree_leaves: scope by user_id, rekey, optionally re-add composite FK.
-          `ALTER TABLE brz_tree_leaves ADD COLUMN user_id VARBINARY(33) NULL`,
+          {
+            op: "addColumn",
+            table: "brz_tree_leaves",
+            name: "user_id",
+            definition: "VARBINARY(33) NULL",
+          },
           `UPDATE brz_tree_leaves SET user_id = ${idLit} WHERE user_id IS NULL`,
           `ALTER TABLE brz_tree_leaves MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
           `ALTER TABLE brz_tree_leaves DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, id)`,
@@ -339,29 +406,58 @@ class MysqlTreeStoreMigrationManager {
                 },
               ]
             : []),
-          `DROP INDEX brz_idx_tree_leaves_available ON brz_tree_leaves`,
-          `DROP INDEX brz_idx_tree_leaves_reservation ON brz_tree_leaves`,
-          `DROP INDEX brz_idx_tree_leaves_added_at ON brz_tree_leaves`,
-          `DROP INDEX brz_idx_tree_leaves_slim ON brz_tree_leaves`,
-          `CREATE INDEX brz_idx_tree_leaves_user_available
-             ON brz_tree_leaves(user_id, status, is_missing_from_operators)`,
-          `CREATE INDEX brz_idx_tree_leaves_user_reservation
-             ON brz_tree_leaves(user_id, reservation_id)`,
-          `CREATE INDEX brz_idx_tree_leaves_user_added_at ON brz_tree_leaves(user_id, added_at)`,
-          `CREATE INDEX brz_idx_tree_leaves_user_slim
-             ON brz_tree_leaves(user_id, status, is_missing_from_operators, reservation_id, value)`,
+          { op: "dropIndex", table: "brz_tree_leaves", name: "brz_idx_tree_leaves_available" },
+          { op: "dropIndex", table: "brz_tree_leaves", name: "brz_idx_tree_leaves_reservation" },
+          { op: "dropIndex", table: "brz_tree_leaves", name: "brz_idx_tree_leaves_added_at" },
+          { op: "dropIndex", table: "brz_tree_leaves", name: "brz_idx_tree_leaves_slim" },
+          {
+            op: "createIndex",
+            table: "brz_tree_leaves",
+            name: "brz_idx_tree_leaves_user_available",
+            definition: "(user_id, status, is_missing_from_operators)",
+          },
+          {
+            op: "createIndex",
+            table: "brz_tree_leaves",
+            name: "brz_idx_tree_leaves_user_reservation",
+            definition: "(user_id, reservation_id)",
+          },
+          {
+            op: "createIndex",
+            table: "brz_tree_leaves",
+            name: "brz_idx_tree_leaves_user_added_at",
+            definition: "(user_id, added_at)",
+          },
+          {
+            op: "createIndex",
+            table: "brz_tree_leaves",
+            name: "brz_idx_tree_leaves_user_slim",
+            definition:
+              "(user_id, status, is_missing_from_operators, reservation_id, value)",
+          },
 
           // brz_tree_spent_leaves: scope by user_id.
-          `ALTER TABLE brz_tree_spent_leaves ADD COLUMN user_id VARBINARY(33) NULL`,
+          {
+            op: "addColumn",
+            table: "brz_tree_spent_leaves",
+            name: "user_id",
+            definition: "VARBINARY(33) NULL",
+          },
           `UPDATE brz_tree_spent_leaves SET user_id = ${idLit} WHERE user_id IS NULL`,
           `ALTER TABLE brz_tree_spent_leaves MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
           `ALTER TABLE brz_tree_spent_leaves DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, leaf_id)`,
 
           // brz_tree_swap_status was a singleton (PK id=1, CHECK id=1). Drop the PK
-          // and the id column, then re-key by user_id.
+          // and the id column, then re-key by user_id. dropPrimaryKey runs first so
+          // the trailing ADD PRIMARY KEY re-applies cleanly on replay.
           { op: "dropPrimaryKey", table: "brz_tree_swap_status" },
-          `ALTER TABLE brz_tree_swap_status DROP COLUMN id`,
-          `ALTER TABLE brz_tree_swap_status ADD COLUMN user_id VARBINARY(33) NULL`,
+          { op: "dropColumn", table: "brz_tree_swap_status", name: "id" },
+          {
+            op: "addColumn",
+            table: "brz_tree_swap_status",
+            name: "user_id",
+            definition: "VARBINARY(33) NULL",
+          },
           `UPDATE brz_tree_swap_status SET user_id = ${idLit} WHERE user_id IS NULL`,
           `ALTER TABLE brz_tree_swap_status MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
           `ALTER TABLE brz_tree_swap_status ADD PRIMARY KEY (user_id)`,
@@ -381,6 +477,70 @@ class MysqlTreeStoreMigrationManager {
           `ALTER TABLE brz_tree_schema_migrations MODIFY COLUMN applied_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
         ],
       },
+      {
+        // Mirrors Rust migration 6 in spark-mysql/src/tree_store.rs. Ancestor
+        // chain: intermediate nodes a leaf's exit chain walks through, kept
+        // separate from the spendable leaf pool and carrying no pool metadata.
+        // Multi-tenant from creation.
+        name: "Add ancestor chain table",
+        sql: [
+          `CREATE TABLE IF NOT EXISTS brz_tree_ancestors (
+            user_id VARBINARY(33) NOT NULL,
+            id VARCHAR(255) NOT NULL,
+            parent_node_id VARCHAR(255) NULL,
+            status VARCHAR(64) NOT NULL,
+            value BIGINT NOT NULL DEFAULT 0,
+            verifying_public_key VARCHAR(255) NOT NULL DEFAULT '',
+            data JSON NOT NULL,
+            PRIMARY KEY (user_id, id)
+          )`,
+          // Guarded so a crash after this DDL (which MySQL implicitly commits)
+          // does not brick replay with a duplicate-key error before the version
+          // row is recorded.
+          {
+            op: "createIndex",
+            table: "brz_tree_ancestors",
+            name: "brz_idx_tree_ancestors_user_parent",
+            definition: "(user_id, parent_node_id)",
+          },
+        ],
+      },
+      {
+        // Promote the remaining JSON fields that queries pull out of `data`
+        // into dedicated columns. `value` already got its own column in the
+        // "Promote leaf value" migration; this adds parent_node_id,
+        // verifying_public_key, and signing_public_key and backfills them.
+        // MySQL DDL auto-commits and has no ADD COLUMN IF NOT EXISTS, so the
+        // ADD COLUMNs are guarded ops (information_schema-checked) and the
+        // backfill is guarded by `WHERE verifying_public_key = ''`, so a replay
+        // after a mid-migration crash is a no-op.
+        name: "Promote leaf JSON fields to columns",
+        sql: [
+          {
+            op: "addColumn",
+            table: "brz_tree_leaves",
+            name: "parent_node_id",
+            definition: "VARCHAR(255) NULL",
+          },
+          {
+            op: "addColumn",
+            table: "brz_tree_leaves",
+            name: "verifying_public_key",
+            definition: "VARCHAR(255) NOT NULL DEFAULT ''",
+          },
+          {
+            op: "addColumn",
+            table: "brz_tree_leaves",
+            name: "signing_public_key",
+            definition: "VARCHAR(255) NOT NULL DEFAULT ''",
+          },
+          `UPDATE brz_tree_leaves SET
+             parent_node_id = NULLIF(data->>'$.parent_node_id', 'null'),
+             verifying_public_key = data->>'$.verifying_public_key',
+             signing_public_key = data->>'$.signing_keyshare.public_key'
+           WHERE verifying_public_key = ''`,
+        ],
+      },
     ];
   }
 }
@@ -390,6 +550,15 @@ async function _mysqlTableExists(conn, tableName) {
     `SELECT COUNT(*) AS c FROM information_schema.tables
      WHERE table_schema = DATABASE() AND table_name = ?`,
     [tableName]
+  );
+  return Number(rows[0].c) > 0;
+}
+
+async function _mysqlColumnExists(conn, tableName, columnName) {
+  const [rows] = await conn.query(
+    `SELECT COUNT(*) AS c FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
+    [tableName, columnName]
   );
   return Number(rows[0].c) > 0;
 }

@@ -49,7 +49,7 @@ use spark::{
     },
     tree::{
         AutoOptimizationEvent, AutoOptimizationEventHandler, InMemoryTreeStore, LeafOptimizer,
-        LeafSelection, OptimizationError, OptimizationOutcome, ReservationPurpose,
+        LeafPedigree, LeafSelection, OptimizationError, OptimizationOutcome, ReservationPurpose,
         SelectLeavesOptions, SynchronousTreeService, TargetAmounts, TreeNode, TreeNodeId,
         TreeService, TreeStore, select_leaves_by_target_amounts, with_reserved_leaves,
     },
@@ -736,9 +736,15 @@ impl SparkWallet {
         vout: u32,
     ) -> Result<Vec<WalletLeaf>, SparkWalletError> {
         let deposit_nodes = self.deposit_service.claim_deposit(tx, vout).await?;
-        self.tree_service
-            .insert_leaves(deposit_nodes.clone())
-            .await?;
+        // A deposit is a root: it carries no ancestors.
+        let pedigrees = deposit_nodes
+            .iter()
+            .map(|leaf| LeafPedigree {
+                leaf: leaf.clone(),
+                ancestors: Vec::new(),
+            })
+            .collect();
+        self.tree_service.insert_leaves(pedigrees).await?;
         info!("Claimed deposit root node: {:?}", deposit_nodes);
 
         self.maybe_start_optimization().await;
@@ -2420,7 +2426,14 @@ async fn claim_transfer(
     tree_service: &Arc<dyn TreeService>,
 ) -> Result<Vec<TreeNode>, SparkWalletError> {
     let claimed_nodes = transfer_service.claim_transfer(transfer, None).await?;
-    let result_nodes = tree_service.insert_leaves(claimed_nodes).await?;
+    // Resolve each claimed leaf's ancestors now, while the operators are reachable
+    // (we just claimed through them), so insert_leaves persists complete chains
+    // without a fetch of its own. Best-effort: if the fetch fails, the leaves are
+    // stored without ancestors and completed by a later refresh.
+    let pedigrees = tree_service
+        .fetch_pedigrees_from_operators(&claimed_nodes)
+        .await;
+    let result_nodes = tree_service.insert_leaves(pedigrees).await?;
     Ok(result_nodes)
 }
 
@@ -2597,7 +2610,12 @@ impl BackgroundProcessor {
     async fn process_deposit_event(&self, deposit: TreeNode) -> Result<(), SparkWalletError> {
         let id = deposit.id.clone();
         info!("Inserting deposit leaf: {:?}", deposit);
-        self.tree_service.insert_leaves(vec![deposit]).await?;
+        // A deposit is a root: it carries no ancestors.
+        let pedigree = LeafPedigree {
+            leaf: deposit,
+            ancestors: Vec::new(),
+        };
+        self.tree_service.insert_leaves(vec![pedigree]).await?;
         self.event_manager
             .notify_listeners(WalletEvent::DepositConfirmed(id));
         self.maybe_start_optimization().await;

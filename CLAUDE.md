@@ -105,7 +105,9 @@ JS implementations also have migration files (`migrations.cjs`) alongside their 
 
 ### Postgres/MySQL `brz_` Naming Convention
 
-All SDK-owned Postgres and MySQL schema identifiers — tables, indexes, and named constraints (PKs, FKs) — are prefixed with `brz_` (e.g. `brz_payments`, `brz_idx_payments_user_timestamp`, `brz_fk_token_outputs_metadata_user`). This isolates the SDK's schema from customer-managed tables sharing the same database. **SQLite and IndexedDB backends do NOT use the prefix** — those are per-user isolated databases with no collision risk.
+All SDK-owned Postgres and MySQL schema identifiers — tables, indexes, and named constraints (PKs, FKs) — are prefixed with `brz_` (e.g. `brz_payments`, `brz_idx_payments_user_timestamp`, `brz_fk_token_outputs_metadata_user`). This isolates the SDK's schema from customer-managed tables sharing the same database.
+
+**The SQLite tree store also uses the `brz_` prefix** (Rust `spark-sqlite` and the Node `better-sqlite3` store): it shares the wallet's main SQLite database file, so its tables must not collide with the main storage's, and it tracks its schema in a `brz_tree_schema_migrations` table rather than the file's `PRAGMA user_version`, which the main storage owns. The main SQLite storage's own tables and the browser **IndexedDB** stores are NOT prefixed — the main storage owns its file, and each IndexedDB database is per-origin isolated (the tree store there uses a separate `-tree` database).
 
 When adding a new table, index, or named constraint to a Postgres/MySQL migration:
 1. Use the `brz_` prefix in the `CREATE` statement and every query that references it.

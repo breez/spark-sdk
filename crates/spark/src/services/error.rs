@@ -1,7 +1,7 @@
 use thiserror::Error;
 use tonic::Status;
 
-use crate::{operator::rpc::OperatorRpcError, tree::TreeNode};
+use crate::operator::rpc::OperatorRpcError;
 
 #[derive(Debug, Error, Clone)]
 pub enum ServiceError {
@@ -68,10 +68,6 @@ pub enum ServiceError {
     // Input validation errors
     #[error("Invalid input: {0}")]
     InvalidInput(String),
-
-    // Timelock manager related errors
-    #[error("Partial check timelock error")]
-    PartialCheckTimelockError(Vec<TreeNode>),
 
     // HTLC related errors
     #[error("invalid payment hash: {0}")]

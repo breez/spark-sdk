@@ -1,0 +1,25 @@
+[package]
+name = "spark-sqlite"
+version.workspace = true
+edition = "2024"
+
+[features]
+test-utils = ["spark-wallet/test-utils"]
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+macros.workspace = true
+platform-utils.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
+spark-wallet.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+spark-wallet = { workspace = true, features = ["test-utils"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
