@@ -25,7 +25,7 @@ use bitcoin::{
     Address, Amount, OutPoint, Psbt, Sequence, Transaction, TxIn, TxOut, Txid, absolute::LockTime,
     consensus::encode::deserialize,
 };
-use breez_sdk_itest::{LocalSdk, SignerBackend, build_local_sdk};
+use breez_sdk_itest::{LocalSdk, SignerBackend, build_local_sdk, wait_for_balance};
 use breez_sdk_spark::signer::{CpfpSigner, single_key_cpfp_signer};
 use breez_sdk_spark::{
     ConfirmationStatus, CpfpFundingKind, CpfpInput, ExitLeafSelection,
@@ -1031,6 +1031,95 @@ async fn test_multi_leaf_fan_out_and_sweep(#[case] backend: SignerBackend) -> Re
         swept, expected,
         "swept {swept} must equal funding ({funding_sat}) + recoverable \
          ({}) - total fee ({})",
+        built.recoverable_value_sat, built.total_fee_sat
+    );
+    Ok(())
+}
+
+/// The feature's core promise: with the operators offline, a wallet still exits.
+/// Two leaves are claimed and synced while the operators are up, persisting each
+/// leaf's full exit chain to the durable tree store. The operators are then
+/// stopped, and the exit is prepared, built, and driven fully on-chain sourcing
+/// every chain from local storage alone. Broadcasting goes to bitcoind, not the
+/// operators, so an offline exit confirms and sweeps like an online one.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn test_multi_leaf_offline_exit(#[case] backend: SignerBackend) -> Result<()> {
+    let sdk = new_local_sdk(backend).await?;
+    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+
+    // Wait for both claimed leaves to finalize to Available and sync into the
+    // durable tree store. This needs the operators (the Creating -> Available
+    // transition and the leaf download), so it must complete before they stop;
+    // afterwards the exit sources everything it needs from local storage.
+    let balance = wait_for_balance(&sdk.sdk, Some(LEAF_SATS * 2), None, 60).await?;
+    assert_eq!(
+        balance,
+        LEAF_SATS * 2,
+        "both claimed leaves are synced into the durable store"
+    );
+
+    let funding_sat = CPFP_SATS * 4;
+    let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(funding_sat)).await?;
+    let destination = cpfp.address.clone();
+
+    // Take the operators offline. Everything below must source from local storage.
+    sdk.fixtures.stop_operators().await?;
+
+    let quote = sdk
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: destination.to_string(),
+            selection: ExitLeafSelection::Auto,
+        })
+        .await?;
+    assert_eq!(
+        quote.leaves.len(),
+        2,
+        "both persisted leaves are exitable with the operators offline"
+    );
+    assert_quote_consistent(&quote, FEE_RATE, &destination.to_string(), p2tr_dust());
+
+    let built = sdk
+        .sdk
+        .unilateral_exit(
+            UnilateralExitRequest {
+                prepared: quote.clone(),
+                funding_inputs: vec![cpfp_input(&cpfp)],
+            },
+            signer_for(&cpfp.secret_key.secret_bytes())?,
+        )
+        .await?;
+    assert_build_matches_quote(&quote, &built);
+
+    // The whole set lands on-chain with the operators still offline: the fan-out,
+    // both branches (each node and its refund with a CPFP child), and the sweep.
+    assert_all_mined(&sdk, &built, &destination).await?;
+
+    // Value conservation: the funding UTXO plus both recovered leaves, minus the
+    // exact on-chain fee, lands at the destination. P2TR signatures are fixed
+    // size, so the fee is exact and there is no slack.
+    let sweep_txid = built
+        .transactions
+        .iter()
+        .find(|t| t.kind == UnilateralExitTxKind::Sweep)
+        .map(|t| Txid::from_str(&t.txid))
+        .expect("the built set terminates in a sweep")?;
+    let sweep = sdk.fixtures.bitcoind.get_transaction(&sweep_txid).await?;
+    let swept = sweep
+        .output
+        .iter()
+        .find(|o| o.script_pubkey == destination.script_pubkey())
+        .map(|o| o.value.to_sat())
+        .expect("the sweep pays the destination");
+    let expected = funding_sat + built.recoverable_value_sat - built.total_fee_sat;
+    assert_eq!(
+        swept, expected,
+        "offline exit conserves value: swept {swept} = funding ({funding_sat}) \
+         + recoverable ({}) - fee ({})",
         built.recoverable_value_sat, built.total_fee_sat
     );
     Ok(())

@@ -320,6 +320,17 @@ impl SparkSoFixture {
         Ok(())
     }
 
+    /// Stops every operator container so their RPC endpoints refuse connections,
+    /// simulating the operators being offline.
+    pub async fn stop_operators(&self) -> Result<()> {
+        for operator in &self.operators {
+            info!("Stopping operator {}", operator.index);
+            operator.container.stop().await?;
+        }
+        info!("All operators stopped");
+        Ok(())
+    }
+
     // Wait for a specific log message to appear in any of the operators' logs
     pub async fn wait_for_log(&self, log_pattern: &str) -> Result<()> {
         info!(
