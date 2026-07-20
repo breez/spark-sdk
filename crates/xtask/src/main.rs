@@ -444,6 +444,23 @@ fn wasm_test_cmd(
                 .with_context(|| "Failed to rebuild native modules.")?;
             sh.change_dir(&current_dir);
 
+            // Install node-tree-store dependencies (better-sqlite3 native module)
+            let node_tree_store_path = Path::new("crates/breez-sdk/wasm/js/node-tree-store");
+            if node_tree_store_path.exists() {
+                println!(
+                    "Installing npm dependencies in {}...",
+                    node_tree_store_path.display()
+                );
+                sh.change_dir(node_tree_store_path);
+                cmd!(sh, "npm install")
+                    .run()
+                    .with_context(|| "Failed to install node-tree-store npm dependencies.")?;
+                cmd!(sh, "npm rebuild")
+                    .run()
+                    .with_context(|| "Failed to rebuild node-tree-store native modules.")?;
+                sh.change_dir(&current_dir);
+            }
+
             // Install postgres-storage dependencies
             let pg_storage_path = Path::new("crates/breez-sdk/wasm/js/postgres-storage");
             if pg_storage_path.exists() {

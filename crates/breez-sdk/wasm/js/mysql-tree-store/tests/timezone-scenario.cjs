@@ -19,11 +19,18 @@ const TEST_IDENTITY = Buffer.from([
   0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
 ]);
 
-// The tree-store persists each leaf as JSON in the `data` column, so the
-// scenario only needs the fields touched by selection / spent-marker logic:
-// `id`, `status`, `value`. Everything else round-trips via JSON.stringify.
+// The tree-store persists each leaf as JSON in the `data` column, but also
+// promotes a few fields to their own columns on upsert, so the scenario has to
+// supply those (`verifying_public_key`, `signing_keyshare.public_key`) as well
+// as the selection / spent-marker fields (`id`, `status`, `value`).
 function buildLeaf(id, value) {
-  return { id, status: "Available", value };
+  return {
+    id,
+    status: "Available",
+    value,
+    verifying_public_key: `${id}-vpk`,
+    signing_keyshare: { public_key: `${id}-spk` },
+  };
 }
 
 async function main() {
@@ -41,10 +48,16 @@ async function main() {
   try {
     const leafA = buildLeaf("leaf-100", 100);
     const leafB = buildLeaf("leaf-200", 200);
+    // setLeaves takes pedigrees (a leaf plus its ancestor chain); these leaves
+    // are roots, so their chains are empty.
+    const pedigrees = [
+      { leaf: leafA, ancestors: [] },
+      { leaf: leafB, ancestors: [] },
+    ];
 
     // 1. Populate the tree under a future refresh window so neither leaf
     //    is treated as aged out.
-    await store.setLeaves([leafA, leafB], [], Date.now() + 10_000);
+    await store.setLeaves(pedigrees, [], Date.now() + 10_000);
 
     // 2. Reserve leaf-100 by exact amount.
     const reserve = await store.tryReserveLeaves(
@@ -71,7 +84,7 @@ async function main() {
     //    marker (timestamp ≈ now) is newer than the refresh start, so
     //    leaf-100 must not be re-added. This is the comparison that was
     //    silently inverted on positive-offset hosts before the fix.
-    await store.setLeaves([leafA, leafB], [], Date.now() - 60_000);
+    await store.setLeaves(pedigrees, [], Date.now() - 60_000);
 
     const result = await store.getLeaves();
     if (result.available.length !== 1) {

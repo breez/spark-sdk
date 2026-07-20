@@ -103,6 +103,30 @@ function buildPlaceholders(n) {
   return new Array(n).fill("?").join(", ");
 }
 
+/**
+ * Pair a leaf with its ancestors (nearest first) by walking `parent_node_id`
+ * through `nodes`. Returns null if the leaf itself is absent; stops at a gap or
+ * cycle, returning a partial chain.
+ * @param {Map<string, object>} nodes
+ * @param {string} leafId
+ * @returns {{leaf: object, ancestors: Array<object>}|null}
+ */
+function assembleExitChain(nodes, leafId) {
+  const leaf = nodes.get(leafId);
+  if (!leaf) return null;
+  const ancestors = [];
+  const visited = new Set([leafId]);
+  let current = leaf.parent_node_id;
+  while (current != null && !visited.has(current)) {
+    visited.add(current);
+    const node = nodes.get(current);
+    if (!node) break;
+    ancestors.push(node);
+    current = node.parent_node_id;
+  }
+  return { leaf, ancestors };
+}
+
 class MysqlTreeStore {
   /**
    * @param {import('mysql2/promise').Pool} pool
@@ -240,7 +264,7 @@ class MysqlTreeStore {
         for (const pedigree of leaves) {
           await this._batchUpsertAncestors(conn, pedigree.ancestors);
         }
-        await this._batchUpsertLeaves(conn, leaves, false, null);
+        await this._batchUpsertLeaves(conn, leafNodes, false, null);
       });
     } catch (error) {
       if (error instanceof TreeStoreError) throw error;
@@ -251,85 +275,36 @@ class MysqlTreeStore {
     }
   }
 
-  async getNode(id) {
+  /**
+   * Reconstruct the exit chains for many leaves in one query, each as
+   * { leaf, ancestors } with ancestors nearest first. A leaf absent from the store
+   * is skipped; a chain that hits a gap comes back partial.
+   * @param {Array<string>} leafIds
+   * @returns {Promise<Array<{leaf: object, ancestors: Array<object>}>>}
+   */
+  async getExitChains(leafIds) {
     try {
+      if (!leafIds || leafIds.length === 0) return [];
+      // Requested leaves plus this tenant's ancestors in one query, walk in memory.
+      // Ancestors come first so a leaf overwrites an ancestor of the same id.
+      const placeholders = buildPlaceholders(leafIds.length);
       const [rows] = await this.pool.query(
-        `SELECT data FROM brz_tree_leaves WHERE user_id = ? AND id = ?
+        `SELECT data FROM brz_tree_ancestors WHERE user_id = ?
          UNION ALL
-         SELECT data FROM brz_tree_ancestors WHERE user_id = ? AND id = ?
-         LIMIT 1`,
-        [this.identity, id, this.identity, id]
+         SELECT data FROM brz_tree_leaves WHERE user_id = ? AND id IN (${placeholders})`,
+        [this.identity, this.identity, ...leafIds]
       );
-      return rows.length > 0 ? parseJson(rows[0].data) : null;
-    } catch (error) {
-      throw new TreeStoreError(`Failed to get node '${id}': ${error.message}`, error);
-    }
-  }
-
-  async getNodes(ids) {
-    try {
-      if (!ids || ids.length === 0) return [];
-      const placeholders = ids.map(() => "?").join(", ");
-      const [rows] = await this.pool.query(
-        `SELECT data FROM brz_tree_leaves
-           WHERE user_id = ? AND id IN (${placeholders})
-         UNION ALL
-         SELECT a.data FROM brz_tree_ancestors a
-           WHERE a.user_id = ? AND a.id IN (${placeholders})
-             AND NOT EXISTS (
-               SELECT 1 FROM brz_tree_leaves l
-               WHERE l.user_id = ? AND l.id = a.id
-             )`,
-        [this.identity, ...ids, this.identity, ...ids, this.identity]
-      );
-      return rows.map((r) => parseJson(r.data));
-    } catch (error) {
-      throw new TreeStoreError(`Failed to get nodes: ${error.message}`, error);
-    }
-  }
-
-  async getExitChain(leafId) {
-    try {
-      const [rows] = await this.pool.query(
-        `WITH RECURSIVE nodes AS (
-             SELECT id, parent_node_id, data
-             FROM brz_tree_leaves WHERE user_id = ?
-             UNION ALL
-             SELECT a.id, a.parent_node_id, a.data
-             FROM brz_tree_ancestors a
-             WHERE a.user_id = ?
-               AND NOT EXISTS (
-                 SELECT 1 FROM brz_tree_leaves l
-                 WHERE l.user_id = ? AND l.id = a.id
-               )
-         ),
-         chain AS (
-             SELECT id, parent_node_id, data, 0 AS depth FROM nodes WHERE id = ?
-             UNION ALL
-             SELECT n.id, n.parent_node_id, n.data, c.depth + 1
-             FROM nodes n JOIN chain c ON n.id = c.parent_node_id
-             WHERE c.depth < 1000
-         )
-         SELECT data FROM chain ORDER BY depth DESC`,
-        [this.identity, this.identity, this.identity, leafId]
-      );
-      const chain = rows.map((r) => parseJson(r.data));
-      if (chain.length === 0) {
-        console.warn(
-          `exit chain for leaf ${leafId} is incomplete: leaf not found in store`
-        );
-      } else if (chain[0].parent_node_id != null) {
-        console.warn(
-          `exit chain for leaf ${leafId} is incomplete: an ancestor is missing from store`
-        );
+      const nodes = new Map();
+      for (const r of rows) {
+        const node = parseJson(r.data);
+        nodes.set(node.id, node);
       }
-      return chain;
+      return leafIds
+        .map((id) => assembleExitChain(nodes, id))
+        .filter((p) => p != null);
     } catch (error) {
       if (error instanceof TreeStoreError) throw error;
-      throw new TreeStoreError(
-        `Failed to get exit chain for '${leafId}': ${error.message}`,
-        error
-      );
+      throw new TreeStoreError(`Failed to get exit chains: ${error.message}`, error);
     }
   }
 
@@ -481,7 +456,7 @@ class MysqlTreeStore {
         // Includes leaves released earlier in this transaction by
         // _cleanupStaleReservations (which now NULLs reservation_id explicitly,
         // since the composite FK uses NO ACTION).
-        await conn.query(
+        const [deleted] = await conn.query(
           "DELETE FROM brz_tree_leaves WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?",
           [this.identity, refreshTimestamp]
         );
@@ -489,9 +464,12 @@ class MysqlTreeStore {
         for (const pedigree of leaves.concat(missingLeaves || [])) {
           await this._batchUpsertAncestors(conn, pedigree.ancestors);
         }
-        await this._batchUpsertLeaves(conn, leaves, false, spentIds);
-        await this._batchUpsertLeaves(conn, missingLeaves, true, spentIds);
-        await this._gcAncestors(conn);
+        await this._batchUpsertLeaves(conn, leaves.map((p) => p.leaf), false, spentIds);
+        await this._batchUpsertLeaves(conn, missingLeaves.map((p) => p.leaf), true, spentIds);
+        // Only a deleted leaf can orphan an ancestor; skip the walk otherwise.
+        if (deleted.affectedRows > 0) {
+          await this._gcAncestors(conn);
+        }
       });
     } catch (error) {
       if (error instanceof TreeStoreError) throw error;
@@ -508,6 +486,8 @@ class MysqlTreeStore {
         // Return leavesToKeep to the pool even when the reservation is already
         // gone (e.g. released by stale cleanup): dropping them here would lose
         // the leaves until the next refresh. The deletes no-op in that case.
+        // Only the leaves are re-inserted: their ancestors stayed in the ancestor
+        // table the whole time they were reserved.
         await conn.query(
           "DELETE FROM brz_tree_leaves WHERE user_id = ? AND reservation_id = ?",
           [this.identity, id]
@@ -518,9 +498,6 @@ class MysqlTreeStore {
         );
 
         if (leavesToKeep && leavesToKeep.length > 0) {
-          for (const pedigree of leavesToKeep) {
-            await this._batchUpsertAncestors(conn, pedigree.ancestors);
-          }
           await this._batchUpsertLeaves(conn, leavesToKeep, false, null);
         }
       });
@@ -546,13 +523,14 @@ class MysqlTreeStore {
         );
 
         let isSwap = false;
+        let reservedLeafIds = [];
         if (resRows.length > 0) {
           isSwap = resRows[0].purpose === "Swap";
           const [leafRows] = await conn.query(
             "SELECT id FROM brz_tree_leaves WHERE user_id = ? AND reservation_id = ?",
             [this.identity, id]
           );
-          const reservedLeafIds = leafRows.map((r) => r.id);
+          reservedLeafIds = leafRows.map((r) => r.id);
           await this._batchInsertSpentLeaves(conn, reservedLeafIds);
           await conn.query(
             "DELETE FROM brz_tree_leaves WHERE user_id = ? AND reservation_id = ?",
@@ -568,9 +546,12 @@ class MysqlTreeStore {
           for (const pedigree of newLeaves) {
             await this._batchUpsertAncestors(conn, pedigree.ancestors);
           }
-          await this._batchUpsertLeaves(conn, newLeaves, false, null);
+          await this._batchUpsertLeaves(conn, newLeaves.map((p) => p.leaf), false, null);
         }
-        await this._gcAncestors(conn);
+        // Only a deleted (spent) leaf can orphan an ancestor; skip the walk otherwise.
+        if (reservedLeafIds.length > 0) {
+          await this._gcAncestors(conn);
+        }
 
         // UPSERT so a tenant that joined after the multi-tenant migration
         // (and thus has no row) gets one created lazily.
@@ -831,8 +812,8 @@ class MysqlTreeStore {
         for (const pedigree of changeLeaves.concat(reservedLeaves)) {
           await this._batchUpsertAncestors(conn, pedigree.ancestors);
         }
-        await this._batchUpsertLeaves(conn, changeLeaves, false, null);
-        await this._batchUpsertLeaves(conn, reservedLeaves, false, null);
+        await this._batchUpsertLeaves(conn, changeLeaves.map((p) => p.leaf), false, null);
+        await this._batchUpsertLeaves(conn, reservedLeaves.map((p) => p.leaf), false, null);
 
         const reservedLeafIds = reservedLeaves.map((p) => p.leaf.id);
         await this._batchSetReservationId(conn, reservationId, reservedLeafIds);
@@ -1046,24 +1027,23 @@ class MysqlTreeStore {
     await this._batchSetReservationId(conn, reservationId, leafIds);
   }
 
-  async _batchUpsertLeaves(conn, pedigrees, isMissingFromOperators, skipIds) {
-    if (!pedigrees || pedigrees.length === 0) return;
+  async _batchUpsertLeaves(conn, leaves, isMissingFromOperators, skipIds) {
+    if (!leaves || leaves.length === 0) return;
 
     const filtered = skipIds
-      ? pedigrees.filter((p) => !skipIds.has(p.leaf.id))
-      : pedigrees;
+      ? leaves.filter((l) => !skipIds.has(l.id))
+      : leaves;
 
     if (filtered.length === 0) return;
 
-    const leafNodes = filtered.map((p) => p.leaf);
+    const leafNodes = filtered;
     await this._checkNodesCompatible(conn, leafNodes);
 
     const valueClauses = new Array(filtered.length)
       .fill("(?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6))")
       .join(", ");
     const params = [];
-    for (const pedigree of filtered) {
-      const leaf = pedigree.leaf;
+    for (const leaf of filtered) {
       params.push(
         this.identity,
         leaf.id,
