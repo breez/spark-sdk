@@ -143,9 +143,6 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # The CLI scenarios and the lnurl itests both need the
-      # breez-lnurl-built image (build-if-missing on a shared tag), so one
-      # cached image serves the whole job.
       - name: Restore lnurl server image
         id: lnurl-image
         uses: actions/cache@v4
@@ -157,14 +154,44 @@ jobs:
         if: steps.lnurl-image.outputs.cache-hit == 'true'
         run: docker load -i /tmp/breez-lnurl-built.tar
 
-      # Shares this job's toolchain, build cache, faucet limits, and lnurl
-      # image with the breez itests. Runs first so a breez-itest failure
-      # never masks the scenario signal.
-      - name: Run CLI scenarios (rust binding tests)
-        run: make cli-itest
-
       - name: Run Tests
         run: make breez-itest
+
+      - name: Export lnurl server image for caching
+        if: steps.lnurl-image.outputs.cache-hit != 'true'
+        run: |
+          docker image inspect breez-lnurl-built:latest > /dev/null 2>&1 \
+            && docker save breez-lnurl-built:latest -o /tmp/breez-lnurl-built.tar \
+            || echo "lnurl image was not built in this run"
+
+  cli-itest:
+    name: Rust CLI binding tests
+    runs-on: ubuntu-latest
+    env:
+      FAUCET_USERNAME: ${{ secrets.FAUCET_USERNAME }}
+      FAUCET_PASSWORD: ${{ secrets.FAUCET_PASSWORD }}
+      FAUCET_CONCURRENCY: "2"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restore lnurl server image
+        id: lnurl-image
+        uses: actions/cache@v4
+        with:
+          path: /tmp/breez-lnurl-built.tar
+          key: lnurl-image-${{ runner.os }}-${{ hashFiles('crates/breez-sdk/lnurl/**') }}
+
+      - name: Load lnurl server image
+        if: steps.lnurl-image.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/breez-lnurl-built.tar
+
+      - name: Run CLI scenarios
+        run: make cli-itest
 
       - name: Export lnurl server image for caching
         if: steps.lnurl-image.outputs.cache-hit != 'true'

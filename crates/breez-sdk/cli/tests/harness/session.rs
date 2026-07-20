@@ -193,8 +193,12 @@ impl CliSession {
         let transcript = self.transcript.lock().expect("transcript lock");
         // The chunk ends where the marker's own output begins. The marker is
         // preceded by the CLI's error prefix on the same line, so cut at the
-        // start of that line.
-        let chunk_end = transcript[..marker_pos].rfind('\n').unwrap_or(0);
+        // start of that line. Clamp to the cursor: if the step emitted no
+        // newline, rfind matches one from an earlier step.
+        let chunk_end = transcript[..marker_pos]
+            .rfind('\n')
+            .unwrap_or(0)
+            .max(self.cursor);
         let chunk = transcript[self.cursor..chunk_end].to_string();
         drop(transcript);
         self.cursor = stable_len;
