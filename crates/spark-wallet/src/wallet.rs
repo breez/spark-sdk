@@ -1405,7 +1405,16 @@ impl SparkWallet {
                 leaf_ids.dedup();
                 Ok((leaf_ids, UnilateralExitLeafFilter::ProfitableOnly))
             }
-            ExitLeafSelection::Specific(leaf_ids) => Ok((leaf_ids, UnilateralExitLeafFilter::All)),
+            ExitLeafSelection::Specific(mut leaf_ids) => {
+                // Dedup so a leaf listed twice is exited once, mirroring Auto. A
+                // duplicate would otherwise be re-selected with its refund uncovered
+                // and corrupt the plan (an empty-funded branch, or a sweep spending
+                // one refund outpoint twice). Order is irrelevant: the cost pass
+                // sorts leaves by value regardless.
+                leaf_ids.sort();
+                leaf_ids.dedup();
+                Ok((leaf_ids, UnilateralExitLeafFilter::All))
+            }
         }
     }
 
