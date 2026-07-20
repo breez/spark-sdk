@@ -185,6 +185,118 @@ pub enum _Fee {
     Rate { sat_per_vbyte: u64 },
 }
 
+#[frb(mirror(CpfpInput))]
+pub enum _CpfpInput {
+    P2wpkh {
+        txid: String,
+        vout: u32,
+        value: u64,
+        pubkey: String,
+    },
+    P2tr {
+        txid: String,
+        vout: u32,
+        value: u64,
+        pubkey: String,
+    },
+    Custom {
+        txid: String,
+        vout: u32,
+        value: u64,
+        script_pubkey_hex: String,
+        signed_input_weight: u64,
+    },
+}
+
+#[frb(mirror(CpfpFundingKind))]
+pub enum _CpfpFundingKind {
+    P2wpkh,
+    P2tr,
+    Custom {
+        script_pubkey_hex: String,
+        signed_input_weight: u64,
+    },
+}
+
+#[frb(mirror(ExitLeafSelection))]
+pub enum _ExitLeafSelection {
+    Auto,
+    Specific { leaf_ids: Vec<String> },
+}
+
+#[frb(mirror(UnilateralExitTxKind))]
+pub enum _UnilateralExitTxKind {
+    FanOut,
+    Node,
+    Refund,
+    Sweep,
+}
+
+#[frb(mirror(ConfirmationStatus))]
+pub enum _ConfirmationStatus {
+    Confirmed,
+    Unconfirmed,
+    Unverified,
+}
+
+#[frb(mirror(UnilateralExitTransaction))]
+pub struct _UnilateralExitTransaction {
+    pub kind: UnilateralExitTxKind,
+    pub node_id: Option<String>,
+    pub txid: String,
+    pub tx_hex: String,
+    pub cpfp_tx_hex: Option<String>,
+    pub csv_timelock_blocks: Option<u32>,
+    pub depends_on: Vec<String>,
+    pub status: ConfirmationStatus,
+}
+
+#[frb(mirror(UnilateralExitLeaf))]
+pub struct _UnilateralExitLeaf {
+    pub leaf_id: String,
+    pub value: u64,
+}
+
+#[frb(mirror(PerBranchFunding))]
+pub struct _PerBranchFunding {
+    pub leaf_id: String,
+    pub funding_sat: u64,
+}
+
+#[frb(mirror(PrepareUnilateralExitRequest))]
+pub struct _PrepareUnilateralExitRequest {
+    pub fee_rate_sat_per_vbyte: u64,
+    pub funding_kind: CpfpFundingKind,
+    pub destination: String,
+    pub selection: ExitLeafSelection,
+}
+
+#[frb(mirror(PrepareUnilateralExitResponse))]
+pub struct _PrepareUnilateralExitResponse {
+    pub leaves: Vec<UnilateralExitLeaf>,
+    pub recoverable_value_sat: u64,
+    pub total_fee_sat: u64,
+    pub fanout_fee_sat: u64,
+    pub single_utxo_funding_sat: u64,
+    pub per_branch_funding: Vec<PerBranchFunding>,
+    pub fee_rate_sat_per_vbyte: u64,
+    pub destination: String,
+}
+
+#[frb(mirror(UnilateralExitRequest))]
+pub struct _UnilateralExitRequest {
+    pub prepared: PrepareUnilateralExitResponse,
+    pub funding_inputs: Vec<CpfpInput>,
+}
+
+#[frb(mirror(UnilateralExitResponse))]
+pub struct _UnilateralExitResponse {
+    pub recoverable_value_sat: u64,
+    pub total_fee_sat: u64,
+    pub leaves: Vec<UnilateralExitLeaf>,
+    pub transactions: Vec<UnilateralExitTransaction>,
+}
+
 #[frb(mirror(GetInfoRequest))]
 pub struct _GetInfoRequest {
     pub ensure_synced: Option<bool>,

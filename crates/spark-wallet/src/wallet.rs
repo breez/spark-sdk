@@ -3,16 +3,19 @@ mod external_signing;
 use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 
 use bitcoin::{
-    Address, Transaction,
+    Address, Amount, Transaction, TxIn, TxOut, Witness,
+    absolute::LockTime,
     address::NetworkUnchecked,
-    hashes::sha256::Hash,
+    hashes::{Hash as _, sha256::Hash},
     key::Secp256k1,
     secp256k1::{PublicKey, ecdsa::Signature},
+    transaction::Version,
 };
 
 use futures::stream::{self, StreamExt};
 use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use platform_utils::tokio;
+use spark::bitcoin::sighash_from_multi_input_tx;
 use spark::{
     address::{
         SatsPayment, SparkAddress, SparkAddressPaymentType, SparkInvoiceFields, TokensPayment,
@@ -28,13 +31,13 @@ use spark::{
         },
     },
     services::{
-        CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpUtxo, DepositService, ExitSpeed,
-        Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription, LeafTxCpfpPsbts,
-        LightningReceivePayment, LightningSendPayment, LightningService, PayLightningResult,
-        Preimage, PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
+        CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpInput, DepositService, ExitSpeed,
+        Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription, LightningReceivePayment,
+        LightningSendPayment, LightningService, PayLightningResult, Preimage,
+        PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
         QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap, TimelockManager,
         TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
-        TransferTokenOutput, TransferType, UnilateralExitService, Utxo,
+        TransferTokenOutput, TransferType, UnilateralExitLeafFilter, Utxo,
     },
     session_store::{InMemorySessionStore, SessionStore},
     signer::{PrepareTransferRequest, PreparedTransfer, SparkSigner},
@@ -62,6 +65,7 @@ use crate::{
     WithdrawInnerParams,
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
+    unilateral_exit::{CpfpChangeInput, ExitLeafSelection, PreparedUnilateralExit, RefundOutput},
 };
 
 const SELECT_LEAVES_MAX_RETRIES: usize = 3;
@@ -251,7 +255,6 @@ pub struct SparkWallet {
     tree_service: Arc<dyn TreeService>,
     token_output_service: Arc<dyn TokenOutputService>,
     coop_exit_service: Arc<CoopExitService>,
-    unilateral_exit_service: Arc<UnilateralExitService>,
     transfer_service: Arc<TransferService>,
     swap_service: Arc<Swap>,
     lightning_service: Arc<LightningService>,
@@ -378,11 +381,6 @@ impl SparkWallet {
             Arc::clone(&spark_signer),
             transfer_observer.clone(),
         ));
-        let unilateral_exit_service = Arc::new(UnilateralExitService::new(
-            operator_pool.clone(),
-            config.network,
-        ));
-
         let swap_service = Arc::new(Swap::new(
             config.network,
             operator_pool.clone(),
@@ -463,7 +461,6 @@ impl SparkWallet {
             tree_service,
             token_output_service,
             coop_exit_service,
-            unilateral_exit_service,
             transfer_service,
             swap_service,
             lightning_service,
@@ -1376,22 +1373,295 @@ impl SparkWallet {
         Ok(transfer)
     }
 
-    /// Prepares a package of unilaterial exit PSBTs for each leaf
-    ///
-    /// # Arguments
-    /// * `fee_rate` - The fee rate used to calculate the PSBT fee, in satoshis per vbyte
-    /// * `leaf_ids` - The IDs of the leaves to unilaterally exit
-    /// * `utxos` - The UTXOs to use as inputs for the PSBTs. Currently only supports p2wpkh addresses
-    pub async fn unilateral_exit(
+    /// Sources the exit tree (leaves plus ancestors) from the operators,
+    /// re-fetching by ID any root the bulk response omitted (legacy mainnet
+    /// trees skip it). An incomplete chain is left as-is for the planner to skip.
+    async fn source_exit_tree_nodes(
         &self,
-        fee_rate: u64,
-        leaf_ids: Vec<TreeNodeId>,
-        utxos: Vec<CpfpUtxo>,
-    ) -> Result<Vec<LeafTxCpfpPsbts>, SparkWalletError> {
-        Ok(self
-            .unilateral_exit_service
-            .unilateral_exit(fee_rate, leaf_ids, utxos)
-            .await?)
+        leaf_ids: &[TreeNodeId],
+    ) -> Result<HashMap<TreeNodeId, TreeNode>, SparkWalletError> {
+        debug!(
+            leaves = leaf_ids.len(),
+            "source_exit_tree_nodes: fetching exit tree from the operators"
+        );
+        let mut tree_nodes: HashMap<TreeNodeId, TreeNode> = self
+            .tree_service
+            .fetch_nodes(leaf_ids, true)
+            .await?
+            .into_iter()
+            .map(|n| (n.id.clone(), n))
+            .collect();
+        for leaf_id in leaf_ids {
+            let Some(leaf) = tree_nodes.get(leaf_id).cloned() else {
+                // Offline sourcing from local storage is deferred.
+                warn!("Requested leaf {leaf_id} not returned by the operators; cannot exit it");
+                continue;
+            };
+            let tree_service = self.tree_service.clone();
+            if let Err(e) =
+                spark::services::build_unilateral_exit_chain(leaf, &mut tree_nodes, move |ids| {
+                    let tree_service = tree_service.clone();
+                    async move {
+                        tree_service
+                            .fetch_nodes(&ids, true)
+                            .await
+                            .map_err(|e| ServiceError::Generic(format!("{e}")))
+                    }
+                })
+                .await
+            {
+                debug!("Exit chain for leaf {leaf_id} incomplete while sourcing tree nodes: {e}");
+            }
+        }
+        debug!(
+            requested = leaf_ids.len(),
+            sourced = tree_nodes.len(),
+            "source_exit_tree_nodes: exit tree sourced"
+        );
+        Ok(tree_nodes)
+    }
+
+    /// Resolves an [`ExitLeafSelection`] into concrete leaf IDs and the
+    /// profitability filter. `Auto` sweeps every available leaf and keeps only
+    /// profitable ones; `Specific` exits exactly the requested leaves regardless
+    /// of profitability.
+    async fn resolve_leaf_selection(
+        &self,
+        selection: ExitLeafSelection,
+    ) -> Result<(Vec<TreeNodeId>, UnilateralExitLeafFilter), SparkWalletError> {
+        match selection {
+            ExitLeafSelection::Auto => {
+                // Include non-available leaves (e.g. a mid-exit leaf the operators
+                // now report OnChain) so Auto resumes a partially-exited leaf, not
+                // just fresh ones. The planner skips any that turn out un-exitable
+                // under ProfitableOnly.
+                let leaves = self.tree_service.list_leaves().await?;
+                let mut leaf_ids: Vec<TreeNodeId> = leaves
+                    .available
+                    .into_iter()
+                    .chain(leaves.not_available)
+                    .map(|l| l.id)
+                    .collect();
+                leaf_ids.sort();
+                leaf_ids.dedup();
+                Ok((leaf_ids, UnilateralExitLeafFilter::ProfitableOnly))
+            }
+            ExitLeafSelection::Specific(mut leaf_ids) => {
+                // Dedup so a leaf listed twice is exited once, mirroring Auto. A
+                // duplicate would otherwise be re-selected with its refund uncovered
+                // and corrupt the plan (an empty-funded branch, or a sweep spending
+                // one refund outpoint twice). Order is irrelevant: the cost pass
+                // sorts leaves by value regardless.
+                leaf_ids.sort();
+                leaf_ids.dedup();
+                Ok((leaf_ids, UnilateralExitLeafFilter::All))
+            }
+        }
+    }
+
+    /// Quotes the funding needed for a unilateral exit of the selected leaves.
+    pub async fn quote_unilateral_exit(
+        &self,
+        fee_rate_sat_per_kw: u64,
+        selection: ExitLeafSelection,
+        funding_input_weight: u64,
+        funding_output_script_len: usize,
+        change_dust_limit: u64,
+        destination_script_len: usize,
+    ) -> Result<spark::services::UnilateralExitQuote, SparkWalletError> {
+        let (leaf_ids, filter) = self.resolve_leaf_selection(selection).await?;
+        let tree_nodes = self.source_exit_tree_nodes(&leaf_ids).await?;
+        Ok(spark::services::quote_unilateral_exit(
+            &tree_nodes,
+            &leaf_ids,
+            filter,
+            funding_input_weight,
+            funding_output_script_len,
+            change_dust_limit,
+            fee_rate_sat_per_kw,
+            destination_script_len,
+        )?)
+    }
+
+    /// Prepares a unilateral exit of the selected leaves: sources the exit tree,
+    /// plans it, and derives each leaf's P2TR refund address. `Auto` keeps only
+    /// profitable leaves; `Specific` exits every requested one.
+    pub async fn prepare_unilateral_exit_plan(
+        &self,
+        fee_rate_sat_per_kw: u64,
+        selection: ExitLeafSelection,
+        inputs: Vec<CpfpInput>,
+        destination_script_len: usize,
+    ) -> Result<PreparedUnilateralExit, SparkWalletError> {
+        let (leaf_ids, filter) = self.resolve_leaf_selection(selection).await?;
+        let tree_nodes = self.source_exit_tree_nodes(&leaf_ids).await?;
+        let plan = spark::services::plan_unilateral_exit(
+            tree_nodes,
+            &leaf_ids,
+            filter,
+            inputs,
+            fee_rate_sat_per_kw,
+            destination_script_len,
+        )?;
+        debug!(
+            fee_rate_sat_per_kw,
+            selected_leaves = plan.selected_leaves.len(),
+            tree_nodes = plan.tree_nodes.len(),
+            has_fan_out = plan.fan_out_psbt.is_some(),
+            "prepare_unilateral_exit_plan: planned"
+        );
+
+        // A P2TR address over the leaf's derived key recognizes an on-chain
+        // refund (any variant) and is where the sweep pulls from.
+        let secp = Secp256k1::new();
+        let network: bitcoin::Network = self.config.network.into();
+        let mut leaf_refund_addresses = HashMap::new();
+        for leaf in &plan.selected_leaves {
+            let pubkey = self.spark_signer.get_public_key_for_leaf(&leaf.id).await?;
+            let address = Address::p2tr(&secp, pubkey.x_only_public_key().0, None, network);
+            leaf_refund_addresses.insert(leaf.id.clone(), address);
+        }
+
+        Ok(PreparedUnilateralExit {
+            plan,
+            leaf_refund_addresses,
+        })
+    }
+
+    /// Builds a sweep PSBT that pulls every leaf's refund output and every
+    /// leaf's terminal CPFP-change output into a single payment to
+    /// `destination`. Refund inputs are signed internally; CPFP-change inputs
+    /// are left unsigned for an external signer.
+    pub async fn create_refund_sweep_transaction(
+        &self,
+        refund_outputs: Vec<RefundOutput>,
+        cpfp_change_inputs: Vec<CpfpChangeInput>,
+        destination: Address,
+        fee_rate_sat_per_kw: u64,
+    ) -> Result<bitcoin::Psbt, SparkWalletError> {
+        use bitcoin::psbt::{Input as PsbtInput, Output as PsbtOutput, Psbt};
+
+        if refund_outputs.is_empty() {
+            return Err(SparkWalletError::ValidationError(
+                "At least one refund output is required".to_string(),
+            ));
+        }
+        debug!(
+            refund_outputs = refund_outputs.len(),
+            cpfp_change_inputs = cpfp_change_inputs.len(),
+            fee_rate_sat_per_kw,
+            "create_refund_sweep_transaction"
+        );
+
+        let secp = Secp256k1::new();
+        let network: bitcoin::Network = self.config.network.into();
+
+        let mut tx_inputs = Vec::with_capacity(refund_outputs.len() + cpfp_change_inputs.len());
+        let mut prev_outputs = Vec::with_capacity(refund_outputs.len() + cpfp_change_inputs.len());
+        let mut total_value: u64 = 0;
+        let mut total_input_weight: u64 = 0;
+
+        // Signal opt-in RBF (BIP125) on every input so an unconfirmed low-fee
+        // sweep can be replaced by a higher-fee rebuild. The sequence is set
+        // before signing, so the refund-spend signatures commit to it.
+        for refund_output in &refund_outputs {
+            tx_inputs.push(TxIn {
+                previous_output: refund_output.outpoint,
+                sequence: bitcoin::Sequence::ENABLE_RBF_NO_LOCKTIME,
+                ..Default::default()
+            });
+            let pubkey = self
+                .spark_signer
+                .get_public_key_for_leaf(&refund_output.leaf_id)
+                .await?;
+            let addr = Address::p2tr(&secp, pubkey.x_only_public_key().0, None, network);
+            prev_outputs.push(TxOut {
+                value: Amount::from_sat(refund_output.value),
+                script_pubkey: addr.script_pubkey(),
+            });
+            total_value = total_value
+                .checked_add(refund_output.value)
+                .ok_or_else(|| {
+                    SparkWalletError::ValidationError("Total value overflow".to_string())
+                })?;
+            total_input_weight = total_input_weight
+                .saturating_add(spark::services::p2tr_key_path_input_weight().to_wu());
+        }
+
+        for change_input in &cpfp_change_inputs {
+            tx_inputs.push(TxIn {
+                previous_output: change_input.outpoint,
+                sequence: bitcoin::Sequence::ENABLE_RBF_NO_LOCKTIME,
+                ..Default::default()
+            });
+            prev_outputs.push(change_input.witness_utxo.clone());
+            total_value = total_value
+                .checked_add(change_input.witness_utxo.value.to_sat())
+                .ok_or_else(|| {
+                    SparkWalletError::ValidationError("Total value overflow".to_string())
+                })?;
+            total_input_weight =
+                total_input_weight.saturating_add(change_input.signed_input_weight);
+        }
+
+        let dest_script = destination.script_pubkey();
+        let fee = spark::services::compute_sweep_fee(
+            bitcoin::Weight::from_wu(total_input_weight),
+            dest_script.len(),
+            fee_rate_sat_per_kw,
+        );
+        if total_value <= fee {
+            return Err(SparkWalletError::ValidationError(format!(
+                "Total value {total_value} sats is not enough to cover fee {fee} sats"
+            )));
+        }
+        let output_value = total_value.saturating_sub(fee);
+        let dust_limit = dest_script.minimal_non_dust().to_sat();
+        if output_value < dust_limit {
+            return Err(SparkWalletError::ValidationError(format!(
+                "Sweep output ({output_value} sats) is below the dust limit ({dust_limit} sats) for the destination address"
+            )));
+        }
+
+        let unsigned_tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: tx_inputs,
+            output: vec![TxOut {
+                value: Amount::from_sat(output_value),
+                script_pubkey: dest_script,
+            }],
+        };
+
+        let mut psbt = Psbt::from_unsigned_tx(unsigned_tx.clone())
+            .map_err(|e| SparkWalletError::Generic(format!("Failed to build sweep PSBT: {e}")))?;
+
+        for (i, refund_output) in refund_outputs.iter().enumerate() {
+            let sighash =
+                sighash_from_multi_input_tx(&unsigned_tx, i, &prev_outputs).map_err(|e| {
+                    SparkWalletError::Generic(format!("Failed to compute sighash: {e}"))
+                })?;
+            let sig = self
+                .spark_signer
+                .sign_leaf_refund_spend(&refund_output.leaf_id, &sighash.to_byte_array())
+                .await?;
+            psbt.inputs[i] = PsbtInput {
+                witness_utxo: Some(prev_outputs[i].clone()),
+                final_script_witness: Some(Witness::from_slice(&[sig.serialize()])),
+                ..Default::default()
+            };
+        }
+
+        for (offset, change_input) in cpfp_change_inputs.iter().enumerate() {
+            let i = refund_outputs.len() + offset;
+            psbt.inputs[i] = PsbtInput {
+                witness_utxo: Some(change_input.witness_utxo.clone()),
+                ..Default::default()
+            };
+        }
+
+        psbt.outputs[0] = PsbtOutput::default();
+        Ok(psbt)
     }
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<WalletEvent> {

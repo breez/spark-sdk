@@ -20,8 +20,13 @@ use tracing::info;
 
 use crate::fixtures::{log::TracingConsumer, setup::FixtureId};
 
-const BITCOIND_VERSION: &str = "v28.0";
-const BITCOIND_DOCKER_IMAGE: &str = "lncm/bitcoind";
+// Official Bitcoin Core image from Docker Hub (pulled by testcontainers, warmed
+// by `cargo xtask itest`). Pinned to 31.0, which supports the `submitpackage`
+// 1p1c relay and TRUC/v3 policy the unilateral exit packages rely on. Its
+// entrypoint prepends `bitcoind` to the `-`-prefixed args below, appends
+// `-datadir=$BITCOIN_DATA`, and runs it as the `bitcoin` user.
+const BITCOIND_DOCKER_IMAGE: &str = "bitcoin/bitcoin";
+const BITCOIND_VERSION: &str = "31.0";
 const REGTEST_RPC_USER: &str = "rpcuser";
 const REGTEST_RPC_PASSWORD: &str = "rpcpassword";
 const REGTEST_RPC_PORT: u16 = 8332;
@@ -196,6 +201,35 @@ impl BitcoindFixture {
         self.rpc_call::<String>("sendrawtransaction", &[json!(tx_hex)])
             .map_ok(|txid_str| txid_str.parse().unwrap())
             .await
+    }
+
+    /// Broadcast a transaction with `maxfeerate=0`, bypassing fee-rate checks.
+    pub async fn broadcast_transaction_no_fee_check(&self, tx: &Transaction) -> Result<Txid> {
+        let tx_hex = hex::encode(bitcoin::consensus::serialize(tx));
+        self.rpc_call::<String>("sendrawtransaction", &[json!(tx_hex), json!(0)])
+            .map_ok(|txid_str| txid_str.parse().unwrap())
+            .await
+    }
+
+    /// Submit a package of transactions via the `submitpackage` RPC. Required
+    /// for v3 transactions with ephemeral anchors, which can't be broadcast
+    /// individually because the 0-value anchor output is non-standard alone.
+    pub async fn submit_package(&self, txs: &[&Transaction]) -> Result<Value> {
+        let hex_array: Vec<String> = txs
+            .iter()
+            .map(|tx| hex::encode(bitcoin::consensus::serialize(tx)))
+            .collect();
+        self.rpc_call::<Value>("submitpackage", &[json!(hex_array)])
+            .await
+    }
+
+    /// Public JSON-RPC accessor for bitcoind methods not already wrapped here.
+    pub async fn rpc<T: for<'de> Deserialize<'de>>(
+        &self,
+        method: &str,
+        params: &[Value],
+    ) -> Result<T> {
+        self.rpc_call(method, params).await
     }
 
     pub async fn get_transaction(&self, txid: &Txid) -> Result<Transaction> {

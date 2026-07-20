@@ -27,7 +27,7 @@ pub mod turnkey;
 mod utils;
 
 pub use chain::{
-    BitcoinChainService, ChainServiceError, RecommendedFees, TxStatus, Utxo,
+    BitcoinChainService, ChainServiceError, Outspend, RecommendedFees, TxStatus, Utxo,
     new_rest_chain_service,
     rest_client::{ChainApiType, RestClientChainService},
 };

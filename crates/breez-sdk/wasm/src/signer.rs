@@ -1026,6 +1026,22 @@ impl breez_sdk_spark::signer::ExternalSparkSigner for WasmExternalSparkSigner {
         Ok(v.into())
     }
 
+    async fn sign_leaf_refund_spend(
+        &self,
+        leaf_id: core_types::ExternalTreeNodeId,
+        sighash: Vec<u8>,
+    ) -> Result<core_types::SchnorrSignatureBytes, SignerError> {
+        let wasm_leaf: ExternalTreeNodeId = leaf_id.into();
+        let promise = self
+            .inner
+            .sign_leaf_refund_spend(wasm_leaf, sighash)
+            .map_err(spark_js_err)?;
+        let result = JsFuture::from(promise).await.map_err(spark_js_err)?;
+        let v: SchnorrSignatureBytes =
+            serde_wasm_bindgen::from_value(result).map_err(spark_de_err)?;
+        Ok(v.into())
+    }
+
     async fn sign_frost(
         &self,
         jobs: Vec<core_spark::ExternalFrostJob>,
@@ -1173,6 +1189,7 @@ const SPARK_SIGNER_INTERFACE: &'static str = r#"export interface ExternalSparkSi
     getStaticDepositPublicKey(index: number): Promise<PublicKeyBytes>;
     signAuthenticationChallenge(challenge: Uint8Array): Promise<EcdsaSignatureBytes>;
     signMessage(message: Uint8Array): Promise<EcdsaSignatureBytes>;
+    signLeafRefundSpend(leafId: ExternalTreeNodeId, sighash: Uint8Array): Promise<SchnorrSignatureBytes>;
     signFrost(jobs: ExternalFrostJob[]): Promise<ExternalFrostShareResult[]>;
     prepareTransfer(request: ExternalPrepareTransferRequest): Promise<ExternalPreparedTransfer>;
     prepareClaim(request: ExternalPrepareClaimRequest): Promise<ExternalPreparedClaim>;
@@ -1214,6 +1231,13 @@ extern "C" {
     #[wasm_bindgen(structural, method, js_name = "signMessage", catch)]
     pub fn sign_message(this: &JsExternalSparkSigner, message: Vec<u8>)
     -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "signLeafRefundSpend", catch)]
+    pub fn sign_leaf_refund_spend(
+        this: &JsExternalSparkSigner,
+        leaf_id: ExternalTreeNodeId,
+        sighash: Vec<u8>,
+    ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "signFrost", catch)]
     pub fn sign_frost(this: &JsExternalSparkSigner, jobs: JsValue) -> Result<Promise, JsValue>;
@@ -1354,6 +1378,19 @@ impl ExternalSparkSignerHandle {
             .map_err(spark_handle_js_err)
     }
 
+    #[wasm_bindgen(js_name = "signLeafRefundSpend")]
+    pub async fn sign_leaf_refund_spend(
+        &self,
+        leaf_id: ExternalTreeNodeId,
+        sighash: Vec<u8>,
+    ) -> Result<SchnorrSignatureBytes, JsValue> {
+        self.inner
+            .sign_leaf_refund_spend(leaf_id.into(), sighash)
+            .await
+            .map(Into::into)
+            .map_err(spark_handle_js_err)
+    }
+
     #[wasm_bindgen(js_name = "signFrost")]
     pub async fn sign_frost(
         &self,
@@ -1473,5 +1510,80 @@ impl ExternalSparkSignerHandle {
             .await
             .map(Into::into)
             .map_err(spark_handle_js_err)
+    }
+}
+
+#[wasm_bindgen(typescript_custom_section)]
+const CPFP_SIGNER_INTERFACE: &'static str = r#"export interface CpfpSigner {
+    signPsbt(psbtBytes: Uint8Array): Promise<Uint8Array>;
+}"#;
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(typescript_type = "CpfpSigner")]
+    pub type JsCpfpSigner;
+
+    #[wasm_bindgen(structural, method, js_name = "signPsbt", catch)]
+    pub fn sign_psbt(this: &JsCpfpSigner, psbt_bytes: Vec<u8>) -> Result<Promise, JsValue>;
+}
+
+pub struct WasmCpfpSigner {
+    inner: JsCpfpSigner,
+}
+
+// Wasm runs single-threaded, so the non-Send JS handle is safe to mark Send+Sync.
+unsafe impl Send for WasmCpfpSigner {}
+unsafe impl Sync for WasmCpfpSigner {}
+
+impl WasmCpfpSigner {
+    pub fn new(inner: JsCpfpSigner) -> Self {
+        Self { inner }
+    }
+}
+
+#[macros::async_trait]
+impl breez_sdk_spark::signer::CpfpSigner for WasmCpfpSigner {
+    async fn sign_psbt(
+        &self,
+        psbt_bytes: Vec<u8>,
+    ) -> Result<Vec<u8>, breez_sdk_spark::SignerError> {
+        let promise = self
+            .inner
+            .sign_psbt(psbt_bytes)
+            .map_err(|e| breez_sdk_spark::SignerError::Generic(format!("JS error: {e:?}")))?;
+        let future = wasm_bindgen_futures::JsFuture::from(promise);
+        let result = future
+            .await
+            .map_err(|e| breez_sdk_spark::SignerError::Generic(format!("JS error: {e:?}")))?;
+        let bytes: Vec<u8> = serde_wasm_bindgen::from_value(result).map_err(|e| {
+            breez_sdk_spark::SignerError::Generic(format!("Failed to deserialize signed PSBT: {e}"))
+        })?;
+        Ok(bytes)
+    }
+}
+
+/// A CPFP signer matching the `CpfpSigner` TypeScript interface.
+#[wasm_bindgen]
+pub struct DefaultCpfpSigner {
+    pub(crate) inner: std::sync::Arc<dyn breez_sdk_spark::signer::CpfpSigner>,
+}
+
+unsafe impl Send for DefaultCpfpSigner {}
+unsafe impl Sync for DefaultCpfpSigner {}
+
+impl DefaultCpfpSigner {
+    pub fn new(inner: std::sync::Arc<dyn breez_sdk_spark::signer::CpfpSigner>) -> Self {
+        Self { inner }
+    }
+}
+
+#[wasm_bindgen]
+impl DefaultCpfpSigner {
+    #[wasm_bindgen(js_name = "signPsbt")]
+    pub async fn sign_psbt(&self, psbt_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        self.inner
+            .sign_psbt(psbt_bytes)
+            .await
+            .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 }

@@ -77,7 +77,11 @@ fn generate_self_signed_certificate(host_names: &[String]) -> Result<(String, St
 
 impl SparkSoFixture {
     pub async fn new(fixture_id: &FixtureId, bitcoind_fixture: &BitcoindFixture) -> Result<Self> {
-        let config_dir = testdir::testdir!();
+        // Namespaced by `fixture_id`: `testdir!()` keys only on the test's case
+        // name, so parametrized cases that share a name (all our `case_1_seed`s)
+        // resolve to one directory and would clobber each other's operators.json
+        // when tests run concurrently.
+        let config_dir = testdir::testdir!().join(fixture_id.to_string());
         let operators_json_path = config_dir.join("operators.json");
 
         // Create a shared server certificate file

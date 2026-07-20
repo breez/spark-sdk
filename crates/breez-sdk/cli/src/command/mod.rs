@@ -1,3 +1,4 @@
+mod advanced;
 mod contacts;
 mod issuer;
 mod stable_balance;
@@ -28,6 +29,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::command::advanced::AdvancedCommand;
 use crate::command::contacts::ContactCommand;
 use crate::command::issuer::IssuerCommand;
 use crate::command::stable_balance::StableBalanceCommand;
@@ -367,6 +369,11 @@ pub enum Command {
 
     /// Get the status of the Spark network services
     GetSparkStatus,
+
+    /// Expert-only commands that build raw transactions for you to broadcast
+    /// yourself. Misuse can strand or lose funds.
+    #[command(subcommand)]
+    Advanced(AdvancedCommand),
 
     /// Issuer related commands
     #[command(subcommand)]
@@ -1065,6 +1072,7 @@ pub(crate) async fn execute_command(
             print_value(&res)?;
             Ok(true)
         }
+        Command::Advanced(cmd) => advanced::handle_command(rl, sdk, cmd).await,
         Command::Issuer(issuer_command) => {
             issuer::handle_command(token_issuer, issuer_command).await
         }

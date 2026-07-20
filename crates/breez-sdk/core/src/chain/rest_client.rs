@@ -13,7 +13,7 @@ use tracing::info;
 use crate::chain::RecommendedFees;
 use crate::{
     Network,
-    chain::{ChainServiceError, Utxo},
+    chain::{ChainServiceError, Outspend, Utxo},
 };
 
 use super::BitcoinChainService;
@@ -31,6 +31,22 @@ const BASE_BACKOFF_MILLIS: Duration = Duration::from_millis(256);
 struct TxInfo {
     txid: String,
     status: super::TxStatus,
+}
+
+/// Minimal esplora `/address/:address/txs` entry: the txid, its confirmation
+/// status, and the outputs (scanned to find the ones paying the queried address).
+#[derive(Deserialize)]
+struct AddressTx {
+    txid: String,
+    status: super::TxStatus,
+    vout: Vec<AddressTxVout>,
+}
+
+#[derive(Deserialize)]
+struct AddressTxVout {
+    #[serde(default)]
+    scriptpubkey_address: Option<String>,
+    value: u64,
 }
 
 pub struct BasicAuth {
@@ -277,6 +293,35 @@ impl RestClientChainServiceInner {
         Ok(utxos)
     }
 
+    async fn do_get_address_txos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError> {
+        let address = address
+            .parse::<Address<NetworkUnchecked>>()?
+            .require_network(self.network.into())?;
+        let address_str = address.to_string();
+
+        // A refund address only ever holds its one refund plus the sweep spending
+        // it, so a single (un-paginated) page of history covers it.
+        let txs = self
+            .get_response_json::<Vec<AddressTx>>(format!("/address/{address}/txs").as_str())
+            .await?;
+        let mut txos = Vec::new();
+        for tx in txs {
+            for (vout, out) in tx.vout.iter().enumerate() {
+                if out.scriptpubkey_address.as_deref() != Some(address_str.as_str()) {
+                    continue;
+                }
+                txos.push(Utxo {
+                    txid: tx.txid.clone(),
+                    vout: u32::try_from(vout)
+                        .map_err(|_| ChainServiceError::Generic("vout overflow".to_string()))?,
+                    value: out.value,
+                    status: tx.status.clone(),
+                });
+            }
+        }
+        Ok(txos)
+    }
+
     async fn do_get_transaction_status(
         &self,
         txid: String,
@@ -292,6 +337,17 @@ impl RestClientChainServiceInner {
             .get_response_text(format!("/tx/{txid}/hex").as_str())
             .await?;
         Ok(tx)
+    }
+
+    async fn do_get_outspend(
+        &self,
+        txid: String,
+        vout: u32,
+    ) -> Result<Outspend, ChainServiceError> {
+        let outspend = self
+            .get_response_json::<Outspend>(format!("/tx/{txid}/outspend/{vout}").as_str())
+            .await?;
+        Ok(outspend)
     }
 
     async fn do_broadcast_transaction(&self, tx: String) -> Result<(), ChainServiceError> {
@@ -315,6 +371,11 @@ impl BitcoinChainService for RestClientChainService {
             .await
     }
 
+    async fn get_address_txos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError> {
+        self.run_on_runtime(|inner| async move { inner.do_get_address_txos(address).await })
+            .await
+    }
+
     async fn get_transaction_status(
         &self,
         txid: String,
@@ -325,6 +386,11 @@ impl BitcoinChainService for RestClientChainService {
 
     async fn get_transaction_hex(&self, txid: String) -> Result<String, ChainServiceError> {
         self.run_on_runtime(|inner| async move { inner.do_get_transaction_hex(txid).await })
+            .await
+    }
+
+    async fn get_outspend(&self, txid: String, vout: u32) -> Result<Outspend, ChainServiceError> {
+        self.run_on_runtime(move |inner| async move { inner.do_get_outspend(txid, vout).await })
             .await
     }
 
@@ -468,5 +534,57 @@ mod tests {
             assert!(utxo.status.block_height.is_some());
             assert!(utxo.status.block_time.is_some());
         }
+    }
+
+    #[async_test_all]
+    async fn test_get_address_txos_returns_spent_outputs() {
+        let address = "1wiz18xYmhRX6xStj2b9t1rwWX4GKUgpv";
+        // The refund tx pays the address (vout 0); a later sweep spends it and pays
+        // elsewhere. get_address_txos must still surface the refund output.
+        let mock_response = format!(
+            r#"[
+                {{
+                    "txid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "status": {{ "confirmed": false }},
+                    "vout": [
+                        {{ "scriptpubkey_address": "1DestinationaaaaaaaaaaaaaaaaaaaaZ", "value": 49000 }}
+                    ]
+                }},
+                {{
+                    "txid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "status": {{ "confirmed": true, "block_height": 800000, "block_time": 1700000000 }},
+                    "vout": [
+                        {{ "scriptpubkey_address": "{address}", "value": 50000 }},
+                        {{ "scriptpubkey_address": "1OtheraaaaaaaaaaaaaaaaaaaaaaaaaaZ", "value": 10000 }}
+                    ]
+                }}
+            ]"#
+        );
+
+        let mock = MockRestClient::new();
+        mock.add_response(MockResponse::new(200, mock_response));
+        let service = RestClientChainService::new(
+            "http://localhost:8080".to_string(),
+            Network::Mainnet,
+            3,
+            Arc::new(mock),
+            None,
+            ChainApiType::Esplora,
+        );
+
+        let result = service.get_address_txos(address.to_string()).await.unwrap();
+
+        assert_eq!(
+            result.len(),
+            1,
+            "only the output paying the address is kept"
+        );
+        assert_eq!(
+            result[0].txid,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(result[0].vout, 0);
+        assert_eq!(result[0].value, 50000);
+        assert!(result[0].status.confirmed);
     }
 }

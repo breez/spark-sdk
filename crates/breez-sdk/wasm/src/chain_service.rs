@@ -4,7 +4,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::models::{
     Credentials, Network,
-    chain_service::{ChainApiType, RecommendedFees, TxStatus, Utxo},
+    chain_service::{ChainApiType, Outspend, RecommendedFees, TxStatus, Utxo},
 };
 
 /// Rust-built implementation of the JS `BitcoinChainService` interface.
@@ -31,6 +31,17 @@ impl BitcoinChainServiceHandle {
         serde_wasm_bindgen::to_value(&utxos).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    #[wasm_bindgen(js_name = "getAddressTxos")]
+    pub async fn get_address_txos(&self, address: String) -> Result<JsValue, JsValue> {
+        let txos = self
+            .inner
+            .get_address_txos(address)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let txos: Vec<Utxo> = txos.into_iter().map(Into::into).collect();
+        serde_wasm_bindgen::to_value(&txos).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
     #[wasm_bindgen(js_name = "getTransactionStatus")]
     pub async fn get_transaction_status(&self, txid: String) -> Result<JsValue, JsValue> {
         let status = self
@@ -50,6 +61,17 @@ impl BitcoinChainServiceHandle {
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(JsValue::from_str(&hex))
+    }
+
+    #[wasm_bindgen(js_name = "getOutspend")]
+    pub async fn get_outspend(&self, txid: String, vout: u32) -> Result<JsValue, JsValue> {
+        let outspend = self
+            .inner
+            .get_outspend(txid, vout)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let outspend: Outspend = outspend.into();
+        serde_wasm_bindgen::to_value(&outspend).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     #[wasm_bindgen(js_name = "broadcastTransaction")]

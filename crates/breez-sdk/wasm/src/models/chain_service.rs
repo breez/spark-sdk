@@ -18,6 +18,16 @@ pub struct Utxo {
     pub status: TxStatus,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Outspend)]
+pub enum Outspend {
+    Unspent,
+    Spent {
+        txid: String,
+        vin: u32,
+        status: TxStatus,
+    },
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::RecommendedFees)]
 pub struct RecommendedFees {
     pub fastest_fee: u64,
@@ -58,6 +68,21 @@ impl breez_sdk_spark::BitcoinChainService for WasmBitcoinChainService {
         Ok(utxos.into_iter().map(|p| p.into()).collect())
     }
 
+    async fn get_address_txos(
+        &self,
+        address: String,
+    ) -> Result<Vec<breez_sdk_spark::Utxo>, breez_sdk_spark::ChainServiceError> {
+        let promise = self
+            .inner
+            .get_address_txos(address)
+            .map_err(js_error_to_chain_service_error)?;
+        let future = JsFuture::from(promise);
+        let result = future.await.map_err(js_error_to_chain_service_error)?;
+        let txos: Vec<Utxo> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| breez_sdk_spark::ChainServiceError::Generic(e.to_string()))?;
+        Ok(txos.into_iter().map(|p| p.into()).collect())
+    }
+
     async fn get_transaction_status(
         &self,
         txid: String,
@@ -86,6 +111,22 @@ impl breez_sdk_spark::BitcoinChainService for WasmBitcoinChainService {
         let tx_hex: String = serde_wasm_bindgen::from_value(result)
             .map_err(|e| breez_sdk_spark::ChainServiceError::Generic(e.to_string()))?;
         Ok(tx_hex)
+    }
+
+    async fn get_outspend(
+        &self,
+        txid: String,
+        vout: u32,
+    ) -> Result<breez_sdk_spark::Outspend, breez_sdk_spark::ChainServiceError> {
+        let promise = self
+            .inner
+            .get_outspend(txid, vout)
+            .map_err(js_error_to_chain_service_error)?;
+        let future = JsFuture::from(promise);
+        let result = future.await.map_err(js_error_to_chain_service_error)?;
+        let outspend: Outspend = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| breez_sdk_spark::ChainServiceError::Generic(e.to_string()))?;
+        Ok(outspend.into())
     }
 
     async fn broadcast_transaction(
@@ -119,8 +160,10 @@ impl breez_sdk_spark::BitcoinChainService for WasmBitcoinChainService {
 #[wasm_bindgen(typescript_custom_section)]
 const EVENT_INTERFACE: &'static str = r#"export interface BitcoinChainService {
     getAddressUtxos(address: string): Promise<Utxo[]>;
+    getAddressTxos(address: string): Promise<Utxo[]>;
     getTransactionStatus(txid: string): Promise<TxStatus>;
     getTransactionHex(txid: string): Promise<string>;
+    getOutspend(txid: string, vout: number): Promise<Outspend>;
     broadcastTransaction(tx: string): Promise<void>;
     recommendedFees(): Promise<RecommendedFees>;
 }"#;
@@ -136,6 +179,12 @@ extern "C" {
         address: String,
     ) -> Result<Promise, JsValue>;
 
+    #[wasm_bindgen(structural, method, js_name = "getAddressTxos", catch)]
+    pub fn get_address_txos(
+        this: &BitcoinChainService,
+        address: String,
+    ) -> Result<Promise, JsValue>;
+
     #[wasm_bindgen(structural, method, js_name = "getTransactionStatus", catch)]
     pub fn get_transaction_status(
         this: &BitcoinChainService,
@@ -146,6 +195,13 @@ extern "C" {
     pub fn get_transaction_hex(
         this: &BitcoinChainService,
         txid: String,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "getOutspend", catch)]
+    pub fn get_outspend(
+        this: &BitcoinChainService,
+        txid: String,
+        vout: u32,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "broadcastTransaction", catch)]

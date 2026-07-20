@@ -2,6 +2,7 @@ mod config;
 mod error;
 mod event;
 mod model;
+mod unilateral_exit;
 mod wallet;
 mod wallet_builder;
 
@@ -16,13 +17,15 @@ pub use spark::{
     header_provider::*,
     operator::rpc::{BalancedConnectionManager, ConnectionManager, DefaultConnectionManager},
     services::{
-        CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitSpeed, Fee,
+        CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpChild, CpfpInput, ExitSpeed, Fee,
         FreezeIssuerTokenResponse, InvoiceDescription, LightningReceivePayment,
         LightningSendPayment, LightningSendStatus, Preimage, PreimageRequestStatus,
         ReceiverTokenOutput, ServiceError, SingleUseDepositAddress, StaticDepositAddress,
         TokenInputs, TokenMintInput, TokenOutputToSpend, TokenTransaction, TokenTransactionStatus,
         TokenTransferInput, TransferId, TransferObserver, TransferObserverError, TransferStatus,
-        TransferTokenOutput, TransferType, Utxo,
+        TransferTokenOutput, TransferType, UnilateralExitPlan, UnilateralExitSelectedLeaf, Utxo,
+        build_cpfp_child, build_unilateral_exit_chain, compute_sweep_fee, csv_timelock,
+        p2tr_key_path_input_weight, p2wpkh_input_weight, walk_unilateral_exit_chain,
     },
     session_store::*,
     signer::{
@@ -63,6 +66,7 @@ pub use spark::{
         transactions::is_ephemeral_anchor_output,
     },
 };
+pub use unilateral_exit::*;
 pub use wallet::{SendPackagePreparation, SparkWallet};
 pub use wallet_builder::WalletBuilder;
 

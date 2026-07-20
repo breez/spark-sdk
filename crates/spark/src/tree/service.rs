@@ -49,6 +49,22 @@ impl TreeService for SynchronousTreeService {
         self.state.get_leaves().await
     }
 
+    async fn fetch_nodes(
+        &self,
+        node_ids: &[TreeNodeId],
+        include_parents: bool,
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        if node_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let client = &self.operator_pool.get_coordinator().client;
+        let source = Source::NodeIds(TreeNodeIds {
+            node_ids: node_ids.iter().map(ToString::to_string).collect(),
+        });
+        self.query_nodes(client, include_parents, Some(source), vec![])
+            .await
+    }
+
     async fn cancel_reservation(
         &self,
         reservation: LeavesReservation,

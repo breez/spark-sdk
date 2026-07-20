@@ -8,6 +8,7 @@ mod spark_signer_adapter;
 use bitcoin::bip32::DerivationPath;
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::{PublicKey, SecretKey, schnorr};
+use bitcoin::taproot::TapNodeHash;
 use frost_secp256k1_tr::round2::SignatureShare;
 
 pub use default_signer::{
@@ -42,6 +43,16 @@ pub trait Signer: Send + Sync + 'static {
         &self,
         path: &DerivationPath,
         hash: &[u8],
+    ) -> Result<schnorr::Signature, SignerError>;
+
+    /// Signs a hash with a key derived from a `SecretSource`, applying the
+    /// BIP341 tap_tweak. `tap_tweak` is the optional merkle root of the taproot
+    /// script tree; pass `None` for key-path-only spends (no script tree).
+    async fn sign_hash_schnorr_with_tweak(
+        &self,
+        secret: &SecretSource,
+        hash: &[u8],
+        tap_tweak: Option<TapNodeHash>,
     ) -> Result<schnorr::Signature, SignerError>;
 
     async fn generate_random_signing_commitment(

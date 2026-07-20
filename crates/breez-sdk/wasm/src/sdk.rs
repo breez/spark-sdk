@@ -184,6 +184,16 @@ pub fn default_external_signers(
     })
 }
 
+/// Creates a default CPFP signer backed by a single private key.
+#[wasm_bindgen(js_name = "singleKeyCpfpSigner")]
+pub fn single_key_cpfp_signer(
+    secret_key_bytes: Vec<u8>,
+) -> Result<crate::signer::DefaultCpfpSigner, JsValue> {
+    let signer = breez_sdk_spark::signer::single_key_cpfp_signer(secret_key_bytes)
+        .map_err(|e| JsValue::from_str(&format!("{e:?}")))?;
+    Ok(crate::signer::DefaultCpfpSigner::new(signer))
+}
+
 #[wasm_bindgen]
 impl BreezSdk {
     #[wasm_bindgen(js_name = "addEventListener")]
@@ -226,6 +236,32 @@ impl BreezSdk {
     #[wasm_bindgen(js_name = "getInfo")]
     pub async fn get_info(&self, request: GetInfoRequest) -> WasmResult<GetInfoResponse> {
         Ok(self.sdk.get_info(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "prepareUnilateralExit")]
+    pub async fn prepare_unilateral_exit(
+        &self,
+        request: PrepareUnilateralExitRequest,
+    ) -> WasmResult<PrepareUnilateralExitResponse> {
+        Ok(self
+            .sdk
+            .prepare_unilateral_exit(request.into())
+            .await?
+            .into())
+    }
+
+    #[wasm_bindgen(js_name = "unilateralExit")]
+    pub async fn unilateral_exit(
+        &self,
+        request: UnilateralExitRequest,
+        signer: crate::signer::JsCpfpSigner,
+    ) -> WasmResult<UnilateralExitResponse> {
+        let signer = std::sync::Arc::new(crate::signer::WasmCpfpSigner::new(signer));
+        Ok(self
+            .sdk
+            .unilateral_exit(request.into(), signer)
+            .await?
+            .into())
     }
 
     #[wasm_bindgen(js_name = "receivePayment")]

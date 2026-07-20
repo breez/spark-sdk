@@ -56,7 +56,9 @@ use crate::signer::{
     SecretBytes,
 };
 
-use super::accounts::{decode_scalar_32, ecdsa_from_rs, schnorr_from_rs, xpriv_from_secret};
+use super::accounts::{
+    bitcoin_p2tr_format, decode_scalar_32, ecdsa_from_rs, schnorr_from_rs, xpriv_from_secret,
+};
 use super::error::TurnkeyError;
 use super::transport::{OnConflict, TurnkeyClient};
 use super::types::{
@@ -602,6 +604,31 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
     async fn sign_message(&self, message: Vec<u8>) -> Result<EcdsaSignatureBytes, SignerError> {
         let sig = self.sign_identity_ecdsa(&message).await?;
         Ok(EcdsaSignatureBytes::from_signature(&sig))
+    }
+
+    async fn sign_leaf_refund_spend(
+        &self,
+        leaf_id: ExternalTreeNodeId,
+        sighash: Vec<u8>,
+    ) -> Result<SchnorrSignatureBytes, SignerError> {
+        // Turnkey selects the scheme from the signWith address format: a P2TR
+        // account signs BIP341 tweaked Schnorr (empty script tree), which the
+        // taproot key-path spend of the refund output needs. The sighash is
+        // signed as-is (NO_OP).
+        let leaf_id = leaf_id.to_tree_node_id().map_err(to_spark_err)?;
+        let path = format!("{}/1'/{}'", self.base_path(), Self::leaf_index(&leaf_id));
+        let sign_with = self
+            .client
+            .create_account(path, bitcoin_p2tr_format(self.network))
+            .await
+            .map_err(to_spark_err)?;
+        let result = self
+            .client
+            .sign_raw(sign_with, hex::encode(&sighash), HASH_FUNCTION_NO_OP)
+            .await
+            .map_err(to_spark_err)?;
+        let sig = schnorr_from_rs(&result.r, &result.s).map_err(to_spark_err)?;
+        Ok(SchnorrSignatureBytes::from_signature(&sig))
     }
 
     async fn sign_frost(

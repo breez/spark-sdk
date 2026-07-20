@@ -301,6 +301,12 @@ fn test_cmd(
     doc: bool,
     rest: Vec<String>,
 ) -> Result<()> {
+    // Integration-test packages spin up docker containers from locally-built
+    // images; make sure those exist before the test run.
+    if matches!(package.as_deref(), Some("spark-itest" | "breez-sdk-itest")) {
+        prepare_itest_images()?;
+    }
+
     let mut c = Command::new("cargo");
     c.arg("test");
     c.arg("--no-fail-fast");
@@ -656,6 +662,32 @@ fn clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
         run_single_crate_clippy(package, "--all-targets", &rest)?;
         run_single_crate_clippy(package, "--tests", &rest)?;
     }
+
+    // The unilateral-exit itests sit behind the `local-itest` feature, so the
+    // workspace passes above (feature off) never compile or lint them. Lint that
+    // crate with the feature on. Scoped to the one package on purpose: enabling
+    // it workspace-wide drags the wasm chain-service into the host build, which
+    // fails clippy's `Send` checks.
+    {
+        let mut c = Command::new("cargo");
+        c.arg("clippy").args([
+            "-p",
+            "breez-sdk-itest",
+            "--all-targets",
+            "--features",
+            "local-itest",
+        ]);
+        if fix {
+            c.arg("--fix");
+        }
+        c.arg("--").arg("-D").arg("warnings").args(&rest);
+        let status = c
+            .status()
+            .context("failed to run cargo clippy -p breez-sdk-itest --features local-itest")?;
+        if !status.success() {
+            bail!("clippy breez-sdk-itest --features local-itest failed");
+        }
+    }
     Ok(())
 }
 
@@ -860,8 +892,19 @@ fn wasm_clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
 fn itest_cmd() -> Result<()> {
     let sh = prepare_itest_images()?;
 
-    // Run the integration tests
+    // spark-itest's own local-cluster tests.
     cmd!(sh, "cargo test -p spark-itest --no-fail-fast").run()?;
+
+    // The unilateral-exit suite is the only local-cluster test in breez-itest, so
+    // scope to that binary: the rest of breez-itest is faucet-based and runs (with
+    // its secrets) in the 8-thread `make breez-itest`; re-running it here would be
+    // redundant and trips tests that need secrets absent from this job. Limited
+    // parallelism because each test starts its own bitcoind + operator cluster.
+    cmd!(
+        sh,
+        "cargo test -p breez-sdk-itest --features local-itest --test unilateral_exit --no-fail-fast -- --test-threads=2"
+    )
+    .run()?;
     Ok(())
 }
 
@@ -889,14 +932,16 @@ fn prepare_itest_images() -> Result<Shell> {
     )?;
 
     // Pull base images used by tests
-    if let Err(e) = cmd!(sh, "docker image pull lncm/bitcoind:v28.0").run() {
-        println!(
-            "Failed to pull lncm/bitcoind:v28.0, continuing anyway, it might exist locally already: {e}"
-        );
-    }
     if let Err(e) = cmd!(sh, "docker image pull postgres:11-alpine").run() {
         println!(
             "Failed to pull postgres:11-alpine, continuing anyway, it might exist locally already: {e}"
+        );
+    }
+    // The regtest node runs the official Bitcoin Core image (see the bitcoind
+    // fixture); testcontainers pulls it on demand, this just warms the cache.
+    if let Err(e) = cmd!(sh, "docker image pull bitcoin/bitcoin:31.0").run() {
+        println!(
+            "Failed to pull bitcoin/bitcoin:31.0, continuing anyway, it might exist locally already: {e}"
         );
     }
 
