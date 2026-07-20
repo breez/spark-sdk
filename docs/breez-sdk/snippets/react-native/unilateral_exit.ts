@@ -27,7 +27,13 @@ const exampleQuoteExit = async (sdk: BreezSdk): Promise<PrepareUnilateralExitRes
 const exampleBuildExit = async (sdk: BreezSdk, quote: PrepareUnilateralExitResponse) => {
   // ANCHOR: unilateral-exit
   const secretKeyBytes = Buffer.from('your-secret-key-hex', 'hex')
-  const signer = singleKeyCpfpSigner(secretKeyBytes.buffer)
+  // Buffer.buffer is a shared pool slab; slice to this key's own bytes.
+  const signer = singleKeyCpfpSigner(
+    secretKeyBytes.buffer.slice(
+      secretKeyBytes.byteOffset,
+      secretKeyBytes.byteOffset + secretKeyBytes.byteLength
+    )
+  )
 
   const response = await sdk.unilateralExit(
     {
