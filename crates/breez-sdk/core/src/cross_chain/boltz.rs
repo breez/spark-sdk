@@ -28,13 +28,12 @@ use tracing::{debug, error, info, warn};
 use super::{
     CrossChainFeeMode, CrossChainPrepared, CrossChainProvider, CrossChainProviderContext,
     CrossChainRouteFilter, CrossChainRoutePair, CrossChainService, SourceAsset,
-    derive_btc_leg_transfer_id,
+    boltz_storage_adapter::PROVIDER_TAG_BOLTZ, derive_btc_leg_transfer_id,
 };
 use crate::{
     ConversionInfo, ConversionStatus, CrossChainAddressDetails, Network, PaymentMetadata,
     PaymentStatus, Storage,
     error::SdkError,
-    persist::{ConversionFilter, StorageListPaymentsRequest, StoragePaymentDetailsFilter},
     sdk::LightningSender,
     utils::{
         payments::resolve_and_insert_payment_metadata,
@@ -119,10 +118,9 @@ impl BoltzService {
         Ok(Some(service))
     }
 
-    /// Spawns a background monitor that warms the client (which runs
-    /// `resume_swaps` and reconcile) as soon as a pending Boltz conversion is
-    /// present, including one synced in from another instance after connect.
-    /// Continues until the client is warm by any path or the SDK shuts down.
+    /// Spawns a background monitor that warms the client  as soon as an active
+    /// Boltz swap is present, including one synced in from another instance after
+    /// connect. Continues until the client is warm by any path or the SDK shuts down.
     fn spawn_resume_monitor(self: &Arc<Self>, mut shutdown_receiver: watch::Receiver<()>) {
         let service = Arc::clone(self);
         tokio::spawn(async move {
@@ -130,13 +128,13 @@ impl BoltzService {
                 if service.client.initialized() {
                     return;
                 }
-                match Self::has_pending_conversions(&service.storage).await {
+                match Self::has_active_swaps(&service.storage).await {
                     Ok(true) => match service.client().await {
                         Ok(_) => return,
                         Err(e) => warn!("Boltz resume monitor: warm failed, will retry: {e:?}"),
                     },
                     Ok(false) => {}
-                    Err(e) => debug!("Boltz resume monitor: pending check failed: {e:?}"),
+                    Err(e) => warn!("Boltz resume monitor: active-swap check failed: {e:?}"),
                 }
                 select! {
                     _ = shutdown_receiver.changed() => return,
@@ -146,17 +144,11 @@ impl BoltzService {
         });
     }
 
-    async fn has_pending_conversions(storage: &Arc<dyn Storage>) -> Result<bool, SdkError> {
-        let payments = storage
-            .list_payments(StorageListPaymentsRequest {
-                payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Lightning {
-                    htlc_status: None,
-                    conversion_filter: Some(ConversionFilter::BoltzPending),
-                }]),
-                ..Default::default()
-            })
+    async fn has_active_swaps(storage: &Arc<dyn Storage>) -> Result<bool, SdkError> {
+        let swaps = storage
+            .list_active_cross_chain_swaps(PROVIDER_TAG_BOLTZ.to_string())
             .await?;
-        Ok(!payments.is_empty())
+        Ok(!swaps.is_empty())
     }
 
     /// Returns the inner Boltz client, building it on first use and caching it.
@@ -932,6 +924,18 @@ mod tests {
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
+    #[cfg(feature = "sqlite")]
+    fn create_temp_dir(name: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "breez-test-boltz-{}-{}",
+            name,
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
     fn test_destination(
         chain_label: &str,
         asset: Asset,
@@ -1138,106 +1142,47 @@ mod tests {
         );
     }
 
-    // ---- has_pending_conversions (startup-resume gate) ----
+    // ---- has_active_swaps (startup-resume gate) ----
 
     #[cfg(feature = "sqlite")]
     mod resume_gate_tests {
         use super::*;
+        use crate::persist::StoredCrossChainSwap;
 
-        fn create_temp_dir(name: &str) -> std::path::PathBuf {
-            let mut path = std::env::temp_dir();
-            path.push(format!(
-                "breez-test-boltz-{}-{}",
-                name,
-                uuid::Uuid::new_v4()
-            ));
-            std::fs::create_dir_all(&path).unwrap();
-            path
-        }
-
-        fn pending_boltz_conversion() -> ConversionInfo {
-            ConversionInfo::Boltz {
-                swap_id: "swap1".to_string(),
-                invoice: "lnbc1".to_string(),
-                invoice_amount_sats: 1_013,
-                bridge_ref: None,
-                max_slippage_bps: 100,
-                quote_degraded: false,
-                chain: "Arbitrum One".to_string(),
-                chain_id: Some("42161".to_string()),
-                asset: "USDT".to_string(),
-                recipient_address: "0xrecipient".to_string(),
-                asset_amount_in: Some(664_652),
-                estimated_out: 656_122,
-                delivered_amount: None,
-                status: ConversionStatus::Pending,
-                fee_amount: Some(8_530),
-                service_fee_amount: Some(8_530),
-                service_fee_asset: Some("USDT".to_string()),
-                asset_decimals: 6,
-                asset_contract: Some("0xUSDT".to_string()),
+        fn boltz_swap_row(id: &str, is_terminal: bool) -> StoredCrossChainSwap {
+            StoredCrossChainSwap {
+                provider: PROVIDER_TAG_BOLTZ.to_string(),
+                id: id.to_string(),
+                is_terminal,
+                updated_at: 1_700_000_000,
+                data: "{}".to_string(),
+                secrets: String::new(),
             }
         }
 
         #[tokio::test]
-        async fn has_pending_conversions_reflects_state() {
-            let dir = create_temp_dir("has_pending");
+        async fn has_active_swaps_reflects_state() {
+            let dir = create_temp_dir("has_active_swaps");
             let storage: Arc<dyn Storage> =
                 Arc::new(crate::persist::sqlite::SqliteStorage::new(&dir).unwrap());
 
             // Empty store: the startup-resume gate reads false.
-            assert!(
-                !BoltzService::has_pending_conversions(&storage)
-                    .await
-                    .unwrap()
-            );
+            assert!(!BoltzService::has_active_swaps(&storage).await.unwrap());
 
-            // A Lightning payment (the settled hold-invoice leg) carrying a still
-            // Pending Boltz conversion flips the gate to true.
-            let payment = crate::Payment {
-                id: "boltz_pending".to_string(),
-                payment_type: crate::PaymentType::Send,
-                status: PaymentStatus::Completed,
-                amount: 1_013,
-                fees: 6,
-                timestamp: 6_000,
-                method: crate::PaymentMethod::Lightning,
-                details: Some(crate::PaymentDetails::Lightning {
-                    description: Some("Boltz reverse swap".to_string()),
-                    invoice: "lnbc1".to_string(),
-                    destination_pubkey:
-                        "03e9c5157126b8049ad235bdade8db97a473b5760b34781b8c870bd2ba34dbfcf8"
-                            .to_string(),
-                    htlc_details: crate::SparkHtlcDetails {
-                        payment_hash: "boltz_payment_hash".to_string(),
-                        preimage: None,
-                        expiry_time: 0,
-                        status: crate::SparkHtlcStatus::PreimageShared,
-                    },
-                    lnurl_pay_info: None,
-                    lnurl_withdraw_info: None,
-                    lnurl_receive_metadata: None,
-                    conversion_info: None,
-                }),
-                conversion_details: None,
-            };
-            storage.apply_payment_update(payment).await.unwrap();
+            // A terminal swap row is not active, so the gate stays false.
             storage
-                .insert_payment_metadata(
-                    "boltz_pending".to_string(),
-                    PaymentMetadata {
-                        conversion_info: Some(pending_boltz_conversion()),
-                        ..Default::default()
-                    },
-                )
+                .set_cross_chain_swap(boltz_swap_row("terminal", true))
                 .await
                 .unwrap();
+            assert!(!BoltzService::has_active_swaps(&storage).await.unwrap());
 
-            assert!(
-                BoltzService::has_pending_conversions(&storage)
-                    .await
-                    .unwrap()
-            );
+            // An active (non-terminal) Boltz swap row flips the gate to true, with
+            // no payment row present (covers the pre-send and receive states).
+            storage
+                .set_cross_chain_swap(boltz_swap_row("active", false))
+                .await
+                .unwrap();
+            assert!(BoltzService::has_active_swaps(&storage).await.unwrap());
         }
     }
 
@@ -1246,17 +1191,6 @@ mod tests {
     #[cfg(feature = "sqlite")]
     mod poll_to_terminal_tests {
         use super::*;
-
-        fn create_temp_dir(name: &str) -> std::path::PathBuf {
-            let mut path = std::env::temp_dir();
-            path.push(format!(
-                "breez-test-boltz-{}-{}",
-                name,
-                uuid::Uuid::new_v4()
-            ));
-            std::fs::create_dir_all(&path).unwrap();
-            path
-        }
 
         fn make_pending_payment(id: &str) -> crate::Payment {
             crate::Payment {

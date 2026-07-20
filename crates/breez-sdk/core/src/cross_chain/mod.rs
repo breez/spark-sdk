@@ -45,8 +45,7 @@ pub(crate) const DEFAULT_TARGET_OVERPAY_BPS: u32 = 15;
 /// ticker would silently misreport `fee_amount` for routes using it.
 const USD_STABLE_ASSETS: &[&str] = &["USDB", "USDC", "USDT", "USDT0"];
 
-/// Tick cadence for each provider's background monitor: Boltz's startup-resume
-/// gate and Orchestra's in-flight order poll.
+/// Each provider's background monitor interval.
 pub(crate) const MONITOR_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Resolves the BTC-leg [`TransferId`] for a cross-chain send. A

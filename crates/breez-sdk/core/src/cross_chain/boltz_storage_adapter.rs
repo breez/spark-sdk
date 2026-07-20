@@ -34,7 +34,7 @@ use tracing::warn;
 use crate::{Storage, persist::StoredCrossChainSwap, signer::EciesSigner};
 
 /// Provider tag this adapter writes into `StoredCrossChainSwap::provider`.
-const PROVIDER_TAG_BOLTZ: &str = "boltz";
+pub(crate) const PROVIDER_TAG_BOLTZ: &str = "boltz";
 
 /// JSON key under which a swap's secrets live before they are lifted out.
 const KEY_SOURCE_FIELD: &str = "key_source";
