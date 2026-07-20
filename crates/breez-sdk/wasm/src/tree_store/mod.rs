@@ -1,4 +1,4 @@
-#[cfg(all(test, not(feature = "browser-tests")))]
+#[cfg(test)]
 mod tests;
 
 use std::collections::HashMap;
@@ -10,9 +10,9 @@ use platform_utils::time::Instant;
 use platform_utils::tokio::sync::watch;
 use serde::{Deserialize, Serialize};
 use spark_wallet::{
-    LeafSelection, Leaves, LeavesReservation, LeavesReservationId, PublicKey, ReservationPurpose,
-    ReserveResult, TargetAmounts, TreeNode, TreeNodeId, TreeServiceError, TreeStore,
-    VerifiedLeafKeys,
+    LeafPedigree, LeafSelection, Leaves, LeavesReservation, LeavesReservationId, PublicKey,
+    ReservationPurpose, ReserveResult, TargetAmounts, TreeNode, TreeNodeId, TreeServiceError,
+    TreeStore, VerifiedLeafKeys,
 };
 use tracing::info;
 use wasm_bindgen::prelude::*;
@@ -199,7 +199,7 @@ impl From<&TargetAmounts> for WasmTargetAmounts {
 
 #[async_trait]
 impl TreeStore for WasmTreeStore {
-    async fn add_leaves(&self, leaves: &[TreeNode]) -> Result<(), TreeServiceError> {
+    async fn add_leaves(&self, leaves: &[LeafPedigree]) -> Result<(), TreeServiceError> {
         let leaves_js = serde_wasm_bindgen::to_value(leaves)
             .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
         let promise = self
@@ -211,6 +211,25 @@ impl TreeStore for WasmTreeStore {
             .map_err(js_error_to_tree_error)?;
         self.notify_balance_change();
         Ok(())
+    }
+
+    async fn get_exit_chains(
+        &self,
+        leaf_ids: &[TreeNodeId],
+    ) -> Result<Vec<LeafPedigree>, TreeServiceError> {
+        let ids: Vec<String> = leaf_ids.iter().map(ToString::to_string).collect();
+        let ids_js = serde_wasm_bindgen::to_value(&ids)
+            .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
+        let promise = self
+            .tree_store
+            .get_exit_chains(ids_js)
+            .map_err(js_error_to_tree_error)?;
+        let result = JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_tree_error)?;
+        let pedigrees: Vec<LeafPedigree> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
+        Ok(pedigrees)
     }
 
     async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
@@ -300,8 +319,8 @@ impl TreeStore for WasmTreeStore {
 
     async fn set_leaves(
         &self,
-        leaves: &[TreeNode],
-        missing_operators_leaves: &[TreeNode],
+        leaves: &[LeafPedigree],
+        missing_operators_leaves: &[LeafPedigree],
         refresh_started_at: platform_utils::time::SystemTime,
     ) -> Result<(), TreeServiceError> {
         let leaves_js = serde_wasm_bindgen::to_value(leaves)
@@ -346,7 +365,7 @@ impl TreeStore for WasmTreeStore {
     async fn finalize_reservation(
         &self,
         id: &LeavesReservationId,
-        new_leaves: Option<&[TreeNode]>,
+        new_leaves: Option<&[LeafPedigree]>,
     ) -> Result<(), TreeServiceError> {
         let new_leaves_js = match new_leaves {
             Some(leaves) => serde_wasm_bindgen::to_value(leaves)
@@ -427,8 +446,8 @@ impl TreeStore for WasmTreeStore {
     async fn update_reservation(
         &self,
         reservation_id: &LeavesReservationId,
-        reserved_leaves: &[TreeNode],
-        change_leaves: &[TreeNode],
+        reserved_leaves: &[LeafPedigree],
+        change_leaves: &[LeafPedigree],
     ) -> Result<LeavesReservation, TreeServiceError> {
         let reserved_js = serde_wasm_bindgen::to_value(reserved_leaves)
             .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
@@ -519,6 +538,13 @@ interface LeavesReservation {
     leaves: TreeNode[];
 }
 
+/** A leaf together with its ancestor chain (root to parent), so a stored leaf
+ *  always brings the intermediate nodes its exit chain walks through. */
+interface LeafPedigree {
+    leaf: TreeNode;
+    ancestors: TreeNode[];
+}
+
 type TargetAmounts =
     | { type: 'amountAndFee'; amountSats: number; feeSats: number | null }
     | { type: 'exactDenominations'; denominations: number[] };
@@ -534,16 +560,17 @@ type LeafSelection =
     | { type: 'insufficientFunds' };
 
 export interface TreeStore {
-    addLeaves: (leaves: TreeNode[]) => Promise<void>;
+    addLeaves: (leaves: LeafPedigree[]) => Promise<void>;
     getLeaves: () => Promise<Leaves>;
+    getExitChains: (leafIds: string[]) => Promise<LeafPedigree[]>;
     getAvailableBalance: () => Promise<bigint>;
     getVerifiedLeafKeys: () => Promise<[string, string, string][]>;
-    setLeaves: (leaves: TreeNode[], missingLeaves: TreeNode[], refreshStartedAtMs: number) => Promise<void>;
-    cancelReservation: (id: string, leavesToKeep: TreeNode[]) => Promise<void>;
-    finalizeReservation: (id: string, newLeaves: TreeNode[] | null) => Promise<void>;
+    setLeaves: (leaves: LeafPedigree[], missingLeaves: LeafPedigree[], refreshStartedAtMs: number) => Promise<void>;
+    cancelReservation: (id: string, leavesToKeep: LeafPedigree[]) => Promise<void>;
+    finalizeReservation: (id: string, newLeaves: LeafPedigree[] | null) => Promise<void>;
     tryReserveLeaves: (targetAmounts: TargetAmounts | null, exactOnly: boolean, purpose: string) => Promise<ReserveResult>;
     now: () => Promise<number>;
-    updateReservation: (reservationId: string, reservedLeaves: TreeNode[], changeLeaves: TreeNode[]) => Promise<LeavesReservation>;
+    updateReservation: (reservationId: string, reservedLeaves: LeafPedigree[], changeLeaves: LeafPedigree[]) => Promise<LeavesReservation>;
     tryReserveLeavesByIds: (leafIds: string[], purpose: string) => Promise<LeavesReservation>;
     trySelectLeaves: (targetAmounts: TargetAmounts | null) => Promise<LeafSelection>;
 }"#;
@@ -558,6 +585,9 @@ extern "C" {
 
     #[wasm_bindgen(structural, method, js_name = getLeaves, catch)]
     pub fn get_leaves(this: &TreeStoreJs) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = getExitChains, catch)]
+    pub fn get_exit_chains(this: &TreeStoreJs, leaf_ids: JsValue) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = getAvailableBalance, catch)]
     pub fn get_available_balance(this: &TreeStoreJs) -> Result<Promise, JsValue>;

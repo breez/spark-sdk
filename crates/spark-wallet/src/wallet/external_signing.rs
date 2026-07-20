@@ -185,9 +185,14 @@ impl SparkWallet {
             }
         };
 
+        // Resolve the swap outputs' ancestors (best-effort), then finalize.
+        let pedigrees = self
+            .tree_service
+            .fetch_pedigrees_from_operators(&claimed)
+            .await;
         if let Err(e) = self
             .tree_service
-            .finalize_reservation(reservation.id.clone(), Some(claimed.as_slice()))
+            .finalize_reservation(reservation.id.clone(), Some(&pedigrees))
             .await
         {
             error!("Failed to finalize reservation: {e:?}");

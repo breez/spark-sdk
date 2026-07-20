@@ -110,6 +110,7 @@ members = [
   "crates/spark-itest",
   "crates/spark-mysql",
   "crates/spark-postgres",
+  "crates/spark-sqlite",
   "crates/spark-wallet",
   "crates/xtask",
   "crates/internal",
@@ -208,6 +209,7 @@ spark = { path = "crates/spark", default-features = false }
 spark-itest = { path = "crates/spark-itest" }
 spark-mysql = { path = "crates/spark-mysql" }
 spark-postgres = { path = "crates/spark-postgres" }
+spark-sqlite = { path = "crates/spark-sqlite" }
 spark-token-primitives = "0.1.3"
 spark-wallet = { path = "crates/spark-wallet", default-features = false }
 syn = "2.0.105"
