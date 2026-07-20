@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use bitcoin::{Address, Amount, OutPoint, ScriptBuf, Transaction, TxOut, Txid};
 use spark::{
     services::{
-        CpfpInput, ServiceError, UnilateralExitPlan, branch_required_funding, build_cpfp_child,
-        csv_timelock, walk_unilateral_exit_chain,
+        CpfpInput, ServiceError, UnilateralExitPlan, build_cpfp_child, csv_timelock,
+        walk_unilateral_exit_chain,
     },
     tree::{TreeNode, TreeNodeId, TreeNodeStatus},
     utils::transactions::is_ephemeral_anchor_output,
@@ -1217,7 +1217,8 @@ fn resolve_fan_out_funding(
     };
 
     // Adopt the confirmed fan-out's real outputs. Each is fixed at the fee it was
-    // built with, so it must still cover the branch cost plus terminal change dust.
+    // built with, so it must still cover the branch's CPFP fees plus terminal change
+    // dust.
     let leaf_by_id: HashMap<&TreeNodeId, _> =
         plan.selected_leaves.iter().map(|l| (&l.id, l)).collect();
     let mut per_branch = plan.per_branch_funding.clone();
@@ -1233,9 +1234,12 @@ fn resolve_fan_out_funding(
         };
         // Dust from the branch's own funding script, not the plan's change_dust_limit.
         let dust = first.witness_utxo.script_pubkey.minimal_non_dust().to_sat();
+        // Gate on the physical CPFP floor (cpfp_cost), not the quote's estimated_cost:
+        // the sweep is paid from the swept value, not this output, so its sweep-fee
+        // headroom must not reject a higher-rate resume the CPFP fees can afford.
         let required = leaf_by_id
             .get(leaf_id)
-            .map_or(dust, |leaf| branch_required_funding(leaf, dust));
+            .map_or(dust, |leaf| leaf.cpfp_cost.saturating_add(dust));
         if adopted.value < required {
             return Err(SparkWalletError::ServiceError(
                 ServiceError::InsufficientCpfpBudget {
