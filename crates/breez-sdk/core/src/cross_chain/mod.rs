@@ -16,6 +16,7 @@ pub(crate) use orchestra::{BreezServerOrchestraConfigResolver, OrchestraService}
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use breez_sdk_common::fiat::FiatService;
 use serde::{Deserialize, Serialize};
@@ -43,6 +44,9 @@ pub(crate) const DEFAULT_TARGET_OVERPAY_BPS: u32 = 15;
 /// Tickers treated as $1-pegged for par-value rescaling. Adding a non-USD
 /// ticker would silently misreport `fee_amount` for routes using it.
 const USD_STABLE_ASSETS: &[&str] = &["USDB", "USDC", "USDT", "USDT0"];
+
+/// Each provider's background monitor interval.
+pub(crate) const MONITOR_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Resolves the BTC-leg [`TransferId`] for a cross-chain send. A
 /// caller-supplied `idempotency_key` from [`crate::SendPaymentRequest`]

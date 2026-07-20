@@ -10,20 +10,25 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use boltz_client::{
-    BoltzError, BoltzService as BoltzClient,
+    BoltzError, BoltzService as BoltzClient, BoltzStorage,
     config::{BoltzConfig as BoltzClientConfig, MAX_SLIPPAGE_BPS},
     models::{Asset, PreparedSwap},
 };
 use breez_sdk_common::fiat::FiatService;
 use breez_sdk_common::input::CrossChainAddressFamily;
-use platform_utils::time::{SystemTime, UNIX_EPOCH};
+use platform_utils::tokio::sync::OnceCell;
+use platform_utils::{
+    time::{SystemTime, UNIX_EPOCH},
+    tokio,
+};
 use spark_wallet::SparkWallet;
-use tracing::{debug, error, info};
+use tokio::{select, sync::watch, time::sleep};
+use tracing::{debug, error, info, warn};
 
 use super::{
     CrossChainFeeMode, CrossChainPrepared, CrossChainProvider, CrossChainProviderContext,
     CrossChainRouteFilter, CrossChainRoutePair, CrossChainService, SourceAsset,
-    derive_btc_leg_transfer_id,
+    boltz_storage_adapter::PROVIDER_TAG_BOLTZ, derive_btc_leg_transfer_id,
 };
 use crate::{
     ConversionInfo, ConversionStatus, CrossChainAddressDetails, Network, PaymentMetadata,
@@ -44,7 +49,9 @@ const SEND_POLL_MAX_DELAY_MS: u64 = 2000;
 const SEND_POLL_TIMEOUT_SECS: u64 = 60;
 
 pub(crate) struct BoltzService {
-    client: Arc<BoltzClient>,
+    client: OnceCell<Arc<BoltzClient>>,
+    config: BoltzClientConfig,
+    adapter: Arc<dyn BoltzStorage>,
     spark_wallet: Arc<SparkWallet>,
     storage: Arc<dyn Storage>,
     fiat_service: Arc<dyn FiatService>,
@@ -56,26 +63,6 @@ pub(crate) struct BoltzService {
 }
 
 impl BoltzService {
-    /// Construct the SDK-side wrapper. Does not perform I/O; the caller is
-    /// expected to construct the inner [`BoltzClient`] (which owns the
-    /// WebSocket + background monitor) and pass it in already initialized.
-    pub(crate) fn new(
-        client: Arc<BoltzClient>,
-        spark_wallet: Arc<SparkWallet>,
-        storage: Arc<dyn Storage>,
-        fiat_service: Arc<dyn FiatService>,
-        lightning_sender: Arc<LightningSender>,
-    ) -> Self {
-        info!("Boltz service initialized");
-        Self {
-            client,
-            spark_wallet,
-            storage,
-            fiat_service,
-            lightning_sender,
-        }
-    }
-
     /// Best-effort helper to build a boltz-client [`BoltzClientConfig`] for
     /// the given network. Returns `None` on non-mainnet networks since Boltz
     /// only supports mainnet today.
@@ -88,20 +75,20 @@ impl BoltzService {
     }
 
     /// Builds the Boltz reverse-swap cross-chain provider, or `None` when the
-    /// network has no default configuration.
+    /// network has no default configuration or no ECIES signer is available.
     ///
-    /// Runs boltz-client in seedless mode: each swap carries its own secrets,
-    /// persisted and synced by the storage adapter, so it is recoverable on any
-    /// instance of the same wallet without a shared seed.
-    pub(crate) async fn build(
+    /// Only performs the build validation and builds the storage adapter,
+    /// deferring the inner [`BoltzClient`] construction to first use.
+    pub(crate) fn build(
         network: Network,
         spark_wallet: Arc<SparkWallet>,
         storage: Arc<dyn Storage>,
         ecies: Option<Arc<dyn crate::signer::EciesSigner>>,
         fiat_service: Arc<dyn FiatService>,
         lightning_sender: Arc<LightningSender>,
+        shutdown_receiver: watch::Receiver<()>,
     ) -> Result<Option<Arc<dyn CrossChainService>>, SdkError> {
-        let Some(client_config) = Self::default_client_config(network) else {
+        let Some(config) = Self::default_client_config(network) else {
             return Ok(None);
         };
         // Boltz encrypts each swap's secrets, so it can't run without an ECIES
@@ -110,48 +97,104 @@ impl BoltzService {
             return Ok(None);
         };
 
-        let adapter = Arc::new(
+        let adapter: Arc<dyn BoltzStorage> = Arc::new(
             super::boltz_storage_adapter::BoltzStorageAdapter::new(Arc::clone(&storage), ecies)
                 .map_err(|e| {
                     SdkError::Generic(format!("Failed to build Boltz storage adapter: {e}"))
                 })?,
         );
 
-        let client = Arc::new(
-            BoltzClient::new_seedless(client_config, adapter)
-                .await
-                .map_err(|e| SdkError::Generic(format!("Failed to construct Boltz client: {e}")))?,
-        );
-
-        let listener = Box::new(super::boltz_event_listener::BoltzSdkEventListener::new(
-            Arc::clone(&storage),
-        ));
-        client.add_event_listener(listener).await;
-
-        if let Err(e) = client.resume_swaps().await {
-            tracing::warn!("Boltz resume_swaps failed on startup: {e:?}");
-        }
-
-        // Defense-in-depth: heal any conversion whose terminal swap event was
-        // dropped (see `reconcile_pending_boltz_conversions`). Spawned so a
-        // large payment history doesn't add latency to connect; it only reads
-        // local storage and the local swap rows.
-        platform_utils::tokio::spawn({
-            let client = Arc::clone(&client);
-            let storage = Arc::clone(&storage);
-            async move {
-                super::boltz_event_listener::reconcile_pending_boltz_conversions(&client, &storage)
-                    .await;
-            }
-        });
-
-        Ok(Some(Arc::new(Self::new(
-            client,
+        let service = Arc::new(Self {
+            client: OnceCell::new(),
+            config,
+            adapter,
             spark_wallet,
             storage,
             fiat_service,
             lightning_sender,
-        ))))
+        });
+        info!("Boltz service initialized");
+        service.spawn_resume_monitor(shutdown_receiver);
+        Ok(Some(service))
+    }
+
+    /// Spawns a background monitor that warms the client  as soon as an active
+    /// Boltz swap is present, including one synced in from another instance after
+    /// connect. Continues until the client is warm by any path or the SDK shuts down.
+    fn spawn_resume_monitor(self: &Arc<Self>, mut shutdown_receiver: watch::Receiver<()>) {
+        let service = Arc::clone(self);
+        tokio::spawn(async move {
+            loop {
+                if service.client.initialized() {
+                    return;
+                }
+                match Self::has_active_swaps(&service.storage).await {
+                    Ok(true) => match service.client().await {
+                        Ok(_) => return,
+                        Err(e) => warn!("Boltz resume monitor: warm failed, will retry: {e:?}"),
+                    },
+                    Ok(false) => {}
+                    Err(e) => warn!("Boltz resume monitor: active-swap check failed: {e:?}"),
+                }
+                select! {
+                    _ = shutdown_receiver.changed() => return,
+                    () = sleep(super::MONITOR_INTERVAL) => {}
+                }
+            }
+        });
+    }
+
+    async fn has_active_swaps(storage: &Arc<dyn Storage>) -> Result<bool, SdkError> {
+        let swaps = storage
+            .list_active_cross_chain_swaps(PROVIDER_TAG_BOLTZ.to_string())
+            .await?;
+        Ok(!swaps.is_empty())
+    }
+
+    /// Returns the inner Boltz client, building it on first use and caching it.
+    ///
+    /// Runs boltz-client in seedless mode: each swap carries
+    /// its own secrets, persisted and synced by the storage adapter, so it is
+    /// recoverable on any instance of the same wallet without a shared seed.
+    async fn client(&self) -> Result<&Arc<BoltzClient>, SdkError> {
+        self.client
+            .get_or_try_init(|| async {
+                let client = Arc::new(
+                    BoltzClient::new_seedless(self.config.clone(), Arc::clone(&self.adapter))
+                        .await
+                        .map_err(|e| {
+                            SdkError::Generic(format!("Failed to construct Boltz client: {e}"))
+                        })?,
+                );
+
+                let listener = Box::new(super::boltz_event_listener::BoltzSdkEventListener::new(
+                    Arc::clone(&self.storage),
+                ));
+                client.add_event_listener(listener).await;
+
+                if let Err(e) = client.resume_swaps().await {
+                    warn!("Boltz resume_swaps failed on lazy init: {e:?}");
+                }
+
+                // Defense-in-depth: heal any conversion whose terminal swap event
+                // was dropped (see `reconcile_pending_boltz_conversions`). Spawned
+                // so a large payment history doesn't delay the first cross-chain
+                // call; it only reads local storage and the local swap rows.
+                tokio::spawn({
+                    let client = Arc::clone(&client);
+                    let storage = Arc::clone(&self.storage);
+                    async move {
+                        super::boltz_event_listener::reconcile_pending_boltz_conversions(
+                            &client, &storage,
+                        )
+                        .await;
+                    }
+                });
+
+                info!("Boltz client lazily initialized");
+                Ok::<_, SdkError>(client)
+            })
+            .await
     }
 
     /// `FeesExcluded`: `amount_sats` is the recipient's USD-equivalent intent.
@@ -283,8 +326,8 @@ impl BoltzService {
         // `real_invoice_sats`, a number the caller never chose. The phase-2
         // prepare validates against the Boltz pair limits before
         // `create_reverse_swap` is called, so a failure here commits no state.
-        let prepared = self
-            .client
+        let client = self.client().await?;
+        let prepared = client
             .prepare_reverse_swap_from_sats(
                 recipient_address,
                 chain,
@@ -301,7 +344,7 @@ impl BoltzService {
                 )),
                 _ => e.into(),
             })?;
-        let created = self.client.create_reverse_swap(&prepared).await?;
+        let created = client.create_reverse_swap(&prepared).await?;
         let ln_fee_final_sats = self.fetch_ln_fee(&created.invoice).await?;
 
         validate_ln_fee_did_not_drift(ln_fee_probe_sats, ln_fee_final_sats)?;
@@ -351,8 +394,8 @@ impl BoltzService {
         output_amount: u64,
         max_slippage_bps: Option<u32>,
     ) -> Result<(PreparedSwap, boltz_client::models::CreatedSwap), SdkError> {
-        let prepared: PreparedSwap = self
-            .client
+        let client = self.client().await?;
+        let prepared: PreparedSwap = client
             .prepare_reverse_swap(
                 recipient_address,
                 chain,
@@ -362,7 +405,7 @@ impl BoltzService {
             )
             .await?;
 
-        let created = self.client.create_reverse_swap(&prepared).await?;
+        let created = client.create_reverse_swap(&prepared).await?;
 
         Ok((prepared, created))
     }
@@ -386,8 +429,8 @@ impl BoltzService {
         invoice_amount_sats: u64,
         max_slippage_bps: Option<u32>,
     ) -> Result<String, SdkError> {
-        let prepared: PreparedSwap = self
-            .client
+        let client = self.client().await?;
+        let prepared: PreparedSwap = client
             .prepare_reverse_swap_from_sats(
                 recipient_address,
                 chain,
@@ -397,7 +440,7 @@ impl BoltzService {
             )
             .await?;
 
-        self.client
+        client
             .create_probe_invoice(&prepared)
             .await
             .map_err(Into::into)
@@ -485,7 +528,8 @@ impl CrossChainService for BoltzService {
         // an unfiltered contract-specific URI would surface unrelated EVM
         // assets/chains and could deliver the wrong asset irreversibly.
         let routes = self
-            .client
+            .client()
+            .await?
             .destinations_accepting(&address_details.address)
             .iter()
             .map(destination_to_route_pair)
@@ -692,7 +736,7 @@ impl CrossChainService for BoltzService {
         // read is sequenced after the metadata write, so no terminal transition
         // can slip through: it is either visible here, or it lands after the
         // write and the WS event finds the `ConversionInfo`.
-        match self.client.get_swap(swap_id).await {
+        match self.client().await?.get_swap(swap_id).await {
             Ok(Some(swap)) if swap.status.is_terminal() => {
                 if let Some(updated) =
                     super::boltz_event_listener::boltz_metadata_from_swap(conversion_info, &swap)
@@ -879,6 +923,18 @@ mod tests {
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[cfg(feature = "sqlite")]
+    fn create_temp_dir(name: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "breez-test-boltz-{}-{}",
+            name,
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
 
     fn test_destination(
         chain_label: &str,
@@ -1086,22 +1142,55 @@ mod tests {
         );
     }
 
+    // ---- has_active_swaps (startup-resume gate) ----
+
+    #[cfg(feature = "sqlite")]
+    mod resume_gate_tests {
+        use super::*;
+        use crate::persist::StoredCrossChainSwap;
+
+        fn boltz_swap_row(id: &str, is_terminal: bool) -> StoredCrossChainSwap {
+            StoredCrossChainSwap {
+                provider: PROVIDER_TAG_BOLTZ.to_string(),
+                id: id.to_string(),
+                is_terminal,
+                updated_at: 1_700_000_000,
+                data: "{}".to_string(),
+                secrets: String::new(),
+            }
+        }
+
+        #[tokio::test]
+        async fn has_active_swaps_reflects_state() {
+            let dir = create_temp_dir("has_active_swaps");
+            let storage: Arc<dyn Storage> =
+                Arc::new(crate::persist::sqlite::SqliteStorage::new(&dir).unwrap());
+
+            // Empty store: the startup-resume gate reads false.
+            assert!(!BoltzService::has_active_swaps(&storage).await.unwrap());
+
+            // A terminal swap row is not active, so the gate stays false.
+            storage
+                .set_cross_chain_swap(boltz_swap_row("terminal", true))
+                .await
+                .unwrap();
+            assert!(!BoltzService::has_active_swaps(&storage).await.unwrap());
+
+            // An active (non-terminal) Boltz swap row flips the gate to true, with
+            // no payment row present (covers the pre-send and receive states).
+            storage
+                .set_cross_chain_swap(boltz_swap_row("active", false))
+                .await
+                .unwrap();
+            assert!(BoltzService::has_active_swaps(&storage).await.unwrap());
+        }
+    }
+
     // ---- poll_to_terminal_or_fallback ----
 
     #[cfg(feature = "sqlite")]
     mod poll_to_terminal_tests {
         use super::*;
-
-        fn create_temp_dir(name: &str) -> std::path::PathBuf {
-            let mut path = std::env::temp_dir();
-            path.push(format!(
-                "breez-test-boltz-{}-{}",
-                name,
-                uuid::Uuid::new_v4()
-            ));
-            std::fs::create_dir_all(&path).unwrap();
-            path
-        }
 
         fn make_pending_payment(id: &str) -> crate::Payment {
             crate::Payment {
