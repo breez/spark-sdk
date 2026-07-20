@@ -303,7 +303,7 @@ fn interpret_chain(
     let mut refunds: HashMap<TreeNodeId, RefundState> = HashMap::new();
     let mut stopped: HashSet<TreeNodeId> = HashSet::new();
     let mut needs_change: HashSet<TreeNodeId> = HashSet::new();
-    let mut operator_confirmed: HashSet<TreeNodeId> = HashSet::new();
+    let mut unverifiable_confirmed: HashSet<TreeNodeId> = HashSet::new();
     for (leaf_id, _) in &plan.per_branch_funding {
         walk_branch(
             node_map,
@@ -314,7 +314,7 @@ fn interpret_chain(
             &mut stopped,
             &mut needs_change,
             &mut unverified,
-            &mut operator_confirmed,
+            &mut unverifiable_confirmed,
             &mut pending,
         );
     }
@@ -325,10 +325,16 @@ fn interpret_chain(
         &mut nodes,
         &needs_change,
         observed,
+        &mut unverifiable_confirmed,
         &mut pending,
     );
 
-    flag_unverifiable_confirmation_branches(node_map, plan, &operator_confirmed, &mut unverified);
+    flag_unverifiable_confirmation_branches(
+        node_map,
+        plan,
+        &unverifiable_confirmed,
+        &mut unverified,
+    );
 
     // Runs per leaf independently of the walk; an adopted refund overrides it.
     for (leaf_id, address) in &prepared.leaf_refund_addresses {
@@ -433,19 +439,21 @@ fn branch_has_tracked_change(
     })
 }
 
-/// Marks a branch's driven txs unverified when one of its nodes was confirmed via
-/// the operator-OnChain fallback (the chain lookup was unavailable). That spend is
-/// invisible to `spent_funding`, so a re-supplied input the confirmed child already
-/// spent wouldn't be dropped and the next driven child would double-spend; flagging
-/// (not the `Unconfirmed` the build would otherwise emit) tells the caller not to
-/// broadcast until a later run confirms it on a healthy chain. Chain-verified
-/// confirmations are left alone: their spend is visible, so `spent_funding` drops
-/// any reused input. Only `Unconfirmed` txs are upgraded, so confirmed nodes keep
-/// their state.
+/// Marks a branch's driven txs unverified when one of its nodes is confirmed but
+/// its on-chain spend can't be verified: either confirmed via the operator-OnChain
+/// fallback (the node's own chain lookup was unavailable), or chain-confirmed with
+/// its CPFP child's spend or body lookup unavailable, so its change is unresolved.
+/// In both cases the confirmed child's spend is invisible to `spent_funding`, so a
+/// re-supplied input the child already spent wouldn't be dropped and the next driven
+/// child would double-spend; flagging (not the `Unconfirmed` the build would
+/// otherwise emit) tells the caller not to broadcast until a later run confirms it on
+/// a healthy chain. Chain-verified confirmations with a resolved (or safely absent)
+/// change are left alone. Only `Unconfirmed` txs are upgraded, so confirmed nodes
+/// keep their state.
 fn flag_unverifiable_confirmation_branches(
     node_map: &HashMap<TreeNodeId, TreeNode>,
     plan: &UnilateralExitPlan,
-    operator_confirmed: &HashSet<TreeNodeId>,
+    unverifiable_confirmed: &HashSet<TreeNodeId>,
     unverified: &mut HashSet<TreeNodeId>,
 ) {
     for (leaf_id, _) in &plan.per_branch_funding {
@@ -455,7 +463,7 @@ fn flag_unverifiable_confirmation_branches(
         let Ok(chain) = walk_unilateral_exit_chain(node_map, leaf) else {
             continue;
         };
-        if chain.iter().any(|n| operator_confirmed.contains(&n.id)) {
+        if chain.iter().any(|n| unverifiable_confirmed.contains(&n.id)) {
             for n in &chain {
                 unverified.insert(n.id.clone());
             }
@@ -464,14 +472,18 @@ fn flag_unverifiable_confirmation_branches(
 }
 
 /// Resolves each `needs_change` node's on-chain CPFP-child change (the output
-/// paying its funding script), driving the two lookups through `pending`; an
-/// unresolved lookup leaves the change `None`.
+/// paying its funding script), driving the two lookups through `pending`. An absent
+/// lookup leaves the change `None` to retry; an `Unavailable` one adds the node to
+/// `unverifiable_confirmed` so its branch is flagged unverified: the confirmed child
+/// already spent the supplied input, which a rebuild must not reuse until the change
+/// can be verified on a healthy chain.
 fn resolve_confirmed_changes(
     node_map: &HashMap<TreeNodeId, TreeNode>,
     plan: &UnilateralExitPlan,
     nodes: &mut HashMap<TreeNodeId, NodeState>,
     needs_change: &HashSet<TreeNodeId>,
     observed: &ObservedIndex<'_>,
+    unverifiable_confirmed: &mut HashSet<TreeNodeId>,
     pending: &mut Vec<ChainQuery>,
 ) {
     let scripts = node_funding_scripts(node_map, plan);
@@ -506,6 +518,13 @@ fn resolve_confirmed_changes(
         };
         let child_txid = match spend {
             ChainResult::Spend(Some(info)) if info.confirmed => info.spender_txid,
+            // The node is confirmed, so a CPFP child may already have spent the
+            // supplied funding, but the anchor's spend can't be verified. Flag the
+            // branch so a rebuild that reuses the input isn't broadcast.
+            ChainResult::Unavailable => {
+                unverifiable_confirmed.insert(node_id.clone());
+                continue;
+            }
             _ => continue,
         };
         let tx_query = ChainQuery::Transaction(child_txid);
@@ -513,8 +532,16 @@ fn resolve_confirmed_changes(
             pending.push(tx_query);
             continue;
         };
-        let ChainResult::Transaction(child_tx) = tx_result else {
-            continue;
+        let child_tx = match tx_result {
+            ChainResult::Transaction(child_tx) => child_tx,
+            // The confirmed child's body is unavailable, so its change output can't
+            // be resolved; flag the branch (a rebuild would reuse the input the
+            // child already spent).
+            ChainResult::Unavailable => {
+                unverifiable_confirmed.insert(node_id.clone());
+                continue;
+            }
+            _ => continue,
         };
         let Some(script) = scripts.get(node_id) else {
             continue;
@@ -640,9 +667,9 @@ fn walk_branch(
     // Confirmed cpfp nodes whose CPFP change is resolved afterwards.
     needs_change: &mut HashSet<TreeNodeId>,
     unverified: &mut HashSet<TreeNodeId>,
-    // Nodes confirmed via the operator-OnChain fallback (chain lookup unavailable),
-    // whose on-chain spend `spent_funding` therefore can't see.
-    operator_confirmed: &mut HashSet<TreeNodeId>,
+    // Confirmed nodes whose on-chain spend `spent_funding` can't see (here: the
+    // operator-OnChain fallback, when the chain lookup was unavailable).
+    unverifiable_confirmed: &mut HashSet<TreeNodeId>,
     pending: &mut Vec<ChainQuery>,
 ) {
     let Some(leaf) = node_map.get(leaf_id) else {
@@ -699,7 +726,7 @@ fn walk_branch(
                         "walk: chain lookup failed, operators report OnChain; assuming cpfp-confirmed"
                     );
                     nodes.insert(node.id.clone(), NodeState::ConfirmedCpfp { change: None });
-                    operator_confirmed.insert(node.id.clone());
+                    unverifiable_confirmed.insert(node.id.clone());
                     if is_leaf {
                         needs_change.insert(node.id.clone());
                         return;
@@ -3077,6 +3104,101 @@ mod interpret_tests {
                 }),
             }),
             "the root's on-chain CPFP-child change is resolved from chain"
+        );
+    }
+
+    #[test]
+    fn interpret_flags_branch_when_confirmed_child_body_unavailable() {
+        // The root is chain-confirmed and its CPFP child's anchor spend is visible
+        // (confirmed child txid known), but the child tx body lookup is Unavailable,
+        // so the child's change output can't be resolved. A rebuild would reuse the
+        // supplied input the confirmed child already spent, so the branch is flagged
+        // unverified rather than emitted unconfirmed.
+        let anchor = ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]);
+        let deposit = OutPoint {
+            txid: Txid::from_byte_array([1u8; 32]),
+            vout: 0,
+        };
+        let root_tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::from_height(1).unwrap(),
+            input: vec![TxIn {
+                previous_output: deposit,
+                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+                ..Default::default()
+            }],
+            output: vec![
+                TxOut {
+                    value: Amount::from_sat(99_000),
+                    script_pubkey: ScriptBuf::new(),
+                },
+                TxOut {
+                    value: Amount::from_sat(0),
+                    script_pubkey: anchor,
+                },
+            ],
+        };
+        let root_txid = root_tx.compute_txid();
+        let root = treenode("root", None, root_tx, 0);
+        let leaf_parent = OutPoint {
+            txid: root_txid,
+            vout: 0,
+        };
+        let leaf = treenode("leaf", Some("root"), tx_spending(leaf_parent, 2), 0);
+        let leaf_id = leaf.id.clone();
+
+        // The child body is never observed, so only its txid is needed here.
+        let child_txid = Txid::from_byte_array([9u8; 32]);
+        let funding_input = CpfpInput {
+            outpoint: OutPoint {
+                txid: Txid::from_byte_array([7u8; 32]),
+                vout: 0,
+            },
+            witness_utxo: TxOut {
+                value: Amount::from_sat(100_000),
+                script_pubkey: leaf_addr().script_pubkey(),
+            },
+            signed_input_weight: 272,
+        };
+        let prepared = PreparedUnilateralExit {
+            plan: UnilateralExitPlan {
+                selected_leaves: vec![],
+                fan_out_psbt: None,
+                per_branch_funding: vec![(leaf_id.clone(), vec![funding_input])],
+                tree_nodes: to_node_map(vec![root, leaf]),
+            },
+            leaf_refund_addresses: [(leaf_id.clone(), leaf_addr())].into_iter().collect(),
+        };
+
+        let observed = vec![
+            spent(deposit, root_txid),
+            Observation {
+                query: ChainQuery::Outspend(leaf_parent),
+                result: ChainResult::Spend(None),
+            },
+            spent(
+                OutPoint {
+                    txid: root_txid,
+                    vout: 1,
+                },
+                child_txid,
+            ),
+            Observation {
+                query: ChainQuery::Transaction(child_txid),
+                result: ChainResult::Unavailable,
+            },
+            no_refund(&leaf_id),
+        ];
+        let interp = interpret_chain(&prepared, &observed).unwrap();
+
+        assert_eq!(
+            interp.resolved.nodes.get(&id("root")),
+            Some(&NodeState::ConfirmedCpfp { change: None }),
+            "root is confirmed but its child's change is unresolved"
+        );
+        assert!(
+            interp.unverified.contains(&leaf_id),
+            "the driven child below a confirmed node with an unavailable child body is flagged"
         );
     }
 }
