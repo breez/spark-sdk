@@ -1265,7 +1265,7 @@ fn resolve_fan_out_funding(
 mod exit_build_tests {
     use super::*;
     use bitcoin::{
-        CompressedPublicKey, ScriptBuf, TxOut,
+        CompressedPublicKey, ScriptBuf, TxOut, Weight,
         absolute::LockTime,
         hashes::Hash,
         key::Secp256k1,
@@ -1274,7 +1274,10 @@ mod exit_build_tests {
     };
     use spark::{
         Identifier,
-        services::UnilateralExitSelectedLeaf,
+        services::{
+            UnilateralExitLeafFilter, UnilateralExitSelectedLeaf, compute_cpfp_package_fee,
+            plan_unilateral_exit,
+        },
         tree::{SigningKeyshare, TreeNodeStatus},
     };
     use std::str::FromStr;
@@ -2015,6 +2018,90 @@ mod exit_build_tests {
             resumed.total_fee_sat,
             all_driven.total_fee_sat
         );
+    }
+
+    #[test]
+    fn plan_single_leaf_two_utxo_funding_boundary_is_exact() {
+        // A single leaf funded with TWO UTXOs: build funds the first CPFP child with
+        // both, so its fee is sized on their combined weight. The plan gate must
+        // charge that, not the one-input estimate the selection pass uses; otherwise
+        // funding in the gap passes the plan then fails build_cpfp_child.
+        let root = node("root", None, anchor_tx(1), None);
+        let leaf = node("leaf", Some("root"), anchor_tx(2), Some(anchor_tx(3)));
+        let leaf_id = leaf.id.clone();
+        let nodes: HashMap<TreeNodeId, TreeNode> = [(id("root"), root), (leaf_id.clone(), leaf)]
+            .into_iter()
+            .collect();
+
+        let change_len = funding(0).witness_utxo.script_pubkey.len();
+        let dest_len = change_len;
+
+        // The first child's extra fee for the second input (272 wu more), which the
+        // old one-input gate omitted. The first bumped tx is the root's node_tx.
+        let two_input =
+            compute_cpfp_package_fee(anchor_tx(1).weight(), Weight::from_wu(544), change_len, FEE_RATE);
+        let one_input =
+            compute_cpfp_package_fee(anchor_tx(1).weight(), Weight::from_wu(272), change_len, FEE_RATE);
+        let extra_second_input_fee = two_input - one_input;
+        assert!(extra_second_input_fee > 0);
+
+        let two = |total: u64| {
+            let mut a = funding(total / 2);
+            a.outpoint.vout = 0;
+            let mut b = funding(total - total / 2);
+            b.outpoint.vout = 1;
+            plan_unilateral_exit(
+                nodes.clone(),
+                std::slice::from_ref(&leaf_id),
+                UnilateralExitLeafFilter::ProfitableOnly,
+                vec![a, b],
+                FEE_RATE,
+                dest_len,
+            )
+        };
+        let one = |total: u64| {
+            let mut only = funding(total);
+            only.outpoint.vout = 0;
+            plan_unilateral_exit(
+                nodes.clone(),
+                std::slice::from_ref(&leaf_id),
+                UnilateralExitLeafFilter::ProfitableOnly,
+                vec![only],
+                FEE_RATE,
+                dest_len,
+            )
+        };
+
+        // The gate reports its exact floor when funding is zero.
+        let floor_two = match two(0) {
+            Err(ServiceError::InsufficientCpfpBudget { required_sat }) => required_sat,
+            other => panic!("expected InsufficientCpfpBudget, got {other:?}"),
+        };
+        let floor_one = match one(0) {
+            Err(ServiceError::InsufficientCpfpBudget { required_sat }) => required_sat,
+            other => panic!("expected InsufficientCpfpBudget, got {other:?}"),
+        };
+        // The two-UTXO floor is exactly the one-UTXO floor plus the first child's
+        // second-input fee: the window the old one-input gate under-charged.
+        assert_eq!(floor_two, floor_one + extra_second_input_fee);
+
+        // Exactly the two-UTXO floor both plans AND builds: no plan/build mismatch.
+        let plan = two(floor_two).expect("funding at the two-UTXO floor plans");
+        assert!(plan.fan_out_psbt.is_none());
+        assert_eq!(plan.per_branch_funding.len(), 1);
+        let build = build_exit(&plan, &ResolvedExitState::default(), FEE_RATE)
+            .expect("funding at the plan floor also builds");
+        assert_eq!(build.cpfp_change_inputs.len(), 1);
+
+        // One sat under rejects up front with that exact floor.
+        match two(floor_two - 1) {
+            Err(ServiceError::InsufficientCpfpBudget { required_sat }) => {
+                assert_eq!(required_sat, floor_two);
+            }
+            other => panic!("expected InsufficientCpfpBudget, got {other:?}"),
+        }
+        // Funding the old one-input gate would have accepted is now rejected.
+        assert!(two(floor_one).is_err());
     }
 }
 

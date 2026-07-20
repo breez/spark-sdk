@@ -173,7 +173,30 @@ pub fn plan_unilateral_exit(
         // it on build_cpfp_child's physical floor (CPFP fees + dust); the sweep is
         // paid from the swept value, not this funding UTXO, so estimated_cost's
         // sweep component (the quote's headroom) must not inflate the hard gate.
-        let required = selected[0].cpfp_cost.saturating_add(change_dust_limit);
+        //
+        // The build funds the first CPFP child with ALL supplied inputs, so re-cost
+        // the first child on their combined weight: the selection pass sized it on
+        // one input, which under-gates a single leaf funded by several UTXOs.
+        let total_input_weight = inputs
+            .iter()
+            .map(|i| i.signed_input_weight)
+            .fold(0u64, u64::saturating_add);
+        let sized_params = UnilateralExitLeafCostParams {
+            initial_cpfp_input_weight: Weight::from_wu(total_input_weight),
+            single_cpfp_input_weight: Weight::from_wu(inputs[0].signed_input_weight),
+            change_script_len: change_script.len(),
+            destination_script_len,
+            fee_rate_sat_per_kw,
+        };
+        let cpfp_cost = evaluate_unilateral_exit_leaf_costs(
+            &tree_nodes,
+            std::slice::from_ref(&selected[0].id),
+            &sized_params,
+            UnilateralExitLeafFilter::All,
+        )?
+        .first()
+        .map_or(selected[0].cpfp_cost, |l| l.cpfp_cost);
+        let required = cpfp_cost.saturating_add(change_dust_limit);
         let available = inputs
             .iter()
             .map(|i| i.witness_utxo.value.to_sat())
