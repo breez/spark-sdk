@@ -260,11 +260,25 @@ struct ChainInterpretation {
     fan_out_unverified: bool,
 }
 
-fn result_for<'a>(observed: &'a [Observation], query: &ChainQuery) -> Option<&'a ChainResult> {
-    observed
-        .iter()
-        .find(|o| &o.query == query)
-        .map(|o| &o.result)
+/// An index over the observations for O(1) lookup by query, built once per
+/// [`interpret_chain`] pass instead of scanning the growing observation list on
+/// every lookup. The first observation of a query wins, matching the prior scan.
+struct ObservedIndex<'a> {
+    by_query: HashMap<&'a ChainQuery, &'a ChainResult>,
+}
+
+impl<'a> ObservedIndex<'a> {
+    fn new(observed: &'a [Observation]) -> Self {
+        let mut by_query = HashMap::with_capacity(observed.len());
+        for obs in observed {
+            by_query.entry(&obs.query).or_insert(&obs.result);
+        }
+        Self { by_query }
+    }
+
+    fn get(&self, query: &ChainQuery) -> Option<&'a ChainResult> {
+        self.by_query.get(query).copied()
+    }
 }
 
 /// Resolves the exit's on-chain state from `observed`, emitting the lookups still
@@ -277,6 +291,8 @@ fn interpret_chain(
 ) -> Result<ChainInterpretation, SparkWalletError> {
     let plan = &prepared.plan;
     let node_map = &plan.tree_nodes;
+    let index = ObservedIndex::new(observed);
+    let observed = &index;
 
     let mut pending: Vec<ChainQuery> = Vec::new();
     let mut unverified: HashSet<TreeNodeId> = HashSet::new();
@@ -337,7 +353,7 @@ fn interpret_chain(
             }
             for input in funding {
                 let query = ChainQuery::Outspend(input.outpoint);
-                match result_for(observed, &query) {
+                match observed.get(&query) {
                     Some(ChainResult::Spend(Some(info))) if info.confirmed => {
                         spent_funding.insert(input.outpoint);
                     }
@@ -455,7 +471,7 @@ fn resolve_confirmed_changes(
     plan: &UnilateralExitPlan,
     nodes: &mut HashMap<TreeNodeId, NodeState>,
     needs_change: &HashSet<TreeNodeId>,
-    observed: &[Observation],
+    observed: &ObservedIndex<'_>,
     pending: &mut Vec<ChainQuery>,
 ) {
     let scripts = node_funding_scripts(node_map, plan);
@@ -484,7 +500,7 @@ fn resolve_confirmed_changes(
             vout: anchor_vout,
         };
         let spend_query = ChainQuery::Outspend(anchor_outpoint);
-        let Some(spend) = result_for(observed, &spend_query) else {
+        let Some(spend) = observed.get(&spend_query) else {
             pending.push(spend_query);
             continue;
         };
@@ -493,7 +509,7 @@ fn resolve_confirmed_changes(
             _ => continue,
         };
         let tx_query = ChainQuery::Transaction(child_txid);
-        let Some(tx_result) = result_for(observed, &tx_query) else {
+        let Some(tx_result) = observed.get(&tx_query) else {
             pending.push(tx_query);
             continue;
         };
@@ -526,7 +542,7 @@ fn resolve_confirmed_changes(
 /// any fee rate is adopted; a differently-shaped spender is a `FundingUtxoConflict`.
 fn interpret_fan_out(
     plan: &UnilateralExitPlan,
-    observed: &[Observation],
+    observed: &ObservedIndex<'_>,
     pending: &mut Vec<ChainQuery>,
 ) -> Result<(Option<ConfirmedFanOut>, bool), SparkWalletError> {
     let Some(fan_out_psbt) = &plan.fan_out_psbt else {
@@ -561,7 +577,7 @@ fn interpret_fan_out(
     };
 
     let spend_query = ChainQuery::Outspend(funding_outpoint);
-    let Some(result) = result_for(observed, &spend_query) else {
+    let Some(result) = observed.get(&spend_query) else {
         pending.push(spend_query);
         return Ok((None, false));
     };
@@ -573,7 +589,7 @@ fn interpret_fan_out(
     };
 
     let tx_query = ChainQuery::Transaction(spender);
-    let Some(result) = result_for(observed, &tx_query) else {
+    let Some(result) = observed.get(&tx_query) else {
         pending.push(tx_query);
         return Ok((None, false));
     };
@@ -617,7 +633,7 @@ fn interpret_fan_out(
 fn walk_branch(
     node_map: &HashMap<TreeNodeId, TreeNode>,
     leaf_id: &TreeNodeId,
-    observed: &[Observation],
+    observed: &ObservedIndex<'_>,
     nodes: &mut HashMap<TreeNodeId, NodeState>,
     refunds: &mut HashMap<TreeNodeId, RefundState>,
     stopped: &mut HashSet<TreeNodeId>,
@@ -655,7 +671,7 @@ fn walk_branch(
             None => deposit_outpoint,
         };
         let query = ChainQuery::Outspend(live_outpoint);
-        let Some(result) = result_for(observed, &query) else {
+        let Some(result) = observed.get(&query) else {
             trace!(%leaf_id, node = %node.id, %live_outpoint, "walk: awaiting outspend");
             pending.push(query);
             return;
@@ -760,7 +776,7 @@ fn walk_branch(
 fn interpret_refund(
     leaf_id: &TreeNodeId,
     address: &Address,
-    observed: &[Observation],
+    observed: &ObservedIndex<'_>,
     refunds: &mut HashMap<TreeNodeId, RefundState>,
     unverified: &mut HashSet<TreeNodeId>,
     pending: &mut Vec<ChainQuery>,
@@ -769,7 +785,7 @@ fn interpret_refund(
         leaf_id: leaf_id.clone(),
         address: address.clone(),
     };
-    let Some(result) = result_for(observed, &scan_query) else {
+    let Some(result) = observed.get(&scan_query) else {
         pending.push(scan_query);
         return;
     };
@@ -792,7 +808,7 @@ fn interpret_refund(
     };
 
     let outspend_query = ChainQuery::Outspend(refund_outpoint);
-    let Some(spend) = result_for(observed, &outspend_query) else {
+    let Some(spend) = observed.get(&outspend_query) else {
         pending.push(outspend_query);
         return;
     };
@@ -813,7 +829,7 @@ fn interpret_refund(
     }
 
     let tx_query = ChainQuery::Transaction(txo.txid);
-    let Some(result) = result_for(observed, &tx_query) else {
+    let Some(result) = observed.get(&tx_query) else {
         pending.push(tx_query);
         return;
     };
