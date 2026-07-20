@@ -957,22 +957,26 @@ async fn test_sweep_is_rbf_replaceable(#[case] backend: SignerBackend) -> Result
 // ancestor once the fixture can split one deposit into multiple leaves (needs
 // the SSP / a tree-split op).
 
-/// Two leaves funded by a single CPFP input force a fan-out. The quote reports a
-/// positive fan-out fee, both leaves are selected, and the build emits a fan-out.
+/// Two leaves funded by a single CPFP input, driven end to end: the quote reports a
+/// positive fan-out fee and selects both leaves, the build emits a fan-out, and the
+/// whole set (fan-out, both branches, sweep) mines, with the funding UTXO plus both
+/// recovered leaves landing at the destination minus the exact on-chain fee.
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
-async fn test_multi_leaf_fans_out(#[case] backend: SignerBackend) -> Result<()> {
+async fn test_multi_leaf_fan_out_and_sweep(#[case] backend: SignerBackend) -> Result<()> {
     let sdk = new_local_sdk(backend).await?;
     deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
     deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
-    let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(CPFP_SATS * 4)).await?;
+    let funding_sat = CPFP_SATS * 4;
+    let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(funding_sat)).await?;
+    let destination = cpfp.address.clone();
 
     let quote = sdk
         .sdk
         .prepare_unilateral_exit(PrepareUnilateralExitRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: CpfpFundingKind::P2tr,
-            destination: cpfp.address.to_string(),
+            destination: destination.to_string(),
             selection: ExitLeafSelection::Auto,
         })
         .await?;
@@ -981,7 +985,7 @@ async fn test_multi_leaf_fans_out(#[case] backend: SignerBackend) -> Result<()> 
         quote.fanout_fee_sat > 0,
         "a single funding input across two branches has a fan-out fee"
     );
-    assert_quote_consistent(&quote, FEE_RATE, &cpfp.address.to_string(), p2tr_dust());
+    assert_quote_consistent(&quote, FEE_RATE, &destination.to_string(), p2tr_dust());
 
     let built = sdk
         .sdk
@@ -1000,6 +1004,34 @@ async fn test_multi_leaf_fans_out(#[case] backend: SignerBackend) -> Result<()> 
             .iter()
             .any(|t| matches!(t.kind, UnilateralExitTxKind::FanOut)),
         "a single funding input across two branches must produce a fan-out"
+    );
+
+    // Drive the whole set on-chain: the fan-out, both branches (each node and its
+    // refund with a CPFP child), and the single sweep that folds both leaves.
+    assert_all_mined(&sdk, &built, &destination).await?;
+
+    // Value conservation across both branches: the funding UTXO plus both recovered
+    // leaves, minus the exact on-chain fee, lands at the destination. P2TR
+    // signatures are fixed size, so the fee is exact and there is no slack.
+    let sweep_txid = built
+        .transactions
+        .iter()
+        .find(|t| t.kind == UnilateralExitTxKind::Sweep)
+        .map(|t| Txid::from_str(&t.txid))
+        .expect("the built set terminates in a sweep")?;
+    let sweep = sdk.fixtures.bitcoind.get_transaction(&sweep_txid).await?;
+    let swept = sweep
+        .output
+        .iter()
+        .find(|o| o.script_pubkey == destination.script_pubkey())
+        .map(|o| o.value.to_sat())
+        .expect("the sweep pays the destination");
+    let expected = funding_sat + built.recoverable_value_sat - built.total_fee_sat;
+    assert_eq!(
+        swept, expected,
+        "swept {swept} must equal funding ({funding_sat}) + recoverable \
+         ({}) - total fee ({})",
+        built.recoverable_value_sat, built.total_fee_sat
     );
     Ok(())
 }
