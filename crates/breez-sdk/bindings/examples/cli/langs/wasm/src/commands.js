@@ -3,6 +3,7 @@
 const { Command, Option } = require('commander')
 const crypto = require('crypto')
 const { printValue } = require('./serialization')
+const { registerAdvancedCommands } = require('./advanced')
 const { registerIssuerCommands } = require('./issuer')
 const { registerContactsCommands } = require('./contacts')
 const { registerWebhooksCommands } = require('./webhooks')
@@ -61,7 +62,8 @@ const COMMAND_NAMES = [
   'webhooks list',
   'stable-balance get',
   'stable-balance set',
-  'stable-balance unset'
+  'stable-balance unset',
+  'advanced unilateral-exit'
 ]
 
 /**
@@ -837,6 +839,9 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
       const res = await getSparkStatus()
       printValue(res)
     })
+
+  // --- advanced subcommands ---
+  registerAdvancedCommands(program, getSdk, rl)
 
   // --- issuer subcommands ---
   registerIssuerCommands(program, getTokenIssuer)

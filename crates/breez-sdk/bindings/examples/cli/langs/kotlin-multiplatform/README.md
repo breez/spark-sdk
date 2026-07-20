@@ -123,6 +123,8 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 
 **Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`
 
+**Advanced** (expert-only): `advanced unilateral-exit`
+
 **Token issuer**: `issuer create-token`, `issuer mint-token`, `issuer burn-token`, `issuer token-balance`, `issuer token-metadata`, `issuer freeze-token`, `issuer unfreeze-token`
 
 **Contacts**: `contacts add`, `contacts update`, `contacts delete`, `contacts list`

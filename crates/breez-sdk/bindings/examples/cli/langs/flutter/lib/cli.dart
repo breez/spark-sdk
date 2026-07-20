@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+import 'advanced.dart';
 import 'commands.dart';
 import 'contacts.dart';
 import 'issuer.dart';
@@ -129,6 +130,7 @@ Future<void> _runRepl(
   final registry = buildCommandRegistry();
   final allCommands = [
     ...commandNames,
+    ...advancedCommandNames,
     ...issuerCommandNames,
     ...contactsCommandNames,
     ...webhookCommandNames,
@@ -162,7 +164,9 @@ Future<void> _runRepl(
       final cmdName = args[0];
       final cmdArgs = args.sublist(1);
 
-      if (cmdName == 'issuer') {
+      if (cmdName == 'advanced') {
+        await dispatchAdvancedCommand(cmdArgs, sdk);
+      } else if (cmdName == 'issuer') {
         await dispatchIssuerCommand(cmdArgs, tokenIssuer);
       } else if (cmdName == 'contacts') {
         await dispatchContactsCommand(cmdArgs, sdk);
@@ -201,6 +205,9 @@ void _printHelp(Map<String, CommandEntry> registry) {
     final desc = registry[name]!.description;
     stdout.writeln('  ${name.padRight(40)} $desc');
   }
+  stdout.writeln(
+    '  ${'advanced <subcommand>'.padRight(40)} Expert-only commands (use \'advanced help\' for details)',
+  );
   stdout.writeln(
     '  ${'issuer <subcommand>'.padRight(40)} Token issuer commands (use \'issuer help\' for details)',
   );
