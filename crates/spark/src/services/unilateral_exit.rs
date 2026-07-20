@@ -41,7 +41,7 @@ pub fn walk_unilateral_exit_chain<'a>(
             break;
         }
         // Cycle guard on semi-trusted parent ids. Returning an id already in the
-        // map is how `build_unilateral_exit_chain` tells a cycle from a missing parent.
+        // map is how a caller tells a cycle from a missing parent.
         if !visited.insert(current.id.clone()) {
             return Err(current.id.clone());
         }
@@ -56,44 +56,6 @@ pub fn walk_unilateral_exit_chain<'a>(
     }
     chain.reverse();
     Ok(chain)
-}
-
-/// Builds a leaf's exit chain from `node_map`, re-fetching absent ancestors via
-/// `fetch_by_ids`. Re-fetch is needed because the SO's ancestor expansion skips
-/// the root for legacy mainnet trees, omitting it from the bulk response.
-pub async fn build_unilateral_exit_chain<F, Fut>(
-    leaf: TreeNode,
-    node_map: &mut HashMap<TreeNodeId, TreeNode>,
-    mut fetch_by_ids: F,
-) -> Result<Vec<TreeNode>, ServiceError>
-where
-    F: FnMut(Vec<TreeNodeId>) -> Fut,
-    Fut: std::future::Future<Output = Result<Vec<TreeNode>, ServiceError>>,
-{
-    loop {
-        match walk_unilateral_exit_chain(node_map, &leaf) {
-            Ok(chain) => return Ok(chain.into_iter().cloned().collect()),
-            Err(missing) => {
-                // Already in the map => a cycle, not an absent parent.
-                if node_map.contains_key(&missing) {
-                    return Err(ServiceError::ValidationError(format!(
-                        "Exit chain contains a parent cycle at node {missing}",
-                    )));
-                }
-                debug!(
-                    "Parent {missing} missing from query_nodes response; re-fetching by node ID"
-                );
-                for node in fetch_by_ids(vec![missing.clone()]).await? {
-                    node_map.insert(node.id.clone(), node);
-                }
-                if !node_map.contains_key(&missing) {
-                    return Err(ServiceError::ValidationError(format!(
-                        "Parent node {missing} not returned by query_nodes; exit chain incomplete",
-                    )));
-                }
-            }
-        }
-    }
 }
 
 /// A funding UTXO for CPFP fee-bumping.
@@ -1079,187 +1041,72 @@ mod tests {
             n
         }
 
-        fn chain_ids(chain: &[TreeNode]) -> Vec<String> {
+        fn node_map(nodes: &[&TreeNode]) -> HashMap<TreeNodeId, TreeNode> {
+            nodes.iter().map(|n| (n.id.clone(), (*n).clone())).collect()
+        }
+
+        fn chain_ids(chain: &[&TreeNode]) -> Vec<String> {
             chain.iter().map(|n| n.id.to_string()).collect()
         }
 
-        #[macros::async_test_all]
-        async fn full_map_no_refetch() {
+        #[test_all]
+        fn walks_leaf_to_root() {
             let root = node(ROOT, None, TreeNodeStatus::Available);
             let mid = node(MID, Some(ROOT), TreeNodeStatus::Splitted);
             let leaf = node(LEAF, Some(MID), TreeNodeStatus::Available);
+            let map = node_map(&[&root, &mid, &leaf]);
 
-            let mut map: HashMap<TreeNodeId, TreeNode> = [&root, &mid, &leaf]
-                .into_iter()
-                .map(|n| (n.id.clone(), n.clone()))
-                .collect();
+            let chain = walk_unilateral_exit_chain(&map, &leaf).unwrap();
 
-            let mut fetched = false;
-            let chain = super::super::build_unilateral_exit_chain(leaf, &mut map, |_ids| {
-                fetched = true;
-                async move { Ok(Vec::new()) }
-            })
-            .await
-            .unwrap();
-
-            assert!(
-                !fetched,
-                "fetcher must not be called when chain is complete"
-            );
             assert_eq!(chain_ids(&chain), vec![ROOT, MID, LEAF]);
         }
 
-        #[macros::async_test_all]
-        async fn refetches_missing_root() {
-            let root = node(ROOT, None, TreeNodeStatus::Available);
-            let mid = node(MID, Some(ROOT), TreeNodeStatus::Splitted);
-            let leaf = node(LEAF, Some(MID), TreeNodeStatus::Available);
-
-            let mut map: HashMap<TreeNodeId, TreeNode> = [&mid, &leaf]
-                .into_iter()
-                .map(|n| (n.id.clone(), n.clone()))
-                .collect();
-
-            let server: HashMap<TreeNodeId, TreeNode> =
-                [(root.id.clone(), root.clone())].into_iter().collect();
-            let mut requested: Vec<TreeNodeId> = Vec::new();
-
-            let chain = super::super::build_unilateral_exit_chain(
-                leaf,
-                &mut map,
-                |ids: Vec<TreeNodeId>| {
-                    requested.extend_from_slice(&ids);
-                    let nodes: Vec<TreeNode> =
-                        ids.iter().filter_map(|i| server.get(i).cloned()).collect();
-                    async move { Ok(nodes) }
-                },
-            )
-            .await
-            .unwrap();
-
-            assert_eq!(requested, vec![root.id.clone()]);
-            assert_eq!(chain_ids(&chain), vec![ROOT, MID, LEAF]);
-        }
-
-        #[macros::async_test_all]
-        async fn walks_through_split_locked_parent() {
+        #[test_all]
+        fn walks_through_split_locked_parent() {
             let root = node(ROOT, None, TreeNodeStatus::Available);
             let mid = node(MID, Some(ROOT), TreeNodeStatus::SplitLocked);
             let leaf = node(LEAF, Some(MID), TreeNodeStatus::Available);
+            let map = node_map(&[&root, &mid, &leaf]);
 
-            let mut map: HashMap<TreeNodeId, TreeNode> = [&root, &mid, &leaf]
-                .into_iter()
-                .map(|n| (n.id.clone(), n.clone()))
-                .collect();
-
-            let chain = super::super::build_unilateral_exit_chain(leaf, &mut map, |_ids| async {
-                Ok(Vec::new())
-            })
-            .await
-            .unwrap();
+            let chain = walk_unilateral_exit_chain(&map, &leaf).unwrap();
 
             assert_eq!(chain_ids(&chain), vec![ROOT, MID, LEAF]);
         }
 
-        #[macros::async_test_all]
-        async fn stops_on_non_exit_status() {
+        #[test_all]
+        fn stops_on_non_exit_status() {
             let root = node(ROOT, None, TreeNodeStatus::Available);
             let mid = node(MID, Some(ROOT), TreeNodeStatus::Exited);
             let leaf = node(LEAF, Some(MID), TreeNodeStatus::Available);
+            let map = node_map(&[&root, &mid, &leaf]);
 
-            let mut map: HashMap<TreeNodeId, TreeNode> = [&root, &mid, &leaf]
-                .into_iter()
-                .map(|n| (n.id.clone(), n.clone()))
-                .collect();
-
-            let chain = super::super::build_unilateral_exit_chain(leaf, &mut map, |_ids| async {
-                Ok(Vec::new())
-            })
-            .await
-            .unwrap();
+            let chain = walk_unilateral_exit_chain(&map, &leaf).unwrap();
 
             assert_eq!(chain_ids(&chain), vec![LEAF]);
         }
 
-        #[macros::async_test_all]
-        async fn parent_unavailable_errors() {
+        #[test_all]
+        fn missing_parent_names_the_gap() {
             let mid = node(MID, Some(ROOT), TreeNodeStatus::Splitted);
             let leaf = node(LEAF, Some(MID), TreeNodeStatus::Available);
+            let map = node_map(&[&mid, &leaf]);
 
-            let mut map: HashMap<TreeNodeId, TreeNode> = [&mid, &leaf]
-                .into_iter()
-                .map(|n| (n.id.clone(), n.clone()))
-                .collect();
+            let missing = walk_unilateral_exit_chain(&map, &leaf).unwrap_err();
 
-            let err = super::super::build_unilateral_exit_chain(leaf, &mut map, async |_ids| {
-                Ok(Vec::new())
-            })
-            .await
-            .unwrap_err();
-
-            match err {
-                ServiceError::ValidationError(msg) => {
-                    assert!(msg.contains("exit chain incomplete"))
-                }
-                other => panic!("expected ValidationError, got {other:?}"),
-            }
+            assert_eq!(missing.to_string(), ROOT);
         }
 
-        #[macros::async_test_all]
-        async fn cycle_errors_without_looping() {
+        #[test_all]
+        fn cycle_returns_a_node_the_map_holds() {
             let root = node(ROOT, Some(MID), TreeNodeStatus::Available);
             let mid = node(MID, Some(ROOT), TreeNodeStatus::Available);
             let leaf = node(LEAF, Some(MID), TreeNodeStatus::Available);
+            let map = node_map(&[&root, &mid, &leaf]);
 
-            let mut map: HashMap<TreeNodeId, TreeNode> = [&root, &mid, &leaf]
-                .into_iter()
-                .map(|n| (n.id.clone(), n.clone()))
-                .collect();
+            let revisited = walk_unilateral_exit_chain(&map, &leaf).unwrap_err();
 
-            let mut fetched = false;
-            let err = super::super::build_unilateral_exit_chain(leaf, &mut map, |_ids| {
-                fetched = true;
-                async move { Ok(Vec::new()) }
-            })
-            .await
-            .unwrap_err();
-
-            assert!(!fetched, "a cycle is detected without re-fetching");
-            match err {
-                ServiceError::ValidationError(msg) => assert!(msg.contains("cycle")),
-                other => panic!("expected a cycle ValidationError, got {other:?}"),
-            }
-        }
-
-        #[macros::async_test_all]
-        async fn refetch_missing_node_errors_without_looping() {
-            let mid = node(MID, Some(ROOT), TreeNodeStatus::Splitted);
-            let leaf = node(LEAF, Some(MID), TreeNodeStatus::Available);
-            let other = node("other", None, TreeNodeStatus::Available);
-
-            let mut map: HashMap<TreeNodeId, TreeNode> = [&mid, &leaf]
-                .into_iter()
-                .map(|n| (n.id.clone(), n.clone()))
-                .collect();
-
-            let mut calls = 0u32;
-            let err = super::super::build_unilateral_exit_chain(
-                leaf,
-                &mut map,
-                |_ids: Vec<TreeNodeId>| {
-                    calls += 1;
-                    let nodes = vec![other.clone()];
-                    async move { Ok(nodes) }
-                },
-            )
-            .await
-            .unwrap_err();
-
-            assert_eq!(calls, 1, "the wrong re-fetch is not retried in a loop");
-            match err {
-                ServiceError::ValidationError(msg) => assert!(msg.contains("incomplete")),
-                other => panic!("expected an incomplete ValidationError, got {other:?}"),
-            }
+            // A caller tells a cycle from a gap by the returned id being stored.
+            assert!(map.contains_key(&revisited));
         }
     }
 
