@@ -818,6 +818,9 @@ async fn test_sweep_is_rbf_replaceable(#[case] backend: SignerBackend) -> Result
             selection: ExitLeafSelection::Auto,
         })
         .await?;
+    // Captured before the quote is moved: the mined leaf drops out of the available
+    // set, so the higher-rate re-quote must force it back in by id.
+    let leaf_ids: Vec<String> = quote.leaves.iter().map(|l| l.leaf_id.clone()).collect();
     let resp = sdk
         .sdk
         .unilateral_exit(
@@ -872,6 +875,75 @@ async fn test_sweep_is_rbf_replaceable(#[case] backend: SignerBackend) -> Result
             .and_then(serde_json::Value::as_bool),
         Some(true),
         "bitcoind must report the sweep as BIP125-replaceable: {entry}"
+    );
+
+    // Now actually replace it: re-quote the same exit at a higher fee rate and
+    // rebuild. The refund is a fixed pre-signed tx confirmed on-chain, so the
+    // rebuild spends the same refund outpoint (a higher fee just shrinks the
+    // output), conflicting with the pending sweep. The mined leaf is no longer
+    // available, so force it back in by id.
+    //
+    // +2 sat/vByte, not +1: the rebuild adopts the confirmed refund and drops the
+    // original sweep's terminal CPFP-change input, so the replacement is a smaller
+    // one-input tx. BIP125 rule 4 makes it pay its own vsize over the original fee,
+    // which a single-sat bump on the smaller tx cannot cover.
+    let higher_rate = FEE_RATE + 2;
+    let bump_quote = sdk
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: higher_rate,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: cpfp.address.to_string(),
+            selection: ExitLeafSelection::Specific { leaf_ids },
+        })
+        .await?;
+    let bumped = sdk
+        .sdk
+        .unilateral_exit(
+            UnilateralExitRequest {
+                prepared: bump_quote,
+                funding_inputs: vec![cpfp_input(&cpfp)],
+            },
+            signer_for(&cpfp.secret_key.secret_bytes())?,
+        )
+        .await?;
+    let higher_sweep = bumped
+        .transactions
+        .iter()
+        .find(|t| matches!(t.kind, UnilateralExitTxKind::Sweep))
+        .map(|t| decode_tx(&t.tx_hex))
+        .expect("the rebuild re-emits a sweep over the pending refund")?;
+
+    // A distinct transaction that conflicts with the original on a shared input.
+    assert_ne!(
+        higher_sweep.compute_txid(),
+        sweep_txid,
+        "the higher-fee sweep must be a different transaction"
+    );
+    let original_inputs: HashSet<OutPoint> =
+        sweep.input.iter().map(|i| i.previous_output).collect();
+    assert!(
+        higher_sweep
+            .input
+            .iter()
+            .any(|i| original_inputs.contains(&i.previous_output)),
+        "the replacement must spend one of the original sweep's inputs"
+    );
+
+    // Broadcast the replacement: bitcoind accepts it and evicts the original.
+    let higher_txid = sdk
+        .fixtures
+        .bitcoind
+        .broadcast_transaction(&higher_sweep)
+        .await?;
+    let mempool: Vec<String> = sdk.fixtures.bitcoind.rpc("getrawmempool", &[]).await?;
+    assert!(
+        mempool.contains(&higher_txid.to_string()),
+        "the higher-fee replacement must be in the mempool: {mempool:?}"
+    );
+    assert!(
+        !mempool.contains(&sweep_txid.to_string()),
+        "the original sweep must be evicted by its replacement: {mempool:?}"
     );
     Ok(())
 }
