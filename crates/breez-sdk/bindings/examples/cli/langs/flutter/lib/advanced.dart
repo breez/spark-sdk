@@ -7,9 +7,7 @@ import 'cli.dart';
 import 'serialization.dart';
 
 /// Advanced subcommand names (used for help and tab completion).
-const advancedCommandNames = [
-  'advanced unilateral-exit',
-];
+const advancedCommandNames = ['advanced unilateral-exit'];
 
 typedef AdvancedHandler = Future<void> Function(BreezSdk sdk, List<String> args);
 
@@ -86,11 +84,12 @@ ArgResults? _parseArgs(ArgParser parser, List<String> args, String usage) {
 }
 
 Future<void> _handleUnilateralExit(BreezSdk sdk, List<String> args) async {
-  final parser = ArgParser(usageLineLength: 80)
-    ..addOption('fee-rate', mandatory: true, help: 'Target fee rate in sat/vByte')
-    ..addOption('funding-kind', defaultsTo: 'p2tr', help: 'Funding UTXO kind: p2wpkh or p2tr')
-    ..addOption('destination', mandatory: true, help: 'Destination address for swept funds')
-    ..addMultiOption('leaf', help: 'Leaf id to exit (repeatable). Omit to auto-select.');
+  final parser =
+      ArgParser(usageLineLength: 80)
+        ..addOption('fee-rate', mandatory: true, help: 'Target fee rate in sat/vByte')
+        ..addOption('funding-kind', defaultsTo: 'p2tr', help: 'Funding UTXO kind: p2wpkh or p2tr')
+        ..addOption('destination', mandatory: true, help: 'Destination address for swept funds')
+        ..addMultiOption('leaf', help: 'Leaf id to exit (repeatable). Omit to auto-select.');
   final results = _parseArgs(
     parser,
     args,
@@ -126,9 +125,7 @@ Future<void> _handleUnilateralExit(BreezSdk sdk, List<String> args) async {
     return;
   }
 
-  final utxoLine = prompt(
-    'Funding UTXO(s) as txid:vout:value:pubkey (space-separated, blank to stop): ',
-  );
+  final utxoLine = prompt('Funding UTXO(s) as txid:vout:value:pubkey (space-separated, blank to stop): ');
   if (utxoLine.trim().isEmpty) {
     print('No funding provided; showing the quote only.');
     return;

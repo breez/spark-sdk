@@ -145,6 +145,8 @@ private func parseCpfpInput(_ s: String, _ kind: CpfpFundingKind) -> CpfpInput? 
         return .p2wpkh(txid: txid, vout: vout, value: value, pubkey: pubkey)
     case .p2tr:
         return .p2tr(txid: txid, vout: vout, value: value, pubkey: pubkey)
+    case .custom:
+        return nil
     }
 }
 

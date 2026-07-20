@@ -177,6 +177,8 @@ fun parseCpfpInput(s: String, kind: CpfpFundingKind): CpfpInput {
             value = value,
             pubkey = pubkey,
         )
+        is CpfpFundingKind.Custom ->
+            throw IllegalArgumentException("custom funding kind is not supported by this CLI")
     }
 }
 
