@@ -207,7 +207,6 @@ pub fn plan_unilateral_exit(
             assignment_covers_first_child(
                 a,
                 &tree_nodes,
-                change_dust_limit,
                 destination_script_len,
                 fee_rate_sat_per_kw,
             )
@@ -708,50 +707,39 @@ pub fn assign_inputs_to_leaves(
     )
 }
 
-/// Whether every multi-input branch of `assignment` funds its first CPFP child.
-/// `assign_inputs_to_leaves` sizes each branch on one input, but `build_exit`
+/// Whether every branch of `assignment` funds its first CPFP child. `build_exit`
 /// feeds a branch's whole input set to that first child, sizing its fee on their
-/// combined weight. A branch short of that would pass the plan then fail
+/// combined weight, so a branch short of that would pass the plan then fail
 /// `build_cpfp_child`; rejecting the assignment falls back to a fan-out (one
-/// output, so one input, per branch). Costs each branch's chain in isolation:
-/// exact for independent branches, conservative when they share an ancestor
-/// (charged to every branch here, to only one in the build).
+/// output, so one input, per branch). Each branch is costed on its own inputs and
+/// its own change-script dust, so a branch funded by an input heavier than the
+/// reference `inputs[0]` (a mixed or Custom funding kind) is gated correctly, not
+/// just the multi-input branches. Costs each branch's chain in isolation: exact
+/// for independent branches, conservative when they share an ancestor (charged to
+/// every branch here, to only one in the build).
 fn assignment_covers_first_child(
     assignment: &[(TreeNodeId, Vec<CpfpInput>)],
     tree_nodes: &HashMap<TreeNodeId, TreeNode>,
-    change_dust_limit: u64,
     destination_script_len: usize,
     fee_rate_sat_per_kw: u64,
 ) -> bool {
     assignment.iter().all(|(leaf_id, branch_inputs)| {
-        if branch_inputs.len() <= 1 {
-            return true;
-        }
-        let total_input_weight = branch_inputs
-            .iter()
-            .map(|i| i.signed_input_weight)
-            .fold(0u64, u64::saturating_add);
-        let params = UnilateralExitLeafCostParams {
-            initial_cpfp_input_weight: Weight::from_wu(total_input_weight),
-            single_cpfp_input_weight: Weight::from_wu(branch_inputs[0].signed_input_weight),
-            change_script_len: branch_inputs[0].witness_utxo.script_pubkey.len(),
-            destination_script_len,
-            fee_rate_sat_per_kw,
+        let Some(first) = branch_inputs.first() else {
+            return false;
         };
+        let dust = first.witness_utxo.script_pubkey.minimal_non_dust().to_sat();
         let available = branch_inputs
             .iter()
             .map(|i| i.witness_utxo.value.to_sat())
             .fold(0u64, u64::saturating_add);
-        match evaluate_unilateral_exit_leaf_costs(
+        match first_child_cpfp_floor(
             tree_nodes,
-            std::slice::from_ref(leaf_id),
-            &params,
-            UnilateralExitLeafFilter::All,
-        )
-        .ok()
-        .and_then(|leaves| leaves.into_iter().next())
-        {
-            Some(leaf) => available >= leaf.cpfp_cost.saturating_add(change_dust_limit),
+            leaf_id,
+            branch_inputs,
+            destination_script_len,
+            fee_rate_sat_per_kw,
+        ) {
+            Some(cpfp_cost) => available >= cpfp_cost.saturating_add(dust),
             None => false,
         }
     })
@@ -1463,21 +1451,50 @@ mod tests {
             assert!(assignment_covers_first_child(
                 &four(floor),
                 &nodes,
-                dust,
                 change_len,
                 250
             ));
             assert!(!assignment_covers_first_child(
                 &four(floor - 1),
                 &nodes,
-                dust,
                 change_len,
                 250
             ));
-            // A one-input branch is sized correctly upstream: always covered here.
-            let one = vec![(leaf_id.clone(), vec![cpfp_input(dust, 0)])];
-            assert!(assignment_covers_first_child(
-                &one, &nodes, dust, change_len, 250
+            // A one-input branch is gated on its own weight too: funded above its
+            // one-input floor it is covered.
+            let one_floor = evaluate_unilateral_exit_leaf_costs(
+                &nodes,
+                std::slice::from_ref(&leaf_id),
+                &UnilateralExitLeafCostParams {
+                    initial_cpfp_input_weight: Weight::from_wu(input_weight),
+                    single_cpfp_input_weight: Weight::from_wu(input_weight),
+                    change_script_len: change_len,
+                    destination_script_len: change_len,
+                    fee_rate_sat_per_kw: 250,
+                },
+                UnilateralExitLeafFilter::All,
+            )
+            .unwrap()[0]
+                .cpfp_cost
+                + dust;
+            let one = vec![(leaf_id.clone(), vec![cpfp_input(one_floor, 0)])];
+            assert!(assignment_covers_first_child(&one, &nodes, change_len, 250));
+            let one_short = vec![(leaf_id.clone(), vec![cpfp_input(one_floor - 1, 0)])];
+            assert!(!assignment_covers_first_child(
+                &one_short, &nodes, change_len, 250
+            ));
+
+            // A single input heavier than the reference kind (a Custom funding kind)
+            // is gated on its real weight, not inputs[0]'s: an input whose value only
+            // meets the light-weight floor is rejected, so the plan can fan out.
+            let mut heavy = cpfp_input(one_floor, 0);
+            heavy.signed_input_weight = 4 * input_weight;
+            let heavy_branch = vec![(leaf_id.clone(), vec![heavy])];
+            assert!(!assignment_covers_first_child(
+                &heavy_branch,
+                &nodes,
+                change_len,
+                250
             ));
         }
 
@@ -1952,6 +1969,54 @@ mod tests {
                 }
                 other => panic!("expected InsufficientCpfpBudget, got {other:?}"),
             }
+        }
+
+        #[test_all]
+        fn plan_falls_back_to_fan_out_when_a_branch_input_is_too_heavy() {
+            // assign_inputs_to_leaves matches by value and would give each of two
+            // leaves one UTXO. One UTXO is far heavier than the reference inputs[0]
+            // (a Custom funding kind), so its own first-child fee exceeds its value:
+            // assignment_covers_first_child rejects the assignment and the plan fans
+            // out, rather than passing a plan build_cpfp_child would then fail.
+            let a = leaf_node_n("a", 1_000_000, 1);
+            let b = leaf_node_n("b", 1_000_000, 3);
+            let (ida, idb) = (a.id.clone(), b.id.clone());
+            let nodes: HashMap<TreeNodeId, TreeNode> =
+                [(ida.clone(), a), (idb.clone(), b)].into_iter().collect();
+
+            let dust = test_script().minimal_non_dust().to_sat();
+            let quote = quote_unilateral_exit(
+                &nodes,
+                &[ida.clone(), idb.clone()],
+                UnilateralExitLeafFilter::ProfitableOnly,
+                272,
+                22,
+                dust,
+                250,
+                22,
+            )
+            .unwrap();
+            // b's per-branch funding covers only a light (272 wu) first child.
+            let b_required = quote.per_branch_funding[1].1;
+
+            // inputs[0] is the light reference the params size on; a large light
+            // input goes to branch a (also covering the fan-out surplus), and a heavy
+            // input worth exactly b's light requirement goes to branch b.
+            let mut heavy = cpfp_input(b_required, 1);
+            heavy.signed_input_weight = 5_000;
+            let plan = plan_unilateral_exit(
+                nodes,
+                &[ida, idb],
+                UnilateralExitLeafFilter::ProfitableOnly,
+                vec![cpfp_input(50_000, 0), heavy],
+                250,
+                22,
+            )
+            .unwrap();
+            assert!(
+                plan.fan_out_psbt.is_some(),
+                "a branch funded by an over-heavy input must fall back to a fan-out"
+            );
         }
 
         fn anchor_tx_n(nonce: u32) -> Transaction {
