@@ -572,8 +572,7 @@ impl SdkBuilder {
             &lightning_sender,
             Arc::clone(&fiat_service),
             shutdown_sender.subscribe(),
-        )
-        .await;
+        );
 
         let stable_balance = build_stable_balance(
             &self.config,
@@ -1041,7 +1040,7 @@ async fn build_stable_balance(
 /// Builds the cross-chain context: provider registry + shared cached fiat
 /// service. Returns an empty registry when `config.cross_chain_config` is unset.
 #[allow(clippy::too_many_arguments)]
-async fn build_cross_chain_context(
+fn build_cross_chain_context(
     config: &Config,
     breez_server: &Arc<BreezServer>,
     spark_wallet: &Arc<SparkWallet>,
@@ -1077,7 +1076,7 @@ async fn build_cross_chain_context(
                 Arc::clone(spark_wallet),
                 Arc::clone(storage),
                 Arc::clone(&cached_fiat),
-                shutdown_receiver,
+                shutdown_receiver.clone(),
             )),
         );
     }
@@ -1089,9 +1088,8 @@ async fn build_cross_chain_context(
         ecies,
         cached_fiat,
         Arc::clone(lightning_sender),
-    )
-    .await
-    {
+        shutdown_receiver,
+    ) {
         Ok(Some(service)) => {
             providers.insert(crate::cross_chain::CrossChainProvider::Boltz, service);
         }
