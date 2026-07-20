@@ -208,6 +208,15 @@ pub fn plan_unilateral_exit(
         }
         (vec![(selected[0].id.clone(), inputs)], None)
     } else if let Some(assignment) = assign_inputs_to_leaves(&inputs, &selected, change_dust_limit)
+        .filter(|a| {
+            assignment_covers_first_child(
+                a,
+                &tree_nodes,
+                change_dust_limit,
+                destination_script_len,
+                fee_rate_sat_per_kw,
+            )
+        })
     {
         (assignment, None)
     } else {
@@ -667,6 +676,55 @@ pub fn assign_inputs_to_leaves(
             })
             .collect(),
     )
+}
+
+/// Whether every multi-input branch of `assignment` funds its first CPFP child.
+/// `assign_inputs_to_leaves` sizes each branch on one input, but `build_exit`
+/// feeds a branch's whole input set to that first child, sizing its fee on their
+/// combined weight. A branch short of that would pass the plan then fail
+/// `build_cpfp_child`; rejecting the assignment falls back to a fan-out (one
+/// output, so one input, per branch). Costs each branch's chain in isolation:
+/// exact for independent branches, conservative when they share an ancestor
+/// (charged to every branch here, to only one in the build).
+fn assignment_covers_first_child(
+    assignment: &[(TreeNodeId, Vec<CpfpInput>)],
+    tree_nodes: &HashMap<TreeNodeId, TreeNode>,
+    change_dust_limit: u64,
+    destination_script_len: usize,
+    fee_rate_sat_per_kw: u64,
+) -> bool {
+    assignment.iter().all(|(leaf_id, branch_inputs)| {
+        if branch_inputs.len() <= 1 {
+            return true;
+        }
+        let total_input_weight = branch_inputs
+            .iter()
+            .map(|i| i.signed_input_weight)
+            .fold(0u64, u64::saturating_add);
+        let params = UnilateralExitLeafCostParams {
+            initial_cpfp_input_weight: Weight::from_wu(total_input_weight),
+            single_cpfp_input_weight: Weight::from_wu(branch_inputs[0].signed_input_weight),
+            change_script_len: branch_inputs[0].witness_utxo.script_pubkey.len(),
+            destination_script_len,
+            fee_rate_sat_per_kw,
+        };
+        let available = branch_inputs
+            .iter()
+            .map(|i| i.witness_utxo.value.to_sat())
+            .fold(0u64, u64::saturating_add);
+        match evaluate_unilateral_exit_leaf_costs(
+            tree_nodes,
+            std::slice::from_ref(leaf_id),
+            &params,
+            UnilateralExitLeafFilter::All,
+        )
+        .ok()
+        .and_then(|leaves| leaves.into_iter().next())
+        {
+            Some(leaf) => available >= leaf.cpfp_cost.saturating_add(change_dust_limit),
+            None => false,
+        }
+    })
 }
 
 /// Builds an unsigned fan-out PSBT with one output per selected leaf. No change
@@ -1324,6 +1382,73 @@ mod tests {
             assert!(assign_inputs_to_leaves(&exact, &leaves, 330).is_some());
             let short = vec![cpfp_input(3_330, 0), cpfp_input(1_329, 1)];
             assert!(assign_inputs_to_leaves(&short, &leaves, 330).is_none());
+        }
+
+        #[test_all]
+        fn assignment_covers_first_child_gates_multi_input_branch() {
+            // A branch of four inputs: build feeds all four to the first CPFP child,
+            // so its fee is sized on their combined weight, above the one-input
+            // estimate assign_inputs_to_leaves used. The guard rejects funding short
+            // of that (the plan then falls back to a one-output-per-branch fan-out).
+            let leaf = leaf_node_n("a", 1_000_000, 1);
+            let leaf_id = leaf.id.clone();
+            let nodes: HashMap<TreeNodeId, TreeNode> =
+                [(leaf_id.clone(), leaf)].into_iter().collect();
+
+            let probe = cpfp_input(0, 0);
+            let change_len = probe.witness_utxo.script_pubkey.len();
+            let dust = probe.witness_utxo.script_pubkey.minimal_non_dust().to_sat();
+            let input_weight = probe.signed_input_weight;
+
+            // The exact first-child floor for four inputs, as the guard computes it.
+            let cpfp_cost = evaluate_unilateral_exit_leaf_costs(
+                &nodes,
+                std::slice::from_ref(&leaf_id),
+                &UnilateralExitLeafCostParams {
+                    initial_cpfp_input_weight: Weight::from_wu(4 * input_weight),
+                    single_cpfp_input_weight: Weight::from_wu(input_weight),
+                    change_script_len: change_len,
+                    destination_script_len: change_len,
+                    fee_rate_sat_per_kw: 250,
+                },
+                UnilateralExitLeafFilter::All,
+            )
+            .unwrap()[0]
+                .cpfp_cost;
+            let floor = cpfp_cost + dust;
+
+            let four = |total: u64| {
+                let each = total / 4;
+                vec![(
+                    leaf_id.clone(),
+                    vec![
+                        cpfp_input(each, 0),
+                        cpfp_input(each, 1),
+                        cpfp_input(each, 2),
+                        cpfp_input(total - 3 * each, 3),
+                    ],
+                )]
+            };
+
+            assert!(assignment_covers_first_child(
+                &four(floor),
+                &nodes,
+                dust,
+                change_len,
+                250
+            ));
+            assert!(!assignment_covers_first_child(
+                &four(floor - 1),
+                &nodes,
+                dust,
+                change_len,
+                250
+            ));
+            // A one-input branch is sized correctly upstream: always covered here.
+            let one = vec![(leaf_id.clone(), vec![cpfp_input(dust, 0)])];
+            assert!(assignment_covers_first_child(
+                &one, &nodes, dust, change_len, 250
+            ));
         }
 
         #[test_all]

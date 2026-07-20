@@ -1276,7 +1276,7 @@ mod exit_build_tests {
         Identifier,
         services::{
             UnilateralExitLeafFilter, UnilateralExitSelectedLeaf, compute_cpfp_package_fee,
-            plan_unilateral_exit,
+            plan_unilateral_exit, quote_unilateral_exit,
         },
         tree::{SigningKeyshare, TreeNodeStatus},
     };
@@ -2038,10 +2038,18 @@ mod exit_build_tests {
 
         // The first child's extra fee for the second input (272 wu more), which the
         // old one-input gate omitted. The first bumped tx is the root's node_tx.
-        let two_input =
-            compute_cpfp_package_fee(anchor_tx(1).weight(), Weight::from_wu(544), change_len, FEE_RATE);
-        let one_input =
-            compute_cpfp_package_fee(anchor_tx(1).weight(), Weight::from_wu(272), change_len, FEE_RATE);
+        let two_input = compute_cpfp_package_fee(
+            anchor_tx(1).weight(),
+            Weight::from_wu(544),
+            change_len,
+            FEE_RATE,
+        );
+        let one_input = compute_cpfp_package_fee(
+            anchor_tx(1).weight(),
+            Weight::from_wu(272),
+            change_len,
+            FEE_RATE,
+        );
         let extra_second_input_fee = two_input - one_input;
         assert!(extra_second_input_fee > 0);
 
@@ -2102,6 +2110,72 @@ mod exit_build_tests {
         }
         // Funding the old one-input gate would have accepted is now rejected.
         assert!(two(floor_one).is_err());
+    }
+
+    #[test]
+    fn plan_two_branch_multi_input_builds() {
+        // Two independent leaves, each funded with two UTXOs: the assignment lands
+        // two inputs per branch and the build funds each branch's first CPFP child
+        // with both. Proves the multi-branch arm handles >1 input per branch.
+        let leaf_a = node("leafA", None, anchor_tx(1), Some(anchor_tx(2)));
+        let leaf_b = node("leafB", None, anchor_tx(3), Some(anchor_tx(4)));
+        let a_id = leaf_a.id.clone();
+        let b_id = leaf_b.id.clone();
+        let nodes: HashMap<TreeNodeId, TreeNode> = [(a_id.clone(), leaf_a), (b_id.clone(), leaf_b)]
+            .into_iter()
+            .collect();
+
+        let change_len = funding(0).witness_utxo.script_pubkey.len();
+        let dust = funding(0)
+            .witness_utxo
+            .script_pubkey
+            .minimal_non_dust()
+            .to_sat();
+
+        // Each identical branch's one-UTXO requirement, split across two inputs so
+        // the assignment lands two per branch.
+        let quote = quote_unilateral_exit(
+            &nodes,
+            &[a_id.clone(), b_id.clone()],
+            UnilateralExitLeafFilter::ProfitableOnly,
+            272,
+            change_len,
+            dust,
+            FEE_RATE,
+            change_len,
+        )
+        .unwrap();
+        let half = quote.per_branch_funding[0].1 / 2 + 1;
+
+        let inputs: Vec<CpfpInput> = (0..4u32)
+            .map(|vout| {
+                let mut f = funding(half);
+                f.outpoint.vout = vout;
+                f
+            })
+            .collect();
+        let plan = plan_unilateral_exit(
+            nodes,
+            &[a_id, b_id],
+            UnilateralExitLeafFilter::ProfitableOnly,
+            inputs,
+            FEE_RATE,
+            change_len,
+        )
+        .unwrap();
+        assert!(
+            plan.fan_out_psbt.is_none(),
+            "four inputs partition two-per-branch without a fan-out"
+        );
+        assert_eq!(plan.per_branch_funding.len(), 2);
+        assert!(
+            plan.per_branch_funding
+                .iter()
+                .all(|(_, ins)| ins.len() == 2),
+            "each branch is funded with two inputs"
+        );
+        let build = build_exit(&plan, &ResolvedExitState::default(), FEE_RATE).unwrap();
+        assert_eq!(build.branches.len(), 2);
     }
 }
 
