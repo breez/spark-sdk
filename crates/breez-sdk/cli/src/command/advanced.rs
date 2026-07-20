@@ -27,7 +27,7 @@ impl From<FundingKindArg> for CpfpFundingKind {
 /// Expert-only commands that build raw transactions for you to broadcast
 /// yourself. Misuse can strand or lose funds.
 #[derive(Clone, Debug, Subcommand)]
-pub enum IKnowWhatImDoingCommand {
+pub enum AdvancedCommand {
     /// Build and sign a unilateral exit. Quotes it first (which leaves, fees, how
     /// much to fund), then prompts for the funding UTXOs and signing key.
     UnilateralExit {
@@ -49,10 +49,10 @@ pub enum IKnowWhatImDoingCommand {
 pub async fn handle_command(
     rl: &mut Editor<CliHelper, DefaultHistory>,
     sdk: &BreezSdk,
-    command: IKnowWhatImDoingCommand,
+    command: AdvancedCommand,
 ) -> Result<bool, anyhow::Error> {
     match command {
-        IKnowWhatImDoingCommand::UnilateralExit {
+        AdvancedCommand::UnilateralExit {
             fee_rate,
             funding_kind,
             destination,

@@ -1,5 +1,5 @@
+mod advanced;
 mod contacts;
-mod i_know_what_im_doing;
 mod issuer;
 mod stable_balance;
 mod webhooks;
@@ -29,8 +29,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::command::advanced::AdvancedCommand;
 use crate::command::contacts::ContactCommand;
-use crate::command::i_know_what_im_doing::IKnowWhatImDoingCommand;
 use crate::command::issuer::IssuerCommand;
 use crate::command::stable_balance::StableBalanceCommand;
 use crate::command::webhooks::WebhookCommand;
@@ -373,7 +373,7 @@ pub enum Command {
     /// Expert-only commands that build raw transactions for you to broadcast
     /// yourself. Misuse can strand or lose funds.
     #[command(subcommand)]
-    IKnowWhatImDoing(IKnowWhatImDoingCommand),
+    Advanced(AdvancedCommand),
 
     /// Issuer related commands
     #[command(subcommand)]
@@ -1072,7 +1072,7 @@ pub(crate) async fn execute_command(
             print_value(&res)?;
             Ok(true)
         }
-        Command::IKnowWhatImDoing(cmd) => i_know_what_im_doing::handle_command(rl, sdk, cmd).await,
+        Command::Advanced(cmd) => advanced::handle_command(rl, sdk, cmd).await,
         Command::Issuer(issuer_command) => {
             issuer::handle_command(token_issuer, issuer_command).await
         }
