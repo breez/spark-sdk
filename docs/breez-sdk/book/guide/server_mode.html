@@ -1,0 +1,927 @@
+<!DOCTYPE HTML>
+<html lang="en" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Server mode - Breez SDK - Spark</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../styles.css">
+        <link rel="stylesheet" href="../theme/pagetoc.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <!--
+                  Breez SDK · Spark docs — brand header partial.
+                
+                  mdBook renders the `header` partial at the top of every page's content. The default
+                  theme ships an EMPTY header.hbs, which is why the reskin's styles.css and
+                  brand-header.js both reference `.brand-header` / #brand-controls but the file
+                  itself was never committed to the reskin branch. THIS is that missing file,
+                  reconstructed from the design mockup (design/Breez SDK Docs.dc.html) and the
+                  class names in styles.css.
+                
+                  Drop this at: docs/breez-sdk/theme/header.hbs
+                  It pairs with styles.css (.brand-header rules) and brand-header.js (which moves
+                  mdBook's theme/search/sidebar controls into #brand-controls at load time).
+                -->
+                <div id="brand-header" class="brand-header">
+                  <a class="brand-logo" href="../index.html" aria-label="Docs home">
+                    <img src="../assets/icons/logo-breez-header.svg" alt="Breez">
+                  </a>
+                  <span class="brand-sep"></span>
+                  <span class="brand-product">SDK Documentation</span>
+                  <span class="brand-badge">
+                    <img src="../assets/icons/spark_icon.svg" alt="">Spark
+                  </span>
+                
+                  <span class="brand-spacer"></span>
+                
+                  <nav class="brand-nav">
+                    <a href="https://breez.technology" target="_blank" rel="noopener">Home</a>
+                    <a href="https://github.com/breez/spark-sdk" target="_blank" rel="noopener">GitHub</a>
+                    <a href="https://t.me/breezsdk" target="_blank" rel="noopener" aria-label="Telegram">
+                      <img src="../assets/icons/telegram-icon.svg" alt="">
+                    </a>
+                  </nav>
+                
+                  <!-- brand-header.js relocates #sidebar-toggle, #theme-toggle, #theme-list and
+                       #search-toggle into this container so they read as one bar. -->
+                  <div id="brand-controls" class="brand-controls"></div>
+                
+                  <a class="brand-cta" href="https://breez.technology/request-api-key/#contact-us-form-sdk" target="_blank" rel="noopener">
+                    Request API Key
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                  </a>
+                </div>
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Breez SDK - Spark</h1>
+
+                    <div class="right-buttons">
+                        <a href="https://github.com/breez/spark-sdk" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/src/guide/server_mode.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="server-mode">
+    <a class="header" href="#server-mode">Server mode</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/fn.default_server_config.html">API docs</a>
+</h1>
+<p>Server mode is the SDK profile for <strong>multi-tenant server deployments</strong> where a single process hosts many wallets and builds an ephemeral SDK instance per request. The SDK is treated as a library: the host orchestrates sync, claiming, and event delivery (typically via webhooks) explicitly, so each per-request SDK stays cheap, predictable, and returns fresh state.</p>
+<p>Use server mode when:</p>
+<ul>
+<li>You run the SDK behind an HTTP/gRPC service that handles many wallets in the same process.</li>
+<li>Each request builds the SDK, performs one operation, and disconnects.</li>
+<li>Background work that makes sense for a long-lived mobile client (periodic sync, real-time sync, leaf optimization, lightning-address recovery) would be wasted on a per-request lifecycle.</li>
+</ul>
+<p>If you're building a mobile or desktop wallet, stay on the default (<a href="initializing.html">client mode</a>) — server mode disables features your app relies on.</p>
+<p>When the server must not be able to send payments on its own, server mode pairs with <a href="client_signing.html">Client signing</a>: the user reviews and signs each payment on their side, and the build and publish steps are stateless, so they fit the per-request lifecycle.</p>
+<h2 id="selecting-server-mode"><a class="header" href="#selecting-server-mode">Selecting server mode</a></h2>
+<p>Build the config with <code class="lang-fn"><span class="fn-rust">default_server_config</span><span class="fn-python">default_server_config</span><span class="fn-swift">defaultServerConfig</span><span class="fn-kotlin">defaultServerConfig</span><span class="fn-javascript">defaultServerConfig</span><span class="fn-react-native">defaultServerConfig</span><span class="fn-flutter">defaultServerConfig</span><span class="fn-go">DefaultServerConfig</span><span class="fn-csharp">DefaultServerConfig</span></code> instead of <code class="lang-fn"><span class="fn-rust">default_config</span><span class="fn-python">default_config</span><span class="fn-swift">defaultConfig</span><span class="fn-kotlin">defaultConfig</span><span class="fn-javascript">defaultConfig</span><span class="fn-react-native">defaultConfig</span><span class="fn-flutter">defaultConfig</span><span class="fn-go">DefaultConfig</span><span class="fn-csharp">DefaultConfig</span></code>:</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">// Construct the seed using a mnemonic, entropy or passkey
+let mnemonic = "&lt;mnemonic words&gt;".to_string();
+let seed = Seed::Mnemonic {
+    mnemonic,
+    passphrase: None,
+};
+
+// Build a server-mode config: same as default_config(network) with
+// background_tasks_enabled = false. No periodic sync, no real-time sync
+// client, no leaf/token optimizer, no flashnet refunder, no lightning-
+// address recovery, no spark private-mode init.
+let mut config = default_server_config(Network::Mainnet);
+config.api_key = Some("&lt;breez api key&gt;".to_string());
+
+// Typically server-mode SDKs are built per request and share infrastructure
+// (DB pool, REST chain service, SSP/Connection Manager) across instances.
+// Pass the shared resources via the builder; see the "Customizing the SDK"
+// page for each component.
+let sdk = SdkBuilder::new(config, seed)
+    .with_default_storage("./.data".to_string())
+    .build()
+    .await?;</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">// Construct the seed using a mnemonic, entropy or passkey
+let mnemonic = "&lt;mnemonic words&gt;"
+let seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
+
+// Build a server-mode config: same as defaultConfig(network) with
+// backgroundTasksEnabled = false. No periodic sync, no real-time sync
+// client, no leaf/token optimizer, no flashnet refunder, no lightning-
+// address recovery, no spark private-mode init.
+var config = defaultServerConfig(network: Network.mainnet)
+config.apiKey = "&lt;breez api key&gt;"
+
+// Typically server-mode SDKs are built per request and share infrastructure
+// (DB pool, REST chain service, SSP/Connection Manager) across instances.
+// Pass the shared resources via the builder.
+let builder = SdkBuilder(config: config, seed: seed)
+await builder.withDefaultStorage(storageDir: "./.data")
+let sdk = try await builder.build()
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">// Construct the seed using a mnemonic, entropy or passkey
+val mnemonic = "&lt;mnemonic words&gt;"
+val seed = Seed.Mnemonic(mnemonic, null)
+
+// Build a server-mode config: same as defaultConfig(network) with
+// backgroundTasksEnabled = false. No periodic sync, no real-time sync
+// client, no leaf/token optimizer, no flashnet refunder, no lightning-
+// address recovery, no spark private-mode init.
+val config = defaultServerConfig(Network.MAINNET)
+config.apiKey = "&lt;breez api key&gt;"
+
+try {
+    // Typically server-mode SDKs are built per request and share
+    // infrastructure (DB pool, REST chain service, SSP/Connection
+    // Manager) across instances. Pass the shared resources via the
+    // builder.
+    val builder = SdkBuilder(config, seed)
+    builder.withDefaultStorage("./.data")
+    val sdk = builder.build()
+} catch (e: Exception) {
+    // handle error
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">// Construct the seed using a mnemonic, entropy or passkey
+var mnemonic = "&lt;mnemonic words&gt;";
+var seed = new Seed.Mnemonic(mnemonic: mnemonic, passphrase: null);
+
+// Build a server-mode config: same as DefaultConfig(network) with
+// backgroundTasksEnabled = false. No periodic sync, no real-time
+// sync client, no leaf/token optimizer, no flashnet refunder, no
+// lightning-address recovery, no spark private-mode init.
+var config = BreezSdkSparkMethods.DefaultServerConfig(Network.Mainnet) with
+{
+    apiKey = "&lt;breez api key&gt;"
+};
+
+// Typically server-mode SDKs are built per request and share
+// infrastructure (DB pool, REST chain service, SSP/Connection
+// Manager) across instances. Pass the shared resources via the
+// builder.
+var builder = new SdkBuilder(config: config, seed: seed);
+await builder.WithDefaultStorage(storageDir: "./.data");
+var sdk = await builder.Build();
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">// Construct the seed using a mnemonic, entropy or passkey
+const mnemonic = '&lt;mnemonic words&gt;'
+const seed: Seed = { type: 'mnemonic', mnemonic, passphrase: undefined }
+
+// Build a server-mode config: same as defaultConfig(network) with
+// backgroundTasksEnabled = false. No periodic sync, no real-time sync
+// client, no leaf/token optimizer, no flashnet refunder, no lightning-
+// address recovery, no spark private-mode init.
+const config = defaultServerConfig('mainnet')
+config.apiKey = '&lt;breez api key&gt;'
+
+// Typically server-mode SDKs are built per request and share infrastructure
+// (DB pool, REST chain service, SSP/Connection Manager) across instances.
+// Pass the shared resources via the builder; see the "Customizing the SDK"
+// page for each component.
+let builder = SdkBuilder.new(config, seed)
+builder = await builder.withDefaultStorage('./.data')
+const sdk = await builder.build()
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">// Construct the seed using a mnemonic, entropy or passkey
+const mnemonic = '&lt;mnemonics words&gt;'
+const seed = new Seed.Mnemonic({ mnemonic, passphrase: undefined })
+
+// Build a server-mode config: same as defaultConfig(network) with
+// backgroundTasksEnabled = false. No periodic sync, no real-time sync
+// client, no leaf/token optimizer, no flashnet refunder, no lightning-
+// address recovery, no spark private-mode init.
+const config = defaultServerConfig(Network.Mainnet)
+config.apiKey = '&lt;breez api key&gt;'
+
+// Typically server-mode SDKs are built per request and share infrastructure
+// (DB pool, REST chain service, SSP/Connection Manager) across instances.
+// Pass the shared resources via the builder.
+const builder = new SdkBuilder(config, seed)
+await builder.withDefaultStorage(`${RNFS.DocumentDirectoryPath}/data`)
+const sdk = await builder.build()
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">// Construct the seed using a mnemonic, entropy or passkey
+String mnemonic = "&lt;mnemonic words&gt;";
+final seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);
+
+// Build a server-mode config: same as defaultConfig(network) with
+// backgroundTasksEnabled = false. No periodic sync, no real-time sync
+// client, no leaf/token optimizer, no flashnet refunder, no lightning-
+// address recovery, no spark private-mode init.
+final config = defaultServerConfig(network: Network.mainnet)
+    .copyWith(apiKey: "&lt;breez api key&gt;");
+
+// Typically server-mode SDKs are built per request and share infrastructure
+// (DB pool, REST chain service, SSP/Connection Manager) across instances.
+// Pass the shared resources via the builder.
+final builder = SdkBuilder(config: config, seed: seed);
+builder.withDefaultStorage(storageDir: "./.data");
+final sdk = await builder.build();
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore"># Construct the seed using a mnemonic, entropy or passkey
+mnemonic = "&lt;mnemonic words&gt;"
+seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
+
+# Build a server-mode config: same as default_config(network) with
+# background_tasks_enabled = False. No periodic sync, no real-time sync
+# client, no leaf/token optimizer, no flashnet refunder, no lightning-
+# address recovery, no spark private-mode init.
+config = default_server_config(network=Network.MAINNET)
+config.api_key = "&lt;breez api key&gt;"
+
+try:
+    # Typically server-mode SDKs are built per request and share
+    # infrastructure (DB pool, REST chain service, SSP/Connection Manager)
+    # across instances. Pass the shared resources via the builder.
+    builder = SdkBuilder(config=config, seed=seed)
+    await builder.with_default_storage(storage_dir="./.data")
+    sdk = await builder.build()
+    return sdk
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">// Construct the seed using a mnemonic, entropy or passkey
+mnemonic := "&lt;mnemonic words&gt;"
+var seed breez_sdk_spark.Seed = breez_sdk_spark.SeedMnemonic{
+	Mnemonic:   mnemonic,
+	Passphrase: nil,
+}
+
+// Build a server-mode config: same as DefaultConfig(network) with
+// BackgroundTasksEnabled = false. No periodic sync, no real-time sync
+// client, no leaf/token optimizer, no flashnet refunder, no lightning-
+// address recovery, no spark private-mode init.
+apiKey := "&lt;breez api key&gt;"
+config := breez_sdk_spark.DefaultServerConfig(breez_sdk_spark.NetworkMainnet)
+config.ApiKey = &amp;apiKey
+
+// Typically server-mode SDKs are built per request and share infrastructure
+// (DB pool, REST chain service, SSP/Connection Manager) across instances.
+// Pass the shared resources via the builder.
+builder := breez_sdk_spark.NewSdkBuilder(config, seed)
+builder.WithDefaultStorage("./.data")
+sdk, err := builder.Build()
+if err != nil {
+	return nil, err
+}
+</code></pre>
+</section>
+</custom-tabs>
+<p><code class="lang-fn"><span class="fn-rust">default_server_config</span><span class="fn-python">default_server_config</span><span class="fn-swift">defaultServerConfig</span><span class="fn-kotlin">defaultServerConfig</span><span class="fn-javascript">defaultServerConfig</span><span class="fn-react-native">defaultServerConfig</span><span class="fn-flutter">defaultServerConfig</span><span class="fn-go">DefaultServerConfig</span><span class="fn-csharp">DefaultServerConfig</span></code> returns the same <code>Config</code> as <code class="lang-fn"><span class="fn-rust">default_config</span><span class="fn-python">default_config</span><span class="fn-swift">defaultConfig</span><span class="fn-kotlin">defaultConfig</span><span class="fn-javascript">defaultConfig</span><span class="fn-react-native">defaultConfig</span><span class="fn-flutter">defaultConfig</span><span class="fn-go">DefaultConfig</span><span class="fn-csharp">DefaultConfig</span></code> with <a href="./config.html#background-tasks-enabled"><code class="lang-fn"><span class="fn-rust">background_tasks_enabled</span><span class="fn-python">background_tasks_enabled</span><span class="fn-swift">backgroundTasksEnabled</span><span class="fn-kotlin">backgroundTasksEnabled</span><span class="fn-javascript">backgroundTasksEnabled</span><span class="fn-react-native">backgroundTasksEnabled</span><span class="fn-flutter">backgroundTasksEnabled</span><span class="fn-go">BackgroundTasksEnabled</span><span class="fn-csharp">BackgroundTasksEnabled</span></code></a> set to <code>false</code> and the fields whose background services are gated off — <a href="./config.html#real-time-sync-server-url"><code class="lang-fn"><span class="fn-rust">real_time_sync_server_url</span><span class="fn-python">real_time_sync_server_url</span><span class="fn-swift">realTimeSyncServerUrl</span><span class="fn-kotlin">realTimeSyncServerUrl</span><span class="fn-javascript">realTimeSyncServerUrl</span><span class="fn-react-native">realTimeSyncServerUrl</span><span class="fn-flutter">realTimeSyncServerUrl</span><span class="fn-go">RealTimeSyncServerUrl</span><span class="fn-csharp">RealTimeSyncServerUrl</span></code></a>, <a href="./config.html#optimization-configuration"><code class="lang-fn"><span class="fn-rust">leaf_optimization_config.auto_enabled</span><span class="fn-python">leaf_optimization_config.auto_enabled</span><span class="fn-swift">leafOptimizationConfig.autoEnabled</span><span class="fn-kotlin">leafOptimizationConfig.autoEnabled</span><span class="fn-javascript">leafOptimizationConfig.autoEnabled</span><span class="fn-react-native">leafOptimizationConfig.autoEnabled</span><span class="fn-flutter">leafOptimizationConfig.autoEnabled</span><span class="fn-go">LeafOptimizationConfig.AutoEnabled</span><span class="fn-csharp">LeafOptimizationConfig.AutoEnabled</span></code></a>, and <a href="./config.html#optimization-configuration"><code class="lang-fn"><span class="fn-rust">token_optimization_config.auto_enabled</span><span class="fn-python">token_optimization_config.auto_enabled</span><span class="fn-swift">tokenOptimizationConfig.autoEnabled</span><span class="fn-kotlin">tokenOptimizationConfig.autoEnabled</span><span class="fn-javascript">tokenOptimizationConfig.autoEnabled</span><span class="fn-react-native">tokenOptimizationConfig.autoEnabled</span><span class="fn-flutter">tokenOptimizationConfig.autoEnabled</span><span class="fn-go">TokenOptimizationConfig.AutoEnabled</span><span class="fn-csharp">TokenOptimizationConfig.AutoEnabled</span></code></a> — reset to their inactive shape. The SDK rejects builds that leave those fields in their active shape while <code>background_tasks_enabled</code> is <code>false</code>, so prefer this preset over flipping the flag by hand.</p>
+<p>Server mode usually pairs with <strong>shared infrastructure</strong> across SDK instances. See <a href="customizing.html">Customizing the SDK</a> and the <a href="#shared-infrastructure">Shared infrastructure</a> section below for the exact wiring.</p>
+<h2 id="what-server-mode-turns-off"><a class="header" href="#what-server-mode-turns-off">What server mode turns off</a></h2>
+<p>None of the following per-instance background work is started when <code class="lang-fn"><span class="fn-rust">background_tasks_enabled</span><span class="fn-python">background_tasks_enabled</span><span class="fn-swift">backgroundTasksEnabled</span><span class="fn-kotlin">backgroundTasksEnabled</span><span class="fn-javascript">backgroundTasksEnabled</span><span class="fn-react-native">backgroundTasksEnabled</span><span class="fn-flutter">backgroundTasksEnabled</span><span class="fn-go">BackgroundTasksEnabled</span><span class="fn-csharp">BackgroundTasksEnabled</span></code> is <code>false</code>:</p>
+<ul>
+<li><strong>Periodic sync loop</strong> — the SDK does not auto-sync with the Spark network.</li>
+<li><strong>Real-time sync client</strong> — no WebSocket subscription to the <a href="./config.html#real-time-sync-server-url">real-time sync server</a>.</li>
+<li><strong>Spark wallet background processor</strong> — no operator-event subscription, leaf optimizer, or token-output optimizer.</li>
+<li><strong>Lightning-address recovery</strong> — the SDK does not refresh the registered lightning address on startup.</li>
+<li><strong>Spark private-mode init</strong> — the <a href="./config.html#private-mode-enabled-by-default"><code class="lang-fn"><span class="fn-rust">private_enabled_default</span><span class="fn-python">private_enabled_default</span><span class="fn-swift">privateEnabledDefault</span><span class="fn-kotlin">privateEnabledDefault</span><span class="fn-javascript">privateEnabledDefault</span><span class="fn-react-native">privateEnabledDefault</span><span class="fn-flutter">privateEnabledDefault</span><span class="fn-go">PrivateEnabledDefault</span><span class="fn-csharp">PrivateEnabledDefault</span></code></a> preset is <strong>not</strong> applied automatically on first startup; you must opt in once via <code class="lang-fn"><span class="fn-rust">update_user_settings</span><span class="fn-python">update_user_settings</span><span class="fn-swift">updateUserSettings</span><span class="fn-kotlin">updateUserSettings</span><span class="fn-javascript">updateUserSettings</span><span class="fn-react-native">updateUserSettings</span><span class="fn-flutter">updateUserSettings</span><span class="fn-go">UpdateUserSettings</span><span class="fn-csharp">UpdateUserSettings</span></code> (see <a href="user_settings.html">User settings</a>).</li>
+<li><strong>Flashnet conversion refunder</strong> — no periodic refund pass for failed token conversions.</li>
+<li><strong>Stable Balance</strong> — Stable Balance is not supported in server mode because its conversion worker is a background service. Do not rely on automatic Bitcoin-to-token conversion on receive, activation/deactivation conversion, or other Stable Balance background behavior in this profile.</li>
+</ul>
+<p>Explicit operations such as <code class="lang-fn"><span class="fn-rust">sync_wallet</span><span class="fn-python">sync_wallet</span><span class="fn-swift">syncWallet</span><span class="fn-kotlin">syncWallet</span><span class="fn-javascript">syncWallet</span><span class="fn-react-native">syncWallet</span><span class="fn-flutter">syncWallet</span><span class="fn-go">SyncWallet</span><span class="fn-csharp">SyncWallet</span></code>, <code class="lang-fn"><span class="fn-rust">claim_deposit</span><span class="fn-python">claim_deposit</span><span class="fn-swift">claimDeposit</span><span class="fn-kotlin">claimDeposit</span><span class="fn-javascript">claimDeposit</span><span class="fn-react-native">claimDeposit</span><span class="fn-flutter">claimDeposit</span><span class="fn-go">ClaimDeposit</span><span class="fn-csharp">ClaimDeposit</span></code>, <code class="lang-fn"><span class="fn-rust">list_unclaimed_deposits</span><span class="fn-python">list_unclaimed_deposits</span><span class="fn-swift">listUnclaimedDeposits</span><span class="fn-kotlin">listUnclaimedDeposits</span><span class="fn-javascript">listUnclaimedDeposits</span><span class="fn-react-native">listUnclaimedDeposits</span><span class="fn-flutter">listUnclaimedDeposits</span><span class="fn-go">ListUnclaimedDeposits</span><span class="fn-csharp">ListUnclaimedDeposits</span></code>, <code class="lang-fn"><span class="fn-rust">refund_deposit</span><span class="fn-python">refund_deposit</span><span class="fn-swift">refundDeposit</span><span class="fn-kotlin">refundDeposit</span><span class="fn-javascript">refundDeposit</span><span class="fn-react-native">refundDeposit</span><span class="fn-flutter">refundDeposit</span><span class="fn-go">RefundDeposit</span><span class="fn-csharp">RefundDeposit</span></code>, and <code class="lang-fn"><span class="fn-rust">refund_pending_conversions</span><span class="fn-python">refund_pending_conversions</span><span class="fn-swift">refundPendingConversions</span><span class="fn-kotlin">refundPendingConversions</span><span class="fn-javascript">refundPendingConversions</span><span class="fn-react-native">refundPendingConversions</span><span class="fn-flutter">refundPendingConversions</span><span class="fn-go">RefundPendingConversions</span><span class="fn-csharp">RefundPendingConversions</span></code> continue to work and are the intended entry points in this mode.</p>
+<h2 id="driving-the-sdk-explicitly"><a class="header" href="#driving-the-sdk-explicitly">Driving the SDK explicitly</a></h2>
+<p>Because nothing runs in the background, the user is responsible for calling the operations that the SDK would otherwise schedule itself. In practice there are only three things to drive, plus one one-time setup per wallet:</p>
+<h3 id="sync"><a class="header" href="#sync">Sync</a></h3>
+<p>Call <code class="lang-fn"><span class="fn-rust">sync_wallet</span><span class="fn-python">sync_wallet</span><span class="fn-swift">syncWallet</span><span class="fn-kotlin">syncWallet</span><span class="fn-javascript">syncWallet</span><span class="fn-react-native">syncWallet</span><span class="fn-flutter">syncWallet</span><span class="fn-go">SyncWallet</span><span class="fn-csharp">SyncWallet</span></code> <strong>only when an external event tells you the wallet state has changed</strong>. The two common cases:</p>
+<ol>
+<li><strong>A webhook fires for an incoming payment</strong> — a Lightning receive completes, an on-chain deposit confirms, an incoming Spark transfer lands. Run <code>sync_wallet()</code> from the webhook handler so the wallet picks up the new state before downstream consumers (balance reads, payment lists, etc.) need it.</li>
+<li><strong>You explicitly need to reconcile state</strong> — e.g. a periodic reconciliation job for a specific wallet, or a manual admin action. This is rare in practice; the webhook path covers the steady state.</li>
+</ol>
+<p><strong>Do not</strong> call <code class="lang-fn"><span class="fn-rust">sync_wallet</span><span class="fn-python">sync_wallet</span><span class="fn-swift">syncWallet</span><span class="fn-kotlin">syncWallet</span><span class="fn-javascript">syncWallet</span><span class="fn-react-native">syncWallet</span><span class="fn-flutter">syncWallet</span><span class="fn-go">SyncWallet</span><span class="fn-csharp">SyncWallet</span></code> from user-facing request handlers (e.g. a <code>GET /balance</code> endpoint) as a precaution — it's a network round-trip to operators and is not needed if your webhooks are wired up. <code class="lang-fn"><span class="fn-rust">get_info</span><span class="fn-python">get_info</span><span class="fn-swift">getInfo</span><span class="fn-kotlin">getInfo</span><span class="fn-javascript">getInfo</span><span class="fn-react-native">getInfo</span><span class="fn-flutter">getInfo</span><span class="fn-go">GetInfo</span><span class="fn-csharp">GetInfo</span></code> reads from the local tree store directly and is the right primitive for read paths.</p>
+<p>The <code class="lang-fn"><span class="fn-rust">SdkEvent::Synced</span><span class="fn-python">SdkEvent.SYNCED</span><span class="fn-swift">SdkEvent.synced</span><span class="fn-kotlin">SdkEvent.Synced</span><span class="fn-javascript">SdkEvent.Synced</span><span class="fn-react-native">SdkEvent.Synced</span><span class="fn-flutter">SdkEvent.Synced</span><span class="fn-go">SdkEventSynced</span><span class="fn-csharp">SdkEvent.Synced</span></code> event pattern documented in <a href="events.html">Listening to events</a> is <strong>not available</strong> in server mode — the SDK has no background subscriber to emit it. Treat <code class="lang-fn"><span class="fn-rust">sync_wallet</span><span class="fn-python">sync_wallet</span><span class="fn-swift">syncWallet</span><span class="fn-kotlin">syncWallet</span><span class="fn-javascript">syncWallet</span><span class="fn-react-native">syncWallet</span><span class="fn-flutter">syncWallet</span><span class="fn-go">SyncWallet</span><span class="fn-csharp">SyncWallet</span></code> as the synchronous primitive instead.</p>
+<h3 id="claiming-on-chain-deposits"><a class="header" href="#claiming-on-chain-deposits">Claiming on-chain deposits</a></h3>
+<p>Server-mode SDKs do not run the periodic deposit detection and claim sweep that the mobile profile uses. When your webhook or chain watcher observes a relevant on-chain deposit, handle it explicitly:</p>
+<ul>
+<li>Call <code class="lang-fn"><span class="fn-rust">sync_wallet</span><span class="fn-python">sync_wallet</span><span class="fn-swift">syncWallet</span><span class="fn-kotlin">syncWallet</span><span class="fn-javascript">syncWallet</span><span class="fn-react-native">syncWallet</span><span class="fn-flutter">syncWallet</span><span class="fn-go">SyncWallet</span><span class="fn-csharp">SyncWallet</span></code> to run the SDK's deposit sync and automatic claim logic using your configured <a href="./config.html#max-deposit-claim-fee"><code class="lang-fn"><span class="fn-rust">max_deposit_claim_fee</span><span class="fn-python">max_deposit_claim_fee</span><span class="fn-swift">maxDepositClaimFee</span><span class="fn-kotlin">maxDepositClaimFee</span><span class="fn-javascript">maxDepositClaimFee</span><span class="fn-react-native">maxDepositClaimFee</span><span class="fn-flutter">maxDepositClaimFee</span><span class="fn-go">MaxDepositClaimFee</span><span class="fn-csharp">MaxDepositClaimFee</span></code></a>.</li>
+<li>If your backend already knows the deposit outpoint and wants to drive a specific claim, call <code class="lang-fn"><span class="fn-rust">claim_deposit</span><span class="fn-python">claim_deposit</span><span class="fn-swift">claimDeposit</span><span class="fn-kotlin">claimDeposit</span><span class="fn-javascript">claimDeposit</span><span class="fn-react-native">claimDeposit</span><span class="fn-flutter">claimDeposit</span><span class="fn-go">ClaimDeposit</span><span class="fn-csharp">ClaimDeposit</span></code> for that <code>txid</code>/<code>vout</code>.</li>
+</ul>
+<p>The standard claim flow documented in <a href="onchain_claims.html">Claiming on-chain deposits</a> applies.</p>
+<h3 id="stable-balance"><a class="header" href="#stable-balance">Stable Balance</a></h3>
+<p>Stable Balance is not available in server mode. The feature depends on the client runtime's background conversion worker, so server-mode SDKs will not automatically convert received Bitcoin to the active stable token and will not process Stable Balance activation/deactivation conversions in the background.</p>
+<p>If <a href="./config.html#stable-balance-configuration"><code class="lang-fn"><span class="fn-rust">stable_balance_config</span><span class="fn-python">stable_balance_config</span><span class="fn-swift">stableBalanceConfig</span><span class="fn-kotlin">stableBalanceConfig</span><span class="fn-javascript">stableBalanceConfig</span><span class="fn-react-native">stableBalanceConfig</span><span class="fn-flutter">stableBalanceConfig</span><span class="fn-go">StableBalanceConfig</span><span class="fn-csharp">StableBalanceConfig</span></code></a> is set while using server mode, SDK initialization fails with an invalid input error. Explicit token conversion flows used by payment APIs can still be used, but do not configure Stable Balance for a server-mode deployment.</p>
+<h3 id="token-conversion-refunds"><a class="header" href="#token-conversion-refunds">Token conversion refunds</a></h3>
+<p><strong>Only relevant if your deployment uses <a href="token_conversion.html">token conversions</a>.</strong> If you don't issue or convert tokens, skip this section.</p>
+<p>The flashnet conversion refunder doesn't run in the background in server mode. If you do use tokens, your host needs to drive <code class="lang-fn"><span class="fn-rust">refund_pending_conversions</span><span class="fn-python">refund_pending_conversions</span><span class="fn-swift">refundPendingConversions</span><span class="fn-kotlin">refundPendingConversions</span><span class="fn-javascript">refundPendingConversions</span><span class="fn-react-native">refundPendingConversions</span><span class="fn-flutter">refundPendingConversions</span><span class="fn-go">RefundPendingConversions</span><span class="fn-csharp">RefundPendingConversions</span></code> per affected wallet so failed conversions get refunded. A practical pattern is to track which wallets have pending conversions (e.g. by recording them when a conversion fails) and to run the refund pass for just those wallets on a cadence you control — not to spin up an SDK per wallet every minute regardless.</p>
+<h3 id="one-time-setup-spark-private-mode"><a class="header" href="#one-time-setup-spark-private-mode">One-time setup: Spark private mode</a></h3>
+<p>The client-mode SDK applies <a href="./config.html#private-mode-enabled-by-default"><code class="lang-fn"><span class="fn-rust">private_enabled_default</span><span class="fn-python">private_enabled_default</span><span class="fn-swift">privateEnabledDefault</span><span class="fn-kotlin">privateEnabledDefault</span><span class="fn-javascript">privateEnabledDefault</span><span class="fn-react-native">privateEnabledDefault</span><span class="fn-flutter">privateEnabledDefault</span><span class="fn-go">PrivateEnabledDefault</span><span class="fn-csharp">PrivateEnabledDefault</span></code></a> on first startup. Server-mode SDKs do not — each per-request SDK would otherwise pay a redundant storage read to check the flag. At provisioning time (when a new wallet is first registered), call <code class="lang-fn"><span class="fn-rust">update_user_settings</span><span class="fn-python">update_user_settings</span><span class="fn-swift">updateUserSettings</span><span class="fn-kotlin">updateUserSettings</span><span class="fn-javascript">updateUserSettings</span><span class="fn-react-native">updateUserSettings</span><span class="fn-flutter">updateUserSettings</span><span class="fn-go">UpdateUserSettings</span><span class="fn-csharp">UpdateUserSettings</span></code> with <code class="lang-fn"><span class="fn-rust">spark_private_mode_enabled</span><span class="fn-python">spark_private_mode_enabled</span><span class="fn-swift">sparkPrivateModeEnabled</span><span class="fn-kotlin">sparkPrivateModeEnabled</span><span class="fn-javascript">sparkPrivateModeEnabled</span><span class="fn-react-native">sparkPrivateModeEnabled</span><span class="fn-flutter">sparkPrivateModeEnabled</span><span class="fn-go">SparkPrivateModeEnabled</span><span class="fn-csharp">SparkPrivateModeEnabled</span></code> set to <code>true</code>. See <a href="user_settings.html">User settings</a>.</p>
+<h2 id="event-delivery-via-webhooks"><a class="header" href="#event-delivery-via-webhooks">Event delivery via webhooks</a></h2>
+<p>Without the background processor, the SDK doesn't emit <code>PaymentSucceeded</code> / <code>PaymentPending</code> / <code>ClaimedDeposits</code> events from operator activity. Deliver those signals through webhooks at your own infrastructure instead:</p>
+<ul>
+<li><a href="webhooks.html">Managing webhooks</a> describes the supported event types and registration flow.</li>
+<li><a href="lnurl_webhooks.html">Lightning Address payment notifications</a> covers the LNURL server's webhook for incoming LNURL payments.</li>
+</ul>
+<p>A typical pipeline: webhook arrives → webhook handler builds a per-request SDK, calls <code class="lang-fn"><span class="fn-rust">sync_wallet</span><span class="fn-python">sync_wallet</span><span class="fn-swift">syncWallet</span><span class="fn-kotlin">syncWallet</span><span class="fn-javascript">syncWallet</span><span class="fn-react-native">syncWallet</span><span class="fn-flutter">syncWallet</span><span class="fn-go">SyncWallet</span><span class="fn-csharp">SyncWallet</span></code> or the relevant explicit operation (e.g. <code class="lang-fn"><span class="fn-rust">claim_deposit</span><span class="fn-python">claim_deposit</span><span class="fn-swift">claimDeposit</span><span class="fn-kotlin">claimDeposit</span><span class="fn-javascript">claimDeposit</span><span class="fn-react-native">claimDeposit</span><span class="fn-flutter">claimDeposit</span><span class="fn-go">ClaimDeposit</span><span class="fn-csharp">ClaimDeposit</span></code>), disconnects.</p>
+<h2 id="lifecycle-pattern"><a class="header" href="#lifecycle-pattern">Lifecycle pattern</a></h2>
+<p>There are three distinct shapes for a server-mode interaction, depending on what triggered it.</p>
+<h3 id="user-facing-request-handlers"><a class="header" href="#user-facing-request-handlers">User-facing request handlers</a></h3>
+<p>Generate an invoice, send a payment, list history, etc. <strong>Do not call <code class="lang-fn"><span class="fn-rust">sync_wallet</span><span class="fn-python">sync_wallet</span><span class="fn-swift">syncWallet</span><span class="fn-kotlin">syncWallet</span><span class="fn-javascript">syncWallet</span><span class="fn-react-native">syncWallet</span><span class="fn-flutter">syncWallet</span><span class="fn-go">SyncWallet</span><span class="fn-csharp">SyncWallet</span></code> here</strong> — operations that read from local storage (<code class="lang-fn"><span class="fn-rust">get_info</span><span class="fn-python">get_info</span><span class="fn-swift">getInfo</span><span class="fn-kotlin">getInfo</span><span class="fn-javascript">getInfo</span><span class="fn-react-native">getInfo</span><span class="fn-flutter">getInfo</span><span class="fn-go">GetInfo</span><span class="fn-csharp">GetInfo</span></code>, <code class="lang-fn"><span class="fn-rust">list_payments</span><span class="fn-python">list_payments</span><span class="fn-swift">listPayments</span><span class="fn-kotlin">listPayments</span><span class="fn-javascript">listPayments</span><span class="fn-react-native">listPayments</span><span class="fn-flutter">listPayments</span><span class="fn-go">ListPayments</span><span class="fn-csharp">ListPayments</span></code>, etc.) do not need a defensive sync, and a network round-trip to operators on every request adds latency without changing the answer.</p>
+<pre><code class="language-text">request in
+  ↓
+build SDK (default_server_config + shared infra)
+  ↓
+do work (receive_payment / send_payment / list_payments / …)
+  ↓
+disconnect()
+  ↓
+response out
+</code></pre>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">// User-facing request handler: do not call sync_wallet here. Operations
+// that read from local storage (get_info, list_payments, etc.) do not
+// need a defensive sync. Call sync_wallet only from webhook handlers or
+// reconciliation jobs that need to observe an external state change.
+let response = sdk
+    .receive_payment(ReceivePaymentRequest {
+        payment_method: ReceivePaymentMethod::Bolt11Invoice {
+            description: "&lt;invoice description&gt;".to_string(),
+            amount_sats: Some(5_000),
+            expiry_secs: Some(3600),
+            payment_hash: None,
+        },
+    })
+    .await?;
+
+// Always disconnect at the end of the request lifecycle to flush
+// outstanding storage writes. See [Disconnecting](initializing.md).
+sdk.disconnect().await?;</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">// User-facing request handler: do not call syncWallet here. Operations
+// that read from local storage (getInfo, listPayments, etc.) do not need
+// a defensive sync. Call syncWallet only from webhook handlers or
+// reconciliation jobs that need to observe an external state change.
+let response = try await sdk.receivePayment(
+    request: ReceivePaymentRequest(
+        paymentMethod: ReceivePaymentMethod.bolt11Invoice(
+            description: "&lt;invoice description&gt;",
+            amountSats: 5_000,
+            expirySecs: 3600,
+            paymentHash: nil
+        )
+    ))
+
+// Always disconnect at the end of the request lifecycle to flush
+// outstanding storage writes.
+try await sdk.disconnect()
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">// User-facing request handler: do not call syncWallet here.
+// Operations that read from local storage (getInfo, listPayments,
+// etc.) do not need a defensive sync. Call syncWallet only from
+// webhook handlers or reconciliation jobs that need to observe an
+// external state change.
+val response = sdk.receivePayment(
+    ReceivePaymentRequest(
+        ReceivePaymentMethod.Bolt11Invoice(
+            "&lt;invoice description&gt;",
+            5_000.toULong(),
+            3600.toUInt(),
+            null,
+        )
+    )
+)
+
+// Always disconnect at the end of the request lifecycle to flush
+// outstanding storage writes.
+sdk.disconnect()
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">// User-facing request handler: do not call SyncWallet here.
+// Operations that read from local storage (GetInfo, ListPayments,
+// etc.) do not need a defensive sync. Call SyncWallet only from
+// webhook handlers or reconciliation jobs that need to observe
+// an external state change.
+var paymentMethod = new ReceivePaymentMethod.Bolt11Invoice(
+    description: "&lt;invoice description&gt;",
+    amountSats: 5_000UL,
+    expirySecs: 3600U,
+    paymentHash: null
+);
+var response = await sdk.ReceivePayment(
+    request: new ReceivePaymentRequest(paymentMethod: paymentMethod)
+);
+
+// Always disconnect at the end of the request lifecycle to flush
+// outstanding storage writes.
+await sdk.Disconnect();
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">// User-facing request handler: do not call syncWallet here. Operations
+// that read from local storage (getInfo, listPayments, etc.) do not need
+// a defensive sync. Call syncWallet only from webhook handlers or
+// reconciliation jobs that need to observe an external state change.
+const response = await sdk.receivePayment({
+  paymentMethod: {
+    type: 'bolt11Invoice',
+    description: '&lt;invoice description&gt;',
+    amountSats: 5_000,
+    expirySecs: 3600,
+    paymentHash: undefined
+  }
+})
+
+// Always disconnect at the end of the request lifecycle to flush
+// outstanding storage writes.
+await sdk.disconnect()
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">// User-facing request handler: do not call syncWallet here. Operations
+// that read from local storage (getInfo, listPayments, etc.) do not need
+// a defensive sync. Call syncWallet only from webhook handlers or
+// reconciliation jobs that need to observe an external state change.
+const response = await sdk.receivePayment({
+  paymentMethod: new ReceivePaymentMethod.Bolt11Invoice({
+    description: '&lt;invoice description&gt;',
+    amountSats: BigInt(5_000),
+    expirySecs: 3600,
+    paymentHash: undefined
+  })
+})
+
+// Always disconnect at the end of the request lifecycle to flush
+// outstanding storage writes.
+await sdk.disconnect()
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">// User-facing request handler: do not call syncWallet here. Operations
+// that read from local storage (getInfo, listPayments, etc.) do not need
+// a defensive sync. Call syncWallet only from webhook handlers or
+// reconciliation jobs that need to observe an external state change.
+final response = await sdk.receivePayment(
+  request: ReceivePaymentRequest(
+    paymentMethod: ReceivePaymentMethod.bolt11Invoice(
+      description: "&lt;invoice description&gt;",
+      amountSats: BigInt.from(5000),
+      expirySecs: 3600,
+      paymentHash: null,
+    ),
+  ),
+);
+
+// Always disconnect at the end of the request lifecycle to flush
+// outstanding storage writes.
+await sdk.disconnect();
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore"># User-facing request handler: do not call sync_wallet here. Operations
+# that read from local storage (get_info, list_payments, etc.) do not
+# need a defensive sync. Call sync_wallet only from webhook handlers or
+# reconciliation jobs that need to observe an external state change.
+payment_method = ReceivePaymentMethod.BOLT11_INVOICE(
+    description="&lt;invoice description&gt;",
+    amount_sats=5_000,
+    expiry_secs=3600,
+    payment_hash=None,
+)
+response = await sdk.receive_payment(
+    request=ReceivePaymentRequest(payment_method=payment_method)
+)
+
+# Always disconnect at the end of the request lifecycle to flush
+# outstanding storage writes.
+await sdk.disconnect()
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">// User-facing request handler: do not call SyncWallet here. Operations
+// that read from local storage (GetInfo, ListPayments, etc.) do not need
+// a defensive sync. Call SyncWallet only from webhook handlers or
+// reconciliation jobs that need to observe an external state change.
+amountSats := uint64(5_000)
+expirySecs := uint32(3600)
+response, err := sdk.ReceivePayment(breez_sdk_spark.ReceivePaymentRequest{
+	PaymentMethod: breez_sdk_spark.ReceivePaymentMethodBolt11Invoice{
+		Description: "&lt;invoice description&gt;",
+		AmountSats:  &amp;amountSats,
+		ExpirySecs:  &amp;expirySecs,
+		PaymentHash: nil,
+	},
+})
+if err != nil {
+	return "", err
+}
+
+// Always disconnect at the end of the request lifecycle to flush
+// outstanding storage writes.
+if err := sdk.Disconnect(); err != nil {
+	return "", err
+}
+</code></pre>
+</section>
+</custom-tabs>
+<h3 id="webhook-handlers-and-reconciliation-jobs"><a class="header" href="#webhook-handlers-and-reconciliation-jobs">Webhook handlers and reconciliation jobs</a></h3>
+<p>Anything driven by an external signal that the wallet state changed. The exact operation depends on the trigger — they're not chained together in the same handler.</p>
+<ul>
+<li><strong>Incoming Lightning / Spark transfer webhook</strong> — call <code class="lang-fn"><span class="fn-rust">sync_wallet</span><span class="fn-python">sync_wallet</span><span class="fn-swift">syncWallet</span><span class="fn-kotlin">syncWallet</span><span class="fn-javascript">syncWallet</span><span class="fn-react-native">syncWallet</span><span class="fn-flutter">syncWallet</span><span class="fn-go">SyncWallet</span><span class="fn-csharp">SyncWallet</span></code> so downstream reads see the new payment:</li>
+</ul>
+<pre><code class="language-text">webhook in  →  build SDK  →  sync_wallet()  →  disconnect()
+</code></pre>
+<ul>
+<li><strong>On-chain deposit webhook</strong> (or chain watcher) — call <code class="lang-fn"><span class="fn-rust">sync_wallet</span><span class="fn-python">sync_wallet</span><span class="fn-swift">syncWallet</span><span class="fn-kotlin">syncWallet</span><span class="fn-javascript">syncWallet</span><span class="fn-react-native">syncWallet</span><span class="fn-flutter">syncWallet</span><span class="fn-go">SyncWallet</span><span class="fn-csharp">SyncWallet</span></code> to run the deposit sync and automatic claim sweep, or call <code class="lang-fn"><span class="fn-rust">claim_deposit</span><span class="fn-python">claim_deposit</span><span class="fn-swift">claimDeposit</span><span class="fn-kotlin">claimDeposit</span><span class="fn-javascript">claimDeposit</span><span class="fn-react-native">claimDeposit</span><span class="fn-flutter">claimDeposit</span><span class="fn-go">ClaimDeposit</span><span class="fn-csharp">ClaimDeposit</span></code> if you want to claim a known outpoint explicitly:</li>
+</ul>
+<pre><code class="language-text">webhook in  →  build SDK  →  sync_wallet() / claim_deposit()  →  disconnect()
+</code></pre>
+<h3 id="one-time-provisioning"><a class="header" href="#one-time-provisioning">One-time provisioning</a></h3>
+<p>When a wallet is first registered, run a one-time setup pass to apply the configuration the client-mode SDK would otherwise apply itself on first startup — currently the <a href="./config.html#private-mode-enabled-by-default">private mode preset</a>:</p>
+<pre><code class="language-text">new wallet registered
+  ↓
+build SDK (default_server_config + shared infra)
+  ↓
+apply one-time user settings
+  ↓
+disconnect()
+</code></pre>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">// One-time setup when a wallet is first registered. The client-mode SDK
+// would normally apply the private-mode preset itself on first startup;
+// server-mode SDKs do not, so opt in once here via update_user_settings.
+sdk.update_user_settings(UpdateUserSettingsRequest {
+    spark_private_mode_enabled: Some(true),
+    stable_balance_active_label: None,
+})
+.await?;
+
+sdk.disconnect().await?;</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">// One-time setup when a wallet is first registered. The client-mode SDK
+// would normally apply the private-mode preset itself on first startup;
+// server-mode SDKs do not, so opt in once here via updateUserSettings.
+try await sdk.updateUserSettings(
+    request: UpdateUserSettingsRequest(sparkPrivateModeEnabled: true))
+
+try await sdk.disconnect()
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">// One-time setup when a wallet is first registered. The client-mode
+// SDK would normally apply the private-mode preset itself on first
+// startup; server-mode SDKs do not, so opt in once here via
+// updateUserSettings.
+sdk.updateUserSettings(UpdateUserSettingsRequest(sparkPrivateModeEnabled = true))
+
+sdk.disconnect()
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">// One-time setup when a wallet is first registered. The
+// client-mode SDK would normally apply the private-mode preset
+// itself on first startup; server-mode SDKs do not, so opt in
+// once here via UpdateUserSettings.
+await sdk.UpdateUserSettings(
+    request: new UpdateUserSettingsRequest(sparkPrivateModeEnabled: true)
+);
+
+await sdk.Disconnect();
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">// One-time setup when a wallet is first registered. The client-mode SDK
+// would normally apply the private-mode preset itself on first startup;
+// server-mode SDKs do not, so opt in once here via updateUserSettings.
+await sdk.updateUserSettings({
+  sparkPrivateModeEnabled: true,
+  stableBalanceActiveLabel: undefined
+})
+
+await sdk.disconnect()
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">// One-time setup when a wallet is first registered. The client-mode SDK
+// would normally apply the private-mode preset itself on first startup;
+// server-mode SDKs do not, so opt in once here via updateUserSettings.
+await sdk.updateUserSettings({
+  sparkPrivateModeEnabled: true,
+  stableBalanceActiveLabel: undefined
+})
+
+await sdk.disconnect()
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">// One-time setup when a wallet is first registered. The client-mode SDK
+// would normally apply the private-mode preset itself on first startup;
+// server-mode SDKs do not, so opt in once here via updateUserSettings.
+await sdk.updateUserSettings(
+  request: UpdateUserSettingsRequest(sparkPrivateModeEnabled: true),
+);
+
+await sdk.disconnect();
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore"># One-time setup when a wallet is first registered. The client-mode SDK
+# would normally apply the private-mode preset itself on first startup;
+# server-mode SDKs do not, so opt in once here via update_user_settings.
+await sdk.update_user_settings(
+    request=UpdateUserSettingsRequest(spark_private_mode_enabled=True)
+)
+
+await sdk.disconnect()
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">// One-time setup when a wallet is first registered. The client-mode SDK
+// would normally apply the private-mode preset itself on first startup;
+// server-mode SDKs do not, so opt in once here via UpdateUserSettings.
+sparkPrivateModeEnabled := true
+if err := sdk.UpdateUserSettings(breez_sdk_spark.UpdateUserSettingsRequest{
+	SparkPrivateModeEnabled: &amp;sparkPrivateModeEnabled,
+}); err != nil {
+	return err
+}
+
+return sdk.Disconnect()
+</code></pre>
+</section>
+</custom-tabs>
+<h3 id="a-few-notes"><a class="header" href="#a-few-notes">A few notes</a></h3>
+<ul>
+<li><strong>Building is cheap when infrastructure is shared.</strong> With the shared chain service, MySQL/Postgres pool, and SSP/Connection Managers configured (<a href="#shared-infrastructure">see below</a>), each per-request SDK reuses HTTP/2 connections, DB pool slots, and gRPC channels — there's no per-request handshake to operators.</li>
+<li><strong>Always disconnect.</strong> Even though no background loops are running, calling <code class="lang-fn"><span class="fn-rust">disconnect</span><span class="fn-python">disconnect</span><span class="fn-swift">disconnect</span><span class="fn-kotlin">disconnect</span><span class="fn-javascript">disconnect</span><span class="fn-react-native">disconnect</span><span class="fn-flutter">disconnect</span><span class="fn-go">Disconnect</span><span class="fn-csharp">Disconnect</span></code> flushes outstanding storage writes and is the documented lifecycle exit. See <a href="initializing.html#disconnecting">Disconnecting</a>.</li>
+<li><strong>One SDK per request, not one SDK pinned to a worker thread.</strong> The per-request build is fast enough and avoids cross-tenant state leaks.</li>
+</ul>
+<h2 id="shared-infrastructure">
+    <a class="header" href="#shared-infrastructure">Shared infrastructure</a>
+</h2>
+<p>A server-mode deployment normally pairs the profile with shared resources across every per-request SDK. Each of the following is documented in <a href="customizing.html">Customizing the SDK</a>:</p>
+<ul>
+<li><a href="customizing.html#with-postgres-backend">PostgreSQL Backend</a> — shared DB pool for storage, tree, and token stores.</li>
+<li><a href="customizing.html#with-mysql-backend">MySQL Backend</a> — same for MySQL.</li>
+<li><a href="customizing.html#with-shared-rest-chain-service">Shared REST Chain Service</a> — one pooled HTTP client instead of one per SDK.</li>
+<li><a href="customizing.html#with-ssp-connection-manager">SSP Connection Manager</a> — share the SSP HTTP client across SDKs.</li>
+<li><a href="customizing.html#with-connection-manager">Connection Manager</a> — share gRPC channels to the Spark operators across SDKs.</li>
+</ul>
+<p>Pair <code class="lang-fn"><span class="fn-rust">default_server_config</span><span class="fn-python">default_server_config</span><span class="fn-swift">defaultServerConfig</span><span class="fn-kotlin">defaultServerConfig</span><span class="fn-javascript">defaultServerConfig</span><span class="fn-react-native">defaultServerConfig</span><span class="fn-flutter">defaultServerConfig</span><span class="fn-go">DefaultServerConfig</span><span class="fn-csharp">DefaultServerConfig</span></code> with all of these shared resources — sharing the DB pool, chain service, SSP HTTP client, and gRPC channels across SDKs is the intended deployment shape.</p>
+<h2 id="driving-the-background_tasks_enabledbackground_tasks_enabledbackgroundtasksenabledbackgroundtasksenabledbackgroundtasksenabledbackgroundtasksenabledbackgroundtasksenabledbackgroundtasksenabledbackgroundtasksenabled-field-directly"><a class="header" href="#driving-the-background_tasks_enabledbackground_tasks_enabledbackgroundtasksenabledbackgroundtasksenabledbackgroundtasksenabledbackgroundtasksenabledbackgroundtasksenabledbackgroundtasksenabledbackgroundtasksenabled-field-directly">Driving the <code class="lang-fn"><span class="fn-rust">background_tasks_enabled</span><span class="fn-python">background_tasks_enabled</span><span class="fn-swift">backgroundTasksEnabled</span><span class="fn-kotlin">backgroundTasksEnabled</span><span class="fn-javascript">backgroundTasksEnabled</span><span class="fn-react-native">backgroundTasksEnabled</span><span class="fn-flutter">backgroundTasksEnabled</span><span class="fn-go">BackgroundTasksEnabled</span><span class="fn-csharp">BackgroundTasksEnabled</span></code> field directly</a></h2>
+<p><code class="lang-fn"><span class="fn-rust">default_server_config</span><span class="fn-python">default_server_config</span><span class="fn-swift">defaultServerConfig</span><span class="fn-kotlin">defaultServerConfig</span><span class="fn-javascript">defaultServerConfig</span><span class="fn-react-native">defaultServerConfig</span><span class="fn-flutter">defaultServerConfig</span><span class="fn-go">DefaultServerConfig</span><span class="fn-csharp">DefaultServerConfig</span></code> is the recommended entry point. If you need to flip the flag on an existing config built another way, see <a href="./config.html#background-tasks-enabled">Background tasks enabled</a>.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../guide/webhooks.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../guide/client_signing.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../guide/webhooks.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../guide/client_signing.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../tabs.js"></script>
+        <script src="../theme/pagetoc.js"></script>
+        <script src="../brand-header.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
