@@ -496,7 +496,7 @@ impl TokenOutputStore for MysqlTokenStore {
     async fn update_token_outputs(
         &self,
         outputs_to_remove: &[(String, u32)],
-        outputs_to_add: Option<&TokenOutputs>,
+        outputs_to_add: &[TokenOutputs],
     ) -> Result<(), TokenOutputServiceError> {
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
         // Serialize against the other token-store mutators (refresh, reservation, finalization),
@@ -1400,7 +1400,7 @@ impl MysqlTokenStore {
         &self,
         conn: &mut Conn,
         outputs_to_remove: &[(String, u32)],
-        outputs_to_add: Option<&TokenOutputs>,
+        outputs_to_add: &[TokenOutputs],
     ) -> Result<(), TokenOutputServiceError> {
         let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
 
@@ -1431,7 +1431,7 @@ impl MysqlTokenStore {
         }
 
         // 2. Insert new outputs.
-        if let Some(token_outputs) = outputs_to_add {
+        for token_outputs in outputs_to_add {
             self.upsert_metadata(&mut tx, &token_outputs.metadata)
                 .await?;
 
@@ -2622,7 +2622,7 @@ mod tests {
         // with B's existing entry — both tenants must end up with their own
         // row.
         let a_token2 = shared_tests::create_token_outputs(2, vec![999]);
-        fx.a.update_token_outputs(&[], Some(&a_token2))
+        fx.a.update_token_outputs(&[], std::slice::from_ref(&a_token2))
             .await
             .unwrap();
 

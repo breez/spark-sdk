@@ -549,7 +549,7 @@ class PostgresTokenStore {
   /**
    * Atomically remove spent outputs and insert new outputs.
    * @param {Array<[string, number]>} outputsToRemove - Array of [prevTxHash, prevTxVout] tuples
-   * @param {Object|null} outputsToAdd - Token outputs to insert (with metadata)
+   * @param {Array<Object>} outputsToAdd - Per-token outputs to insert, each with its metadata
    * @returns {Promise<void>}
    */
   async updateTokenOutputs(outputsToRemove, outputsToAdd) {
@@ -574,12 +574,12 @@ class PostgresTokenStore {
         }
 
         // 2. Insert new outputs.
-        if (outputsToAdd) {
-          await this._upsertMetadata(client, outputsToAdd.metadata);
+        for (const tokenOutputs of outputsToAdd ?? []) {
+          await this._upsertMetadata(client, tokenOutputs.metadata);
 
-          if (outputsToAdd.outputs.length > 0) {
-            const txHashes = outputsToAdd.outputs.map((o) => o.prevTxHash);
-            const vouts = outputsToAdd.outputs.map((o) => o.prevTxVout);
+          if (tokenOutputs.outputs.length > 0) {
+            const txHashes = tokenOutputs.outputs.map((o) => o.prevTxHash);
+            const vouts = tokenOutputs.outputs.map((o) => o.prevTxVout);
             await client.query(
               `DELETE FROM brz_token_spent_outputs
                WHERE user_id = $1
@@ -590,10 +590,10 @@ class PostgresTokenStore {
             );
           }
 
-          for (const output of outputsToAdd.outputs) {
+          for (const output of tokenOutputs.outputs) {
             await this._insertSingleOutput(
               client,
-              outputsToAdd.metadata.identifier,
+              tokenOutputs.metadata.identifier,
               output
             );
           }

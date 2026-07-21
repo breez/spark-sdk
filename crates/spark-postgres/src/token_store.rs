@@ -649,7 +649,7 @@ impl TokenOutputStore for PostgresTokenStore {
     async fn update_token_outputs(
         &self,
         outputs_to_remove: &[(String, u32)],
-        outputs_to_add: Option<&TokenOutputs>,
+        outputs_to_add: &[TokenOutputs],
     ) -> Result<(), TokenOutputServiceError> {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
@@ -683,7 +683,7 @@ impl TokenOutputStore for PostgresTokenStore {
         }
 
         // 2. Insert new outputs.
-        if let Some(token_outputs) = outputs_to_add {
+        for token_outputs in outputs_to_add {
             self.upsert_metadata(&tx, &token_outputs.metadata).await?;
 
             // Clear spent status for outputs being (re-)added.
@@ -2285,7 +2285,7 @@ mod tests {
         // both tenants must end up with their own row, and A's outputs/balance
         // for "token-2" must differ from B's.
         let a_token2 = shared_tests::create_token_outputs(2, vec![999]);
-        fx.a.update_token_outputs(&[], Some(&a_token2))
+        fx.a.update_token_outputs(&[], std::slice::from_ref(&a_token2))
             .await
             .unwrap();
 

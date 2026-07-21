@@ -83,7 +83,7 @@ async function main() {
     await store.setTokensOutputs([token], Date.now() + 10_000);
 
     // 2. Mark output 100 (at prev_tx_hash 'tx-hash-0', vout 0) as spent.
-    await store.updateTokenOutputs([["tx-hash-0", 0]], null);
+    await store.updateTokenOutputs([["tx-hash-0", 0]], []);
 
     // 3. Replay setTokensOutputs with a refresh start in the past (60s ago).
     //    The spent marker should suppress re-adding output 100.

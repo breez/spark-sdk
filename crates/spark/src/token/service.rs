@@ -127,7 +127,7 @@ impl TokenOutputService for SynchronousTokenOutputService {
     async fn update_token_outputs(
         &self,
         outputs_to_remove: &[(String, u32)],
-        outputs_to_add: Option<&TokenOutputs>,
+        outputs_to_add: &[TokenOutputs],
     ) -> Result<(), TokenOutputServiceError> {
         self.state
             .update_token_outputs(outputs_to_remove, outputs_to_add)

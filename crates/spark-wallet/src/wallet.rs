@@ -1737,9 +1737,10 @@ impl SparkWallet {
         Ok(balances)
     }
 
-    /// Transfers tokens to another Spark user.
+    /// Transfers tokens to other Spark users.
     ///
-    /// Multiple outputs may be provided but they must share the same token id.
+    /// Every output is paid by a single transaction, and the outputs may span
+    /// several token ids.
     pub async fn transfer_tokens(
         &self,
         outputs: Vec<TransferTokenOutput>,

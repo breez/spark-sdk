@@ -347,7 +347,7 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
     async fn update_token_outputs(
         &self,
         outputs_to_remove: &[(String, u32)],
-        outputs_to_add: Option<&TokenOutputs>,
+        outputs_to_add: &[TokenOutputs],
     ) -> Result<(), TokenOutputServiceError> {
         let mut state = self.token_outputs.lock().await;
         let now = SystemTime::now();
@@ -364,7 +364,7 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         }
 
         // 2. Insert new outputs.
-        if let Some(token_outputs) = outputs_to_add {
+        for token_outputs in outputs_to_add {
             // Clear spent status for outputs being (re-)added.
             for output in &token_outputs.outputs {
                 let outpoint = outpoint_of(output);

@@ -109,30 +109,39 @@ impl TokenOutputsReservation {
     }
 }
 
+/// Runs `f` and then settles every reservation it depends on: finalized when `f`
+/// succeeds, cancelled when it fails.
+///
+/// A transaction spanning several tokens holds one reservation per token, and
+/// they settle together so a failure cannot leave one token's outputs reserved.
 pub async fn with_reserved_token_outputs<F, R, E>(
     token_output_service: &dyn TokenOutputService,
     f: F,
-    reservation: &TokenOutputsReservation,
+    reservations: &[TokenOutputsReservation],
 ) -> Result<R, E>
 where
     F: Future<Output = Result<R, E>>,
 {
     match f.await {
         Ok(r) => {
-            if let Err(e) = token_output_service
-                .finalize_reservation(&reservation.id)
-                .await
-            {
-                error!("Failed to finalize reservation: {e:?}");
+            for reservation in reservations {
+                if let Err(e) = token_output_service
+                    .finalize_reservation(&reservation.id)
+                    .await
+                {
+                    error!("Failed to finalize reservation: {e:?}");
+                }
             }
             Ok(r)
         }
         Err(e) => {
-            if let Err(e) = token_output_service
-                .cancel_reservation(&reservation.id)
-                .await
-            {
-                error!("Failed to cancel reservation: {e:?}");
+            for reservation in reservations {
+                if let Err(e) = token_output_service
+                    .cancel_reservation(&reservation.id)
+                    .await
+                {
+                    error!("Failed to cancel reservation: {e:?}");
+                }
             }
             Err(e)
         }
@@ -256,7 +265,7 @@ pub trait TokenOutputStore: Send + Sync {
     async fn update_token_outputs(
         &self,
         outputs_to_remove: &[(String, u32)],
-        outputs_to_add: Option<&TokenOutputs>,
+        outputs_to_add: &[TokenOutputs],
     ) -> Result<(), TokenOutputServiceError>;
 
     async fn reserve_token_outputs(
@@ -326,7 +335,7 @@ pub trait TokenOutputService: Send + Sync {
     async fn update_token_outputs(
         &self,
         outputs_to_remove: &[(String, u32)],
-        outputs_to_add: Option<&TokenOutputs>,
+        outputs_to_add: &[TokenOutputs],
     ) -> Result<(), TokenOutputServiceError>;
 
     async fn reserve_token_outputs(
