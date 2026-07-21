@@ -99,7 +99,7 @@ Show a sticky retry when the biometric timeout fires:
 
 {{#tabs passkey:handle-timeout}}
 
-See the [UX guide](./uxguide_passkey.md) for the recommended recovery UX.
+See the [UX guide](./uxguide_login.md) for the recommended recovery UX.
 
 ## Supported specs
 
