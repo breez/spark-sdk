@@ -20,8 +20,8 @@ How users get into a wallet and how they recover it are one story: the login met
 
 ### Returning users
 
-1. **Day-2 login is one prompt.** Don't run a full passkey ceremony on every launch: on native, unlock from biometric-bound secure storage so returning is a single biometric prompt; on web, offer "Sign in with a passkey". Always leave an escape hatch ("Use a different wallet").
-2. **The mnemonic never touches plain storage.** Re-derive it from the passkey each session, or on native keep it only in biometric-bound secure storage, so that access always requires OS authentication. Within a session, cache the derived seed in memory so later SDK calls don't re-prompt.
+1. **Day-2 login is effortless.** Don't run a full passkey ceremony on every launch: on native, store the seed in the keychain so the wallet opens directly (optionally biometric-bound, making the return a single biometric prompt); on web, offer "Sign in with a passkey". Always leave an escape hatch ("Use a different wallet").
+2. **The mnemonic never touches plain storage.** On native, keep it in the keychain or secure storage; on web, re-derive it from the passkey each session. Within a session, cache the derived seed in memory so later SDK calls don't re-prompt.
 3. **A dismissed prompt is an answer.** Never auto-retry: land on a persistent error state with a "Try Again" button, and re-prompt only on an explicit tap. (The SDK follows the same rule and never re-fires the OS prompt on its own.)
 4. **Catch duplicate registrations.** When the authenticator reports that a passkey already exists for this wallet, say so and pivot the user to sign-in instead of silently prompting again.
 
