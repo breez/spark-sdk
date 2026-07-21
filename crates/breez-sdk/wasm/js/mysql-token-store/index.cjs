@@ -547,7 +547,7 @@ class MysqlTokenStore {
   /**
    * Atomically remove spent outputs and insert new outputs.
    * @param {Array<[string, number]>} outputsToRemove - Array of [prevTxHash, prevTxVout] tuples
-   * @param {Object|null} outputsToAdd - Token outputs to insert (with metadata)
+   * @param {Array<Object>} outputsToAdd - Per-token outputs to insert, each with its metadata
    * @returns {Promise<void>}
    */
   async updateTokenOutputs(outputsToRemove, outputsToAdd) {
@@ -572,15 +572,15 @@ class MysqlTokenStore {
         }
 
         // 2. Insert new outputs.
-        if (outputsToAdd) {
-          await this._upsertMetadata(conn, outputsToAdd.metadata);
+        for (const tokenOutputs of outputsToAdd ?? []) {
+          await this._upsertMetadata(conn, tokenOutputs.metadata);
 
-          if (outputsToAdd.outputs.length > 0) {
-            const pairPlaceholders = outputsToAdd.outputs
+          if (tokenOutputs.outputs.length > 0) {
+            const pairPlaceholders = tokenOutputs.outputs
               .map(() => "(?, ?)")
               .join(", ");
             const params = [this.identity];
-            for (const o of outputsToAdd.outputs) {
+            for (const o of tokenOutputs.outputs) {
               params.push(o.prevTxHash, o.prevTxVout);
             }
             await conn.query(
@@ -589,10 +589,10 @@ class MysqlTokenStore {
             );
           }
 
-          for (const output of outputsToAdd.outputs) {
+          for (const output of tokenOutputs.outputs) {
             await this._insertSingleOutput(
               conn,
-              outputsToAdd.metadata.identifier,
+              tokenOutputs.metadata.identifier,
               output
             );
           }

@@ -198,7 +198,9 @@ pub async fn test_insert_token_outputs(store: &dyn TokenOutputStore) {
 
     // Insert outputs for a new token
     let token2 = create_token_outputs(2, vec![500, 1000]);
-    let result = store.update_token_outputs(&[], Some(&token2)).await;
+    let result = store
+        .update_token_outputs(&[], std::slice::from_ref(&token2))
+        .await;
     assert!(result.is_ok());
 
     // Verify there are now two tokens
@@ -208,7 +210,7 @@ pub async fn test_insert_token_outputs(store: &dyn TokenOutputStore) {
     // Insert additional outputs for token1
     let token1_additional = create_token_outputs(1, vec![400, 500]);
     let result = store
-        .update_token_outputs(&[], Some(&token1_additional))
+        .update_token_outputs(&[], std::slice::from_ref(&token1_additional))
         .await;
     assert!(result.is_ok());
 
@@ -222,7 +224,7 @@ pub async fn test_insert_token_outputs(store: &dyn TokenOutputStore) {
     // Insert some duplicate outputs for token2 (should not duplicate)
     let token2_duplicate = create_token_outputs(2, vec![500, 750, 1000]);
     let result = store
-        .update_token_outputs(&[], Some(&token2_duplicate))
+        .update_token_outputs(&[], std::slice::from_ref(&token2_duplicate))
         .await;
     assert!(result.is_ok());
 
@@ -1486,7 +1488,7 @@ pub async fn test_set_tokens_outputs_skipped_after_swap_completes_during_refresh
     // Insert new outputs (simulating swap result)
     let token1_new = create_token_outputs(1, vec![300]);
     store
-        .update_token_outputs(&[], Some(&token1_new))
+        .update_token_outputs(&[], std::slice::from_ref(&token1_new))
         .await
         .unwrap();
 
@@ -1523,7 +1525,7 @@ pub async fn test_insert_outputs_preserved_by_set_tokens_outputs(store: &dyn Tok
     // While refresh is in progress, a new output arrives
     let token1_new = create_token_outputs(1, vec![200]);
     store
-        .update_token_outputs(&[], Some(&token1_new))
+        .update_token_outputs(&[], std::slice::from_ref(&token1_new))
         .await
         .unwrap();
 
@@ -1634,7 +1636,7 @@ pub async fn test_finalize_swap_marks_spent_and_tracks_completion(store: &dyn To
     // Insert new outputs (simulating swap result)
     let token1_new = create_token_outputs(1, vec![600]);
     store
-        .update_token_outputs(&[], Some(&token1_new))
+        .update_token_outputs(&[], std::slice::from_ref(&token1_new))
         .await
         .unwrap();
 
@@ -1686,7 +1688,7 @@ pub async fn test_insert_outputs_clears_spent_status(store: &dyn TokenOutputStor
     // Insert the same output back (simulating receiving it back)
     let token1_back = create_token_outputs(1, vec![100]);
     store
-        .update_token_outputs(&[], Some(&token1_back))
+        .update_token_outputs(&[], std::slice::from_ref(&token1_back))
         .await
         .unwrap();
 
@@ -1721,7 +1723,7 @@ pub async fn test_remove_token_outputs_by_prev_tx_ref(store: &dyn TokenOutputSto
         .unwrap();
 
     store
-        .update_token_outputs(&[("tx-hash-token-1-200".to_string(), 0)], None)
+        .update_token_outputs(&[("tx-hash-token-1-200".to_string(), 0)], &[])
         .await
         .unwrap();
 
@@ -1747,7 +1749,7 @@ pub async fn test_remove_token_outputs_prevents_refresh_re_add(store: &dyn Token
         .unwrap();
 
     store
-        .update_token_outputs(&[("tx-hash-token-1-100".to_string(), 0)], None)
+        .update_token_outputs(&[("tx-hash-token-1-100".to_string(), 0)], &[])
         .await
         .unwrap();
 

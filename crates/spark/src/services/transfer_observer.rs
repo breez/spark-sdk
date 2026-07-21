@@ -6,6 +6,7 @@ use crate::services::TransferId;
 pub struct ReceiverTokenOutput {
     pub pay_request: String,
     pub amount: u128,
+    pub token_id: String,
 }
 
 #[derive(Debug, Error, Clone)]
@@ -33,7 +34,6 @@ pub trait TransferObserver: Send + Sync {
     async fn before_send_token(
         &self,
         partial_tx_id: &str,
-        token_id: &str,
         receiver_outputs: Vec<ReceiverTokenOutput>,
     ) -> Result<(), TransferObserverError>;
     /// `receiver_output_count` is the number of receiver outputs reported by `before_send_token`
