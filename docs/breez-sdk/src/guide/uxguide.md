@@ -13,10 +13,10 @@ These guidelines describe how to build a UI/UX on top of the Breez SDK that feel
 
 ## Guidelines
 
+- **[Login & backup]**
+- **[Displaying payments]**
 - **[Receiving payments]**
 - **[Sending payments]**
-- **[Displaying payments]**
-- **[Login & backup]**
 
 [Receiving payments]: uxguide_receive.md
 [Sending payments]: uxguide_send.md
