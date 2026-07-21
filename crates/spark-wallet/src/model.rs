@@ -309,6 +309,15 @@ pub struct ListTransfersRequest {
     pub transfer_ids: Vec<TransferId>,
 }
 
+/// A Spark invoice to pay, with the amount to use when the invoice leaves it open.
+#[derive(Clone, Debug)]
+pub struct SparkInvoiceToFulfill {
+    pub invoice: String,
+    /// Amount in the asset's base units. Required when the invoice encodes no
+    /// amount, ignored when it does.
+    pub amount: Option<u128>,
+}
+
 #[derive(Clone, Debug)]
 pub enum FulfillSparkInvoiceResult {
     Transfer(Box<WalletTransfer>),
