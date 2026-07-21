@@ -1295,17 +1295,11 @@ pub enum ReceivePaymentMethod {
     CrossChain {
         /// The selected cross-chain route in the receive direction.
         route: crate::cross_chain::CrossChainRoutePair,
-        /// The amount, with semantics determined by `fee_mode`:
-        /// - `FeesExcluded` (default): net amount the receiver wants to
-        ///   land on the Spark side, in destination-asset base units
-        ///   (sats when the destination is BTC; token base units when
-        ///   the destination is a Spark token like USDB). The SDK pads
-        ///   the sender's deposit to cover provider fees + the
-        ///   `target_overpay_bps` safety buffer.
-        /// - `FeesIncluded`: the deposit the sender will pay, in the
-        ///   route's source-asset base units (e.g. USDC base units when
-        ///   the source asset is USDC). The receiver lands `amount`
-        ///   minus fees.
+        /// The amount, always in **USDB base units (6-decimal)**, regardless
+        /// of destination or fee mode. `$1 = 1_000_000`.
+        ///
+        /// - `FeesExcluded` (default): net USD value the receiver wants delivered.
+        /// - `FeesIncluded`: USD value the sender will deposit.
         amount: u128,
         /// Spark-side asset the receiver wants delivered. When absent, the
         /// SDK auto-selects: the wallet's active stable-balance token if

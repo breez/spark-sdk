@@ -435,6 +435,27 @@ pub(crate) fn convert_sats_to_destination_amount(
     Ok(target as u128)
 }
 
+/// Converts USDB base units to sats at the live BTC/USD rate. Inverse of
+/// [`convert_sats_to_destination_amount`] for the 6-decimal USD-stable case.
+/// Errors on non-finite / negative results.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+pub(crate) fn convert_usdb_base_units_to_sats(
+    usdb_base_units: u128,
+    fiat_rate: f64,
+) -> Result<u128, SdkError> {
+    let sats = (usdb_base_units as f64) * 100.0 / fiat_rate;
+    if !sats.is_finite() || sats < 0.0 {
+        return Err(SdkError::Generic(format!(
+            "Cross-chain: invalid USDB→sats conversion result: {sats}"
+        )));
+    }
+    Ok(sats as u128)
+}
+
 pub(crate) fn is_usd_stable_asset(asset: &str) -> bool {
     USD_STABLE_ASSETS
         .iter()

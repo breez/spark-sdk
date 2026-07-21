@@ -138,6 +138,15 @@ async fn receive_cross_chain(
 
     let resolved_destination = resolve_receive_destination(sdk, &route, destination).await?;
 
+    let provider_amount = convert_receive_amount_to_provider_units(
+        sdk,
+        &route,
+        &resolved_destination,
+        fee_mode,
+        amount,
+    )
+    .await?;
+
     let service = sdk.cross_chain_context.get(route.provider)?.clone();
 
     let recipient = sdk
@@ -149,8 +158,8 @@ async fn receive_cross_chain(
         })?;
 
     debug!(
-        "Cross-chain receive: fee_mode={fee_mode:?} target={amount} \
-         overpay_bps={overpay_bps} slippage_bps={slippage}",
+        "Cross-chain receive: fee_mode={fee_mode:?} usdb_amount={amount} \
+         provider_amount={provider_amount} overpay_bps={overpay_bps} slippage_bps={slippage}",
     );
 
     let CrossChainReceivePrepared {
@@ -160,7 +169,7 @@ async fn receive_cross_chain(
         .prepare_receive(
             &route,
             &recipient,
-            amount,
+            provider_amount,
             slippage,
             &resolved_destination,
             fee_mode,
@@ -173,6 +182,36 @@ async fn receive_cross_chain(
         fee: 0,
         cross_chain_info: Some(info),
     })
+}
+
+/// Convert the caller-facing USDB-denominated receive amount into the units
+/// the provider layer expects for its own math.
+///
+/// - `FeesExcluded` + USDB destination: identical (already USDB base units).
+/// - `FeesExcluded` + BTC destination: USDB base units → sats via live
+///   BTC/USD rate.
+/// - `FeesIncluded` (any destination): USDB base units → source-asset base
+///   units, assuming USD-stable par.
+async fn convert_receive_amount_to_provider_units(
+    sdk: &BreezSdk,
+    route: &CrossChainRoutePair,
+    destination: &SparkAsset,
+    fee_mode: crate::cross_chain::CrossChainFeeMode,
+    usdb_amount: u128,
+) -> Result<u128, SdkError> {
+    use crate::cross_chain::{
+        CrossChainFeeMode, convert_usdb_base_units_to_sats, fetch_btc_usd_rate, rescale_decimals,
+    };
+    match (fee_mode, destination) {
+        (CrossChainFeeMode::FeesExcluded, SparkAsset::Token { .. }) => Ok(usdb_amount),
+        (CrossChainFeeMode::FeesExcluded, SparkAsset::Bitcoin) => {
+            let btc_usd = fetch_btc_usd_rate(sdk.fiat_service.as_ref()).await?;
+            convert_usdb_base_units_to_sats(usdb_amount, btc_usd)
+        }
+        (CrossChainFeeMode::FeesIncluded, _) => {
+            rescale_decimals(usdb_amount, 6, u32::from(route.decimals))
+        }
+    }
 }
 
 /// Picks a Spark-side destination asset for a cross-chain receive.
@@ -297,4 +336,3 @@ pub(super) async fn receive_bolt11_invoice_inner(
     };
     Ok(receive)
 }
-

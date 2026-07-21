@@ -1445,7 +1445,11 @@ dependencies = [
 name = "breez-sdk-itest"
 version = "0.1.0"
 dependencies = [
+ "alloy-consensus",
+ "alloy-eips",
  "alloy-primitives",
+ "alloy-rlp",
+ "alloy-signer",
  "alloy-signer-local",
  "anyhow",
  "async-trait",

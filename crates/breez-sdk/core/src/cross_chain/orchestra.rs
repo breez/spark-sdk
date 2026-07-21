@@ -64,7 +64,15 @@ const RECEIVE_GRACE_SECS: u64 = 24 * 60 * 60;
 /// `USD_STABLE_ASSETS`; call-site gate lives in `prepare_receive`. USDB cent
 /// flooring is itemized inside Orchestra's own `total_fee_amount` as
 /// `rounding_fee_amount`, so no separate grid buffer is needed here.
-const RECEIVE_EXTERNAL_FEE_STABLE_BASE_UNITS: u128 = 40_000;
+const STABLE_RECEIVE_BUFFER_BASE_UNITS: u128 = 40_000;
+
+/// Probe-ratio threshold (bps of the inflated target) above which Orchestra's
+/// estimate is treated as optimistic and shaved by the external-fee buffer.
+/// Empirically CCTP-direct USDC probes report ~9885 bps; multi-hop and
+/// non-CCTP routes report ~9385 bps. Below this gate Orchestra has already
+/// priced external overhead into the estimate and the buffer would just
+/// inflate the deposit without helping delivery.
+const STABLE_RECEIVE_BUFFER_ACTIVATION_BPS: u128 = 9_700;
 
 /// Resolves the Orchestra config from Breez server.
 ///
@@ -620,23 +628,24 @@ impl OrchestraService {
         let estimate: EstimateResponse = self.client.estimate(request).await?;
         debug!("Orchestra: estimate response: {:?}", estimate);
         let delivered = parse_amount(&estimate.estimated_out, "estimatedOut")?;
-        let adjusted_delivered = if apply_stable_receive_buffers {
+        let probe_ratio_bps = delivered
+            .saturating_mul(10_000)
+            .checked_div(destination_amount)
+            .unwrap_or(0);
+        let buffer_applied =
+            apply_stable_receive_buffers && probe_ratio_bps >= STABLE_RECEIVE_BUFFER_ACTIVATION_BPS;
+        let adjusted_delivered = if buffer_applied {
             adjust_estimate_for_receive_buffers(delivered)?
         } else {
             delivered
         };
         let required_in =
             proportional_inflation(source_amount, destination_amount, adjusted_delivered)?;
-        // ratio_bps = delivered / source × 10000, so 10000 = 100% (par).
-        // Reported on the RAW estimate for comparability across orders.
-        let ratio_bps = delivered
-            .saturating_mul(10_000)
-            .checked_div(source_amount)
-            .unwrap_or(0);
         debug!(
             "Orchestra: estimate scaling: source_probe={source_amount} \
              estimated_delivered={delivered} adjusted_delivered={adjusted_delivered} \
-             ratio_bps={ratio_bps} target={destination_amount} → required_in={required_in}",
+             probe_ratio_bps={probe_ratio_bps} buffer_applied={buffer_applied} \
+             target={destination_amount} → required_in={required_in}",
         );
         Ok(required_in)
     }
@@ -652,9 +661,9 @@ fn parse_amount(value: &str, field: &str) -> Result<u128, SdkError> {
 /// used to scale `required_in`. Orchestra's estimate covers their own platform
 /// fees (including cent-floor rounding) but not the pass-through
 /// bridge/aggregator/gas costs. See
-/// [`RECEIVE_EXTERNAL_FEE_STABLE_BASE_UNITS`] for provenance.
+/// [`STABLE_RECEIVE_BUFFER_BASE_UNITS`] for provenance.
 fn adjust_estimate_for_receive_buffers(delivered: u128) -> Result<u128, SdkError> {
-    let adjusted = delivered.saturating_sub(RECEIVE_EXTERNAL_FEE_STABLE_BASE_UNITS);
+    let adjusted = delivered.saturating_sub(STABLE_RECEIVE_BUFFER_BASE_UNITS);
     if adjusted == 0 {
         return Err(SdkError::InvalidInput(
             "Cross-chain receive amount too small: Orchestra's estimate is at or below \
@@ -1057,7 +1066,7 @@ impl CrossChainService for OrchestraService {
         // we model on the input side. Orchestea don't estimate the external
         // delivery costs of routing the payment.
         let shaved_expected = if apply_stable_buffers {
-            quote_estimated_out.saturating_sub(RECEIVE_EXTERNAL_FEE_STABLE_BASE_UNITS)
+            quote_estimated_out.saturating_sub(STABLE_RECEIVE_BUFFER_BASE_UNITS)
         } else {
             quote_estimated_out
         };
@@ -1065,8 +1074,8 @@ impl CrossChainService for OrchestraService {
         // on what the receiver will actually see. Reporting the shaved value
         // when it dips below target would under-promise something the buffer
         // was designed to make impossible.
-        let expected_received_amount = target_destination_amount
-            .map_or(shaved_expected, |t| shaved_expected.max(t));
+        let expected_received_amount =
+            target_destination_amount.map_or(shaved_expected, |t| shaved_expected.max(t));
 
         let data = OrchestraSwapData {
             quote_id: quote.quote_id.clone(),
@@ -2572,7 +2581,7 @@ mod tests {
     /// so the caller can surface a "too small" error at prepare time.
     #[test_all]
     fn adjust_estimate_rejects_below_buffer_floor() {
-        let floor = super::RECEIVE_EXTERNAL_FEE_STABLE_BASE_UNITS;
+        let floor = super::STABLE_RECEIVE_BUFFER_BASE_UNITS;
         let err = adjust_estimate_for_receive_buffers(floor).unwrap_err();
         assert!(matches!(err, SdkError::InvalidInput(_)));
         let err = adjust_estimate_for_receive_buffers(floor - 1).unwrap_err();
@@ -2585,7 +2594,7 @@ mod tests {
     /// `(buffer × source / delivered)`.
     #[test_all]
     fn adjust_estimate_shaves_by_external_buffer_and_scales_required_in_up() {
-        let external = super::RECEIVE_EXTERNAL_FEE_STABLE_BASE_UNITS;
+        let external = super::STABLE_RECEIVE_BUFFER_BASE_UNITS;
         let raw_delivered = 990_000u128;
         let adjusted = adjust_estimate_for_receive_buffers(raw_delivered).unwrap();
         assert_eq!(adjusted, raw_delivered - external);
