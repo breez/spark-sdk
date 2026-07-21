@@ -436,17 +436,26 @@ impl SparkWallet {
         invoice_str: &str,
         amount: Option<u128>,
     ) -> Result<PreparedTokenPackage, SparkWalletError> {
-        let invoice = self.parse_and_validate_spark_invoice(invoice_str)?;
-        if !self.config.self_payment_allowed
-            && invoice.identity_public_key == self.identity_public_key
-        {
-            return Err(SparkWalletError::SelfPaymentNotAllowed);
-        }
-        let (output, execute_before_unix_micros) =
-            token_output_from_invoice(&invoice, invoice_str, amount)?;
+        self.prepare_spark_invoice_token_packages(vec![SparkInvoiceToFulfill {
+            invoice: invoice_str.to_string(),
+            amount,
+        }])
+        .await
+    }
+
+    /// Prepares one package paying several token Spark invoices, for external signing.
+    ///
+    /// The invoices may request different tokens. Sats invoices are not accepted:
+    /// a sats payment moves leaves rather than token outputs and cannot share a
+    /// transaction.
+    pub async fn prepare_spark_invoice_token_packages(
+        &self,
+        invoices: Vec<SparkInvoiceToFulfill>,
+    ) -> Result<PreparedTokenPackage, SparkWalletError> {
+        let (outputs, execute_before_unix_micros) = self.token_outputs_from_invoices(invoices)?;
         let prepared = self
             .token_service
-            .prepare_token_transfer(vec![output], None, None, execute_before_unix_micros)
+            .prepare_token_transfer(outputs, None, None, execute_before_unix_micros)
             .await?;
         Ok(prepared)
     }
