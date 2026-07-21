@@ -15,19 +15,52 @@
             return;
         }
         // The sidebar toggle leads the bar, to the left of the logo, next to
-        // the sidebar it controls. The rest join the right-hand controls.
+        // the sidebar it controls. Search joins the right-hand controls. The
+        // theme picker (#theme-toggle / #theme-list) is deliberately NOT
+        // rescued from the hidden #menu-bar: the docs are pinned to the
+        // "Auto" theme, which book.toml resolves to navy either way.
         var sidebarToggle = document.getElementById("sidebar-toggle");
         if (sidebarToggle) {
             header.insertBefore(sidebarToggle, header.firstChild);
         }
-        ["theme-toggle", "theme-list", "search-toggle"].forEach(function (id) {
+        ["search-toggle"].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) {
                 controls.appendChild(el);
             }
         });
+        forceAutoTheme();
         markActiveNav();
         wireSidebarBehavior();
+    }
+
+    // The docs are pinned to the Auto theme: with no picker in the UI, a
+    // visitor who chose a theme in the past would be stuck with it forever.
+    // Wipe the stored choice and correct the current page load in place
+    // (theme class + matching highlight stylesheet, mirroring book.js).
+    function forceAutoTheme() {
+        var stored = null;
+        try {
+            stored = localStorage.getItem("mdbook-theme");
+            if (stored !== null) {
+                localStorage.removeItem("mdbook-theme");
+            }
+        } catch (e) { }
+        if (stored === null || stored === "navy") {
+            return; // fresh visitors already resolve to navy via book.toml
+        }
+        var html = document.documentElement;
+        ["light", "rust", "coal", "ayu"].forEach(function (cls) {
+            html.classList.remove(cls);
+        });
+        html.classList.add("navy");
+        var sheet = function (id) { return document.getElementById(id); };
+        var hl = sheet("highlight-css");
+        var tn = sheet("tomorrow-night-css");
+        var ayu = sheet("ayu-highlight-css");
+        if (hl) { hl.disabled = true; }
+        if (tn) { tn.disabled = false; }
+        if (ayu) { ayu.disabled = true; }
     }
 
     // Highlight the current top-level section link (Home / GitHub) when it matches.

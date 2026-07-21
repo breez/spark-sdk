@@ -202,7 +202,6 @@ html.rust #brand-header .icon-button:hover { background: var(--theme-hover); }
    sidebar on narrow windows and never restores it on grow) and leads the
    bar, left of the logo, next to the sidebar it controls. */
 #brand-header #sidebar-toggle { display: inline-flex; margin-right: 6px; }
-.brand-controls #theme-list { top: 40px; }
 
 /* ---- Reconcile the fixed header with mdBook's layout -------------------- */
 /* The brand header replaces mdBook's #menu-bar entirely. */
