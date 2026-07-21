@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use breez_sdk_common::input::{InputType, PaymentRequestSource, parse_spark_address};
 use platform_utils::time::UNIX_EPOCH;
@@ -81,9 +81,7 @@ pub fn token_tx_inputs_are_ours(
 ///
 /// Each resulting payment corresponds to a tx output (change outputs don't result in payments).
 ///
-/// Assumptions:
-/// - All outputs of a token transaction share the same token identifier
-/// - All inputs of a token transaction share the same owner public key
+/// Assumes all inputs of a token transaction share the same owner public key.
 #[allow(clippy::too_many_lines)]
 pub async fn token_transaction_to_payments(
     spark_wallet: &SparkWallet,
@@ -92,24 +90,29 @@ pub async fn token_transaction_to_payments(
     tx_inputs_are_ours: bool,
 ) -> Result<Vec<Payment>, SdkError> {
     // Transactions with no outputs (e.g. Create) produce no payments
-    let Some(first_output) = transaction.outputs.first() else {
+    if transaction.outputs.is_empty() {
         debug!(
             "Skipping token transaction with no outputs: hash={}, inputs={:?}",
             hex::encode(&transaction.hash),
             transaction.inputs,
         );
         return Ok(Vec::new());
-    };
+    }
 
-    // Get token metadata for the first output (assuming all outputs have the same token)
-    let token_identifier = first_output.token_identifier.as_ref();
+    let mut token_identifiers: Vec<&str> = transaction
+        .outputs
+        .iter()
+        .map(|o| o.token_identifier.as_ref())
+        .collect();
+    token_identifiers.sort_unstable();
+    token_identifiers.dedup();
 
-    let metadata =
-        get_tokens_metadata_cached_or_query(spark_wallet, object_repository, &[token_identifier])
+    let metadata_by_token: HashMap<String, TokenMetadata> =
+        get_tokens_metadata_cached_or_query(spark_wallet, object_repository, &token_identifiers)
             .await?
-            .first()
-            .cloned()
-            .ok_or(SdkError::Generic("Token metadata not found".to_string()))?;
+            .into_iter()
+            .map(|m| (m.identifier.clone(), m))
+            .collect();
 
     let is_mint_transaction = matches!(&transaction.inputs, spark_wallet::TokenInputs::Mint(..));
     let is_transfer_transaction =
@@ -155,8 +158,17 @@ pub async fn token_transaction_to_payments(
 
         let id = format!("{}:{}", transaction.hash, vout);
 
-        // TODO:The following breaks if there are multiple invoices/outputs with the same owner public key but is the best we can do for now
-        // Should be an edge case given that the Spark SDK only supports one invoice per transaction
+        let metadata = metadata_by_token
+            .get(&output.token_identifier)
+            .ok_or_else(|| {
+                SdkError::Generic(format!(
+                    "Token metadata not found for {}",
+                    output.token_identifier
+                ))
+            })?;
+
+        // TODO: Invoices are matched to outputs by owner public key, so a transaction carrying two
+        // invoices for the same owner picks the wrong one for one of them.
         let invoices = invoices
             .iter()
             .filter(|i| i.identity_public_key == output.owner_public_key.to_string())

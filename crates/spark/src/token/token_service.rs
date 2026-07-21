@@ -70,7 +70,6 @@ pub struct PreparedTokenTransfer {
     pub partial_token_transaction_bytes: Vec<u8>,
     pub spent_outpoints: Vec<TokenOutpoint>,
     pub receiver_outputs: Vec<PreparedTokenReceiverOutput>,
-    pub num_receiver_outputs: usize,
     pub created_timestamp: SystemTime,
 }
 
@@ -125,9 +124,8 @@ fn build_consolidation_outputs(
 
     let per_output = amount / n;
     // Emit (n - 1) explicit outputs of `per_output`. The remainder
-    // (amount - (n - 1) * per_output) becomes the change output added by
-    // build_transfer_token_transaction, also routed back to receiver_address,
-    // landing us at exactly `target_output_count` outputs.
+    // (amount - (n - 1) * per_output) becomes the change output added by the transfer builder,
+    // also routed back to receiver_address, landing us at exactly `target_output_count` outputs.
     (0..(target_output_count - 1))
         .map(|_| TransferTokenOutput {
             token_id: token_id.to_string(),
@@ -781,38 +779,27 @@ impl TokenService {
         let mut inputs = inputs;
         inputs.sort_by_key(|o| o.prev_tx_vout);
 
-        // The caller's receiver outputs occupy vouts 0..num_receiver_outputs. Any change output we
-        // append below lands after them and goes to our own identity key; the payment pipeline
-        // (token_transaction_to_payments) filters such self-outputs, so we keep change out of the
-        // observer's view too and only report these receiver outputs.
-        let num_receiver_outputs = receiver_outputs.len();
-
-        let mut receiver_outputs = receiver_outputs;
-        let inputs_amount = inputs.iter().map(|o| o.output.token_amount).sum::<u128>();
-        let outputs_amount = receiver_outputs.iter().map(|o| o.amount).sum::<u128>();
-        if inputs_amount > outputs_amount {
-            receiver_outputs.push(TransferTokenOutput {
-                token_id: token_id.to_string(),
-                amount: inputs_amount
-                    .checked_sub(outputs_amount)
-                    .ok_or_else(|| ServiceError::Generic("Amount overflow".to_string()))?,
-                receiver_address: SparkAddress::new(identity_public_key, self.network, None),
-                spark_invoice: None,
-            });
-        }
-
-        let token_id_bytes = bech32m_decode_token_id(token_id, Some(self.network))
-            .map_err(|e| ServiceError::Generic(format!("Invalid token id '{token_id}': {e}")))?;
-
+        // The transfer builder appends one change output per token, after the caller's receiver
+        // outputs and owned by our identity key, so `receiver_outputs` here holds only the caller's
+        // outputs and they occupy vouts 0..receiver_outputs.len() in both the partial and the final
+        // transaction.
         let selected_outputs = inputs
             .iter()
             .map(|o| {
+                let token_identifier =
+                    bech32m_decode_token_id(&o.output.token_identifier, Some(self.network))
+                        .map_err(|e| {
+                            ServiceError::Generic(format!(
+                                "Invalid token id '{}': {e}",
+                                o.output.token_identifier
+                            ))
+                        })?;
                 Ok(spark_token_primitives::SelectedTokenOutput {
                     previous_transaction_hash: hex::decode(&o.prev_tx_hash)
                         .map_err(|_| ServiceError::Generic("Invalid prev tx hash".to_string()))?,
                     previous_transaction_vout: o.prev_tx_vout,
                     owner_public_key: o.output.owner_public_key.serialize().to_vec(),
-                    token_identifier: token_id_bytes.clone(),
+                    token_identifier,
                     token_amount: o.output.token_amount.to_be_bytes().to_vec(),
                 })
             })
@@ -898,7 +885,6 @@ impl TokenService {
             partial_token_transaction_bytes: result.partial_token_transaction_bytes,
             spent_outpoints,
             receiver_outputs: prepared_receivers,
-            num_receiver_outputs,
             created_timestamp: now,
         })
     }
@@ -916,7 +902,6 @@ impl TokenService {
             partial_token_transaction_bytes,
             spent_outpoints,
             receiver_outputs,
-            num_receiver_outputs,
             created_timestamp,
         } = prepared;
 
@@ -939,7 +924,6 @@ impl TokenService {
                     &token_id,
                     receiver_outputs
                         .iter()
-                        .take(num_receiver_outputs)
                         .map(|o| ReceiverTokenOutput {
                             pay_request: o.pay_request.clone(),
                             amount: o.amount,
@@ -1036,9 +1020,11 @@ impl TokenService {
         };
 
         // Operator outputs are authoritative post-broadcast; log mismatches rather than propagate.
-        if outputs.len() != receiver_outputs.len() {
+        // The final transaction carries our receiver outputs at vouts 0..receiver_outputs.len(),
+        // followed by any change output the builder appended, so it can be longer but never shorter.
+        if outputs.len() < receiver_outputs.len() {
             warn!(
-                "broadcast returned {} final outputs but expected {} for tx {txid}",
+                "broadcast returned {} final outputs but expected at least {} for tx {txid}",
                 outputs.len(),
                 receiver_outputs.len()
             );
@@ -1060,7 +1046,7 @@ impl TokenService {
 
         if let Some(observer) = &self.transfer_observer
             && let Err(e) = observer
-                .after_send_token(&partial_txid, &txid, num_receiver_outputs)
+                .after_send_token(&partial_txid, &txid, receiver_outputs.len())
                 .await
         {
             warn!("after_send_token observer failed for tx {txid}: {e:?}");
