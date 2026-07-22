@@ -1701,6 +1701,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_multi_token_reservation_rolls_back_on_shortfall() {
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+        shared_tests::test_multi_token_reservation_rolls_back_on_shortfall(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_multi_token_reservation_rolls_back_on_first_token() {
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+        shared_tests::test_multi_token_reservation_rolls_back_on_first_token(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_multi_token_reservation_rolls_back_on_unknown_token() {
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+        shared_tests::test_multi_token_reservation_rolls_back_on_unknown_token(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_multi_token_reservation_cancel_restores_every_token() {
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+        shared_tests::test_multi_token_reservation_cancel_restores_every_token(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_multi_token_reservation_finalize_spends_every_token() {
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+        shared_tests::test_multi_token_reservation_finalize_spends_every_token(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_by_outpoints_rolls_back_on_missing() {
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_by_outpoints_rolls_back_on_missing(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_by_outpoints_spans_tokens() {
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_by_outpoints_spans_tokens(&fixture.store).await;
+    }
+
+    #[tokio::test]
     async fn test_reserve_token_outputs_and_cancel() {
         let fixture = PostgresTokenStoreTestFixture::new().await;
         shared_tests::test_reserve_token_outputs_and_cancel(&fixture.store).await;

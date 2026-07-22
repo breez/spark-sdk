@@ -266,6 +266,48 @@ async fn test_reserve_token_outputs_by_outpoints() {
 }
 
 #[async_test_all]
+async fn test_multi_token_reservation_rolls_back_on_shortfall() {
+    let store = InMemoryTokenOutputStore::default();
+    shared_tests::test_multi_token_reservation_rolls_back_on_shortfall(&store).await;
+}
+
+#[async_test_all]
+async fn test_multi_token_reservation_rolls_back_on_first_token() {
+    let store = InMemoryTokenOutputStore::default();
+    shared_tests::test_multi_token_reservation_rolls_back_on_first_token(&store).await;
+}
+
+#[async_test_all]
+async fn test_multi_token_reservation_rolls_back_on_unknown_token() {
+    let store = InMemoryTokenOutputStore::default();
+    shared_tests::test_multi_token_reservation_rolls_back_on_unknown_token(&store).await;
+}
+
+#[async_test_all]
+async fn test_multi_token_reservation_cancel_restores_every_token() {
+    let store = InMemoryTokenOutputStore::default();
+    shared_tests::test_multi_token_reservation_cancel_restores_every_token(&store).await;
+}
+
+#[async_test_all]
+async fn test_multi_token_reservation_finalize_spends_every_token() {
+    let store = InMemoryTokenOutputStore::default();
+    shared_tests::test_multi_token_reservation_finalize_spends_every_token(&store).await;
+}
+
+#[async_test_all]
+async fn test_reserve_by_outpoints_rolls_back_on_missing() {
+    let store = InMemoryTokenOutputStore::default();
+    shared_tests::test_reserve_by_outpoints_rolls_back_on_missing(&store).await;
+}
+
+#[async_test_all]
+async fn test_reserve_by_outpoints_spans_tokens() {
+    let store = InMemoryTokenOutputStore::default();
+    shared_tests::test_reserve_by_outpoints_spans_tokens(&store).await;
+}
+
+#[async_test_all]
 async fn test_reserve_token_outputs_and_cancel() {
     let store = InMemoryTokenOutputStore::default();
     shared_tests::test_reserve_token_outputs_and_cancel(&store).await;
