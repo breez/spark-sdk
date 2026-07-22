@@ -1836,7 +1836,7 @@ pub struct ResolvedTokenBatchRecipient {
     pub invoice_details: Option<SparkInvoiceDetails>,
 }
 
-/// What a batch debits for one token. Never a sum across tokens.
+/// What a batch debits for one token.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct TokenBatchTotal {

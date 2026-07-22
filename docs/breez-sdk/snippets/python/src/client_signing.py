@@ -1,4 +1,5 @@
 # pylint: disable=duplicate-code
+# pylint: disable=too-many-branches
 import logging
 from breez_sdk_spark import (
     BreezSdk,
@@ -68,6 +69,19 @@ async def sign_package(
                 unsigned.prepare_token_transaction
             )
         )
+    elif isinstance(unsigned, UnsignedTransferPackage.TOKEN_BATCH):
+        if unsigned.is_swap:
+            logging.debug("Approve combining token outputs before the batch is sent")
+        else:
+            for total in unsigned.totals:
+                logging.debug(
+                    f"Approve sending {total.amount} of token {total.token_identifier}"
+                )
+        signature = TransferSignature.TOKEN(
+            signed=await signer.prepare_token_transaction(
+                unsigned.prepare_token_transaction
+            )
+        )
     else:
         raise ValueError("Unknown transfer package variant")
 
@@ -109,6 +123,9 @@ async def send_with_client_signing(
                 continue
             if isinstance(result, PublishSignedTransferPackageResponse.PAYMENT_SENT):
                 return result.payment
+            # Only a batch package pays several recipients at once
+            if isinstance(result, PublishSignedTransferPackageResponse.PAYMENTS_SENT):
+                raise ValueError("unexpected batch response for a single payment")
     except Exception as error:
         logging.error(error)
         raise
