@@ -1,8 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    ops::Not,
-    sync::Arc,
-};
+use std::{collections::BTreeMap, ops::Not, sync::Arc};
 
 use bitcoin::{
     bech32::{self, Bech32m, Hrp},
@@ -39,7 +35,7 @@ use crate::{
     token::{
         GetTokenOutputsFilter, ReservationPurpose, ReservationTarget, SelectionStrategy,
         TokenMetadata, TokenOutput, TokenOutputService, TokenOutputWithPrevOut, TokenOutputs,
-        TokenOutputsReservation, with_reserved_token_outputs,
+        with_reserved_token_outputs,
     },
     utils::{
         paging::{PagingFilter, PagingResult, pager},
@@ -91,11 +87,11 @@ pub enum PreparedTokenPackage {
     Consolidation(PreparedTokenTransfer),
 }
 
-/// Sums the requested amount per token id. Ordered by token id so concurrent
-/// transfers acquire reservations in a consistent order.
-fn amount_by_token(
+/// Sums the requested amount per token id into one reservation target each,
+/// ordered by token id so the targets are deterministic.
+fn reservation_targets(
     receiver_outputs: &[TransferTokenOutput],
-) -> Result<BTreeMap<String, u128>, ServiceError> {
+) -> Result<Vec<(String, ReservationTarget)>, ServiceError> {
     if receiver_outputs.is_empty() {
         return Err(ServiceError::Generic(
             "No receiver outputs provided".to_string(),
@@ -109,42 +105,10 @@ fn amount_by_token(
             .checked_add(output.amount)
             .ok_or_else(|| ServiceError::Generic("Amount overflow".to_string()))?;
     }
-    Ok(totals)
-}
-
-/// Buckets outputs by their own token identifier, pairing each bucket with that
-/// token's metadata. Outputs whose token has no metadata are dropped: the store
-/// cannot file them without it.
-fn group_outputs_by_token(
-    outputs: Vec<TokenOutputWithPrevOut>,
-    metadata_by_token: &HashMap<String, TokenMetadata>,
-) -> Vec<TokenOutputs> {
-    let mut grouped = BTreeMap::<String, Vec<TokenOutputWithPrevOut>>::new();
-    for output in outputs {
-        grouped
-            .entry(output.output.token_identifier.clone())
-            .or_default()
-            .push(output);
-    }
-
-    grouped
+    Ok(totals
         .into_iter()
-        .filter_map(
-            |(token_id, outputs)| match metadata_by_token.get(&token_id) {
-                Some(metadata) => Some(TokenOutputs {
-                    metadata: metadata.clone(),
-                    outputs,
-                }),
-                None => {
-                    warn!(
-                        "No metadata for token {token_id}; skipping {} outputs",
-                        outputs.len()
-                    );
-                    None
-                }
-            },
-        )
-        .collect()
+        .map(|(token_id, amount)| (token_id, ReservationTarget::MinTotalValue(amount)))
+        .collect())
 }
 
 /// Returns the token identifier contributing the most inputs, breaking ties by
@@ -160,22 +124,6 @@ fn most_common_token(inputs: &[TokenOutputWithPrevOut]) -> Option<String> {
         .into_iter()
         .max_by_key(|&(token_id, count)| (count, std::cmp::Reverse(token_id)))
         .map(|(token_id, _)| token_id.to_string())
-}
-
-/// Cancels every reservation, logging failures rather than propagating them: the
-/// caller is already unwinding.
-async fn cancel_reservations(
-    token_output_service: &dyn TokenOutputService,
-    reservations: &[TokenOutputsReservation],
-) {
-    for reservation in reservations {
-        if let Err(e) = token_output_service
-            .cancel_reservation(&reservation.id)
-            .await
-        {
-            error!("Failed to cancel reservation: {e:?}");
-        }
-    }
 }
 
 /// Checks if an error indicates a transaction was preempted because token outputs
@@ -342,13 +290,10 @@ impl TokenService {
         token_ids.sort_unstable();
         token_ids.dedup();
 
-        let metadata_by_token = self
-            .get_tokens_metadata(&token_ids, &[])
-            .await?
-            .into_iter()
-            .map(|m| (m.identifier.clone(), m))
-            .collect::<HashMap<_, _>>();
-        let outputs_to_add = group_outputs_by_token(our_outputs, &metadata_by_token);
+        let outputs_to_add = TokenOutputs {
+            metadata: self.get_tokens_metadata(&token_ids, &[]).await?,
+            outputs: our_outputs,
+        };
 
         // 4. Atomically remove spent inputs and insert new outputs.
         self.token_output_service
@@ -718,51 +663,31 @@ impl TokenService {
         selection_strategy: Option<SelectionStrategy>,
         execute_before_unix_micros: Option<i64>,
     ) -> Result<TokenTransaction, ServiceError> {
-        let amount_by_token = amount_by_token(&receiver_outputs)?;
+        let reservation_targets = reservation_targets(&receiver_outputs)?;
 
         // Stable for the wallet's lifetime; fetch once and reuse across retries and below.
         let identity_public_key = self.spark_signer.get_identity_public_key().await?;
 
         let mut attempt = 0;
         let mut preempted_attempt = 0;
-        let (token_transaction, reservations) = loop {
+        let (token_transaction, reservation) = loop {
             if attempt >= MAX_TRANSFER_TOKEN_TOO_MANY_OUTPUTS_RETRY_ATTEMPTS {
                 return Err(ServiceError::NeededTooManyOutputs);
             }
 
-            // One reservation per token. They settle together in
-            // with_reserved_token_outputs, so a failure part-way through cannot leave an
-            // earlier token's outputs reserved.
-            let mut reservations = Vec::with_capacity(amount_by_token.len());
-            let mut reserve_result = Ok(());
-            for (token_id, amount) in &amount_by_token {
-                match self
-                    .token_output_service
-                    .reserve_token_outputs(
-                        token_id,
-                        ReservationTarget::MinTotalValue(*amount),
-                        ReservationPurpose::Payment,
-                        preferred_outputs.clone(),
-                        selection_strategy,
-                    )
-                    .await
-                {
-                    Ok(reservation) => reservations.push(reservation),
-                    Err(e) => {
-                        reserve_result = Err(e);
-                        break;
-                    }
-                }
-            }
-            if let Err(e) = reserve_result {
-                cancel_reservations(self.token_output_service.as_ref(), &reservations).await;
-                return Err(e.into());
-            }
+            let reservation = self
+                .token_output_service
+                .reserve_token_outputs(
+                    &reservation_targets,
+                    ReservationPurpose::Payment,
+                    preferred_outputs.clone(),
+                    selection_strategy,
+                )
+                .await?;
 
-            let inputs = reservations
-                .iter()
-                .flat_map(|r| r.token_outputs.outputs.iter().cloned())
-                .collect::<Vec<_>>();
+            let inputs = reservation.token_outputs.outputs.clone();
+            // Captured before `inputs` is consumed, for the over-cap retry below.
+            let heaviest_token = most_common_token(&inputs);
 
             let result = with_reserved_token_outputs(
                 self.token_output_service.as_ref(),
@@ -772,20 +697,20 @@ impl TokenService {
                     receiver_outputs.clone(),
                     execute_before_unix_micros,
                 ),
-                &reservations,
+                &reservation,
             )
             .await;
 
             match result {
-                Ok(token_transaction) => break (token_transaction, reservations),
+                Ok(token_transaction) => break (token_transaction, reservation),
                 Err(ServiceError::NeededTooManyOutputs)
                     if attempt < MAX_TRANSFER_TOKEN_TOO_MANY_OUTPUTS_RETRY_ATTEMPTS - 1 =>
                 {
-                    // Emergency consolidation during a transfer retry: collapse each token
-                    // the transfer spends to a single output regardless of the wallet's
-                    // configured target, so the next retry has the simplest possible input
-                    // set to work with.
-                    for token_id in amount_by_token.keys() {
+                    // Emergency consolidation during a transfer retry: collapse the token
+                    // that contributed the most inputs to a single output, regardless of
+                    // the wallet's configured target. That is the one selection whose
+                    // shrinking can bring the next attempt back under the cap.
+                    if let Some(token_id) = &heaviest_token {
                         self.optimize_token_outputs(Some(token_id), 2, 1).await?;
                     }
                     attempt += 1;
@@ -818,16 +743,10 @@ impl TokenService {
                 prev_tx_vout: vout as u32,
             })
             .collect::<Vec<_>>();
-        let metadata_by_token = reservations
-            .into_iter()
-            .map(|r| {
-                (
-                    r.token_outputs.metadata.identifier.clone(),
-                    r.token_outputs.metadata,
-                )
-            })
-            .collect::<HashMap<_, _>>();
-        let outputs_to_add = group_outputs_by_token(our_outputs, &metadata_by_token);
+        let outputs_to_add = TokenOutputs {
+            metadata: reservation.token_outputs.metadata,
+            outputs: our_outputs,
+        };
         if let Err(e) = self
             .token_output_service
             .update_token_outputs(&[], &outputs_to_add)
@@ -1185,22 +1104,14 @@ impl TokenService {
         selection_strategy: Option<SelectionStrategy>,
         execute_before_unix_micros: Option<i64>,
     ) -> Result<PreparedTokenPackage, ServiceError> {
-        let amount_by_token = amount_by_token(&receiver_outputs)?;
+        let targets = reservation_targets(&receiver_outputs)?;
         let identity_public_key = self.spark_signer.get_identity_public_key().await?;
 
-        let mut inputs = Vec::new();
-        for (token_id, amount) in &amount_by_token {
-            let selected = self
-                .token_output_service
-                .select_token_outputs(
-                    token_id,
-                    ReservationTarget::MinTotalValue(*amount),
-                    preferred_outputs.clone(),
-                    selection_strategy,
-                )
-                .await?;
-            inputs.extend(selected.outputs);
-        }
+        let inputs = self
+            .token_output_service
+            .select_token_outputs(&targets, preferred_outputs, selection_strategy)
+            .await?
+            .outputs;
 
         // The cap is on the transaction's total inputs, so it is checked against every
         // token's selection combined. Consolidating the token that contributed the most
@@ -1238,8 +1149,10 @@ impl TokenService {
         let selected = self
             .token_output_service
             .select_token_outputs(
-                token_id,
-                ReservationTarget::MaxOutputCount(self.tokens_config.max_tx_inputs),
+                &[(
+                    token_id.to_string(),
+                    ReservationTarget::MaxOutputCount(self.tokens_config.max_tx_inputs),
+                )],
                 None,
                 Some(SelectionStrategy::SmallestFirst),
             )
@@ -1267,39 +1180,23 @@ impl TokenService {
     ) -> Result<TokenTransaction, ServiceError> {
         let identity_public_key = self.spark_signer.get_identity_public_key().await?;
 
-        // The package may spend outpoints of several tokens; reserve each token's
-        // outpoints separately and settle the reservations together.
-        let mut outpoints_by_token = BTreeMap::<&str, Vec<(String, u32)>>::new();
-        for outpoint in &prepared.spent_outpoints {
-            outpoints_by_token
-                .entry(outpoint.token_id.as_str())
-                .or_default()
-                .push((outpoint.prev_tx_hash.clone(), outpoint.prev_tx_vout));
-        }
+        // The package may spend outpoints of several tokens; one reservation covers
+        // all of them.
+        let outpoints: Vec<(String, u32)> = prepared
+            .spent_outpoints
+            .iter()
+            .map(|o| (o.prev_tx_hash.clone(), o.prev_tx_vout))
+            .collect();
 
-        let mut reservations = Vec::with_capacity(outpoints_by_token.len());
-        for (token_id, outpoints) in &outpoints_by_token {
-            match self
-                .token_output_service
-                .reserve_token_outputs_by_outpoints(
-                    token_id,
-                    outpoints,
-                    ReservationPurpose::Payment,
-                )
-                .await
-            {
-                Ok(reservation) => reservations.push(reservation),
-                Err(e) => {
-                    cancel_reservations(self.token_output_service.as_ref(), &reservations).await;
-                    return Err(e.into());
-                }
-            }
-        }
+        let reservation = self
+            .token_output_service
+            .reserve_token_outputs_by_outpoints(&outpoints, ReservationPurpose::Payment)
+            .await?;
 
         let token_transaction = with_reserved_token_outputs(
             self.token_output_service.as_ref(),
             self.broadcast_token_transfer(identity_public_key, prepared, signature),
-            &reservations,
+            &reservation,
         )
         .await?;
 
@@ -1367,8 +1264,10 @@ impl TokenService {
             let reservation = self
                 .token_output_service
                 .reserve_token_outputs(
-                    &output.metadata.identifier,
-                    ReservationTarget::MaxOutputCount(self.tokens_config.max_tx_inputs),
+                    &[(
+                        output.metadata.identifier.clone(),
+                        ReservationTarget::MaxOutputCount(self.tokens_config.max_tx_inputs),
+                    )],
                     ReservationPurpose::Swap,
                     None,
                     Some(SelectionStrategy::SmallestFirst),
@@ -1405,7 +1304,7 @@ impl TokenService {
                     receiver_outputs,
                     None,
                 ),
-                std::slice::from_ref(&reservation),
+                &reservation,
             )
             .await?;
 
@@ -1422,10 +1321,10 @@ impl TokenService {
             self.token_output_service
                 .update_token_outputs(
                     &[],
-                    &[TokenOutputs {
+                    &TokenOutputs {
                         metadata: reservation.token_outputs.metadata,
                         outputs,
-                    }],
+                    },
                 )
                 .await?;
         }
@@ -2333,7 +2232,7 @@ mod tests {
     use macros::test_all;
     use prost_types::Timestamp;
 
-    use super::{TransferTokenOutput, amount_by_token, group_outputs_by_token, most_common_token};
+    use super::{ReservationTarget, TransferTokenOutput, most_common_token, reservation_targets};
 
     use bitcoin::secp256k1::PublicKey;
 
@@ -2675,91 +2574,43 @@ mod tests {
         }
     }
 
-    fn test_metadata(token_id: &str) -> crate::token::TokenMetadata {
-        crate::token::TokenMetadata {
-            identifier: token_id.to_string(),
-            issuer_public_key: test_receiver_address().identity_public_key,
-            name: "Token".to_string(),
-            ticker: "TKN".to_string(),
-            decimals: 0,
-            max_supply: 0,
-            is_freezable: false,
-            creation_entity_public_key: None,
-        }
+    fn target_amount(targets: &[(String, ReservationTarget)], token_id: &str) -> Option<u128> {
+        targets
+            .iter()
+            .find(|(id, _)| id == token_id)
+            .map(|(_, t)| match t {
+                ReservationTarget::MinTotalValue(amount) => *amount,
+                ReservationTarget::MaxOutputCount(count) => *count as u128,
+            })
     }
 
     #[test_all]
-    fn test_amount_by_token_sums_per_token() {
-        let totals = amount_by_token(&[
+    fn test_reservation_targets_sums_per_token() {
+        let targets = reservation_targets(&[
             transfer_output(TEST_TOKEN_ID, 10),
             transfer_output(TEST_TOKEN_ID_B, 5),
             transfer_output(TEST_TOKEN_ID, 7),
         ])
         .unwrap();
-        assert_eq!(totals.len(), 2);
-        assert_eq!(totals[TEST_TOKEN_ID], 17);
-        assert_eq!(totals[TEST_TOKEN_ID_B], 5);
+        assert_eq!(targets.len(), 2);
+        assert_eq!(target_amount(&targets, TEST_TOKEN_ID), Some(17));
+        assert_eq!(target_amount(&targets, TEST_TOKEN_ID_B), Some(5));
     }
 
     #[test_all]
-    fn test_amount_by_token_rejects_empty() {
-        assert!(amount_by_token(&[]).is_err());
+    fn test_reservation_targets_rejects_empty() {
+        assert!(reservation_targets(&[]).is_err());
     }
 
     #[test_all]
-    fn test_amount_by_token_detects_overflow() {
+    fn test_reservation_targets_detects_overflow() {
         assert!(
-            amount_by_token(&[
+            reservation_targets(&[
                 transfer_output(TEST_TOKEN_ID, u128::MAX),
                 transfer_output(TEST_TOKEN_ID, 1),
             ])
             .is_err()
         );
-    }
-
-    #[test_all]
-    fn test_group_outputs_by_token_buckets_by_own_identifier() {
-        let metadata = [
-            (TEST_TOKEN_ID.to_string(), test_metadata(TEST_TOKEN_ID)),
-            (TEST_TOKEN_ID_B.to_string(), test_metadata(TEST_TOKEN_ID_B)),
-        ]
-        .into_iter()
-        .collect();
-        let grouped = group_outputs_by_token(
-            vec![
-                input_of(TEST_TOKEN_ID, 1, 0),
-                input_of(TEST_TOKEN_ID_B, 2, 1),
-                input_of(TEST_TOKEN_ID, 3, 2),
-            ],
-            &metadata,
-        );
-        assert_eq!(grouped.len(), 2);
-        for bucket in &grouped {
-            assert!(
-                bucket
-                    .outputs
-                    .iter()
-                    .all(|o| o.output.token_identifier == bucket.metadata.identifier)
-            );
-        }
-        let total: usize = grouped.iter().map(|b| b.outputs.len()).sum();
-        assert_eq!(total, 3);
-    }
-
-    #[test_all]
-    fn test_group_outputs_by_token_drops_outputs_without_metadata() {
-        let metadata = [(TEST_TOKEN_ID.to_string(), test_metadata(TEST_TOKEN_ID))]
-            .into_iter()
-            .collect();
-        let grouped = group_outputs_by_token(
-            vec![
-                input_of(TEST_TOKEN_ID, 1, 0),
-                input_of(TEST_TOKEN_ID_B, 2, 1),
-            ],
-            &metadata,
-        );
-        assert_eq!(grouped.len(), 1);
-        assert_eq!(grouped[0].metadata.identifier, TEST_TOKEN_ID);
     }
 
     #[test_all]
