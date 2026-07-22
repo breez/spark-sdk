@@ -23,6 +23,12 @@ const haveDocker = dockerAvailable()
 
 for (const [name, scenario] of loadScenarios()) {
   test(`scenario ${name}`, async (t) => {
+    // A typo'd name must fail, not silently un-gate the scenario. 'faucet'
+    // itself is enforced by the suite-wide gate below; 'docker' is probed.
+    const unknown = (scenario.requires ?? []).find((r) => r !== 'faucet' && r !== 'docker')
+    if (unknown !== undefined) {
+      throw new Error(`unknown requirement '${unknown}'`)
+    }
     if (!faucetConfigured) {
       t.skip('FAUCET_USERNAME not set')
       return

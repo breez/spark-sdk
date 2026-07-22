@@ -16,13 +16,10 @@ const STEP_TIMEOUT: Duration = Duration::from_mins(2);
 
 /// Run a scenario by file stem, skipping (Ok) when its requirements are not
 /// met. All scenarios need network access to the remote regtest operators,
-/// so `FAUCET_USERNAME` doubles as the opt-in flag for the whole suite.
+/// so `FAUCET_USERNAME` doubles as the opt-in flag for the whole suite. The
+/// file is parsed and validated before that gate, so schema errors fail the
+/// hermetic no-faucet run too.
 pub async fn run_scenario(name: &str) -> Result<()> {
-    if std::env::var("FAUCET_USERNAME").is_err() {
-        eprintln!("skipping scenario {name}: FAUCET_USERNAME not set");
-        return Ok(());
-    }
-
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/scenarios")
         .join(format!("{name}.json"));
@@ -30,6 +27,20 @@ pub async fn run_scenario(name: &str) -> Result<()> {
         .with_context(|| format!("failed to read {}", path.display()))?;
     let scenario: Scenario =
         serde_json::from_str(&raw).with_context(|| format!("invalid scenario {name}"))?;
+
+    // A typo'd name must fail, not silently un-gate the scenario. "faucet"
+    // itself is enforced by the suite-wide gate below; "docker" is probed
+    // per scenario.
+    for requirement in &scenario.requires {
+        if !matches!(requirement.as_str(), "faucet" | "docker") {
+            bail!("unknown requirement '{requirement}'");
+        }
+    }
+
+    if std::env::var("FAUCET_USERNAME").is_err() {
+        eprintln!("skipping scenario {name}: FAUCET_USERNAME not set");
+        return Ok(());
+    }
 
     if scenario.requires.iter().any(|r| r == "docker") && !docker_available() {
         eprintln!("skipping scenario {name}: docker not available");

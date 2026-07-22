@@ -196,7 +196,6 @@ jobs:
         env:
           FAUCET_USERNAME: ${{ secrets.FAUCET_USERNAME }}
           FAUCET_PASSWORD: ${{ secrets.FAUCET_PASSWORD }}
-          FAUCET_CONCURRENCY: "2"
         run: make ${{ matrix.scenarios }}
 
       - name: Export lnurl server image for caching

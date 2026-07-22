@@ -52,17 +52,26 @@ class EventQueue {
 
 async function connectWallet(name, lnurlDomain) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `breez-smoke-${name}-`))
-  const config = defaultConfig('regtest')
-  if (lnurlDomain !== undefined) {
-    config.lnurlDomain = lnurlDomain
+  let sdk
+  try {
+    const config = defaultConfig('regtest')
+    if (lnurlDomain !== undefined) {
+      config.lnurlDomain = lnurlDomain
+    }
+    const mnemonic = require('bip39').generateMnemonic()
+    let builder = SdkBuilder.new(config, { type: 'mnemonic', mnemonic })
+    builder = await builder.withDefaultStorage(dir)
+    sdk = await builder.build()
+    const events = new EventQueue()
+    await sdk.addEventListener(events)
+    return { sdk, events, dir }
+  } catch (e) {
+    // Partial failure leaves nothing behind: the caller only cleans up
+    // wallets it received.
+    await sdk?.disconnect().catch(() => {})
+    fs.rmSync(dir, { recursive: true, force: true })
+    throw e
   }
-  const mnemonic = require('bip39').generateMnemonic()
-  let builder = SdkBuilder.new(config, { type: 'mnemonic', mnemonic })
-  builder = await builder.withDefaultStorage(dir)
-  const sdk = await builder.build()
-  const events = new EventQueue()
-  await sdk.addEventListener(events)
-  return { sdk, events, dir }
 }
 
 async function waitForBalance(sdk, floorSats, timeoutMs) {
@@ -93,8 +102,9 @@ test('npm API smoke: connect, receive, parse, pay, list, lnurl-pay', async (t) =
       lnurl = await LnurlFixture.start()
     }
     const alice = await connectWallet('alice')
+    wallets.push(alice)
     const bob = await connectWallet('bob', lnurl?.httpUrl)
-    wallets.push(alice, bob)
+    wallets.push(bob)
 
     // Balance and event surface on a fresh wallet.
     const info = await alice.sdk.getInfo({ ensureSynced: true })
