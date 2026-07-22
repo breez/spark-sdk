@@ -7,8 +7,8 @@ use spark_itest::backend::resolve_backend;
 use spark_itest::helpers::{build_test_wallet, wait_for_event};
 use spark_wallet::{
     DefaultSigner, Network, PrepareTokenTransactionRequest, PreparedTokenPackage,
-    SelectionStrategy, SparkInvoiceToFulfill, SparkSigner, SparkSignerAdapter, SparkWallet,
-    SparkWalletConfig, TokenTransactionKind, TransferTokenOutput, WalletEvent,
+    SelectionStrategy, SparkSigner, SparkSignerAdapter, SparkWallet, SparkWalletConfig,
+    TokenRecipient, TokenTransactionKind, WalletEvent,
 };
 use tracing::info;
 
@@ -115,12 +115,11 @@ async fn test_many_outputs() -> Result<()> {
         info!("Progress: {i}/{num_self_sends} self-sends completed");
 
         // Create multiple outputs in a single transaction
-        let outputs: Vec<TransferTokenOutput> = (0..outputs_per_send)
-            .map(|_| TransferTokenOutput {
+        let outputs: Vec<TokenRecipient> = (0..outputs_per_send)
+            .map(|_| TokenRecipient::Address {
                 token_id: token_identifier.clone(),
                 amount: self_send_amount,
                 receiver_address: alice_spark_address.clone(),
-                spark_invoice: None,
             })
             .collect();
 
@@ -159,11 +158,10 @@ async fn test_many_outputs() -> Result<()> {
     info!("Bob's Spark address: {:?}", bob_spark_address);
 
     // Create a single output sending all tokens to Bob
-    let outputs_to_bob = vec![TransferTokenOutput {
+    let outputs_to_bob = vec![TokenRecipient::Address {
         token_id: token_identifier.clone(),
         amount: balance_after_self_sends,
         receiver_address: bob_spark_address,
-        spark_invoice: None,
     }];
 
     alice_wallet
@@ -293,17 +291,15 @@ async fn test_single_token_multiple_recipients() -> Result<()> {
     let tx = alice
         .transfer_tokens(
             vec![
-                TransferTokenOutput {
+                TokenRecipient::Address {
                     token_id: token.clone(),
                     amount: 700,
                     receiver_address: bob.get_spark_address()?,
-                    spark_invoice: None,
                 },
-                TransferTokenOutput {
+                TokenRecipient::Address {
                     token_id: token.clone(),
                     amount: 300,
                     receiver_address: dave.get_spark_address()?,
-                    spark_invoice: None,
                 },
             ],
             None,
@@ -341,11 +337,10 @@ async fn test_multiple_tokens_in_one_transaction() -> Result<()> {
     // Carol funds Alice with token B so Alice holds both tokens.
     carol
         .transfer_tokens(
-            vec![TransferTokenOutput {
+            vec![TokenRecipient::Address {
                 token_id: token_b.clone(),
                 amount: 5_000,
                 receiver_address: alice.get_spark_address()?,
-                spark_invoice: None,
             }],
             None,
             None,
@@ -359,17 +354,15 @@ async fn test_multiple_tokens_in_one_transaction() -> Result<()> {
     let tx = alice
         .transfer_tokens(
             vec![
-                TransferTokenOutput {
+                TokenRecipient::Address {
                     token_id: token_a.clone(),
                     amount: 400,
                     receiver_address: bob.get_spark_address()?,
-                    spark_invoice: None,
                 },
-                TransferTokenOutput {
+                TokenRecipient::Address {
                     token_id: token_b.clone(),
                     amount: 900,
                     receiver_address: bob.get_spark_address()?,
-                    spark_invoice: None,
                 },
             ],
             None,
@@ -417,16 +410,20 @@ async fn test_multiple_invoices_in_one_transaction() -> Result<()> {
         .await?;
 
     let tx = alice
-        .fulfill_token_spark_invoices(vec![
-            SparkInvoiceToFulfill {
-                invoice: bob_invoice,
-                amount: None,
-            },
-            SparkInvoiceToFulfill {
-                invoice: dave_invoice,
-                amount: None,
-            },
-        ])
+        .transfer_tokens(
+            vec![
+                TokenRecipient::Invoice {
+                    invoice: bob_invoice,
+                    amount: None,
+                },
+                TokenRecipient::Invoice {
+                    invoice: dave_invoice,
+                    amount: None,
+                },
+            ],
+            None,
+            None,
+        )
         .await?;
     info!("Multi-invoice transaction: {}", tx.hash);
 
@@ -460,16 +457,20 @@ async fn test_duplicate_invoice_rejected() -> Result<()> {
         .await?;
 
     let result = alice
-        .fulfill_token_spark_invoices(vec![
-            SparkInvoiceToFulfill {
-                invoice: invoice.clone(),
-                amount: None,
-            },
-            SparkInvoiceToFulfill {
-                invoice,
-                amount: None,
-            },
-        ])
+        .transfer_tokens(
+            vec![
+                TokenRecipient::Invoice {
+                    invoice: invoice.clone(),
+                    amount: None,
+                },
+                TokenRecipient::Invoice {
+                    invoice,
+                    amount: None,
+                },
+            ],
+            None,
+            None,
+        )
         .await;
 
     assert!(result.is_err(), "duplicate invoice must be rejected");
@@ -477,6 +478,60 @@ async fn test_duplicate_invoice_rejected() -> Result<()> {
         token_balance(&alice, &token).await?,
         10_000,
         "nothing was sent"
+    );
+    Ok(())
+}
+
+/// One transaction paying a plain Spark address and fulfilling a Spark invoice.
+/// The two differ only by the invoice attachment, so the operators must accept
+/// them side by side.
+#[rstest]
+#[tokio::test]
+#[test_log::test]
+async fn test_address_and_invoice_in_one_transaction() -> Result<()> {
+    let config = SparkWalletConfig::default_config(Network::Regtest);
+
+    let (alice, token) = issuer_wallet(&config, "Mixed Pay", "MIXP", 30_000).await?;
+    let bob = plain_wallet(&config).await?;
+    let dave = plain_wallet(&config).await?;
+
+    let dave_invoice = dave
+        .create_spark_invoice(Some(400), Some(token.clone()), None, None, None)
+        .await?;
+
+    let tx = alice
+        .transfer_tokens(
+            vec![
+                TokenRecipient::Address {
+                    token_id: token.clone(),
+                    amount: 900,
+                    receiver_address: bob.get_spark_address()?,
+                },
+                TokenRecipient::Invoice {
+                    invoice: dave_invoice,
+                    amount: None,
+                },
+            ],
+            None,
+            None,
+        )
+        .await?;
+    info!("Address-and-invoice transaction: {}", tx.hash);
+
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    alice.sync().await?;
+    bob.sync().await?;
+    dave.sync().await?;
+
+    assert_eq!(token_balance(&bob, &token).await?, 900);
+    assert_eq!(token_balance(&dave, &token).await?, 400);
+    assert_eq!(token_balance(&alice, &token).await?, 30_000 - 1_300);
+
+    assert_eq!(tx.outputs.len(), 3, "two recipients plus Alice's change");
+    assert_eq!(
+        tx.fulfilled_invoices.len(),
+        1,
+        "only the invoice recipient is attached"
     );
     Ok(())
 }
@@ -517,11 +572,10 @@ async fn test_external_signing_multiple_tokens() -> Result<()> {
 
     carol
         .transfer_tokens(
-            vec![TransferTokenOutput {
+            vec![TokenRecipient::Address {
                 token_id: token_b.clone(),
                 amount: 4_000,
                 receiver_address: alice.get_spark_address()?,
-                spark_invoice: None,
             }],
             None,
             None,
@@ -533,17 +587,15 @@ async fn test_external_signing_multiple_tokens() -> Result<()> {
     let prepared = alice
         .prepare_token_package(
             vec![
-                TransferTokenOutput {
+                TokenRecipient::Address {
                     token_id: token_a.clone(),
                     amount: 600,
                     receiver_address: bob.get_spark_address()?,
-                    spark_invoice: None,
                 },
-                TransferTokenOutput {
+                TokenRecipient::Address {
                     token_id: token_b.clone(),
                     amount: 800,
                     receiver_address: bob.get_spark_address()?,
-                    spark_invoice: None,
                 },
             ],
             None,
@@ -599,16 +651,20 @@ async fn test_external_signing_multiple_invoices() -> Result<()> {
         .await?;
 
     let prepared = alice
-        .prepare_token_package_for_invoices(vec![
-            SparkInvoiceToFulfill {
-                invoice: bob_invoice,
-                amount: None,
-            },
-            SparkInvoiceToFulfill {
-                invoice: dave_invoice,
-                amount: None,
-            },
-        ])
+        .prepare_token_package(
+            vec![
+                TokenRecipient::Invoice {
+                    invoice: bob_invoice,
+                    amount: None,
+                },
+                TokenRecipient::Invoice {
+                    invoice: dave_invoice,
+                    amount: None,
+                },
+            ],
+            None,
+            None,
+        )
         .await?;
 
     let PreparedTokenPackage::Ready(prepared) = prepared else {
@@ -635,5 +691,70 @@ async fn test_external_signing_multiple_invoices() -> Result<()> {
     assert_eq!(token_balance(&bob, &token).await?, 210);
     assert_eq!(token_balance(&dave, &token).await?, 120);
     assert_eq!(tx.fulfilled_invoices.len(), 2);
+    Ok(())
+}
+
+/// The client-signing path mixing an address recipient with an invoice recipient
+/// in one prepared package.
+#[rstest]
+#[tokio::test]
+#[test_log::test]
+async fn test_external_signing_address_and_invoice() -> Result<()> {
+    let config = SparkWalletConfig::default_config(Network::Regtest);
+
+    let (alice, alice_signer, token) =
+        issuer_wallet_with_signer(&config, "Ext Mixed", "XMIX", 20_000).await?;
+    let bob = plain_wallet(&config).await?;
+    let dave = plain_wallet(&config).await?;
+
+    let dave_invoice = dave
+        .create_spark_invoice(Some(180), Some(token.clone()), None, None, None)
+        .await?;
+
+    let prepared = alice
+        .prepare_token_package(
+            vec![
+                TokenRecipient::Address {
+                    token_id: token.clone(),
+                    amount: 320,
+                    receiver_address: bob.get_spark_address()?,
+                },
+                TokenRecipient::Invoice {
+                    invoice: dave_invoice,
+                    amount: None,
+                },
+            ],
+            None,
+            None,
+        )
+        .await?;
+
+    let PreparedTokenPackage::Ready(prepared) = prepared else {
+        anyhow::bail!("expected a ready package, got a consolidation");
+    };
+    assert_eq!(
+        prepared
+            .receiver_outputs
+            .iter()
+            .filter(|o| o.spark_invoice.is_some())
+            .count(),
+        1,
+        "only the invoice recipient is attached"
+    );
+
+    let signature = sign_partial(&alice_signer, &prepared).await?;
+    let tx = alice.publish_token_package(prepared, signature).await?;
+    info!(
+        "Externally signed address-and-invoice transaction: {}",
+        tx.hash
+    );
+
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    bob.sync().await?;
+    dave.sync().await?;
+
+    assert_eq!(token_balance(&bob, &token).await?, 320);
+    assert_eq!(token_balance(&dave, &token).await?, 180);
+    assert_eq!(tx.fulfilled_invoices.len(), 1);
     Ok(())
 }

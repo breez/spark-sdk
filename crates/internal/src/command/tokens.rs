@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use clap::Subcommand;
 use spark_wallet::{
-    ListTokenTransactionsRequest, PagingFilter, SparkAddress, SparkWallet, TransferTokenOutput,
+    ListTokenTransactionsRequest, PagingFilter, SparkAddress, SparkWallet, TokenRecipient,
 };
 
 /// A transfer output that can be parsed from a string in the format "token_id:amount:receiver_address"
@@ -38,15 +38,14 @@ impl FromStr for TransferTokenOutputArg {
     }
 }
 
-impl TryFrom<TransferTokenOutputArg> for TransferTokenOutput {
+impl TryFrom<TransferTokenOutputArg> for TokenRecipient {
     type Error = Box<dyn std::error::Error>;
 
     fn try_from(arg: TransferTokenOutputArg) -> Result<Self, Self::Error> {
-        Ok(TransferTokenOutput {
+        Ok(TokenRecipient::Address {
             token_id: arg.token_id,
             amount: arg.amount,
             receiver_address: SparkAddress::from_str(&arg.receiver_address)?,
-            spark_invoice: None,
         })
     }
 }
@@ -103,7 +102,7 @@ pub async fn handle_command(
                 return Err("At least one output must be specified".into());
             }
 
-            let outputs: Vec<TransferTokenOutput> = outputs
+            let outputs: Vec<TokenRecipient> = outputs
                 .into_iter()
                 .map(|o| o.try_into())
                 .collect::<Result<Vec<_>, _>>()?;
