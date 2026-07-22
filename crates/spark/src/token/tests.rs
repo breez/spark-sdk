@@ -1729,3 +1729,310 @@ pub async fn test_remove_token_outputs_prevents_refresh_re_add(store: &dyn Token
     assert_eq!(stored.available.len(), 1);
     assert_eq!(stored.available[0].output.token_amount, 200);
 }
+
+/// A reservation spanning several tokens either takes every token's outputs or
+/// none of them. Here the second token cannot cover its target, so the first
+/// token's outputs must be left untouched rather than stranded as reserved.
+pub async fn test_multi_token_reservation_rolls_back_on_shortfall(store: &dyn TokenOutputStore) {
+    let token1 = create_token_outputs(1, vec![100, 200]);
+    let token2 = create_token_outputs(2, vec![50]);
+    store
+        .set_tokens_outputs(
+            &merge_token_outputs([token1, token2]),
+            future_refresh_start(store).await,
+        )
+        .await
+        .unwrap();
+
+    let result = store
+        .reserve_token_outputs(
+            &[
+                ("token-1".to_string(), ReservationTarget::MinTotalValue(300)),
+                // More than token-2 holds.
+                ("token-2".to_string(), ReservationTarget::MinTotalValue(999)),
+            ],
+            ReservationPurpose::Payment,
+            None,
+            None,
+        )
+        .await;
+    assert!(
+        result.is_err(),
+        "shortfall on one token must fail the whole reservation"
+    );
+
+    // Neither token may be left holding a partial reservation.
+    for token_id in ["token-1", "token-2"] {
+        let stored = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier(token_id))
+            .await
+            .unwrap();
+        assert!(
+            stored.reserved_for_payment.is_empty(),
+            "{token_id} kept outputs reserved after a failed multi-token reservation"
+        );
+    }
+    let stored1 = store
+        .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        stored1.available.len(),
+        2,
+        "token-1 outputs returned to the pool"
+    );
+    assert_eq!(stored1.available_balance(), 300);
+}
+
+/// The same rollback when the shortfall is on the first token listed: nothing is
+/// reserved even though a later token could have been satisfied.
+pub async fn test_multi_token_reservation_rolls_back_on_first_token(store: &dyn TokenOutputStore) {
+    let token1 = create_token_outputs(1, vec![10]);
+    let token2 = create_token_outputs(2, vec![500, 1000]);
+    store
+        .set_tokens_outputs(
+            &merge_token_outputs([token1, token2]),
+            future_refresh_start(store).await,
+        )
+        .await
+        .unwrap();
+
+    let result = store
+        .reserve_token_outputs(
+            &[
+                ("token-1".to_string(), ReservationTarget::MinTotalValue(999)),
+                ("token-2".to_string(), ReservationTarget::MinTotalValue(500)),
+            ],
+            ReservationPurpose::Payment,
+            None,
+            None,
+        )
+        .await;
+    assert!(result.is_err());
+
+    let stored2 = store
+        .get_token_outputs(GetTokenOutputsFilter::Identifier("token-2"))
+        .await
+        .unwrap();
+    assert!(
+        stored2.reserved_for_payment.is_empty(),
+        "token-2 reserved despite the reservation failing"
+    );
+    assert_eq!(stored2.available.len(), 2);
+}
+
+/// A reservation naming a token the store has never seen fails without reserving
+/// the tokens it does know about.
+pub async fn test_multi_token_reservation_rolls_back_on_unknown_token(
+    store: &dyn TokenOutputStore,
+) {
+    let token1 = create_token_outputs(1, vec![100, 200]);
+    store
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
+        .await
+        .unwrap();
+
+    let result = store
+        .reserve_token_outputs(
+            &[
+                ("token-1".to_string(), ReservationTarget::MinTotalValue(100)),
+                ("token-9".to_string(), ReservationTarget::MinTotalValue(1)),
+            ],
+            ReservationPurpose::Payment,
+            None,
+            None,
+        )
+        .await;
+    assert!(result.is_err());
+
+    let stored1 = store
+        .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+        .await
+        .unwrap();
+    assert!(stored1.reserved_for_payment.is_empty());
+    assert_eq!(stored1.available.len(), 2);
+}
+
+/// A successful multi-token reservation takes every token's outputs, and
+/// cancelling returns each output to its own token's pool.
+pub async fn test_multi_token_reservation_cancel_restores_every_token(
+    store: &dyn TokenOutputStore,
+) {
+    let token1 = create_token_outputs(1, vec![100, 200]);
+    let token2 = create_token_outputs(2, vec![500, 1000]);
+    store
+        .set_tokens_outputs(
+            &merge_token_outputs([token1, token2]),
+            future_refresh_start(store).await,
+        )
+        .await
+        .unwrap();
+
+    let reservation = store
+        .reserve_token_outputs(
+            &[
+                ("token-1".to_string(), ReservationTarget::MinTotalValue(100)),
+                ("token-2".to_string(), ReservationTarget::MinTotalValue(500)),
+            ],
+            ReservationPurpose::Payment,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    // One reservation covering both tokens.
+    let reserved_tokens = reservation
+        .token_outputs
+        .outputs
+        .iter()
+        .map(|o| o.output.token_identifier.clone())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(reserved_tokens.len(), 2, "reservation spans both tokens");
+
+    store.cancel_reservation(&reservation.id).await.unwrap();
+
+    for (token_id, expected) in [("token-1", 2), ("token-2", 2)] {
+        let stored = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier(token_id))
+            .await
+            .unwrap();
+        assert_eq!(
+            stored.available.len(),
+            expected,
+            "{token_id} outputs not restored by cancel"
+        );
+        assert!(stored.reserved_for_payment.is_empty());
+    }
+}
+
+/// Finalizing a multi-token reservation spends every token's outputs, and a stale
+/// refresh still reporting them must not bring any of them back.
+pub async fn test_multi_token_reservation_finalize_spends_every_token(
+    store: &dyn TokenOutputStore,
+) {
+    let token1 = create_token_outputs(1, vec![100, 200]);
+    let token2 = create_token_outputs(2, vec![500, 1000]);
+    let all = merge_token_outputs([token1, token2]);
+    store
+        .set_tokens_outputs(&all, future_refresh_start(store).await)
+        .await
+        .unwrap();
+
+    let reservation = store
+        .reserve_token_outputs(
+            &[
+                ("token-1".to_string(), ReservationTarget::MinTotalValue(100)),
+                ("token-2".to_string(), ReservationTarget::MinTotalValue(500)),
+            ],
+            ReservationPurpose::Payment,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let spent = reservation.token_outputs.prev_outpoints();
+    assert_eq!(spent.len(), 2, "one output taken from each token");
+    store.finalize_reservation(&reservation.id).await.unwrap();
+
+    // Both tokens lost exactly their reserved output.
+    for (token_id, expected) in [("token-1", 1), ("token-2", 1)] {
+        let stored = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier(token_id))
+            .await
+            .unwrap();
+        assert_eq!(stored.available.len(), expected);
+        assert!(stored.reserved_for_payment.is_empty());
+    }
+
+    // A refresh that started before the spend is stale, so it must not resurrect
+    // either token's spent output.
+    store
+        .set_tokens_outputs(&all, past_refresh_start(store).await)
+        .await
+        .unwrap();
+
+    for token_id in ["token-1", "token-2"] {
+        let stored = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier(token_id))
+            .await
+            .unwrap();
+        for output in &stored.available {
+            assert!(
+                !spent.contains(&(output.prev_tx_hash.clone(), output.prev_tx_vout)),
+                "{token_id} resurrected a finalized output"
+            );
+        }
+    }
+}
+
+/// Reserving by outpoints is all-or-nothing too: one unknown outpoint fails the
+/// whole call, and the outputs already taken from earlier tokens go back to their
+/// pools rather than staying reserved.
+pub async fn test_reserve_by_outpoints_rolls_back_on_missing(store: &dyn TokenOutputStore) {
+    let token1 = create_token_outputs(1, vec![100, 200]);
+    let token2 = create_token_outputs(2, vec![500]);
+    let all = merge_token_outputs([token1, token2]);
+    store
+        .set_tokens_outputs(&all, future_refresh_start(store).await)
+        .await
+        .unwrap();
+
+    let mut outpoints = all.prev_outpoints().into_iter().collect::<Vec<_>>();
+    outpoints.push(("does-not-exist".to_string(), 7));
+
+    let result = store
+        .reserve_token_outputs_by_outpoints(&outpoints, ReservationPurpose::Payment)
+        .await;
+    assert!(
+        result.is_err(),
+        "a missing outpoint must fail the reservation"
+    );
+
+    for (token_id, expected) in [("token-1", 2), ("token-2", 1)] {
+        let stored = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier(token_id))
+            .await
+            .unwrap();
+        assert_eq!(
+            stored.available.len(),
+            expected,
+            "{token_id} outputs not restored after a failed outpoint reservation"
+        );
+        assert!(stored.reserved_for_payment.is_empty());
+    }
+}
+
+/// Outpoints spanning several tokens are reserved by one call, without being told
+/// which tokens they belong to.
+pub async fn test_reserve_by_outpoints_spans_tokens(store: &dyn TokenOutputStore) {
+    let token1 = create_token_outputs(1, vec![100]);
+    let token2 = create_token_outputs(2, vec![500]);
+    let all = merge_token_outputs([token1, token2]);
+    store
+        .set_tokens_outputs(&all, future_refresh_start(store).await)
+        .await
+        .unwrap();
+
+    let outpoints = all.prev_outpoints().into_iter().collect::<Vec<_>>();
+    let reservation = store
+        .reserve_token_outputs_by_outpoints(&outpoints, ReservationPurpose::Payment)
+        .await
+        .unwrap();
+
+    assert_eq!(reservation.token_outputs.outputs.len(), 2);
+    let tokens = reservation
+        .token_outputs
+        .outputs
+        .iter()
+        .map(|o| o.output.token_identifier.clone())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(tokens.len(), 2);
+    // Metadata must cover every token the reservation holds.
+    for token_id in tokens {
+        assert!(
+            reservation.token_outputs.metadata_for(&token_id).is_some(),
+            "reservation missing metadata for {token_id}"
+        );
+    }
+}
