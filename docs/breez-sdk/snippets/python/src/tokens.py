@@ -7,10 +7,13 @@ from breez_sdk_spark import (
     GetTokensMetadataRequest,
     PaymentRequest,
     PrepareSendPaymentRequest,
+    PrepareSendTokenBatchRequest,
     ReceivePaymentMethod,
     ReceivePaymentRequest,
     SendPaymentMethod,
     SendPaymentRequest,
+    SendTokenBatchRequest,
+    TokenBatchRecipient,
     ConversionOptions,
     ConversionType,
 )
@@ -129,6 +132,47 @@ async def send_token_payment(sdk: BreezSdk):
         logging.error(error)
         raise
     # ANCHOR_END: send-token-payment
+
+
+async def send_token_batch(sdk: BreezSdk):
+    # ANCHOR: send-token-batch
+    try:
+        # Each recipient is a Spark address or a Spark invoice. An invoice that
+        # names its own token and amount needs neither here.
+        recipients = [
+            TokenBatchRecipient(
+                destination="<spark address>",
+                amount=1_000,
+                token_identifier="<token identifier>",
+            ),
+            TokenBatchRecipient(
+                destination="<spark invoice>",
+                amount=None,
+                token_identifier=None,
+            ),
+        ]
+
+        prepare_response = await sdk.prepare_send_token_batch(
+            request=PrepareSendTokenBatchRequest(recipients=recipients)
+        )
+
+        # Show what the batch debits, one entry per token
+        for total in prepare_response.totals:
+            print(f"Token ID: {total.token_identifier}")
+            print(f"Total: {total.amount} token base units")
+
+        # If the totals are acceptable, send the batch
+        send_response = await sdk.send_token_batch(
+            request=SendTokenBatchRequest(prepare_response=prepare_response)
+        )
+
+        # One payment per recipient, in the order they were requested
+        for payment in send_response.payments:
+            print(f"Payment: {payment}")
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: send-token-batch
 
 
 async def fetch_conversion_limits(sdk: BreezSdk):

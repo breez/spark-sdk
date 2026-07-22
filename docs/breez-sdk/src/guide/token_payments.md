@@ -63,6 +63,8 @@ Payments can be sent without holding an asset by converting on-the-fly as a step
 
 {{#tabs tokens:send-token-payment}}
 
+To pay several recipients at once, see [Sending to multiple recipients](./token_batch_send.md): one transaction can pay multiple payees, across several tokens, mixing Spark addresses and invoices.
+
 <h2 id="listing-payments">
     <a class="header" href="#listing-payments">Listing token payments</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.list_payments">API docs</a>

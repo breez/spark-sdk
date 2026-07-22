@@ -49,6 +49,7 @@
 - [End-user fees](guide/end-user_fees.md)
 - [Handling tokens](guide/tokens.md)
   - [Token payments](guide/token_payments.md)
+    - [Sending to multiple recipients](guide/token_batch_send.md)
   - [Converting tokens](guide/token_conversion.md)
   - [Issuing tokens](guide/issuing_tokens.md)
 - [Advanced features](guide/advanced.md)

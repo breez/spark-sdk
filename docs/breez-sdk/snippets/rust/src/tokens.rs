@@ -133,6 +133,46 @@ async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+async fn send_token_batch(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: send-token-batch
+    // Each recipient is a Spark address or a Spark invoice. An invoice that
+    // names its own token and amount needs neither here.
+    let recipients = vec![
+        TokenBatchRecipient {
+            destination: "<spark address>".to_string(),
+            amount: Some(1_000),
+            token_identifier: Some("<token identifier>".to_string()),
+        },
+        TokenBatchRecipient {
+            destination: "<spark invoice>".to_string(),
+            amount: None,
+            token_identifier: None,
+        },
+    ];
+
+    let prepare_response = sdk
+        .prepare_send_token_batch(PrepareSendTokenBatchRequest { recipients })
+        .await?;
+
+    // Show what the batch debits, one entry per token
+    for total in &prepare_response.totals {
+        info!("Token ID: {}", total.token_identifier);
+        info!("Total: {} token base units", total.amount);
+    }
+
+    // If the totals are acceptable, send the batch
+    let send_response = sdk
+        .send_token_batch(SendTokenBatchRequest { prepare_response })
+        .await?;
+
+    // One payment per recipient, in the order they were requested
+    for payment in send_response.payments {
+        info!("Payment: {payment:?}");
+    }
+    // ANCHOR_END: send-token-batch
+    Ok(())
+}
+
 async fn fetch_conversion_limits(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: fetch-conversion-limits
     // Fetch limits for converting Bitcoin to a token

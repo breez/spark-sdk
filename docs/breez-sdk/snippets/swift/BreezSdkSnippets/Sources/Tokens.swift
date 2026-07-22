@@ -110,6 +110,43 @@ func sendTokenPayment(sdk: BreezSdk) async throws {
     // ANCHOR_END: send-token-payment
 }
 
+func sendTokenBatch(sdk: BreezSdk) async throws {
+    // ANCHOR: send-token-batch
+    // Each recipient is a Spark address or a Spark invoice. An invoice that
+    // names its own token and amount needs neither here.
+    let recipients = [
+        TokenBatchRecipient(
+            destination: "<spark address>",
+            amount: BInt(1_000),
+            tokenIdentifier: "<token identifier>"
+        ),
+        TokenBatchRecipient(
+            destination: "<spark invoice>",
+            amount: nil,
+            tokenIdentifier: nil
+        ),
+    ]
+
+    let prepareResponse = try await sdk.prepareSendTokenBatch(
+        request: PrepareSendTokenBatchRequest(recipients: recipients))
+
+    // Show what the batch debits, one entry per token
+    for total in prepareResponse.totals {
+        print("Token ID: \(total.tokenIdentifier)")
+        print("Total: \(total.amount) token base units")
+    }
+
+    // If the totals are acceptable, send the batch
+    let sendResponse = try await sdk.sendTokenBatch(
+        request: SendTokenBatchRequest(prepareResponse: prepareResponse))
+
+    // One payment per recipient, in the order they were requested
+    for payment in sendResponse.payments {
+        print("Payment: \(payment)")
+    }
+    // ANCHOR_END: send-token-batch
+}
+
 func fetchConversionLimits(sdk: BreezSdk) async throws {
     // ANCHOR: fetch-conversion-limits
     // Fetch limits for converting Bitcoin to a token

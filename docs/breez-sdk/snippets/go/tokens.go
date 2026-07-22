@@ -162,6 +162,66 @@ func SendTokenPayment(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
+func SendTokenBatch(sdk *breez_sdk_spark.BreezSdk) error {
+	// ANCHOR: send-token-batch
+	// Each recipient is a Spark address or a Spark invoice. An invoice that
+	// names its own token and amount needs neither here.
+	amount := new(big.Int).SetInt64(1_000)
+	tokenIdentifier := "<token identifier>"
+	recipients := []breez_sdk_spark.TokenBatchRecipient{
+		{
+			Destination:     "<spark address>",
+			Amount:          &amount,
+			TokenIdentifier: &tokenIdentifier,
+		},
+		{
+			Destination:     "<spark invoice>",
+			Amount:          nil,
+			TokenIdentifier: nil,
+		},
+	}
+
+	prepareResponse, err := sdk.PrepareSendTokenBatch(breez_sdk_spark.PrepareSendTokenBatchRequest{
+		Recipients: recipients,
+	})
+
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
+		return err
+	}
+
+	// Show what the batch debits, one entry per token
+	for _, total := range prepareResponse.Totals {
+		log.Printf("Token ID: %v", total.TokenIdentifier)
+		log.Printf("Total: %v token base units", total.Amount)
+	}
+
+	// If the totals are acceptable, send the batch
+	sendResponse, err := sdk.SendTokenBatch(breez_sdk_spark.SendTokenBatchRequest{
+		PrepareResponse: prepareResponse,
+	})
+
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
+		return err
+	}
+
+	// One payment per recipient, in the order they were requested
+	for _, payment := range sendResponse.Payments {
+		log.Printf("Payment: %#v", payment)
+	}
+	// ANCHOR_END: send-token-batch
+	return nil
+}
+
 func FetchConversionLimits(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: fetch-conversion-limits
 	// Fetch limits for converting Bitcoin to a token

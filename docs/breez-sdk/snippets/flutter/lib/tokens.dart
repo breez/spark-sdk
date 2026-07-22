@@ -109,6 +109,45 @@ Future<void> sendTokenPayment(BreezSdk sdk) async {
   // ANCHOR_END: send-token-payment
 }
 
+Future<void> sendTokenBatch(BreezSdk sdk) async {
+  // ANCHOR: send-token-batch
+  // Each recipient is a Spark address or a Spark invoice. An invoice that
+  // names its own token and amount needs neither here.
+  final recipients = [
+    TokenBatchRecipient(
+      destination: '<spark address>',
+      amount: BigInt.from(1000),
+      tokenIdentifier: '<token identifier>',
+    ),
+    TokenBatchRecipient(
+      destination: '<spark invoice>',
+      amount: null,
+      tokenIdentifier: null,
+    ),
+  ];
+
+  final prepareResponse = await sdk.prepareSendTokenBatch(
+    request: PrepareSendTokenBatchRequest(recipients: recipients),
+  );
+
+  // Show what the batch debits, one entry per token
+  for (final total in prepareResponse.totals) {
+    print('Token ID: ${total.tokenIdentifier}');
+    print('Total: ${total.amount} token base units');
+  }
+
+  // If the totals are acceptable, send the batch
+  final sendResponse = await sdk.sendTokenBatch(
+    request: SendTokenBatchRequest(prepareResponse: prepareResponse),
+  );
+
+  // One payment per recipient, in the order they were requested
+  for (final payment in sendResponse.payments) {
+    print('Payment: $payment');
+  }
+  // ANCHOR_END: send-token-batch
+}
+
 Future<void> fetchConversionLimits(BreezSdk sdk) async {
   // ANCHOR: fetch-conversion-limits
   // Fetch limits for converting Bitcoin to a token
