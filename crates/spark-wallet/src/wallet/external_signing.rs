@@ -436,19 +436,20 @@ impl SparkWallet {
         invoice_str: &str,
         amount: Option<u128>,
     ) -> Result<PreparedTokenPackage, SparkWalletError> {
-        self.prepare_spark_invoice_token_packages(vec![SparkInvoiceToFulfill {
+        self.prepare_token_package_for_invoices(vec![SparkInvoiceToFulfill {
             invoice: invoice_str.to_string(),
             amount,
         }])
         .await
     }
 
-    /// Prepares one package paying several token Spark invoices, for external signing.
+    /// Prepares a single package paying the given token Spark invoices, for external
+    /// signing.
     ///
     /// The invoices may request different tokens. Sats invoices are not accepted:
     /// a sats payment moves leaves rather than token outputs and cannot share a
     /// transaction.
-    pub async fn prepare_spark_invoice_token_packages(
+    pub async fn prepare_token_package_for_invoices(
         &self,
         invoices: Vec<SparkInvoiceToFulfill>,
     ) -> Result<PreparedTokenPackage, SparkWalletError> {

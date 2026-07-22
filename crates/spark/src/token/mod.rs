@@ -6,7 +6,7 @@ mod token_service;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod tests;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub use error::TokenOutputServiceError;
 pub use service::SynchronousTokenOutputService;
@@ -53,18 +53,48 @@ pub struct TokenOutputWithPrevOut {
     pub prev_tx_vout: u32,
 }
 
-#[derive(Clone, Debug)]
+/// Token outputs together with the metadata describing the tokens they hold.
+///
+/// Outputs carry their own [`TokenOutput::token_identifier`], so a set may span
+/// several tokens. `metadata` holds one entry per token appearing in `outputs`;
+/// it is a separate lookup rather than a field on each output because metadata
+/// is per token, not per output.
+#[derive(Clone, Debug, Default)]
 pub struct TokenOutputs {
-    pub metadata: TokenMetadata,
+    pub metadata: Vec<TokenMetadata>,
     pub outputs: Vec<TokenOutputWithPrevOut>,
 }
 
 impl TokenOutputs {
+    pub fn single(metadata: TokenMetadata, outputs: Vec<TokenOutputWithPrevOut>) -> Self {
+        Self {
+            metadata: vec![metadata],
+            outputs,
+        }
+    }
+
     pub fn prev_outpoints(&self) -> HashSet<(String, u32)> {
         self.outputs
             .iter()
             .map(|o| (o.prev_tx_hash.clone(), o.prev_tx_vout))
             .collect()
+    }
+
+    pub fn metadata_for(&self, token_identifier: &str) -> Option<&TokenMetadata> {
+        self.metadata
+            .iter()
+            .find(|m| m.identifier == token_identifier)
+    }
+
+    /// Total amount held per token identifier.
+    pub fn amount_by_token(&self) -> HashMap<String, u128> {
+        let mut totals = HashMap::<String, u128>::new();
+        for output in &self.outputs {
+            *totals
+                .entry(output.output.token_identifier.clone())
+                .or_default() += output.output.token_amount;
+        }
+        totals
     }
 }
 
@@ -109,39 +139,32 @@ impl TokenOutputsReservation {
     }
 }
 
-/// Runs `f` and then settles every reservation it depends on: finalized when `f`
-/// succeeds, cancelled when it fails.
-///
-/// A transaction spanning several tokens holds one reservation per token, and
-/// they settle together so a failure cannot leave one token's outputs reserved.
+/// Runs `f` and settles the reservation it depends on: finalized when `f` succeeds,
+/// cancelled when it fails.
 pub async fn with_reserved_token_outputs<F, R, E>(
     token_output_service: &dyn TokenOutputService,
     f: F,
-    reservations: &[TokenOutputsReservation],
+    reservation: &TokenOutputsReservation,
 ) -> Result<R, E>
 where
     F: Future<Output = Result<R, E>>,
 {
     match f.await {
         Ok(r) => {
-            for reservation in reservations {
-                if let Err(e) = token_output_service
-                    .finalize_reservation(&reservation.id)
-                    .await
-                {
-                    error!("Failed to finalize reservation: {e:?}");
-                }
+            if let Err(e) = token_output_service
+                .finalize_reservation(&reservation.id)
+                .await
+            {
+                error!("Failed to finalize reservation: {e:?}");
             }
             Ok(r)
         }
         Err(e) => {
-            for reservation in reservations {
-                if let Err(e) = token_output_service
-                    .cancel_reservation(&reservation.id)
-                    .await
-                {
-                    error!("Failed to cancel reservation: {e:?}");
-                }
+            if let Err(e) = token_output_service
+                .cancel_reservation(&reservation.id)
+                .await
+            {
+                error!("Failed to cancel reservation: {e:?}");
             }
             Err(e)
         }
@@ -227,7 +250,7 @@ pub fn select_token_outputs_from(
 pub trait TokenOutputStore: Send + Sync {
     async fn set_tokens_outputs(
         &self,
-        token_outputs: &[TokenOutputs],
+        token_outputs: &TokenOutputs,
         refresh_started_at: SystemTime,
     ) -> Result<(), TokenOutputServiceError>;
 
@@ -265,13 +288,14 @@ pub trait TokenOutputStore: Send + Sync {
     async fn update_token_outputs(
         &self,
         outputs_to_remove: &[(String, u32)],
-        outputs_to_add: &[TokenOutputs],
+        outputs_to_add: &TokenOutputs,
     ) -> Result<(), TokenOutputServiceError>;
 
+    /// Reserves outputs covering every target in one atomic step, so a transaction
+    /// spanning several tokens holds a single reservation rather than one per token.
     async fn reserve_token_outputs(
         &self,
-        token_identifier: &str,
-        target: ReservationTarget,
+        targets: &[(String, ReservationTarget)],
         purpose: ReservationPurpose,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
@@ -279,15 +303,14 @@ pub trait TokenOutputStore: Send + Sync {
 
     async fn select_token_outputs(
         &self,
-        token_identifier: &str,
-        target: ReservationTarget,
+        targets: &[(String, ReservationTarget)],
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputs, TokenOutputServiceError>;
 
+    /// Reserves the given outpoints, which may belong to different tokens.
     async fn reserve_token_outputs_by_outpoints(
         &self,
-        token_identifier: &str,
         outpoints: &[(String, u32)],
         purpose: ReservationPurpose,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError>;
@@ -335,13 +358,14 @@ pub trait TokenOutputService: Send + Sync {
     async fn update_token_outputs(
         &self,
         outputs_to_remove: &[(String, u32)],
-        outputs_to_add: &[TokenOutputs],
+        outputs_to_add: &TokenOutputs,
     ) -> Result<(), TokenOutputServiceError>;
 
+    /// Reserves outputs covering every target in one atomic step, so a transaction
+    /// spanning several tokens holds a single reservation rather than one per token.
     async fn reserve_token_outputs(
         &self,
-        token_identifier: &str,
-        target: ReservationTarget,
+        targets: &[(String, ReservationTarget)],
         purpose: ReservationPurpose,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
@@ -349,15 +373,14 @@ pub trait TokenOutputService: Send + Sync {
 
     async fn select_token_outputs(
         &self,
-        token_identifier: &str,
-        target: ReservationTarget,
+        targets: &[(String, ReservationTarget)],
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputs, TokenOutputServiceError>;
 
+    /// Reserves the given outpoints, which may belong to different tokens.
     async fn reserve_token_outputs_by_outpoints(
         &self,
-        token_identifier: &str,
         outpoints: &[(String, u32)],
         purpose: ReservationPurpose,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError>;

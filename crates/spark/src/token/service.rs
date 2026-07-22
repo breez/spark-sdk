@@ -66,7 +66,7 @@ impl TokenOutputService for SynchronousTokenOutputService {
         if outputs.is_empty() {
             // Clear stored token outputs if none are returned
             self.state
-                .set_tokens_outputs(&[], refresh_started_at)
+                .set_tokens_outputs(&TokenOutputs::default(), refresh_started_at)
                 .await?;
             return Ok(());
         }
@@ -96,19 +96,19 @@ impl TokenOutputService for SynchronousTokenOutputService {
             ));
         }
 
-        let token_outputs = outputs_map
-            .into_iter()
-            .map(|(token_id, outputs)| {
-                let metadata = metadata
-                    .iter()
-                    .find(|m| m.token_identifier == token_id)
-                    .ok_or_else(|| {
-                        TokenOutputServiceError::Generic("Metadata not found".to_string())
-                    })?;
-                let metadata = (metadata.clone(), self.network).try_into()?;
-                Ok(TokenOutputs { metadata, outputs })
-            })
-            .collect::<Result<Vec<TokenOutputs>, TokenOutputServiceError>>()?;
+        let mut token_outputs = TokenOutputs::default();
+        for (token_id, outputs) in outputs_map {
+            let token_metadata = metadata
+                .iter()
+                .find(|m| m.token_identifier == token_id)
+                .ok_or_else(|| {
+                    TokenOutputServiceError::Generic("Metadata not found".to_string())
+                })?;
+            token_outputs
+                .metadata
+                .push((token_metadata.clone(), self.network).try_into()?);
+            token_outputs.outputs.extend(outputs);
+        }
 
         self.state
             .set_tokens_outputs(&token_outputs, refresh_started_at)
@@ -127,7 +127,7 @@ impl TokenOutputService for SynchronousTokenOutputService {
     async fn update_token_outputs(
         &self,
         outputs_to_remove: &[(String, u32)],
-        outputs_to_add: &[TokenOutputs],
+        outputs_to_add: &TokenOutputs,
     ) -> Result<(), TokenOutputServiceError> {
         self.state
             .update_token_outputs(outputs_to_remove, outputs_to_add)
@@ -136,43 +136,28 @@ impl TokenOutputService for SynchronousTokenOutputService {
 
     async fn reserve_token_outputs(
         &self,
-        token_identifier: &str,
-        target: ReservationTarget,
+        targets: &[(String, ReservationTarget)],
         purpose: ReservationPurpose,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
-        let mut reservation: Option<TokenOutputsReservation> = None;
-
         for i in 0..SELECT_TOKEN_OUTPUTS_MAX_RETRIES {
-            let reserve_res = self
+            if let Ok(reservation) = self
                 .state
                 .reserve_token_outputs(
-                    token_identifier,
-                    target,
+                    targets,
                     purpose,
                     preferred_outputs.clone(),
                     selection_strategy,
                 )
-                .await;
-            if let Ok(token_outputs_reservation) = reserve_res {
-                reservation = Some(token_outputs_reservation);
-                break;
+                .await
+            {
+                return Ok(reservation);
             }
 
             info!("Failed to reserve token outputs, refreshing and retrying");
             self.refresh_tokens_outputs().await?;
-            let token_balance = self
-                .state
-                .get_token_outputs(GetTokenOutputsFilter::Identifier(token_identifier))
-                .await?
-                .balance();
-            if let ReservationTarget::MinTotalValue(amount) = &target
-                && *amount > token_balance
-            {
-                info!(
-                    "Insufficient funds to select token outputs after refresh: requested {amount}, balance {token_balance}"
-                );
+            if self.any_target_unaffordable(targets).await? {
                 break;
             }
 
@@ -181,46 +166,27 @@ impl TokenOutputService for SynchronousTokenOutputService {
             }
         }
 
-        reservation.ok_or_else(|| TokenOutputServiceError::InsufficientFunds)
+        Err(TokenOutputServiceError::InsufficientFunds)
     }
 
     async fn select_token_outputs(
         &self,
-        token_identifier: &str,
-        target: ReservationTarget,
+        targets: &[(String, ReservationTarget)],
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputs, TokenOutputServiceError> {
-        let mut selected: Option<TokenOutputs> = None;
-
         for i in 0..SELECT_TOKEN_OUTPUTS_MAX_RETRIES {
-            let select_res = self
+            if let Ok(token_outputs) = self
                 .state
-                .select_token_outputs(
-                    token_identifier,
-                    target,
-                    preferred_outputs.clone(),
-                    selection_strategy,
-                )
-                .await;
-            if let Ok(token_outputs) = select_res {
-                selected = Some(token_outputs);
-                break;
+                .select_token_outputs(targets, preferred_outputs.clone(), selection_strategy)
+                .await
+            {
+                return Ok(token_outputs);
             }
 
             info!("Failed to select token outputs, refreshing and retrying");
             self.refresh_tokens_outputs().await?;
-            let token_balance = self
-                .state
-                .get_token_outputs(GetTokenOutputsFilter::Identifier(token_identifier))
-                .await?
-                .balance();
-            if let ReservationTarget::MinTotalValue(amount) = &target
-                && *amount > token_balance
-            {
-                info!(
-                    "Insufficient funds to select token outputs after refresh: requested {amount}, balance {token_balance}"
-                );
+            if self.any_target_unaffordable(targets).await? {
                 break;
             }
 
@@ -229,17 +195,16 @@ impl TokenOutputService for SynchronousTokenOutputService {
             }
         }
 
-        selected.ok_or_else(|| TokenOutputServiceError::InsufficientFunds)
+        Err(TokenOutputServiceError::InsufficientFunds)
     }
 
     async fn reserve_token_outputs_by_outpoints(
         &self,
-        token_identifier: &str,
         outpoints: &[(String, u32)],
         purpose: ReservationPurpose,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
         self.state
-            .reserve_token_outputs_by_outpoints(token_identifier, outpoints, purpose)
+            .reserve_token_outputs_by_outpoints(outpoints, purpose)
             .await
     }
 
@@ -259,6 +224,31 @@ impl TokenOutputService for SynchronousTokenOutputService {
 }
 
 impl SynchronousTokenOutputService {
+    /// Whether any target now asks for more than that token's balance. Retrying
+    /// cannot help once one token is short, since the reservation is all-or-nothing.
+    async fn any_target_unaffordable(
+        &self,
+        targets: &[(String, ReservationTarget)],
+    ) -> Result<bool, TokenOutputServiceError> {
+        for (token_identifier, target) in targets {
+            let ReservationTarget::MinTotalValue(amount) = target else {
+                continue;
+            };
+            let balance = self
+                .state
+                .get_token_outputs(GetTokenOutputsFilter::Identifier(token_identifier))
+                .await?
+                .balance();
+            if *amount > balance {
+                info!(
+                    "Insufficient funds for token {token_identifier} after refresh: requested {amount}, balance {balance}"
+                );
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub fn new(
         network: Network,
         operator_pool: Arc<OperatorPool>,
