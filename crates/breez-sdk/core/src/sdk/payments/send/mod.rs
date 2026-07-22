@@ -3,11 +3,12 @@ pub(in crate::sdk) mod bolt11;
 pub(in crate::sdk::payments) mod cross_chain;
 pub(super) mod spark_address;
 pub(super) mod spark_invoice;
+pub(in crate::sdk) mod token_batch;
 
 use tracing::warn;
 
 use crate::{
-    ConversionEstimate, SendPaymentMethod,
+    ConversionEstimate, Payment, SendPaymentMethod,
     error::SdkError,
     events::SdkEvent,
     models::{
@@ -26,6 +27,9 @@ pub(in crate::sdk) enum PublishOutcome {
     SwapCompleted,
     Sent(SendPaymentResponse),
     Replayed(SendPaymentResponse),
+    /// A batch package: one payment per recipient, in recipient order.
+    SentBatch(Vec<Payment>),
+    ReplayedBatch(Vec<Payment>),
 }
 
 pub(in crate::sdk) async fn publish_signed_package_inner(
@@ -69,27 +73,16 @@ pub(in crate::sdk) async fn publish_signed_package_inner(
             },
             TransferSignature::Token { signed },
         ) => {
-            // Token replay-safety relies on a local record keyed by the package
-            // digest: unlike transfer and swap, a token transaction is queryable
-            // at the operator only by its final hash, which is computed during
-            // broadcast and so is unknown from the package after a crash. A crash
-            // between the operator broadcast and recording the digest here is
-            // therefore not recoverable from the package; the integrator must
-            // reconcile local state (sync) before rebuilding, or the retry fails
-            // on the already-spent outputs rather than double-spending.
             let package_id = hex::encode(&prepare_token_transaction.digest);
             if *is_swap {
-                if let Ok(Some(_)) = cache.fetch_published_package(&package_id).await {
-                    return Ok(PublishOutcome::SwapCompleted);
-                }
-                spark_address::broadcast_signed_token_package(sdk, token_context, signed).await?;
-                if let Err(e) = cache
-                    .save_published_package(&package_id, "consolidation")
-                    .await
-                {
-                    warn!("Failed to record the published token consolidation package: {e:?}");
-                }
-                return Ok(PublishOutcome::SwapCompleted);
+                return publish_token_consolidation(
+                    sdk,
+                    &cache,
+                    &package_id,
+                    token_context,
+                    signed,
+                )
+                .await;
             }
             if let Ok(Some(payment_id)) = cache.fetch_published_package(&package_id).await
                 && let Ok(payment) = sdk.storage.get_payment_by_id(payment_id).await
@@ -97,13 +90,42 @@ pub(in crate::sdk) async fn publish_signed_package_inner(
                 return Ok(PublishOutcome::Replayed(SendPaymentResponse { payment }));
             }
             let res = spark_address::send_token_signed(sdk, token_context, signed).await?;
-            if let Err(e) = cache
-                .save_published_package(&package_id, &res.payment.id)
-                .await
-            {
-                warn!("Failed to record the published token package: {e:?}");
-            }
+            record_published_package(&cache, &package_id, &res.payment.id).await;
             Ok(res)
+        }
+        (
+            UnsignedTransferPackage::TokenBatch {
+                prepare_token_transaction,
+                token_context,
+                is_swap,
+                ..
+            },
+            TransferSignature::Token { signed },
+        ) => {
+            let package_id = hex::encode(&prepare_token_transaction.digest);
+            if *is_swap {
+                return publish_token_consolidation(
+                    sdk,
+                    &cache,
+                    &package_id,
+                    token_context,
+                    signed,
+                )
+                .await;
+            }
+            if let Ok(Some(payment_id)) = cache.fetch_published_package(&package_id).await
+                && let Ok(payments) =
+                    token_batch::payments_for_published_batch(sdk, payment_id).await
+            {
+                return Ok(PublishOutcome::ReplayedBatch(payments));
+            }
+            let payments = token_batch::send_signed(sdk, token_context, signed).await?;
+            // Only the first id is recorded: the rest are recovered through the
+            // transaction hash it carries.
+            if let Some(payment) = payments.first() {
+                record_published_package(&cache, &package_id, &payment.id).await;
+            }
+            return Ok(PublishOutcome::SentBatch(payments));
         }
         _ => {
             return Err(SdkError::InvalidInput(
@@ -112,6 +134,42 @@ pub(in crate::sdk) async fn publish_signed_package_inner(
         }
     }?;
     Ok(PublishOutcome::Sent(res))
+}
+
+/// Publishes a package that consolidates our own token outputs instead of paying
+/// anyone, which both token package kinds can turn out to be.
+async fn publish_token_consolidation(
+    sdk: &BreezSdk,
+    cache: &ObjectCacheRepository,
+    package_id: &str,
+    token_context: &[u8],
+    signed: &crate::signer::ExternalPreparedTokenTransaction,
+) -> Result<PublishOutcome, SdkError> {
+    if let Ok(Some(_)) = cache.fetch_published_package(package_id).await {
+        return Ok(PublishOutcome::SwapCompleted);
+    }
+    spark_address::broadcast_signed_token_package(sdk, token_context, signed).await?;
+    record_published_package(cache, package_id, "consolidation").await;
+    Ok(PublishOutcome::SwapCompleted)
+}
+
+/// Records that a token package was published, so a re-publish replays its
+/// payments instead of spending the same outputs again.
+///
+/// A token transaction is queryable at the operator only by its final hash,
+/// which is computed during broadcast and so is unknown from the package after a
+/// crash. A crash between the broadcast and this record is therefore not
+/// recoverable from the package: the integrator must reconcile local state
+/// (sync) before rebuilding, or the retry fails on the already-spent outputs
+/// rather than double-spending.
+async fn record_published_package(
+    cache: &ObjectCacheRepository,
+    package_id: &str,
+    payment_id: &str,
+) {
+    if let Err(e) = cache.save_published_package(package_id, payment_id).await {
+        warn!("Failed to record the published token package: {e:?}");
+    }
 }
 
 pub(in crate::sdk::payments) async fn publish_signed_transfer_package(
@@ -145,6 +203,13 @@ pub(in crate::sdk::payments) async fn publish_signed_transfer_package(
             Ok(PublishSignedTransferPackageResponse::PaymentSent {
                 payment: res.payment,
             })
+        }
+        PublishOutcome::ReplayedBatch(payments) => {
+            Ok(PublishSignedTransferPackageResponse::PaymentsSent { payments })
+        }
+        PublishOutcome::SentBatch(payments) => {
+            token_batch::emit_payments(sdk, &payments).await;
+            Ok(PublishSignedTransferPackageResponse::PaymentsSent { payments })
         }
     }
 }

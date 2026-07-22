@@ -7,10 +7,12 @@ use crate::{
     BitcoinAddressDetails, FeePolicy, SendOnchainFeeQuote,
     error::SdkError,
     models::{
-        BuildTransferPackageOptions, PrepareSendPaymentResponse, SendPaymentMethod,
-        SignedTransferPackage, TransferSignature, TransferTarget, UnsignedTransferPackage,
+        BuildTransferPackageOptions, PrepareSendPaymentResponse, PrepareSendTokenBatchResponse,
+        SendPaymentMethod, SignedTransferPackage, TransferSignature, TransferTarget,
+        UnsignedTransferPackage,
     },
     sdk::BreezSdk,
+    sdk::payments::send,
     signer::{
         ExternalPrepareTokenTransactionRequest, ExternalPrepareTransferRequest,
         ExternalTokenTransactionKind,
@@ -246,6 +248,36 @@ async fn build_lightning_package(
             completion_timeout_secs,
         },
     )
+}
+
+pub(in crate::sdk::payments) async fn build_unsigned_token_batch_package(
+    sdk: &BreezSdk,
+    prepare_response: &PrepareSendTokenBatchResponse,
+) -> Result<UnsignedTransferPackage, SdkError> {
+    let recipients = send::token_batch::to_token_recipients(&prepare_response.recipients)?;
+    let prepared = sdk
+        .spark_wallet
+        .prepare_token_package(recipients, None, None)
+        .await?;
+    // A consolidation package re-shapes the wallet's outputs rather than paying
+    // the recipients, so it carries no totals to display. It is exposed as a
+    // swap: publishing it returns SwapCompleted, like the single-recipient flow.
+    let (prepared, is_swap, totals) = match prepared {
+        PreparedTokenPackage::Ready(pt) => (pt, false, prepare_response.totals.clone()),
+        PreparedTokenPackage::Consolidation(pt) => (pt, true, Vec::new()),
+    };
+    let digest = prepared.partial_token_transaction_hash.clone();
+    let token_context = serde_json::to_vec(&prepared)
+        .map_err(|e| SdkError::Generic(format!("Failed to serialize token transfer: {e}")))?;
+    Ok(UnsignedTransferPackage::TokenBatch {
+        prepare_token_transaction: ExternalPrepareTokenTransactionRequest {
+            kind: ExternalTokenTransactionKind::Partial,
+            digest,
+        },
+        token_context,
+        totals,
+        is_swap,
+    })
 }
 
 async fn build_token_package(

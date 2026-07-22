@@ -1,5 +1,3 @@
-use platform_utils::time::{Duration, SystemTime, UNIX_EPOCH};
-
 use crate::{
     ConversionOptions, ConversionType, FeePolicy, SendPaymentMethod, SparkInvoiceDetails,
     error::SdkError,
@@ -71,25 +69,8 @@ fn validate_request(
         ));
     }
 
-    // Validate expiry time
-    if let Some(expiry_time) = spark_invoice_details.expiry_time {
-        let current_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| SdkError::Generic("Failed to get current time".to_string()))?;
-        if current_time > Duration::from_secs(expiry_time) {
-            return Err(SdkError::InvalidInput("Invoice has expired".to_string()));
-        }
-    }
-
-    // Validate sender public key
-    if let Some(sender_public_key) = &spark_invoice_details.sender_public_key
-        && identity_public_key != sender_public_key
-    {
-        return Err(SdkError::InvalidInput(
-            format!("Invoice can only be paid by sender public key {sender_public_key}")
-                .to_string(),
-        ));
-    }
+    // Validate expiry time and sender public key
+    validation::validate_spark_invoice_payable(spark_invoice_details, identity_public_key)?;
 
     // Validate amount
     if let Some(invoice_amount) = spark_invoice_details.amount

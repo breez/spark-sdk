@@ -1221,3 +1221,234 @@ async fn test_07_token_payment_realtime_event() -> Result<()> {
     info!("=== Test test_07_token_payment_realtime_event PASSED ===");
     Ok(())
 }
+
+/// Test 8: One transaction paying two recipients, one by address and one by
+/// invoice.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_08_token_batch(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_08_token_batch ===");
+
+    let alice = alice_sdk.await?;
+    let bob = bob_sdk.await?;
+    let token = create_mint_test_token(&alice).await?.identifier;
+
+    let bob_address = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+    let bob_invoice = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkInvoice {
+                amount: Some(30),
+                token_identifier: Some(token.clone()),
+                expiry_time: None,
+                description: Some("batch invoice".to_string()),
+                sender_public_key: None,
+            },
+        })
+        .await?
+        .payment_request;
+
+    let prepare_response = alice
+        .sdk
+        .prepare_send_token_batch(PrepareSendTokenBatchRequest {
+            recipients: vec![
+                TokenBatchRecipient {
+                    destination: bob_address,
+                    amount: Some(70),
+                    token_identifier: Some(token.clone()),
+                },
+                TokenBatchRecipient {
+                    destination: bob_invoice.clone(),
+                    amount: None,
+                    token_identifier: None,
+                },
+            ],
+        })
+        .await?;
+
+    // One token, so one total covering both recipients.
+    assert_eq!(prepare_response.totals.len(), 1);
+    assert_eq!(prepare_response.totals[0].token_identifier, token);
+    assert_eq!(prepare_response.totals[0].amount, 100);
+    assert_eq!(prepare_response.recipients.len(), 2);
+    assert!(
+        prepare_response.recipients[0].invoice_details.is_none(),
+        "the address recipient resolves to no invoice"
+    );
+    assert_eq!(
+        prepare_response.recipients[1]
+            .invoice_details
+            .as_ref()
+            .map(|i| i.amount),
+        Some(Some(30)),
+        "the invoice recipient carries the invoice it pays"
+    );
+
+    let response = alice
+        .sdk
+        .send_token_batch(SendTokenBatchRequest { prepare_response })
+        .await?;
+
+    assert_eq!(response.payments.len(), 2, "one payment per recipient");
+    assert_eq!(
+        response.payments[0].amount, 70,
+        "payments come back in recipient order"
+    );
+    assert_eq!(response.payments[1].amount, 30);
+
+    let tx_hashes: Vec<String> = response
+        .payments
+        .iter()
+        .map(|p| match &p.details {
+            Some(PaymentDetails::Token { tx_hash, .. }) => tx_hash.clone(),
+            _ => panic!("a batch payment must carry token details"),
+        })
+        .collect();
+    assert_eq!(
+        tx_hashes[0], tx_hashes[1],
+        "both payments come from one transaction"
+    );
+
+    // Both payments are listable, which is what a client groups on.
+    let listed = alice
+        .sdk
+        .list_payments(ListPaymentsRequest {
+            payment_details_filter: Some(vec![PaymentDetailsFilter::Token {
+                conversion_refund_needed: None,
+                tx_hash: Some(tx_hashes[0].clone()),
+                tx_type: None,
+            }]),
+            ..Default::default()
+        })
+        .await?
+        .payments;
+    assert_eq!(listed.len(), 2, "the batch is listable by transaction hash");
+
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let bob_balance = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .token_balances
+        .get(&token)
+        .map(|b| b.balance)
+        .unwrap_or(0);
+    assert_eq!(bob_balance, 100, "Bob receives both outputs");
+
+    info!("=== Test test_08_token_batch PASSED ===");
+    Ok(())
+}
+
+/// Test 9: Prepare rejects a batch that cannot be paid as requested.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_09_token_batch_prepare_rejections(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_09_token_batch_prepare_rejections ===");
+
+    let alice = alice_sdk.await?;
+    let bob = bob_sdk.await?;
+    let token = create_mint_test_token(&alice).await?.identifier;
+
+    let bob_address = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+    let bob_invoice = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkInvoice {
+                amount: Some(10),
+                token_identifier: Some(token.clone()),
+                expiry_time: None,
+                description: None,
+                sender_public_key: None,
+            },
+        })
+        .await?
+        .payment_request;
+
+    let prepare = |recipients: Vec<TokenBatchRecipient>| {
+        alice
+            .sdk
+            .prepare_send_token_batch(PrepareSendTokenBatchRequest { recipients })
+    };
+
+    assert!(prepare(vec![]).await.is_err(), "empty batch");
+
+    assert!(
+        prepare(vec![
+            TokenBatchRecipient {
+                destination: bob_invoice.clone(),
+                amount: None,
+                token_identifier: None,
+            },
+            TokenBatchRecipient {
+                destination: bob_invoice.clone(),
+                amount: None,
+                token_identifier: None,
+            },
+        ])
+        .await
+        .is_err(),
+        "the same invoice twice would pay it twice"
+    );
+
+    assert!(
+        prepare(vec![TokenBatchRecipient {
+            destination: bob_address.clone(),
+            amount: Some(5),
+            token_identifier: None,
+        }])
+        .await
+        .is_err(),
+        "an address recipient names no token"
+    );
+
+    assert!(
+        prepare(vec![TokenBatchRecipient {
+            destination: bob_address.clone(),
+            amount: None,
+            token_identifier: Some(token.clone()),
+        }])
+        .await
+        .is_err(),
+        "an address recipient names no amount"
+    );
+
+    // Two outputs to one payee is a legitimate batch, not a duplicate.
+    let ok = prepare(vec![
+        TokenBatchRecipient {
+            destination: bob_address.clone(),
+            amount: Some(5),
+            token_identifier: Some(token.clone()),
+        },
+        TokenBatchRecipient {
+            destination: bob_address,
+            amount: Some(7),
+            token_identifier: Some(token.clone()),
+        },
+    ])
+    .await?;
+    assert_eq!(ok.totals[0].amount, 12, "one total covering both outputs");
+
+    info!("=== Test test_09_token_batch_prepare_rejections PASSED ===");
+    Ok(())
+}
