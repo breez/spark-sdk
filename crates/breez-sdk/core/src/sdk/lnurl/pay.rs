@@ -485,6 +485,12 @@ pub(super) async fn publish_signed_package(
         }
         send::PublishOutcome::Sent(res) => (res, true),
         send::PublishOutcome::Replayed(res) => (res, false),
+        // An LNURL pay package is a lightning transfer, never a token batch.
+        send::PublishOutcome::SentBatch(_) | send::PublishOutcome::ReplayedBatch(_) => {
+            return Err(SdkError::Generic(
+                "LNURL pay package unexpectedly produced a token batch".to_string(),
+            ));
+        }
     };
     let Some(context) = context else {
         return Err(SdkError::Generic(

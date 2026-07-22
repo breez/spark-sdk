@@ -266,11 +266,13 @@ fn take_invoice_for_output(
     Some(unmatched.remove(position))
 }
 
-pub(crate) async fn map_and_persist_token_transaction(
+/// Persists every payment the transaction produced, one per output paying
+/// someone else, in vout order.
+pub(crate) async fn map_and_persist_token_transaction_payments(
     spark_wallet: &SparkWallet,
     storage: &Arc<dyn Storage>,
     token_transaction: &spark_wallet::TokenTransaction,
-) -> Result<Payment, SdkError> {
+) -> Result<Vec<Payment>, SdkError> {
     let object_repository = ObjectCacheRepository::new(storage.clone());
     let payments =
         token_transaction_to_payments(spark_wallet, &object_repository, token_transaction, true)
@@ -279,12 +281,25 @@ pub(crate) async fn map_and_persist_token_transaction(
         storage.apply_payment_update(payment.clone()).await?;
     }
 
-    payments
-        .first()
-        .ok_or(SdkError::Generic(
-            "No payment created from token invoice".to_string(),
-        ))
-        .cloned()
+    if payments.is_empty() {
+        return Err(SdkError::Generic(
+            "No payment created from token transaction".to_string(),
+        ));
+    }
+    Ok(payments)
+}
+
+pub(crate) async fn map_and_persist_token_transaction(
+    spark_wallet: &SparkWallet,
+    storage: &Arc<dyn Storage>,
+    token_transaction: &spark_wallet::TokenTransaction,
+) -> Result<Payment, SdkError> {
+    let payments =
+        map_and_persist_token_transaction_payments(spark_wallet, storage, token_transaction)
+            .await?;
+    payments.into_iter().next().ok_or(SdkError::Generic(
+        "No payment created from token transaction".to_string(),
+    ))
 }
 
 #[cfg(test)]

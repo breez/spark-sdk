@@ -4,7 +4,35 @@
 //! per-type `prepare/<type>.rs::validate_request` calls them first, so the
 //! complete set of rules for an input type is visible in that type's own file.
 
-use crate::{ConversionOptions, ConversionType, FeePolicy, error::SdkError};
+use platform_utils::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::{ConversionOptions, ConversionType, FeePolicy, SparkInvoiceDetails, error::SdkError};
+
+/// Validates that a Spark invoice can be paid by us: it has not expired, and it
+/// is not bound to a different sender.
+pub(in crate::sdk) fn validate_spark_invoice_payable(
+    details: &SparkInvoiceDetails,
+    identity_public_key: &str,
+) -> Result<(), SdkError> {
+    if let Some(expiry_time) = details.expiry_time {
+        let current_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| SdkError::Generic("Failed to get current time".to_string()))?;
+        if current_time > Duration::from_secs(expiry_time) {
+            return Err(SdkError::InvalidInput("Invoice has expired".to_string()));
+        }
+    }
+
+    if let Some(sender_public_key) = &details.sender_public_key
+        && identity_public_key != sender_public_key
+    {
+        return Err(SdkError::InvalidInput(format!(
+            "Invoice can only be paid by sender public key {sender_public_key}"
+        )));
+    }
+
+    Ok(())
+}
 
 /// Validates that amount is > 0 if provided.
 pub(in crate::sdk) fn validate_amount(amount: Option<u128>) -> Result<(), SdkError> {

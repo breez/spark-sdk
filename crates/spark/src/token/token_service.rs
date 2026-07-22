@@ -46,6 +46,11 @@ use crate::{
 /// Default cap on the number of inputs a single token transaction may spend.
 /// Overridable per wallet via [`TokensConfig::max_tx_inputs`].
 pub const DEFAULT_MAX_TOKEN_TX_INPUTS: usize = 500;
+/// Cap on the outputs a single token transaction may create, counting the change
+/// output each token with a remainder gets. Mirrors the constant the transaction
+/// builder enforces, which `spark-token-primitives` keeps private: exceeding it
+/// fails deep in construction, so callers sizing a transfer check it up front.
+pub const MAX_TOKEN_TX_OUTPUTS: usize = 500;
 const MAX_TRANSFER_TOKEN_TOO_MANY_OUTPUTS_RETRY_ATTEMPTS: usize = 3;
 const MAX_TOKEN_PREEMPTED_RETRY_ATTEMPTS: usize = 3;
 
