@@ -1452,3 +1452,221 @@ async fn test_09_token_batch_prepare_rejections(
     info!("=== Test test_09_token_batch_prepare_rejections PASSED ===");
     Ok(())
 }
+
+/// Test 10: A batch spanning two tokens: an invoice per token with different
+/// amounts, plus a plain-address output. Different amounts make attribution
+/// unambiguous, so both the sender's response and the receiver's synced records
+/// must attach each invoice to the one payment whose amount it names, carrying
+/// each token's own metadata.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_10_token_batch_invoice_attribution(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_10_token_batch_invoice_attribution ===");
+
+    let alice = alice_sdk.await?;
+    let bob = bob_sdk.await?;
+    let token_a = create_mint_test_token(&alice).await?.identifier;
+    let token_b = create_mint_test_token(&bob).await?.identifier;
+
+    // Fund Alice with the second token so her batch can span both.
+    let alice_address = alice
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+    let funding_prepare = bob
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: PaymentRequest::Input {
+                input: alice_address,
+            },
+            amount: Some(500),
+            token_identifier: Some(token_b.clone()),
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+    bob.sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: funding_prepare,
+            options: None,
+            idempotency_key: None,
+        })
+        .await?;
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+
+    let invoice_a = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkInvoice {
+                amount: Some(30),
+                token_identifier: Some(token_a.clone()),
+                expiry_time: None,
+                description: Some("invoice a".to_string()),
+                sender_public_key: None,
+            },
+        })
+        .await?
+        .payment_request;
+    let invoice_b = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkInvoice {
+                amount: Some(55),
+                token_identifier: Some(token_b.clone()),
+                expiry_time: None,
+                description: Some("invoice b".to_string()),
+                sender_public_key: None,
+            },
+        })
+        .await?
+        .payment_request;
+    let bob_address = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+
+    let prepare_response = alice
+        .sdk
+        .prepare_send_token_batch(PrepareSendTokenBatchRequest {
+            recipients: vec![
+                TokenBatchRecipient {
+                    destination: invoice_a.clone(),
+                    amount: None,
+                    token_identifier: None,
+                },
+                TokenBatchRecipient {
+                    destination: invoice_b.clone(),
+                    amount: None,
+                    token_identifier: None,
+                },
+                TokenBatchRecipient {
+                    destination: bob_address,
+                    amount: Some(70),
+                    token_identifier: Some(token_a.clone()),
+                },
+            ],
+        })
+        .await?;
+
+    let totals: Vec<(String, u128)> = prepare_response
+        .totals
+        .iter()
+        .map(|t| (t.token_identifier.clone(), t.amount))
+        .collect();
+    assert_eq!(
+        totals,
+        vec![(token_a.clone(), 100), (token_b.clone(), 55)],
+        "one total per token, in first-requested order"
+    );
+
+    let response = alice
+        .sdk
+        .send_token_batch(SendTokenBatchRequest { prepare_response })
+        .await?;
+    assert_eq!(response.payments.len(), 3, "one payment per recipient");
+
+    // The expected (amount, token, attached invoice) for each output. The
+    // address recipient carries no invoice.
+    let expected = vec![
+        (30_u128, token_a.clone(), Some(invoice_a.clone())),
+        (55_u128, token_b.clone(), Some(invoice_b.clone())),
+        (70_u128, token_a.clone(), None),
+    ];
+
+    // Sender side: payments come back in recipient order.
+    let sender_attribution: Vec<(u128, String, Option<String>)> = response
+        .payments
+        .iter()
+        .map(|p| match &p.details {
+            Some(PaymentDetails::Token {
+                metadata,
+                invoice_details,
+                ..
+            }) => (
+                p.amount,
+                metadata.identifier.clone(),
+                invoice_details.as_ref().map(|d| d.invoice.clone()),
+            ),
+            _ => panic!("a batch payment must carry token details"),
+        })
+        .collect();
+    assert_eq!(
+        sender_attribution, expected,
+        "each sent payment carries the invoice its amount names"
+    );
+
+    let tx_hash = match &response.payments[0].details {
+        Some(PaymentDetails::Token { tx_hash, .. }) => tx_hash.clone(),
+        _ => unreachable!(),
+    };
+
+    // Receiver side: attribution is reconstructed from the synced transaction
+    // alone, so it must land on the same invoice per amount.
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let bob_payments = bob
+        .sdk
+        .list_payments(ListPaymentsRequest {
+            payment_details_filter: Some(vec![PaymentDetailsFilter::Token {
+                conversion_refund_needed: None,
+                tx_hash: Some(tx_hash),
+                tx_type: None,
+            }]),
+            ..Default::default()
+        })
+        .await?
+        .payments;
+    assert_eq!(bob_payments.len(), 3, "the receiver records every output");
+
+    let mut receiver_attribution: Vec<(u128, String, Option<String>)> = bob_payments
+        .iter()
+        .map(|p| {
+            assert_eq!(p.payment_type, PaymentType::Receive);
+            match &p.details {
+                Some(PaymentDetails::Token {
+                    metadata,
+                    invoice_details,
+                    ..
+                }) => (
+                    p.amount,
+                    metadata.identifier.clone(),
+                    invoice_details.as_ref().map(|d| d.invoice.clone()),
+                ),
+                _ => panic!("a batch payment must carry token details"),
+            }
+        })
+        .collect();
+    // Listing order is not guaranteed, so compare by amount.
+    receiver_attribution.sort_by_key(|(amount, _, _)| *amount);
+    assert_eq!(
+        receiver_attribution, expected,
+        "the receiver attaches each invoice to the payment its amount names"
+    );
+
+    // No invoice is attached to two payments.
+    let mut attached: Vec<&String> = receiver_attribution
+        .iter()
+        .filter_map(|(_, _, inv)| inv.as_ref())
+        .collect();
+    let attached_count = attached.len();
+    attached.sort();
+    attached.dedup();
+    assert_eq!(
+        attached.len(),
+        attached_count,
+        "no invoice is attached to more than one payment"
+    );
+
+    info!("=== Test test_10_token_batch_invoice_attribution PASSED ===");
+    Ok(())
+}
