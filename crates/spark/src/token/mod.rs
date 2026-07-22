@@ -6,7 +6,7 @@ mod token_service;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod tests;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 pub use error::TokenOutputServiceError;
 pub use service::SynchronousTokenOutputService;
@@ -84,17 +84,6 @@ impl TokenOutputs {
         self.metadata
             .iter()
             .find(|m| m.identifier == token_identifier)
-    }
-
-    /// Total amount held per token identifier.
-    pub fn amount_by_token(&self) -> HashMap<String, u128> {
-        let mut totals = HashMap::<String, u128>::new();
-        for output in &self.outputs {
-            *totals
-                .entry(output.output.token_identifier.clone())
-                .or_default() += output.output.token_amount;
-        }
-        totals
     }
 }
 
