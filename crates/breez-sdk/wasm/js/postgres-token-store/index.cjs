@@ -716,7 +716,7 @@ class PostgresTokenStore {
     }
   }
 
-  _selectOutputs(outputs, target, selectionStrategy) {
+  _selectOutputs(tokenIdentifier, outputs, target, selectionStrategy) {
     if (target.type === "minTotalValue") {
       const amount = BigInt(target.value);
       const totalAvailable = outputs.reduce(
@@ -724,7 +724,9 @@ class PostgresTokenStore {
         0n
       );
       if (totalAvailable < amount) {
-        throw new TokenStoreError("InsufficientFunds");
+        throw new TokenStoreError(
+          `InsufficientFunds: ${tokenIdentifier}`
+        );
       }
 
       const exactMatch = outputs.find(
@@ -754,7 +756,9 @@ class PostgresTokenStore {
         remaining -= BigInt(output.output.tokenAmount);
       }
       if (remaining > 0n) {
-        throw new TokenStoreError("InsufficientFunds");
+        throw new TokenStoreError(
+          `InsufficientFunds: ${tokenIdentifier}`
+        );
       }
       return selected;
     }
@@ -1066,6 +1070,7 @@ class PostgresTokenStore {
     for (const [tokenIdentifier, target] of targets) {
       const candidates = availablePerToken.get(tokenIdentifier) ?? [];
       const selected = this._selectOutputs(
+        tokenIdentifier,
         candidates,
         target,
         selectionStrategy

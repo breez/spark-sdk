@@ -339,7 +339,7 @@ pub async fn test_reserve_token_outputs_by_outpoints(store: &dyn TokenOutputStor
                 ReservationPurpose::Payment,
             )
             .await,
-        Err(TokenOutputServiceError::InsufficientFunds)
+        Err(TokenOutputServiceError::InsufficientFunds { .. })
     ));
 }
 
@@ -674,7 +674,7 @@ pub async fn test_reserve_insufficient_outputs(store: &dyn TokenOutputStore) {
     assert!(result.is_err());
     assert!(matches!(
         result,
-        Err(TokenOutputServiceError::InsufficientFunds)
+        Err(TokenOutputServiceError::InsufficientFunds { .. })
     ));
 }
 
