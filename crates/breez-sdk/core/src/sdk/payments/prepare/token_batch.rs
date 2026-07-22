@@ -42,24 +42,31 @@ pub(in crate::sdk::payments) async fn prepare(
     }
 
     let totals = totals(&recipients)?;
+    validate_output_cap(recipients.len(), totals.len())?;
 
-    // The builder appends one change output per token with a remainder, and
-    // rejects the transaction past the cap with a message from deep inside
-    // construction. Fail here instead, where the caller can act on it.
-    let outputs = recipients
-        .len()
-        .checked_add(totals.len())
+    Ok(PrepareSendTokenBatchResponse { recipients, totals })
+}
+
+/// Rejects a batch that cannot fit the transaction output cap even before input
+/// selection decides how many change outputs there really are.
+///
+/// The builder appends one change output per token with a remainder, and rejects
+/// the transaction past the cap with a message from deep inside construction.
+/// Failing here instead lets the caller act on it. The count is worst-case (one
+/// change output assumed per token): whether a token produces change is only
+/// known once inputs are selected at send time, and a verdict that depended on
+/// the balance at prepare time could flip by the time the caller sends.
+fn validate_output_cap(recipient_count: usize, token_count: usize) -> Result<(), SdkError> {
+    let outputs = recipient_count
+        .checked_add(token_count)
         .ok_or_else(|| SdkError::InvalidInput("Too many recipients".to_string()))?;
     if outputs > MAX_TOKEN_TX_OUTPUTS {
         return Err(SdkError::InvalidInput(format!(
             "A batch is limited to {MAX_TOKEN_TX_OUTPUTS} outputs, counting one change output \
-             per token: {} recipients across {} token(s) needs {outputs}",
-            recipients.len(),
-            totals.len()
+             per token: {recipient_count} recipients across {token_count} token(s) needs {outputs}"
         )));
     }
-
-    Ok(PrepareSendTokenBatchResponse { recipients, totals })
+    Ok(())
 }
 
 /// Resolves one requested recipient into the concrete token and amount that will
@@ -305,6 +312,30 @@ mod tests {
     #[test_all]
     fn totals_reject_an_overflowing_token() {
         let result = totals(&[resolved(TOKEN, u128::MAX), resolved(TOKEN, 1)]);
+        assert!(matches!(result, Err(SdkError::InvalidInput(_))));
+    }
+
+    #[test_all]
+    fn output_cap_admits_a_batch_that_fits_with_change() {
+        assert!(validate_output_cap(MAX_TOKEN_TX_OUTPUTS - 1, 1).is_ok());
+    }
+
+    #[test_all]
+    fn output_cap_rejects_a_batch_one_change_output_over() {
+        let result = validate_output_cap(MAX_TOKEN_TX_OUTPUTS, 1);
+        assert!(matches!(result, Err(SdkError::InvalidInput(_))));
+    }
+
+    #[test_all]
+    fn output_cap_counts_every_token_of_the_batch() {
+        assert!(validate_output_cap(MAX_TOKEN_TX_OUTPUTS - 2, 2).is_ok());
+        let result = validate_output_cap(MAX_TOKEN_TX_OUTPUTS - 1, 2);
+        assert!(matches!(result, Err(SdkError::InvalidInput(_))));
+    }
+
+    #[test_all]
+    fn output_cap_rejects_an_overflowing_count() {
+        let result = validate_output_cap(usize::MAX, 1);
         assert!(matches!(result, Err(SdkError::InvalidInput(_))));
     }
 }
