@@ -1,6 +1,6 @@
 use spark_wallet::{
     CoopExitFeeQuote, ExitSpeed, PreparedTokenPackage, SendPackagePreparation, SparkAddress,
-    TransferTokenOutput,
+    TokenRecipient,
 };
 
 use crate::{
@@ -256,27 +256,24 @@ async fn build_token_package(
     amount: u128,
     fee: u128,
 ) -> Result<UnsignedTransferPackage, SdkError> {
-    let prepared = if let Some(invoice) = spark_invoice {
-        sdk.spark_wallet
-            .prepare_spark_invoice_token_package(&invoice, Some(amount))
-            .await?
+    let recipient = if let Some(invoice) = spark_invoice {
+        TokenRecipient::Invoice {
+            invoice,
+            amount: Some(amount),
+        }
     } else {
-        let spark_address = receiver
-            .parse::<SparkAddress>()
-            .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?;
-        sdk.spark_wallet
-            .prepare_token_package(
-                vec![TransferTokenOutput {
-                    token_id: token_identifier.clone(),
-                    amount,
-                    receiver_address: spark_address,
-                    spark_invoice: None,
-                }],
-                None,
-                None,
-            )
-            .await?
+        TokenRecipient::Address {
+            token_id: token_identifier.clone(),
+            amount,
+            receiver_address: receiver
+                .parse::<SparkAddress>()
+                .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?,
+        }
     };
+    let prepared = sdk
+        .spark_wallet
+        .prepare_token_package(vec![recipient], None, None)
+        .await?;
     // A consolidation package re-shapes the wallet's outputs rather than paying
     // the receiver, so it carries no send amount or fee to display. It is exposed
     // as a swap: publishing it returns SwapCompleted, like the sats flow.

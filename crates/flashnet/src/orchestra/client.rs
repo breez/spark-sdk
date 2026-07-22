@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use bitcoin::hashes::{Hash, sha256};
 use platform_utils::{ContentType, HttpClient, add_content_type_header};
-use spark_wallet::{SparkAddress, SparkWallet, TransferId, TransferTokenOutput};
+use spark_wallet::{SparkAddress, SparkWallet, TokenRecipient, TransferId};
 use tokio::sync::OnceCell;
 use tracing::debug;
 
@@ -190,11 +190,10 @@ impl OrchestraClient {
                 let token_tx = self
                     .spark_wallet
                     .transfer_tokens(
-                        vec![TransferTokenOutput {
+                        vec![TokenRecipient::Address {
                             token_id: token_identifier.to_string(),
                             amount: amount_in,
                             receiver_address,
-                            spark_invoice: None,
                         }],
                         None,
                         None,

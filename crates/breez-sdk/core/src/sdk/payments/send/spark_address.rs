@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use bitcoin::hashes::sha256;
 use platform_utils::time::Duration;
-use spark_wallet::{PreparedTokenTransfer, SparkAddress, TransferId, TransferTokenOutput};
+use spark_wallet::{PreparedTokenTransfer, SparkAddress, TokenRecipient, TransferId};
 
 use crate::{
     ConversionOptions, ConversionPurpose, SendPaymentOptions, SparkHtlcOptions,
@@ -168,11 +168,10 @@ async fn send_token_address(
     let token_transaction = sdk
         .spark_wallet
         .transfer_tokens(
-            vec![TransferTokenOutput {
+            vec![TokenRecipient::Address {
                 token_id: token_identifier,
                 amount,
                 receiver_address: receiver_address.clone(),
-                spark_invoice: None,
             }],
             None,
             None,

@@ -66,7 +66,7 @@ use tracing::{Instrument, debug, error, info, trace, warn};
 
 use crate::{
     FulfillSparkInvoiceResult, ListTokenTransactionsRequest, ListTransfersRequest, PreimageRequest,
-    QuerySparkInvoiceResult, SparkInvoiceToFulfill, TokenBalance, WalletEvent, WalletLeaves,
+    QuerySparkInvoiceResult, TokenBalance, TokenRecipient, WalletEvent, WalletLeaves,
     WalletSettings, WithdrawInnerParams,
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
@@ -1744,30 +1744,27 @@ impl SparkWallet {
 
     /// Transfers tokens to other Spark users.
     ///
-    /// All outputs are paid by one transaction, and they may span several token ids.
+    /// All recipients are paid by one transaction, and they may mix Spark
+    /// addresses with Spark invoices and span several token ids. Sats invoices
+    /// are not accepted: a sats payment moves leaves rather than token outputs
+    /// and cannot share a transaction, so use {@link fulfill_spark_invoice} for
+    /// those.
     pub async fn transfer_tokens(
         &self,
-        outputs: Vec<TransferTokenOutput>,
+        recipients: Vec<TokenRecipient>,
         selected_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenTransaction, SparkWalletError> {
-        if outputs.iter().any(|o| o.spark_invoice.is_some()) {
-            return Err(SparkWalletError::Generic(
-                "Spark invoices are not supported for token transfers. Use the `fulfill_spark_invoice` method instead.".to_string(),
-            ));
-        }
-
-        if !self.config.self_payment_allowed
-            && outputs
-                .iter()
-                .any(|o| o.receiver_address.identity_public_key == self.identity_public_key)
-        {
-            return Err(SparkWalletError::SelfPaymentNotAllowed);
-        }
+        let (outputs, execute_before_unix_micros) = self.resolve_recipients(recipients)?;
 
         let tx = self
             .token_service
-            .transfer_tokens(outputs, selected_outputs, selection_strategy, None)
+            .transfer_tokens(
+                outputs,
+                selected_outputs,
+                selection_strategy,
+                execute_before_unix_micros,
+            )
             .await?;
         Ok(tx)
     }
@@ -1978,10 +1975,14 @@ impl SparkWallet {
             }
             Some(SparkAddressPaymentType::TokensPayment(_)) => {
                 let tx = self
-                    .fulfill_token_spark_invoices(vec![SparkInvoiceToFulfill {
-                        invoice: invoice_str.to_string(),
-                        amount,
-                    }])
+                    .transfer_tokens(
+                        vec![TokenRecipient::Invoice {
+                            invoice: invoice_str.to_string(),
+                            amount,
+                        }],
+                        None,
+                        None,
+                    )
                     .await?;
 
                 Ok(FulfillSparkInvoiceResult::TokenTransaction(Box::new(tx)))
@@ -1992,58 +1993,63 @@ impl SparkWallet {
         }
     }
 
-    /// Fulfills several token Spark invoices with one transaction.
-    ///
-    /// The invoices may request different tokens. Sats invoices are not accepted:
-    /// a sats payment moves leaves rather than token outputs and cannot share a
-    /// transaction, so use {@link fulfill_spark_invoice} for those.
-    pub async fn fulfill_token_spark_invoices(
+    /// Validates each recipient and turns it into the output that pays it, along
+    /// with the deadline the transaction as a whole must meet.
+    pub(crate) fn resolve_recipients(
         &self,
-        invoices: Vec<SparkInvoiceToFulfill>,
-    ) -> Result<TokenTransaction, SparkWalletError> {
-        let (outputs, execute_before_unix_micros) = self.token_outputs_from_invoices(invoices)?;
-        Ok(self
-            .token_service
-            .transfer_tokens(outputs, None, None, execute_before_unix_micros)
-            .await?)
-    }
-
-    /// Validates each invoice and turns it into the output that pays it, along with
-    /// the deadline the transaction as a whole must meet.
-    pub(crate) fn token_outputs_from_invoices(
-        &self,
-        invoices: Vec<SparkInvoiceToFulfill>,
+        recipients: Vec<TokenRecipient>,
     ) -> Result<(Vec<TransferTokenOutput>, Option<i64>), SparkWalletError> {
-        if invoices.is_empty() {
+        if recipients.is_empty() {
             return Err(SparkWalletError::Generic(
-                "No invoices provided".to_string(),
+                "No recipients provided".to_string(),
             ));
         }
 
         // The same invoice twice would attach twice and pay twice for one request.
+        // Repeating a plain address is legitimate: it is two outputs to one payee.
         let mut seen = HashSet::new();
-        for invoice in &invoices {
-            if !seen.insert(invoice.invoice.as_str()) {
+        for recipient in &recipients {
+            if let TokenRecipient::Invoice { invoice, .. } = recipient
+                && !seen.insert(invoice.as_str())
+            {
                 return Err(SparkWalletError::InvalidAddress(format!(
-                    "Invoice appears more than once: {}",
-                    invoice.invoice
+                    "Invoice appears more than once: {invoice}"
                 )));
             }
         }
 
-        let mut outputs = Vec::with_capacity(invoices.len());
-        let mut deadlines = Vec::with_capacity(invoices.len());
-        for to_fulfill in invoices {
-            let invoice = self.parse_and_validate_spark_invoice(&to_fulfill.invoice)?;
-            if !self.config.self_payment_allowed
-                && invoice.identity_public_key == self.identity_public_key
-            {
-                return Err(SparkWalletError::SelfPaymentNotAllowed);
-            }
-            let (output, execute_before) =
-                token_output_from_invoice(&invoice, &to_fulfill.invoice, to_fulfill.amount)?;
+        let mut outputs = Vec::with_capacity(recipients.len());
+        let mut deadlines = Vec::with_capacity(recipients.len());
+        for recipient in recipients {
+            let (output, execute_before) = match recipient {
+                TokenRecipient::Address {
+                    token_id,
+                    amount,
+                    receiver_address,
+                } => (
+                    TransferTokenOutput {
+                        token_id,
+                        amount,
+                        receiver_address,
+                        spark_invoice: None,
+                    },
+                    None,
+                ),
+                TokenRecipient::Invoice { invoice, amount } => {
+                    let parsed = self.parse_and_validate_spark_invoice(&invoice)?;
+                    token_output_from_invoice(&parsed, &invoice, amount)?
+                }
+            };
             outputs.push(output);
             deadlines.push(execute_before);
+        }
+
+        if !self.config.self_payment_allowed
+            && outputs
+                .iter()
+                .any(|o| o.receiver_address.identity_public_key == self.identity_public_key)
+        {
+            return Err(SparkWalletError::SelfPaymentNotAllowed);
         }
 
         Ok((outputs, earliest_execute_before(deadlines)))

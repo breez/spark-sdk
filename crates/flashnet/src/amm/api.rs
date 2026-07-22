@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use bitcoin::hashes::{Hash, sha256};
 use spark::bech32m_encode_token_id;
-use spark_wallet::{PublicKey, SparkAddress, SparkWallet, TransferId, TransferTokenOutput};
+use spark_wallet::{PublicKey, SparkAddress, SparkWallet, TokenRecipient, TransferId};
 use tokio::sync::Mutex;
 use tracing::debug;
 
@@ -458,11 +458,10 @@ impl FlashnetClient {
             let token_tx = self
                 .spark_wallet
                 .transfer_tokens(
-                    vec![TransferTokenOutput {
+                    vec![TokenRecipient::Address {
                         token_id,
                         amount,
                         receiver_address,
-                        spark_invoice: None,
                     }],
                     None,
                     None,
