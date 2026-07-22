@@ -191,77 +191,25 @@ pub mod shared_tests {
 }
 
 #[cfg(test)]
-mod sqlite_tests {
-    use super::shared_tests;
-
-    async fn setup_test_db() -> crate::sqlite::LnurlRepository {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .connect(":memory:")
-            .await
-            .unwrap();
-        crate::sqlite::run_migrations(&pool).await.unwrap();
-        crate::sqlite::LnurlRepository::new(pool)
-    }
-
-    #[tokio::test]
-    async fn webhook_delivery_success_marks_succeeded() {
-        let db = setup_test_db().await;
-        shared_tests::webhook_delivery_success_marks_succeeded(&db).await;
-    }
-
-    #[tokio::test]
-    async fn webhook_delivery_failure_schedules_retry() {
-        let db = setup_test_db().await;
-        shared_tests::webhook_delivery_failure_schedules_retry(&db).await;
-    }
-
-    #[tokio::test]
-    async fn delete_webhook_deliveries_older_than_removes_old() {
-        let db = setup_test_db().await;
-        shared_tests::delete_webhook_deliveries_older_than_removes_old(&db).await;
-    }
-}
-
-// PostgreSQL tests - only run when LNURL_TEST_POSTGRES_URL is set.
-// Example: LNURL_TEST_POSTGRES_URL="postgres://user:pass@localhost/lnurl_test" cargo test
-#[cfg(test)]
 mod postgres_tests {
     use super::shared_tests;
-
-    async fn setup_test_db() -> Option<crate::postgresql::LnurlRepository> {
-        let url = std::env::var("LNURL_TEST_POSTGRES_URL").ok()?;
-        let pool = sqlx::PgPool::connect(&url).await.ok()?;
-        crate::postgresql::run_migrations(&pool).await.ok()?;
-
-        sqlx::query("DELETE FROM webhook_deliveries")
-            .execute(&pool)
-            .await
-            .ok()?;
-
-        Some(crate::postgresql::LnurlRepository::new(pool))
-    }
+    use crate::test_support::test_db;
 
     #[tokio::test]
     async fn webhook_delivery_success_marks_succeeded() {
-        let Some(db) = setup_test_db().await else {
-            return;
-        };
+        let db = test_db("delivery_success_marks_succeeded").await;
         shared_tests::webhook_delivery_success_marks_succeeded(&db).await;
     }
 
     #[tokio::test]
     async fn webhook_delivery_failure_schedules_retry() {
-        let Some(db) = setup_test_db().await else {
-            return;
-        };
+        let db = test_db("delivery_failure_schedules_retry").await;
         shared_tests::webhook_delivery_failure_schedules_retry(&db).await;
     }
 
     #[tokio::test]
     async fn delete_webhook_deliveries_older_than_removes_old() {
-        let Some(db) = setup_test_db().await else {
-            return;
-        };
+        let db = test_db("delete_deliveries_older_than").await;
         shared_tests::delete_webhook_deliveries_older_than_removes_old(&db).await;
     }
 }

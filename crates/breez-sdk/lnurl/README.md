@@ -24,7 +24,7 @@ To compile and run the LNURL server, you'll need:
 - Rust toolchain (1.75 or newer recommended)
 - Protobuf compiler (`protoc`)
 - OpenSSL development libraries
-- PostgreSQL (if using a PostgreSQL database)
+- PostgreSQL
 
 ## How to Compile
 
@@ -77,7 +77,7 @@ docker run -p 8080:8080 \
 If you've built the binary, you can run it directly:
 
 ```shell
-./target/release/lnurl --db-url="lnurl.sqlite" --domains="yourdomain.com" --default-api-key="<breez-api-key>" --auto-migrate
+./target/release/lnurl --db-url="postgres://user:password@localhost:5432/lnurl_db" --domains="yourdomain.com" --default-api-key="<breez-api-key>" --auto-migrate
 ```
 
 ## Configuration
@@ -106,8 +106,6 @@ scheme = "https"                    # Scheme for generated URLs only; the server
 
 # Database configuration
 db_url = "postgres://user:password@localhost:5432/lnurl_db"
-# Or for SQLite:
-# db_url = "lnurl.sqlite"
 
 # LNURL payment configuration
 min_sendable = 1000                 # Minimum amount in millisatoshi (1 sat)
@@ -122,7 +120,7 @@ default_api_key = "<breez-api-key>" # Fallback Breez API key for partner attribu
 |--------|-------------|---------|
 | `--address` | Address the server listens on | `0.0.0.0:8080` |
 | `--auto-migrate` | Automatically apply database migrations | `false` |
-| `--db-url` | Database connection string | `""` |
+| `--db-url` | PostgreSQL connection string | `""` |
 | `--domains` | Comma-separated list of allowed domains | `localhost:8080` |
 | `--default-api-key` | Fallback Breez API key for partner attribution (**required on mainnet**) | (none) |
 | `--log-level` | RUST_LOG style format (e.g., `info`, `lnurl=trace,info`, `lnurl=trace,spark_wallet=debug,info`) | `info` |
@@ -153,10 +151,8 @@ On **mainnet the default API key is required**, and the server will not start wi
 
 ### Database Support
 
-The server supports two database backends:
-
-- **PostgreSQL**: Use a connection string starting with `postgres://`
-- **SQLite**: Use any other connection string (e.g., `lnurl.sqlite`)
+PostgreSQL is the only supported backend. `--db-url` must start with `postgres://`
+or the server refuses to start.
 
 When `--auto-migrate` is enabled, the server will automatically create the required tables.
 
@@ -178,14 +174,17 @@ The LNURL server provides the following endpoints:
 
 ## Example Usage
 
-### Setting Up With SQLite (Development)
+### Setting Up For Development
 
 ```shell
-# Create a local SQLite database with auto-migrations
-./target/release/lnurl --db-url="lnurl.sqlite" --domains="localhost:8080" --auto-migrate --scheme="http"
+# Point at a local database with auto-migrations
+./target/release/lnurl --db-url="postgres://user:password@localhost:5432/lnurl_db" \
+  --domains="localhost:8080" \
+  --auto-migrate \
+  --scheme="http"
 ```
 
-### Setting Up With PostgreSQL (Production)
+### Setting Up For Production
 
 ```shell
 # Setup PostgreSQL database with auto-migrations
@@ -230,6 +229,24 @@ services:
 volumes:
   postgres_data:
 ```
+
+## Testing
+
+The tests run against a real PostgreSQL instance. Each test gets its own schema,
+so they can share one database, but the tests create and drop schemas in it:
+point `LNURL_TEST_POSTGRES_URL` at a disposable instance, never at real data.
+
+```shell
+docker run -d --rm --name lnurl-pg-test \
+  -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=lnurl_test \
+  -p 55432:5432 postgres:16-alpine
+
+LNURL_TEST_POSTGRES_URL="postgres://postgres:postgres@localhost:55432/lnurl_test" \
+  make lnurl-test
+```
+
+Without `LNURL_TEST_POSTGRES_URL` the database-backed tests fail rather than
+silently skip.
 
 ## License
 

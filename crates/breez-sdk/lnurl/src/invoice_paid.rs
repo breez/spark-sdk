@@ -241,86 +241,25 @@ mod shared_tests {
 }
 
 #[cfg(test)]
-mod sqlite_tests {
-    use super::shared_tests;
-
-    async fn setup_test_db() -> crate::sqlite::LnurlRepository {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .connect(":memory:")
-            .await
-            .unwrap();
-        crate::sqlite::run_migrations(&pool).await.unwrap();
-        crate::sqlite::LnurlRepository::new(pool)
-    }
-
-    #[tokio::test]
-    async fn invoice_paid_enqueues_zap_when_preimage_already_stored() {
-        let db = setup_test_db().await;
-        shared_tests::invoice_paid_enqueues_zap_when_preimage_already_stored(&db).await;
-    }
-
-    #[tokio::test]
-    async fn get_or_create_setting_returns_default_on_first_call() {
-        let db = setup_test_db().await;
-        shared_tests::get_or_create_setting_returns_default_on_first_call(&db).await;
-    }
-
-    #[tokio::test]
-    async fn get_or_create_setting_returns_existing_on_subsequent_calls() {
-        let db = setup_test_db().await;
-        shared_tests::get_or_create_setting_returns_existing_on_subsequent_calls(&db).await;
-    }
-}
-
-// PostgreSQL tests - only run when LNURL_TEST_POSTGRES_URL is set.
-// Example: LNURL_TEST_POSTGRES_URL="postgres://user:pass@localhost/lnurl_test" cargo test
-#[cfg(test)]
 mod postgres_tests {
     use super::shared_tests;
-
-    async fn setup_test_db() -> Option<crate::postgresql::LnurlRepository> {
-        let url = std::env::var("LNURL_TEST_POSTGRES_URL").ok()?;
-        let pool = sqlx::PgPool::connect(&url).await.ok()?;
-        crate::postgresql::run_migrations(&pool).await.ok()?;
-
-        sqlx::query("DELETE FROM invoices")
-            .execute(&pool)
-            .await
-            .ok()?;
-        sqlx::query("DELETE FROM zaps").execute(&pool).await.ok()?;
-        sqlx::query("DELETE FROM sender_comments")
-            .execute(&pool)
-            .await
-            .ok()?;
-        sqlx::query("DELETE FROM settings")
-            .execute(&pool)
-            .await
-            .ok()?;
-
-        Some(crate::postgresql::LnurlRepository::new(pool))
-    }
+    use crate::test_support::test_db;
 
     #[tokio::test]
     async fn invoice_paid_enqueues_zap_when_preimage_already_stored() {
-        let Some(db) = setup_test_db().await else {
-            return;
-        };
+        let db = test_db("invoice_paid_enqueues_zap").await;
         shared_tests::invoice_paid_enqueues_zap_when_preimage_already_stored(&db).await;
     }
 
     #[tokio::test]
     async fn get_or_create_setting_returns_default_on_first_call() {
-        let Some(db) = setup_test_db().await else {
-            return;
-        };
+        let db = test_db("setting_default_on_first_call").await;
         shared_tests::get_or_create_setting_returns_default_on_first_call(&db).await;
     }
 
     #[tokio::test]
     async fn get_or_create_setting_returns_existing_on_subsequent_calls() {
-        let Some(db) = setup_test_db().await else {
-            return;
-        };
+        let db = test_db("setting_existing_on_subsequent").await;
         shared_tests::get_or_create_setting_returns_existing_on_subsequent_calls(&db).await;
     }
 }
