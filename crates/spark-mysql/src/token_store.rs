@@ -1094,7 +1094,12 @@ impl MysqlTokenStore {
             }
             candidates.retain(|o| !taken.contains(&outpoint_of(o)));
 
-            let chosen = select_token_outputs_from(candidates, *target, selection_strategy)?;
+            let chosen = select_token_outputs_from(
+                token_identifier,
+                candidates,
+                *target,
+                selection_strategy,
+            )?;
             taken.extend(chosen.iter().map(outpoint_of));
             selected.extend(chosen);
 
@@ -1224,7 +1229,9 @@ impl MysqlTokenStore {
         let distinct: HashSet<(&str, u32)> =
             outpoints.iter().map(|(h, v)| (h.as_str(), *v)).collect();
         if selected_outputs.len() != distinct.len() {
-            return Err(TokenOutputServiceError::InsufficientFunds);
+            return Err(TokenOutputServiceError::InsufficientFunds {
+                token_identifier: None,
+            });
         }
 
         let mut token_identifiers: Vec<&str> = selected_outputs

@@ -141,6 +141,7 @@ impl TokenOutputService for SynchronousTokenOutputService {
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
+        let mut short_token = None;
         for i in 0..SELECT_TOKEN_OUTPUTS_MAX_RETRIES {
             if let Ok(reservation) = self
                 .state
@@ -157,7 +158,8 @@ impl TokenOutputService for SynchronousTokenOutputService {
 
             info!("Failed to reserve token outputs, refreshing and retrying");
             self.refresh_tokens_outputs().await?;
-            if self.any_target_unaffordable(targets).await? {
+            if let Some(token) = self.first_unaffordable_target(targets).await? {
+                short_token = Some(token);
                 break;
             }
 
@@ -166,7 +168,9 @@ impl TokenOutputService for SynchronousTokenOutputService {
             }
         }
 
-        Err(TokenOutputServiceError::InsufficientFunds)
+        Err(TokenOutputServiceError::InsufficientFunds {
+            token_identifier: short_token,
+        })
     }
 
     async fn select_token_outputs(
@@ -175,6 +179,7 @@ impl TokenOutputService for SynchronousTokenOutputService {
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputs, TokenOutputServiceError> {
+        let mut short_token = None;
         for i in 0..SELECT_TOKEN_OUTPUTS_MAX_RETRIES {
             if let Ok(token_outputs) = self
                 .state
@@ -186,7 +191,8 @@ impl TokenOutputService for SynchronousTokenOutputService {
 
             info!("Failed to select token outputs, refreshing and retrying");
             self.refresh_tokens_outputs().await?;
-            if self.any_target_unaffordable(targets).await? {
+            if let Some(token) = self.first_unaffordable_target(targets).await? {
+                short_token = Some(token);
                 break;
             }
 
@@ -195,7 +201,9 @@ impl TokenOutputService for SynchronousTokenOutputService {
             }
         }
 
-        Err(TokenOutputServiceError::InsufficientFunds)
+        Err(TokenOutputServiceError::InsufficientFunds {
+            token_identifier: short_token,
+        })
     }
 
     async fn reserve_token_outputs_by_outpoints(
@@ -224,12 +232,13 @@ impl TokenOutputService for SynchronousTokenOutputService {
 }
 
 impl SynchronousTokenOutputService {
-    /// Whether any target now asks for more than that token's balance. Retrying
-    /// cannot help once one token is short, since the reservation is all-or-nothing.
-    async fn any_target_unaffordable(
+    /// The first target that now asks for more than its token's balance, if any.
+    /// Retrying cannot help once one token is short, since the reservation is
+    /// all-or-nothing.
+    async fn first_unaffordable_target(
         &self,
         targets: &[(String, ReservationTarget)],
-    ) -> Result<bool, TokenOutputServiceError> {
+    ) -> Result<Option<String>, TokenOutputServiceError> {
         for (token_identifier, target) in targets {
             let ReservationTarget::MinTotalValue(amount) = target else {
                 continue;
@@ -243,10 +252,10 @@ impl SynchronousTokenOutputService {
                 info!(
                     "Insufficient funds for token {token_identifier} after refresh: requested {amount}, balance {balance}"
                 );
-                return Ok(true);
+                return Ok(Some(token_identifier.clone()));
             }
         }
-        Ok(false)
+        Ok(None)
     }
 
     pub fn new(

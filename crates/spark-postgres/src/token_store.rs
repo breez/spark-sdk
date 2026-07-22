@@ -816,7 +816,9 @@ impl TokenOutputStore for PostgresTokenStore {
         let distinct: HashSet<(&str, u32)> =
             outpoints.iter().map(|(h, v)| (h.as_str(), *v)).collect();
         if selected_outputs.len() != distinct.len() {
-            return Err(TokenOutputServiceError::InsufficientFunds);
+            return Err(TokenOutputServiceError::InsufficientFunds {
+                token_identifier: None,
+            });
         }
 
         let metadata = self
@@ -1226,8 +1228,12 @@ impl PostgresTokenStore {
             let candidates = available_per_token
                 .remove(token_identifier)
                 .unwrap_or_default();
-            let selected =
-                select_token_outputs_from(candidates.clone(), *target, selection_strategy)?;
+            let selected = select_token_outputs_from(
+                token_identifier,
+                candidates.clone(),
+                *target,
+                selection_strategy,
+            )?;
 
             let taken: HashSet<(String, u32)> = selected
                 .iter()

@@ -31,11 +31,21 @@ unsafe impl Sync for WasmTokenStore {}
 
 fn js_error_to_token_error(js_error: JsValue) -> TokenOutputServiceError {
     let error_message = get_detailed_js_error(&js_error);
-    if error_message.contains("InsufficientFunds") {
-        TokenOutputServiceError::InsufficientFunds
-    } else {
-        TokenOutputServiceError::Generic(error_message)
+    match error_message.split_once("InsufficientFunds") {
+        Some((_, rest)) => TokenOutputServiceError::InsufficientFunds {
+            token_identifier: insufficient_funds_token(rest),
+        },
+        None => TokenOutputServiceError::Generic(error_message),
     }
+}
+
+/// The token a JS store named after its `InsufficientFunds` marker
+/// (`InsufficientFunds: <token>`), if it named one.
+fn insufficient_funds_token(rest: &str) -> Option<String> {
+    rest.trim_start()
+        .strip_prefix(':')
+        .and_then(|t| t.split_whitespace().next())
+        .map(ToString::to_string)
 }
 
 fn get_detailed_js_error(js_error: &JsValue) -> String {

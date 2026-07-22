@@ -120,7 +120,12 @@ fn select_available(
         }
         None => pool.output_vec(),
     };
-    select_token_outputs_from(candidates, target, selection_strategy)
+    select_token_outputs_from(
+        &pool.metadata.identifier,
+        candidates,
+        target,
+        selection_strategy,
+    )
 }
 
 #[macros::async_trait]
@@ -578,7 +583,9 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
                     pool.outputs.insert(outpoint_of(&stored.output), stored);
                 }
             }
-            return Err(TokenOutputServiceError::InsufficientFunds);
+            return Err(TokenOutputServiceError::InsufficientFunds {
+                token_identifier: None,
+            });
         }
 
         let reservation_id = Uuid::now_v7().to_string();

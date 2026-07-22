@@ -185,6 +185,7 @@ pub enum ReservationPurpose {
 }
 
 pub fn select_token_outputs_from(
+    token_identifier: &str,
     mut outputs: Vec<TokenOutputWithPrevOut>,
     target: ReservationTarget,
     selection_strategy: Option<SelectionStrategy>,
@@ -192,7 +193,9 @@ pub fn select_token_outputs_from(
     if let ReservationTarget::MinTotalValue(amount) = target
         && outputs.iter().map(|o| o.output.token_amount).sum::<u128>() < amount
     {
-        return Err(TokenOutputServiceError::InsufficientFunds);
+        return Err(TokenOutputServiceError::InsufficientFunds {
+            token_identifier: Some(token_identifier.to_string()),
+        });
     }
 
     if let ReservationTarget::MinTotalValue(amount) = target
@@ -223,7 +226,9 @@ pub fn select_token_outputs_from(
             }
 
             if remaining_amount > 0 {
-                return Err(TokenOutputServiceError::InsufficientFunds);
+                return Err(TokenOutputServiceError::InsufficientFunds {
+                    token_identifier: Some(token_identifier.to_string()),
+                });
             }
 
             Ok(selected_outputs)
