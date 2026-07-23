@@ -1775,4 +1775,5 @@ pub struct _ConnectWithPasskeyRequest {
 pub struct _ConnectWithPasskeyResponse {
     pub wallet: Wallet,
     pub credential: Option<PasskeyCredential>,
+    pub labels: Vec<String>,
 }

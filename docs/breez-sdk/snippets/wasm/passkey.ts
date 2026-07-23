@@ -74,8 +74,20 @@ const connectWithPasskey = async () => {
   })
 
   // ANCHOR: connect-with-passkey
-  // Not available on web; use two buttons (signIn / register) instead.
-  const response = await passkey.signIn({ label: 'personal' })
+  // Single-button flow. On web it works only where the browser supports
+  // immediate mediation; supportsImmediateMediation() reports it. Otherwise
+  // use the two-button flow (register / signIn).
+  const availability = await passkey.checkAvailability()
+  if (availability.type !== 'available' || !(await passkey.supportsImmediateMediation())) {
+    throw new Error('Use the two-button flow (register / signIn) on this browser')
+  }
+  // No label: a returning user's wallets are discovered (response.labels,
+  // with wallet being the default); a new user gets a freshly registered
+  // default wallet.
+  const response = await passkey.connectWithPasskey({})
+  if (response.labels.length > 1) {
+    // Multiple wallets: let the user pick, then signIn to the chosen label.
+  }
 
   const config = defaultConfig('mainnet')
   const sdk = await connect({ config, seed: response.wallet.seed, storageDir: './.data' })

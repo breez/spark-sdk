@@ -87,9 +87,14 @@ async def connect_with_passkey():
 
     # ANCHOR: connect-with-passkey
     # Silent sign-in for a returning user, fall-through to register on a fresh device.
-    response = await passkey.connect_with_passkey(
-        ConnectWithPasskeyRequest(label="personal")
-    )
+    # No label: derive the default wallet and discover this passkey's label set.
+    response = await passkey.connect_with_passkey(ConnectWithPasskeyRequest())
+
+    if len(response.labels) > 1:
+        # Returning multi-wallet user: let them pick a label and sign in to it.
+        # chosen = ...  # prompt the user with response.labels
+        # response = await passkey.sign_in(SignInRequest(label=chosen))
+        pass
 
     config = default_config(network=Network.MAINNET)
     sdk = await connect(

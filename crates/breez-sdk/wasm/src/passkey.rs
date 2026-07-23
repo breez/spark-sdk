@@ -108,12 +108,33 @@ pub struct SignInResponse {
     pub credential: Option<PasskeyCredential>,
 }
 
+/// Request shape for `PasskeyClient.connectWithPasskey`.
+#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::ConnectWithPasskeyRequest)]
+pub struct ConnectWithPasskeyRequest {
+    pub label: Option<String>,
+    #[tsify(type = "Uint8Array[]")]
+    pub allow_credentials: Option<Vec<Vec<u8>>>,
+    #[tsify(type = "Uint8Array[]")]
+    pub exclude_credentials: Option<Vec<Vec<u8>>>,
+}
+
+/// Response shape for `PasskeyClient.connectWithPasskey`.
+#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::ConnectWithPasskeyResponse)]
+pub struct ConnectWithPasskeyResponse {
+    pub wallet: Wallet,
+    pub credential: Option<PasskeyCredential>,
+    pub labels: Vec<String>,
+}
+
 /// High-level orchestrator that collapses register / sign-in flows
 /// into single calls. See the matching Rust types for full semantics;
 /// the JS surface is a thin wasm-bindgen wrapper.
 #[wasm_bindgen]
 pub struct PasskeyClient {
     inner: breez_sdk_spark::passkey::PasskeyClient,
+    /// Kept so `supportsImmediateMediation` can query the provider
+    /// directly: the core client does not expose this capability.
+    provider: Arc<WasmPrfProvider>,
 }
 
 #[wasm_bindgen]
@@ -128,13 +149,14 @@ impl PasskeyClient {
         breez_api_key: Option<String>,
         config: Option<PasskeyConfig>,
     ) -> Self {
-        let wasm_provider = WasmPrfProvider::new(prf_provider);
+        let provider = Arc::new(WasmPrfProvider::new(prf_provider));
         Self {
             inner: breez_sdk_spark::passkey::PasskeyClient::new(
-                Arc::new(wasm_provider),
+                provider.clone(),
                 breez_api_key,
                 config.map(Into::into),
             ),
+            provider,
         }
     }
 
@@ -143,6 +165,16 @@ impl PasskeyClient {
     #[wasm_bindgen(js_name = "checkAvailability")]
     pub async fn check_availability(&self) -> WasmResult<PasskeyAvailability> {
         Ok(self.inner.check_availability().await?.into())
+    }
+
+    /// Whether this browser advertises WebAuthn immediate mediation: the
+    /// silent single-CTA probe (a no-credential sign-in fast-fails with no
+    /// UI) works here, so a web host can pick single- vs two-button
+    /// onboarding. Web-only and WASM-only: native does the silent probe
+    /// inherently, so there is nothing to query off-web.
+    #[wasm_bindgen(js_name = "supportsImmediateMediation")]
+    pub async fn supports_immediate_mediation(&self) -> bool {
+        self.provider.supports_immediate_mediation().await
     }
 
     /// First-time setup. Drives the platform's create-passkey ceremony
@@ -160,6 +192,27 @@ impl PasskeyClient {
     #[wasm_bindgen(js_name = "signIn")]
     pub async fn sign_in(&self, request: SignInRequest) -> WasmResult<SignInResponse> {
         Ok(self.inner.sign_in(request.into()).await?.into())
+    }
+
+    /// Single-CTA onboarding: silent sign-in that falls through to
+    /// registration when no credential exists on the device. Pins
+    /// immediate mediation, so on web only use it where the browser
+    /// advertises it (`supportsImmediateMediation`); otherwise the silent
+    /// probe degrades to the standard picker and a dismiss does not fall
+    /// through to register, so
+    /// present an explicit create / sign-in choice instead. Called without
+    /// a `label`, the response `labels` lists a returning user's wallets
+    /// for a picker.
+    #[wasm_bindgen(js_name = "connectWithPasskey")]
+    pub async fn connect_with_passkey(
+        &self,
+        request: ConnectWithPasskeyRequest,
+    ) -> WasmResult<ConnectWithPasskeyResponse> {
+        Ok(self
+            .inner
+            .connect_with_passkey(request.into())
+            .await?
+            .into())
     }
 
     /// Label sub-object. List / publish labels for this passkey's identity.
