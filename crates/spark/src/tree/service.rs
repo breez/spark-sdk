@@ -308,51 +308,33 @@ impl TreeService for SynchronousTreeService {
         // Leaves added after this time will be preserved even if not in the refresh data.
         let refresh_started_at = self.state.now().await?;
 
-        // Prepare queries for coordinator and all operators and run them in parallel
-        let coordinator_client = self.operator_pool.get_coordinator().client.clone();
+        // Query every operator the same way. The coordinator gets no special say in
+        // which leaves are ours, so it takes part in the same comparison as the rest.
+        // Leaves only: asking for each leaf's ancestors here would re-download every
+        // chain on every refresh, including the ones already stored.
         let operators: Vec<_> = self
             .operator_pool
-            .get_non_coordinator_operators()
+            .get_all_operators()
             .map(|op| (op.id, op.client.clone()))
             .collect();
-
-        // Leaves only. Asking for each leaf's ancestors here would re-download every
-        // chain on every refresh, including the ones already stored.
-        let coord_fut = self.query_nodes(&coordinator_client, false, None, held_leaf_statuses());
-        let op_futs = operators.iter().map(|(id, client)| async move {
+        let coordinator_id = self.operator_pool.get_coordinator().id;
+        let operator_count = operators.len();
+        let responses = join_all(operators.iter().map(|(id, client)| async move {
             (
                 *id,
                 self.query_nodes(client, false, None, held_leaf_statuses())
                     .await,
             )
-        });
+        }))
+        .await;
 
-        let (coordinator_leaves_res, operator_results) = tokio::join!(coord_fut, join_all(op_futs));
-        // Status cannot pick the leaves out of the response any more: now that a
-        // mid-exit leaf is asked for, an ancestor of one is just as able to come
-        // back `OnChain` as the leaf below it. Go by shape instead, and drop what
-        // another node in the same response calls its parent: an ancestor is not
-        // a leaf, whatever status it is in.
-        let coordinator_nodes = coordinator_leaves_res?;
-        let parent_ids: HashSet<TreeNodeId> = coordinator_nodes
-            .iter()
-            .filter_map(|n| n.parent_node_id.clone())
-            .collect();
-        let coordinator_leaves: Vec<TreeNode> = coordinator_nodes
-            .into_iter()
-            .filter(|n| !parent_ids.contains(&n.id))
-            .collect();
-        debug!(
-            leaves = coordinator_leaves.len(),
-            "refresh_leaves: fetched leaves"
-        );
-
-        // Propagate any operator query error to preserve original behavior and
-        // collect successful operator leaves for later comparison
-        let mut operator_leaves_vec: Vec<Vec<TreeNode>> = Vec::new();
-        for (id, res) in operator_results {
+        // One unreachable operator would shrink the comparison below, making the
+        // leaves only it still reports look dropped by everyone, so a refresh is all
+        // or nothing.
+        let mut per_operator = Vec::with_capacity(responses.len());
+        for (id, res) in responses {
             match res {
-                Ok(leaves) => operator_leaves_vec.push(leaves),
+                Ok(nodes) => per_operator.push((id, nodes)),
                 Err(e) => {
                     error!("Failed to query operator {id}: {e:?}");
                     return Err(e);
@@ -360,54 +342,74 @@ impl TreeService for SynchronousTreeService {
             }
         }
 
+        // Status cannot pick the leaves out of a response any more: now that a
+        // mid-exit leaf is asked for, an ancestor of one is just as able to come
+        // back `OnChain` as the leaf below it. Go by shape instead, and drop what
+        // another node in the same response calls its parent: an ancestor is not a
+        // leaf, whatever status it is in.
+        let mut reported: HashMap<TreeNodeId, Vec<(usize, TreeNode)>> = HashMap::new();
+        for (id, nodes) in per_operator {
+            let parent_ids: HashSet<TreeNodeId> = nodes
+                .iter()
+                .filter_map(|n| n.parent_node_id.clone())
+                .collect();
+            for node in nodes {
+                if parent_ids.contains(&node.id) {
+                    continue;
+                }
+                reported
+                    .entry(node.id.clone())
+                    .or_default()
+                    .push((id, node));
+            }
+        }
+        debug!(
+            leaves = reported.len(),
+            operators = operator_count,
+            "refresh_leaves: fetched leaves from every operator"
+        );
+
         let mut missing_operator_leaves_map: HashMap<TreeNodeId, TreeNode> = HashMap::new();
         let mut ignored_leaves_map: HashMap<TreeNodeId, TreeNode> = HashMap::new();
 
-        // For each operator's leaves, compare against coordinator in the same way as before
-        for (operator_id, operator_leaves) in operators.into_iter().zip(operator_leaves_vec) {
-            // Paging over a set the operator is concurrently mutating can return the
-            // same leaf on more than one page, so keep the first occurrence.
-            let mut operator_leaves_by_id: HashMap<&TreeNodeId, &TreeNode> =
-                HashMap::with_capacity(operator_leaves.len());
-            for operator_leaf in &operator_leaves {
-                operator_leaves_by_id
-                    .entry(&operator_leaf.id)
-                    .or_insert(operator_leaf);
+        // A leaf every operator reported identically is clean. One that some of them
+        // dropped, or described differently, is still ours and still counts towards
+        // the balance, but it is held back from payments until they agree again. A
+        // leaf no operator reports is simply absent from here, and that absence is
+        // what the store reads as a deletion: it now takes every operator to drop a
+        // leaf, where before the coordinator alone decided.
+        let mut union_leaves: Vec<TreeNode> = Vec::with_capacity(reported.len());
+        for (leaf_id, copies) in reported {
+            // Where the operators disagree no copy is the right one, so keep the
+            // coordinator's, the one the rest of the client transacts against. The
+            // leaf is held back either way.
+            let Some(representative) = copies
+                .iter()
+                .find(|(id, _)| *id == coordinator_id)
+                .or_else(|| copies.first())
+                .map(|(_, node)| node.clone())
+            else {
+                continue;
+            };
+            let agreed = copies.len() == operator_count
+                && copies
+                    .iter()
+                    .all(|(_, node)| leaf_copies_agree(node, &representative));
+            if !agreed {
+                warn!(
+                    "Leaf {leaf_id} reported by {} of {operator_count} operators, and not identically by all of them; holding it back from payments",
+                    copies.len()
+                );
+                missing_operator_leaves_map.insert(leaf_id.clone(), representative.clone());
             }
-
-            for leaf in &coordinator_leaves {
-                match operator_leaves_by_id.get(&leaf.id).copied() {
-                    Some(operator_leaf) => {
-                        // TODO: move this logic to TreeNode method
-                        if operator_leaf.status != leaf.status
-                            || operator_leaf.signing_keyshare.public_key
-                                != leaf.signing_keyshare.public_key
-                            || operator_leaf.node_tx != leaf.node_tx
-                            || operator_leaf.refund_tx != leaf.refund_tx
-                        {
-                            warn!(
-                                "Ignoring leaf due to mismatch between coordinator and operator {}. Coordinator: {:?}, Operator: {:?}",
-                                operator_id.0, leaf, operator_leaf
-                            );
-                            missing_operator_leaves_map.insert(leaf.id.clone(), leaf.clone());
-                        }
-                    }
-                    None => {
-                        warn!(
-                            "Ignoring leaf due to missing from operator {}: {:?}",
-                            operator_id.0, leaf.id
-                        );
-                        missing_operator_leaves_map.insert(leaf.id.clone(), leaf.clone());
-                    }
-                }
-            }
+            union_leaves.push(representative);
         }
 
         // Every reported leaf needs an ownership check (our signing share plus the
         // operators' share must equal the verifying key). The check is not gated on
         // status: a leaf part-way through an exit is still ours, and dropping it
         // here would strand the chain that exit resumes from.
-        let reported_leaves: Vec<&TreeNode> = coordinator_leaves.iter().collect();
+        let reported_leaves: Vec<&TreeNode> = union_leaves.iter().collect();
 
         // Deriving our leaf pubkey is a network round-trip on a remote signer, so
         // re-deriving every leaf each refresh would flood the signer and stall
@@ -457,7 +459,7 @@ impl TreeService for SynchronousTreeService {
             }
         }
 
-        let new_leaves = coordinator_leaves
+        let new_leaves = union_leaves
             .into_iter()
             .filter(|leaf| {
                 !missing_operator_leaves_map.contains_key(&leaf.id)
@@ -1074,6 +1076,16 @@ fn bare_pedigrees(leaves: Vec<TreeNode>) -> Vec<LeafPedigree> {
             ancestors: Vec::new(),
         })
         .collect()
+}
+
+/// Whether two operators' views of one leaf describe the same leaf. Compares what
+/// a client goes on to act upon: the status, the operators' share of the signing
+/// key, and the two transactions an exit broadcasts.
+fn leaf_copies_agree(a: &TreeNode, b: &TreeNode) -> bool {
+    a.status == b.status
+        && a.signing_keyshare.public_key == b.signing_keyshare.public_key
+        && a.node_tx == b.node_tx
+        && a.refund_tx == b.refund_tx
 }
 
 /// The statuses a leaf we still hold can be reported in. `Available` is the
