@@ -318,20 +318,29 @@ impl TreeService for SynchronousTreeService {
 
         // Leaves only. Asking for each leaf's ancestors here would re-download every
         // chain on every refresh, including the ones already stored.
-        let coord_fut =
-            self.query_nodes(&coordinator_client, false, None, available_leaf_statuses());
+        let coord_fut = self.query_nodes(&coordinator_client, false, None, held_leaf_statuses());
         let op_futs = operators.iter().map(|(id, client)| async move {
             (
                 *id,
-                self.query_nodes(client, false, None, available_leaf_statuses())
+                self.query_nodes(client, false, None, held_leaf_statuses())
                     .await,
             )
         });
 
         let (coordinator_leaves_res, operator_results) = tokio::join!(coord_fut, join_all(op_futs));
-        let coordinator_leaves: Vec<TreeNode> = coordinator_leaves_res?
+        // Status cannot pick the leaves out of the response any more: now that a
+        // mid-exit leaf is asked for, an ancestor of one is just as able to come
+        // back `OnChain` as the leaf below it. Go by shape instead, and drop what
+        // another node in the same response calls its parent: an ancestor is not
+        // a leaf, whatever status it is in.
+        let coordinator_nodes = coordinator_leaves_res?;
+        let parent_ids: HashSet<TreeNodeId> = coordinator_nodes
+            .iter()
+            .filter_map(|n| n.parent_node_id.clone())
+            .collect();
+        let coordinator_leaves: Vec<TreeNode> = coordinator_nodes
             .into_iter()
-            .filter(|n| n.status == TreeNodeStatus::Available)
+            .filter(|n| !parent_ids.contains(&n.id))
             .collect();
         debug!(
             leaves = coordinator_leaves.len(),
@@ -394,21 +403,11 @@ impl TreeService for SynchronousTreeService {
             }
         }
 
-        // Leaves not Available are ignored outright; the rest need an ownership
-        // check (our signing share + the operators' share must equal the
-        // verifying key).
-        let available_leaves: Vec<&TreeNode> = coordinator_leaves
-            .iter()
-            .filter(|leaf| {
-                if leaf.status == TreeNodeStatus::Available {
-                    true
-                } else {
-                    info!("Ignoring leaf {} due to status: {:?}", leaf.id, leaf.status);
-                    ignored_leaves_map.insert(leaf.id.clone(), (*leaf).clone());
-                    false
-                }
-            })
-            .collect();
+        // Every reported leaf needs an ownership check (our signing share plus the
+        // operators' share must equal the verifying key). The check is not gated on
+        // status: a leaf part-way through an exit is still ours, and dropping it
+        // here would strand the chain that exit resumes from.
+        let reported_leaves: Vec<&TreeNode> = coordinator_leaves.iter().collect();
 
         // Deriving our leaf pubkey is a network round-trip on a remote signer, so
         // re-deriving every leaf each refresh would flood the signer and stall
@@ -423,7 +422,7 @@ impl TreeService for SynchronousTreeService {
         } else {
             HashMap::new()
         };
-        let unverified_leaves: Vec<&TreeNode> = available_leaves
+        let unverified_leaves: Vec<&TreeNode> = reported_leaves
             .iter()
             .copied()
             .filter(|leaf| {
@@ -1077,8 +1076,18 @@ fn bare_pedigrees(leaves: Vec<TreeNode>) -> Vec<LeafPedigree> {
         .collect()
 }
 
-fn available_leaf_statuses() -> Vec<i32> {
-    vec![ProtoTreeNodeStatus::Available as i32]
+/// The statuses a leaf we still hold can be reported in. `Available` is the
+/// spendable one. `OnChain` and `Exited` are the two an exit drives a leaf
+/// through, and they have to be asked for: a refresh that requested only
+/// `Available` lost the leaf from every operator's response at once the moment
+/// its node txs confirmed, and the store, reading that absence as a spend,
+/// deleted the chain the exit still needed to resume.
+fn held_leaf_statuses() -> Vec<i32> {
+    vec![
+        ProtoTreeNodeStatus::Available as i32,
+        ProtoTreeNodeStatus::OnChain as i32,
+        ProtoTreeNodeStatus::Exited as i32,
+    ]
 }
 
 fn query_nodes_request(
@@ -1511,8 +1520,13 @@ mod tests {
         assert!(!rx.has_changed().unwrap());
     }
 
+    /// The refresh asks for the statuses a leaf we hold can be reported in, so a
+    /// leaf part-way through an exit keeps coming back instead of vanishing from
+    /// every operator at once. `TransferLocked` is deliberately not among them: a
+    /// leaf of ours in that status is one we are sending, and re-reading it would
+    /// undo the send.
     #[test_all]
-    fn refresh_query_requests_only_available_leaves() {
+    fn refresh_query_requests_held_leaf_statuses() {
         let owner = PublicKey::from_slice(&[2; 33]).unwrap();
         let req = query_nodes_request(
             &owner,
@@ -1520,9 +1534,16 @@ mod tests {
             false,
             Network::Mainnet,
             &PagingFilter::default(),
-            available_leaf_statuses(),
+            held_leaf_statuses(),
         );
-        assert_eq!(req.statuses, vec![ProtoTreeNodeStatus::Available as i32]);
+        assert_eq!(
+            req.statuses,
+            vec![
+                ProtoTreeNodeStatus::Available as i32,
+                ProtoTreeNodeStatus::OnChain as i32,
+                ProtoTreeNodeStatus::Exited as i32,
+            ]
+        );
         assert!(
             !req.statuses
                 .contains(&(ProtoTreeNodeStatus::TransferLocked as i32))
