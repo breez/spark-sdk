@@ -29,16 +29,21 @@ doc_build_instructions = "setup commands (`make run` instead of `cargo run --`),
 # Documentation: what language-specific content to preserve
 doc_preserve_items = "Flutter pub get instructions, or Dart/FRB-specific notes"
 
-# Build check command (syntax validation without SDK installed)
-build_check = "make -C crates/breez-sdk/bindings/examples/cli check-flutter"
+# Build check command (syntax validation without SDK installed).
+# pub get first: package resolution pins the language version the formatter
+# applies. dart format also rejects unparsable Dart, so this is the syntax
+# gate. Full analysis (make check-flutter) cannot run in the sync
+# environment: it needs the FRB-generated SDK bindings, which only CI builds.
+build_check = "dart pub get -C crates/breez-sdk/bindings/examples/cli/langs/flutter && dart format -l 110 crates/breez-sdk/bindings/examples/cli/langs/flutter/lib crates/breez-sdk/bindings/examples/cli/langs/flutter/bin"
 
 # Format instructions appended to the build check step
-format_instructions = "The Dart project uses 110-character line length. Run `dart format -l 110 lib/ bin/` before the build check to ensure formatting passes."
+format_instructions = "The Dart project uses a 110-character line length; the build check formats the files in place. Run it from the repo root exactly as written: a leading `cd` does not match the allowed-tools rules and gets denied. Do NOT run `dart analyze` or `make check-flutter` here: the generated SDK bindings are absent in this environment, so the analyzer reports hundreds of false undefined-symbol errors. CI runs the full analysis after binding codegen."
 
 # Claude Code allowed tools (workflow YAML)
 allowed_tools = """Read,Write,Edit,Glob,Grep,
 Bash(git diff:*),
-Bash(make -C crates/breez-sdk/bindings/examples/cli check-flutter:*)"""
+Bash(dart format:*),
+Bash(dart pub get:*)"""
 
 [file_mapping]
 content = """

@@ -5,6 +5,9 @@
 #   sync-prompts/prompt-template.md  +  sync-prompts/langs/<lang>.toml
 #
 # All language changes are consolidated into a single PR (instead of one per language).
+# A language whose sync job fails is excluded from the PR. When every language
+# syncs cleanly, the PR squash-merges automatically once the gating CI checks
+# pass (integration test checks are excluded from the gate: they are flaky).
 #
 # To add a new language: create a TOML in sync-prompts/langs/ and add a
 # matrix entry below.
@@ -235,11 +238,29 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: 'github-actions[bot]'
+          # claude_args is tokenized shell-style (shell-quote), so the
+          # allowed-tools value must stay quoted: an unquoted Bash(...) rule
+          # containing spaces is split at the spaces and silently dropped,
+          # leaving the agent unable to run its build/format checks.
           claude_args: >-
             --model claude-opus-4-6
             --allowed-tools
-            ${{ steps.config.outputs.allowed_tools }}
+            "${{ steps.config.outputs.allowed_tools }}"
           prompt: ${{ steps.gen-prompt.outputs.content }}
+
+      # Format deterministically: if the agent skipped or failed its format
+      # step, unformatted Dart fails the Flutter CI job on the PR. dart format
+      # also rejects unparsable Dart, so a syntactically broken sync fails
+      # this job and stays out of the PR. Full analysis (make check-flutter)
+      # cannot run here: it needs the FRB-generated SDK bindings, which only
+      # the Flutter CI job builds. pub get must run first: package resolution
+      # pins the language version the formatter applies.
+      - name: Format Flutter CLI
+        if: matrix.lang == 'flutter' && inputs.approve-run == ''
+        run: |
+          cd crates/breez-sdk/bindings/examples/cli/langs/flutter
+          dart pub get
+          dart format -l 110 lib/ bin/
 
       # ── Create patch artifact (always, not just dry-run) ────────────
       - name: Create patch
@@ -307,6 +328,8 @@ jobs:
     needs: [setup, sync]
     if: ${{ !inputs.dry-run && !cancelled() }}
     runs-on: ubuntu-latest
+    # Generous budget: the auto-merge step waits up to ~60 minutes for CI.
+    timeout-minutes: 90
 
     permissions:
       contents: write
@@ -319,22 +342,6 @@ jobs:
         with:
           token: ${{ secrets.SYNC_CLI_PR_TOKEN || github.token }}
           fetch-depth: 1
-
-      # ── Resolve PR reviewer ──────────────────────────────────────────
-      - name: Resolve reviewer
-        id: reviewer
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          REVIEWER=$(gh api "repos/${{ github.repository }}/commits?path=crates/breez-sdk/cli/src/&per_page=1" \
-            --jq '.[0].author.login // empty') || true
-          if [ -n "$REVIEWER" ] && [[ ! "$REVIEWER" =~ \[bot\]$ ]]; then
-            echo "reviewer=$REVIEWER" >> "$GITHUB_OUTPUT"
-            echo "::notice::Will request review from $REVIEWER (last Rust CLI committer)"
-          else
-            echo "reviewer=" >> "$GITHUB_OUTPUT"
-            echo "::notice::No reviewer to assign (last committer is a bot or unknown)"
-          fi
 
       # ── Determine which languages were requested ────────────────────
       - name: Determine languages
@@ -365,9 +372,9 @@ jobs:
             if gh run download "$RUN_ID" --name "$ARTIFACT_NAME" --dir "patches/${LANG}" 2>/dev/null; then
               echo "::notice::Downloaded patch for ${LANG}"
             else
-              echo "::warning::No patch artifact found for ${LANG} (sync job may have failed or been skipped)"
-              mkdir -p "patches/${LANG}"
-              touch "patches/${LANG}/sync-${LANG}.patch"
+              # No placeholder file: a missing artifact must surface as a
+              # failed sync, not masquerade as "no changes needed".
+              echo "::warning::No patch artifact found for ${LANG} (sync job failed or was skipped)"
             fi
           done
 
@@ -380,10 +387,16 @@ jobs:
           UPDATED=""
           NO_CHANGES=""
           FAILED=""
+          MISSING=""
 
           for LANG in $(echo "$LANGS" | jq -r '.[]'); do
             PATCH="patches/${LANG}/sync-${LANG}.patch"
-            if [ ! -f "$PATCH" ] || [ ! -s "$PATCH" ]; then
+            if [ ! -f "$PATCH" ]; then
+              echo "::warning::${LANG}: sync job produced no patch (failed or skipped); excluded from the PR"
+              MISSING="${MISSING}${LANG},"
+              continue
+            fi
+            if [ ! -s "$PATCH" ]; then
               echo "::notice::${LANG}: no changes"
               NO_CHANGES="${NO_CHANGES}${LANG},"
               continue
@@ -392,7 +405,7 @@ jobs:
               echo "::notice::${LANG}: patch applied successfully"
               UPDATED="${UPDATED}${LANG},"
             else
-              echo "::warning::${LANG}: patch failed to apply — target files may have changed"
+              echo "::warning::${LANG}: patch failed to apply; target files may have changed"
               FAILED="${FAILED}${LANG},"
             fi
           done
@@ -401,14 +414,24 @@ jobs:
           UPDATED="${UPDATED%,}"
           NO_CHANGES="${NO_CHANGES%,}"
           FAILED="${FAILED%,}"
+          MISSING="${MISSING%,}"
 
           echo "updated=$UPDATED" >> "$GITHUB_OUTPUT"
           echo "no_changes=$NO_CHANGES" >> "$GITHUB_OUTPUT"
           echo "failed=$FAILED" >> "$GITHUB_OUTPUT"
+          echo "missing=$MISSING" >> "$GITHUB_OUTPUT"
+
+          # all_clean gates auto-merge: every requested language either
+          # applied cleanly or needed no changes.
+          if [ -z "$FAILED" ] && [ -z "$MISSING" ]; then
+            echo "all_clean=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "all_clean=false" >> "$GITHUB_OUTPUT"
+          fi
 
           if [ -z "$UPDATED" ]; then
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::No language patches to apply — skipping PR creation."
+            echo "::notice::No language patches to apply. Skipping PR creation."
           else
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
@@ -422,7 +445,7 @@ jobs:
           UPDATED: ${{ steps.apply.outputs.updated }}
           NO_CHANGES: ${{ steps.apply.outputs.no_changes }}
           FAILED: ${{ steps.apply.outputs.failed }}
-          REVIEWER: ${{ steps.reviewer.outputs.reviewer }}
+          MISSING: ${{ steps.apply.outputs.missing }}
           APPROVE_RUN: ${{ inputs.approve-run }}
           LANGS: ${{ steps.langs.outputs.list }}
         run: |
@@ -479,7 +502,7 @@ jobs:
             elif echo ",$NO_CHANGES," | grep -q ",${LANG},"; then
               BODY+=$'\n'"- :next_track_button: ${LANG_NAME} (no changes needed)"
             else
-              BODY+=$'\n'"- :grey_question: ${LANG_NAME} (sync job did not produce a patch)"
+              BODY+=$'\n'"- :grey_question: ${LANG_NAME} (sync job failed; excluded from this PR)"
             fi
           done
 
@@ -508,17 +531,19 @@ jobs:
             BODY+=$'\n'"</details>"
           fi
 
-          # Warn about failures
-          if [ -n "$FAILED" ]; then
+          # Warn about failures; a clean run announces the auto-merge instead.
+          if [ -n "$FAILED" ] || [ -n "$MISSING" ]; then
             BODY+=$'\n\n'"> [!WARNING]"
-            BODY+=$'\n'"> Some patches failed to apply. The target files may have changed since the sync ran."
-            BODY+=$'\n'"> Failed languages: ${FAILED}"
+            BODY+=$'\n'"> Some languages did not sync cleanly, so this PR will not merge automatically."
+            if [ -n "$FAILED" ]; then
+              BODY+=$'\n'"> Patch failed to apply (target files may have changed): ${FAILED}"
+            fi
+            if [ -n "$MISSING" ]; then
+              BODY+=$'\n'"> Sync job produced no patch (failed or skipped): ${MISSING}"
+            fi
             BODY+=$'\n'"> Consider re-running the sync for these languages."
-          fi
-
-          REVIEWER_FLAG=""
-          if [ -n "$REVIEWER" ]; then
-            REVIEWER_FLAG="--reviewer $REVIEWER"
+          else
+            BODY+=$'\n\n'"All languages synced cleanly. This PR merges automatically once the gating CI checks pass (integration test checks excluded)."
           fi
 
           # The bot branch is throwaway (rebuilt from main each run), so
@@ -533,14 +558,55 @@ jobs:
             gh pr edit "$EXISTING_PR" --body "$BODY"
             echo "::notice::Updated existing PR #${EXISTING_PR}"
             echo "action=updated" >> "$GITHUB_OUTPUT"
+            echo "pr_number=${EXISTING_PR}" >> "$GITHUB_OUTPUT"
           else
-            gh pr create --title "chore: sync CLI languages with Rust CLI changes" \
+            PR_URL=$(gh pr create --title "chore: sync CLI languages with Rust CLI changes" \
               --body "$BODY" \
               --label "CLI" \
-              $REVIEWER_FLAG \
-              --base main
+              --base main)
+            echo "::notice::Created PR ${PR_URL}"
             echo "action=created" >> "$GITHUB_OUTPUT"
+            echo "pr_number=${PR_URL##*/}" >> "$GITHUB_OUTPUT"
           fi
+
+      # ── Auto-merge when every language synced cleanly ───────────────
+      # Waits for the PR's CI checks, then squash-merges. Repo-level
+      # auto-merge is disabled and main has no required checks, so the
+      # wait-and-merge lives here. Integration test checks never gate the
+      # merge: they run against live faucets and Docker and are flaky.
+      # On a gating check failure or timeout the PR stays open for review.
+      - name: Auto-merge when CI passes
+        if: steps.apply.outputs.has_changes == 'true' && steps.apply.outputs.all_clean == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_CLI_PR_TOKEN }}
+          PR_NUMBER: ${{ steps.create-pr.outputs.pr_number }}
+          IGNORED_CHECKS: '^(Integration test|Breez integration tests|Rust CLI binding tests|WASM binding tests)'
+        run: |
+          echo "::notice::All languages synced cleanly. Waiting for CI on PR #${PR_NUMBER}."
+          # Give CI a moment to register its check runs on the fresh push.
+          sleep 60
+          for _ in $(seq 1 118); do
+            CHECKS=$(gh pr checks "$PR_NUMBER" --json name,bucket 2>/dev/null || true)
+            if ! echo "$CHECKS" | jq -e 'type == "array"' > /dev/null 2>&1; then
+              CHECKS='[]'
+            fi
+            GATING=$(echo "$CHECKS" | jq --arg re "$IGNORED_CHECKS" '[.[] | select(.name | test($re) | not)]')
+            TOTAL=$(echo "$GATING" | jq 'length')
+            FAILING=$(echo "$GATING" | jq '[.[] | select(.bucket == "fail" or .bucket == "cancel")] | length')
+            PENDING=$(echo "$GATING" | jq '[.[] | select(.bucket == "pending")] | length')
+            if [ "$FAILING" -gt 0 ]; then
+              echo "::warning::Gating CI checks failed on PR #${PR_NUMBER}. Leaving it open for review."
+              echo "$GATING" | jq -r '.[] | select(.bucket == "fail" or .bucket == "cancel") | "  failed: \(.name)"'
+              exit 0
+            fi
+            if [ "$TOTAL" -gt 0 ] && [ "$PENDING" -eq 0 ]; then
+              gh pr merge "$PR_NUMBER" --squash
+              echo "::notice::PR #${PR_NUMBER} merged."
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::warning::Timed out waiting for CI on PR #${PR_NUMBER}. Leaving it open."
 
       - name: Cleanup branch on failure
         if: failure()
@@ -560,6 +626,7 @@ jobs:
           UPDATED: ${{ steps.apply.outputs.updated }}
           NO_CHANGES: ${{ steps.apply.outputs.no_changes }}
           FAILED: ${{ steps.apply.outputs.failed }}
+          MISSING: ${{ steps.apply.outputs.missing }}
           LANGS: ${{ steps.langs.outputs.list }}
         run: |
           echo "## CLI Sync Summary" >> "$GITHUB_STEP_SUMMARY"
@@ -571,11 +638,13 @@ jobs:
             if echo ",$UPDATED," | grep -q ",${LANG},"; then
               STATUS="Updated"
             elif echo ",$FAILED," | grep -q ",${LANG},"; then
-              STATUS="Failed"
+              STATUS="Patch failed to apply"
             elif echo ",$NO_CHANGES," | grep -q ",${LANG},"; then
               STATUS="No changes"
+            elif echo ",$MISSING," | grep -q ",${LANG},"; then
+              STATUS="Sync failed (excluded)"
             else
-              STATUS="No patch"
+              STATUS="Unknown"
             fi
             echo "| ${LANG} | ${STATUS} |" >> "$GITHUB_STEP_SUMMARY"
           done
