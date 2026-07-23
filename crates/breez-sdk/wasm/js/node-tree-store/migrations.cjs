@@ -178,6 +178,12 @@ class TreeStoreMigrationManager {
                         WHERE reservation_id IS NULL`,
         ],
       },
+      {
+        name: "Keep a leaf no operator reports, for its exit chain",
+        sql: [
+          `ALTER TABLE brz_tree_leaves ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0`,
+        ],
+      },
     ];
   }
 }

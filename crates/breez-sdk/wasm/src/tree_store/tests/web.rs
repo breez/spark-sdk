@@ -391,9 +391,9 @@ async fn test_set_leaves_with_reservations() {
 }
 
 #[wasm_bindgen_test]
-async fn test_shared_ancestor_survives_leaf_deletion() {
-    let store = create_test_tree_store("wtree_test_shared_ancestor_survives_leaf_deletion").await;
-    breez_sdk_spark::tree_store_tests::test_shared_ancestor_survives_leaf_deletion(&store).await;
+async fn test_absent_leaf_keeps_shared_ancestor() {
+    let store = create_test_tree_store("wtree_test_absent_leaf_keeps_shared_ancestor").await;
+    breez_sdk_spark::tree_store_tests::test_absent_leaf_keeps_shared_ancestor(&store).await;
 }
 
 #[wasm_bindgen_test]
@@ -423,12 +423,9 @@ async fn test_store_ancestors_backfills_chain() {
 }
 
 #[wasm_bindgen_test]
-async fn test_stored_chain_survives_refresh_and_dies_with_its_leaf() {
+async fn test_stored_chain_survives_every_refresh() {
     let store = create_test_tree_store("wtree_store_chain_survives").await;
-    breez_sdk_spark::tree_store_tests::test_stored_chain_survives_refresh_and_dies_with_its_leaf(
-        &store,
-    )
-    .await;
+    breez_sdk_spark::tree_store_tests::test_stored_chain_survives_every_refresh(&store).await;
 }
 
 #[wasm_bindgen_test]
@@ -501,9 +498,9 @@ async fn test_try_select_leaves() {
 }
 
 #[wasm_bindgen_test]
-async fn test_unshared_ancestor_deleted_with_leaf() {
-    let store = create_test_tree_store("wtree_test_unshared_ancestor_deleted_with_leaf").await;
-    breez_sdk_spark::tree_store_tests::test_unshared_ancestor_deleted_with_leaf(&store).await;
+async fn test_absent_leaf_is_kept_for_its_exit_chain() {
+    let store = create_test_tree_store("wtree_test_absent_leaf_is_kept_for_its_exit_chain").await;
+    breez_sdk_spark::tree_store_tests::test_absent_leaf_is_kept_for_its_exit_chain(&store).await;
 }
 
 #[wasm_bindgen_test]
