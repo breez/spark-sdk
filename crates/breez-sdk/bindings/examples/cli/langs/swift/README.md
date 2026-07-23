@@ -64,6 +64,7 @@ make clean            Remove build artifacts
 | `--list-labels` | false | Requires `--passkey`. Select label from Nostr |
 | `--store-label` | false | Requires `--passkey`. Publish label to Nostr |
 | `--rpid` | `keys.breez.technology` | Requires `--passkey`. Relying party ID for FIDO2 provider |
+| `--lnurl-domain` | network default | LNURL server domain for lightning address registration; accepts a plain domain or an `http://host:port` test server URL |
 
 ## Environment Variables
 

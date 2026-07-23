@@ -26,6 +26,7 @@ Future<void> runCli({
   BigInt? stableBalanceThreshold,
   CliPasskeyConfig? passkeyConfig,
   bool serverMode = false,
+  String? lnurlDomain,
 }) async {
   await BreezSdkSparkLib.init(externalLibrary: ExternalLibrary.open(_nativeLibPath()));
 
@@ -58,6 +59,10 @@ Future<void> runCli({
         maxSlippageBps: null,
       ),
     );
+  }
+
+  if (lnurlDomain != null) {
+    config = config.copyWith(lnurlDomain: lnurlDomain);
   }
 
   if (networkEnum == Network.mainnet) {

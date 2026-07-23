@@ -121,7 +121,7 @@ func PrintHelp(registry map[string]Command) {
 
 func handleGetInfo(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []string) error {
 	fs := flag.NewFlagSet("get-info", flag.ContinueOnError)
-	ensureSynced := fs.String("s", "", "Force sync (true/false)")
+	ensureSynced := fs.String("e", "", "Force sync (true/false)")
 	fs.StringVar(ensureSynced, "ensure-synced", "", "Force sync (true/false)")
 	if err := fs.Parse(args); err != nil {
 		return err

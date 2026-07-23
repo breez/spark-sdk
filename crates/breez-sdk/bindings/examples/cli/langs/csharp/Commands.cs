@@ -1059,14 +1059,15 @@ public static class Commands
 
     private static async Task HandleRegisterLightningAddress(BreezSdk sdk, Func<string, string?> readline, string[] args)
     {
-        var description = GetFlag(args, "-d", "--description");
         var positional = GetPositionalArgs(args);
 
         if (positional.Length < 1)
         {
-            Console.WriteLine("Usage: register-lightning-address <username> [-d <description>]");
+            Console.WriteLine("Usage: register-lightning-address <username> [<description>]");
             return;
         }
+
+        var description = positional.Length > 1 ? positional[1] : null;
 
         var result = await sdk.RegisterLightningAddress(new RegisterLightningAddressRequest(
             username: positional[0],

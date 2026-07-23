@@ -62,6 +62,7 @@ node src/main.js [OPTIONS]
 | `--store-label` | false | Requires `--passkey`. Publish label to Nostr |
 | `--rpid` | `keys.breez.technology` | Requires `--passkey`. Relying party ID for FIDO2 provider |
 | `--server-mode` | false | Run in server mode (`background_tasks_enabled=false`) |
+| `--lnurl-domain` | network default | LNURL server domain for lightning address registration; accepts a plain domain or an `http://host:port` test server URL |
 
 ### Examples
 

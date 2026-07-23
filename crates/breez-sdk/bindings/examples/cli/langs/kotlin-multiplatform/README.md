@@ -66,6 +66,7 @@ make clean            Remove build artifacts
 | `--store-label` | | Publish the label to Nostr (requires `--passkey` + `--label`) |
 | `--rpid` | | Relying party ID for FIDO2 provider (requires `--passkey`) |
 | `--server-mode` | | Run in server mode (no background tasks) |
+| `--lnurl-domain` | network default | LNURL server domain for lightning address registration; accepts a plain domain or an `http://host:port` test server URL |
 
 ## Environment Variables
 
