@@ -15,20 +15,12 @@ use crate::{
     utils::transactions::is_ephemeral_anchor_output,
 };
 
-/// Statuses where a node still belongs to an exit chain. `OnChain` is kept
-/// (the SO marks a node `ON_CHAIN` once its tx confirms, still mid-exit);
-/// `SplitLocked` is kept because a timelock renewal leaves a permanent
-/// `SplitLocked` node above the renewed leaf that the walk must cross.
-const EXIT_CHAIN_STATUSES: [TreeNodeStatus; 4] = [
-    TreeNodeStatus::Available,
-    TreeNodeStatus::Splitted,
-    TreeNodeStatus::SplitLocked,
-    TreeNodeStatus::OnChain,
-];
-
-/// Returns a leaf's ancestor chain, root → leaf, stopping above any node outside
-/// [`EXIT_CHAIN_STATUSES`]. `Err(parent_id)` names the first ancestor missing
-/// from `node_map` for the caller to re-fetch.
+/// Returns a leaf's ancestor chain, root → leaf. The walk is purely structural:
+/// it crosses a node whatever its status, because what the exit broadcasts is the
+/// pre-signed transaction lineage, not the operator's label for it. An ancestor
+/// that is `TransferLocked`, `RenewLocked` or under `Investigation` still holds an
+/// unspent output whose `node_tx` every node below it spends. `Err(parent_id)`
+/// names the first ancestor missing from `node_map` for the caller to re-fetch.
 pub fn walk_unilateral_exit_chain<'a>(
     node_map: &'a HashMap<TreeNodeId, TreeNode>,
     leaf: &'a TreeNode,
@@ -37,9 +29,6 @@ pub fn walk_unilateral_exit_chain<'a>(
     let mut visited: HashSet<TreeNodeId> = HashSet::new();
     let mut current = leaf;
     loop {
-        if !EXIT_CHAIN_STATUSES.contains(&current.status) {
-            break;
-        }
         // Cycle guard on semi-trusted parent ids. Returning an id already in the
         // map is how a caller tells a cycle from a missing parent.
         if !visited.insert(current.id.clone()) {
@@ -513,6 +502,12 @@ pub fn evaluate_unilateral_exit_leaf_costs(
     let mut covered_txids: HashSet<bitcoin::Txid> = HashSet::new();
 
     for (leaf_id, leaf) in &leaves {
+        // No status gate here on purpose. A leaf's status is the operators' label
+        // for it, not the state of its output: an already-exited leaf still has to
+        // be selectable so a re-run resolves it as swept and drives nothing, and a
+        // locked or degraded one is still perfectly exitable from its stored
+        // transactions. What can and cannot be driven is settled by the on-chain
+        // observation, which sees the real spends.
         let Some(refund_tx) = &leaf.refund_tx else {
             report_unexitable(filter, leaf_id, "no refund transaction")?;
             continue;
@@ -1061,28 +1056,37 @@ mod tests {
             assert_eq!(chain_ids(&chain), vec![ROOT, MID, LEAF]);
         }
 
+        /// The walk is structural, so an ancestor is crossed whatever its status:
+        /// every node below it spends its `node_tx`, so dropping one would build a
+        /// silently unbroadcastable package. `SplitLocked` is the load-bearing case
+        /// (a timelock renewal leaves one permanently above the renewed leaf) and
+        /// `Splitted` is the ordinary intermediate node.
         #[test_all]
-        fn walks_through_split_locked_parent() {
-            let root = node(ROOT, None, TreeNodeStatus::Available);
-            let mid = node(MID, Some(ROOT), TreeNodeStatus::SplitLocked);
-            let leaf = node(LEAF, Some(MID), TreeNodeStatus::Available);
-            let map = node_map(&[&root, &mid, &leaf]);
+        fn walks_through_any_ancestor_status() {
+            for status in [
+                TreeNodeStatus::SplitLocked,
+                TreeNodeStatus::Splitted,
+                TreeNodeStatus::TransferLocked,
+                TreeNodeStatus::RenewLocked,
+                TreeNodeStatus::Investigation,
+                TreeNodeStatus::Lost,
+                TreeNodeStatus::ParentExited,
+                TreeNodeStatus::Exited,
+                TreeNodeStatus::Unknown,
+            ] {
+                let root = node(ROOT, None, TreeNodeStatus::Available);
+                let mid = node(MID, Some(ROOT), status);
+                let leaf = node(LEAF, Some(MID), TreeNodeStatus::Available);
+                let map = node_map(&[&root, &mid, &leaf]);
 
-            let chain = walk_unilateral_exit_chain(&map, &leaf).unwrap();
+                let chain = walk_unilateral_exit_chain(&map, &leaf).unwrap();
 
-            assert_eq!(chain_ids(&chain), vec![ROOT, MID, LEAF]);
-        }
-
-        #[test_all]
-        fn stops_on_non_exit_status() {
-            let root = node(ROOT, None, TreeNodeStatus::Available);
-            let mid = node(MID, Some(ROOT), TreeNodeStatus::Exited);
-            let leaf = node(LEAF, Some(MID), TreeNodeStatus::Available);
-            let map = node_map(&[&root, &mid, &leaf]);
-
-            let chain = walk_unilateral_exit_chain(&map, &leaf).unwrap();
-
-            assert_eq!(chain_ids(&chain), vec![LEAF]);
+                assert_eq!(
+                    chain_ids(&chain),
+                    vec![ROOT, MID, LEAF],
+                    "a {status} ancestor must not truncate the chain"
+                );
+            }
         }
 
         #[test_all]
@@ -1499,6 +1503,45 @@ mod tests {
             )
             .unwrap();
             assert!(sel.is_empty());
+        }
+
+        /// Selection never consults the status. Gating on the operators' label used
+        /// to strand a `TransferLocked` or `Lost` leaf whose pre-signed refund was
+        /// still perfectly broadcastable, and an already-`Exited` one has to stay
+        /// selectable too so re-running a finished exit can resolve it as swept
+        /// instead of failing.
+        #[test_all]
+        fn selects_leaf_in_any_status() {
+            for status in [
+                TreeNodeStatus::Available,
+                TreeNodeStatus::TransferLocked,
+                TreeNodeStatus::SplitLocked,
+                TreeNodeStatus::Splitted,
+                TreeNodeStatus::RenewLocked,
+                TreeNodeStatus::Investigation,
+                TreeNodeStatus::Lost,
+                TreeNodeStatus::OnChain,
+                TreeNodeStatus::Exited,
+                TreeNodeStatus::Aggregated,
+                TreeNodeStatus::Reimbursed,
+                TreeNodeStatus::ParentExited,
+                TreeNodeStatus::Unknown,
+            ] {
+                let mut node = leaf_node("leaf", 1_000_000);
+                node.status = status;
+                let id = node.id.clone();
+                let nodes: HashMap<TreeNodeId, TreeNode> =
+                    [(id.clone(), node)].into_iter().collect();
+
+                let sel = evaluate_unilateral_exit_leaf_costs(
+                    &nodes,
+                    std::slice::from_ref(&id),
+                    &cost_params(),
+                    UnilateralExitLeafFilter::ProfitableOnly,
+                )
+                .unwrap();
+                assert_eq!(sel.len(), 1, "a {status} leaf must stay exitable");
+            }
         }
 
         #[test_all]
