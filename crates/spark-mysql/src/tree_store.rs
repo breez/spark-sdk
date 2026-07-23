@@ -162,6 +162,7 @@ const SLIM_LEAF_CANDIDATES_SQL: &str = r"SELECT id, value
     WHERE user_id = ?
       AND status = 'Available'
       AND is_missing_from_operators = 0
+      AND is_deleted = 0
       AND reservation_id IS NULL
       AND (
         value <= ?
@@ -171,6 +172,7 @@ const SLIM_LEAF_CANDIDATES_SQL: &str = r"SELECT id, value
             WHERE user_id = ?
               AND status = 'Available'
               AND is_missing_from_operators = 0
+              AND is_deleted = 0
               AND reservation_id IS NULL
               AND value > ?
             ORDER BY value
@@ -504,6 +506,7 @@ impl TreeStore for MysqlTreeStore {
                   LEFT JOIN brz_tree_reservations r
                     ON l.reservation_id = r.id AND l.user_id = r.user_id
                   WHERE l.user_id = ?
+                    AND l.is_deleted = 0
                     AND (
                         (l.reservation_id IS NULL AND l.status = 'Available')
                         OR r.purpose = 'Swap'
@@ -532,7 +535,8 @@ impl TreeStore for MysqlTreeStore {
                   FROM brz_tree_leaves l
                   LEFT JOIN brz_tree_reservations r
                     ON l.reservation_id = r.id AND l.user_id = r.user_id
-                  WHERE l.user_id = ?",
+                  WHERE l.user_id = ?
+                    AND l.is_deleted = 0",
                 (self.identity.clone(),),
             )
             .await
@@ -566,7 +570,7 @@ impl TreeStore for MysqlTreeStore {
                   FROM brz_tree_leaves l
                   LEFT JOIN brz_tree_reservations r
                     ON l.reservation_id = r.id AND l.user_id = r.user_id
-                  WHERE l.user_id = ?",
+                  WHERE l.user_id = ? AND l.is_deleted = 0",
                 (self.identity.clone(),),
             )
             .await
@@ -1065,6 +1069,14 @@ impl MysqlTreeStore {
                         signing_public_key = data->>'$.signing_keyshare.public_key'",
                 ),
             ],
+            // Migration 8: Keep a leaf no operator reports rather than removing
+            // it, so the chain that would exit it survives until a spend has
+            // actually been proven.
+            vec![Migration::AddColumn {
+                table: "brz_tree_leaves",
+                column: "is_deleted",
+                definition: "BOOLEAN NOT NULL DEFAULT FALSE",
+            }],
         ]
     }
 
@@ -1238,51 +1250,45 @@ impl MysqlTreeStore {
             spent_ids
         );
 
-        // Ids the delete below is about to remove. MySQL has no RETURNING, so
-        // they are read first and matched against the refresh in Rust.
-        let stale_ids: Vec<String> = tx
-            .exec(
-                "SELECT id FROM brz_tree_leaves \
-                 WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?",
-                (self.identity.clone(), refresh_timestamp.naive_utc()),
-            )
-            .await
-            .map_err(map_err)?;
-
-        // Delete non-reserved leaves added before refresh started. Includes
-        // leaves released earlier in this transaction by
-        // `cleanup_stale_reservations` (which clears `reservation_id`
-        // explicitly because the composite FK uses NO ACTION).
+        // Mark, rather than remove, the non-reserved leaves added before this
+        // refresh started. A leaf no operator reports may still be ours, and its
+        // stored transactions are the only way to exit it, so the row stays, and
+        // its ancestor rows stay with it: the chain is the whole reason for
+        // keeping the leaf. Includes leaves released earlier in this transaction
+        // by `cleanup_stale_reservations` (which clears `reservation_id`
+        // explicitly because the composite FK uses NO ACTION). The upserts below
+        // clear the mark on whatever came back.
         tx.exec_drop(
-            "DELETE FROM brz_tree_leaves WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?",
+            "UPDATE brz_tree_leaves SET is_deleted = 1 \
+             WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?",
             (self.identity.clone(), refresh_timestamp.naive_utc()),
         )
         .await
         .map_err(map_err)?;
 
-        // A chain is only ever removed with its leaf. A leaf the refresh reports
-        // is re-inserted below, so only an id this refresh does not bring back is
-        // truly gone, and in the steady state there is no statement to run.
-        let fresh_ids: HashSet<String> = leaves
-            .iter()
-            .chain(missing_operators_leaves.iter())
-            .map(|leaf| leaf.id.to_string())
-            .collect();
-        let departed: Vec<String> = stale_ids
-            .into_iter()
-            .filter(|id| !fresh_ids.contains(id))
-            .collect();
-        for chunk in departed.chunks(IDS_PER_STATEMENT) {
-            let sql = format!(
-                "DELETE FROM brz_tree_ancestors WHERE user_id = ? AND leaf_id IN ({})",
-                build_placeholders(chunk.len())
-            );
-            let mut params: Vec<Value> = Vec::with_capacity(chunk.len().saturating_add(1));
-            params.push(Value::from(self.identity.clone()));
-            params.extend(chunk.iter().cloned().map(Value::from));
-            tx.exec_drop(&sql, Params::Positional(params))
-                .await
-                .map_err(map_err)?;
+        // A leaf we spent ourselves is the one absence already accounted for, so
+        // it goes for good and takes its ancestor rows with it, in that order so
+        // no ancestor row is ever left without its leaf.
+        let spent_vec: Vec<String> = spent_ids.iter().cloned().collect();
+        for chunk in spent_vec.chunks(IDS_PER_STATEMENT) {
+            let placeholders = build_placeholders(chunk.len());
+            for sql in [
+                format!(
+                    "DELETE FROM brz_tree_ancestors \
+                     WHERE user_id = ? AND leaf_id IN ({placeholders})"
+                ),
+                format!(
+                    "DELETE FROM brz_tree_leaves \
+                     WHERE user_id = ? AND reservation_id IS NULL AND id IN ({placeholders})"
+                ),
+            ] {
+                let mut params: Vec<Value> = Vec::with_capacity(chunk.len().saturating_add(1));
+                params.push(Value::from(self.identity.clone()));
+                params.extend(chunk.iter().cloned().map(Value::from));
+                tx.exec_drop(&sql, Params::Positional(params))
+                    .await
+                    .map_err(map_err)?;
+            }
         }
 
         self.batch_upsert_leaves(&mut tx, leaves.iter(), false, Some(&spent_ids))
@@ -1489,6 +1495,7 @@ impl MysqlTreeStore {
                   WHERE user_id = ?
                     AND status = 'Available'
                     AND is_missing_from_operators = 0
+                    AND is_deleted = 0
                     AND reservation_id IS NULL
                    ",
                 (self.identity.clone(),),
@@ -1627,6 +1634,7 @@ impl MysqlTreeStore {
             "SELECT id FROM brz_tree_leaves \
              WHERE user_id = ? AND id IN ({placeholders}) \
                AND status = 'Available' AND is_missing_from_operators = 0 \
+               AND is_deleted = 0 \
                AND reservation_id IS NULL"
         );
         let mut params: Vec<Value> = Vec::with_capacity(ids.len().saturating_add(1));
@@ -1840,14 +1848,15 @@ impl MysqlTreeStore {
             let mut sql = String::from(
                 "INSERT INTO brz_tree_leaves \
                  (user_id, id, status, is_missing_from_operators, data, \
-                  value, parent_node_id, verifying_public_key, signing_public_key, added_at) VALUES ",
+                  value, parent_node_id, verifying_public_key, signing_public_key, added_at, \
+                  is_deleted) VALUES ",
             );
             let mut params: Vec<Value> = Vec::with_capacity(chunk.len() * 9);
             for (i, &leaf) in chunk.iter().enumerate() {
                 if i > 0 {
                     sql.push_str(", ");
                 }
-                sql.push_str("(?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6))");
+                sql.push_str("(?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6), 0)");
                 #[allow(clippy::cast_possible_wrap)]
                 let value_i64 = leaf.value as i64;
                 params.push(Value::from(self.identity.clone()));
@@ -1871,7 +1880,8 @@ impl MysqlTreeStore {
                     parent_node_id = VALUES(parent_node_id),
                     verifying_public_key = VALUES(verifying_public_key),
                     signing_public_key = VALUES(signing_public_key),
-                    added_at = UTC_TIMESTAMP(6)",
+                    added_at = UTC_TIMESTAMP(6),
+                    is_deleted = 0",
             );
 
             tx.exec_drop(&sql, Params::Positional(params))
@@ -2405,10 +2415,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_stored_chain_survives_refresh_and_dies_with_its_leaf() {
+    async fn test_stored_chain_survives_every_refresh() {
         let fixture = MysqlTreeStoreTestFixture::new().await;
-        shared_tests::test_stored_chain_survives_refresh_and_dies_with_its_leaf(&fixture.store)
-            .await;
+        shared_tests::test_stored_chain_survives_every_refresh(&fixture.store).await;
     }
 
     #[tokio::test]
@@ -2442,15 +2451,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_unshared_ancestor_deleted_with_leaf() {
+    async fn test_absent_leaf_is_kept_for_its_exit_chain() {
         let fixture = MysqlTreeStoreTestFixture::new().await;
-        shared_tests::test_unshared_ancestor_deleted_with_leaf(&fixture.store).await;
+        shared_tests::test_absent_leaf_is_kept_for_its_exit_chain(&fixture.store).await;
     }
 
     #[tokio::test]
-    async fn test_shared_ancestor_survives_leaf_deletion() {
+    async fn test_absent_leaf_keeps_shared_ancestor() {
         let fixture = MysqlTreeStoreTestFixture::new().await;
-        shared_tests::test_shared_ancestor_survives_leaf_deletion(&fixture.store).await;
+        shared_tests::test_absent_leaf_keeps_shared_ancestor(&fixture.store).await;
     }
 
     #[tokio::test]

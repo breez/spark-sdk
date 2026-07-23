@@ -346,6 +346,12 @@ class TreeStoreMigrationManager {
              signing_public_key = data->'signing_keyshare'->>'public_key'`,
         ],
       },
+      {
+        name: "Keep a leaf no operator reports, for its exit chain",
+        sql: [
+          `ALTER TABLE brz_tree_leaves ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE`,
+        ],
+      },
     ];
   }
 }
