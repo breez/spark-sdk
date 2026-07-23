@@ -19,8 +19,8 @@ use crate::{
     token_conversion::{ConversionAmount, DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS},
     utils::{
         payments::{
-            fetch_and_process_payment, insert_payment_with_metadata,
-            resolve_and_insert_payment_metadata,
+            fetch_and_process_payment, insert_payment_metadata_with_cache_fallback,
+            insert_payment_with_metadata, resolve_and_insert_payment_metadata, resolve_payment_id,
         },
         polling::{PollSchedule, poll_until},
     },
@@ -48,10 +48,9 @@ const RECONCILE_MIN_AGE_SECS: u64 = 300;
 const RECONCILE_LISTING_LIMIT: u32 = 100;
 
 /// Returns true when the transfer is older than `cutoff_secs`, i.e. eligible
-/// for clawback. Backend emits RFC 3339; missing or unparseable timestamps
-/// fall back to eligible so reconcile trusts Flashnet's clawback-eligibility
-/// verdict instead of silently no-op'ing on an unexpected format. The
-/// unparseable branch logs at `warn` so operators see format drift.
+/// for clawback. Backend emits RFC 3339; a missing or unparseable timestamp
+/// falls back to eligible, trusting Flashnet's clawback-eligibility verdict
+/// over silently skipping on an unexpected format.
 fn transfer_is_older_than(transfer: &ClawbackTransfer, cutoff_secs: u64) -> bool {
     let Some(created_at) = transfer.created_at.as_deref() else {
         return true;
@@ -67,6 +66,41 @@ fn transfer_is_older_than(transfer: &ClawbackTransfer, cutoff_secs: u64) -> bool
             transfer.id
         );
         true
+    }
+}
+
+/// Builds the `Refunded` metadata for a clawed-back conversion. Carries the
+/// prior AMM fields (`conversion_id`, `fee`, `purpose`, `amount_adjustment`)
+/// forward when present; otherwise emits a placeholder keyed on
+/// `fallback_pool_id` with a fresh `conversion_id` and unset fields.
+fn refunded_info_from_prior(
+    prev: Option<ConversionInfo>,
+    fallback_pool_id: &PublicKey,
+) -> ConversionInfo {
+    match prev {
+        Some(ConversionInfo::Amm {
+            pool_id,
+            conversion_id,
+            fee,
+            purpose,
+            amount_adjustment,
+            ..
+        }) => ConversionInfo::Amm {
+            pool_id,
+            conversion_id,
+            status: ConversionStatus::Refunded,
+            fee,
+            purpose,
+            amount_adjustment,
+        },
+        _ => ConversionInfo::Amm {
+            pool_id: fallback_pool_id.to_string(),
+            conversion_id: uuid::Uuid::now_v7().to_string(),
+            status: ConversionStatus::Refunded,
+            fee: None,
+            purpose: None,
+            amount_adjustment: None,
+        },
     }
 }
 
@@ -183,11 +217,13 @@ impl FlashnetTokenConverter {
                 ));
             }
         };
-        let Some(ConversionInfo::Amm {
-            pool_id,
-            status: ConversionStatus::RefundNeeded,
-            ..
-        }) = conversion_info
+        let Some(
+            info @ ConversionInfo::Amm {
+                pool_id,
+                status: ConversionStatus::RefundNeeded,
+                ..
+            },
+        ) = conversion_info
         else {
             return Err(ConversionError::RefundFailed(
                 "Conversion is not an AMM conversion with refund pending status".into(),
@@ -200,10 +236,15 @@ impl FlashnetTokenConverter {
             "Conversion refund needed for payment {}: pool_id {pool_id}",
             payment.id
         );
-        // payment.id is the storage row id — pass it as the hint so the
-        // shared helper skips the operator round-trip.
-        self.clawback_and_record_refunded(&clawback_id, pool_id, Some(payment.id.clone()))
-            .await
+        // payment.id is the storage row id. Pass the already-loaded conversion
+        // info so the write preserves its fields without re-reading the row.
+        self.clawback_and_record_refunded(
+            &clawback_id,
+            pool_id,
+            Some(payment.id.clone()),
+            Some(info.clone()),
+        )
+        .await
     }
 
     /// Refunds transfers Flashnet flags as clawback-eligible. Catches the
@@ -237,7 +278,12 @@ impl FlashnetTokenConverter {
                 continue;
             }
             match self
-                .clawback_and_record_refunded(&transfer.id, transfer.lp_identity_public_key, None)
+                .clawback_and_record_refunded(
+                    &transfer.id,
+                    transfer.lp_identity_public_key,
+                    None,
+                    None,
+                )
                 .await
             {
                 Ok(true) => res.refunded = res.refunded.saturating_add(1),
@@ -253,16 +299,18 @@ impl FlashnetTokenConverter {
         Ok(res)
     }
 
-    /// Claws back one transfer. `Ok(true)` = Flashnet accepted and the
-    /// local `Refunded` metadata write was attempted (the write itself
-    /// propagates as `Err` on failure; resolution misses are silent).
-    /// `Ok(false)` = Flashnet rejected, local state untouched so the next
-    /// pass retries. Pass `payment_id` when known to skip resolution.
+    /// Claws back one transfer, then records `Refunded` locally while
+    /// preserving the prior AMM fields. `Ok(true)` = Flashnet accepted (a
+    /// failed metadata write is cached for the next sync); `Ok(false)` =
+    /// rejected, local state untouched for a retry; `Err` = the clawback call
+    /// failed (funds not returned). `payment_id` skips row-id resolution;
+    /// `prior_info` skips the metadata re-read.
     async fn clawback_and_record_refunded(
         &self,
         clawback_id: &str,
         pool_id: PublicKey,
         payment_id: Option<String>,
+        prior_info: Option<ConversionInfo>,
     ) -> Result<bool, ConversionError> {
         match self
             .flashnet_client
@@ -279,7 +327,10 @@ impl FlashnetTokenConverter {
                 );
             }
             Ok(r) => {
-                warn!("Clawback for {clawback_id} not accepted: {:?}", r.error);
+                warn!(
+                    "Clawback for {clawback_id} not accepted (request_id={}): {:?}",
+                    r.request_id, r.error
+                );
                 return Ok(false);
             }
             Err(e) => {
@@ -288,65 +339,54 @@ impl FlashnetTokenConverter {
             }
         }
 
-        // Preserve the prior ConversionInfo::Amm fields when we can read it;
-        // fall back to a placeholder when storage has nothing (reconcile path
-        // recovering a row whose original metadata write never landed).
-        let prev_amm = self
-            .storage
-            .get_payment_by_id(
-                payment_id
-                    .clone()
-                    .unwrap_or_else(|| clawback_id.to_string()),
-            )
-            .await
-            .ok()
-            .and_then(|p| crate::utils::conversions::extract_conversion_info(p.details));
-        let conversion_info = match prev_amm {
-            Some(ConversionInfo::Amm {
-                pool_id: prev_pool_id,
-                conversion_id,
-                fee,
-                purpose,
-                amount_adjustment,
-                ..
-            }) => ConversionInfo::Amm {
-                pool_id: prev_pool_id,
-                conversion_id,
-                status: ConversionStatus::Refunded,
-                fee,
-                purpose,
-                amount_adjustment,
-            },
-            _ => ConversionInfo::Amm {
-                pool_id: pool_id.to_string(),
-                conversion_id: uuid::Uuid::now_v7().to_string(),
-                status: ConversionStatus::Refunded,
-                fee: None,
-                purpose: None,
-                amount_adjustment: None,
+        // Resolve the storage row id once. The local path passes it directly;
+        // reconcile resolves it from clawback_id, which for tokens is a bare
+        // tx hash rather than the {hash}:{vout} row id.
+        let resolved_id = match payment_id {
+            Some(id) => Some(id),
+            None => resolve_payment_id(clawback_id, &self.spark_wallet, &self.storage, true)
+                .await
+                .ok(),
+        };
+
+        // Preserve the prior ConversionInfo::Amm fields. Prefer the
+        // caller-supplied info (local path, definitely present); otherwise read
+        // the resolved row. Falls back to a placeholder when neither is present
+        // (reconcile recovering a row whose original metadata write never landed).
+        let prev = match prior_info {
+            Some(info) => Some(info),
+            None => match &resolved_id {
+                Some(id) => self
+                    .storage
+                    .get_payment_by_id(id.clone())
+                    .await
+                    .ok()
+                    .and_then(|p| crate::utils::conversions::extract_conversion_info(p.details)),
+                None => None,
             },
         };
         let metadata = PaymentMetadata {
-            conversion_info: Some(conversion_info),
+            conversion_info: Some(refunded_info_from_prior(prev, &pool_id)),
             ..Default::default()
         };
 
-        // With a payment_id hint, skip resolution and write directly.
-        // Without one, use the shared helper: it resolves (operator round-
-        // trip for tokens) and caches the metadata for the next sync if
-        // resolution fails. That cache fallback covers the otherwise-silent
-        // "clawback accepted server-side, local row unreachable" case.
-        match payment_id {
+        match resolved_id {
             Some(id) => {
-                self.storage
-                    .insert_payment_metadata(id, metadata)
-                    .await
-                    .map_err(|e| {
-                        warn!("Metadata write failed for {clawback_id}: {e}");
-                        ConversionError::from(e)
-                    })?;
+                // Cache the mark under clawback_id (the sync-time identifier) if
+                // the write fails: the clawback already succeeded, so surface
+                // Ok rather than counting a returned refund as failed.
+                insert_payment_metadata_with_cache_fallback(
+                    &self.storage,
+                    id,
+                    clawback_id,
+                    metadata,
+                )
+                .await
+                .map_err(ConversionError::Sdk)?;
             }
             None => {
+                // Row id didn't resolve (row not present locally): cache under
+                // the identifier so the next sync reapplies the mark.
                 resolve_and_insert_payment_metadata(
                     clawback_id,
                     metadata,
@@ -1043,26 +1083,20 @@ impl TokenConverter for FlashnetTokenConverter {
             Err(e) => {
                 warn!("Local refund pass failed: {e}");
                 local_failed = true;
-                RefundPendingConversionsResponse {
-                    failed: 1,
-                    ..Default::default()
-                }
+                RefundPendingConversionsResponse::default()
             }
         };
         let remote = match self.reconcile_with_flashnet().await {
             Ok(r) => r,
             Err(e) => {
                 warn!("Reconcile with Flashnet failed: {e}");
-                // Both passes errored: surface via Err instead of masking
-                // with Ok. Single-pass error stays Ok with `failed += 1`,
-                // since the other pass still produced counts.
+                // Both passes errored: surface via Err. A single-pass error
+                // stays Ok with the other pass's counts; the errored pass
+                // contributes none rather than a phantom per-conversion `failed`.
                 if local_failed {
                     return Err(e);
                 }
-                RefundPendingConversionsResponse {
-                    failed: 1,
-                    ..Default::default()
-                }
+                RefundPendingConversionsResponse::default()
             }
         };
 
@@ -1122,10 +1156,8 @@ mod tests {
         assert!(transfer_is_older_than(&transfer("id-1", None), 0));
     }
 
-    /// Fail-loud, not-quiet: an unrecognised timestamp must still let the
-    /// clawback proceed (with a warn log) instead of being silently bucketed
-    /// as `skipped`. That silent-skip is the exact class of failure this PR
-    /// exists to prevent.
+    /// An unrecognised timestamp must still let the clawback proceed instead
+    /// of being silently bucketed as `skipped`.
     #[test]
     fn unparseable_created_at_is_eligible() {
         assert!(transfer_is_older_than(
@@ -1146,5 +1178,68 @@ mod tests {
         let t = transfer("id-4", Some("2025-09-22T19:09:36.661269+00:00"));
         assert!(transfer_is_older_than(&t, SAMPLE_UNIX_SECS + 1));
         assert!(!transfer_is_older_than(&t, SAMPLE_UNIX_SECS - 1));
+    }
+
+    fn sample_pool_key() -> PublicKey {
+        PublicKey::from_str("02894808873b896e21d29856a6d7bb346fb13c019739adb9bf0b6a8b7e28da53da")
+            .unwrap()
+    }
+
+    /// The clawed-back mark must carry the prior conversion's fields forward,
+    /// flipping only the status. This is the reconcile/local path preserving
+    /// `fee`/`purpose`/`amount_adjustment` instead of overwriting with a placeholder.
+    #[test]
+    fn refunded_info_preserves_prior_amm_fields() {
+        let prior = ConversionInfo::Amm {
+            pool_id: "prior-pool".to_string(),
+            conversion_id: "conv-abc".to_string(),
+            status: ConversionStatus::RefundNeeded,
+            fee: Some(4200),
+            purpose: Some(ConversionPurpose::AutoConversion),
+            amount_adjustment: Some(AmountAdjustmentReason::FlooredToMinLimit),
+        };
+        let ConversionInfo::Amm {
+            pool_id,
+            conversion_id,
+            status,
+            fee,
+            purpose,
+            amount_adjustment,
+        } = refunded_info_from_prior(Some(prior), &sample_pool_key())
+        else {
+            panic!("expected Amm");
+        };
+        assert_eq!(pool_id, "prior-pool");
+        assert_eq!(conversion_id, "conv-abc");
+        assert_eq!(status, ConversionStatus::Refunded);
+        assert_eq!(fee, Some(4200));
+        assert_eq!(purpose, Some(ConversionPurpose::AutoConversion));
+        assert_eq!(
+            amount_adjustment,
+            Some(AmountAdjustmentReason::FlooredToMinLimit)
+        );
+    }
+
+    /// With no prior metadata (row's original write never landed), the mark
+    /// falls back to the placeholder keyed on the passed pool id.
+    #[test]
+    fn refunded_info_falls_back_to_placeholder_when_absent() {
+        let ConversionInfo::Amm {
+            pool_id,
+            conversion_id,
+            status,
+            fee,
+            purpose,
+            amount_adjustment,
+        } = refunded_info_from_prior(None, &sample_pool_key())
+        else {
+            panic!("expected Amm");
+        };
+        assert_eq!(pool_id, sample_pool_key().to_string());
+        assert!(!conversion_id.is_empty());
+        assert_eq!(status, ConversionStatus::Refunded);
+        assert_eq!(fee, None);
+        assert_eq!(purpose, None);
+        assert_eq!(amount_adjustment, None);
     }
 }

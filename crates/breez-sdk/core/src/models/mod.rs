@@ -1171,8 +1171,8 @@ pub struct RefundPendingConversionsResponse {
     /// Conversions intentionally deferred (eligible but held back by a
     /// safety window). The next pass will retry them.
     pub skipped: u32,
-    /// Conversions that did not refund this pass. The next pass will
-    /// retry them.
+    /// Conversions whose clawback did not complete this pass (rejected or
+    /// errored; funds not returned). The next pass will retry them.
     pub failed: u32,
 }
 
