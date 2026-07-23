@@ -145,14 +145,7 @@ jobs:
 
       - name: Restore lnurl server image
         id: lnurl-image
-        uses: actions/cache@v4
-        with:
-          path: /tmp/breez-lnurl-built.tar
-          key: lnurl-image-${{ runner.os }}-${{ hashFiles('crates/breez-sdk/lnurl/**') }}
-
-      - name: Load lnurl server image
-        if: steps.lnurl-image.outputs.cache-hit == 'true'
-        run: docker load -i /tmp/breez-lnurl-built.tar
+        uses: ./.github/actions/lnurl-image-cache
 
       - name: Run Tests
         run: make breez-itest
@@ -180,14 +173,7 @@ jobs:
 
       - name: Restore lnurl server image
         id: lnurl-image
-        uses: actions/cache@v4
-        with:
-          path: /tmp/breez-lnurl-built.tar
-          key: lnurl-image-${{ runner.os }}-${{ hashFiles('crates/breez-sdk/lnurl/**') }}
-
-      - name: Load lnurl server image
-        if: steps.lnurl-image.outputs.cache-hit == 'true'
-        run: docker load -i /tmp/breez-lnurl-built.tar
+        uses: ./.github/actions/lnurl-image-cache
 
       - name: Run CLI scenarios
         run: make cli-itest
@@ -222,14 +208,7 @@ jobs:
 
       - name: Restore lnurl server image
         id: lnurl-image
-        uses: actions/cache@v4
-        with:
-          path: /tmp/breez-lnurl-built.tar
-          key: lnurl-image-${{ runner.os }}-${{ hashFiles('crates/breez-sdk/lnurl/**') }}
-
-      - name: Load lnurl server image
-        if: steps.lnurl-image.outputs.cache-hit == 'true'
-        run: docker load -i /tmp/breez-lnurl-built.tar
+        uses: ./.github/actions/lnurl-image-cache
 
       - name: Run WASM binding tests
         run: make wasm-itest

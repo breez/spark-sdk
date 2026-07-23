@@ -180,14 +180,7 @@ jobs:
       - name: Restore lnurl server image
         if: matrix.scenarios && runner.os == 'Linux'
         id: lnurl-image
-        uses: actions/cache@v4
-        with:
-          path: /tmp/breez-lnurl-built.tar
-          key: lnurl-image-${{ runner.os }}-${{ hashFiles('crates/breez-sdk/lnurl/**') }}
-
-      - name: Load lnurl server image
-        if: matrix.scenarios && runner.os == 'Linux' && steps.lnurl-image.outputs.cache-hit == 'true'
-        run: docker load -i /tmp/breez-lnurl-built.tar
+        uses: ./.github/actions/lnurl-image-cache
 
       # Reuses the local bindings built by the check step. Soft-skips
       # without the faucet secrets (fork PRs).
