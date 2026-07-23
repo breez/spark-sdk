@@ -39,6 +39,9 @@ pub struct WasmPrfProvider {
     /// Cached `createPasskey` presence probe: JS providers may omit
     /// it (only platform passkey backends implement registration).
     supports_create: OnceLock<bool>,
+    /// Cached `supportsImmediateMediation` presence probe: custom
+    /// providers may omit it, in which case it is treated as unsupported.
+    supports_immediate: OnceLock<bool>,
 }
 
 impl WasmPrfProvider {
@@ -46,6 +49,7 @@ impl WasmPrfProvider {
         Self {
             inner,
             supports_create: OnceLock::new(),
+            supports_immediate: OnceLock::new(),
         }
     }
 
@@ -60,6 +64,25 @@ impl WasmPrfProvider {
                     .map(|v| v.is_function())
                     .unwrap_or(false)
         })
+    }
+
+    /// Whether the browser advertises WebAuthn immediate mediation, the
+    /// signal the WASM `PasskeyClient` surfaces as
+    /// `supportsImmediateMediation()`. A provider that omits the method is
+    /// treated as unsupported (`false`); a custom provider opts in by
+    /// implementing it.
+    pub async fn supports_immediate_mediation(&self) -> bool {
+        if !self.js_has_method("supportsImmediateMediation", &self.supports_immediate) {
+            return false;
+        }
+        let Ok(promise) = self.inner.supports_immediate_mediation() else {
+            return false;
+        };
+        JsFuture::from(promise)
+            .await
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
     }
 }
 
@@ -282,6 +305,14 @@ export interface PrfProvider {
      * device. Hosts gate UX on the result.
      */
     isSupported(): Promise<boolean>;
+
+    /**
+     * Optional. Whether the silent single-CTA flow works here (a
+     * no-credential sign-in fast-fails with no UI). Omit to be treated as
+     * unsupported (`false`); the built-in browser provider returns the
+     * WebAuthn immediate-mediation capability.
+     */
+    supportsImmediateMediation?(): Promise<boolean>;
 }
 
 /**
@@ -297,7 +328,9 @@ export interface DeriveSeedOptions {
     allowCredentials?: Uint8Array[];
     /**
      * Fast-fail when no local credential is available. On the web this maps
-     * to WebAuthn `mediation: 'immediate'`: `true` opts in where the browser
+     * to WebAuthn `uiMode: 'immediate'`, used only on the unpinned probe (a
+     * non-empty allowCredentials keeps the standard picker, since a pin means
+     * a credential is already known): `true` opts in where the browser
      * advertises support, `false` uses the standard picker. Unset uses the
      * provider default.
      */
@@ -337,4 +370,9 @@ extern "C" {
         this: &PrfProvider,
         exclude_credentials: JsValue,
     ) -> Result<Promise, JsValue>;
+
+    // Optional method. Custom providers may omit it (then treated as
+    // unsupported); probed with `js_has_method` before invoking.
+    #[wasm_bindgen(structural, method, js_name = "supportsImmediateMediation", catch)]
+    pub fn supports_immediate_mediation(this: &PrfProvider) -> Result<Promise, JsValue>;
 }

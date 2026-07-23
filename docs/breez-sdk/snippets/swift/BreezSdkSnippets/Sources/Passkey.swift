@@ -72,8 +72,14 @@ func connectWithPasskey() async throws -> BreezSdk {
     config.apiKey = "<breez api key>"
 
     let response = try await passkey.connectWithPasskey(
-        request: ConnectWithPasskeyRequest(label: "personal")
+        request: ConnectWithPasskeyRequest()
     )
+
+    if response.labels.count > 1 {
+        // Returning multi-wallet user: let them pick a label, then sign in to it.
+        // let chosen = promptForLabel(response.labels)
+        // return try await passkey.signIn(request: SignInRequest(label: chosen))
+    }
 
     let sdk = try await connect(
         request: ConnectRequest(

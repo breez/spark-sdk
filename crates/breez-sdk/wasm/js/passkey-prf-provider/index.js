@@ -22,10 +22,12 @@ const BREEZ_RP_ID = 'keys.breez.technology';
 /** Default `rpName` for the zero-config {@link PasskeyClient} path. */
 const DEFAULT_RP_NAME = 'Breez';
 
-// WebAuthn collapses "no matching credential" and "user dismissed" into
-// one NotAllowedError, but a no-credential fast-fail resolves before any
-// UI shows while a dismiss takes seconds. Elapsed time below this is
-// classified as no-credential, at or above as user-cancel.
+// A no-credential reject resolves before any UI shows; a dismiss takes
+// seconds. This fast-fail window only applies under immediate UI mode
+// (`uiMode: 'immediate'`): that is the only path where a no-credential
+// reject shows no UI. On the modal path the OS always shows a picker
+// first, so a NotAllowedError there is a dismiss/timeout, never a fast
+// no-credential.
 const NO_CRED_FAST_FAIL_MS = 250;
 
 // iOS and Android tear the biometric sheet down around 55s of inactivity
@@ -285,6 +287,28 @@ export class PasskeyProvider {
     }
 
     /**
+     * Whether the silent single-CTA flow works in this browser: WebAuthn
+     * immediate UI mode (`uiMode: 'immediate'`), probed via
+     * `getClientCapabilities().immediateGet`. The SDK surfaces this on the
+     * WASM client's `supportsImmediateMediation()`; hosts gate single- vs
+     * two-button onboarding on it.
+     *
+     * @returns {Promise<boolean>}
+     */
+    async supportsImmediateMediation() {
+        try {
+            if (typeof PublicKeyCredential === 'undefined'
+                || typeof PublicKeyCredential.getClientCapabilities !== 'function') {
+                return false;
+            }
+            const caps = await PublicKeyCredential.getClientCapabilities();
+            return caps?.immediateGet === true;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
      * Check whether the configured rpId is a valid WebAuthn scope for
      * the current origin (must be a registrable suffix of
      * `window.location.hostname`, or equal to it). Mirrors the browser's
@@ -434,6 +458,26 @@ export class PasskeyProvider {
         }
 
         const requestOptions = { publicKey };
+        // Immediate UI mode: fast-fail with no UI when no credential is
+        // present so a single-CTA host can fall through to register. Only on
+        // the first, unpinned probe (`allowList` empty): immediate mode is
+        // discoverable-only (rejects a non-empty allowCredentials) and spends
+        // the transient activation, which the pinned later ceremonies of a
+        // multi-salt derive no longer have. Once a credential is pinned we
+        // already know one exists, so the modal path (which keeps the pin) is
+        // correct and avoids a second, credential-substituting chooser. Only
+        // where the browser advertises it (`getClientCapabilities().immediateGet`);
+        // the fast NotAllowedError it raises on no-credential is classified as
+        // CredentialNotFound below.
+        if (options.preferImmediatelyAvailableCredentials && allowList.length === 0) {
+            if (await this.supportsImmediateMediation()) {
+                requestOptions.uiMode = 'immediate';
+            } else {
+                // Surface the fallback: silently using standard mediation
+                // hides why a single-CTA probe still shows a sheet.
+                console.debug('breez-sdk: preferImmediatelyAvailableCredentials set but immediate UI mode is unsupported by this browser; using standard mediation');
+            }
+        }
 
         let credential;
         const startedAt = (typeof performance !== 'undefined' && performance.now)
@@ -445,7 +489,7 @@ export class PasskeyProvider {
             const elapsed = ((typeof performance !== 'undefined' && performance.now)
                 ? performance.now()
                 : Date.now()) - startedAt;
-            throw this._mapAssertionError(error, elapsed);
+            throw this._mapAssertionError(error, elapsed, requestOptions.uiMode === 'immediate');
         }
         if (!credential) {
             throw new PasskeyCredentialNotFoundError();
@@ -583,18 +627,24 @@ export class PasskeyProvider {
 
     /**
      * Map a `navigator.credentials.get` failure into a typed error.
-     * `elapsedMs` resolves the `NotAllowedError` ambiguity (cancel vs
-     * no-credential vs timeout, which all share the error) by elapsed
-     * time, since only the cancel path shows dismissable UI.
+     * `elapsedMs` disambiguates the shared `NotAllowedError` (cancel vs
+     * no-credential vs timeout) by time, since only cancel shows UI. The
+     * fast no-credential branch is immediate-only: the modal path shows a
+     * picker first, so its NotAllowedError is a dismiss/timeout.
      * @param {Error} error
      * @param {number} elapsedMs
+     * @param {boolean} [immediate=false]
      * @returns {Error}
      * @private
      */
-    _mapAssertionError(error, elapsedMs) {
+    _mapAssertionError(error, elapsedMs, immediate = false) {
         if (!error) return new Error('Unknown WebAuthn error');
         if (error.name === 'NotAllowedError') {
-            if (elapsedMs < NO_CRED_FAST_FAIL_MS) {
+            // Fast no-credential only under immediate mediation: that's the
+            // only path where a no-credential reject shows no UI. On the
+            // modal path the OS always shows a picker first, so a
+            // NotAllowedError is a dismiss/timeout, not a no-credential.
+            if (immediate && elapsedMs < NO_CRED_FAST_FAIL_MS) {
                 return new PasskeyCredentialNotFoundError();
             }
             if (elapsedMs >= this._cancelVsTimeoutThresholdMs()) {

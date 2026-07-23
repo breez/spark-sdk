@@ -77,8 +77,14 @@ namespace BreezSdkSnippets
             // Single-CTA onboarding: silent sign-in for a returning user,
             // fall-through to register on a fresh device.
             var response = await passkey.ConnectWithPasskey(
-                new ConnectWithPasskeyRequest(label: "personal")
+                new ConnectWithPasskeyRequest()
             );
+
+            if (response.labels.Length > 1)
+            {
+                // Returning multi-wallet user: let them pick a label, then
+                // SignIn to the chosen wallet.
+            }
 
             var config = BreezSdkSparkMethods.DefaultConfig(network: Network.Mainnet);
             var sdk = await BreezSdkSparkMethods.Connect(new ConnectRequest(
