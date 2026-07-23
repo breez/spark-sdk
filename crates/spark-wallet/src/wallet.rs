@@ -16,6 +16,9 @@ use futures::stream::{self, StreamExt};
 use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use platform_utils::tokio;
 use spark::bitcoin::sighash_from_multi_input_tx;
+use spark::ssp::{
+    InstantStaticDepositPlan, InstantStaticDepositQuote, InstantStaticDepositQuoteResult,
+};
 use spark::{
     address::{
         SatsPayment, SparkAddress, SparkAddressPaymentType, SparkInvoiceFields, TokensPayment,
@@ -870,6 +873,34 @@ impl SparkWallet {
         Ok(self
             .deposit_service
             .fetch_static_deposit_claim_quote(tx, output_index)
+            .await?)
+    }
+
+    /// Fetches an instant static deposit quote and its fulfillment plans (one
+    /// per available confirmation profile; `confirmations == 0` is the 0-conf
+    /// path).
+    pub async fn fetch_instant_static_deposit_quote(
+        &self,
+        tx: Transaction,
+        output_index: Option<u32>,
+    ) -> Result<InstantStaticDepositQuoteResult, SparkWalletError> {
+        Ok(self
+            .deposit_service
+            .fetch_instant_static_deposit_quote(tx, output_index)
+            .await?)
+    }
+
+    /// Claims an instant static deposit using a quote and a chosen fulfillment
+    /// plan. Returns the SSP claim id; the resulting transfer settles async.
+    pub async fn claim_instant_static_deposit(
+        &self,
+        tx: Transaction,
+        quote: InstantStaticDepositQuote,
+        plan: InstantStaticDepositPlan,
+    ) -> Result<String, SparkWalletError> {
+        Ok(self
+            .deposit_service
+            .claim_instant_static_deposit(tx, quote, plan)
             .await?)
     }
 

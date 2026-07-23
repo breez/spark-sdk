@@ -87,6 +87,21 @@ namespace BreezSdkSnippets
             // ANCHOR_END: handle-fee-exceeded
         }
 
+        async Task InstantClaim(BreezSdk sdk, DepositInfo deposit)
+        {
+            // ANCHOR: instant-claim
+            // Claim a not-yet-mature deposit instantly (0-conf). Cap it at 4% (400 bps)
+            // of the deposit value.
+            var claimRequest = new ClaimDepositRequest(
+                txid: deposit.txid,
+                vout: deposit.vout,
+                maxFee: null,
+                maxInstantFeeBps: 400
+            );
+            await sdk.ClaimDeposit(request: claimRequest);
+            // ANCHOR_END: instant-claim
+        }
+
         async Task RefundDeposit(BreezSdk sdk)
         {
             // ANCHOR: refund-deposit

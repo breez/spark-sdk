@@ -13,19 +13,22 @@ use tokio::time::sleep;
 use crate::header_provider::HeaderProvider;
 use crate::ssp::graphql::error::{GraphQLError, GraphQLResult};
 use crate::ssp::graphql::queries::{
-    self, claim_static_deposit, complete_coop_exit, coop_exit_fee_quote, delete_wallet_webhook,
-    leaves_swap_fee_estimate, lightning_send_fee_estimate, register_wallet_webhook,
-    request_coop_exit, request_lightning_receive, request_lightning_send, request_swap,
-    static_deposit_quote, transfers, user_request, wallet_webhooks,
+    self, claim_static_deposit, complete_coop_exit, coop_exit_fee_quote,
+    create_claim_instant_static_deposit, create_instant_static_deposit_quote,
+    delete_wallet_webhook, leaves_swap_fee_estimate, lightning_send_fee_estimate,
+    register_wallet_webhook, request_coop_exit, request_lightning_receive, request_lightning_send,
+    request_swap, static_deposit_quote, transfers, user_request, wallet_webhooks,
 };
 use crate::ssp::graphql::{
     BitcoinNetwork, ClaimStaticDeposit, CoopExitRequest, CurrencyAmount, GraphQLClientConfig,
-    LeavesSwapRequest, LightningReceiveRequest, LightningSendRequest, SparkWalletWebhookEventType,
-    StaticDepositQuote, WebhookEntry,
+    InstantStaticDepositClaim, InstantStaticDepositQuoteResult, LeavesSwapRequest,
+    LightningReceiveRequest, LightningSendRequest, SparkWalletWebhookEventType, StaticDepositQuote,
+    WebhookEntry,
 };
 use crate::ssp::{
-    ClaimStaticDepositInput, CoopExitFeeQuote, RequestCoopExitInput, RequestLightningReceiveInput,
-    RequestLightningSendInput, RequestSwapInput, RetryConfig, SspTransfer,
+    ClaimStaticDepositInput, CoopExitFeeQuote, CreateClaimInstantStaticDepositInput,
+    RequestCoopExitInput, RequestLightningReceiveInput, RequestLightningSendInput,
+    RequestSwapInput, RetryConfig, SspTransfer,
 };
 
 pub(crate) async fn post_graphql_query<Q: GraphQLQuery, T>(
@@ -437,6 +440,42 @@ impl GraphQLClient {
             .await?;
 
         Ok(response.claim_static_deposit.into())
+    }
+
+    /// Get an instant static deposit quote and its fulfillment plans.
+    pub async fn get_instant_static_deposit_quote(
+        &self,
+        transaction_id: String,
+        output_index: u32,
+        network: BitcoinNetwork,
+    ) -> GraphQLResult<InstantStaticDepositQuoteResult> {
+        let vars = create_instant_static_deposit_quote::Variables {
+            input: create_instant_static_deposit_quote::CreateInstantStaticDepositQuoteInput {
+                transaction_id,
+                output_index: output_index as i64,
+                network,
+            },
+        };
+
+        let response = self
+            .post_query::<queries::CreateInstantStaticDepositQuote, _>(vars)
+            .await?;
+
+        Ok(response.create_instant_static_deposit_quote.into())
+    }
+
+    /// Claim an instant static deposit for a chosen fulfillment plan.
+    pub async fn claim_instant_static_deposit(
+        &self,
+        input: CreateClaimInstantStaticDepositInput,
+    ) -> GraphQLResult<InstantStaticDepositClaim> {
+        let vars = create_claim_instant_static_deposit::Variables { input };
+
+        let response = self
+            .post_query::<queries::CreateClaimInstantStaticDeposit, _>(vars)
+            .await?;
+
+        Ok(response.create_claim_instant_static_deposit.into())
     }
 
     /// Get transfers by IDs

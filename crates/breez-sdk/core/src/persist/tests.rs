@@ -1408,6 +1408,49 @@ pub async fn test_deposit_refunds(storage: Box<dyn Storage>) {
     );
 }
 
+pub async fn test_instant_claim_attempted(storage: Box<dyn Storage>) {
+    // A freshly-added deposit has not had a 0-conf claim attempted.
+    storage
+        .add_deposit("tx_instant".to_string(), 0, 100_000, false)
+        .await
+        .unwrap();
+    let deposits = storage.list_deposits().await.unwrap();
+    assert_eq!(deposits.len(), 1);
+    assert!(!deposits[0].instant_claim_attempted);
+
+    // Marking the attempt persists it.
+    storage
+        .update_deposit(
+            "tx_instant".to_string(),
+            0,
+            UpdateDepositPayload::InstantClaimAttempted,
+        )
+        .await
+        .unwrap();
+    let deposits = storage.list_deposits().await.unwrap();
+    assert_eq!(deposits.len(), 1);
+    assert!(deposits[0].instant_claim_attempted);
+
+    // Re-observing the UTXO (the syncer upserts is_mature/amount) must preserve
+    // the marker, otherwise the 0-conf attempt would repeat every sync.
+    storage
+        .add_deposit("tx_instant".to_string(), 0, 100_000, true)
+        .await
+        .unwrap();
+    let deposits = storage.list_deposits().await.unwrap();
+    assert_eq!(deposits.len(), 1);
+    assert!(deposits[0].is_mature);
+    assert!(
+        deposits[0].instant_claim_attempted,
+        "instant_claim_attempted must survive an add_deposit upsert"
+    );
+
+    storage
+        .delete_deposit("tx_instant".to_string(), 0)
+        .await
+        .unwrap();
+}
+
 pub async fn test_payment_type_filtering(storage: Box<dyn Storage>) {
     // Create test payments with different types
     let send_payment = Payment {

@@ -73,6 +73,7 @@ pub enum UpdateDepositPayload {
         refund_txid: String,
         refund_tx: String,
     },
+    InstantClaimAttempted,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

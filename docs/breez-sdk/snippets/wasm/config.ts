@@ -19,6 +19,13 @@ const exampleConfigureSdk = async () => {
   // with a leeway of 1 sats/vbyte
   config.maxDepositClaimFee = { type: 'networkRecommended', leewaySatPerVbyte: 1 }
   // ANCHOR_END: max-deposit-claim-fee
+
+  // ANCHOR: max-instant-deposit-claim-fee
+  // Opt into instant (0-conf) deposit claims, paying at most 4% (400 bps) of
+  // the deposit value as the SSP spread. Small deposits fall through to the
+  // normal claim.
+  config.maxInstantDepositClaimFeeBps = 400
+  // ANCHOR_END: max-instant-deposit-claim-fee
   console.log('Config:', config)
 }
 

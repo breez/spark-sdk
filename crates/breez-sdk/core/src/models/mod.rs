@@ -594,6 +594,12 @@ pub struct Config {
     // If not set then any fee is allowed
     pub max_deposit_claim_fee: Option<MaxFee>,
 
+    /// Maximum instant (0-conf) static deposit claim fee, as basis points of the
+    /// deposit value (100 bps = 1%), capping the SSP spread for the instant
+    /// credit. Opt-in: while unset, no 0-conf claim is attempted. Small deposits,
+    /// whose spread is proportionally larger, fall through to the normal claim.
+    pub max_instant_deposit_claim_fee_bps: Option<u32>,
+
     /// The domain used for receiving through lnurl-pay and lightning address.
     pub lnurl_domain: Option<String>,
 
@@ -1096,6 +1102,7 @@ pub struct DepositInfo {
     pub refund_tx: Option<String>,
     pub refund_tx_id: Option<String>,
     pub claim_error: Option<DepositClaimError>,
+    pub instant_claim_attempted: bool,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -1104,12 +1111,20 @@ pub struct ClaimDepositRequest {
     pub vout: u32,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub max_fee: Option<MaxFee>,
+    /// Set to request an instant (0-conf) claim instead of waiting for the
+    /// deposit to mature, bounding the SSP spread at this many basis points of
+    /// the deposit value (100 bps = 1%).
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub max_instant_fee_bps: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ClaimDepositResponse {
-    pub payment: Payment,
+    /// The settled claim payment. Present for a standard claim, which completes
+    /// synchronously. Absent for an instant claim, whose transfer settles
+    /// asynchronously: watch for the payment via events or `list_payments`.
+    pub payment: Option<Payment>,
 }
 
 #[derive(Debug, Clone, Serialize)]

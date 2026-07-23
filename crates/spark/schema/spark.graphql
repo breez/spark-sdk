@@ -355,18 +355,24 @@ input CreateClaimInstantStaticDepositInput {
   static_deposit_quote_id: ID!
 
   """
-  The user's private key share for the static deposit address. This key share is used in combination with Spark operator key shares to create the final signature for the spend transaction.
+  The user's private key share for the static deposit address, in cleartext hex. Provide this or its encrypted counterpart. This key share is used in combination with Spark operator key shares to create the final signature for the spend transaction.
   """
-  static_deposit_address_private_key_share: String!
+  static_deposit_address_private_key_share: String = null
 
   """
-  The user's signature authorizing the static deposit claim. This is a hex-encoded ECDSA signature that proves the user's authorization to claim the deposit. The signature should be created by signing a message containing the claim details (transaction ID, output index, network, and credit amount) with the user's identity private key. This signature is used to authenticate the claim request and prevent unauthorized access to the deposit funds.
+  The user's private key share for the static deposit address, ECIES-encrypted to the SSP identity public key (hex). Preferred over the cleartext field.
+  """
+  encrypted_static_deposit_address_private_key_share: String = null
+
+  """
+  The user's signature authorizing the static deposit claim. This is a hex-encoded ECDSA signature that proves the user's authorization to claim the deposit. The signature should be created by signing the claim user statement with the user's identity private key. This signature is used to authenticate the claim request and prevent unauthorized access to the deposit funds.
   """
   signature: String!
 }
 
 type CreateClaimInstantStaticDepositOutput {
-  stub: Int!
+  """The identifier of the instant static deposit claim."""
+  claim_id: UUID!
 }
 
 input CreateInstantStaticDepositQuoteInput {
@@ -381,8 +387,36 @@ input CreateInstantStaticDepositQuoteInput {
 }
 
 type CreateInstantStaticDepositQuoteOutput {
-  """A stub field."""
-  stub: Int!
+  """The instant static deposit quote."""
+  quote: StaticDepositQuote!
+
+  """The available fulfillment plans for claiming the deposit."""
+  fulfillment_plans: [StaticDepositPlan!]!
+}
+
+"""A fulfillment plan for claiming a static deposit."""
+type StaticDepositPlan {
+  """The unique identifier of the plan."""
+  id: ID!
+
+  """The plan amount."""
+  amount: CurrencyAmount!
+
+  """The number of confirmations required for this plan (0 is the instant path)."""
+  confirmations: Int!
+
+  """The status of the plan."""
+  status: StaticDepositPlanStatus!
+
+  """The spark id of the resulting transfer, if any."""
+  transfer_spark_id: UUID
+}
+
+"""The status of a static deposit fulfillment plan."""
+enum StaticDepositPlanStatus {
+  CREATED
+  PENDING
+  COMPLETED
 }
 
 """This object represents the value and unit for an amount of currency."""

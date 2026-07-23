@@ -84,6 +84,24 @@ class RefundingPayments {
         // ANCHOR_END: handle-fee-exceeded
     }
 
+    suspend fun instantClaim(sdk: BreezSdk, deposit: DepositInfo) {
+        // ANCHOR: instant-claim
+        // Claim a not-yet-mature deposit instantly (0-conf). Cap it at 4% (400 bps)
+        // of the deposit value.
+        try {
+            val claimRequest = ClaimDepositRequest(
+                txid = deposit.txid,
+                vout = deposit.vout,
+                maxFee = null,
+                maxInstantFeeBps = 400u
+            )
+            sdk.claimDeposit(claimRequest)
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: instant-claim
+    }
+
     suspend fun refundDeposit(sdk: BreezSdk) {
         // ANCHOR: refund-deposit
         try {
