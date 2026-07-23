@@ -1196,6 +1196,12 @@ pub enum UnsignedTransferPackage {
         fee: u128,
         is_swap: bool,
     },
+    TokenBatch {
+        prepare_token_transaction: crate::signer::ExternalPrepareTokenTransactionRequest,
+        token_context: Vec<u8>,
+        totals: Vec<TokenBatchTotal>,
+        is_swap: bool,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::TransferTarget)]
@@ -1309,6 +1315,53 @@ pub struct SendPaymentRequest {
     pub idempotency_key: Option<String>,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TokenBatchRecipient)]
+pub struct TokenBatchRecipient {
+    pub destination: String,
+    pub amount: Option<u128>,
+    pub token_identifier: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendTokenBatchRequest)]
+pub struct PrepareSendTokenBatchRequest {
+    pub recipients: Vec<TokenBatchRecipient>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ResolvedTokenBatchRecipient)]
+pub struct ResolvedTokenBatchRecipient {
+    pub destination: String,
+    pub amount: u128,
+    pub token_identifier: String,
+    pub invoice_details: Option<SparkInvoiceDetails>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TokenBatchTotal)]
+pub struct TokenBatchTotal {
+    pub token_identifier: String,
+    pub amount: u128,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendTokenBatchResponse)]
+pub struct PrepareSendTokenBatchResponse {
+    pub recipients: Vec<ResolvedTokenBatchRecipient>,
+    pub totals: Vec<TokenBatchTotal>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SendTokenBatchRequest)]
+pub struct SendTokenBatchRequest {
+    pub prepare_response: PrepareSendTokenBatchResponse,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SendTokenBatchResponse)]
+pub struct SendTokenBatchResponse {
+    pub payments: Vec<Payment>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BuildUnsignedTokenBatchPackageRequest)]
+pub struct BuildUnsignedTokenBatchPackageRequest {
+    pub prepare_response: PrepareSendTokenBatchResponse,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PublishSignedTransferPackageRequest)]
 pub struct PublishSignedTransferPackageRequest {
     pub signed_package: SignedTransferPackage,
@@ -1319,6 +1372,7 @@ pub struct PublishSignedTransferPackageRequest {
 pub enum PublishSignedTransferPackageResponse {
     SwapCompleted,
     PaymentSent { payment: Payment },
+    PaymentsSent { payments: Vec<Payment> },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendPaymentResponse)]

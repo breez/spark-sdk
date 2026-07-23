@@ -58,6 +58,28 @@ async fn sign_package(
                     .await?,
             }
         }
+        UnsignedTransferPackage::TokenBatch {
+            prepare_token_transaction,
+            totals,
+            is_swap,
+            ..
+        } => {
+            if *is_swap {
+                info!("Approve combining token outputs before the batch is sent");
+            } else {
+                for total in totals {
+                    info!(
+                        "Approve sending {} of token {}",
+                        total.amount, total.token_identifier
+                    );
+                }
+            }
+            TransferSignature::Token {
+                signed: signer
+                    .prepare_token_transaction(prepare_token_transaction.clone())
+                    .await?,
+            }
+        }
     };
 
     let signed_package = SignedTransferPackage {
@@ -104,6 +126,10 @@ async fn send_with_client_signing(
             PublishSignedTransferPackageResponse::SwapCompleted => continue,
             PublishSignedTransferPackageResponse::PaymentSent { payment } => {
                 return Ok(payment);
+            }
+            // Only a batch package pays several recipients at once
+            PublishSignedTransferPackageResponse::PaymentsSent { .. } => {
+                anyhow::bail!("unexpected batch response for a single payment")
             }
         }
     }

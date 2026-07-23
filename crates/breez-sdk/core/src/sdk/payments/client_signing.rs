@@ -1,16 +1,18 @@
 use spark_wallet::{
     CoopExitFeeQuote, ExitSpeed, PreparedTokenPackage, SendPackagePreparation, SparkAddress,
-    TransferTokenOutput,
+    TokenRecipient,
 };
 
 use crate::{
     BitcoinAddressDetails, FeePolicy, SendOnchainFeeQuote,
     error::SdkError,
     models::{
-        BuildTransferPackageOptions, PrepareSendPaymentResponse, SendPaymentMethod,
-        SignedTransferPackage, TransferSignature, TransferTarget, UnsignedTransferPackage,
+        BuildTransferPackageOptions, PrepareSendPaymentResponse, PrepareSendTokenBatchResponse,
+        SendPaymentMethod, SignedTransferPackage, TransferSignature, TransferTarget,
+        UnsignedTransferPackage,
     },
     sdk::BreezSdk,
+    sdk::payments::send,
     signer::{
         ExternalPrepareTokenTransactionRequest, ExternalPrepareTransferRequest,
         ExternalTokenTransactionKind,
@@ -248,6 +250,36 @@ async fn build_lightning_package(
     )
 }
 
+pub(in crate::sdk::payments) async fn build_unsigned_token_batch_package(
+    sdk: &BreezSdk,
+    prepare_response: &PrepareSendTokenBatchResponse,
+) -> Result<UnsignedTransferPackage, SdkError> {
+    let recipients = send::token_batch::to_token_recipients(&prepare_response.recipients)?;
+    let prepared = sdk
+        .spark_wallet
+        .prepare_token_package(recipients, None, None)
+        .await?;
+    // A consolidation package re-shapes the wallet's outputs rather than paying
+    // the recipients, so it carries no totals to display. It is exposed as a
+    // swap: publishing it returns SwapCompleted, like the single-recipient flow.
+    let (prepared, is_swap, totals) = match prepared {
+        PreparedTokenPackage::Ready(pt) => (pt, false, prepare_response.totals.clone()),
+        PreparedTokenPackage::Consolidation(pt) => (pt, true, Vec::new()),
+    };
+    let digest = prepared.partial_token_transaction_hash.clone();
+    let token_context = serde_json::to_vec(&prepared)
+        .map_err(|e| SdkError::Generic(format!("Failed to serialize token transfer: {e}")))?;
+    Ok(UnsignedTransferPackage::TokenBatch {
+        prepare_token_transaction: ExternalPrepareTokenTransactionRequest {
+            kind: ExternalTokenTransactionKind::Partial,
+            digest,
+        },
+        token_context,
+        totals,
+        is_swap,
+    })
+}
+
 async fn build_token_package(
     sdk: &BreezSdk,
     receiver: &str,
@@ -256,27 +288,24 @@ async fn build_token_package(
     amount: u128,
     fee: u128,
 ) -> Result<UnsignedTransferPackage, SdkError> {
-    let prepared = if let Some(invoice) = spark_invoice {
-        sdk.spark_wallet
-            .prepare_spark_invoice_token_package(&invoice, Some(amount))
-            .await?
+    let recipient = if let Some(invoice) = spark_invoice {
+        TokenRecipient::Invoice {
+            invoice,
+            amount: Some(amount),
+        }
     } else {
-        let spark_address = receiver
-            .parse::<SparkAddress>()
-            .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?;
-        sdk.spark_wallet
-            .prepare_token_package(
-                vec![TransferTokenOutput {
-                    token_id: token_identifier.clone(),
-                    amount,
-                    receiver_address: spark_address,
-                    spark_invoice: None,
-                }],
-                None,
-                None,
-            )
-            .await?
+        TokenRecipient::Address {
+            token_id: token_identifier.clone(),
+            amount,
+            receiver_address: receiver
+                .parse::<SparkAddress>()
+                .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?,
+        }
     };
+    let prepared = sdk
+        .spark_wallet
+        .prepare_token_package(vec![recipient], None, None)
+        .await?;
     // A consolidation package re-shapes the wallet's outputs rather than paying
     // the receiver, so it carries no send amount or fee to display. It is exposed
     // as a swap: publishing it returns SwapCompleted, like the sats flow.

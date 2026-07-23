@@ -404,49 +404,26 @@ impl SparkWallet {
         .await
     }
 
+    /// Prepares a single package paying the given recipients, for external signing.
+    ///
+    /// The recipients may mix Spark addresses with Spark invoices and span
+    /// several token ids. Sats invoices are not accepted: a sats payment moves
+    /// leaves rather than token outputs and cannot share a transaction.
     pub async fn prepare_token_package(
         &self,
-        outputs: Vec<TransferTokenOutput>,
+        recipients: Vec<TokenRecipient>,
         selected_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<PreparedTokenPackage, SparkWalletError> {
-        if outputs.iter().any(|o| o.spark_invoice.is_some()) {
-            return Err(SparkWalletError::Generic(
-                "Spark invoices are not supported for token transfers. Use the `fulfill_spark_invoice` method instead.".to_string(),
-            ));
-        }
-
-        if !self.config.self_payment_allowed
-            && outputs
-                .iter()
-                .any(|o| o.receiver_address.identity_public_key == self.identity_public_key)
-        {
-            return Err(SparkWalletError::SelfPaymentNotAllowed);
-        }
-
+        let (outputs, execute_before_unix_micros) = self.resolve_recipients(recipients)?;
         let prepared = self
             .token_service
-            .prepare_token_transfer(outputs, selected_outputs, selection_strategy, None)
-            .await?;
-        Ok(prepared)
-    }
-
-    pub async fn prepare_spark_invoice_token_package(
-        &self,
-        invoice_str: &str,
-        amount: Option<u128>,
-    ) -> Result<PreparedTokenPackage, SparkWalletError> {
-        let invoice = self.parse_and_validate_spark_invoice(invoice_str)?;
-        if !self.config.self_payment_allowed
-            && invoice.identity_public_key == self.identity_public_key
-        {
-            return Err(SparkWalletError::SelfPaymentNotAllowed);
-        }
-        let (output, execute_before_unix_micros) =
-            token_output_from_invoice(&invoice, invoice_str, amount)?;
-        let prepared = self
-            .token_service
-            .prepare_token_transfer(vec![output], None, None, execute_before_unix_micros)
+            .prepare_token_transfer(
+                outputs,
+                selected_outputs,
+                selection_strategy,
+                execute_before_unix_micros,
+            )
             .await?;
         Ok(prepared)
     }

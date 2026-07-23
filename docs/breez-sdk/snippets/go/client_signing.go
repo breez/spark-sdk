@@ -1,6 +1,7 @@
 package example
 
 import (
+	"errors"
 	"log"
 	"math/big"
 
@@ -61,6 +62,23 @@ func SignPackage(
 				pkg.TokenIdentifier,
 				pkg.Fee,
 			)
+		}
+		signed, err := signer.PrepareTokenTransaction(pkg.PrepareTokenTransaction)
+		if err != nil {
+			return breez_sdk_spark.SignedTransferPackage{}, err
+		}
+		signature = breez_sdk_spark.TransferSignatureToken{Signed: signed}
+	case breez_sdk_spark.UnsignedTransferPackageTokenBatch:
+		if pkg.IsSwap {
+			log.Printf("Approve combining token outputs before the batch is sent")
+		} else {
+			for _, total := range pkg.Totals {
+				log.Printf(
+					"Approve sending %v of token %v",
+					total.Amount,
+					total.TokenIdentifier,
+				)
+			}
 		}
 		signed, err := signer.PrepareTokenTransaction(pkg.PrepareTokenTransaction)
 		if err != nil {
@@ -128,6 +146,9 @@ func SendWithClientSigning(
 			continue
 		case breez_sdk_spark.PublishSignedTransferPackageResponsePaymentSent:
 			return &result.Payment, nil
+		// Only a batch package pays several recipients at once
+		case breez_sdk_spark.PublishSignedTransferPackageResponsePaymentsSent:
+			return nil, errors.New("unexpected batch response for a single payment")
 		}
 	}
 	// ANCHOR_END: client-signing-send

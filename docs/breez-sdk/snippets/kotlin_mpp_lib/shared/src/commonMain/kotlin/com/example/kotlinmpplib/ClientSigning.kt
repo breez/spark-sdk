@@ -42,6 +42,19 @@ class ClientSigning {
                     signer.prepareTokenTransaction(unsigned.prepareTokenTransaction)
                 )
             }
+            is UnsignedTransferPackage.TokenBatch -> {
+                if (unsigned.isSwap) {
+                    // Log.v("Breez", "Approve combining token outputs before the batch is sent")
+                } else {
+                    for (total in unsigned.totals) {
+                        // Log.v("Breez", "Approve sending ${total.amount} of token " +
+                        //     "${total.tokenIdentifier}")
+                    }
+                }
+                TransferSignature.Token(
+                    signer.prepareTokenTransaction(unsigned.prepareTokenTransaction)
+                )
+            }
         }
 
         val signedPackage = SignedTransferPackage(unsigned, signature)
@@ -79,6 +92,9 @@ class ClientSigning {
                 // The wallet's funds were re-shaped first: build the payment again
                 is PublishSignedTransferPackageResponse.SwapCompleted -> continue
                 is PublishSignedTransferPackageResponse.PaymentSent -> return result.payment
+                // Only a batch package pays several recipients at once
+                is PublishSignedTransferPackageResponse.PaymentsSent ->
+                    throw IllegalStateException("unexpected batch response for a single payment")
             }
         }
         // ANCHOR_END: client-signing-send

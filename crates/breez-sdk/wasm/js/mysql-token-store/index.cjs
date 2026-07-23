@@ -66,6 +66,60 @@ function buildPlaceholders(n) {
   return new Array(n).fill("?").join(", ");
 }
 
+function buildPairPlaceholders(n) {
+  return new Array(n).fill("(?, ?)").join(", ");
+}
+
+/**
+ * Groups outputs by the token each one names, keeping first-seen token order.
+ * @param {Array<Object>} outputs
+ * @returns {Array<[string, Array<Object>]>}
+ */
+function _groupOutputsByToken(outputs) {
+  const grouped = new Map();
+  for (const output of outputs ?? []) {
+    const identifier = output.output.tokenIdentifier;
+    if (!grouped.has(identifier)) {
+      grouped.set(identifier, []);
+    }
+    grouped.get(identifier).push(output);
+  }
+  return Array.from(grouped.entries());
+}
+
+/**
+ * The metadata entry describing `identifier`, or null when absent.
+ */
+function _metadataFor(metadata, identifier) {
+  return (metadata ?? []).find((m) => m.identifier === identifier) ?? null;
+}
+
+/** The distinct token identifiers the outputs belong to, in first-seen order. */
+function _tokenIdentifiersOf(outputs) {
+  return Array.from(new Set(outputs.map((o) => o.output.tokenIdentifier)));
+}
+
+/**
+ * Rejects reservation targets that can never be satisfied.
+ * @param {Array<[string, {type: string, value: string|number}]>} targets
+ */
+function _validateTargets(targets) {
+  if (!targets || targets.length === 0) {
+    throw new TokenStoreError("No reservation targets provided");
+  }
+  for (const [, target] of targets) {
+    if (
+      target.type === "minTotalValue" &&
+      (!target.value || target.value === "0")
+    ) {
+      throw new TokenStoreError("Amount to reserve must be greater than zero");
+    }
+    if (target.type === "maxOutputCount" && !target.value) {
+      throw new TokenStoreError("Count to reserve must be greater than zero");
+    }
+  }
+}
+
 class MysqlTokenStore {
   /**
    * @param {import('mysql2/promise').Pool} pool
@@ -190,6 +244,13 @@ class MysqlTokenStore {
 
   // ===== TokenOutputStore Methods =====
 
+  /**
+   * Set the full set of token outputs, reconciling reservations.
+   * @param {{metadata: Array<Object>, outputs: Array<Object>}} tokenOutputs - A flat
+   *   output list that may span several tokens, plus one metadata entry per token
+   *   the outputs name.
+   * @param {number} refreshStartedAtMs - Milliseconds since epoch when the refresh started
+   */
   async setTokensOutputs(tokenOutputs, refreshStartedAtMs) {
     try {
       const refreshTimestamp = new Date(refreshStartedAtMs);
@@ -238,12 +299,9 @@ class MysqlTokenStore {
           [this.identity, refreshTimestamp]
         );
 
-        const incomingOutpoints = new Set();
-        for (const to of tokenOutputs) {
-          for (const o of to.outputs) {
-            incomingOutpoints.add(`${o.prevTxHash}:${o.prevTxVout}`);
-          }
-        }
+        const incomingOutpoints = new Set(
+          tokenOutputs.outputs.map((o) => `${o.prevTxHash}:${o.prevTxVout}`)
+        );
 
         const [reservedRows] = await conn.query(
           `SELECT r.id, o.prev_tx_hash, o.prev_tx_vout
@@ -339,19 +397,25 @@ class MysqlTokenStore {
           [this.identity, this.identity]
         );
 
-        for (const to of tokenOutputs) {
-          await this._upsertMetadata(conn, to.metadata);
+        for (const [tokenIdentifier, outputs] of _groupOutputsByToken(
+          tokenOutputs.outputs
+        )) {
+          const metadata = _metadataFor(tokenOutputs.metadata, tokenIdentifier);
+          if (!metadata) {
+            this._log(
+              "warn",
+              `Skipping outputs of token ${tokenIdentifier}: no metadata provided`
+            );
+            continue;
+          }
+          await this._upsertMetadata(conn, metadata);
 
-          for (const output of to.outputs) {
+          for (const output of outputs) {
             const outpoint = `${output.prevTxHash}:${output.prevTxVout}`;
             if (reservedOutpoints.has(outpoint) || spentOutpoints.has(outpoint)) {
               continue;
             }
-            await this._insertSingleOutput(
-              conn,
-              to.metadata.identifier,
-              output
-            );
+            await this._insertSingleOutput(conn, tokenIdentifier, output);
           }
         }
       });
@@ -547,7 +611,9 @@ class MysqlTokenStore {
   /**
    * Atomically remove spent outputs and insert new outputs.
    * @param {Array<[string, number]>} outputsToRemove - Array of [prevTxHash, prevTxVout] tuples
-   * @param {Object|null} outputsToAdd - Token outputs to insert (with metadata)
+   * @param {{metadata: Array<Object>, outputs: Array<Object>}} outputsToAdd - A flat
+   *   output list that may span several tokens, plus one metadata entry per token
+   *   the outputs name.
    * @returns {Promise<void>}
    */
   async updateTokenOutputs(outputsToRemove, outputsToAdd) {
@@ -571,30 +637,34 @@ class MysqlTokenStore {
           }
         }
 
-        // 2. Insert new outputs.
-        if (outputsToAdd) {
-          await this._upsertMetadata(conn, outputsToAdd.metadata);
-
-          if (outputsToAdd.outputs.length > 0) {
-            const pairPlaceholders = outputsToAdd.outputs
-              .map(() => "(?, ?)")
-              .join(", ");
-            const params = [this.identity];
-            for (const o of outputsToAdd.outputs) {
-              params.push(o.prevTxHash, o.prevTxVout);
-            }
-            await conn.query(
-              `DELETE FROM brz_token_spent_outputs WHERE user_id = ? AND (prev_tx_hash, prev_tx_vout) IN (${pairPlaceholders})`,
-              params
+        // 2. Insert new outputs, grouped by the token each one names.
+        for (const [tokenIdentifier, outputs] of _groupOutputsByToken(
+          outputsToAdd?.outputs
+        )) {
+          const metadata = _metadataFor(outputsToAdd.metadata, tokenIdentifier);
+          if (!metadata) {
+            this._log(
+              "warn",
+              `Skipping outputs of token ${tokenIdentifier}: no metadata provided`
             );
+            continue;
           }
+          await this._upsertMetadata(conn, metadata);
 
-          for (const output of outputsToAdd.outputs) {
-            await this._insertSingleOutput(
-              conn,
-              outputsToAdd.metadata.identifier,
-              output
-            );
+          // Clear spent status for outputs being (re-)added.
+          const params = [this.identity];
+          for (const o of outputs) {
+            params.push(o.prevTxHash, o.prevTxVout);
+          }
+          await conn.query(
+            `DELETE FROM brz_token_spent_outputs WHERE user_id = ? AND (prev_tx_hash, prev_tx_vout) IN (${buildPairPlaceholders(
+              outputs.length
+            )})`,
+            params
+          );
+
+          for (const output of outputs) {
+            await this._insertSingleOutput(conn, tokenIdentifier, output);
           }
         }
       });
@@ -607,98 +677,42 @@ class MysqlTokenStore {
     }
   }
 
+  /**
+   * Reserve token outputs for a payment or swap.
+   *
+   * Selection and reservation of every target share one transaction and the
+   * write lock it holds, so a multi-token reservation is all-or-nothing: no
+   * concurrent writer can take an output between two targets being selected.
+   * @param {Array<[string, {type: string, value: string|number}]>} targets - One
+   *   [tokenIdentifier, target] pair per token to reserve for, target being
+   *   MinTotalValue or MaxOutputCount
+   * @param {string} purpose - "Payment" or "Swap"
+   * @param {Array|null} preferredOutputs
+   * @param {string|null} selectionStrategy - "SmallestFirst" or "LargestFirst"
+   * @returns {Promise<{id: string, tokenOutputs: {metadata: Array<Object>, outputs: Array}}>}
+   */
   async reserveTokenOutputs(
-    tokenIdentifier,
-    target,
+    targets,
     purpose,
     preferredOutputs,
     selectionStrategy
   ) {
     try {
+      _validateTargets(targets);
+
       return await this._withWriteTransaction(async (conn) => {
-        if (
-          target.type === "minTotalValue" &&
-          (!target.value || target.value === "0")
-        ) {
-          throw new TokenStoreError(
-            "Amount to reserve must be greater than zero"
-          );
-        }
-        if (
-          target.type === "maxOutputCount" &&
-          (!target.value || target.value === 0)
-        ) {
-          throw new TokenStoreError(
-            "Count to reserve must be greater than zero"
-          );
-        }
-
-        const [metadataRows] = await conn.query(
-          "SELECT * FROM brz_token_metadata WHERE user_id = ? AND identifier = ?",
-          [this.identity, tokenIdentifier]
-        );
-
-        if (metadataRows.length === 0) {
-          throw new TokenStoreError(
-            `Token outputs not found for identifier: ${tokenIdentifier}`
-          );
-        }
-
-        const metadata = this._metadataFromRow(metadataRows[0]);
-
-        const [outputRows] = await conn.query(
-          `SELECT o.owner_public_key, o.revocation_commitment,
-                  o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
-                  o.token_public_key, o.token_amount, o.token_identifier,
-                  o.prev_tx_hash, o.prev_tx_vout
-           FROM brz_token_outputs o
-           WHERE o.user_id = ? AND o.token_identifier = ? AND o.reservation_id IS NULL`,
-          [this.identity, tokenIdentifier]
-        );
-
-        let outputs = outputRows.map((row) => this._outputFromRow(row));
-
-        if (preferredOutputs) {
-          const preferredOutpoints = new Set(
-            preferredOutputs.map((p) => `${p.prevTxHash}:${p.prevTxVout}`)
-          );
-          outputs = outputs.filter((o) =>
-            preferredOutpoints.has(`${o.prevTxHash}:${o.prevTxVout}`)
-          );
-        }
-
-        const selectedOutputs = this._selectOutputs(
-          outputs,
-          target,
+        const selected = await this._selectForTargets(
+          conn,
+          targets,
+          preferredOutputs,
           selectionStrategy
         );
 
         const reservationId = this._generateId();
+        await this._insertReservation(conn, reservationId, purpose);
+        await this._assignReservation(conn, reservationId, selected.outputs);
 
-        await conn.query(
-          "INSERT INTO brz_token_reservations (user_id, id, purpose, created_at) VALUES (?, ?, ?, UTC_TIMESTAMP(6))",
-          [this.identity, reservationId, purpose]
-        );
-
-        if (selectedOutputs.length > 0) {
-          const pairPlaceholders = selectedOutputs
-            .map(() => "(?, ?)")
-            .join(", ");
-          const params = [reservationId, this.identity];
-          for (const o of selectedOutputs) {
-            params.push(o.prevTxHash, o.prevTxVout);
-          }
-          await conn.query(
-            `UPDATE brz_token_outputs SET reservation_id = ? WHERE user_id = ?
-               AND (prev_tx_hash, prev_tx_vout) IN (${pairPlaceholders})`,
-            params
-          );
-        }
-
-        return {
-          id: reservationId,
-          tokenOutputs: { metadata, outputs: selectedOutputs },
-        };
+        return { id: reservationId, tokenOutputs: selected };
       });
     } catch (error) {
       if (error instanceof TokenStoreError) throw error;
@@ -709,7 +723,7 @@ class MysqlTokenStore {
     }
   }
 
-  _selectOutputs(outputs, target, selectionStrategy) {
+  _selectOutputs(tokenIdentifier, outputs, target, selectionStrategy) {
     if (target.type === "minTotalValue") {
       const amount = BigInt(target.value);
       const totalAvailable = outputs.reduce(
@@ -717,7 +731,9 @@ class MysqlTokenStore {
         0n
       );
       if (totalAvailable < amount) {
-        throw new TokenStoreError("InsufficientFunds");
+        throw new TokenStoreError(
+          `InsufficientFunds: ${tokenIdentifier}`
+        );
       }
 
       const exactMatch = outputs.find(
@@ -747,7 +763,9 @@ class MysqlTokenStore {
         remaining -= BigInt(output.output.tokenAmount);
       }
       if (remaining > 0n) {
-        throw new TokenStoreError("InsufficientFunds");
+        throw new TokenStoreError(
+          `InsufficientFunds: ${tokenIdentifier}`
+        );
       }
       return selected;
     }
@@ -771,64 +789,24 @@ class MysqlTokenStore {
     throw new TokenStoreError(`Unknown target type: ${target.type}`);
   }
 
-  async selectTokenOutputs(
-    tokenIdentifier,
-    target,
-    preferredOutputs,
-    selectionStrategy
-  ) {
+  /**
+   * Select outputs covering every target, without reserving them.
+   * @param {Array<[string, {type: string, value: string|number}]>} targets - One
+   *   [tokenIdentifier, target] pair per token to select for
+   * @param {Array|null} preferredOutputs
+   * @param {string|null} selectionStrategy - "SmallestFirst" or "LargestFirst"
+   * @returns {Promise<{metadata: Array<Object>, outputs: Array}>}
+   */
+  async selectTokenOutputs(targets, preferredOutputs, selectionStrategy) {
     try {
-      if (
-        target.type === "minTotalValue" &&
-        (!target.value || target.value === "0")
-      ) {
-        throw new TokenStoreError("Amount to reserve must be greater than zero");
-      }
-      if (
-        target.type === "maxOutputCount" &&
-        (!target.value || target.value === 0)
-      ) {
-        throw new TokenStoreError("Count to reserve must be greater than zero");
-      }
+      _validateTargets(targets);
 
-      const [metadataRows] = await this.pool.query(
-        "SELECT * FROM brz_token_metadata WHERE user_id = ? AND identifier = ?",
-        [this.identity, tokenIdentifier]
-      );
-      if (metadataRows.length === 0) {
-        throw new TokenStoreError(
-          `Token outputs not found for identifier: ${tokenIdentifier}`
-        );
-      }
-      const metadata = this._metadataFromRow(metadataRows[0]);
-
-      const [outputRows] = await this.pool.query(
-        `SELECT o.owner_public_key, o.revocation_commitment,
-                o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
-                o.token_public_key, o.token_amount, o.token_identifier,
-                o.prev_tx_hash, o.prev_tx_vout
-         FROM brz_token_outputs o
-         WHERE o.user_id = ? AND o.token_identifier = ? AND o.reservation_id IS NULL`,
-        [this.identity, tokenIdentifier]
-      );
-
-      let outputs = outputRows.map((row) => this._outputFromRow(row));
-
-      if (preferredOutputs) {
-        const preferredOutpoints = new Set(
-          preferredOutputs.map((p) => `${p.prevTxHash}:${p.prevTxVout}`)
-        );
-        outputs = outputs.filter((o) =>
-          preferredOutpoints.has(`${o.prevTxHash}:${o.prevTxVout}`)
-        );
-      }
-
-      const selectedOutputs = this._selectOutputs(
-        outputs,
-        target,
+      return await this._selectForTargets(
+        this.pool,
+        targets,
+        preferredOutputs,
         selectionStrategy
       );
-      return { metadata, outputs: selectedOutputs };
     } catch (error) {
       if (error instanceof TokenStoreError) throw error;
       throw new TokenStoreError(
@@ -838,36 +816,33 @@ class MysqlTokenStore {
     }
   }
 
-  async reserveTokenOutputsByOutpoints(tokenIdentifier, outpoints, purpose) {
+  /**
+   * Reserve the outputs at the given outpoints, which may belong to several tokens.
+   * @param {Array<{prevTxHash: string, prevTxVout: number}>} outpoints
+   * @param {string} purpose - "Payment" or "Swap"
+   * @returns {Promise<{id: string, tokenOutputs: {metadata: Array<Object>, outputs: Array}}>}
+   */
+  async reserveTokenOutputsByOutpoints(outpoints, purpose) {
     try {
       if (!outpoints || outpoints.length === 0) {
         throw new TokenStoreError("No outpoints provided");
       }
       return await this._withWriteTransaction(async (conn) => {
-        const [metadataRows] = await conn.query(
-          "SELECT * FROM brz_token_metadata WHERE user_id = ? AND identifier = ?",
-          [this.identity, tokenIdentifier]
-        );
-        if (metadataRows.length === 0) {
-          throw new TokenStoreError(
-            `Token outputs not found for identifier: ${tokenIdentifier}`
-          );
-        }
-        const metadata = this._metadataFromRow(metadataRows[0]);
-
-        const pairPlaceholders = outpoints.map(() => "(?, ?)").join(", ");
-        const selectParams = [this.identity, tokenIdentifier];
+        const selectParams = [this.identity];
         for (const o of outpoints) {
           selectParams.push(o.prevTxHash, o.prevTxVout);
         }
+        // The outpoints are not scoped to a token: they may belong to several.
         const [outputRows] = await conn.query(
           `SELECT o.owner_public_key, o.revocation_commitment,
                   o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                   o.token_public_key, o.token_amount, o.token_identifier,
                   o.prev_tx_hash, o.prev_tx_vout
            FROM brz_token_outputs o
-           WHERE o.user_id = ? AND o.token_identifier = ? AND o.reservation_id IS NULL
-             AND (o.prev_tx_hash, o.prev_tx_vout) IN (${pairPlaceholders})`,
+           WHERE o.user_id = ? AND o.reservation_id IS NULL
+             AND (o.prev_tx_hash, o.prev_tx_vout) IN (${buildPairPlaceholders(
+               outpoints.length
+             )})`,
           selectParams
         );
 
@@ -882,24 +857,14 @@ class MysqlTokenStore {
           throw new TokenStoreError("InsufficientFunds");
         }
 
-        const reservationId = this._generateId();
-        await conn.query(
-          "INSERT INTO brz_token_reservations (user_id, id, purpose, created_at) VALUES (?, ?, ?, UTC_TIMESTAMP(6))",
-          [this.identity, reservationId, purpose]
+        const metadata = await this._fetchMetadata(
+          conn,
+          _tokenIdentifiersOf(selectedOutputs)
         );
 
-        const updatePlaceholders = selectedOutputs
-          .map(() => "(?, ?)")
-          .join(", ");
-        const updateParams = [reservationId, this.identity];
-        for (const o of selectedOutputs) {
-          updateParams.push(o.prevTxHash, o.prevTxVout);
-        }
-        await conn.query(
-          `UPDATE brz_token_outputs SET reservation_id = ? WHERE user_id = ?
-             AND (prev_tx_hash, prev_tx_vout) IN (${updatePlaceholders})`,
-          updateParams
-        );
+        const reservationId = this._generateId();
+        await this._insertReservation(conn, reservationId, purpose);
+        await this._assignReservation(conn, reservationId, selectedOutputs);
 
         return {
           id: reservationId,
@@ -1028,6 +993,138 @@ class MysqlTokenStore {
   }
 
   // ===== Private Helpers =====
+
+  _log(level, message) {
+    if (this.logger && typeof this.logger.log === "function") {
+      this.logger.log({ line: message, level });
+    }
+  }
+
+  /**
+   * Select available outputs covering every target, without reserving them.
+   *
+   * The result carries metadata for every requested token. A target whose token
+   * is unknown to this tenant is an error, and a target that cannot be covered
+   * by the available outputs yields `InsufficientFunds`.
+   * @param {import('mysql2/promise').PoolConnection|import('mysql2/promise').Pool} conn
+   * @returns {Promise<{metadata: Array<Object>, outputs: Array}>}
+   */
+  async _selectForTargets(conn, targets, preferredOutputs, selectionStrategy) {
+    const tokenIdentifiers = Array.from(new Set(targets.map(([id]) => id)));
+
+    const metadata = await this._fetchMetadata(conn, tokenIdentifiers);
+    for (const identifier of tokenIdentifiers) {
+      if (!metadata.some((m) => m.identifier === identifier)) {
+        throw new TokenStoreError(
+          `Token outputs not found for identifier: ${identifier}`
+        );
+      }
+    }
+
+    const [outputRows] = await conn.query(
+      `SELECT o.owner_public_key, o.revocation_commitment,
+              o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
+              o.token_public_key, o.token_amount, o.token_identifier,
+              o.prev_tx_hash, o.prev_tx_vout
+       FROM brz_token_outputs o
+       WHERE o.user_id = ?
+         AND o.token_identifier IN (${buildPlaceholders(
+           tokenIdentifiers.length
+         )})
+         AND o.reservation_id IS NULL`,
+      [this.identity, ...tokenIdentifiers]
+    );
+
+    let available = outputRows.map((row) => this._outputFromRow(row));
+
+    if (preferredOutputs) {
+      const preferredOutpoints = new Set(
+        preferredOutputs.map((p) => `${p.prevTxHash}:${p.prevTxVout}`)
+      );
+      available = available.filter((o) =>
+        preferredOutpoints.has(`${o.prevTxHash}:${o.prevTxVout}`)
+      );
+    }
+
+    const availablePerToken = new Map();
+    for (const output of available) {
+      const identifier = output.output.tokenIdentifier;
+      if (!availablePerToken.has(identifier)) {
+        availablePerToken.set(identifier, []);
+      }
+      availablePerToken.get(identifier).push(output);
+    }
+
+    const outputs = [];
+    for (const [tokenIdentifier, target] of targets) {
+      const candidates = availablePerToken.get(tokenIdentifier) ?? [];
+      const selected = this._selectOutputs(
+        tokenIdentifier,
+        candidates,
+        target,
+        selectionStrategy
+      );
+
+      // Outputs picked for one target are withheld from the next, so repeated
+      // entries for the same token do not select the same output twice.
+      const taken = new Set(
+        selected.map((o) => `${o.prevTxHash}:${o.prevTxVout}`)
+      );
+      availablePerToken.set(
+        tokenIdentifier,
+        candidates.filter((o) => !taken.has(`${o.prevTxHash}:${o.prevTxVout}`))
+      );
+
+      outputs.push(...selected);
+    }
+
+    return { metadata, outputs };
+  }
+
+  /**
+   * Load this tenant's metadata for the given token identifiers. Unknown
+   * identifiers are simply absent from the result.
+   */
+  async _fetchMetadata(conn, tokenIdentifiers) {
+    if (tokenIdentifiers.length === 0) {
+      return [];
+    }
+    const [rows] = await conn.query(
+      `SELECT * FROM brz_token_metadata
+       WHERE user_id = ? AND identifier IN (${buildPlaceholders(
+         tokenIdentifiers.length
+       )})`,
+      [this.identity, ...tokenIdentifiers]
+    );
+    return rows.map((row) => this._metadataFromRow(row));
+  }
+
+  async _insertReservation(conn, reservationId, purpose) {
+    await conn.query(
+      "INSERT INTO brz_token_reservations (user_id, id, purpose, created_at) VALUES (?, ?, ?, UTC_TIMESTAMP(6))",
+      [this.identity, reservationId, purpose]
+    );
+  }
+
+  /**
+   * Point the given outputs at the reservation, addressing them by outpoint.
+   */
+  async _assignReservation(conn, reservationId, outputs) {
+    if (outputs.length === 0) {
+      return;
+    }
+    const params = [reservationId, this.identity];
+    for (const o of outputs) {
+      params.push(o.prevTxHash, o.prevTxVout);
+    }
+    await conn.query(
+      `UPDATE brz_token_outputs SET reservation_id = ? WHERE user_id = ?
+         AND (prev_tx_hash, prev_tx_vout) IN (${buildPairPlaceholders(
+           outputs.length
+         )})`,
+      params
+    );
+  }
 
   _generateId() {
     if (typeof crypto !== "undefined" && crypto.randomUUID) {

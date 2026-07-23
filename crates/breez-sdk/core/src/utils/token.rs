@@ -1,9 +1,11 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use breez_sdk_common::input::{InputType, PaymentRequestSource, parse_spark_address};
+use breez_sdk_common::input::{
+    InputType, PaymentRequestSource, SparkInvoiceDetails, parse_spark_address,
+};
 use platform_utils::time::UNIX_EPOCH;
 use spark_wallet::{BURN_PUBLIC_KEY, PublicKey, SparkWallet};
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::{
     Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, SdkError, Storage,
@@ -81,9 +83,7 @@ pub fn token_tx_inputs_are_ours(
 ///
 /// Each resulting payment corresponds to a tx output (change outputs don't result in payments).
 ///
-/// Assumptions:
-/// - All outputs of a token transaction share the same token identifier
-/// - All inputs of a token transaction share the same owner public key
+/// Assumes all inputs of a token transaction share the same owner public key.
 #[allow(clippy::too_many_lines)]
 pub async fn token_transaction_to_payments(
     spark_wallet: &SparkWallet,
@@ -92,24 +92,29 @@ pub async fn token_transaction_to_payments(
     tx_inputs_are_ours: bool,
 ) -> Result<Vec<Payment>, SdkError> {
     // Transactions with no outputs (e.g. Create) produce no payments
-    let Some(first_output) = transaction.outputs.first() else {
+    if transaction.outputs.is_empty() {
         debug!(
             "Skipping token transaction with no outputs: hash={}, inputs={:?}",
             hex::encode(&transaction.hash),
             transaction.inputs,
         );
         return Ok(Vec::new());
-    };
+    }
 
-    // Get token metadata for the first output (assuming all outputs have the same token)
-    let token_identifier = first_output.token_identifier.as_ref();
+    let mut token_identifiers: Vec<&str> = transaction
+        .outputs
+        .iter()
+        .map(|o| o.token_identifier.as_ref())
+        .collect();
+    token_identifiers.sort_unstable();
+    token_identifiers.dedup();
 
-    let metadata =
-        get_tokens_metadata_cached_or_query(spark_wallet, object_repository, &[token_identifier])
+    let metadata_by_token: HashMap<String, TokenMetadata> =
+        get_tokens_metadata_cached_or_query(spark_wallet, object_repository, &token_identifiers)
             .await?
-            .first()
-            .cloned()
-            .ok_or(SdkError::Generic("Token metadata not found".to_string()))?;
+            .into_iter()
+            .map(|m| (m.identifier.clone(), m))
+            .collect();
 
     let is_mint_transaction = matches!(&transaction.inputs, spark_wallet::TokenInputs::Mint(..));
     let is_transfer_transaction =
@@ -129,14 +134,20 @@ pub async fn token_transaction_to_payments(
 
     let mut payments = Vec::new();
 
-    let mut invoices = Vec::new();
+    let mut unmatched_invoices = Vec::new();
     for invoice_str in &transaction.fulfilled_invoices {
         if let Some(InputType::SparkInvoice(invoice)) =
             parse_spark_address(invoice_str, &PaymentRequestSource::default())
         {
-            invoices.push(invoice);
+            unmatched_invoices.push(invoice);
         }
     }
+    // `fulfilled_invoices` arrives in the caller's order when we broadcast the
+    // transaction ourselves, and in the operators' order when we learn of it by
+    // syncing. Sort by the invoice string, the order the protocol itself puts
+    // attachments in, so that every wallet attributes the same invoice to the
+    // same payment regardless of how it saw the transaction.
+    unmatched_invoices.sort_by(|a, b| a.invoice.cmp(&b.invoice));
 
     for (vout, output) in transaction.outputs.iter().enumerate() {
         let payment_type = if tx_inputs_are_ours && output.owner_public_key != identity_public_key {
@@ -155,19 +166,21 @@ pub async fn token_transaction_to_payments(
 
         let id = format!("{}:{}", transaction.hash, vout);
 
-        // TODO:The following breaks if there are multiple invoices/outputs with the same owner public key but is the best we can do for now
-        // Should be an edge case given that the Spark SDK only supports one invoice per transaction
-        let invoices = invoices
-            .iter()
-            .filter(|i| i.identity_public_key == output.owner_public_key.to_string())
-            .collect::<Vec<_>>();
-        if invoices.len() > 1 {
-            warn!(
-                "Multiple invoices found for output owner public key: {}. Using the first one",
-                output.owner_public_key
-            );
-        }
-        let invoice = invoices.first().map(|&inv| inv.clone());
+        let metadata = metadata_by_token
+            .get(&output.token_identifier)
+            .ok_or_else(|| {
+                SdkError::Generic(format!(
+                    "Token metadata not found for {}",
+                    output.token_identifier
+                ))
+            })?;
+
+        let invoice = take_invoice_for_output(
+            &mut unmatched_invoices,
+            &output.owner_public_key.to_string(),
+            &output.token_identifier,
+            output.token_amount,
+        );
 
         let mut tx_type = match transaction.inputs {
             spark_wallet::TokenInputs::Mint(..) => TokenTransactionType::Mint,
@@ -206,14 +219,60 @@ pub async fn token_transaction_to_payments(
         payments.push(payment);
     }
 
+    if !unmatched_invoices.is_empty() {
+        debug!(
+            "{} fulfilled invoice(s) on tx {} matched no output",
+            unmatched_invoices.len(),
+            transaction.hash
+        );
+    }
+
     Ok(payments)
 }
 
-pub(crate) async fn map_and_persist_token_transaction(
+/// Picks the invoice that `output` pays, removing it so no invoice is attached to
+/// two payments.
+///
+/// The protocol carries no output-to-invoice mapping: `InvoiceAttachment` holds
+/// only the invoice string, and attachments are sorted before broadcast, so even
+/// their order says nothing about which output pays which. The match is therefore
+/// inferred from payee, token and amount, preferring an exact amount over an
+/// invoice that left the amount to the sender.
+///
+/// Two invoices from the same payee for the same token and amount are
+/// indistinguishable, so either assignment is equally correct. Which one is taken
+/// depends on the order of `unmatched`, so callers must put it in a canonical
+/// order first, or two wallets seeing the same transaction from different sources
+/// would attribute those invoices differently.
+fn take_invoice_for_output(
+    unmatched: &mut Vec<SparkInvoiceDetails>,
+    owner_public_key: &str,
+    token_identifier: &str,
+    amount: u128,
+) -> Option<SparkInvoiceDetails> {
+    let payable = |invoice: &SparkInvoiceDetails| {
+        invoice.identity_public_key == owner_public_key
+            && invoice.token_identifier.as_deref() == Some(token_identifier)
+    };
+
+    let position = unmatched
+        .iter()
+        .position(|i| payable(i) && i.amount == Some(amount))
+        .or_else(|| {
+            unmatched
+                .iter()
+                .position(|i| payable(i) && i.amount.is_none())
+        })?;
+    Some(unmatched.remove(position))
+}
+
+/// Persists every payment the transaction produced, one per output paying
+/// someone else, in vout order.
+pub(crate) async fn map_and_persist_token_transaction_payments(
     spark_wallet: &SparkWallet,
     storage: &Arc<dyn Storage>,
     token_transaction: &spark_wallet::TokenTransaction,
-) -> Result<Payment, SdkError> {
+) -> Result<Vec<Payment>, SdkError> {
     let object_repository = ObjectCacheRepository::new(storage.clone());
     let payments =
         token_transaction_to_payments(spark_wallet, &object_repository, token_transaction, true)
@@ -222,12 +281,25 @@ pub(crate) async fn map_and_persist_token_transaction(
         storage.apply_payment_update(payment.clone()).await?;
     }
 
-    payments
-        .first()
-        .ok_or(SdkError::Generic(
-            "No payment created from token invoice".to_string(),
-        ))
-        .cloned()
+    if payments.is_empty() {
+        return Err(SdkError::Generic(
+            "No payment created from token transaction".to_string(),
+        ));
+    }
+    Ok(payments)
+}
+
+pub(crate) async fn map_and_persist_token_transaction(
+    spark_wallet: &SparkWallet,
+    storage: &Arc<dyn Storage>,
+    token_transaction: &spark_wallet::TokenTransaction,
+) -> Result<Payment, SdkError> {
+    let payments =
+        map_and_persist_token_transaction_payments(spark_wallet, storage, token_transaction)
+            .await?;
+    payments.into_iter().next().ok_or(SdkError::Generic(
+        "No payment created from token transaction".to_string(),
+    ))
 }
 
 #[cfg(test)]
@@ -259,6 +331,161 @@ mod tests {
             token_identifier: "tk".to_string(),
             token_amount: 100,
         }
+    }
+
+    const TOKEN: &str = "tk";
+    const OTHER_TOKEN: &str = "tk-other";
+
+    fn invoice(payee: &str, token: Option<&str>, amount: Option<u128>) -> SparkInvoiceDetails {
+        SparkInvoiceDetails {
+            invoice: format!("inv-{payee}-{token:?}-{amount:?}"),
+            identity_public_key: payee.to_string(),
+            network: breez_sdk_common::network::BitcoinNetwork::Regtest,
+            amount,
+            token_identifier: token.map(ToString::to_string),
+            expiry_time: None,
+            description: None,
+            sender_public_key: None,
+        }
+    }
+
+    #[macros::test_all]
+    fn take_invoice_matches_same_payee_by_amount() {
+        // Two invoices from one payee: each output must take its own.
+        let mut unmatched = vec![
+            invoice("alice", Some(TOKEN), Some(100)),
+            invoice("alice", Some(TOKEN), Some(250)),
+        ];
+
+        let first = take_invoice_for_output(&mut unmatched, "alice", TOKEN, 250).unwrap();
+        assert_eq!(first.amount, Some(250));
+        let second = take_invoice_for_output(&mut unmatched, "alice", TOKEN, 100).unwrap();
+        assert_eq!(second.amount, Some(100));
+        assert!(unmatched.is_empty());
+    }
+
+    #[macros::test_all]
+    fn take_invoice_consumes_indistinguishable_invoices_exactly_once() {
+        // Same payee, token and amount: either assignment is correct, but each
+        // invoice must be attached once and none dropped. Real invoices always
+        // differ by their id, so give the fixtures distinct strings.
+        let mut first_invoice = invoice("alice", Some(TOKEN), Some(100));
+        first_invoice.invoice = "inv-one".to_string();
+        let mut second_invoice = invoice("alice", Some(TOKEN), Some(100));
+        second_invoice.invoice = "inv-two".to_string();
+        let mut unmatched = vec![first_invoice, second_invoice];
+
+        let first = take_invoice_for_output(&mut unmatched, "alice", TOKEN, 100).unwrap();
+        let second = take_invoice_for_output(&mut unmatched, "alice", TOKEN, 100).unwrap();
+        assert_ne!(
+            first.invoice, second.invoice,
+            "the same invoice was attached to two payments"
+        );
+        assert!(unmatched.is_empty(), "no invoice left unattached");
+    }
+
+    #[macros::test_all]
+    fn take_invoice_prefers_exact_amount_over_amountless() {
+        let mut unmatched = vec![
+            invoice("alice", Some(TOKEN), None),
+            invoice("alice", Some(TOKEN), Some(100)),
+        ];
+
+        let exact = take_invoice_for_output(&mut unmatched, "alice", TOKEN, 100).unwrap();
+        assert_eq!(exact.amount, Some(100));
+        // The amountless one is still available for the next output.
+        let amountless = take_invoice_for_output(&mut unmatched, "alice", TOKEN, 77).unwrap();
+        assert_eq!(amountless.amount, None);
+    }
+
+    #[macros::test_all]
+    fn take_invoice_falls_back_to_amountless() {
+        let mut unmatched = vec![invoice("alice", Some(TOKEN), None)];
+        let matched = take_invoice_for_output(&mut unmatched, "alice", TOKEN, 4321).unwrap();
+        assert_eq!(matched.amount, None);
+    }
+
+    #[macros::test_all]
+    fn take_invoice_requires_matching_payee() {
+        let mut unmatched = vec![invoice("alice", Some(TOKEN), Some(100))];
+        assert!(take_invoice_for_output(&mut unmatched, "bob", TOKEN, 100).is_none());
+        assert_eq!(unmatched.len(), 1, "a non-match must not consume");
+    }
+
+    #[macros::test_all]
+    fn take_invoice_requires_matching_token() {
+        let mut unmatched = vec![invoice("alice", Some(TOKEN), Some(100))];
+        assert!(take_invoice_for_output(&mut unmatched, "alice", OTHER_TOKEN, 100).is_none());
+        assert_eq!(unmatched.len(), 1);
+    }
+
+    #[macros::test_all]
+    fn take_invoice_ignores_sats_invoices() {
+        let mut unmatched = vec![invoice("alice", None, Some(100))];
+        assert!(take_invoice_for_output(&mut unmatched, "alice", TOKEN, 100).is_none());
+    }
+
+    #[macros::test_all]
+    fn attribution_is_independent_of_the_order_invoices_arrive_in() {
+        // Same payee, token and amount, so only ordering can decide the match.
+        // The sending wallet sees them in its caller's order, a syncing wallet in
+        // the operators' order; both must reach the same attribution.
+        let mut a = invoice("alice", Some(TOKEN), Some(100));
+        a.invoice = "inv-aaa".to_string();
+        let mut b = invoice("alice", Some(TOKEN), Some(100));
+        b.invoice = "inv-bbb".to_string();
+
+        let attribute = |mut invoices: Vec<SparkInvoiceDetails>| {
+            // Mirrors token_transaction_to_payments: canonicalise, then match each
+            // output in vout order.
+            invoices.sort_by(|x, y| x.invoice.cmp(&y.invoice));
+            (0..2)
+                .map(|_| {
+                    take_invoice_for_output(&mut invoices, "alice", TOKEN, 100)
+                        .map(|i| i.invoice)
+                        .unwrap()
+                })
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            attribute(vec![a.clone(), b.clone()]),
+            attribute(vec![b, a]),
+            "attribution changed with the order the invoices arrived in"
+        );
+    }
+
+    #[macros::test_all]
+    fn take_invoice_on_empty_list_is_none() {
+        let mut unmatched = Vec::new();
+        assert!(take_invoice_for_output(&mut unmatched, "alice", TOKEN, 100).is_none());
+    }
+
+    #[macros::test_all]
+    fn take_invoice_separates_payees_sharing_an_amount() {
+        // A mixed batch: same amount, different payees.
+        let mut unmatched = vec![
+            invoice("alice", Some(TOKEN), Some(100)),
+            invoice("bob", Some(TOKEN), Some(100)),
+        ];
+
+        let for_bob = take_invoice_for_output(&mut unmatched, "bob", TOKEN, 100).unwrap();
+        assert_eq!(for_bob.identity_public_key, "bob");
+        let for_alice = take_invoice_for_output(&mut unmatched, "alice", TOKEN, 100).unwrap();
+        assert_eq!(for_alice.identity_public_key, "alice");
+    }
+
+    #[macros::test_all]
+    fn take_invoice_separates_tokens_sharing_an_amount() {
+        let mut unmatched = vec![
+            invoice("alice", Some(TOKEN), Some(100)),
+            invoice("alice", Some(OTHER_TOKEN), Some(100)),
+        ];
+
+        let other = take_invoice_for_output(&mut unmatched, "alice", OTHER_TOKEN, 100).unwrap();
+        assert_eq!(other.token_identifier.as_deref(), Some(OTHER_TOKEN));
+        let first = take_invoice_for_output(&mut unmatched, "alice", TOKEN, 100).unwrap();
+        assert_eq!(first.token_identifier.as_deref(), Some(TOKEN));
     }
 
     fn transfer_tx(prev_tx_hash: &str, prev_vout: u32) -> TokenTransaction {

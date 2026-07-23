@@ -4,7 +4,6 @@
 //! To use, call these functions from implementation-specific test modules
 //! passing a concrete store instance.
 
-use std::slice;
 use std::time::Duration;
 
 use bitcoin::secp256k1::PublicKey;
@@ -63,7 +62,17 @@ pub fn create_token_outputs(identifier_no: u8, output_amounts: Vec<u128>) -> Tok
         })
         .collect();
 
-    TokenOutputs { metadata, outputs }
+    TokenOutputs::single(metadata, outputs)
+}
+
+/// Combines several single-token sets into one multi-token set.
+pub fn merge_token_outputs(sets: impl IntoIterator<Item = TokenOutputs>) -> TokenOutputs {
+    let mut merged = TokenOutputs::default();
+    for set in sets {
+        merged.metadata.extend(set.metadata);
+        merged.outputs.extend(set.outputs);
+    }
+    merged
 }
 
 /// Returns a refresh start 10s in the future relative to the store's clock,
@@ -89,7 +98,7 @@ pub async fn test_set_tokens_outputs(store: &dyn TokenOutputStore) {
 
     let result = store
         .set_tokens_outputs(
-            &[token1.clone(), token2.clone()],
+            &merge_token_outputs([token1.clone(), token2.clone()]),
             future_refresh_start(store).await,
         )
         .await;
@@ -105,7 +114,7 @@ pub async fn test_get_token_outputs(store: &dyn TokenOutputStore) {
 
     let result = store
         .set_tokens_outputs(
-            &[token1.clone(), token2.clone()],
+            &merge_token_outputs([token1.clone(), token2.clone()]),
             future_refresh_start(store).await,
         )
         .await;
@@ -150,7 +159,7 @@ pub async fn test_set_tokens_outputs_with_update(store: &dyn TokenOutputStore) {
 
     let result = store
         .set_tokens_outputs(
-            &[token1.clone(), token2.clone()],
+            &merge_token_outputs([token1.clone(), token2.clone()]),
             future_refresh_start(store).await,
         )
         .await;
@@ -162,10 +171,7 @@ pub async fn test_set_tokens_outputs_with_update(store: &dyn TokenOutputStore) {
     // Update with new token outputs (overwrite)
     let token1_updated = create_token_outputs(1, vec![150, 250]);
     let result = store
-        .set_tokens_outputs(
-            slice::from_ref(&token1_updated),
-            future_refresh_start(store).await,
-        )
+        .set_tokens_outputs(&token1_updated, future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -192,13 +198,13 @@ pub async fn test_insert_token_outputs(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200, 300]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
     // Insert outputs for a new token
     let token2 = create_token_outputs(2, vec![500, 1000]);
-    let result = store.update_token_outputs(&[], Some(&token2)).await;
+    let result = store.update_token_outputs(&[], &token2).await;
     assert!(result.is_ok());
 
     // Verify there are now two tokens
@@ -207,9 +213,7 @@ pub async fn test_insert_token_outputs(store: &dyn TokenOutputStore) {
 
     // Insert additional outputs for token1
     let token1_additional = create_token_outputs(1, vec![400, 500]);
-    let result = store
-        .update_token_outputs(&[], Some(&token1_additional))
-        .await;
+    let result = store.update_token_outputs(&[], &token1_additional).await;
     assert!(result.is_ok());
 
     // Verify token1 now has 5 outputs
@@ -221,9 +225,7 @@ pub async fn test_insert_token_outputs(store: &dyn TokenOutputStore) {
 
     // Insert some duplicate outputs for token2 (should not duplicate)
     let token2_duplicate = create_token_outputs(2, vec![500, 750, 1000]);
-    let result = store
-        .update_token_outputs(&[], Some(&token2_duplicate))
-        .await;
+    let result = store.update_token_outputs(&[], &token2_duplicate).await;
     assert!(result.is_ok());
 
     // Verify token2 now has 3 unique outputs
@@ -240,7 +242,7 @@ pub async fn test_reserve_token_outputs(store: &dyn TokenOutputStore) {
 
     let result = store
         .set_tokens_outputs(
-            &[token1.clone(), token2.clone()],
+            &merge_token_outputs([token1.clone(), token2.clone()]),
             future_refresh_start(store).await,
         )
         .await;
@@ -249,15 +251,14 @@ pub async fn test_reserve_token_outputs(store: &dyn TokenOutputStore) {
     // Reserve some outputs from token1
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(300),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(300))],
             ReservationPurpose::Payment,
             None,
             None,
         )
         .await
         .unwrap();
-    assert_eq!(reservation.token_outputs.metadata.identifier, "token-1");
+    assert_eq!(reservation.token_outputs.metadata[0].identifier, "token-1");
     assert_eq!(reservation.token_outputs.outputs.len(), 1);
 
     // Verify token1 now has 2 outputs left
@@ -271,15 +272,19 @@ pub async fn test_reserve_token_outputs(store: &dyn TokenOutputStore) {
 pub async fn test_select_token_outputs(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200, 300]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await
         .unwrap();
 
     let selected = store
-        .select_token_outputs("token-1", ReservationTarget::MinTotalValue(300), None, None)
+        .select_token_outputs(
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(300))],
+            None,
+            None,
+        )
         .await
         .unwrap();
-    assert_eq!(selected.metadata.identifier, "token-1");
+    assert_eq!(selected.metadata[0].identifier, "token-1");
     let selected_total: u128 = selected.outputs.iter().map(|o| o.output.token_amount).sum();
     assert!(selected_total >= 300);
 
@@ -295,12 +300,16 @@ pub async fn test_select_token_outputs(store: &dyn TokenOutputStore) {
 pub async fn test_reserve_token_outputs_by_outpoints(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200, 300]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await
         .unwrap();
 
     let selected = store
-        .select_token_outputs("token-1", ReservationTarget::MinTotalValue(300), None, None)
+        .select_token_outputs(
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(300))],
+            None,
+            None,
+        )
         .await
         .unwrap();
     let outpoints: Vec<(String, u32)> = selected
@@ -310,7 +319,7 @@ pub async fn test_reserve_token_outputs_by_outpoints(store: &dyn TokenOutputStor
         .collect();
 
     let reservation = store
-        .reserve_token_outputs_by_outpoints("token-1", &outpoints, ReservationPurpose::Payment)
+        .reserve_token_outputs_by_outpoints(&outpoints, ReservationPurpose::Payment)
         .await
         .unwrap();
     assert_eq!(reservation.token_outputs.outputs.len(), outpoints.len());
@@ -326,12 +335,11 @@ pub async fn test_reserve_token_outputs_by_outpoints(store: &dyn TokenOutputStor
     assert!(matches!(
         store
             .reserve_token_outputs_by_outpoints(
-                "token-1",
                 &[("missing-tx".to_string(), 0)],
                 ReservationPurpose::Payment,
             )
             .await,
-        Err(TokenOutputServiceError::InsufficientFunds)
+        Err(TokenOutputServiceError::InsufficientFunds { .. })
     ));
 }
 
@@ -341,7 +349,7 @@ pub async fn test_reserve_token_outputs_and_cancel(store: &dyn TokenOutputStore)
 
     let result = store
         .set_tokens_outputs(
-            &[token1.clone(), token2.clone()],
+            &merge_token_outputs([token1.clone(), token2.clone()]),
             future_refresh_start(store).await,
         )
         .await;
@@ -349,8 +357,7 @@ pub async fn test_reserve_token_outputs_and_cancel(store: &dyn TokenOutputStore)
 
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(300),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(300))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -384,7 +391,7 @@ pub async fn test_reserve_token_outputs_and_finalize(store: &dyn TokenOutputStor
 
     let result = store
         .set_tokens_outputs(
-            &[token1.clone(), token2.clone()],
+            &merge_token_outputs([token1.clone(), token2.clone()]),
             future_refresh_start(store).await,
         )
         .await;
@@ -392,8 +399,7 @@ pub async fn test_reserve_token_outputs_and_finalize(store: &dyn TokenOutputStor
 
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(300),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(300))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -427,7 +433,7 @@ pub async fn test_reserve_token_outputs_and_set_add_output(store: &dyn TokenOutp
 
     let result = store
         .set_tokens_outputs(
-            &[token1.clone(), token2.clone()],
+            &merge_token_outputs([token1.clone(), token2.clone()]),
             future_refresh_start(store).await,
         )
         .await;
@@ -435,8 +441,7 @@ pub async fn test_reserve_token_outputs_and_set_add_output(store: &dyn TokenOutp
 
     let _reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(300),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(300))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -454,10 +459,7 @@ pub async fn test_reserve_token_outputs_and_set_add_output(store: &dyn TokenOutp
     // Set new token outputs, simulating an external update
     let token1_updated = create_token_outputs(1, vec![100, 200, 300, 400]);
     let result = store
-        .set_tokens_outputs(
-            slice::from_ref(&token1_updated),
-            future_refresh_start(store).await,
-        )
+        .set_tokens_outputs(&token1_updated, future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -478,7 +480,7 @@ pub async fn test_reserve_token_outputs_and_set_remove_reserved_output(
 
     let result = store
         .set_tokens_outputs(
-            &[token1.clone(), token2.clone()],
+            &merge_token_outputs([token1.clone(), token2.clone()]),
             future_refresh_start(store).await,
         )
         .await;
@@ -486,8 +488,7 @@ pub async fn test_reserve_token_outputs_and_set_remove_reserved_output(
 
     let _reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(300),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(300))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -505,10 +506,7 @@ pub async fn test_reserve_token_outputs_and_set_remove_reserved_output(
     // Set new token outputs without the reserved output
     let token1_updated = create_token_outputs(1, vec![100, 200, 400]);
     let result = store
-        .set_tokens_outputs(
-            slice::from_ref(&token1_updated),
-            future_refresh_start(store).await,
-        )
+        .set_tokens_outputs(&token1_updated, future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -525,15 +523,14 @@ pub async fn test_multiple_parallel_reservations(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200, 300, 400, 500]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
     // Create multiple reservations
     let reservation1 = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(100),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(100))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -542,8 +539,7 @@ pub async fn test_multiple_parallel_reservations(store: &dyn TokenOutputStore) {
         .unwrap();
     let reservation2 = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(200),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(200))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -552,8 +548,7 @@ pub async fn test_multiple_parallel_reservations(store: &dyn TokenOutputStore) {
         .unwrap();
     let reservation3 = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(300),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(300))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -610,7 +605,7 @@ pub async fn test_reserve_with_preferred_outputs(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200, 300, 400, 500]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -637,8 +632,7 @@ pub async fn test_reserve_with_preferred_outputs(store: &dyn TokenOutputStore) {
     // Reserve using preferred outputs
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(250),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(250))],
             ReservationPurpose::Payment,
             Some(preferred),
             None,
@@ -665,14 +659,13 @@ pub async fn test_reserve_insufficient_outputs(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
     let result = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(500),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(500))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -681,7 +674,7 @@ pub async fn test_reserve_insufficient_outputs(store: &dyn TokenOutputStore) {
     assert!(result.is_err());
     assert!(matches!(
         result,
-        Err(TokenOutputServiceError::InsufficientFunds)
+        Err(TokenOutputServiceError::InsufficientFunds { .. })
     ));
 }
 
@@ -689,14 +682,16 @@ pub async fn test_reserve_nonexistent_token(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
     let result = store
         .reserve_token_outputs(
-            "token-999",
-            ReservationTarget::MinTotalValue(100),
+            &[(
+                "token-999".to_string(),
+                ReservationTarget::MinTotalValue(100),
+            )],
             ReservationPurpose::Payment,
             None,
             None,
@@ -713,14 +708,13 @@ pub async fn test_reserve_exact_amount_match(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![50, 100, 150, 200, 250]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(150),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(150))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -745,14 +739,13 @@ pub async fn test_reserve_multiple_outputs_combination(store: &dyn TokenOutputSt
     let token1 = create_token_outputs(1, vec![10, 20, 30, 40, 50]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(75),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(75))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -774,14 +767,13 @@ pub async fn test_reserve_all_available_outputs(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200, 300]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(600),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(600))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -802,7 +794,7 @@ pub async fn test_reserve_with_preferred_outputs_insufficient(store: &dyn TokenO
     let token1 = create_token_outputs(1, vec![100, 200, 300, 400, 500]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -828,8 +820,7 @@ pub async fn test_reserve_with_preferred_outputs_insufficient(store: &dyn TokenO
 
     let result = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(500),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(500))],
             ReservationPurpose::Payment,
             Some(preferred),
             None,
@@ -842,8 +833,7 @@ pub async fn test_reserve_with_preferred_outputs_insufficient(store: &dyn TokenO
     // selects from all of them.
     let result = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(100),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(100))],
             ReservationPurpose::Payment,
             Some(vec![]),
             None,
@@ -857,14 +847,13 @@ pub async fn test_reserve_zero_amount(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(0),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(0))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -877,7 +866,7 @@ pub async fn test_cancel_nonexistent_reservation(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -891,7 +880,7 @@ pub async fn test_finalize_nonexistent_reservation(store: &dyn TokenOutputStore)
     let token1 = create_token_outputs(1, vec![100, 200]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -907,14 +896,14 @@ pub async fn test_set_removes_all_tokens(store: &dyn TokenOutputStore) {
 
     let result = store
         .set_tokens_outputs(
-            &[token1.clone(), token2.clone()],
+            &merge_token_outputs([token1.clone(), token2.clone()]),
             future_refresh_start(store).await,
         )
         .await;
     assert!(result.is_ok());
 
     let result = store
-        .set_tokens_outputs(&[], future_refresh_start(store).await)
+        .set_tokens_outputs(&TokenOutputs::default(), future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -926,14 +915,13 @@ pub async fn test_reserve_single_large_output(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![10, 20, 1000]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(500),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(500))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -948,7 +936,7 @@ pub async fn test_get_token_outputs_none_found(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -968,14 +956,13 @@ pub async fn test_set_reconciles_reservation_with_empty_outputs(store: &dyn Toke
     let token1 = create_token_outputs(1, vec![100, 200, 300]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
     let _reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(300),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(300))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -985,7 +972,7 @@ pub async fn test_set_reconciles_reservation_with_empty_outputs(store: &dyn Toke
 
     // Set token outputs to empty list (all outputs removed)
     let result = store
-        .set_tokens_outputs(&[], future_refresh_start(store).await)
+        .set_tokens_outputs(&TokenOutputs::default(), future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -1000,14 +987,13 @@ pub async fn test_reserve_token_outputs_selection_strategy_smallest_first(
     let token1 = create_token_outputs(1, vec![50, 100, 150, 200, 500]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(300),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(300))],
             ReservationPurpose::Payment,
             None,
             Some(SelectionStrategy::SmallestFirst),
@@ -1046,14 +1032,13 @@ pub async fn test_reserve_token_outputs_selection_strategy_largest_first(
     let token1 = create_token_outputs(1, vec![50, 100, 150, 200, 500]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(300),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(300))],
             ReservationPurpose::Payment,
             None,
             Some(SelectionStrategy::LargestFirst),
@@ -1086,14 +1071,13 @@ pub async fn test_reserve_token_outputs_selection_strategy_largest_first(
 pub async fn test_reserve_max_output_count_smallest_first(store: &dyn TokenOutputStore) {
     let token_outputs = create_token_outputs(1, vec![50, 100, 150, 200, 500]);
     store
-        .set_tokens_outputs(&[token_outputs], future_refresh_start(store).await)
+        .set_tokens_outputs(&token_outputs, future_refresh_start(store).await)
         .await
         .unwrap();
 
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MaxOutputCount(2),
+            &[("token-1".to_string(), ReservationTarget::MaxOutputCount(2))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -1127,14 +1111,13 @@ pub async fn test_reserve_max_output_count_smallest_first(store: &dyn TokenOutpu
 pub async fn test_reserve_max_output_count_largest_first(store: &dyn TokenOutputStore) {
     let token_outputs = create_token_outputs(1, vec![50, 100, 150, 200, 500]);
     store
-        .set_tokens_outputs(&[token_outputs], future_refresh_start(store).await)
+        .set_tokens_outputs(&token_outputs, future_refresh_start(store).await)
         .await
         .unwrap();
 
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MaxOutputCount(3),
+            &[("token-1".to_string(), ReservationTarget::MaxOutputCount(3))],
             ReservationPurpose::Payment,
             None,
             Some(SelectionStrategy::LargestFirst),
@@ -1168,14 +1151,13 @@ pub async fn test_reserve_max_output_count_largest_first(store: &dyn TokenOutput
 pub async fn test_reserve_max_output_count_more_than_available(store: &dyn TokenOutputStore) {
     let token_outputs = create_token_outputs(1, vec![50, 100, 150]);
     store
-        .set_tokens_outputs(&[token_outputs], future_refresh_start(store).await)
+        .set_tokens_outputs(&token_outputs, future_refresh_start(store).await)
         .await
         .unwrap();
 
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MaxOutputCount(10),
+            &[("token-1".to_string(), ReservationTarget::MaxOutputCount(10))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -1202,14 +1184,13 @@ pub async fn test_reserve_max_output_count_more_than_available(store: &dyn Token
 pub async fn test_reserve_max_output_count_zero_rejected(store: &dyn TokenOutputStore) {
     let token_outputs = create_token_outputs(1, vec![100, 200]);
     store
-        .set_tokens_outputs(&[token_outputs], future_refresh_start(store).await)
+        .set_tokens_outputs(&token_outputs, future_refresh_start(store).await)
         .await
         .unwrap();
 
     let result = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MaxOutputCount(0),
+            &[("token-1".to_string(), ReservationTarget::MaxOutputCount(0))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -1224,7 +1205,7 @@ pub async fn test_reserve_max_output_count_zero_rejected(store: &dyn TokenOutput
 pub async fn test_reserve_for_payment_affects_balance(store: &dyn TokenOutputStore) {
     let token_outputs = create_token_outputs(1, vec![100, 200, 300]);
     store
-        .set_tokens_outputs(&[token_outputs], future_refresh_start(store).await)
+        .set_tokens_outputs(&token_outputs, future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -1237,8 +1218,7 @@ pub async fn test_reserve_for_payment_affects_balance(store: &dyn TokenOutputSto
 
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(200),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(200))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -1278,14 +1258,13 @@ pub async fn test_get_token_balances_includes_zero_spendable(store: &dyn TokenOu
     // balance 0.
     let token_outputs = create_token_outputs(1, vec![100, 200]);
     store
-        .set_tokens_outputs(&[token_outputs], future_refresh_start(store).await)
+        .set_tokens_outputs(&token_outputs, future_refresh_start(store).await)
         .await
         .unwrap();
 
     let _reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(300),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(300))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -1304,7 +1283,7 @@ pub async fn test_get_token_balances_includes_zero_spendable(store: &dyn TokenOu
 pub async fn test_reserve_for_swap_does_not_affect_balance(store: &dyn TokenOutputStore) {
     let token_outputs = create_token_outputs(1, vec![100, 200, 300]);
     store
-        .set_tokens_outputs(&[token_outputs], future_refresh_start(store).await)
+        .set_tokens_outputs(&token_outputs, future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -1317,8 +1296,7 @@ pub async fn test_reserve_for_swap_does_not_affect_balance(store: &dyn TokenOutp
 
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(200),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(200))],
             ReservationPurpose::Swap,
             None,
             None,
@@ -1350,7 +1328,7 @@ pub async fn test_reserve_for_swap_does_not_affect_balance(store: &dyn TokenOutp
 pub async fn test_mixed_reservation_purposes_balance(store: &dyn TokenOutputStore) {
     let token_outputs = create_token_outputs(1, vec![100, 200, 300, 400, 500]);
     store
-        .set_tokens_outputs(&[token_outputs], future_refresh_start(store).await)
+        .set_tokens_outputs(&token_outputs, future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -1363,8 +1341,7 @@ pub async fn test_mixed_reservation_purposes_balance(store: &dyn TokenOutputStor
 
     let payment_reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(100),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(100))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -1374,8 +1351,7 @@ pub async fn test_mixed_reservation_purposes_balance(store: &dyn TokenOutputStor
 
     let swap_reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(200),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(200))],
             ReservationPurpose::Swap,
             None,
             None,
@@ -1418,15 +1394,14 @@ pub async fn test_mixed_reservation_purposes_balance(store: &dyn TokenOutputStor
 pub async fn test_set_tokens_outputs_skipped_during_active_swap(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await
         .unwrap();
 
     // Reserve for swap
     let _reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(300),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(300))],
             ReservationPurpose::Swap,
             None,
             None,
@@ -1437,10 +1412,7 @@ pub async fn test_set_tokens_outputs_skipped_during_active_swap(store: &dyn Toke
     // Try to set new outputs while swap is active - should be skipped
     let token1_updated = create_token_outputs(1, vec![500]);
     store
-        .set_tokens_outputs(
-            slice::from_ref(&token1_updated),
-            future_refresh_start(store).await,
-        )
+        .set_tokens_outputs(&token1_updated, future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -1458,15 +1430,14 @@ pub async fn test_set_tokens_outputs_skipped_after_swap_completes_during_refresh
 ) {
     let token1 = create_token_outputs(1, vec![100, 200]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await
         .unwrap();
 
     // Reserve for swap
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(300),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(300))],
             ReservationPurpose::Swap,
             None,
             None,
@@ -1485,15 +1456,12 @@ pub async fn test_set_tokens_outputs_skipped_after_swap_completes_during_refresh
 
     // Insert new outputs (simulating swap result)
     let token1_new = create_token_outputs(1, vec![300]);
-    store
-        .update_token_outputs(&[], Some(&token1_new))
-        .await
-        .unwrap();
+    store.update_token_outputs(&[], &token1_new).await.unwrap();
 
     // Try to set with stale data - should be skipped because swap completed during refresh
     let token1_stale = create_token_outputs(1, vec![100, 200]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1_stale), refresh_start)
+        .set_tokens_outputs(&token1_stale, refresh_start)
         .await
         .unwrap();
 
@@ -1510,7 +1478,7 @@ pub async fn test_insert_outputs_preserved_by_set_tokens_outputs(store: &dyn Tok
     // Add initial outputs
     let token1 = create_token_outputs(1, vec![100]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -1522,15 +1490,12 @@ pub async fn test_insert_outputs_preserved_by_set_tokens_outputs(store: &dyn Tok
 
     // While refresh is in progress, a new output arrives
     let token1_new = create_token_outputs(1, vec![200]);
-    store
-        .update_token_outputs(&[], Some(&token1_new))
-        .await
-        .unwrap();
+    store.update_token_outputs(&[], &token1_new).await.unwrap();
 
     // Refresh completes with stale data (doesn't include the 200 output)
     let token1_stale = create_token_outputs(1, vec![100]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1_stale), refresh_start)
+        .set_tokens_outputs(&token1_stale, refresh_start)
         .await
         .unwrap();
 
@@ -1555,15 +1520,14 @@ pub async fn test_insert_outputs_preserved_by_set_tokens_outputs(store: &dyn Tok
 pub async fn test_spent_outputs_not_restored_by_set_tokens_outputs(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await
         .unwrap();
 
     // Reserve output-token-1-100 for payment
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(100),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(100))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -1586,7 +1550,7 @@ pub async fn test_spent_outputs_not_restored_by_set_tokens_outputs(store: &dyn T
     let refresh_start = past_refresh_start(store).await;
     let token1_stale = create_token_outputs(1, vec![100, 200, 300]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1_stale), refresh_start)
+        .set_tokens_outputs(&token1_stale, refresh_start)
         .await
         .unwrap();
 
@@ -1612,15 +1576,14 @@ pub async fn test_spent_outputs_not_restored_by_set_tokens_outputs(store: &dyn T
 pub async fn test_finalize_swap_marks_spent_and_tracks_completion(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200, 300]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await
         .unwrap();
 
     // Reserve for swap
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(600),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(600))],
             ReservationPurpose::Swap,
             None,
             None,
@@ -1633,10 +1596,7 @@ pub async fn test_finalize_swap_marks_spent_and_tracks_completion(store: &dyn To
 
     // Insert new outputs (simulating swap result)
     let token1_new = create_token_outputs(1, vec![600]);
-    store
-        .update_token_outputs(&[], Some(&token1_new))
-        .await
-        .unwrap();
+    store.update_token_outputs(&[], &token1_new).await.unwrap();
 
     // Verify only the new output exists
     let stored = store
@@ -1650,7 +1610,7 @@ pub async fn test_finalize_swap_marks_spent_and_tracks_completion(store: &dyn To
     let old_refresh = past_refresh_start(store).await;
     let token1_stale = create_token_outputs(1, vec![100, 200, 300]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1_stale), old_refresh)
+        .set_tokens_outputs(&token1_stale, old_refresh)
         .await
         .unwrap();
 
@@ -1666,15 +1626,14 @@ pub async fn test_finalize_swap_marks_spent_and_tracks_completion(store: &dyn To
 pub async fn test_insert_outputs_clears_spent_status(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await
         .unwrap();
 
     // Reserve and finalize (marks as spent)
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(100),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(100))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -1685,10 +1644,7 @@ pub async fn test_insert_outputs_clears_spent_status(store: &dyn TokenOutputStor
 
     // Insert the same output back (simulating receiving it back)
     let token1_back = create_token_outputs(1, vec![100]);
-    store
-        .update_token_outputs(&[], Some(&token1_back))
-        .await
-        .unwrap();
+    store.update_token_outputs(&[], &token1_back).await.unwrap();
 
     // Verify it's available
     let stored = store
@@ -1702,7 +1658,7 @@ pub async fn test_insert_outputs_clears_spent_status(store: &dyn TokenOutputStor
     let old_refresh = past_refresh_start(store).await;
     let token1_refresh = create_token_outputs(1, vec![100, 200]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1_refresh), old_refresh)
+        .set_tokens_outputs(&token1_refresh, old_refresh)
         .await
         .unwrap();
 
@@ -1716,12 +1672,15 @@ pub async fn test_insert_outputs_clears_spent_status(store: &dyn TokenOutputStor
 pub async fn test_remove_token_outputs_by_prev_tx_ref(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200, 300]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await
         .unwrap();
 
     store
-        .update_token_outputs(&[("tx-hash-token-1-200".to_string(), 0)], None)
+        .update_token_outputs(
+            &[("tx-hash-token-1-200".to_string(), 0)],
+            &TokenOutputs::default(),
+        )
         .await
         .unwrap();
 
@@ -1742,12 +1701,15 @@ pub async fn test_remove_token_outputs_by_prev_tx_ref(store: &dyn TokenOutputSto
 pub async fn test_remove_token_outputs_prevents_refresh_re_add(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
         .await
         .unwrap();
 
     store
-        .update_token_outputs(&[("tx-hash-token-1-100".to_string(), 0)], None)
+        .update_token_outputs(
+            &[("tx-hash-token-1-100".to_string(), 0)],
+            &TokenOutputs::default(),
+        )
         .await
         .unwrap();
 
@@ -1756,7 +1718,7 @@ pub async fn test_remove_token_outputs_prevents_refresh_re_add(store: &dyn Token
     let old_refresh = past_refresh_start(store).await;
     let token1_refresh = create_token_outputs(1, vec![100, 200]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1_refresh), old_refresh)
+        .set_tokens_outputs(&token1_refresh, old_refresh)
         .await
         .unwrap();
 
@@ -1766,4 +1728,311 @@ pub async fn test_remove_token_outputs_prevents_refresh_re_add(store: &dyn Token
         .unwrap();
     assert_eq!(stored.available.len(), 1);
     assert_eq!(stored.available[0].output.token_amount, 200);
+}
+
+/// A reservation spanning several tokens either takes every token's outputs or
+/// none of them. Here the second token cannot cover its target, so the first
+/// token's outputs must be left untouched rather than stranded as reserved.
+pub async fn test_multi_token_reservation_rolls_back_on_shortfall(store: &dyn TokenOutputStore) {
+    let token1 = create_token_outputs(1, vec![100, 200]);
+    let token2 = create_token_outputs(2, vec![50]);
+    store
+        .set_tokens_outputs(
+            &merge_token_outputs([token1, token2]),
+            future_refresh_start(store).await,
+        )
+        .await
+        .unwrap();
+
+    let result = store
+        .reserve_token_outputs(
+            &[
+                ("token-1".to_string(), ReservationTarget::MinTotalValue(300)),
+                // More than token-2 holds.
+                ("token-2".to_string(), ReservationTarget::MinTotalValue(999)),
+            ],
+            ReservationPurpose::Payment,
+            None,
+            None,
+        )
+        .await;
+    assert!(
+        result.is_err(),
+        "shortfall on one token must fail the whole reservation"
+    );
+
+    // Neither token may be left holding a partial reservation.
+    for token_id in ["token-1", "token-2"] {
+        let stored = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier(token_id))
+            .await
+            .unwrap();
+        assert!(
+            stored.reserved_for_payment.is_empty(),
+            "{token_id} kept outputs reserved after a failed multi-token reservation"
+        );
+    }
+    let stored1 = store
+        .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        stored1.available.len(),
+        2,
+        "token-1 outputs returned to the pool"
+    );
+    assert_eq!(stored1.available_balance(), 300);
+}
+
+/// The same rollback when the shortfall is on the first token listed: nothing is
+/// reserved even though a later token could have been satisfied.
+pub async fn test_multi_token_reservation_rolls_back_on_first_token(store: &dyn TokenOutputStore) {
+    let token1 = create_token_outputs(1, vec![10]);
+    let token2 = create_token_outputs(2, vec![500, 1000]);
+    store
+        .set_tokens_outputs(
+            &merge_token_outputs([token1, token2]),
+            future_refresh_start(store).await,
+        )
+        .await
+        .unwrap();
+
+    let result = store
+        .reserve_token_outputs(
+            &[
+                ("token-1".to_string(), ReservationTarget::MinTotalValue(999)),
+                ("token-2".to_string(), ReservationTarget::MinTotalValue(500)),
+            ],
+            ReservationPurpose::Payment,
+            None,
+            None,
+        )
+        .await;
+    assert!(result.is_err());
+
+    let stored2 = store
+        .get_token_outputs(GetTokenOutputsFilter::Identifier("token-2"))
+        .await
+        .unwrap();
+    assert!(
+        stored2.reserved_for_payment.is_empty(),
+        "token-2 reserved despite the reservation failing"
+    );
+    assert_eq!(stored2.available.len(), 2);
+}
+
+/// A reservation naming a token the store has never seen fails without reserving
+/// the tokens it does know about.
+pub async fn test_multi_token_reservation_rolls_back_on_unknown_token(
+    store: &dyn TokenOutputStore,
+) {
+    let token1 = create_token_outputs(1, vec![100, 200]);
+    store
+        .set_tokens_outputs(&token1, future_refresh_start(store).await)
+        .await
+        .unwrap();
+
+    let result = store
+        .reserve_token_outputs(
+            &[
+                ("token-1".to_string(), ReservationTarget::MinTotalValue(100)),
+                ("token-9".to_string(), ReservationTarget::MinTotalValue(1)),
+            ],
+            ReservationPurpose::Payment,
+            None,
+            None,
+        )
+        .await;
+    assert!(result.is_err());
+
+    let stored1 = store
+        .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+        .await
+        .unwrap();
+    assert!(stored1.reserved_for_payment.is_empty());
+    assert_eq!(stored1.available.len(), 2);
+}
+
+/// A successful multi-token reservation takes every token's outputs, and
+/// cancelling returns each output to its own token's pool.
+pub async fn test_multi_token_reservation_cancel_restores_every_token(
+    store: &dyn TokenOutputStore,
+) {
+    let token1 = create_token_outputs(1, vec![100, 200]);
+    let token2 = create_token_outputs(2, vec![500, 1000]);
+    store
+        .set_tokens_outputs(
+            &merge_token_outputs([token1, token2]),
+            future_refresh_start(store).await,
+        )
+        .await
+        .unwrap();
+
+    let reservation = store
+        .reserve_token_outputs(
+            &[
+                ("token-1".to_string(), ReservationTarget::MinTotalValue(100)),
+                ("token-2".to_string(), ReservationTarget::MinTotalValue(500)),
+            ],
+            ReservationPurpose::Payment,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    // One reservation covering both tokens.
+    let reserved_tokens = reservation
+        .token_outputs
+        .outputs
+        .iter()
+        .map(|o| o.output.token_identifier.clone())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(reserved_tokens.len(), 2, "reservation spans both tokens");
+
+    store.cancel_reservation(&reservation.id).await.unwrap();
+
+    for (token_id, expected) in [("token-1", 2), ("token-2", 2)] {
+        let stored = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier(token_id))
+            .await
+            .unwrap();
+        assert_eq!(
+            stored.available.len(),
+            expected,
+            "{token_id} outputs not restored by cancel"
+        );
+        assert!(stored.reserved_for_payment.is_empty());
+    }
+}
+
+/// Finalizing a multi-token reservation spends every token's outputs, and a stale
+/// refresh still reporting them must not bring any of them back.
+pub async fn test_multi_token_reservation_finalize_spends_every_token(
+    store: &dyn TokenOutputStore,
+) {
+    let token1 = create_token_outputs(1, vec![100, 200]);
+    let token2 = create_token_outputs(2, vec![500, 1000]);
+    let all = merge_token_outputs([token1, token2]);
+    store
+        .set_tokens_outputs(&all, future_refresh_start(store).await)
+        .await
+        .unwrap();
+
+    let reservation = store
+        .reserve_token_outputs(
+            &[
+                ("token-1".to_string(), ReservationTarget::MinTotalValue(100)),
+                ("token-2".to_string(), ReservationTarget::MinTotalValue(500)),
+            ],
+            ReservationPurpose::Payment,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let spent = reservation.token_outputs.prev_outpoints();
+    assert_eq!(spent.len(), 2, "one output taken from each token");
+    store.finalize_reservation(&reservation.id).await.unwrap();
+
+    // Both tokens lost exactly their reserved output.
+    for (token_id, expected) in [("token-1", 1), ("token-2", 1)] {
+        let stored = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier(token_id))
+            .await
+            .unwrap();
+        assert_eq!(stored.available.len(), expected);
+        assert!(stored.reserved_for_payment.is_empty());
+    }
+
+    // A refresh that started before the spend is stale, so it must not resurrect
+    // either token's spent output.
+    store
+        .set_tokens_outputs(&all, past_refresh_start(store).await)
+        .await
+        .unwrap();
+
+    for token_id in ["token-1", "token-2"] {
+        let stored = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier(token_id))
+            .await
+            .unwrap();
+        for output in &stored.available {
+            assert!(
+                !spent.contains(&(output.prev_tx_hash.clone(), output.prev_tx_vout)),
+                "{token_id} resurrected a finalized output"
+            );
+        }
+    }
+}
+
+/// Reserving by outpoints is all-or-nothing too: one unknown outpoint fails the
+/// whole call, and the outputs already taken from earlier tokens go back to their
+/// pools rather than staying reserved.
+pub async fn test_reserve_by_outpoints_rolls_back_on_missing(store: &dyn TokenOutputStore) {
+    let token1 = create_token_outputs(1, vec![100, 200]);
+    let token2 = create_token_outputs(2, vec![500]);
+    let all = merge_token_outputs([token1, token2]);
+    store
+        .set_tokens_outputs(&all, future_refresh_start(store).await)
+        .await
+        .unwrap();
+
+    let mut outpoints = all.prev_outpoints().into_iter().collect::<Vec<_>>();
+    outpoints.push(("does-not-exist".to_string(), 7));
+
+    let result = store
+        .reserve_token_outputs_by_outpoints(&outpoints, ReservationPurpose::Payment)
+        .await;
+    assert!(
+        result.is_err(),
+        "a missing outpoint must fail the reservation"
+    );
+
+    for (token_id, expected) in [("token-1", 2), ("token-2", 1)] {
+        let stored = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier(token_id))
+            .await
+            .unwrap();
+        assert_eq!(
+            stored.available.len(),
+            expected,
+            "{token_id} outputs not restored after a failed outpoint reservation"
+        );
+        assert!(stored.reserved_for_payment.is_empty());
+    }
+}
+
+/// Outpoints spanning several tokens are reserved by one call, without being told
+/// which tokens they belong to.
+pub async fn test_reserve_by_outpoints_spans_tokens(store: &dyn TokenOutputStore) {
+    let token1 = create_token_outputs(1, vec![100]);
+    let token2 = create_token_outputs(2, vec![500]);
+    let all = merge_token_outputs([token1, token2]);
+    store
+        .set_tokens_outputs(&all, future_refresh_start(store).await)
+        .await
+        .unwrap();
+
+    let outpoints = all.prev_outpoints().into_iter().collect::<Vec<_>>();
+    let reservation = store
+        .reserve_token_outputs_by_outpoints(&outpoints, ReservationPurpose::Payment)
+        .await
+        .unwrap();
+
+    assert_eq!(reservation.token_outputs.outputs.len(), 2);
+    let tokens = reservation
+        .token_outputs
+        .outputs
+        .iter()
+        .map(|o| o.output.token_identifier.clone())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(tokens.len(), 2);
+    // Metadata must cover every token the reservation holds.
+    for token_id in tokens {
+        assert!(
+            reservation.token_outputs.metadata_for(&token_id).is_some(),
+            "reservation missing metadata for {token_id}"
+        );
+    }
 }
