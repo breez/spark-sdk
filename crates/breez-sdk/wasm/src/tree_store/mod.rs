@@ -258,6 +258,34 @@ impl TreeStore for WasmTreeStore {
         Ok(pedigrees)
     }
 
+    async fn get_deleted_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
+        let promise = self
+            .tree_store
+            .get_deleted_leaves()
+            .map_err(js_error_to_tree_error)?;
+        let result = JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_tree_error)?;
+        serde_wasm_bindgen::from_value(result).map_err(|e| TreeServiceError::Generic(e.to_string()))
+    }
+
+    async fn remove_leaves(&self, leaf_ids: &[TreeNodeId]) -> Result<(), TreeServiceError> {
+        if leaf_ids.is_empty() {
+            return Ok(());
+        }
+        let ids: Vec<String> = leaf_ids.iter().map(ToString::to_string).collect();
+        let ids_js = serde_wasm_bindgen::to_value(&ids)
+            .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
+        let promise = self
+            .tree_store
+            .remove_leaves(ids_js)
+            .map_err(js_error_to_tree_error)?;
+        JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_tree_error)?;
+        Ok(())
+    }
+
     async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
         let promise = self
             .tree_store
@@ -592,6 +620,8 @@ export interface TreeStore {
     leavesMissingExitChains: () => Promise<string[]>;
     getLeaves: () => Promise<Leaves>;
     getExitChains: (leafIds: string[]) => Promise<LeafPedigree[]>;
+    getDeletedLeaves: () => Promise<TreeNode[]>;
+    removeLeaves: (leafIds: string[]) => Promise<void>;
     getAvailableBalance: () => Promise<bigint>;
     getVerifiedLeafKeys: () => Promise<[string, string, string][]>;
     setLeaves: (leaves: TreeNode[], missingLeaves: TreeNode[], refreshStartedAtMs: number) => Promise<void>;
@@ -623,6 +653,12 @@ extern "C" {
 
     #[wasm_bindgen(structural, method, js_name = getExitChains, catch)]
     pub fn get_exit_chains(this: &TreeStoreJs, leaf_ids: JsValue) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = getDeletedLeaves, catch)]
+    pub fn get_deleted_leaves(this: &TreeStoreJs) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = removeLeaves, catch)]
+    pub fn remove_leaves(this: &TreeStoreJs, leaf_ids: JsValue) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = getAvailableBalance, catch)]
     pub fn get_available_balance(this: &TreeStoreJs) -> Result<Promise, JsValue>;
