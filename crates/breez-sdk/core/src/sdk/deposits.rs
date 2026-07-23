@@ -3,7 +3,7 @@ use std::{str::FromStr, time::Duration};
 use bitcoin::{consensus::serialize, hex::DisplayHex};
 use platform_utils::tokio;
 use spark_wallet::{ListTransfersRequest, TransferId, WalletTransfer};
-use tracing::{error, trace};
+use tracing::{error, info, trace};
 
 use crate::{
     ClaimDepositRequest, ClaimDepositResponse, ListUnclaimedDepositsRequest,
@@ -12,7 +12,7 @@ use crate::{
     utils::utxo_fetcher::CachedUtxoFetcher,
 };
 
-use super::BreezSdk;
+use super::{BreezSdk, sync::InstantClaimOutcome};
 
 // Retry parameters for looking up the transfer created by a static deposit
 // claim while it propagates across Spark operators.
@@ -31,6 +31,51 @@ impl BreezSdk {
             CachedUtxoFetcher::new(self.chain_service.clone(), self.storage.clone())
                 .fetch_detailed_utxo(&request.txid, request.vout)
                 .await?;
+
+        if let Some(max_instant_fee_bps) = request.max_instant_fee_bps {
+            return match self
+                .instant_claim_utxo(&detailed_utxo, max_instant_fee_bps)
+                .await
+            {
+                Ok(InstantClaimOutcome::Submitted(claim_id)) => {
+                    info!(
+                        "Instant claimed utxo {}:{} with claim_id: {claim_id}",
+                        detailed_utxo.txid, detailed_utxo.vout
+                    );
+                    // Mark, don't delete: the claim settles asynchronously, so the
+                    // marker keeps the background sync from re-attempting;
+                    // reconcile_deposits removes the row once the swap lands.
+                    self.storage
+                        .update_deposit(
+                            detailed_utxo.txid.to_string(),
+                            detailed_utxo.vout,
+                            UpdateDepositPayload::InstantClaimAttempted,
+                        )
+                        .await?;
+                    Ok(ClaimDepositResponse { payment: None })
+                }
+                Ok(InstantClaimOutcome::Declined(e)) => {
+                    // Terminal outcome (no 0-conf plan, spread over the ceiling,
+                    // or a failed submission whose outcome is unknown): mark, so
+                    // that if instant is also enabled in config the background
+                    // sync does not re-submit into the pre-swap window.
+                    error!("Instant claim declined: {e:?}");
+                    self.storage
+                        .update_deposit(
+                            detailed_utxo.txid.to_string(),
+                            detailed_utxo.vout,
+                            UpdateDepositPayload::InstantClaimAttempted,
+                        )
+                        .await?;
+                    Err(e)
+                }
+                // Transient quote-fetch failure: leave unmarked so a retry works.
+                Err(e) => {
+                    error!("Instant claim transient error: {e:?}");
+                    Err(e)
+                }
+            };
+        }
 
         let max_fee = request
             .max_fee
@@ -51,7 +96,9 @@ impl BreezSdk {
                         should_emit_event,
                     })
                     .await;
-                Ok(ClaimDepositResponse { payment })
+                Ok(ClaimDepositResponse {
+                    payment: Some(payment),
+                })
             }
             Err(e) => {
                 error!("Failed to claim deposit: {e:?}");

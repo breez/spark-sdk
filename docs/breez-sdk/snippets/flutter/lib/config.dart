@@ -24,6 +24,13 @@ Future<void> configureMaxDepositClaimFee() async {
       maxDepositClaimFee:
           MaxFee.networkRecommended(leewaySatPerVbyte: BigInt.from(1)));
   // ANCHOR_END: max-deposit-claim-fee
+
+  // ANCHOR: max-instant-deposit-claim-fee
+  // Opt into instant (0-conf) deposit claims, paying at most 4% (400 bps) of
+  // the deposit value as the SSP spread. Small deposits fall through to the
+  // normal claim.
+  config = config.copyWith(maxInstantDepositClaimFeeBps: 400);
+  // ANCHOR_END: max-instant-deposit-claim-fee
   print(config);
 }
 

@@ -189,6 +189,36 @@ mutation ClaimStaticDeposit($input: ClaimStaticDepositInput!) {
   }
 }
 
+mutation CreateInstantStaticDepositQuote($input: CreateInstantStaticDepositQuoteInput!) {
+  create_instant_static_deposit_quote(input: $input) {
+    quote {
+      id
+      transaction_id
+      output_index
+      deposit_amount {
+        ...CurrencyAmountFragment
+      }
+      credit_amount {
+        ...CurrencyAmountFragment
+      }
+      quote_signature
+    }
+    fulfillment_plans {
+      id
+      amount {
+        ...CurrencyAmountFragment
+      }
+      confirmations
+    }
+  }
+}
+
+mutation CreateClaimInstantStaticDeposit($input: CreateClaimInstantStaticDepositInput!) {
+  create_claim_instant_static_deposit(input: $input) {
+    claim_id
+  }
+}
+
 mutation CompleteCoopExit($input: CompleteCoopExitInput!) {
   complete_coop_exit(input: $input) {
     request {

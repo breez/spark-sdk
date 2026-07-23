@@ -71,6 +71,20 @@ func handleFeeExceeded(sdk: BreezSdk, deposit: DepositInfo) async throws {
     // ANCHOR_END: handle-fee-exceeded
 }
 
+func instantClaim(sdk: BreezSdk, deposit: DepositInfo) async throws {
+    // ANCHOR: instant-claim
+    // Claim a not-yet-mature deposit instantly (0-conf). Cap it at 4% (400 bps)
+    // of the deposit value.
+    let claimRequest = ClaimDepositRequest(
+        txid: deposit.txid,
+        vout: deposit.vout,
+        maxFee: nil,
+        maxInstantFeeBps: 400
+    )
+    try await sdk.claimDeposit(request: claimRequest)
+    // ANCHOR_END: instant-claim
+}
+
 func refundDeposit(sdk: BreezSdk) async throws {
     // ANCHOR: refund-deposit
     let txid = "your_deposit_txid"

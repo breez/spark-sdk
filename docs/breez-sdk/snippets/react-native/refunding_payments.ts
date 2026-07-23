@@ -72,12 +72,27 @@ const handleFeeExceeded = async (sdk: BreezSdk, deposit: DepositInfo) => {
       const claimRequest: ClaimDepositRequest = {
         txid: deposit.txid,
         vout: deposit.vout,
-        maxFee: new MaxFee.Fixed({ amount: requiredFee })
+        maxFee: new MaxFee.Fixed({ amount: requiredFee }),
+        maxInstantFeeBps: undefined
       }
       await sdk.claimDeposit(claimRequest)
     }
   }
   // ANCHOR_END: handle-fee-exceeded
+}
+
+const instantClaim = async (sdk: BreezSdk, deposit: DepositInfo) => {
+  // ANCHOR: instant-claim
+  // Claim a not-yet-mature deposit instantly (0-conf). Cap it at 4% (400 bps)
+  // of the deposit value.
+  const claimRequest: ClaimDepositRequest = {
+    txid: deposit.txid,
+    vout: deposit.vout,
+    maxFee: undefined,
+    maxInstantFeeBps: 400
+  }
+  await sdk.claimDeposit(claimRequest)
+  // ANCHOR_END: instant-claim
 }
 
 const refundDeposit = async (sdk: BreezSdk) => {
@@ -131,7 +146,8 @@ const customClaimLogic = async (sdk: BreezSdk, deposit: DepositInfo) => {
       const claimRequest: ClaimDepositRequest = {
         txid: deposit.txid,
         vout: deposit.vout,
-        maxFee: new MaxFee.Rate({ satPerVbyte: requiredFeeRate })
+        maxFee: new MaxFee.Rate({ satPerVbyte: requiredFeeRate }),
+        maxInstantFeeBps: undefined
       }
       await sdk.claimDeposit(claimRequest)
     }

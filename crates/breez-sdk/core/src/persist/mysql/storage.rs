@@ -530,6 +530,13 @@ impl MysqlStorage {
                         (user_id, provider, is_terminal)
                 )",
             )],
+            // Migration 21: Track whether a 0-conf instant claim has been
+            // attempted for a deposit.
+            vec![Migration::AddColumn {
+                table: "brz_unclaimed_deposits",
+                column: "instant_claim_attempted",
+                definition: "TINYINT(1) NOT NULL DEFAULT 0",
+            }],
         ]
     }
 }
@@ -1374,7 +1381,7 @@ impl Storage for MysqlStorage {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         let rows: Vec<Row> = conn
             .exec(
-                "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM brz_unclaimed_deposits WHERE user_id = ?",
+                "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_attempted FROM brz_unclaimed_deposits WHERE user_id = ?",
                 (self.identity.clone(),),
             )
             .await
@@ -1401,6 +1408,7 @@ impl Storage for MysqlStorage {
                 claim_error,
                 refund_tx: get_opt_str(row, 5),
                 refund_tx_id: get_opt_str(row, 6),
+                instant_claim_attempted: get_opt_bool(row, 7).unwrap_or(false),
             });
         }
         Ok(deposits)
@@ -1431,6 +1439,14 @@ impl Storage for MysqlStorage {
                 conn.exec_drop(
                     "UPDATE brz_unclaimed_deposits SET refund_tx = ?, refund_tx_id = ?, claim_error = NULL WHERE user_id = ? AND txid = ? AND vout = ?",
                     (refund_tx, refund_txid, self.identity.clone(), txid, i32::try_from(vout)?),
+                )
+                .await
+                .map_err(map_db_error)?;
+            }
+            UpdateDepositPayload::InstantClaimAttempted => {
+                conn.exec_drop(
+                    "UPDATE brz_unclaimed_deposits SET instant_claim_attempted = 1 WHERE user_id = ? AND txid = ? AND vout = ?",
+                    (self.identity.clone(), txid, i32::try_from(vout)?),
                 )
                 .await
                 .map_err(map_db_error)?;
@@ -2303,6 +2319,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_instant_claim_attempted() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_instant_claim_attempted(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
     async fn test_payment_type_filtering() {
         let fixture = MysqlTestFixture::new().await;
         crate::persist::tests::test_payment_type_filtering(Box::new(fixture.storage)).await;
@@ -2989,7 +3011,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(20), "migration version must advance to 20");
+        assert_eq!(version, Some(21), "migration version must advance to 21");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())
@@ -3261,7 +3283,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(20), "migration must advance to 20");
+        assert_eq!(version, Some(21), "migration must advance to 21");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())

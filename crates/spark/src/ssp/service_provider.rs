@@ -11,10 +11,11 @@ use crate::{
     signer::SparkSigner,
     ssp::{
         BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositInput, CoopExitFeeQuote,
-        CurrencyAmount, LeavesSwapRequest, RequestCoopExitInput, RequestLightningReceiveInput,
-        RequestLightningSendInput, RequestSwapInput, ServiceProviderConfig,
-        SparkWalletWebhookEventType, SspAuthHeaderProvider, SspTransfer, StaticDepositQuote,
-        WebhookEntry,
+        CreateClaimInstantStaticDepositInput, CurrencyAmount, InstantStaticDepositClaim,
+        InstantStaticDepositQuoteResult, LeavesSwapRequest, RequestCoopExitInput,
+        RequestLightningReceiveInput, RequestLightningSendInput, RequestSwapInput,
+        ServiceProviderConfig, SparkWalletWebhookEventType, SspAuthHeaderProvider, SspTransfer,
+        StaticDepositQuote, WebhookEntry,
         error::ServiceProviderResult,
         graphql::{CoopExitRequest, GraphQLClient, LightningReceiveRequest, LightningSendRequest},
     },
@@ -247,6 +248,29 @@ impl ServiceProvider {
         input: ClaimStaticDepositInput,
     ) -> ServiceProviderResult<ClaimStaticDeposit> {
         Ok(self.gql_client.claim_static_deposit(input).await?)
+    }
+
+    /// Get an instant static deposit quote and its fulfillment plans.
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
+    pub async fn get_instant_static_deposit_quote(
+        &self,
+        transaction_id: String,
+        output_index: u32,
+        network: BitcoinNetwork,
+    ) -> ServiceProviderResult<InstantStaticDepositQuoteResult> {
+        Ok(self
+            .gql_client
+            .get_instant_static_deposit_quote(transaction_id, output_index, network)
+            .await?)
+    }
+
+    /// Claim an instant static deposit for a chosen fulfillment plan.
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
+    pub async fn claim_instant_static_deposit(
+        &self,
+        input: CreateClaimInstantStaticDepositInput,
+    ) -> ServiceProviderResult<InstantStaticDepositClaim> {
+        Ok(self.gql_client.claim_instant_static_deposit(input).await?)
     }
 
     /// Get transfers by IDs

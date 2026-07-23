@@ -467,6 +467,11 @@ impl PostgresStorage {
                 "CREATE INDEX IF NOT EXISTS brz_idx_cross_chain_swaps_user_provider_is_terminal
                     ON brz_cross_chain_swaps (user_id, provider, is_terminal)".to_string(),
             ],
+            // Migration 20: Track whether a 0-conf instant claim has been
+            // attempted for a deposit.
+            vec![
+                "ALTER TABLE brz_unclaimed_deposits ADD COLUMN instant_claim_attempted BOOLEAN NOT NULL DEFAULT FALSE".to_string(),
+            ],
         ]
     }
 }
@@ -1258,7 +1263,7 @@ impl Storage for PostgresStorage {
         let client = self.pool.get().await.map_err(map_pool_error)?;
         let rows = client
             .query(
-                "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM brz_unclaimed_deposits WHERE user_id = $1",
+                "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_attempted FROM brz_unclaimed_deposits WHERE user_id = $1",
                 &[&self.identity],
             )
             .await?;
@@ -1280,6 +1285,7 @@ impl Storage for PostgresStorage {
                 claim_error,
                 refund_tx: row.get(5),
                 refund_tx_id: row.get(6),
+                instant_claim_attempted: row.get(7),
             });
         }
         Ok(deposits)
@@ -1311,6 +1317,14 @@ impl Storage for PostgresStorage {
                     .execute(
                         "UPDATE brz_unclaimed_deposits SET refund_tx = $1, refund_tx_id = $2, claim_error = NULL WHERE user_id = $3 AND txid = $4 AND vout = $5",
                         &[&refund_tx, &refund_txid, &self.identity, &txid, &i32::try_from(vout)?],
+                    )
+                    .await?;
+            }
+            UpdateDepositPayload::InstantClaimAttempted => {
+                client
+                    .execute(
+                        "UPDATE brz_unclaimed_deposits SET instant_claim_attempted = TRUE WHERE user_id = $1 AND txid = $2 AND vout = $3",
+                        &[&self.identity, &txid, &i32::try_from(vout)?],
                     )
                     .await?;
             }
@@ -2153,6 +2167,12 @@ mod tests {
     async fn test_deposit_refunds() {
         let fixture = PostgresTestFixture::new().await;
         crate::persist::tests::test_deposit_refunds(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_instant_claim_attempted() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_instant_claim_attempted(Box::new(fixture.storage)).await;
     }
 
     #[tokio::test]
@@ -3187,7 +3207,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 19, "migration version must advance to 19");
+        assert_eq!(version, 20, "migration version must advance to 20");
 
         // Seed payment row is preserved on the renamed table — proves the
         // table + PK constraint rename worked and the columns line up.
@@ -3483,7 +3503,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 19, "migration must advance to 19");
+        assert_eq!(version, 20, "migration must advance to 20");
 
         // Seed data preserved (multi-tenant backfilled user_id to current tenant).
         let payment_count: i64 = client

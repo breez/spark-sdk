@@ -480,6 +480,12 @@ class MigrationManager {
             ON cross_chain_swaps(provider, is_terminal)`,
         ],
       },
+      {
+        name: "Add instant_claim_attempted to unclaimed_deposits",
+        sql: [
+          `ALTER TABLE unclaimed_deposits ADD COLUMN instant_claim_attempted INTEGER NOT NULL DEFAULT 0`,
+        ],
+      },
     ];
   }
 }

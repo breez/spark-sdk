@@ -25,6 +25,7 @@ impl DetailedUtxo {
             refund_tx: None,
             refund_tx_id: None,
             claim_error: None,
+            instant_claim_attempted: false,
         }
     }
 }
