@@ -85,6 +85,7 @@ func main() {
 	stableBalanceDefaultActiveLabel := flag.String("stable-balance-default-active-label", "", "Default active label for stable balance")
 	stableBalanceThreshold := flag.Uint64("stable-balance-threshold", 0, "Stable balance threshold in sats")
 	serverMode := flag.Bool("server-mode", false, "Run in server mode (background_tasks_enabled=false)")
+	lnurlDomain := flag.String("lnurl-domain", "", "LNURL server domain for lightning address registration; accepts a plain domain or an http://host:port test server URL")
 	passkeyProviderStr := flag.String("passkey", "", "Use passkey with PRF provider (file, yubikey, or fido2)")
 	label := flag.String("label", "", "Label for seed derivation (requires --passkey)")
 	listLabels := flag.Bool("list-labels", false, "List and select from labels published to Nostr (requires --passkey)")
@@ -123,6 +124,10 @@ func main() {
 	apiKey := os.Getenv("BREEZ_API_KEY")
 	if apiKey != "" {
 		config.ApiKey = &apiKey
+	}
+
+	if *lnurlDomain != "" {
+		config.LnurlDomain = lnurlDomain
 	}
 
 	// Cross-chain sends are opt-in by the caller and mainnet-only (enabling on

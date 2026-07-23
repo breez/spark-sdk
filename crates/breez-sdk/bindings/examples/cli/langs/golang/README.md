@@ -60,6 +60,7 @@ make clean            Remove binary
 | `--stable-balance-default-active-label` | - | Default active label for stable balance |
 | `--stable-balance-threshold` | - | Stable balance threshold in sats |
 | `--server-mode` | false | Run in server mode (`background_tasks_enabled=false`) |
+| `--lnurl-domain` | network default | LNURL server domain for lightning address registration; accepts a plain domain or an `http://host:port` test server URL |
 | `--passkey` | - | Use Passkey with PRF provider (`file`, `yubikey` or `fido2`) |
 | `--label` | `Default` | Requires `--passkey`. The label to use |
 | `--list-labels` | false | Requires `--passkey`. Select label from Nostr |

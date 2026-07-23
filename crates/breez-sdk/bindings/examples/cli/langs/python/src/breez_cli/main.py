@@ -77,12 +77,15 @@ def expand_path(path: str) -> Path:
 @click.option("--list-labels", is_flag=True, default=False, help="List and select from labels published to Nostr (requires --passkey)")
 @click.option("--store-label", is_flag=True, default=False, help="Publish the label to Nostr (requires --passkey and --label)")
 @click.option("--rpid", default=None, help="Relying party ID for FIDO2 provider (requires --passkey)")
+@click.option("--lnurl-domain", default=None,
+              help="LNURL server domain for lightning address registration; accepts a plain domain or an http://host:port test server URL")
 async def main(data_dir, network, account_number, postgres_connection_string,
                mysql_connection_string,
                stable_balance_tokens, stable_balance_default_active_label,
                stable_balance_threshold,
                server_mode,
-               passkey_provider, label, list_labels, store_label, rpid):
+               passkey_provider, label, list_labels, store_label, rpid,
+               lnurl_domain):
     """CLI client for Breez SDK with Spark."""
     data_dir = expand_path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -116,6 +119,8 @@ async def main(data_dir, network, account_number, postgres_connection_string,
     else:
         config = default_config(network=network_enum)
     config.api_key = breez_api_key
+    if lnurl_domain is not None:
+        config.lnurl_domain = lnurl_domain
     if network_enum == Network.MAINNET:
         config.cross_chain_config = CrossChainConfig()
 

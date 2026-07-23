@@ -57,6 +57,7 @@ make run-mainnet
     --store-label                       Publish label to Nostr (requires --passkey and --label)
     --rpid                              Relying party ID for FIDO2 provider (requires --passkey)
     --server-mode                       Run in server mode (background_tasks_enabled=false)
+    --lnurl-domain                      LNURL server domain for lightning address registration
 -h, --help                              Show usage
 ```
 

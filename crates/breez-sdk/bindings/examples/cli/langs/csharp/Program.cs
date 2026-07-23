@@ -14,6 +14,7 @@ var stableBalanceTokens = new List<string>();
 string? stableBalanceDefaultActiveLabel = null;
 ulong? stableBalanceThreshold = null;
 bool serverMode = false;
+string? lnurlDomain = null;
 string? passkeyProviderStr = null;
 string? label = null;
 bool listLabels = false;
@@ -66,6 +67,9 @@ for (int i = 0; i < args.Length; i++)
             break;
         case "--server-mode":
             serverMode = true;
+            break;
+        case "--lnurl-domain":
+            if (i + 1 < args.Length) lnurlDomain = args[++i];
             break;
         case "--help":
         case "-h":
@@ -192,7 +196,8 @@ await RunInteractiveMode(
     postgresConnectionString,
     mysqlConnectionString,
     stableBalanceConfig,
-    passkeyConfig
+    passkeyConfig,
+    lnurlDomain
 );
 
 return;
@@ -232,6 +237,7 @@ static void PrintUsage()
     Console.WriteLine("  --store-label                               Publish label to Nostr (requires --passkey and --label)");
     Console.WriteLine("  --rpid <RPID>                               Relying party ID for FIDO2 provider (requires --passkey)");
     Console.WriteLine("  --server-mode                               Run in server mode (background tasks disabled)");
+    Console.WriteLine("  --lnurl-domain <DOMAIN>                     LNURL server domain for lightning address registration");
     Console.WriteLine("  -h, --help                                  Show this help");
 }
 
@@ -243,7 +249,8 @@ static async Task RunInteractiveMode(
     string? postgresConnectionString,
     string? mysqlConnectionString,
     StableBalanceConfig? stableBalanceConfig,
-    CliPasskeyConfig? passkeyConfig)
+    CliPasskeyConfig? passkeyConfig,
+    string? lnurlDomain)
 {
     // Init logging
     try
@@ -278,6 +285,10 @@ static async Task RunInteractiveMode(
     if (stableBalanceConfig != null)
     {
         config = config with { stableBalanceConfig = stableBalanceConfig };
+    }
+    if (lnurlDomain != null)
+    {
+        config = config with { lnurlDomain = lnurlDomain };
     }
     if (network == Network.Mainnet)
     {
