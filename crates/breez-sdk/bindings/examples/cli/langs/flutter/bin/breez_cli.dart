@@ -44,10 +44,7 @@ Future<void> main(List<String> arguments) async {
           negatable: false,
           help: 'Run in server mode (background_tasks_enabled=false)',
         )
-        ..addOption(
-          'lnurl-domain',
-          help: 'LNURL server domain for lightning address registration',
-        )
+        ..addOption('lnurl-domain', help: 'LNURL server domain for lightning address registration')
         ..addFlag('help', abbr: 'h', negatable: false, help: 'Show usage');
 
   final ArgResults results;
