@@ -78,6 +78,7 @@ const SLIM_LEAF_CANDIDATES_SQL = `SELECT id, value
   WHERE user_id = ?
     AND status = 'Available'
     AND is_missing_from_operators = 0
+    AND is_deleted = 0
     AND reservation_id IS NULL
     AND (
       value <= ?
@@ -87,6 +88,7 @@ const SLIM_LEAF_CANDIDATES_SQL = `SELECT id, value
           WHERE user_id = ?
             AND status = 'Available'
             AND is_missing_from_operators = 0
+            AND is_deleted = 0
             AND reservation_id IS NULL
             AND value > ?
           ORDER BY value
@@ -423,6 +425,7 @@ class MysqlTreeStore {
          LEFT JOIN brz_tree_reservations r
            ON l.reservation_id = r.id AND l.user_id = r.user_id
          WHERE l.user_id = ?
+           AND l.is_deleted = 0
            AND (
              (l.reservation_id IS NULL AND l.status = 'Available')
              OR r.purpose = 'Swap'
@@ -452,6 +455,7 @@ class MysqlTreeStore {
          LEFT JOIN brz_tree_reservations r
            ON l.reservation_id = r.id AND l.user_id = r.user_id
          WHERE l.user_id = ?
+           AND l.is_deleted = 0
            AND (r.purpose IS NOT NULL OR l.status = 'Available')`,
         [this.identity]
       );
@@ -472,7 +476,7 @@ class MysqlTreeStore {
          FROM brz_tree_leaves l
          LEFT JOIN brz_tree_reservations r
            ON l.reservation_id = r.id AND l.user_id = r.user_id
-         WHERE l.user_id = ?`,
+         WHERE l.user_id = ? AND l.is_deleted = 0`,
         [this.identity]
       );
 
@@ -555,19 +559,26 @@ class MysqlTreeStore {
         );
         const spentIds = new Set(spentRows.map((r) => r.leaf_id));
 
-        // Includes leaves released earlier in this transaction by
-        // _cleanupStaleReservations (which now NULLs reservation_id explicitly,
-        // since the composite FK uses NO ACTION). MySQL has no DELETE ...
-        // RETURNING, so the ids are read first.
-        const [oldLeafRows] = await conn.query(
-          "SELECT id FROM brz_tree_leaves WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?",
-          [this.identity, refreshTimestamp]
-        );
-        const deletedIds = oldLeafRows.map((r) => r.id);
+        // Mark, rather than remove, the non-reserved leaves added before this
+        // refresh started. A leaf no operator reports may still be ours, and its
+        // stored transactions are the only way to exit it, so the row stays, and
+        // its ancestor rows stay with it. The upserts below clear the mark on
+        // whatever came back.
         await conn.query(
-          "DELETE FROM brz_tree_leaves WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?",
+          "UPDATE brz_tree_leaves SET is_deleted = 1 WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?",
           [this.identity, refreshTimestamp]
         );
+
+        // A leaf we spent ourselves is the one absence already accounted for, so
+        // it goes for good and takes its ancestor rows with it below.
+        const deletedIds = Array.from(spentIds);
+        if (deletedIds.length > 0) {
+          await conn.query(
+            `DELETE FROM brz_tree_leaves WHERE user_id = ? AND reservation_id IS NULL
+               AND id IN (${buildPlaceholders(deletedIds.length)})`,
+            [this.identity, ...deletedIds]
+          );
+        }
 
         await this._batchUpsertLeaves(conn, leaves, false, spentIds);
         await this._batchUpsertLeaves(conn, missingLeaves, true, spentIds);
@@ -719,6 +730,7 @@ class MysqlTreeStore {
            WHERE user_id = ?
              AND status = 'Available'
              AND is_missing_from_operators = 0
+             AND is_deleted = 0
              AND reservation_id IS NULL`,
           [this.identity]
         );
@@ -884,6 +896,7 @@ class MysqlTreeStore {
            WHERE user_id = ? AND id IN (${placeholders})
              AND status = 'Available'
              AND is_missing_from_operators = 0
+             AND is_deleted = 0
              AND reservation_id IS NULL`,
           [this.identity, ...leafIds]
         );
@@ -1186,7 +1199,7 @@ class MysqlTreeStore {
     for (let i = 0; i < leafNodes.length; i += LEAF_UPSERT_CHUNK_SIZE) {
       const chunk = leafNodes.slice(i, i + LEAF_UPSERT_CHUNK_SIZE);
       const valueClauses = new Array(chunk.length)
-        .fill("(?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6))")
+        .fill("(?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6), 0)")
         .join(", ");
       const params = [];
       for (const leaf of chunk) {
@@ -1206,7 +1219,8 @@ class MysqlTreeStore {
       await conn.query(
         `INSERT INTO brz_tree_leaves
              (user_id, id, status, is_missing_from_operators, data, value,
-              parent_node_id, verifying_public_key, signing_public_key, added_at)
+              parent_node_id, verifying_public_key, signing_public_key, added_at,
+              is_deleted)
          VALUES ${valueClauses}
          ON DUPLICATE KEY UPDATE
            status = VALUES(status),
@@ -1216,7 +1230,8 @@ class MysqlTreeStore {
            parent_node_id = VALUES(parent_node_id),
            verifying_public_key = VALUES(verifying_public_key),
            signing_public_key = VALUES(signing_public_key),
-           added_at = UTC_TIMESTAMP(6)`,
+           added_at = UTC_TIMESTAMP(6),
+           is_deleted = 0`,
         params
       );
     }
