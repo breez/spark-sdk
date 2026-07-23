@@ -114,4 +114,15 @@ The Kotlin CLI uses the breez-sdk-spark-kmp bindings (built locally via `make se
 **Serialization:**
 - UniFFI types are not data classes — use Gson with reflection for JSON serialization
 - Handle BigInteger serialization specially (convert to string)
+
+**Scenario runner contract:**
+This CLI is executed end-to-end on CI by the shared scenario runner
+(crates/breez-sdk/cli/tests/, `make kotlin-itest`) against the scenarios in
+`crates/breez-sdk/cli/tests/scenarios/` (never port those files). Keep the
+REPL drivable with piped, non-TTY stdin, keep prompt order and count
+identical to the Rust CLI, and keep results printed as JSON documents.
+Serialization.kt must skip static fields (a Kotlin object's INSTANCE
+self-reference recurses forever), print field-less records as {}, and
+flatten a sealed variant's single positional payload (uniffi's v1) beside
+the "type" tag.
 """

@@ -1,0 +1,30 @@
+name: 'Restore lnurl server image'
+description: >
+  Restores the docker-save tarball of the breez-lnurl-built image at
+  /tmp/breez-lnurl-built.tar and loads it into docker on a cache hit. On a
+  miss the test harness builds the image and the caller's export step
+  recreates the tarball, which the cache saves at job end.
+outputs:
+  cache-hit:
+    description: 'Whether the image tarball was restored'
+    value: ${{ steps.cache.outputs.cache-hit }}
+runs:
+  using: 'composite'
+  steps:
+    # The key must cover every local crate the lnurl bin builds from, or a
+    # dependency change ships a stale image. Regenerate the list with:
+    #   cd crates/breez-sdk/lnurl && cargo tree -e normal,build --prefix none \
+    #     | grep -o '(.*)' | sort -u
+    # External dependencies are pinned by the crate's own Cargo.lock, which
+    # the first pattern covers.
+    - name: Restore lnurl server image
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: /tmp/breez-lnurl-built.tar
+        key: lnurl-image-${{ runner.os }}-${{ hashFiles('crates/breez-sdk/lnurl/**', 'crates/breez-sdk/lnurl-models/**', 'crates/macros/**', 'crates/platform-utils/**', 'crates/spark/**', 'crates/spark-wallet/**', 'crates/utils/**') }}
+
+    - name: Load lnurl server image
+      if: steps.cache.outputs.cache-hit == 'true'
+      shell: bash
+      run: docker load -i /tmp/breez-lnurl-built.tar

@@ -21,6 +21,10 @@ When a change is made to the Rust CLI and merged to `main`, the [sync-cli](../..
 | [Swift](langs/swift/) | `langs/swift/` | Active |
 | [WASM (TypeScript)](langs/wasm/) | `langs/wasm/` | Active |
 
+## Behavioral Tests
+
+Shared end-to-end scenarios live in [`crates/breez-sdk/cli/tests/scenarios/`](../../../cli/tests/scenarios/): JSON files describing wallet flows as CLI commands plus expected output. They are shared verbatim across languages; each port gets a thin runner instead of ported tests. The Rust CLI runs them via `make cli-itest`; the WASM, Swift, and Kotlin ports run the same files via `make wasm-itest`, `make swift-itest`, and `make kotlin-itest`. See the [scenarios README](../../../cli/tests/scenarios/README.md) for the runner table, the schema, and the sync contract.
+
 ## Sync Prompts
 
 The `sync-prompts/` directory contains per-language prompt configs (TOML) and a shared prompt template. The [sync-cli](../../../../../.github/workflows/sync-cli.yml) workflow assembles the final prompt at runtime by rendering the template with language-specific values.

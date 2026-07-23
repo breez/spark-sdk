@@ -32,7 +32,15 @@ make cargo-test         # Run Rust unit tests
 make wasm-test          # Run WASM tests (browser + Node.js)
 make itest              # Integration tests (requires Docker)
 make breez-itest        # Breez integration tests (requires faucet credentials)
+make cli-itest          # Shared CLI scenarios via the Rust CLI (faucet credentials; Docker for lnurl)
+make wasm-itest         # Same scenarios via the wasm CLI port + npm-API smoke suite (Node 22)
+make swift-itest        # Same scenarios via the swift CLI port (macOS)
+make kotlin-itest       # Same scenarios via the kotlin-multiplatform CLI port (JVM)
 ```
+
+Shared behavioral scenarios (JSON, shared verbatim across language CLI runners,
+never ported) live in `crates/breez-sdk/cli/tests/scenarios/`; see its README
+for the schema and the sync contract.
 
 Run a single test:
 ```bash

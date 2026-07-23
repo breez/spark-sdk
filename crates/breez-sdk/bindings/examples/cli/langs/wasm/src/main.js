@@ -44,7 +44,8 @@ function parseCliArgs() {
     label: undefined,
     listLabels: false,
     storeLabel: false,
-    rpid: undefined
+    rpid: undefined,
+    lnurlDomain: undefined
   }
 
   for (let i = 0; i < args.length; i++) {
@@ -92,6 +93,9 @@ function parseCliArgs() {
       case '--server-mode':
         opts.serverMode = true
         break
+      case '--lnurl-domain':
+        opts.lnurlDomain = args[++i]
+        break
       case '-h':
       case '--help':
         console.log('Usage: node src/main.js [OPTIONS]')
@@ -111,6 +115,7 @@ function parseCliArgs() {
         console.log('  --store-label                                Publish the label to Nostr (requires --passkey and --label)')
         console.log('  --rpid <id>                                  Relying party ID for FIDO2 provider (requires --passkey)')
         console.log('  --server-mode                                Run in server mode (background_tasks_enabled=false)')
+        console.log('  --lnurl-domain <domain>                      LNURL server domain for lightning address registration')
         console.log('  -h, --help                                   Show this help message')
         process.exit(0)
         break
@@ -245,6 +250,10 @@ async function main() {
     config.crossChainConfig = {}
   }
 
+  if (opts.lnurlDomain !== undefined) {
+    config.lnurlDomain = opts.lnurlDomain
+  }
+
   // Stable balance config
   if (opts.stableBalanceTokens.length > 0) {
     const tokens = opts.stableBalanceTokens.map((s) => {
@@ -324,25 +333,89 @@ async function main() {
     return [hits.length ? hits : allCommands, line]
   }
 
-  // Create readline interface for the REPL with tab completion
+  // Create readline interface for the REPL with tab completion. Terminal
+  // mode only on a real TTY: piped stdin must not echo input or emit
+  // escape codes.
+  const isTty = process.stdin.isTTY === true
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    terminal: true,
+    terminal: isTty,
     completer
   })
 
-  // Load history
+  // Load history (readline only tracks history in terminal mode)
   const historyFile = persistence.historyFile()
-  try {
-    const historyData = fs.readFileSync(historyFile, 'utf-8')
-    const lines = historyData.split('\n').filter((l) => l.trim() !== '')
-    // readline history is most-recent-first in the internal array
-    for (const line of lines.reverse()) {
-      rl.history.push(line)
+  if (rl.history) {
+    try {
+      const historyData = fs.readFileSync(historyFile, 'utf-8')
+      const lines = historyData.split('\n').filter((l) => l.trim() !== '')
+      // readline history is most-recent-first in the internal array
+      for (const line of lines.reverse()) {
+        rl.history.push(line)
+      }
+    } catch {
+      // No history file yet
     }
-  } catch {
-    // No history file yet
+  }
+
+  // Buffer lines that arrive while a command is still executing: readline
+  // drops them otherwise (nothing is waiting on them), which breaks piped
+  // stdin where all input arrives at once. Every read goes through the
+  // buffer, so in-command prompts see scripted answers too.
+  const bufferedLines = []
+  let pendingLine = null
+  let inputEnded = false
+  rl.on('line', (line) => {
+    if (pendingLine) {
+      const resolve = pendingLine
+      pendingLine = null
+      resolve(line)
+    } else {
+      bufferedLines.push(line)
+    }
+  })
+  rl.on('close', () => {
+    inputEnded = true
+    if (pendingLine) {
+      const resolve = pendingLine
+      pendingLine = null
+      resolve(null)
+    }
+  })
+
+  /**
+   * Read the next input line, preferring lines buffered while a command
+   * was running. Resolves null once input is exhausted (CTRL-D or piped
+   * stdin fully consumed).
+   *
+   * @param {string} prompt - The prompt to display (TTY only)
+   * @returns {Promise<string|null>} The next line, or null on end of input
+   */
+  function readLine(prompt) {
+    return new Promise((resolve) => {
+      if (bufferedLines.length > 0) {
+        resolve(bufferedLines.shift())
+        return
+      }
+      if (inputEnded) {
+        resolve(null)
+        return
+      }
+      pendingLine = resolve
+      if (isTty) {
+        rl.setPrompt(prompt)
+        rl.prompt()
+      }
+    })
+  }
+
+  // Handed to command handlers in place of the raw readline interface so
+  // their prompts are answered from the shared line buffer.
+  const lineReader = {
+    question(prompt, cb) {
+      readLine(prompt).then((answer) => cb(answer ?? ''))
+    }
   }
 
   // REPL prompt
@@ -351,22 +424,19 @@ async function main() {
   console.log('Breez SDK CLI Interactive Mode')
   console.log("Type 'help' for available commands or 'exit' to quit")
 
-  const askQuestion = () => {
-    rl.question(promptStr, async (line) => {
-      const trimmed = (line || '').trim()
-      if (!trimmed) {
-        askQuestion()
-        return
+  const runRepl = async () => {
+    for (;;) {
+      const line = await readLine(promptStr)
+      if (line === null) {
+        break
       }
-
-      // Add to history
-      if (rl.history && rl.history[0] !== trimmed) {
-        // readline auto-adds to history, but we want to also save it
+      const trimmed = line.trim()
+      if (!trimmed) {
+        continue
       }
 
       if (trimmed === 'exit' || trimmed === 'quit') {
-        await shutdown()
-        return
+        break
       }
 
       if (trimmed === 'help' || trimmed === '-h') {
@@ -374,11 +444,10 @@ async function main() {
           () => sdk,
           () => tokenIssuer,
           () => getSparkStatus,
-          rl
+          lineReader
         )
         helpProgram.outputHelp()
-        askQuestion()
-        return
+        continue
       }
 
       try {
@@ -391,7 +460,7 @@ async function main() {
           () => sdk,
           () => tokenIssuer,
           () => getSparkStatus,
-          rl
+          lineReader
         )
         await program.parseAsync(parsedArgs, { from: 'user' })
       } catch (e) {
@@ -407,9 +476,9 @@ async function main() {
           console.error(`Error: ${e.message || e}`)
         }
       }
+    }
 
-      askQuestion()
-    })
+    await shutdown()
   }
 
   async function shutdown() {
@@ -433,18 +502,15 @@ async function main() {
     process.exit(0)
   }
 
-  // Handle CTRL-C and CTRL-D
-  rl.on('close', async () => {
-    await shutdown()
-  })
-
+  // CTRL-D ends input via the readline 'close' handler above, which lets
+  // the REPL loop drain buffered lines before shutting down.
   process.on('SIGINT', async () => {
     console.log('\nCTRL-C')
     await shutdown()
   })
 
   // Start the REPL
-  askQuestion()
+  await runRepl()
 }
 
 main().catch((err) => {

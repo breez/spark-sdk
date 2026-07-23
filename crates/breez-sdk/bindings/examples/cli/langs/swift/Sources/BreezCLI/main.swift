@@ -19,6 +19,7 @@ struct CliOptions {
     var storeLabel: Bool = false
     var rpid: String?
     var serverMode: Bool = false
+    var lnurlDomain: String?
 }
 
 func parseCliFlags() -> CliOptions {
@@ -66,6 +67,9 @@ func parseCliFlags() -> CliOptions {
             if i < args.count { opts.rpid = args[i] }
         case "--server-mode":
             opts.serverMode = true
+        case "--lnurl-domain":
+            i += 1
+            if i < args.count { opts.lnurlDomain = args[i] }
         default:
             break
         }
@@ -160,8 +164,13 @@ func attemptedCompletion(_ text: UnsafePointer<CChar>?, _ start: Int32, _ end: I
     return nil
 }
 
-/// Reads a line using libedit (with history and editing support).
+/// Reads a line using libedit (with history and editing support). On piped
+/// (non-TTY) stdin libedit echoes input with redraw escapes that corrupt the
+/// output stream, so plain line reads are used instead.
 func editlineRead(_ prompt: String) -> String? {
+    if isatty(fileno(stdin)) == 0 {
+        return readLine(strippingNewline: true)
+    }
     guard let cLine = readline(prompt) else { return nil }
     defer { free(cLine) }
     let line = String(cString: cLine)
@@ -223,6 +232,9 @@ let breezApiKey: String? = {
 config.apiKey = breezApiKey
 if network == .mainnet {
     config.crossChainConfig = CrossChainConfig()
+}
+if let lnurlDomain = opts.lnurlDomain {
+    config.lnurlDomain = lnurlDomain
 }
 if !opts.stableBalanceTokens.isEmpty {
     let tokens: [StableBalanceToken] = opts.stableBalanceTokens.map { s in

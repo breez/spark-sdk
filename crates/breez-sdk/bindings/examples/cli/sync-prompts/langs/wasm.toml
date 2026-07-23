@@ -106,4 +106,12 @@ The TypeScript CLI uses the `@breeztech/breez-sdk-spark` WASM package (Node.js e
 - `defaultConfig('regtest')` takes a string, not an enum variant
 - Token issuer: `sdk.getTokenIssuer()` → `await tokenIssuer.methodName({...})`
 - WASM `parse()` returns objects with a `type` field (not `tag`), unlike React Native
+
+**Scenario runner contract:**
+This CLI is executed end-to-end on CI by `packages/wasm/itest` against the shared
+scenarios in `crates/breez-sdk/cli/tests/scenarios/` (never port those files).
+`main.js` routes all input through a buffered `readLine`/`lineReader` so piped,
+non-TTY stdin works (no dropped lines, exit on end of input): preserve that
+mechanism, keep prompt order and count identical to the Rust CLI, and keep
+results printed as JSON documents starting at column 0.
 """

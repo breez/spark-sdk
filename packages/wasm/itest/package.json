@@ -1,0 +1,18 @@
+{
+  "name": "breez-sdk-spark-itest",
+  "version": "0.0.0",
+  "private": true,
+  "description": "End-to-end tests for the WASM bindings: shared CLI scenarios and an npm-API smoke suite",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1"
+  },
+  "dependencies": {
+    "@breeztech/breez-sdk-spark": "file:..",
+    "better-sqlite3": "^9.2.2",
+    "bip39": "^3.1.0",
+    "dotenv": "^16.0.0"
+  }
+}

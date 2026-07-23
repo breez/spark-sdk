@@ -1,0 +1,51 @@
+{
+  "name": "generate receive requests and parse them back",
+  "sessions": [
+    {
+      "wallet": "carol",
+      "steps": [
+        {
+          "cmd": "receive -m bolt11 -d \"scenario test\" -a 2500",
+          "expect_json": {
+            "payment_request": { "exists": true }
+          },
+          "capture": { "bolt11_invoice": "payment_request" }
+        },
+        {
+          "cmd": "parse ${bolt11_invoice}",
+          "expect_json": {
+            "bolt11_invoice.amount_msat": 2500000,
+            "bolt11_invoice.description": "scenario test"
+          }
+        },
+        {
+          "cmd": "receive -m sparkaddress",
+          "expect_json": {
+            "payment_request": { "exists": true }
+          },
+          "capture": { "spark_address": "payment_request" }
+        },
+        {
+          "cmd": "parse ${spark_address}",
+          "expect_json": {
+            "spark_address.address": "${spark_address}",
+            "spark_address.identity_public_key": { "exists": true }
+          }
+        },
+        {
+          "cmd": "receive -m sparkinvoice -a 1000",
+          "expect_json": {
+            "payment_request": { "exists": true }
+          },
+          "capture": { "spark_invoice": "payment_request" }
+        },
+        {
+          "cmd": "parse ${spark_invoice}",
+          "expect_json": {
+            "spark_invoice": { "exists": true }
+          }
+        }
+      ]
+    }
+  ]
+}

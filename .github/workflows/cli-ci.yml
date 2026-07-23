@@ -34,6 +34,10 @@ jobs:
           - lang: kotlin-multiplatform
             runner: ubuntu-latest
             java-version: "17"
+            # Behavioral scenarios ride along here to reuse the local
+            # bindings this job already builds. The JVM CLI shares the
+            # generated uniffi binding surface with Android.
+            scenarios: kotlin-itest
           # SDK Android compile smoke-test — gobley Android source +
           # cargo-ndk cross-compile + AGP AAR assembly.
           - lang: kotlin-multiplatform-android
@@ -67,6 +71,10 @@ jobs:
             node-version: "22"
           - lang: swift
             runner: macos-latest
+            # Behavioral scenarios ride along here to reuse the local
+            # bindings this job already builds (no docker on macOS runners,
+            # so lnurl scenarios skip).
+            scenarios: swift-itest
           - lang: wasm
             runner: ubuntu-latest
     steps:
@@ -165,3 +173,27 @@ jobs:
         if: matrix.sdk-target != true
         working-directory: crates/breez-sdk/bindings/examples/cli
         run: make check-${{ matrix.lang }}
+
+      # The lnurl scenario builds the breez-lnurl-built image; restore the
+      # cross-job cache so it is not rebuilt here (Linux runners only:
+      # macOS runners have no docker and skip the scenario instead).
+      - name: Restore lnurl server image
+        if: matrix.scenarios && runner.os == 'Linux'
+        id: lnurl-image
+        uses: ./.github/actions/lnurl-image-cache
+
+      # Reuses the local bindings built by the check step. Soft-skips
+      # without the faucet secrets (fork PRs).
+      - name: Run binding scenarios
+        if: matrix.scenarios
+        env:
+          FAUCET_USERNAME: ${{ secrets.FAUCET_USERNAME }}
+          FAUCET_PASSWORD: ${{ secrets.FAUCET_PASSWORD }}
+        run: make ${{ matrix.scenarios }}
+
+      - name: Export lnurl server image for caching
+        if: matrix.scenarios && runner.os == 'Linux' && steps.lnurl-image.outputs.cache-hit != 'true'
+        run: |
+          docker image inspect breez-lnurl-built:latest > /dev/null 2>&1 \
+            && docker save breez-lnurl-built:latest -o /tmp/breez-lnurl-built.tar \
+            || echo "lnurl image was not built in this run"

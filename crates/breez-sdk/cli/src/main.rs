@@ -86,6 +86,12 @@ struct Cli {
     /// behavior end-to-end against mainnet/regtest without standing up a server.
     #[arg(long)]
     server_mode: bool,
+
+    /// LNURL server domain for lightning address registration. Overrides the
+    /// network default; accepts a plain domain or an `http://host:port` URL
+    /// (e.g. a local test server).
+    #[arg(long)]
+    lnurl_domain: Option<String>,
 }
 
 fn expand_path(path: &str) -> PathBuf {
@@ -146,6 +152,7 @@ async fn run_interactive_mode(
     mysql_connection_string: Option<String>,
     stable_balance_config: Option<StableBalanceConfig>,
     passkey_config: Option<PasskeyConfig>,
+    lnurl_domain: Option<String>,
 ) -> Result<()> {
     breez_sdk_spark::init_logging(Some(data_dir.to_string_lossy().into()), None, None)?;
     let persistence = CliPersistence {
@@ -174,6 +181,9 @@ async fn run_interactive_mode(
     };
     config.api_key.clone_from(&breez_api_key);
     config.stable_balance_config = stable_balance_config;
+    if lnurl_domain.is_some() {
+        config.lnurl_domain = lnurl_domain;
+    }
     // Cross-chain sends are opt-in by the caller and mainnet-only (enabling on
     // other networks fails config validation). Enable with default slippage so
     // `pay` can route cross-chain destinations.
@@ -339,8 +349,55 @@ async fn main() -> Result<(), anyhow::Error> {
         cli.mysql_connection_string,
         stable_balance_config,
         passkey_config,
+        cli.lnurl_domain,
     ))
     .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod parse_command_tests {
+    use super::*;
+
+    #[test]
+    fn exit_and_quit_are_special_cased() {
+        assert!(matches!(parse_command("exit").unwrap(), Command::Exit));
+        assert!(matches!(parse_command("quit").unwrap(), Command::Exit));
+        assert!(matches!(parse_command("  exit  ").unwrap(), Command::Exit));
+    }
+
+    #[test]
+    fn parses_a_command_line() {
+        assert!(matches!(
+            parse_command("get-info -e true").unwrap(),
+            Command::GetInfo {
+                ensure_synced: Some(true)
+            }
+        ));
+    }
+
+    #[test]
+    fn splits_quoted_arguments() {
+        let Command::Parse { input } = parse_command("parse \"two words\"").unwrap() else {
+            panic!("expected Parse");
+        };
+        assert_eq!(input, "two words");
+    }
+
+    #[test]
+    fn rejects_unbalanced_quotes() {
+        let Err(err) = parse_command("parse \"unbalanced") else {
+            panic!("expected parse failure");
+        };
+        assert!(err.to_string().contains("Failed to parse input string"));
+    }
+
+    #[test]
+    fn wraps_clap_errors() {
+        let Err(err) = parse_command("not-a-command") else {
+            panic!("expected parse failure");
+        };
+        assert!(err.to_string().contains("Command parsing error"));
+    }
 }

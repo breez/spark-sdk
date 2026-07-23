@@ -1,5 +1,7 @@
 mod advanced;
 mod contacts;
+#[cfg(test)]
+mod grammar_tests;
 mod issuer;
 mod stable_balance;
 mod webhooks;

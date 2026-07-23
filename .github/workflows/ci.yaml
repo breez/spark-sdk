@@ -143,8 +143,82 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Restore lnurl server image
+        id: lnurl-image
+        uses: ./.github/actions/lnurl-image-cache
+
       - name: Run Tests
         run: make breez-itest
+
+      - name: Export lnurl server image for caching
+        if: steps.lnurl-image.outputs.cache-hit != 'true'
+        run: |
+          docker image inspect breez-lnurl-built:latest > /dev/null 2>&1 \
+            && docker save breez-lnurl-built:latest -o /tmp/breez-lnurl-built.tar \
+            || echo "lnurl image was not built in this run"
+
+  cli-itest:
+    name: Rust CLI binding tests
+    runs-on: ubuntu-latest
+    env:
+      FAUCET_USERNAME: ${{ secrets.FAUCET_USERNAME }}
+      FAUCET_PASSWORD: ${{ secrets.FAUCET_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restore lnurl server image
+        id: lnurl-image
+        uses: ./.github/actions/lnurl-image-cache
+
+      - name: Run CLI scenarios
+        run: make cli-itest
+
+      - name: Export lnurl server image for caching
+        if: steps.lnurl-image.outputs.cache-hit != 'true'
+        run: |
+          docker image inspect breez-lnurl-built:latest > /dev/null 2>&1 \
+            && docker save breez-lnurl-built:latest -o /tmp/breez-lnurl-built.tar \
+            || echo "lnurl image was not built in this run"
+
+  wasm-itest:
+    name: WASM binding tests
+    runs-on: ubuntu-latest
+    env:
+      FAUCET_USERNAME: ${{ secrets.FAUCET_USERNAME }}
+      FAUCET_PASSWORD: ${{ secrets.FAUCET_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install wasm-pack
+        run: which wasm-pack || cargo install wasm-pack
+
+      - name: Restore lnurl server image
+        id: lnurl-image
+        uses: ./.github/actions/lnurl-image-cache
+
+      - name: Run WASM binding tests
+        run: make wasm-itest
+
+      - name: Export lnurl server image for caching
+        if: steps.lnurl-image.outputs.cache-hit != 'true'
+        run: |
+          docker image inspect breez-lnurl-built:latest > /dev/null 2>&1 \
+            && docker save breez-lnurl-built:latest -o /tmp/breez-lnurl-built.tar \
+            || echo "lnurl image was not built in this run"
 
   wasm-clippy:
     name: Wasm clippy
