@@ -1,0 +1,1529 @@
+<!DOCTYPE HTML>
+<html lang="en" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Client signing - Breez SDK - Spark</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../styles.css">
+        <link rel="stylesheet" href="../theme/pagetoc.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <!--
+                  Breez SDK · Spark docs — brand header partial.
+                
+                  mdBook renders the `header` partial at the top of every page's content. The default
+                  theme ships an EMPTY header.hbs, which is why the reskin's styles.css and
+                  brand-header.js both reference `.brand-header` / #brand-controls but the file
+                  itself was never committed to the reskin branch. THIS is that missing file,
+                  reconstructed from the design mockup (design/Breez SDK Docs.dc.html) and the
+                  class names in styles.css.
+                
+                  Drop this at: docs/breez-sdk/theme/header.hbs
+                  It pairs with styles.css (.brand-header rules) and brand-header.js (which moves
+                  mdBook's theme/search/sidebar controls into #brand-controls at load time).
+                -->
+                <div id="brand-header" class="brand-header">
+                  <a class="brand-logo" href="../index.html" aria-label="Docs home">
+                    <img src="../assets/icons/logo-breez-header.svg" alt="Breez">
+                  </a>
+                  <span class="brand-sep"></span>
+                  <span class="brand-product">SDK Documentation</span>
+                  <span class="brand-badge">
+                    <img src="../assets/icons/spark_icon.svg" alt="">Spark
+                  </span>
+                
+                  <span class="brand-spacer"></span>
+                
+                  <nav class="brand-nav">
+                    <a href="https://breez.technology" target="_blank" rel="noopener">Home</a>
+                    <a href="https://github.com/breez/spark-sdk" target="_blank" rel="noopener">GitHub</a>
+                    <a href="https://t.me/breezsdk" target="_blank" rel="noopener" aria-label="Telegram">
+                      <img src="../assets/icons/telegram-icon.svg" alt="">
+                    </a>
+                  </nav>
+                
+                  <!-- brand-header.js relocates #sidebar-toggle, #theme-toggle, #theme-list and
+                       #search-toggle into this container so they read as one bar. -->
+                  <div id="brand-controls" class="brand-controls"></div>
+                
+                  <a class="brand-cta" href="https://breez.technology/request-api-key/#contact-us-form-sdk" target="_blank" rel="noopener">
+                    Request API Key
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                  </a>
+                </div>
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Breez SDK - Spark</h1>
+
+                    <div class="right-buttons">
+                        <a href="https://github.com/breez/spark-sdk" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/src/guide/client_signing.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="client-signing"><a class="header" href="#client-signing">Client signing</a></h1>
+<p>Client signing lets a server drive payments while the key that approves them stays with the user. The server prepares the payment and builds a small package that describes it, the user reviews and signs the package on their side, and the server publishes it to complete the payment.</p>
+<p>Use it when the SDK runs on your server, for example hosting wallets for many users, and the server must not be able to send payments on its own. It works for Spark addresses and invoices, Lightning invoices, token payments, Bitcoin addresses and LNURL payments.</p>
+<p>Client signing is fully opt-in. Without it, <code class="lang-fn"><span class="fn-rust">send_payment</span><span class="fn-python">send_payment</span><span class="fn-swift">sendPayment</span><span class="fn-kotlin">sendPayment</span><span class="fn-javascript">sendPayment</span><span class="fn-react-native">sendPayment</span><span class="fn-flutter">sendPayment</span><span class="fn-go">SendPayment</span><span class="fn-csharp">SendPayment</span></code> works as described in <a href="send_payment.html">Sending payments</a>.</p>
+<h2 id="how-it-works"><a class="header" href="#how-it-works">How it works</a></h2>
+<ol>
+<li><strong>Prepare</strong> on the server with <code class="lang-fn"><span class="fn-rust">prepare_send_payment</span><span class="fn-python">prepare_send_payment</span><span class="fn-swift">prepareSendPayment</span><span class="fn-kotlin">prepareSendPayment</span><span class="fn-javascript">prepareSendPayment</span><span class="fn-react-native">prepareSendPayment</span><span class="fn-flutter">prepareSendPayment</span><span class="fn-go">PrepareSendPayment</span><span class="fn-csharp">PrepareSendPayment</span></code>, exactly as in <a href="send_payment.html">Sending payments</a>. This validates the input and returns the fees.</li>
+<li><strong>Build</strong> on the server with <code class="lang-fn"><span class="fn-rust">build_unsigned_transfer_package</span><span class="fn-python">build_unsigned_transfer_package</span><span class="fn-swift">buildUnsignedTransferPackage</span><span class="fn-kotlin">buildUnsignedTransferPackage</span><span class="fn-javascript">buildUnsignedTransferPackage</span><span class="fn-react-native">buildUnsignedTransferPackage</span><span class="fn-flutter">buildUnsignedTransferPackage</span><span class="fn-go">BuildUnsignedTransferPackage</span><span class="fn-csharp">BuildUnsignedTransferPackage</span></code>. This returns the one item the user needs to sign. It carries the amount, fee and destination of the payment.</li>
+<li><strong>Sign</strong> on the user's side. The user reviews the package and signs it with their signer.</li>
+<li><strong>Publish</strong> on the server with <code class="lang-fn"><span class="fn-rust">publish_signed_transfer_package</span><span class="fn-python">publish_signed_transfer_package</span><span class="fn-swift">publishSignedTransferPackage</span><span class="fn-kotlin">publishSignedTransferPackage</span><span class="fn-javascript">publishSignedTransferPackage</span><span class="fn-react-native">publishSignedTransferPackage</span><span class="fn-flutter">publishSignedTransferPackage</span><span class="fn-go">PublishSignedTransferPackage</span><span class="fn-csharp">PublishSignedTransferPackage</span></code> to complete the payment.</li>
+</ol>
+<p>Sometimes the wallet first needs to re-shape its funds so it can send the exact amount (a denomination swap). That swap also needs the user's signature, so it arrives as its own package: publishing it returns <code class="lang-fn"><span class="fn-rust">PublishSignedTransferPackageResponse::SwapCompleted</span><span class="fn-python">PublishSignedTransferPackageResponse.SWAP_COMPLETED</span><span class="fn-swift">PublishSignedTransferPackageResponse.swapCompleted</span><span class="fn-kotlin">PublishSignedTransferPackageResponse.SwapCompleted</span><span class="fn-javascript">PublishSignedTransferPackageResponse.SwapCompleted</span><span class="fn-react-native">PublishSignedTransferPackageResponse.SwapCompleted</span><span class="fn-flutter">PublishSignedTransferPackageResponse.SwapCompleted</span><span class="fn-go">PublishSignedTransferPackageResponseSwapCompleted</span><span class="fn-csharp">PublishSignedTransferPackageResponse.SwapCompleted</span></code>, and you build again from the same prepare response. Repeat until publishing returns <code class="lang-fn"><span class="fn-rust">PublishSignedTransferPackageResponse::PaymentSent</span><span class="fn-python">PublishSignedTransferPackageResponse.PAYMENT_SENT</span><span class="fn-swift">PublishSignedTransferPackageResponse.paymentSent</span><span class="fn-kotlin">PublishSignedTransferPackageResponse.PaymentSent</span><span class="fn-javascript">PublishSignedTransferPackageResponse.PaymentSent</span><span class="fn-react-native">PublishSignedTransferPackageResponse.PaymentSent</span><span class="fn-flutter">PublishSignedTransferPackageResponse.PaymentSent</span><span class="fn-go">PublishSignedTransferPackageResponsePaymentSent</span><span class="fn-csharp">PublishSignedTransferPackageResponse.PaymentSent</span></code>.</p>
+<p>The server keeps no state between these steps. Everything needed to complete the payment travels inside the requests and responses, so building and publishing can happen in different processes or on different instances. This fits <a href="server_mode.html">Server mode</a> deployments, where an SDK instance is built per request.</p>
+<h2 id="signing-on-the-users-side">
+    <a class="header" href="#signing-on-the-users-side">Signing on the user's side</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/signer/trait.ExternalSparkSigner.html">API docs</a>
+</h2>
+<p>The user's side does not need a connected SDK, only a signer that holds the user's key: any <code class="lang-fn"><span class="fn-rust">ExternalSparkSigner</span><span class="fn-python">ExternalSparkSigner</span><span class="fn-swift">ExternalSparkSigner</span><span class="fn-kotlin">ExternalSparkSigner</span><span class="fn-javascript">ExternalSparkSigner</span><span class="fn-react-native">ExternalSparkSigner</span><span class="fn-flutter">ExternalSparkSigner</span><span class="fn-go">ExternalSparkSigner</span><span class="fn-csharp">ExternalSparkSigner</span></code> implementation (see <a href="external_signer.html">Using an External Signer</a>), whether it runs on the user's device or fronts a remote signing service.</p>
+<p>The package tells the user exactly what they are approving: the amount, the fee and the destination. Show these to the user before signing. Sign Transfer and Swap packages with <code class="lang-fn"><span class="fn-rust">prepare_transfer</span><span class="fn-python">prepare_transfer</span><span class="fn-swift">prepareTransfer</span><span class="fn-kotlin">prepareTransfer</span><span class="fn-javascript">prepareTransfer</span><span class="fn-react-native">prepareTransfer</span><span class="fn-flutter">prepareTransfer</span><span class="fn-go">PrepareTransfer</span><span class="fn-csharp">PrepareTransfer</span></code>, and Token packages with <code class="lang-fn"><span class="fn-rust">prepare_token_transaction</span><span class="fn-python">prepare_token_transaction</span><span class="fn-swift">prepareTokenTransaction</span><span class="fn-kotlin">prepareTokenTransaction</span><span class="fn-javascript">prepareTokenTransaction</span><span class="fn-react-native">prepareTokenTransaction</span><span class="fn-flutter">prepareTokenTransaction</span><span class="fn-go">PrepareTokenTransaction</span><span class="fn-csharp">PrepareTokenTransaction</span></code>:</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let signature = match &amp;unsigned {
+    UnsignedTransferPackage::Transfer {
+        prepare_transfer,
+        amount_sat,
+        fee_sat,
+        target,
+    } =&gt; {
+        // Show the user what they are approving before signing
+        let destination = match target {
+            TransferTarget::Spark { address, .. } =&gt; address,
+            TransferTarget::Lightning { bolt11, .. } =&gt; bolt11,
+            TransferTarget::CoopExit { address, .. } =&gt; address,
+        };
+        info!("Approve sending {amount_sat} sats (fee {fee_sat} sats) to {destination}");
+        TransferSignature::Transfer {
+            signed: signer.prepare_transfer(prepare_transfer.clone()).await?,
+        }
+    }
+    UnsignedTransferPackage::Swap {
+        prepare_transfer,
+        amount_sat,
+        fee_sat,
+        ..
+    } =&gt; {
+        info!("Approve re-shaping funds for a {amount_sat} sat send (fee {fee_sat} sats)");
+        TransferSignature::Transfer {
+            signed: signer.prepare_transfer(prepare_transfer.clone()).await?,
+        }
+    }
+    UnsignedTransferPackage::Token {
+        prepare_token_transaction,
+        token_identifier,
+        amount,
+        fee,
+        is_swap,
+        ..
+    } =&gt; {
+        if *is_swap {
+            info!("Approve combining token outputs for a {token_identifier} send");
+        } else {
+            info!("Approve sending {amount} of token {token_identifier} (fee {fee})");
+        }
+        TransferSignature::Token {
+            signed: signer
+                .prepare_token_transaction(prepare_token_transaction.clone())
+                .await?,
+        }
+    }
+};
+
+let signed_package = SignedTransferPackage {
+    unsigned,
+    signature,
+};</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let signature: TransferSignature
+switch unsigned {
+case let .transfer(prepareTransfer, amountSat, feeSat, target):
+    // Show the user what they are approving before signing
+    let destination: String
+    switch target {
+    case let .spark(address, _):
+        destination = address
+    case let .lightning(bolt11, _, _, _):
+        destination = bolt11
+    case let .coopExit(address, _, _):
+        destination = address
+    }
+    print("Approve sending \(amountSat) sats (fee \(feeSat) sats) to \(destination)")
+    signature = TransferSignature.transfer(
+        signed: try await signer.prepareTransfer(request: prepareTransfer)
+    )
+case let .swap(prepareTransfer, _, amountSat, feeSat):
+    print("Approve re-shaping funds for a \(amountSat) sat send (fee \(feeSat) sats)")
+    signature = TransferSignature.transfer(
+        signed: try await signer.prepareTransfer(request: prepareTransfer)
+    )
+case let .token(prepareTokenTransaction, _, tokenIdentifier, amount, fee, isSwap):
+    if isSwap {
+        print("Approve combining token outputs for a \(tokenIdentifier) send")
+    } else {
+        print("Approve sending \(amount) of token \(tokenIdentifier) (fee \(fee))")
+    }
+    signature = TransferSignature.token(
+        signed: try await signer.prepareTokenTransaction(request: prepareTokenTransaction)
+    )
+}
+
+let signedPackage = SignedTransferPackage(
+    unsigned: unsigned,
+    signature: signature
+)
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">val signature = when (unsigned) {
+    is UnsignedTransferPackage.Transfer -&gt; {
+        // Show the user what they are approving before signing
+        val destination = when (val target = unsigned.target) {
+            is TransferTarget.Spark -&gt; target.address
+            is TransferTarget.Lightning -&gt; target.bolt11
+            is TransferTarget.CoopExit -&gt; target.address
+        }
+        // Log.v("Breez", "Approve sending ${unsigned.amountSat} sats " +
+        //     "(fee ${unsigned.feeSat} sats) to $destination")
+        TransferSignature.Transfer(
+            signer.prepareTransfer(unsigned.prepareTransfer)
+        )
+    }
+    is UnsignedTransferPackage.Swap -&gt; {
+        // Log.v("Breez", "Approve re-shaping funds for a ${unsigned.amountSat} " +
+        //     "sat send (fee ${unsigned.feeSat} sats)")
+        TransferSignature.Transfer(
+            signer.prepareTransfer(unsigned.prepareTransfer)
+        )
+    }
+    is UnsignedTransferPackage.Token -&gt; {
+        if (unsigned.isSwap) {
+            // Log.v("Breez", "Approve combining token outputs for a " +
+            //     "${unsigned.tokenIdentifier} send")
+        } else {
+            // Log.v("Breez", "Approve sending ${unsigned.amount} of token " +
+            //     "${unsigned.tokenIdentifier} (fee ${unsigned.fee})")
+        }
+        TransferSignature.Token(
+            signer.prepareTokenTransaction(unsigned.prepareTokenTransaction)
+        )
+    }
+}
+
+val signedPackage = SignedTransferPackage(unsigned, signature)
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">TransferSignature signature;
+switch (unsigned)
+{
+    case UnsignedTransferPackage.Transfer transfer:
+        // Show the user what they are approving before signing
+        var destination = transfer.target switch
+        {
+            TransferTarget.Spark spark =&gt; spark.address,
+            TransferTarget.Lightning lightning =&gt; lightning.bolt11,
+            TransferTarget.CoopExit coopExit =&gt; coopExit.address,
+            _ =&gt; throw new Exception("Unknown transfer target")
+        };
+        Console.WriteLine($"Approve sending {transfer.amountSat} sats " +
+            $"(fee {transfer.feeSat} sats) to {destination}");
+        signature = new TransferSignature.Transfer(
+            signed: await signer.PrepareTransfer(transfer.prepareTransfer)
+        );
+        break;
+    case UnsignedTransferPackage.Swap swap:
+        Console.WriteLine("Approve re-shaping funds for a " +
+            $"{swap.amountSat} sat send (fee {swap.feeSat} sats)");
+        signature = new TransferSignature.Transfer(
+            signed: await signer.PrepareTransfer(swap.prepareTransfer)
+        );
+        break;
+    case UnsignedTransferPackage.Token token:
+        if (token.isSwap)
+        {
+            Console.WriteLine("Approve combining token outputs for a " +
+                $"{token.tokenIdentifier} send");
+        }
+        else
+        {
+            Console.WriteLine($"Approve sending {token.amount} of token " +
+                $"{token.tokenIdentifier} (fee {token.fee})");
+        }
+        signature = new TransferSignature.Token(
+            signed: await signer.PrepareTokenTransaction(token.prepareTokenTransaction)
+        );
+        break;
+    default:
+        throw new Exception("Unknown transfer package");
+}
+
+var signedPackage = new SignedTransferPackage(unsigned: unsigned, signature: signature);
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">let signature: TransferSignature
+switch (unsigned.type) {
+  case 'transfer': {
+    const { prepareTransfer, amountSat, feeSat, target } = unsigned
+    // Show the user what they are approving before signing
+    const destination = target.type === 'lightning' ? target.bolt11 : target.address
+    console.log(`Approve sending ${amountSat} sats (fee ${feeSat} sats) to ${destination}`)
+    signature = {
+      type: 'transfer',
+      signed: await signer.prepareTransfer(prepareTransfer)
+    }
+    break
+  }
+  case 'swap': {
+    const { prepareTransfer, amountSat, feeSat } = unsigned
+    console.log(`Approve re-shaping funds for a ${amountSat} sat send (fee ${feeSat} sats)`)
+    signature = {
+      type: 'transfer',
+      signed: await signer.prepareTransfer(prepareTransfer)
+    }
+    break
+  }
+  case 'token': {
+    const { prepareTokenTransaction, tokenIdentifier, amount, fee, isSwap } = unsigned
+    if (isSwap) {
+      console.log(`Approve combining token outputs for a ${tokenIdentifier} send`)
+    } else {
+      console.log(`Approve sending ${amount} of token ${tokenIdentifier} (fee ${fee})`)
+    }
+    signature = {
+      type: 'token',
+      signed: await signer.prepareTokenTransaction(prepareTokenTransaction)
+    }
+    break
+  }
+}
+
+const signedPackage = { unsigned, signature }
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">let signature: TransferSignature
+switch (unsigned.tag) {
+  case UnsignedTransferPackage_Tags.Transfer: {
+    const { prepareTransfer, amountSat, feeSat, target } = unsigned.inner
+    // Show the user what they are approving before signing
+    const destination =
+      target.tag === TransferTarget_Tags.Lightning ? target.inner.bolt11 : target.inner.address
+    console.log(`Approve sending ${amountSat} sats (fee ${feeSat} sats) to ${destination}`)
+    signature = new TransferSignature.Transfer({
+      signed: await signer.prepareTransfer(prepareTransfer)
+    })
+    break
+  }
+  case UnsignedTransferPackage_Tags.Swap: {
+    const { prepareTransfer, amountSat, feeSat } = unsigned.inner
+    console.log(`Approve re-shaping funds for a ${amountSat} sat send (fee ${feeSat} sats)`)
+    signature = new TransferSignature.Transfer({
+      signed: await signer.prepareTransfer(prepareTransfer)
+    })
+    break
+  }
+  case UnsignedTransferPackage_Tags.Token: {
+    const { prepareTokenTransaction, tokenIdentifier, amount, fee, isSwap } = unsigned.inner
+    if (isSwap) {
+      console.log(`Approve combining token outputs for a ${tokenIdentifier} send`)
+    } else {
+      console.log(`Approve sending ${amount} of token ${tokenIdentifier} (fee ${fee})`)
+    }
+    signature = new TransferSignature.Token({
+      signed: await signer.prepareTokenTransaction(prepareTokenTransaction)
+    })
+    break
+  }
+}
+
+const signedPackage = { unsigned, signature }
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">TransferSignature signature;
+if (unsigned is UnsignedTransferPackage_Transfer) {
+  // Show the user what they are approving before signing
+  final target = unsigned.target;
+  String destination = "";
+  if (target is TransferTarget_Spark) {
+    destination = target.address;
+  } else if (target is TransferTarget_Lightning) {
+    destination = target.bolt11;
+  } else if (target is TransferTarget_CoopExit) {
+    destination = target.address;
+  }
+  print("Approve sending ${unsigned.amountSat} sats"
+      " (fee ${unsigned.feeSat} sats) to $destination");
+  signature = TransferSignature.transfer(
+      signed: await signer.prepareTransfer(unsigned.prepareTransfer));
+} else if (unsigned is UnsignedTransferPackage_Swap) {
+  print("Approve re-shaping funds for a ${unsigned.amountSat} sat send"
+      " (fee ${unsigned.feeSat} sats)");
+  signature = TransferSignature.transfer(
+      signed: await signer.prepareTransfer(unsigned.prepareTransfer));
+} else if (unsigned is UnsignedTransferPackage_Token) {
+  if (unsigned.isSwap) {
+    print("Approve combining token outputs for a ${unsigned.tokenIdentifier} send");
+  } else {
+    print("Approve sending ${unsigned.amount} of token"
+        " ${unsigned.tokenIdentifier} (fee ${unsigned.fee})");
+  }
+  signature = TransferSignature.token(
+      signed: await signer
+          .prepareTokenTransaction(unsigned.prepareTokenTransaction));
+} else {
+  throw Exception("Unknown transfer package variant");
+}
+
+final signedPackage =
+    SignedTransferPackage(unsigned: unsigned, signature: signature);
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">if isinstance(unsigned, UnsignedTransferPackage.TRANSFER):
+    # Show the user what they are approving before signing
+    target = unsigned.target
+    destination = ""
+    if isinstance(target, TransferTarget.SPARK):
+        destination = target.address
+    elif isinstance(target, TransferTarget.LIGHTNING):
+        destination = target.bolt11
+    elif isinstance(target, TransferTarget.COOP_EXIT):
+        destination = target.address
+    logging.debug(
+        f"Approve sending {unsigned.amount_sat} sats"
+        f" (fee {unsigned.fee_sat} sats) to {destination}"
+    )
+    signature = TransferSignature.TRANSFER(
+        signed=await signer.prepare_transfer(unsigned.prepare_transfer)
+    )
+elif isinstance(unsigned, UnsignedTransferPackage.SWAP):
+    logging.debug(
+        f"Approve re-shaping funds for a {unsigned.amount_sat} sat send"
+        f" (fee {unsigned.fee_sat} sats)"
+    )
+    signature = TransferSignature.TRANSFER(
+        signed=await signer.prepare_transfer(unsigned.prepare_transfer)
+    )
+elif isinstance(unsigned, UnsignedTransferPackage.TOKEN):
+    if unsigned.is_swap:
+        logging.debug(
+            f"Approve combining token outputs for a {unsigned.token_identifier} send"
+        )
+    else:
+        logging.debug(
+            f"Approve sending {unsigned.amount} of token"
+            f" {unsigned.token_identifier} (fee {unsigned.fee})"
+        )
+    signature = TransferSignature.TOKEN(
+        signed=await signer.prepare_token_transaction(
+            unsigned.prepare_token_transaction
+        )
+    )
+else:
+    raise ValueError("Unknown transfer package variant")
+
+signed_package = SignedTransferPackage(unsigned=unsigned, signature=signature)
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">var signature breez_sdk_spark.TransferSignature
+
+switch pkg := unsigned.(type) {
+case breez_sdk_spark.UnsignedTransferPackageTransfer:
+	// Show the user what they are approving before signing
+	var destination string
+	switch target := pkg.Target.(type) {
+	case breez_sdk_spark.TransferTargetSpark:
+		destination = target.Address
+	case breez_sdk_spark.TransferTargetLightning:
+		destination = target.Bolt11
+	case breez_sdk_spark.TransferTargetCoopExit:
+		destination = target.Address
+	}
+	log.Printf(
+		"Approve sending %v sats (fee %v sats) to %v",
+		pkg.AmountSat,
+		pkg.FeeSat,
+		destination,
+	)
+	signed, err := signer.PrepareTransfer(pkg.PrepareTransfer)
+	if err != nil {
+		return breez_sdk_spark.SignedTransferPackage{}, err
+	}
+	signature = breez_sdk_spark.TransferSignatureTransfer{Signed: signed}
+case breez_sdk_spark.UnsignedTransferPackageSwap:
+	log.Printf(
+		"Approve re-shaping funds for a %v sat send (fee %v sats)",
+		pkg.AmountSat,
+		pkg.FeeSat,
+	)
+	signed, err := signer.PrepareTransfer(pkg.PrepareTransfer)
+	if err != nil {
+		return breez_sdk_spark.SignedTransferPackage{}, err
+	}
+	signature = breez_sdk_spark.TransferSignatureTransfer{Signed: signed}
+case breez_sdk_spark.UnsignedTransferPackageToken:
+	if pkg.IsSwap {
+		log.Printf(
+			"Approve combining token outputs for a %v send",
+			pkg.TokenIdentifier,
+		)
+	} else {
+		log.Printf(
+			"Approve sending %v of token %v (fee %v)",
+			pkg.Amount,
+			pkg.TokenIdentifier,
+			pkg.Fee,
+		)
+	}
+	signed, err := signer.PrepareTokenTransaction(pkg.PrepareTokenTransaction)
+	if err != nil {
+		return breez_sdk_spark.SignedTransferPackage{}, err
+	}
+	signature = breez_sdk_spark.TransferSignatureToken{Signed: signed}
+}
+
+signedPackage := breez_sdk_spark.SignedTransferPackage{
+	Unsigned:  unsigned,
+	Signature: signature,
+}
+</code></pre>
+</section>
+</custom-tabs>
+<h2 id="driving-the-send">
+    <a class="header" href="#driving-the-send">Driving the send from the server</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.build_unsigned_transfer_package">API docs</a>
+</h2>
+<p>Prepare once, then repeat build, sign and publish until the payment is sent:</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let prepare_response = sdk
+    .prepare_send_payment(PrepareSendPaymentRequest {
+        payment_request: PaymentRequest::Input {
+            input: "&lt;spark address or invoice&gt;".to_string(),
+        },
+        amount: Some(5_000),
+        token_identifier: None,
+        conversion_options: None,
+        fee_policy: None,
+    })
+    .await?;
+
+loop {
+    let unsigned = sdk
+        .build_unsigned_transfer_package(BuildUnsignedTransferPackageRequest {
+            prepare_response: prepare_response.clone(),
+            options: None,
+        })
+        .await?;
+
+    // Send the package to the user, who reviews and signs it
+    let signed_package = sign_package(signer, unsigned).await?;
+
+    match sdk
+        .publish_signed_transfer_package(PublishSignedTransferPackageRequest { signed_package })
+        .await?
+    {
+        // The wallet's funds were re-shaped first: build the payment again
+        PublishSignedTransferPackageResponse::SwapCompleted =&gt; continue,
+        PublishSignedTransferPackageResponse::PaymentSent { payment } =&gt; {
+            return Ok(payment);
+        }
+    }
+}</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let prepareResponse = try await sdk.prepareSendPayment(
+    request: PrepareSendPaymentRequest(
+        paymentRequest: .input(input: "&lt;spark address or invoice&gt;"),
+        amount: BInt(5_000),
+        tokenIdentifier: nil,
+        conversionOptions: nil,
+        feePolicy: nil
+    ))
+
+while true {
+    let unsigned = try await sdk.buildUnsignedTransferPackage(
+        request: BuildUnsignedTransferPackageRequest(
+            prepareResponse: prepareResponse,
+            options: nil
+        ))
+
+    // Send the package to the user, who reviews and signs it
+    let signedPackage = try await signPackage(signer: signer, unsigned: unsigned)
+
+    let publishResponse = try await sdk.publishSignedTransferPackage(
+        request: PublishSignedTransferPackageRequest(signedPackage: signedPackage))
+
+    switch publishResponse {
+    // The wallet's funds were re-shaped first: build the payment again
+    case .swapCompleted:
+        continue
+    case let .paymentSent(payment):
+        return payment
+    }
+}
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">val prepareResponse = sdk.prepareSendPayment(
+    PrepareSendPaymentRequest(
+        paymentRequest = PaymentRequest.Input(input = "&lt;spark address or invoice&gt;"),
+        amount = BigInteger.fromLong(5_000L),
+        tokenIdentifier = null,
+        conversionOptions = null,
+        feePolicy = null,
+    )
+)
+
+while (true) {
+    val unsigned = sdk.buildUnsignedTransferPackage(
+        BuildUnsignedTransferPackageRequest(
+            prepareResponse = prepareResponse,
+            options = null,
+        )
+    )
+
+    // Send the package to the user, who reviews and signs it
+    val signedPackage = signPackage(signer, unsigned)
+
+    val result = sdk.publishSignedTransferPackage(
+        PublishSignedTransferPackageRequest(signedPackage)
+    )
+    when (result) {
+        // The wallet's funds were re-shaped first: build the payment again
+        is PublishSignedTransferPackageResponse.SwapCompleted -&gt; continue
+        is PublishSignedTransferPackageResponse.PaymentSent -&gt; return result.payment
+    }
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var prepareResponse = await sdk.PrepareSendPayment(
+    request: new PrepareSendPaymentRequest(
+        paymentRequest: new PaymentRequest.Input(input: "&lt;spark address or invoice&gt;"),
+        amount: 5_000UL,
+        tokenIdentifier: null,
+        conversionOptions: null,
+        feePolicy: null
+    )
+);
+
+while (true)
+{
+    var unsigned = await sdk.BuildUnsignedTransferPackage(
+        request: new BuildUnsignedTransferPackageRequest(
+            prepareResponse: prepareResponse,
+            options: null
+        )
+    );
+
+    // Send the package to the user, who reviews and signs it
+    var signedPackage = await SignPackage(signer, unsigned);
+
+    var response = await sdk.PublishSignedTransferPackage(
+        request: new PublishSignedTransferPackageRequest(signedPackage: signedPackage)
+    );
+
+    switch (response)
+    {
+        // The wallet's funds were re-shaped first: build the payment again
+        case PublishSignedTransferPackageResponse.SwapCompleted:
+            continue;
+        case PublishSignedTransferPackageResponse.PaymentSent paymentSent:
+            return paymentSent.payment;
+    }
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const prepareResponse = await sdk.prepareSendPayment({
+  paymentRequest: { type: 'input', input: '&lt;spark address or invoice&gt;' },
+  amount: BigInt(5_000),
+  tokenIdentifier: undefined,
+  conversionOptions: undefined,
+  feePolicy: undefined
+})
+
+while (true) {
+  const unsigned = await sdk.buildUnsignedTransferPackage({
+    prepareResponse,
+    options: undefined
+  })
+
+  // Send the package to the user, who reviews and signs it
+  const signedPackage = await signPackage(signer, unsigned)
+
+  const publishResponse = await sdk.publishSignedTransferPackage({ signedPackage })
+
+  if (publishResponse.type === 'swapCompleted') {
+    // The wallet's funds were re-shaped first: build the payment again
+    continue
+  }
+  return publishResponse.payment
+}
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const prepareResponse = await sdk.prepareSendPayment({
+  paymentRequest: new PaymentRequest.Input({ input: '&lt;spark address or invoice&gt;' }),
+  amount: BigInt(5_000),
+  tokenIdentifier: undefined,
+  conversionOptions: undefined,
+  feePolicy: undefined
+})
+
+while (true) {
+  const unsigned = await sdk.buildUnsignedTransferPackage({
+    prepareResponse,
+    options: undefined
+  })
+
+  // Send the package to the user, who reviews and signs it
+  const signedPackage = await signPackage(signer, unsigned)
+
+  const publishResponse = await sdk.publishSignedTransferPackage({ signedPackage })
+
+  if (publishResponse.tag === PublishSignedTransferPackageResponse_Tags.SwapCompleted) {
+    // The wallet's funds were re-shaped first: build the payment again
+    continue
+  }
+  return publishResponse.inner.payment
+}
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">final prepareResponse = await sdk.prepareSendPayment(
+    request: PrepareSendPaymentRequest(
+        paymentRequest:
+            PaymentRequest.input(input: "&lt;spark address or invoice&gt;"),
+        amount: BigInt.from(5000),
+        tokenIdentifier: null,
+        conversionOptions: null,
+        feePolicy: null));
+
+while (true) {
+  final unsigned = await sdk.buildUnsignedTransferPackage(
+      request: BuildUnsignedTransferPackageRequest(
+          prepareResponse: prepareResponse, options: null));
+
+  // Send the package to the user, who reviews and signs it
+  final signedPackage = await signPackage(signer, unsigned);
+
+  final result = await sdk.publishSignedTransferPackage(
+      request:
+          PublishSignedTransferPackageRequest(signedPackage: signedPackage));
+  if (result is PublishSignedTransferPackageResponse_SwapCompleted) {
+    // The wallet's funds were re-shaped first: build the payment again
+    continue;
+  }
+  if (result is PublishSignedTransferPackageResponse_PaymentSent) {
+    return result.payment;
+  }
+}
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">try:
+    prepare_response = await sdk.prepare_send_payment(
+        PrepareSendPaymentRequest(
+            payment_request=PaymentRequest.INPUT(input="&lt;spark address or invoice&gt;"),
+            amount=5_000,
+            token_identifier=None,
+            conversion_options=None,
+            fee_policy=None,
+        )
+    )
+
+    while True:
+        unsigned = await sdk.build_unsigned_transfer_package(
+            BuildUnsignedTransferPackageRequest(
+                prepare_response=prepare_response, options=None
+            )
+        )
+
+        # Send the package to the user, who reviews and signs it
+        signed_package = await sign_package(signer, unsigned)
+
+        result = await sdk.publish_signed_transfer_package(
+            PublishSignedTransferPackageRequest(signed_package=signed_package)
+        )
+        if isinstance(result, PublishSignedTransferPackageResponse.SWAP_COMPLETED):
+            # The wallet's funds were re-shaped first: build the payment again
+            continue
+        if isinstance(result, PublishSignedTransferPackageResponse.PAYMENT_SENT):
+            return result.payment
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">paymentRequest := "&lt;spark address or invoice&gt;"
+amountSats := new(big.Int).SetInt64(5_000)
+
+prepareResponse, err := sdk.PrepareSendPayment(breez_sdk_spark.PrepareSendPaymentRequest{
+	PaymentRequest:    breez_sdk_spark.PaymentRequestInput{Input: paymentRequest},
+	Amount:            &amp;amountSats,
+	TokenIdentifier:   nil,
+	ConversionOptions: nil,
+	FeePolicy:         nil,
+})
+if err != nil {
+	return nil, err
+}
+
+for {
+	unsigned, err := sdk.BuildUnsignedTransferPackage(
+		breez_sdk_spark.BuildUnsignedTransferPackageRequest{
+			PrepareResponse: prepareResponse,
+			Options:         nil,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Send the package to the user, who reviews and signs it
+	signedPackage, err := SignPackage(signer, unsigned)
+	if err != nil {
+		return nil, err
+	}
+
+	response, err := sdk.PublishSignedTransferPackage(
+		breez_sdk_spark.PublishSignedTransferPackageRequest{
+			SignedPackage: signedPackage,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	switch result := response.(type) {
+	// The wallet's funds were re-shaped first: build the payment again
+	case breez_sdk_spark.PublishSignedTransferPackageResponseSwapCompleted:
+		continue
+	case breez_sdk_spark.PublishSignedTransferPackageResponsePaymentSent:
+		return &amp;result.Payment, nil
+	}
+}
+</code></pre>
+</section>
+</custom-tabs>
+<h3 id="bitcoin"><a class="header" href="#bitcoin">Bitcoin</a></h3>
+<p>For Bitcoin addresses, choose the confirmation speed when building the package. The fee, and therefore what the user signs, depends on it:</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">// For Bitcoin address sends, the confirmation speed is chosen when
+// building the package: the fee depends on it
+let unsigned = sdk
+    .build_unsigned_transfer_package(BuildUnsignedTransferPackageRequest {
+        prepare_response,
+        options: Some(BuildTransferPackageOptions::BitcoinAddress {
+            confirmation_speed: OnchainConfirmationSpeed::Medium,
+        }),
+    })
+    .await?;</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">// For Bitcoin address sends, the confirmation speed is chosen when
+// building the package: the fee depends on it
+let unsigned = try await sdk.buildUnsignedTransferPackage(
+    request: BuildUnsignedTransferPackageRequest(
+        prepareResponse: prepareResponse,
+        options: BuildTransferPackageOptions.bitcoinAddress(
+            confirmationSpeed: OnchainConfirmationSpeed.medium
+        )
+    ))
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">// For Bitcoin address sends, the confirmation speed is chosen when
+// building the package: the fee depends on it
+val unsigned = sdk.buildUnsignedTransferPackage(
+    BuildUnsignedTransferPackageRequest(
+        prepareResponse = prepareResponse,
+        options = BuildTransferPackageOptions.BitcoinAddress(
+            confirmationSpeed = OnchainConfirmationSpeed.MEDIUM
+        ),
+    )
+)
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">// For Bitcoin address sends, the confirmation speed is chosen when
+// building the package: the fee depends on it
+var unsigned = await sdk.BuildUnsignedTransferPackage(
+    request: new BuildUnsignedTransferPackageRequest(
+        prepareResponse: prepareResponse,
+        options: new BuildTransferPackageOptions.BitcoinAddress(
+            confirmationSpeed: OnchainConfirmationSpeed.Medium
+        )
+    )
+);
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">// For Bitcoin address sends, the confirmation speed is chosen when
+// building the package: the fee depends on it
+const unsigned = await sdk.buildUnsignedTransferPackage({
+  prepareResponse,
+  options: {
+    type: 'bitcoinAddress',
+    confirmationSpeed: 'medium'
+  }
+})
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">// For Bitcoin address sends, the confirmation speed is chosen when
+// building the package: the fee depends on it
+const unsigned = await sdk.buildUnsignedTransferPackage({
+  prepareResponse,
+  options: new BuildTransferPackageOptions.BitcoinAddress({
+    confirmationSpeed: OnchainConfirmationSpeed.Medium
+  })
+})
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">// For Bitcoin address sends, the confirmation speed is chosen when
+// building the package: the fee depends on it
+final unsigned = await sdk.buildUnsignedTransferPackage(
+    request: BuildUnsignedTransferPackageRequest(
+        prepareResponse: prepareResponse,
+        options: BuildTransferPackageOptions.bitcoinAddress(
+            confirmationSpeed: OnchainConfirmationSpeed.medium)));
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore"># For Bitcoin address sends, the confirmation speed is chosen when
+# building the package: the fee depends on it
+try:
+    unsigned = await sdk.build_unsigned_transfer_package(
+        BuildUnsignedTransferPackageRequest(
+            prepare_response=prepare_response,
+            options=BuildTransferPackageOptions.BITCOIN_ADDRESS(
+                confirmation_speed=OnchainConfirmationSpeed.MEDIUM
+            ),
+        )
+    )
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">// For Bitcoin address sends, the confirmation speed is chosen when
+// building the package: the fee depends on it
+var options breez_sdk_spark.BuildTransferPackageOptions
+options = breez_sdk_spark.BuildTransferPackageOptionsBitcoinAddress{
+	ConfirmationSpeed: breez_sdk_spark.OnchainConfirmationSpeedMedium,
+}
+
+unsigned, err := sdk.BuildUnsignedTransferPackage(
+	breez_sdk_spark.BuildUnsignedTransferPackageRequest{
+		PrepareResponse: prepareResponse,
+		Options:         &amp;options,
+	},
+)
+if err != nil {
+	return err
+}
+</code></pre>
+</section>
+</custom-tabs>
+<h3 id="lightning"><a class="header" href="#lightning">Lightning</a></h3>
+<p>For BOLT11 invoices the build options work like the send options in <a href="send_payment.html#lightning-1">Sending payments</a>: <code class="lang-fn"><span class="fn-rust">prefer_spark</span><span class="fn-python">prefer_spark</span><span class="fn-swift">preferSpark</span><span class="fn-kotlin">preferSpark</span><span class="fn-javascript">preferSpark</span><span class="fn-react-native">preferSpark</span><span class="fn-flutter">preferSpark</span><span class="fn-go">PreferSpark</span><span class="fn-csharp">PreferSpark</span></code> sends via a direct Spark transfer when the invoice also contains a Spark address, and <code class="lang-fn"><span class="fn-rust">completion_timeout_secs</span><span class="fn-python">completion_timeout_secs</span><span class="fn-swift">completionTimeoutSecs</span><span class="fn-kotlin">completionTimeoutSecs</span><span class="fn-javascript">completionTimeoutSecs</span><span class="fn-react-native">completionTimeoutSecs</span><span class="fn-flutter">completionTimeoutSecs</span><span class="fn-go">CompletionTimeoutSecs</span><span class="fn-csharp">CompletionTimeoutSecs</span></code> controls how long publishing waits for the payment to complete before returning it while still pending:</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let unsigned = sdk
+    .build_unsigned_transfer_package(BuildUnsignedTransferPackageRequest {
+        prepare_response,
+        options: Some(BuildTransferPackageOptions::Bolt11Invoice {
+            prefer_spark: true,
+            completion_timeout_secs: Some(10),
+        }),
+    })
+    .await?;</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let unsigned = try await sdk.buildUnsignedTransferPackage(
+    request: BuildUnsignedTransferPackageRequest(
+        prepareResponse: prepareResponse,
+        options: BuildTransferPackageOptions.bolt11Invoice(
+            preferSpark: true,
+            completionTimeoutSecs: 10
+        )
+    ))
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">val unsigned = sdk.buildUnsignedTransferPackage(
+    BuildUnsignedTransferPackageRequest(
+        prepareResponse = prepareResponse,
+        options = BuildTransferPackageOptions.Bolt11Invoice(
+            preferSpark = true,
+            completionTimeoutSecs = 10u,
+        ),
+    )
+)
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var unsigned = await sdk.BuildUnsignedTransferPackage(
+    request: new BuildUnsignedTransferPackageRequest(
+        prepareResponse: prepareResponse,
+        options: new BuildTransferPackageOptions.Bolt11Invoice(
+            preferSpark: true,
+            completionTimeoutSecs: 10
+        )
+    )
+);
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const unsigned = await sdk.buildUnsignedTransferPackage({
+  prepareResponse,
+  options: {
+    type: 'bolt11Invoice',
+    preferSpark: true,
+    completionTimeoutSecs: 10
+  }
+})
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const unsigned = await sdk.buildUnsignedTransferPackage({
+  prepareResponse,
+  options: new BuildTransferPackageOptions.Bolt11Invoice({
+    preferSpark: true,
+    completionTimeoutSecs: 10
+  })
+})
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">final unsigned = await sdk.buildUnsignedTransferPackage(
+    request: BuildUnsignedTransferPackageRequest(
+        prepareResponse: prepareResponse,
+        options: BuildTransferPackageOptions.bolt11Invoice(
+            preferSpark: true, completionTimeoutSecs: 10)));
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">try:
+    unsigned = await sdk.build_unsigned_transfer_package(
+        BuildUnsignedTransferPackageRequest(
+            prepare_response=prepare_response,
+            options=BuildTransferPackageOptions.BOLT11_INVOICE(
+                prefer_spark=True, completion_timeout_secs=10
+            ),
+        )
+    )
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">var completionTimeoutSecs uint32 = 10
+var options breez_sdk_spark.BuildTransferPackageOptions
+options = breez_sdk_spark.BuildTransferPackageOptionsBolt11Invoice{
+	PreferSpark:           true,
+	CompletionTimeoutSecs: &amp;completionTimeoutSecs,
+}
+
+unsigned, err := sdk.BuildUnsignedTransferPackage(
+	breez_sdk_spark.BuildUnsignedTransferPackageRequest{
+		PrepareResponse: prepareResponse,
+		Options:         &amp;options,
+	},
+)
+if err != nil {
+	return err
+}
+</code></pre>
+</section>
+</custom-tabs>
+<h3 id="tokens"><a class="header" href="#tokens">Tokens</a></h3>
+<p>Token payments follow the same loop. Prepare with a token identifier as in <a href="token_payments.html">Token payments</a>. The package amounts are in the token's base units, and the user signs with <code class="lang-fn"><span class="fn-rust">prepare_token_transaction</span><span class="fn-python">prepare_token_transaction</span><span class="fn-swift">prepareTokenTransaction</span><span class="fn-kotlin">prepareTokenTransaction</span><span class="fn-javascript">prepareTokenTransaction</span><span class="fn-react-native">prepareTokenTransaction</span><span class="fn-flutter">prepareTokenTransaction</span><span class="fn-go">PrepareTokenTransaction</span><span class="fn-csharp">PrepareTokenTransaction</span></code>. A Token package with <code class="lang-fn"><span class="fn-rust">is_swap</span><span class="fn-python">is_swap</span><span class="fn-swift">isSwap</span><span class="fn-kotlin">isSwap</span><span class="fn-javascript">isSwap</span><span class="fn-react-native">isSwap</span><span class="fn-flutter">isSwap</span><span class="fn-go">IsSwap</span><span class="fn-csharp">IsSwap</span></code> set means the wallet first needs to combine token outputs: publishing it returns <code class="lang-fn"><span class="fn-rust">PublishSignedTransferPackageResponse::SwapCompleted</span><span class="fn-python">PublishSignedTransferPackageResponse.SWAP_COMPLETED</span><span class="fn-swift">PublishSignedTransferPackageResponse.swapCompleted</span><span class="fn-kotlin">PublishSignedTransferPackageResponse.SwapCompleted</span><span class="fn-javascript">PublishSignedTransferPackageResponse.SwapCompleted</span><span class="fn-react-native">PublishSignedTransferPackageResponse.SwapCompleted</span><span class="fn-flutter">PublishSignedTransferPackageResponse.SwapCompleted</span><span class="fn-go">PublishSignedTransferPackageResponseSwapCompleted</span><span class="fn-csharp">PublishSignedTransferPackageResponse.SwapCompleted</span></code>, just like the Bitcoin case.</p>
+<h2 id="lnurl-pay">
+    <a class="header" href="#lnurl-pay">LNURL-Pay</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.build_unsigned_lnurl_pay_package">API docs</a>
+</h2>
+<p>LNURL payments have their own pair of methods, because completing them includes the LNURL exchange with the recipient's service. Prepare with <code class="lang-fn"><span class="fn-rust">prepare_lnurl_pay</span><span class="fn-python">prepare_lnurl_pay</span><span class="fn-swift">prepareLnurlPay</span><span class="fn-kotlin">prepareLnurlPay</span><span class="fn-javascript">prepareLnurlPay</span><span class="fn-react-native">prepareLnurlPay</span><span class="fn-flutter">prepareLnurlPay</span><span class="fn-go">PrepareLnurlPay</span><span class="fn-csharp">PrepareLnurlPay</span></code> as in <a href="lnurl_pay.html">LNURL-Pay</a>, then run the same loop with <code class="lang-fn"><span class="fn-rust">build_unsigned_lnurl_pay_package</span><span class="fn-python">build_unsigned_lnurl_pay_package</span><span class="fn-swift">buildUnsignedLnurlPayPackage</span><span class="fn-kotlin">buildUnsignedLnurlPayPackage</span><span class="fn-javascript">buildUnsignedLnurlPayPackage</span><span class="fn-react-native">buildUnsignedLnurlPayPackage</span><span class="fn-flutter">buildUnsignedLnurlPayPackage</span><span class="fn-go">BuildUnsignedLnurlPayPackage</span><span class="fn-csharp">BuildUnsignedLnurlPayPackage</span></code> and <code class="lang-fn"><span class="fn-rust">publish_signed_lnurl_pay_package</span><span class="fn-python">publish_signed_lnurl_pay_package</span><span class="fn-swift">publishSignedLnurlPayPackage</span><span class="fn-kotlin">publishSignedLnurlPayPackage</span><span class="fn-javascript">publishSignedLnurlPayPackage</span><span class="fn-react-native">publishSignedLnurlPayPackage</span><span class="fn-flutter">publishSignedLnurlPayPackage</span><span class="fn-go">PublishSignedLnurlPayPackage</span><span class="fn-csharp">PublishSignedLnurlPayPackage</span></code>. The result carries the LNURL response, including any success action:</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">loop {
+    let unsigned = sdk
+        .build_unsigned_lnurl_pay_package(BuildUnsignedLnurlPayPackageRequest {
+            prepare_response: prepare_response.clone(),
+        })
+        .await?;
+
+    let signed_package = sign_package(signer, unsigned).await?;
+
+    match sdk
+        .publish_signed_lnurl_pay_package(PublishSignedLnurlPayPackageRequest {
+            signed_package,
+        })
+        .await?
+    {
+        PublishSignedLnurlPayResponse::SwapCompleted =&gt; continue,
+        PublishSignedLnurlPayResponse::PaymentSent { response } =&gt; {
+            return Ok(response);
+        }
+    }
+}</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">while true {
+    let unsigned = try await sdk.buildUnsignedLnurlPayPackage(
+        request: BuildUnsignedLnurlPayPackageRequest(
+            prepareResponse: prepareResponse
+        ))
+
+    let signedPackage = try await signPackage(signer: signer, unsigned: unsigned)
+
+    let publishResponse = try await sdk.publishSignedLnurlPayPackage(
+        request: PublishSignedLnurlPayPackageRequest(signedPackage: signedPackage))
+
+    switch publishResponse {
+    case .swapCompleted:
+        continue
+    case let .paymentSent(response):
+        return response
+    }
+}
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">while (true) {
+    val unsigned = sdk.buildUnsignedLnurlPayPackage(
+        BuildUnsignedLnurlPayPackageRequest(prepareResponse)
+    )
+
+    val signedPackage = signPackage(signer, unsigned)
+
+    val result = sdk.publishSignedLnurlPayPackage(
+        PublishSignedLnurlPayPackageRequest(signedPackage)
+    )
+    when (result) {
+        is PublishSignedLnurlPayResponse.SwapCompleted -&gt; continue
+        is PublishSignedLnurlPayResponse.PaymentSent -&gt; return result.response
+    }
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">while (true)
+{
+    var unsigned = await sdk.BuildUnsignedLnurlPayPackage(
+        request: new BuildUnsignedLnurlPayPackageRequest(
+            prepareResponse: prepareResponse
+        )
+    );
+
+    var signedPackage = await SignPackage(signer, unsigned);
+
+    var response = await sdk.PublishSignedLnurlPayPackage(
+        request: new PublishSignedLnurlPayPackageRequest(signedPackage: signedPackage)
+    );
+
+    switch (response)
+    {
+        case PublishSignedLnurlPayResponse.SwapCompleted:
+            continue;
+        case PublishSignedLnurlPayResponse.PaymentSent paymentSent:
+            return paymentSent.response;
+    }
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">while (true) {
+  const unsigned = await sdk.buildUnsignedLnurlPayPackage({ prepareResponse })
+
+  const signedPackage = await signPackage(signer, unsigned)
+
+  const publishResponse = await sdk.publishSignedLnurlPayPackage({ signedPackage })
+
+  if (publishResponse.type === 'swapCompleted') {
+    continue
+  }
+  return publishResponse.response
+}
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">while (true) {
+  const unsigned = await sdk.buildUnsignedLnurlPayPackage({ prepareResponse })
+
+  const signedPackage = await signPackage(signer, unsigned)
+
+  const publishResponse = await sdk.publishSignedLnurlPayPackage({ signedPackage })
+
+  if (publishResponse.tag === PublishSignedLnurlPayResponse_Tags.SwapCompleted) {
+    continue
+  }
+  return publishResponse.inner.response
+}
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">while (true) {
+  final unsigned = await sdk.buildUnsignedLnurlPayPackage(
+      request:
+          BuildUnsignedLnurlPayPackageRequest(prepareResponse: prepareResponse));
+
+  final signedPackage = await signPackage(signer, unsigned);
+
+  final result = await sdk.publishSignedLnurlPayPackage(
+      request:
+          PublishSignedLnurlPayPackageRequest(signedPackage: signedPackage));
+  if (result is PublishSignedLnurlPayResponse_SwapCompleted) {
+    continue;
+  }
+  if (result is PublishSignedLnurlPayResponse_PaymentSent) {
+    return result.response;
+  }
+}
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">try:
+    while True:
+        unsigned = await sdk.build_unsigned_lnurl_pay_package(
+            BuildUnsignedLnurlPayPackageRequest(prepare_response=prepare_response)
+        )
+
+        signed_package = await sign_package(signer, unsigned)
+
+        result = await sdk.publish_signed_lnurl_pay_package(
+            PublishSignedLnurlPayPackageRequest(signed_package=signed_package)
+        )
+        if isinstance(result, PublishSignedLnurlPayResponse.SWAP_COMPLETED):
+            continue
+        if isinstance(result, PublishSignedLnurlPayResponse.PAYMENT_SENT):
+            return result.response
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">for {
+	unsigned, err := sdk.BuildUnsignedLnurlPayPackage(
+		breez_sdk_spark.BuildUnsignedLnurlPayPackageRequest{
+			PrepareResponse: prepareResponse,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	signedPackage, err := SignPackage(signer, unsigned)
+	if err != nil {
+		return nil, err
+	}
+
+	response, err := sdk.PublishSignedLnurlPayPackage(
+		breez_sdk_spark.PublishSignedLnurlPayPackageRequest{
+			SignedPackage: signedPackage,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	switch result := response.(type) {
+	case breez_sdk_spark.PublishSignedLnurlPayResponseSwapCompleted:
+		continue
+	case breez_sdk_spark.PublishSignedLnurlPayResponsePaymentSent:
+		return &amp;result.Response, nil
+	}
+}
+</code></pre>
+</section>
+</custom-tabs>
+<h2 id="failures-and-retries"><a class="header" href="#failures-and-retries">Failures and retries</a></h2>
+<ul>
+<li>Publishing the same signed package twice returns the same result, so it is safe to retry after a lost response or a network error.</li>
+<li>If publishing fails because the wallet's funds moved or fees changed since the package was built, prepare again and restart the loop with a fresh package.</li>
+<li>Never reuse a signature for a changed payment. Any change to the amount, fee or destination needs a new package, reviewed and signed by the user.</li>
+</ul>
+<h2 id="remote-signers"><a class="header" href="#remote-signers">Remote signers</a></h2>
+<p>The signature does not have to come from a device holding the mnemonic. Any <code class="lang-fn"><span class="fn-rust">ExternalSparkSigner</span><span class="fn-python">ExternalSparkSigner</span><span class="fn-swift">ExternalSparkSigner</span><span class="fn-kotlin">ExternalSparkSigner</span><span class="fn-javascript">ExternalSparkSigner</span><span class="fn-react-native">ExternalSparkSigner</span><span class="fn-flutter">ExternalSparkSigner</span><span class="fn-go">ExternalSparkSigner</span><span class="fn-csharp">ExternalSparkSigner</span></code> implementation can sign the package, including one backed by a remote signing service. With Turnkey, a policy can require the end user to approve the transfer signing while the server runs the rest; see <a href="turnkey.html#user-approved-payments">Using Turnkey</a>.</p>
+<h2 id="limitations"><a class="header" href="#limitations">Limitations</a></h2>
+<ul>
+<li>Payments with a conversion step (see <a href="token_conversion.html">Converting tokens</a>) are not supported.</li>
+<li>USDC/USDT cross-chain sends are not supported.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../guide/server_mode.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../guide/turnkey.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../guide/server_mode.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../guide/turnkey.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../tabs.js"></script>
+        <script src="../theme/pagetoc.js"></script>
+        <script src="../brand-header.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

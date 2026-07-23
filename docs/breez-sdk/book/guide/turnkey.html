@@ -1,0 +1,556 @@
+<!DOCTYPE HTML>
+<html lang="en" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Using Turnkey - Breez SDK - Spark</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../styles.css">
+        <link rel="stylesheet" href="../theme/pagetoc.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <!--
+                  Breez SDK · Spark docs — brand header partial.
+                
+                  mdBook renders the `header` partial at the top of every page's content. The default
+                  theme ships an EMPTY header.hbs, which is why the reskin's styles.css and
+                  brand-header.js both reference `.brand-header` / #brand-controls but the file
+                  itself was never committed to the reskin branch. THIS is that missing file,
+                  reconstructed from the design mockup (design/Breez SDK Docs.dc.html) and the
+                  class names in styles.css.
+                
+                  Drop this at: docs/breez-sdk/theme/header.hbs
+                  It pairs with styles.css (.brand-header rules) and brand-header.js (which moves
+                  mdBook's theme/search/sidebar controls into #brand-controls at load time).
+                -->
+                <div id="brand-header" class="brand-header">
+                  <a class="brand-logo" href="../index.html" aria-label="Docs home">
+                    <img src="../assets/icons/logo-breez-header.svg" alt="Breez">
+                  </a>
+                  <span class="brand-sep"></span>
+                  <span class="brand-product">SDK Documentation</span>
+                  <span class="brand-badge">
+                    <img src="../assets/icons/spark_icon.svg" alt="">Spark
+                  </span>
+                
+                  <span class="brand-spacer"></span>
+                
+                  <nav class="brand-nav">
+                    <a href="https://breez.technology" target="_blank" rel="noopener">Home</a>
+                    <a href="https://github.com/breez/spark-sdk" target="_blank" rel="noopener">GitHub</a>
+                    <a href="https://t.me/breezsdk" target="_blank" rel="noopener" aria-label="Telegram">
+                      <img src="../assets/icons/telegram-icon.svg" alt="">
+                    </a>
+                  </nav>
+                
+                  <!-- brand-header.js relocates #sidebar-toggle, #theme-toggle, #theme-list and
+                       #search-toggle into this container so they read as one bar. -->
+                  <div id="brand-controls" class="brand-controls"></div>
+                
+                  <a class="brand-cta" href="https://breez.technology/request-api-key/#contact-us-form-sdk" target="_blank" rel="noopener">
+                    Request API Key
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                  </a>
+                </div>
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Breez SDK - Spark</h1>
+
+                    <div class="right-buttons">
+                        <a href="https://github.com/breez/spark-sdk" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/src/guide/turnkey.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="using-turnkey"><a class="header" href="#using-turnkey">Using Turnkey</a></h1>
+<p><a href="https://www.turnkey.com/">Turnkey</a> keeps the wallet's keys inside a secure enclave. The SDK ships Turnkey-backed signers, so a server can run wallets without holding any signing key material: signing happens inside Turnkey, and what the server holds is an API credential whose permissions you control with Turnkey policies.</p>
+<p>Turnkey is meant for server deployments (see <a href="server_mode.html">Server mode</a>). Depending on the policy you attach to the server's credential, it supports two ways of sending payments: the server signs everything itself, or each payment is approved by the end user via <a href="client_signing.html">Client signing</a>.</p>
+<p>The SDK connects to an existing Spark wallet in your Turnkey organization or sub-organization. Creating the wallet itself is done with Turnkey directly and is out of the SDK's scope (see <a href="https://docs.turnkey.com/features/networks/spark">Turnkey's Spark support</a> for creating the wallet account).</p>
+<h2 id="connecting">
+    <a class="header" href="#connecting">Connecting</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/turnkey/fn.create_turnkey_signer.html">API docs</a>
+</h2>
+<p>Create the signers with <code class="lang-fn"><span class="fn-rust">create_turnkey_signer</span><span class="fn-python">create_turnkey_signer</span><span class="fn-swift">createTurnkeySigner</span><span class="fn-kotlin">createTurnkeySigner</span><span class="fn-javascript">createTurnkeySigner</span><span class="fn-react-native">createTurnkeySigner</span><span class="fn-flutter">createTurnkeySigner</span><span class="fn-go">CreateTurnkeySigner</span><span class="fn-csharp">CreateTurnkeySigner</span></code> and connect with <code class="lang-fn"><span class="fn-rust">connect_with_signer</span><span class="fn-python">connect_with_signer</span><span class="fn-swift">connectWithSigner</span><span class="fn-kotlin">connectWithSigner</span><span class="fn-javascript">connectWithSigner</span><span class="fn-react-native">connectWithSigner</span><span class="fn-flutter">connectWithSigner</span><span class="fn-go">ConnectWithSigner</span><span class="fn-csharp">ConnectWithSigner</span></code>, the same way as any <a href="external_signer.html">external signer</a>:</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let turnkey_config = TurnkeyConfig {
+    base_url: None,
+    organization_id: "&lt;turnkey sub-organization id&gt;".to_string(),
+    api_public_key: "&lt;api public key hex&gt;".to_string(),
+    api_private_key: "&lt;api private key hex&gt;".to_string(),
+    wallet_id: "&lt;turnkey wallet id&gt;".to_string(),
+    network: Network::Mainnet,
+    account_number: None,
+    // Set after the first connect to make later signer setup network-free
+    identity_public_key: None,
+    retry: None,
+    max_rps: None,
+};
+
+let signers = create_turnkey_signer(turnkey_config).await?;
+
+let mut config = default_config(Network::Mainnet);
+config.api_key = Some("&lt;breez api key&gt;".to_string());
+
+let sdk = connect_with_signer(ConnectWithSignerRequest {
+    config,
+    breez_signer: signers.breez_signer,
+    spark_signer: signers.spark_signer,
+    storage_dir: "./.data".to_string(),
+})
+.await?;</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let turnkeyConfig = TurnkeyConfig(
+    baseUrl: nil,
+    organizationId: "&lt;turnkey sub-organization id&gt;",
+    apiPublicKey: "&lt;api public key hex&gt;",
+    apiPrivateKey: "&lt;api private key hex&gt;",
+    walletId: "&lt;turnkey wallet id&gt;",
+    network: Network.mainnet,
+    accountNumber: nil,
+    // Set after the first connect to make later signer setup network-free
+    identityPublicKey: nil,
+    retry: nil,
+    maxRps: nil
+)
+
+let signers = try await createTurnkeySigner(config: turnkeyConfig)
+
+var config = defaultConfig(network: Network.mainnet)
+config.apiKey = "&lt;breez api key&gt;"
+
+let sdk = try await BreezSdkSpark.connectWithSigner(request: ConnectWithSignerRequest(
+    config: config,
+    breezSigner: signers.breezSigner,
+    sparkSigner: signers.sparkSigner,
+    storageDir: "./.data"
+))
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">val turnkeyConfig = TurnkeyConfig(
+    baseUrl = null,
+    organizationId = "&lt;turnkey sub-organization id&gt;",
+    apiPublicKey = "&lt;api public key hex&gt;",
+    apiPrivateKey = "&lt;api private key hex&gt;",
+    walletId = "&lt;turnkey wallet id&gt;",
+    network = Network.MAINNET,
+    accountNumber = null,
+    // Set after the first connect to make later signer setup network-free
+    identityPublicKey = null,
+    retry = null,
+    maxRps = null
+)
+
+try {
+    val signers = createTurnkeySigner(turnkeyConfig)
+
+    val config = defaultConfig(Network.MAINNET)
+    config.apiKey = "&lt;breez api key&gt;"
+
+    val sdk = connectWithSigner(ConnectWithSignerRequest(
+        config = config,
+        breezSigner = signers.breezSigner,
+        sparkSigner = signers.sparkSigner,
+        storageDir = "./.data"
+    ))
+} catch (e: Exception) {
+    // handle error
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var turnkeyConfig = new TurnkeyConfig(
+    baseUrl: null,
+    organizationId: "&lt;turnkey sub-organization id&gt;",
+    apiPublicKey: "&lt;api public key hex&gt;",
+    apiPrivateKey: "&lt;api private key hex&gt;",
+    walletId: "&lt;turnkey wallet id&gt;",
+    network: Network.Mainnet,
+    accountNumber: null,
+    // Set after the first connect to make later signer setup network-free
+    identityPublicKey: null,
+    retry: null,
+    maxRps: null
+);
+
+var signers = await BreezSdkSparkMethods.CreateTurnkeySigner(turnkeyConfig);
+
+var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+{
+    apiKey = "&lt;breez api key&gt;"
+};
+
+var sdk = await BreezSdkSparkMethods.ConnectWithSigner(new ConnectWithSignerRequest(
+    config: config,
+    breezSigner: signers.breezSigner,
+    sparkSigner: signers.sparkSigner,
+    storageDir: "./.data"
+));
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const turnkeyConfig: TurnkeyConfig = {
+  baseUrl: undefined,
+  organizationId: '&lt;turnkey sub-organization id&gt;',
+  apiPublicKey: '&lt;api public key hex&gt;',
+  apiPrivateKey: '&lt;api private key hex&gt;',
+  walletId: '&lt;turnkey wallet id&gt;',
+  network: 'mainnet',
+  accountNumber: undefined,
+  // Set after the first connect to make later signer setup network-free
+  identityPublicKey: undefined,
+  retry: undefined,
+  maxRps: undefined
+}
+
+const signers = await createTurnkeySigner(turnkeyConfig)
+
+const config = defaultConfig('mainnet')
+config.apiKey = '&lt;breez api key&gt;'
+
+const sdk = await connectWithSigner(
+  config,
+  signers.breezSigner,
+  signers.sparkSigner,
+  'breez_spark_db' // For WASM, this is the IndexedDB database name
+)
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const turnkeyConfig: TurnkeyConfig = {
+  baseUrl: undefined,
+  organizationId: '&lt;turnkey sub-organization id&gt;',
+  apiPublicKey: '&lt;api public key hex&gt;',
+  apiPrivateKey: '&lt;api private key hex&gt;',
+  walletId: '&lt;turnkey wallet id&gt;',
+  network: Network.Mainnet,
+  accountNumber: undefined,
+  // Set after the first connect to make later signer setup network-free
+  identityPublicKey: undefined,
+  retry: undefined,
+  maxRps: undefined
+}
+
+const signers = await createTurnkeySigner(turnkeyConfig)
+
+const config = defaultConfig(Network.Mainnet)
+config.apiKey = '&lt;breez api key&gt;'
+
+const sdk = await connectWithSigner({
+  config,
+  breezSigner: signers.breezSigner,
+  sparkSigner: signers.sparkSigner,
+  storageDir: `${RNFS.DocumentDirectoryPath}/data`
+})
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">turnkey_config = TurnkeyConfig(
+    base_url=None,
+    organization_id="&lt;turnkey sub-organization id&gt;",
+    api_public_key="&lt;api public key hex&gt;",
+    api_private_key="&lt;api private key hex&gt;",
+    wallet_id="&lt;turnkey wallet id&gt;",
+    network=Network.MAINNET,
+    account_number=None,
+    # Set after the first connect to make later signer setup network-free
+    identity_public_key=None,
+    retry=None,
+    max_rps=None,
+)
+
+signers = await create_turnkey_signer(config=turnkey_config)
+
+config = default_config(Network.MAINNET)
+config.api_key = "&lt;breez api key&gt;"
+
+sdk = await connect_with_signer(ConnectWithSignerRequest(
+    config=config,
+    breez_signer=signers.breez_signer,
+    spark_signer=signers.spark_signer,
+    storage_dir="./.data"
+))
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">turnkeyConfig := breez_sdk_spark.TurnkeyConfig{
+	BaseUrl:        nil,
+	OrganizationId: "&lt;turnkey sub-organization id&gt;",
+	ApiPublicKey:   "&lt;api public key hex&gt;",
+	ApiPrivateKey:  "&lt;api private key hex&gt;",
+	WalletId:       "&lt;turnkey wallet id&gt;",
+	Network:        breez_sdk_spark.NetworkMainnet,
+	AccountNumber:  nil,
+	// Set after the first connect to make later signer setup network-free
+	IdentityPublicKey: nil,
+	Retry:             nil,
+	MaxRps:            nil,
+}
+
+signers, err := breez_sdk_spark.CreateTurnkeySigner(turnkeyConfig)
+if err != nil {
+	return nil, err
+}
+
+config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+apiKey := "&lt;breez api key&gt;"
+config.ApiKey = &amp;apiKey
+
+sdk, err := breez_sdk_spark.ConnectWithSigner(breez_sdk_spark.ConnectWithSignerRequest{
+	Config:      config,
+	BreezSigner: signers.BreezSigner,
+	SparkSigner: signers.SparkSigner,
+	StorageDir:  "./.data",
+})
+if err != nil {
+	return nil, err
+}
+</code></pre>
+</section>
+</custom-tabs>
+<p>A few notes on the configuration:</p>
+<ul>
+<li><code class="lang-fn"><span class="fn-rust">api_private_key</span><span class="fn-python">api_private_key</span><span class="fn-swift">apiPrivateKey</span><span class="fn-kotlin">apiPrivateKey</span><span class="fn-javascript">apiPrivateKey</span><span class="fn-react-native">apiPrivateKey</span><span class="fn-flutter">apiPrivateKey</span><span class="fn-go">ApiPrivateKey</span><span class="fn-csharp">ApiPrivateKey</span></code> is a server secret. It authenticates every Turnkey request; keep it out of client code and logs.</li>
+<li>The API key pair can be secp256k1 or P-256 (Turnkey's console default). All published bindings support both. If you use the Rust crate directly, enable the <code>turnkey</code> cargo feature, plus <code>turnkey-p256</code> for P-256 keys.</li>
+<li><code class="lang-fn"><span class="fn-rust">max_rps</span><span class="fn-python">max_rps</span><span class="fn-swift">maxRps</span><span class="fn-kotlin">maxRps</span><span class="fn-javascript">maxRps</span><span class="fn-react-native">maxRps</span><span class="fn-flutter">maxRps</span><span class="fn-go">MaxRps</span><span class="fn-csharp">MaxRps</span></code> paces requests to Turnkey. Unset uses Turnkey's documented limit of 10 requests per second per sub-organization; set it if your account has a different limit.</li>
+</ul>
+<h3 id="reconnecting-without-network-calls"><a class="header" href="#reconnecting-without-network-calls">Reconnecting without network calls</a></h3>
+<p>Server deployments often build a fresh SDK instance per request. Setting <code class="lang-fn"><span class="fn-rust">identity_public_key</span><span class="fn-python">identity_public_key</span><span class="fn-swift">identityPublicKey</span><span class="fn-kotlin">identityPublicKey</span><span class="fn-javascript">identityPublicKey</span><span class="fn-react-native">identityPublicKey</span><span class="fn-flutter">identityPublicKey</span><span class="fn-go">IdentityPublicKey</span><span class="fn-csharp">IdentityPublicKey</span></code> makes the signer setup network-free. Obtain it once from a freshly built signer with <code class="lang-fn"><span class="fn-rust">get_identity_public_key</span><span class="fn-python">get_identity_public_key</span><span class="fn-swift">getIdentityPublicKey</span><span class="fn-kotlin">getIdentityPublicKey</span><span class="fn-javascript">getIdentityPublicKey</span><span class="fn-react-native">getIdentityPublicKey</span><span class="fn-flutter">getIdentityPublicKey</span><span class="fn-go">GetIdentityPublicKey</span><span class="fn-csharp">GetIdentityPublicKey</span></code> (available right after <code class="lang-fn"><span class="fn-rust">create_turnkey_signer</span><span class="fn-python">create_turnkey_signer</span><span class="fn-swift">createTurnkeySigner</span><span class="fn-kotlin">createTurnkeySigner</span><span class="fn-javascript">createTurnkeySigner</span><span class="fn-react-native">createTurnkeySigner</span><span class="fn-flutter">createTurnkeySigner</span><span class="fn-go">CreateTurnkeySigner</span><span class="fn-csharp">CreateTurnkeySigner</span></code>, no connect needed), or from <code class="lang-fn"><span class="fn-rust">identity_pubkey</span><span class="fn-python">identity_pubkey</span><span class="fn-swift">identityPubkey</span><span class="fn-kotlin">identityPubkey</span><span class="fn-javascript">identityPubkey</span><span class="fn-react-native">identityPubkey</span><span class="fn-flutter">identityPubkey</span><span class="fn-go">IdentityPubkey</span><span class="fn-csharp">IdentityPubkey</span></code> on <code class="lang-fn"><span class="fn-rust">get_info</span><span class="fn-python">get_info</span><span class="fn-swift">getInfo</span><span class="fn-kotlin">getInfo</span><span class="fn-javascript">getInfo</span><span class="fn-react-native">getInfo</span><span class="fn-flutter">getInfo</span><span class="fn-go">GetInfo</span><span class="fn-csharp">GetInfo</span></code> if you already have a connected SDK. Store it alongside the wallet and pass it in the config on later connects. It is a stable, non-secret value, but it must belong to the same wallet.</p>
+<h3 id="wallets-under-a-deny-export-policy"><a class="header" href="#wallets-under-a-deny-export-policy">Wallets under a deny-export policy</a></h3>
+<p><code class="lang-fn"><span class="fn-rust">create_turnkey_signer</span><span class="fn-python">create_turnkey_signer</span><span class="fn-swift">createTurnkeySigner</span><span class="fn-kotlin">createTurnkeySigner</span><span class="fn-javascript">createTurnkeySigner</span><span class="fn-react-native">createTurnkeySigner</span><span class="fn-flutter">createTurnkeySigner</span><span class="fn-go">CreateTurnkeySigner</span><span class="fn-csharp">CreateTurnkeySigner</span></code> keeps every Spark key in the enclave, but exports one dedicated non-Spark key on first use for local encryption operations. If your Turnkey policy forbids any key export, use <code class="lang-fn"><span class="fn-rust">create_turnkey_signing_only_signer</span><span class="fn-python">create_turnkey_signing_only_signer</span><span class="fn-swift">createTurnkeySigningOnlySigner</span><span class="fn-kotlin">createTurnkeySigningOnlySigner</span><span class="fn-javascript">createTurnkeySigningOnlySigner</span><span class="fn-react-native">createTurnkeySigningOnlySigner</span><span class="fn-flutter">createTurnkeySigningOnlySigner</span><span class="fn-go">CreateTurnkeySigningOnlySigner</span><span class="fn-csharp">CreateTurnkeySigningOnlySigner</span></code> instead: no key is ever exported. Connect its signers as described in <a href="external_signer.html#signers-without-local-ecieshmac-support">Signers Without Local ECIES/HMAC Support</a>, which also lists the trade-offs of a signing-only signer.</p>
+<h2 id="signing-models"><a class="header" href="#signing-models">Signing models</a></h2>
+<p>How payments are authorized is decided by the Turnkey policy attached to each credential, not by SDK code. Configure the policies in Turnkey; see the <a href="https://docs.turnkey.com/concepts/policies/overview">Turnkey policy documentation</a> for the mechanics and <a href="https://docs.turnkey.com/features/networks/spark#supported-operations">Turnkey's Spark operations</a> for the activity names the policy scopes.</p>
+<h3 id="server-side-signing"><a class="header" href="#server-side-signing">Server-side signing</a></h3>
+<p>The server's API credential is allowed to run all Spark signing activities. Every SDK flow then works exactly as documented, starting with <a href="send_payment.html">Sending payments</a>: the server prepares, signs and sends on its own. Use this when the server is trusted to send payments autonomously.</p>
+<h3 id="user-approved-payments"><a class="header" href="#user-approved-payments">User-approved payments</a></h3>
+<p>The policy allows the server's credential to run everything except the transfer approval activity (<code>SPARK_PREPARE_TRANSFER</code>), which requires the end user's own Turnkey credential (for example a passkey registered with Turnkey). The server then drives the send with the <a href="client_signing.html">Client signing</a> flow: it prepares the payment and builds the package, the user approves and signs the one item that needs their credential, and the server publishes it. The rest of the signing (<code>SPARK_SIGN_FROST</code>) stays with the server under policy, so a payment can never be sent without the user, and no key leaves Turnkey on either side.</p>
+<h2 id="availability"><a class="header" href="#availability">Availability</a></h2>
+<ul>
+<li>Turnkey signers are available on all platforms except Flutter, which does not support external signers (see <a href="external_signer.html">Using an External Signer</a>).</li>
+<li>In the Rust crate the integration is behind the <code>turnkey</code> cargo feature. The published bindings ship with it enabled.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../guide/client_signing.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../guide/cross_chain.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../guide/client_signing.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../guide/cross_chain.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../tabs.js"></script>
+        <script src="../theme/pagetoc.js"></script>
+        <script src="../brand-header.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
