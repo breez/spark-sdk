@@ -8,7 +8,7 @@ use std::{
 };
 
 use bitcoin::{
-    Address, Amount, Transaction, TxIn, TxOut, Witness,
+    Address, Amount, OutPoint, Transaction, TxIn, TxOut, Witness,
     absolute::LockTime,
     address::NetworkUnchecked,
     hashes::{Hash as _, sha256::Hash},
@@ -20,13 +20,16 @@ use bitcoin::{
 use futures::stream::{self, StreamExt};
 use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use platform_utils::tokio;
-use spark::bitcoin::sighash_from_multi_input_tx;
+use spark::bitcoin::{
+    sighash_from_multi_input_tx, sighash_from_tx, verify_finalized_taproot_signature_tx,
+};
 #[cfg(feature = "test-utils")]
 use spark::operator::rpc::spark::{
     QueryNodesRequest, TreeNodeStatus as ProtoTreeNodeStatus,
     query_nodes_request::Source as QueryNodesSource,
 };
 use spark::{
+    Network,
     address::{
         SatsPayment, SparkAddress, SparkAddressPaymentType, SparkInvoiceFields, TokensPayment,
     },
@@ -50,7 +53,7 @@ use spark::{
         Preimage, PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
         QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap, TimelockManager,
         TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
-        TransferTokenOutput, TransferType, UnilateralExitLeafFilter, Utxo,
+        TransferTokenOutput, TransferType, UnilateralExitLeafFilter, Utxo, csv_timelock,
     },
     session_store::{InMemorySessionStore, SessionStore},
     signer::{PrepareTransferRequest, PreparedTransfer, SparkSigner},
@@ -2044,6 +2047,7 @@ impl SparkWallet {
                     Arc::clone(&self.operator_pool),
                     Arc::clone(&self.event_manager),
                     self.identity_public_key,
+                    self.config.network,
                     reconnect_interval,
                     Arc::clone(&self.tree_service),
                     Arc::clone(&self.ssp_client),
@@ -2887,6 +2891,121 @@ async fn claim_transfer(
     Ok(result_nodes)
 }
 
+/// Retires the leaves kept only for their exit chain that our own transfer
+/// history proves we sent away, and returns how many went.
+///
+/// The evidence has to come from our side. A leaf we handed on belongs to
+/// somebody else now, and the operators will not describe another wallet's leaf
+/// to us, so there is nothing to read back about it. A completed transfer we
+/// sent is ours to read, names the leaf outright, and carries the refund that
+/// handed it over.
+async fn purge_spent_leaves(
+    tree_service: &dyn TreeService,
+    transfer_service: &TransferService,
+    identity_public_key: &PublicKey,
+    network: Network,
+) -> Result<usize, SparkWalletError> {
+    let kept = tree_service.list_leaves_kept_for_exit().await?;
+    if kept.is_empty() {
+        return Ok(0);
+    }
+    let kept_by_id: HashMap<&TreeNodeId, &TreeNode> =
+        kept.iter().map(|leaf| (&leaf.id, leaf)).collect();
+
+    let bitcoin_service = BitcoinService::new(network);
+    let mut proven: Vec<TreeNodeId> = Vec::new();
+    let mut paging = Some(PagingFilter::default());
+    // Walked a page at a time, newest first, and stopped as soon as every
+    // kept leaf is accounted for: the history has no bound, and a wallet
+    // with nothing left to prove should not read all of it.
+    while let Some(filter) = paging {
+        let page = transfer_service.query_transfers(&[], Some(filter)).await?;
+        paging = page.next;
+        for transfer in &page.items {
+            // Ours to read either way, so say which direction counts. A
+            // transfer back to us is not a leaf leaving, and a claim
+            // re-signs at a lower timelock too.
+            if transfer.status != TransferStatus::Completed
+                || transfer.sender_identity_public_key != *identity_public_key
+                || transfer.receiver_identity_public_key == *identity_public_key
+            {
+                continue;
+            }
+            for sent in &transfer.leaves {
+                let Some(ours) = kept_by_id.get(&sent.leaf.id) else {
+                    continue;
+                };
+                if refund_hands_leaf_over(&bitcoin_service, ours, &sent.intermediate_refund_tx) {
+                    proven.push(ours.id.clone());
+                }
+            }
+        }
+        if proven.len() == kept.len() {
+            break;
+        }
+    }
+
+    if !proven.is_empty() {
+        info!(
+            "Retiring {} of {} kept leaves: we sent them on, under a refund we signed",
+            proven.len(),
+            kept.len()
+        );
+        tree_service.retire_leaves(&proven).await?;
+    }
+    Ok(proven.len())
+}
+
+/// Whether `refund` is the one that handed `ours` to somebody else: it spends the
+/// output our stored node tx funds, at a lower timelock, under a signature that
+/// verifies against the leaf's verifying key.
+///
+/// The signature is what makes this evidence rather than testimony. The rest is
+/// read off a transfer record, so an operator answering in bad faith could
+/// otherwise hand us a bare transaction and have us drop the chain we keep in
+/// order to survive exactly that. A leaf is 2-of-2, so a signature verifying
+/// under its `verifying_public_key` is one we took part in producing.
+///
+/// The timelock is what makes it directional. Only a transfer decrements it, one
+/// interval per hop, so a lower one is the leaf moving on rather than a renewal
+/// moving it the other way.
+fn refund_hands_leaf_over(
+    bitcoin_service: &BitcoinService,
+    ours: &TreeNode,
+    refund: &Transaction,
+) -> bool {
+    // Checked against our own stored node tx, not against anything the record
+    // carries, so a rewritten node tx cannot bring a matching refund with it.
+    let funding = OutPoint::new(ours.node_tx.compute_txid(), 0);
+    if refund
+        .input
+        .first()
+        .is_none_or(|input| input.previous_output != funding)
+    {
+        return false;
+    }
+    let Some(our_refund) = &ours.refund_tx else {
+        return false;
+    };
+    match (csv_timelock(our_refund), csv_timelock(refund)) {
+        (Some(ours), Some(theirs)) if theirs < ours => {}
+        _ => return false,
+    }
+    let Some(funded) = ours.node_tx.output.first() else {
+        return false;
+    };
+    let Ok(sighash) = sighash_from_tx(refund, 0, funded) else {
+        return false;
+    };
+    verify_finalized_taproot_signature_tx(
+        bitcoin_service,
+        refund,
+        &sighash.to_raw_hash().to_byte_array(),
+        &ours.verifying_public_key,
+    )
+    .is_ok()
+}
+
 /// Event handler that bridges AutoOptimizationEvent to WalletEvent.
 struct WalletAutoOptimizationEventHandler {
     event_manager: Arc<EventManager>,
@@ -2899,10 +3018,16 @@ impl AutoOptimizationEventHandler for WalletAutoOptimizationEventHandler {
     }
 }
 
+/// How often to check whether the leaves kept for their exit chain have been
+/// spent. They leave the balance the moment the operators stop reporting them,
+/// so this only bounds how long their rows outlive them.
+const SPENT_LEAF_PURGE_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
 struct BackgroundProcessor {
     operator_pool: Arc<OperatorPool>,
     event_manager: Arc<EventManager>,
     identity_public_key: PublicKey,
+    network: Network,
     reconnect_interval: Duration,
     tree_service: Arc<dyn TreeService>,
     ssp_client: Arc<ServiceProvider>,
@@ -2922,6 +3047,7 @@ impl BackgroundProcessor {
         operator_pool: Arc<OperatorPool>,
         event_manager: Arc<EventManager>,
         identity_public_key: PublicKey,
+        network: Network,
         reconnect_interval: Duration,
         tree_service: Arc<dyn TreeService>,
         ssp_client: Arc<ServiceProvider>,
@@ -2938,6 +3064,7 @@ impl BackgroundProcessor {
             operator_pool,
             event_manager,
             identity_public_key,
+            network,
             reconnect_interval,
             tree_service,
             ssp_client,
@@ -3011,6 +3138,20 @@ impl BackgroundProcessor {
 
         if let Err(e) = self.token_service.refresh_tokens_outputs().await {
             error!("Error refreshing token outputs on startup: {:?}", e);
+        }
+
+        {
+            let cloned_self = Arc::clone(self);
+            let cancellation_token_clone = cancellation_token.clone();
+            let span = tracing::Span::current();
+            tokio::spawn(
+                async move {
+                    cloned_self
+                        .run_spent_leaf_purge(cancellation_token_clone)
+                        .await;
+                }
+                .instrument(span),
+            );
         }
 
         // Start token output optimization background task if configured
@@ -3268,6 +3409,43 @@ impl BackgroundProcessor {
         }
     }
 
+    /// Clears out the leaves kept only for their exit chain once the operators
+    /// can prove they were spent. Housekeeping, not book-keeping: such a leaf is
+    /// already out of the balance and out of selection, so nothing waits on this
+    /// and it runs on its own slow timer rather than on the refresh, which sits
+    /// on the payment path. When there is nothing lingering it costs one local
+    /// read and no network at all.
+    async fn run_spent_leaf_purge(&self, mut cancellation_token: watch::Receiver<()>) {
+        let run_purge = || async {
+            match purge_spent_leaves(
+                self.tree_service.as_ref(),
+                &self.transfer_service,
+                &self.identity_public_key,
+                self.network,
+            )
+            .await
+            {
+                Ok(0) => {}
+                Ok(removed) => info!("Retired {removed} leaves we had sent away"),
+                Err(e) => debug!("Could not check whether kept leaves were sent away: {e:?}"),
+            }
+        };
+
+        run_purge().await;
+
+        loop {
+            tokio::select! {
+                () = tokio::time::sleep(SPENT_LEAF_PURGE_INTERVAL) => {
+                    run_purge().await;
+                }
+                _ = cancellation_token.changed() => {
+                    debug!("Stopping the spent-leaf purge");
+                    break;
+                }
+            }
+        }
+    }
+
     async fn run_token_output_optimization(
         &self,
         interval: Duration,
@@ -3397,6 +3575,130 @@ fn validate_invoiced_transaction_is_single_token(
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    fn leaf_keypair() -> bitcoin::secp256k1::Keypair {
+        let secp = Secp256k1::new();
+        bitcoin::secp256k1::Keypair::from_seckey_slice(&secp, &[0x33; 32]).unwrap()
+    }
+
+    /// A leaf of ours, funded by a node output and refunded at `seq`. A leaf is
+    /// 2-of-2, so the one keypair stands in for the whole signing group: a refund
+    /// verifies under it only if we took part in signing.
+    fn our_leaf(seq: u32) -> TreeNode {
+        let mut node = create_test_node_with_parent("leaf", None, TreeNodeStatus::Available);
+        let secp = Secp256k1::new();
+        let verifying = leaf_keypair().public_key();
+        node.verifying_public_key = verifying;
+        let (x_only, _) = verifying.x_only_public_key();
+        node.node_tx.output = vec![TxOut {
+            value: Amount::from_sat(1_000),
+            script_pubkey: bitcoin::ScriptBuf::new_p2tr(&secp, x_only, None),
+        }];
+        node.refund_tx = Some(refund_spending(&node, seq));
+        node
+    }
+
+    /// An unsigned refund of `leaf` at `seq`.
+    fn refund_spending(leaf: &TreeNode, seq: u32) -> Transaction {
+        Transaction {
+            version: Version::non_standard(3),
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::new(leaf.node_tx.compute_txid(), 0),
+                sequence: bitcoin::Sequence::from_consensus(seq),
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(900),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        }
+    }
+
+    /// The refund a transfer of `leaf` carries: spends the same node output at
+    /// `seq`, signed by `signer`.
+    fn handover_refund(
+        leaf: &TreeNode,
+        seq: u32,
+        signer: &bitcoin::secp256k1::Keypair,
+    ) -> Transaction {
+        use bitcoin::key::TapTweak;
+        let secp = Secp256k1::new();
+        let mut refund = refund_spending(leaf, seq);
+        let sighash = sighash_from_tx(&refund, 0, &leaf.node_tx.output[0]).unwrap();
+        let tweaked = signer.tap_tweak(&secp, None).to_keypair();
+        let sig = secp.sign_schnorr_no_aux_rand(
+            &bitcoin::secp256k1::Message::from_digest(sighash.to_raw_hash().to_byte_array()),
+            &tweaked,
+        );
+        refund.input[0].witness = Witness::from_slice(&[sig.serialize()]);
+        refund
+    }
+
+    fn bitcoin_service() -> BitcoinService {
+        BitcoinService::new(Network::Regtest)
+    }
+
+    /// Only a transfer decrements the refund timelock, one interval per hop, so a
+    /// lower one under a signature we took part in is the leaf moving on. A
+    /// renewal moves it the other way and proves nothing.
+    #[macros::test_all]
+    fn a_lower_timelock_we_signed_proves_the_handover() {
+        let ours = our_leaf(2_000);
+        let hands_over = |seq| {
+            refund_hands_leaf_over(
+                &bitcoin_service(),
+                &ours,
+                &handover_refund(&ours, seq, &leaf_keypair()),
+            )
+        };
+
+        assert!(hands_over(1_900));
+        assert!(
+            !hands_over(2_000),
+            "an unchanged timelock is not a handover"
+        );
+        assert!(
+            !hands_over(2_100),
+            "a renewal moves the timelock the other way"
+        );
+    }
+
+    /// The signature is the whole point: everything else is read off a transfer
+    /// record, so a refund we did not take part in signing proves nothing however
+    /// well-formed it looks.
+    #[macros::test_all]
+    fn a_refund_we_did_not_sign_proves_nothing() {
+        let ours = our_leaf(2_000);
+        let secp = Secp256k1::new();
+        let impostor = bitcoin::secp256k1::Keypair::from_seckey_slice(&secp, &[0x44; 32]).unwrap();
+
+        assert!(!refund_hands_leaf_over(
+            &bitcoin_service(),
+            &ours,
+            &handover_refund(&ours, 1_900, &impostor)
+        ));
+
+        let mut unsigned = refund_spending(&ours, 1_900);
+        unsigned.input[0].witness = Witness::new();
+        assert!(!refund_hands_leaf_over(
+            &bitcoin_service(),
+            &ours,
+            &unsigned
+        ));
+    }
+
+    /// The funding output is checked against our own stored node tx, so a refund
+    /// spending anything else is not this leaf's.
+    #[macros::test_all]
+    fn a_refund_spending_another_output_proves_nothing() {
+        let ours = our_leaf(2_000);
+        let other = our_leaf(2_000);
+        let mut refund = handover_refund(&ours, 1_900, &leaf_keypair());
+        refund.input[0].previous_output = OutPoint::new(other.node_tx.compute_txid(), 1);
+
+        assert!(!refund_hands_leaf_over(&bitcoin_service(), &ours, &refund));
+    }
 
     use bitcoin::{OutPoint, ScriptBuf};
     use frost_secp256k1_tr::Identifier;

@@ -384,7 +384,10 @@ impl TreeService for SynchronousTreeService {
                 if parent_ids.contains(&node.id) {
                     continue;
                 }
-                reported.entry(node.id.clone()).or_default().push((id, node));
+                reported
+                    .entry(node.id.clone())
+                    .or_default()
+                    .push((id, node));
             }
         }
         debug!(
@@ -505,6 +508,14 @@ impl TreeService for SynchronousTreeService {
 
     async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
         self.state.get_available_balance().await
+    }
+
+    async fn list_leaves_kept_for_exit(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
+        self.state.get_deleted_leaves().await
+    }
+
+    async fn retire_leaves(&self, leaf_ids: &[TreeNodeId]) -> Result<(), TreeServiceError> {
+        self.state.remove_leaves(leaf_ids).await
     }
 }
 
