@@ -149,6 +149,12 @@ async fn test_absent_leaf_is_kept_for_its_exit_chain() {
 }
 
 #[wasm_bindgen_test]
+async fn test_deleted_leaves_are_listed_and_removable() {
+    let store = create_test_tree_store("mysql_tree_ancestor_deleted").await;
+    breez_sdk_spark::tree_store_tests::test_deleted_leaves_are_listed_and_removable(&store).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_absent_leaf_keeps_shared_ancestor() {
     let store = create_test_tree_store("mysql_tree_ancestor_shared").await;
     breez_sdk_spark::tree_store_tests::test_absent_leaf_keeps_shared_ancestor(&store).await;

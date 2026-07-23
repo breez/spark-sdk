@@ -528,6 +528,12 @@ async fn test_stored_chain_replaces_previous() {
 }
 
 #[wasm_bindgen_test]
+async fn test_deleted_leaves_are_listed_and_removable() {
+    let store = create_test_tree_store().await;
+    breez_sdk_spark::tree_store_tests::test_deleted_leaves_are_listed_and_removable(&store).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_update_reservation_basic() {
     let store = create_test_tree_store().await;
     breez_sdk_spark::tree_store_tests::test_update_reservation_basic(&store).await;

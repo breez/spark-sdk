@@ -562,6 +562,50 @@ impl TreeStore for MysqlTreeStore {
         Ok(keys)
     }
 
+    async fn get_deleted_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+        let rows: Vec<String> = conn
+            .exec(
+                "SELECT data FROM brz_tree_leaves WHERE user_id = ? AND is_deleted = 1",
+                (self.identity.clone(),),
+            )
+            .await
+            .map_err(map_err)?;
+        rows.iter()
+            .map(|data| {
+                serde_json::from_str(data).map_err(|e| TreeServiceError::Generic(e.to_string()))
+            })
+            .collect()
+    }
+
+    async fn remove_leaves(&self, leaf_ids: &[TreeNodeId]) -> Result<(), TreeServiceError> {
+        if leaf_ids.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+        self.acquire_write_lock(&mut conn).await?;
+        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
+        // Each leaf owns its chain, so its ancestor rows go with it, and in that
+        // order so no ancestor row is ever left without its leaf.
+        for id in leaf_ids {
+            tx.exec_drop(
+                "DELETE FROM brz_tree_ancestors WHERE user_id = ? AND leaf_id = ?",
+                (self.identity.clone(), id.to_string()),
+            )
+            .await
+            .map_err(map_err)?;
+            tx.exec_drop(
+                "DELETE FROM brz_tree_leaves WHERE user_id = ? AND id = ?",
+                (self.identity.clone(), id.to_string()),
+            )
+            .await
+            .map_err(map_err)?;
+        }
+        tx.commit().await.map_err(map_err)?;
+        self.notify_balance_change();
+        Ok(())
+    }
+
     async fn get_leaves(&self) -> Result<Leaves, TreeServiceError> {
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
 
@@ -2461,6 +2505,12 @@ mod tests {
     async fn test_absent_leaf_is_kept_for_its_exit_chain() {
         let fixture = MysqlTreeStoreTestFixture::new().await;
         shared_tests::test_absent_leaf_is_kept_for_its_exit_chain(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_deleted_leaves_are_listed_and_removable() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_deleted_leaves_are_listed_and_removable(&fixture.store).await;
     }
 
     #[tokio::test]

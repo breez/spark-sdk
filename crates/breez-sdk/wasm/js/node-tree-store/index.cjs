@@ -371,6 +371,36 @@ class NodeTreeStore {
    * Return all pool leaves categorized by status and reservation purpose.
    * @returns {Promise<Object>}
    */
+  async getDeletedLeaves() {
+    try {
+      const rows = this.db
+        .prepare("SELECT data FROM brz_tree_leaves WHERE is_deleted = 1")
+        .all();
+      return rows.map((row) => JSON.parse(row.data));
+    } catch (error) {
+      throw new TreeStoreError(`Failed to get deleted leaves: ${error.message}`);
+    }
+  }
+
+  async removeLeaves(leafIds) {
+    try {
+      if (!leafIds || leafIds.length === 0) return;
+      this.db.transaction(() => {
+        // Each leaf owns its chain, so its ancestor rows go with it, and in
+        // that order so no ancestor row is ever left without its leaf.
+        const placeholders = leafIds.map(() => "?").join(",");
+        this.db
+          .prepare(`DELETE FROM brz_tree_ancestors WHERE leaf_id IN (${placeholders})`)
+          .run(...leafIds);
+        this.db
+          .prepare(`DELETE FROM brz_tree_leaves WHERE id IN (${placeholders})`)
+          .run(...leafIds);
+      })();
+    } catch (error) {
+      throw new TreeStoreError(`Failed to remove leaves: ${error.message}`);
+    }
+  }
+
   async getLeaves() {
     try {
       const rows = this.db

@@ -470,6 +470,49 @@ impl TreeStore for PostgresTreeStore {
         Ok(keys)
     }
 
+    async fn get_deleted_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
+        let client = self.pool.get().await.map_err(map_err)?;
+        let rows = client
+            .query(
+                "SELECT data FROM brz_tree_leaves WHERE user_id = $1 AND is_deleted = TRUE",
+                &[&self.identity],
+            )
+            .await
+            .map_err(map_err)?;
+        rows.iter()
+            .map(|row| {
+                serde_json::from_value(row.get("data"))
+                    .map_err(|e| TreeServiceError::Generic(e.to_string()))
+            })
+            .collect()
+    }
+
+    async fn remove_leaves(&self, leaf_ids: &[TreeNodeId]) -> Result<(), TreeServiceError> {
+        if leaf_ids.is_empty() {
+            return Ok(());
+        }
+        let ids: Vec<String> = leaf_ids.iter().map(ToString::to_string).collect();
+        let mut client = self.pool.get().await.map_err(map_err)?;
+        let tx = client.transaction().await.map_err(map_err)?;
+        // Each leaf owns its chain, so its ancestor rows go with it, and in that
+        // order so no ancestor row is ever left without its leaf.
+        tx.execute(
+            "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)",
+            &[&self.identity, &ids],
+        )
+        .await
+        .map_err(map_err)?;
+        tx.execute(
+            "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND id = ANY($2)",
+            &[&self.identity, &ids],
+        )
+        .await
+        .map_err(map_err)?;
+        tx.commit().await.map_err(map_err)?;
+        self.notify_balance_change();
+        Ok(())
+    }
+
     async fn get_leaves(&self) -> Result<Leaves, TreeServiceError> {
         let client = self.pool.get().await.map_err(map_err)?;
 
@@ -2108,6 +2151,12 @@ mod tests {
     async fn test_absent_leaf_is_kept_for_its_exit_chain() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_absent_leaf_is_kept_for_its_exit_chain(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_deleted_leaves_are_listed_and_removable() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_deleted_leaves_are_listed_and_removable(&fixture.store).await;
     }
 
     #[tokio::test]

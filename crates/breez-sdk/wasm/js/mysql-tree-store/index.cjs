@@ -468,6 +468,42 @@ class MysqlTreeStore {
     }
   }
 
+  async getDeletedLeaves() {
+    try {
+      const [rows] = await this.pool.query(
+        "SELECT data FROM brz_tree_leaves WHERE user_id = ? AND is_deleted = 1",
+        [this.identity]
+      );
+      return rows.map((row) =>
+        typeof row.data === "string" ? JSON.parse(row.data) : row.data
+      );
+    } catch (error) {
+      throw new TreeStoreError(`Failed to get deleted leaves: ${error.message}`);
+    }
+  }
+
+  async removeLeaves(leafIds) {
+    try {
+      if (!leafIds || leafIds.length === 0) return;
+      await this._withWriteTransaction(async (conn) => {
+        // Each leaf owns its chain, so its ancestor rows go with it, and in
+        // that order so no ancestor row is ever left without its leaf.
+        const placeholders = leafIds.map(() => "?").join(", ");
+        await conn.query(
+          `DELETE FROM brz_tree_ancestors WHERE user_id = ? AND leaf_id IN (${placeholders})`,
+          [this.identity, ...leafIds]
+        );
+        await conn.query(
+          `DELETE FROM brz_tree_leaves WHERE user_id = ? AND id IN (${placeholders})`,
+          [this.identity, ...leafIds]
+        );
+      });
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(`Failed to remove leaves: ${error.message}`);
+    }
+  }
+
   async getLeaves() {
     try {
       const [rows] = await this.pool.query(

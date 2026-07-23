@@ -8,6 +8,7 @@ use platform_utils::tokio;
 use platform_utils::tokio::sync::broadcast;
 use tracing::{debug, error, info, trace, warn};
 
+use crate::services::csv_timelock;
 use crate::tree::{
     LeafPedigree, LeafSelection, Leaves, ReservationPurpose, ReserveResult, SelectLeavesOptions,
     TreeNodeStatus,
@@ -496,6 +497,58 @@ impl TreeService for SynchronousTreeService {
 
     async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
         self.state.get_available_balance().await
+    }
+
+    async fn purge_proven_spent_leaves(&self) -> Result<usize, TreeServiceError> {
+        let deleted = self.state.get_deleted_leaves().await?;
+        if deleted.is_empty() {
+            return Ok(0);
+        }
+        let ids: Vec<TreeNodeId> = deleted.iter().map(|leaf| leaf.id.clone()).collect();
+        // By id rather than by owner. An owner query is status-filtered, and the
+        // operators drop Investigation, Lost and Reimbursed from it whatever we
+        // ask for, so it cannot tell a spent leaf from one it will not talk
+        // about. A lookup by id answers for a node in any status.
+        let theirs: HashMap<TreeNodeId, TreeNode> = self
+            .fetch_nodes(&ids, false)
+            .await?
+            .into_iter()
+            .map(|node| (node.id.clone(), node))
+            .collect();
+        let proven: Vec<TreeNodeId> = deleted
+            .iter()
+            .filter(|leaf| {
+                theirs
+                    .get(&leaf.id)
+                    .is_some_and(|theirs| refund_timelock_dropped(leaf, theirs))
+            })
+            .map(|leaf| leaf.id.clone())
+            .collect();
+        if !proven.is_empty() {
+            info!(
+                "Removing {} of {} kept leaves: their refunds were replaced at a lower timelock",
+                proven.len(),
+                deleted.len()
+            );
+            self.state.remove_leaves(&proven).await?;
+        }
+        Ok(proven.len())
+    }
+}
+
+/// Whether the operators' copy of a leaf carries a refund that replaced ours at a
+/// lower timelock. Only a transfer decrements it, one interval per hop, and it
+/// does so to hand the leaf to its next owner, so a drop is proof the leaf is no
+/// longer ours. A renewal moves the timelock the other way, and anything else,
+/// including a leaf the operators will not report at all, proves nothing and
+/// leaves the leaf exactly where it is.
+fn refund_timelock_dropped(ours: &TreeNode, theirs: &TreeNode) -> bool {
+    let (Some(ours), Some(theirs)) = (&ours.refund_tx, &theirs.refund_tx) else {
+        return false;
+    };
+    match (csv_timelock(ours), csv_timelock(theirs)) {
+        (Some(ours), Some(theirs)) => theirs < ours,
+        _ => false,
     }
 }
 
@@ -1529,11 +1582,48 @@ mod tests {
         assert!(!rx.has_changed().unwrap());
     }
 
-    /// The refresh asks for the statuses a leaf we hold can be reported in, so a
-    /// leaf part-way through an exit keeps coming back instead of vanishing from
-    /// every operator at once. `TransferLocked` is deliberately not among them: a
-    /// leaf of ours in that status is one we are sending, and re-reading it would
-    /// undo the send.
+    /// A leaf whose refund tx carries `seq`, for comparing two copies of the
+    /// same leaf by their refund timelock.
+    fn leaf_with_refund_timelock(seq: u32) -> TreeNode {
+        let mut node = create_test_leaves(&[1_000]).remove(0);
+        node.refund_tx = Some(Transaction {
+            version: Version::non_standard(3),
+            lock_time: LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                sequence: bitcoin::Sequence::from_consensus(seq),
+                ..Default::default()
+            }],
+            output: vec![],
+        });
+        node
+    }
+
+    /// A transfer decrements the refund timelock to hand the leaf to its next
+    /// owner, so a lower one on the operators' copy is the proof that it left us.
+    /// A renewal moves it the other way, and an unchanged or absent refund says
+    /// nothing either way.
+    #[test_all]
+    fn only_a_lower_refund_timelock_proves_the_leaf_left() {
+        let ours = leaf_with_refund_timelock(2000);
+
+        assert!(refund_timelock_dropped(
+            &ours,
+            &leaf_with_refund_timelock(1900)
+        ));
+        assert!(!refund_timelock_dropped(
+            &ours,
+            &leaf_with_refund_timelock(2000)
+        ));
+        assert!(!refund_timelock_dropped(
+            &ours,
+            &leaf_with_refund_timelock(2100)
+        ));
+
+        let mut no_refund = leaf_with_refund_timelock(1900);
+        no_refund.refund_tx = None;
+        assert!(!refund_timelock_dropped(&ours, &no_refund));
+    }
+
     #[test_all]
     fn refresh_query_requests_held_leaf_statuses() {
         let owner = PublicKey::from_slice(&[2; 33]).unwrap();

@@ -139,6 +139,13 @@ enum StoreCommand {
     GetLeaves {
         response_tx: oneshot::Sender<Result<Leaves, TreeServiceError>>,
     },
+    GetDeletedLeaves {
+        response_tx: oneshot::Sender<Result<Vec<TreeNode>, TreeServiceError>>,
+    },
+    RemoveLeaves {
+        leaf_ids: Vec<TreeNodeId>,
+        response_tx: oneshot::Sender<Result<(), TreeServiceError>>,
+    },
     GetExitChains {
         leaf_ids: Vec<TreeNodeId>,
         response_tx: oneshot::Sender<Result<Vec<LeafPedigree>, TreeServiceError>>,
@@ -285,6 +292,27 @@ impl InMemoryTreeStore {
                 StoreCommand::GetLeaves { response_tx } => {
                     let result = Self::process_get_leaves(&state);
                     let _ = response_tx.send(result);
+                }
+                StoreCommand::GetDeletedLeaves { response_tx } => {
+                    let leaves = state
+                        .leaves
+                        .values()
+                        .filter(|stored| stored.deleted)
+                        .map(|stored| stored.node.clone())
+                        .collect();
+                    let _ = response_tx.send(Ok(leaves));
+                }
+                StoreCommand::RemoveLeaves {
+                    leaf_ids,
+                    response_tx,
+                } => {
+                    // Each leaf owns its chain, so a removed leaf takes its
+                    // ancestors with it and nothing else can be orphaned.
+                    for id in &leaf_ids {
+                        state.leaves.remove(id);
+                        state.ancestors.remove(id);
+                    }
+                    let _ = response_tx.send(Ok(()));
                 }
                 StoreCommand::GetExitChains {
                     leaf_ids,
@@ -1103,6 +1131,23 @@ impl TreeStore for InMemoryTreeStore {
             .await
     }
 
+    async fn get_deleted_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
+        self.send_command(|tx| StoreCommand::GetDeletedLeaves { response_tx: tx })
+            .await
+    }
+
+    async fn remove_leaves(&self, leaf_ids: &[TreeNodeId]) -> Result<(), TreeServiceError> {
+        if leaf_ids.is_empty() {
+            return Ok(());
+        }
+        let leaf_ids = leaf_ids.to_vec();
+        self.send_command(|tx| StoreCommand::RemoveLeaves {
+            leaf_ids,
+            response_tx: tx,
+        })
+        .await
+    }
+
     async fn get_exit_chains(
         &self,
         leaf_ids: &[TreeNodeId],
@@ -1352,6 +1397,11 @@ mod tests {
     #[async_test_all]
     async fn test_absent_leaf_is_kept_for_its_exit_chain() {
         shared_tests::test_absent_leaf_is_kept_for_its_exit_chain(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_deleted_leaves_are_listed_and_removable() {
+        shared_tests::test_deleted_leaves_are_listed_and_removable(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]

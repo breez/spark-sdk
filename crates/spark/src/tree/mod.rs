@@ -615,11 +615,23 @@ pub trait TreeStore: Send + Sync {
         Ok(verified_leaf_keys_from_leaves(&self.get_leaves().await?))
     }
 
-    /// Replaces the leaf pool with `leaves`, removing any prior leaf not in the
-    /// set. A leaf added after `refresh_started_at` is kept even when absent, so
-    /// a leaf added mid-refresh (e.g. from a payment) is not lost. A removed
-    /// leaf's chain is removed with it; a surviving leaf keeps the chain
-    /// [`Self::store_ancestors`] wrote for it.
+    /// Returns the leaves no operator reports any more, which are kept for their
+    /// exit chain alone and so belong to none of [`TreeStore::get_leaves`]'s
+    /// buckets. This is the only way to reach them, and it exists for the check
+    /// that decides whether one of them was really spent.
+    async fn get_deleted_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError>;
+
+    /// Removes `leaf_ids`, and any ancestor left unreachable, for good. Reserved
+    /// for a leaf whose spend has been proven: anything else keeps its row, since
+    /// a leaf that is still ours is exitable from its stored transactions alone.
+    async fn remove_leaves(&self, leaf_ids: &[TreeNodeId]) -> Result<(), TreeServiceError>;
+
+    /// Refreshes the leaf pool from `leaves`. A prior leaf absent from the set is
+    /// marked rather than removed: it leaves the balance and the selection pool
+    /// but keeps its row and the chain [`Self::store_ancestors`] wrote for it,
+    /// because absence is not proof of a spend. A leaf added after
+    /// `refresh_started_at` is kept unmarked, so a leaf added mid-refresh (e.g.
+    /// from a payment) is not held back.
     async fn set_leaves(
         &self,
         leaves: &[TreeNode],
@@ -912,6 +924,12 @@ pub trait TreeService: Send + Sync {
     /// # }
     /// ```
     async fn refresh_leaves(&self) -> Result<(), TreeServiceError>;
+
+    /// Removes the leaves kept only for their exit chain whose spend the
+    /// operators can now prove, and returns how many went. Deliberately separate
+    /// from [`TreeService::refresh_leaves`]: proving a spend costs a query per
+    /// batch, and a refresh sits on the payment path.
+    async fn purge_proven_spent_leaves(&self) -> Result<usize, TreeServiceError>;
 
     /// Inserts new leaves into the tree, each with the ancestors the caller
     /// already knows.

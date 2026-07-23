@@ -604,6 +604,40 @@ pub async fn test_absent_leaf_is_kept_for_its_exit_chain(store: &dyn TreeStore) 
     assert_eq!(exit_chain_ids(store, &leaf.id).await, vec!["root", "leaf"]);
 }
 
+/// A leaf kept only for its exit chain is reachable through `get_deleted_leaves`
+/// and nowhere else, and `remove_leaves` is what finally takes it, along with the
+/// ancestors it alone reached.
+pub async fn test_deleted_leaves_are_listed_and_removable(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+    add_with_chains(
+        store,
+        &[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![root.clone()],
+        }],
+    )
+    .await;
+
+    // Nothing is marked while an operator still reports the leaf.
+    assert!(store.get_deleted_leaves().await.unwrap().is_empty());
+
+    let refresh_start = future_refresh_start(store).await;
+    store.set_leaves(&[], &[], refresh_start).await.unwrap();
+
+    let deleted = store.get_deleted_leaves().await.unwrap();
+    assert_eq!(deleted.len(), 1);
+    assert_eq!(deleted[0].id.to_string(), "leaf");
+    assert!(get_available(store).await.is_empty());
+
+    store
+        .remove_leaves(std::slice::from_ref(&leaf.id))
+        .await
+        .unwrap();
+    assert!(store.get_deleted_leaves().await.unwrap().is_empty());
+    assert!(exit_chain(store, &leaf.id).await.is_none());
+}
+
 /// A refresh reporting only one of two leaves keeps both, so the unreported one
 /// stays exitable and each leaf keeps its own copy of the ancestor they share.
 pub async fn test_absent_leaf_keeps_shared_ancestor(store: &dyn TreeStore) {

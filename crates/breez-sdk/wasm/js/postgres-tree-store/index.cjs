@@ -425,6 +425,39 @@ class PostgresTreeStore {
     }
   }
 
+  async getDeletedLeaves() {
+    try {
+      const result = await this.pool.query(
+        "SELECT data FROM brz_tree_leaves WHERE user_id = $1 AND is_deleted = TRUE",
+        [this.identity]
+      );
+      return result.rows.map((row) => row.data);
+    } catch (error) {
+      throw new TreeStoreError(`Failed to get deleted leaves: ${error.message}`);
+    }
+  }
+
+  async removeLeaves(leafIds) {
+    try {
+      if (!leafIds || leafIds.length === 0) return;
+      await this._withWriteTransaction(async (client) => {
+        // Each leaf owns its chain, so its ancestor rows go with it, and in
+        // that order so no ancestor row is ever left without its leaf.
+        await client.query(
+          "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)",
+          [this.identity, leafIds]
+        );
+        await client.query(
+          "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND id = ANY($2)",
+          [this.identity, leafIds]
+        );
+      });
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(`Failed to remove leaves: ${error.message}`);
+    }
+  }
+
   async getLeaves() {
     try {
       const result = await this.pool.query(

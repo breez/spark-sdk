@@ -769,6 +769,52 @@ impl TreeStore for SqliteTreeStore {
         Ok(())
     }
 
+    async fn get_deleted_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
+        let conn = self.get_connection()?;
+        let mut stmt = conn
+            .prepare("SELECT data FROM brz_tree_leaves WHERE is_deleted = 1")
+            .map_err(|e| generic("prepare deleted leaves", e))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| generic("query deleted leaves", e))?;
+        let mut leaves = Vec::new();
+        for row in rows {
+            let data = row.map_err(|e| generic("read deleted leaf", e))?;
+            leaves.push(
+                serde_json::from_str(&data).map_err(|e| generic("deserialize deleted leaf", e))?,
+            );
+        }
+        Ok(leaves)
+    }
+
+    async fn remove_leaves(&self, leaf_ids: &[TreeNodeId]) -> Result<(), TreeServiceError> {
+        if leaf_ids.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.get_connection()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| generic("begin remove_leaves", e))?;
+        // Each leaf owns its chain, so its ancestor rows go with it, and in that
+        // order so no ancestor row is ever left without its leaf.
+        for id in leaf_ids {
+            tx.execute(
+                "DELETE FROM brz_tree_ancestors WHERE leaf_id = ?1",
+                params![id.to_string()],
+            )
+            .map_err(|e| generic("remove leaf ancestors", e))?;
+            tx.execute(
+                "DELETE FROM brz_tree_leaves WHERE id = ?1",
+                params![id.to_string()],
+            )
+            .map_err(|e| generic("remove leaf", e))?;
+        }
+        tx.commit()
+            .map_err(|e| generic("commit remove_leaves", e))?;
+        self.notify();
+        Ok(())
+    }
+
     async fn get_leaves(&self) -> Result<Leaves, TreeServiceError> {
         let conn = self.get_connection()?;
         let mut stmt = conn
@@ -1285,6 +1331,7 @@ mod tests {
         test_leaf_reparented_by_renewal,
         test_ancestor_not_returned_as_leaf,
         test_absent_leaf_is_kept_for_its_exit_chain,
+        test_deleted_leaves_are_listed_and_removable,
         test_absent_leaf_keeps_shared_ancestor,
         test_incomplete_pedigree_still_spendable,
         test_exit_chain_after_swap_update,

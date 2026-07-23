@@ -431,6 +431,53 @@ class WebTreeStore {
     }
   }
 
+  async getDeletedLeaves() {
+    try {
+      return await this._txRun(
+        [STORE_LEAVES],
+        "readonly",
+        [{ name: "leaves", store: STORE_LEAVES }],
+        (res) => res.leaves.filter((row) => row.is_deleted).map((row) => row.data)
+      );
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(`Failed to get deleted leaves: ${error.message}`);
+    }
+  }
+
+  async removeLeaves(leafIds) {
+    try {
+      if (!leafIds || leafIds.length === 0) return;
+      const ids = new Set(leafIds);
+      await this._txRun(
+        [STORE_LEAVES, STORE_ANCESTORS],
+        "readwrite",
+        [
+          { name: "leaves", store: STORE_LEAVES },
+          { name: "ancestors", store: STORE_ANCESTORS },
+        ],
+        (res, tx) => {
+          const leavesStore = tx.objectStore(STORE_LEAVES);
+          const ancestorsStore = tx.objectStore(STORE_ANCESTORS);
+          const leafMap = new Map(res.leaves.map((r) => [r.id, r]));
+          // Each leaf owns its chain, so its ancestor rows go with it. They are
+          // keyed by [leaf_id, id], so the leaf's own id selects exactly its own.
+          for (const id of ids) {
+            if (!leafMap.has(id)) continue;
+            leavesStore.delete(id);
+            leafMap.delete(id);
+            for (const row of res.ancestors) {
+              if (row.leaf_id === id) ancestorsStore.delete([row.leaf_id, row.id]);
+            }
+          }
+        }
+      );
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(`Failed to remove leaves: ${error.message}`);
+    }
+  }
+
   async getLeaves() {
     try {
       return await this._txRun(
