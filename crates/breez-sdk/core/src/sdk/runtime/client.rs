@@ -467,14 +467,26 @@ fn spawn_conversion_refunder(
 
     tokio::spawn(
         async move {
-            loop {
-                if let Err(e) = token_converter.refund_pending().await {
-                    error!("Failed to refund failed conversions: {e:?}");
+            // Init pass includes the Flashnet listing reconcile; periodic
+            // ticks below are local-only.
+            select! {
+                biased;
+                _ = shutdown_receiver.changed() => {
+                    info!("Conversion refunder shutdown before init pass completed");
+                    return;
                 }
+                result = token_converter.refund_pending() => {
+                    if let Err(e) = result {
+                        error!("Init conversion-refund pass failed: {e:?}");
+                    }
+                }
+            }
 
+            loop {
                 match refund_requests.as_mut() {
                     Some(trigger_receiver) => {
                         select! {
+                            biased;
                             _ = shutdown_receiver.changed() => {
                                 info!("Conversion refunder shutdown signal received");
                                 return;
@@ -487,11 +499,25 @@ fn spawn_conversion_refunder(
                     }
                     None => {
                         select! {
+                            biased;
                             _ = shutdown_receiver.changed() => {
                                 info!("Conversion refunder shutdown signal received");
                                 return;
                             }
                             () = tokio::time::sleep(Duration::from_secs(150)) => {}
+                        }
+                    }
+                }
+
+                select! {
+                    biased;
+                    _ = shutdown_receiver.changed() => {
+                        info!("Conversion refunder shutdown during local pass");
+                        return;
+                    }
+                    result = token_converter.refund_local_pending() => {
+                        if let Err(e) = result {
+                            error!("Periodic local refund pass failed: {e:?}");
                         }
                     }
                 }

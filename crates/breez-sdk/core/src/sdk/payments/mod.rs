@@ -3,7 +3,8 @@ use tracing::instrument;
 
 use crate::{
     ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, FetchConversionLimitsRequest,
-    FetchConversionLimitsResponse, GetPaymentRequest, GetPaymentResponse, WaitForPaymentIdentifier,
+    FetchConversionLimitsResponse, GetPaymentRequest, GetPaymentResponse,
+    RefundPendingConversionsResponse, WaitForPaymentIdentifier,
     error::SdkError,
     models::{
         BuildUnsignedTransferPackageRequest, ListPaymentsRequest, ListPaymentsResponse, Payment,
@@ -130,16 +131,19 @@ impl BreezSdk {
             .map_err(Into::into)
     }
 
-    /// Runs one pass of the pending-conversion refunder.
+    /// Runs one full pass of the pending-conversion refunder and returns how
+    /// many conversions were refunded, skipped (held back by a safety window),
+    /// or failed.
     ///
-    /// Iterates over payments whose conversions failed and have a refund
-    /// pending, then attempts to refund each one. This is the same logic the
-    /// SDK runs internally on a periodic schedule when
-    /// `background_tasks_enabled` is `true`. When background tasks are
-    /// disabled the periodic refunder does not run, and this method is the
-    /// explicit entry point for driving the pass; when background tasks are
-    /// enabled, it can be called to force an immediate refund pass.
-    pub async fn refund_pending_conversions(&self) -> Result<(), SdkError> {
+    /// The pass has two parts: refunding locally-marked failed conversions, and
+    /// reconciling against Flashnet's clawback-eligible listing to catch
+    /// conversions with no local marker (e.g. a storage write that never
+    /// landed). The SDK's periodic background schedule runs only the local
+    /// part; the reconcile runs at SDK init and on each call to this method, so
+    /// this is the explicit entry point for driving a full pass on demand.
+    pub async fn refund_pending_conversions(
+        &self,
+    ) -> Result<RefundPendingConversionsResponse, SdkError> {
         self.token_converter
             .refund_pending()
             .await
