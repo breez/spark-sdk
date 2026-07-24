@@ -801,7 +801,7 @@ class MysqlStorage {
   async listDeposits() {
     try {
       const [rows] = await this.pool.query(
-        "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM brz_unclaimed_deposits WHERE user_id = ?",
+        "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status FROM brz_unclaimed_deposits WHERE user_id = ?",
         [this.identity]
       );
 
@@ -814,6 +814,7 @@ class MysqlStorage {
         claimError: parseJson(row.claim_error),
         refundTx: row.refund_tx,
         refundTxId: row.refund_tx_id,
+        instantClaimStatus: parseJson(row.instant_claim_status),
       }));
     } catch (error) {
       throw new StorageError(
@@ -838,6 +839,13 @@ class MysqlStorage {
            SET refund_tx = ?, refund_tx_id = ?, claim_error = NULL
            WHERE user_id = ? AND txid = ? AND vout = ?`,
           [payload.refundTx, payload.refundTxid, this.identity, txid, vout]
+        );
+      } else if (payload.type === "instantClaim") {
+        await this.pool.query(
+          `UPDATE brz_unclaimed_deposits
+           SET instant_claim_status = ?
+           WHERE user_id = ? AND txid = ? AND vout = ?`,
+          [JSON.stringify(payload.status), this.identity, txid, vout]
         );
       } else {
         throw new StorageError(`Unknown payload type: ${payload.type}`);

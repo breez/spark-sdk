@@ -266,6 +266,10 @@ pub enum Command {
         /// If provided, the max fee per vbyte will be set to the fastest recommended fee at time of claim, plus the leeway.
         #[arg(long)]
         recommended_fee_leeway: Option<u64>,
+
+        /// Claim instantly (0-conf) with this max SSP spread in basis points of the deposit value (e.g. 400 = 4%), instead of waiting for the deposit to mature.
+        #[arg(long)]
+        instant_fee_bps: Option<u32>,
     },
     Parse {
         input: String,
@@ -501,6 +505,7 @@ pub(crate) async fn execute_command(
             fee_sat,
             sat_per_vbyte,
             recommended_fee_leeway,
+            instant_fee_bps,
         } => {
             let max_fee = if let Some(recommended_fee_leeway) = recommended_fee_leeway {
                 if fee_sat.is_some() || sat_per_vbyte.is_some() {
@@ -528,6 +533,7 @@ pub(crate) async fn execute_command(
                     txid,
                     vout,
                     max_fee,
+                    max_instant_fee_bps: instant_fee_bps,
                 })
                 .await?;
             print_value(&value)?;

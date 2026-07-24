@@ -9,8 +9,9 @@ use rusqlite_migration::{M, Migrations, SchemaVersion};
 
 use crate::{
     AssetFilter, Contact, ConversionDetails, ConversionInfo, ConversionStatus, DepositInfo,
-    ListContactsRequest, LnurlPayInfo, LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails,
-    PaymentMethod, PaymentStatus, SparkHtlcDetails, SparkHtlcStatus, TokenTransactionType,
+    InstantClaimStatus, ListContactsRequest, LnurlPayInfo, LnurlReceiveMetadata, LnurlWithdrawInfo,
+    PaymentDetails, PaymentMethod, PaymentStatus, SparkHtlcDetails, SparkHtlcStatus,
+    TokenTransactionType,
     error::DepositClaimError,
     persist::{
         PaymentMetadata, SetLnurlMetadataItem, StorageListPaymentsRequest,
@@ -370,6 +371,9 @@ impl SqliteStorage {
             );
             CREATE INDEX idx_cross_chain_swaps_provider_is_terminal
                 ON cross_chain_swaps(provider, is_terminal);",
+            // Track the state of a 0-conf instant claim as a JSON-encoded
+            // InstantClaimStatus (NULL when no instant claim has been attempted).
+            "ALTER TABLE unclaimed_deposits ADD COLUMN instant_claim_status TEXT;",
         ]
     }
 }
@@ -975,7 +979,7 @@ impl Storage for SqliteStorage {
     async fn list_deposits(&self) -> Result<Vec<DepositInfo>, StorageError> {
         let connection = self.get_connection()?;
         let mut stmt =
-            connection.prepare("SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits")?;
+            connection.prepare("SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status FROM unclaimed_deposits")?;
         let rows = stmt.query_map(params![], |row| {
             Ok(DepositInfo {
                 txid: row.get(0)?,
@@ -985,6 +989,7 @@ impl Storage for SqliteStorage {
                 claim_error: row.get(4)?,
                 refund_tx: row.get(5)?,
                 refund_tx_id: row.get(6)?,
+                instant_claim_status: row.get(7)?,
             })
         })?;
         let mut deposits = Vec::new();
@@ -1015,6 +1020,12 @@ impl Storage for SqliteStorage {
                 connection.execute(
                     "UPDATE unclaimed_deposits SET refund_tx = ?, refund_tx_id = ?, claim_error = NULL WHERE txid = ? AND vout = ?",
                     params![refund_tx, refund_txid, txid, vout],
+                )?;
+            }
+            UpdateDepositPayload::InstantClaim { status } => {
+                connection.execute(
+                    "UPDATE unclaimed_deposits SET instant_claim_status = ? WHERE txid = ? AND vout = ?",
+                    params![status, txid, vout],
                 )?;
             }
         }
@@ -1823,6 +1834,18 @@ impl FromSql for DepositClaimError {
     }
 }
 
+impl ToSql for InstantClaimStatus {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        to_sql_json(self)
+    }
+}
+
+impl FromSql for InstantClaimStatus {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        from_sql_json(value)
+    }
+}
+
 impl ToSql for LnurlPayInfo {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
         to_sql_json(self)
@@ -1939,6 +1962,14 @@ mod tests {
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_deposit_refunds(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_instant_claim_status() {
+        let temp_dir = create_temp_dir("sqlite_storage_instant_claim");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        crate::persist::tests::test_instant_claim_status(Box::new(storage)).await;
     }
 
     #[tokio::test]

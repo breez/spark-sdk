@@ -10,6 +10,13 @@ use crate::ssp::graphql::queries::coop_exit_fee_quote::{
     CoopExitFeeQuoteCoopExitFeeQuoteQuote,
     CurrencyAmountFragment as CoopExitFeeQuoteCurrencyAmountFragment,
 };
+use crate::ssp::graphql::queries::create_claim_instant_static_deposit::CreateClaimInstantStaticDepositCreateClaimInstantStaticDeposit;
+use crate::ssp::graphql::queries::create_instant_static_deposit_quote::{
+    CreateInstantStaticDepositQuoteCreateInstantStaticDepositQuote,
+    CreateInstantStaticDepositQuoteCreateInstantStaticDepositQuoteFulfillmentPlans,
+    CreateInstantStaticDepositQuoteCreateInstantStaticDepositQuoteQuote,
+    CurrencyAmountFragment as CreateInstantStaticDepositQuoteCurrencyAmountFragment,
+};
 use crate::ssp::graphql::queries::leaves_swap_fee_estimate::CurrencyAmountFragment as LeavesSwapFeeEstimateCurrencyAmountFragment;
 use crate::ssp::graphql::queries::lightning_send_fee_estimate::CurrencyAmountFragment as LightningSendFeeEstimateCurrencyAmountFragment;
 use crate::ssp::graphql::queries::request_coop_exit::{
@@ -73,6 +80,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub use crate::ssp::graphql::queries::claim_static_deposit::ClaimStaticDepositInput;
+pub use crate::ssp::graphql::queries::create_claim_instant_static_deposit::CreateClaimInstantStaticDepositInput;
 pub use crate::ssp::graphql::queries::request_coop_exit::RequestCoopExitInput;
 pub use crate::ssp::graphql::queries::request_lightning_receive::RequestLightningReceiveInput;
 pub use crate::ssp::graphql::queries::request_lightning_send::RequestLightningSendInput;
@@ -312,6 +320,7 @@ pub struct LightningInvoice {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[macros::derive_from(CompleteCoopExitCurrencyAmountFragment)]
 #[macros::derive_from(CoopExitFeeQuoteCurrencyAmountFragment)]
+#[macros::derive_from(CreateInstantStaticDepositQuoteCurrencyAmountFragment)]
 #[macros::derive_from(LeavesSwapFeeEstimateCurrencyAmountFragment)]
 #[macros::derive_from(LightningSendFeeEstimateCurrencyAmountFragment)]
 #[macros::derive_from(RequestCoopExitCurrencyAmountFragment)]
@@ -647,6 +656,46 @@ pub struct StaticDepositQuote {
 #[macros::derive_from(ClaimStaticDepositClaimStaticDeposit)]
 pub struct ClaimStaticDeposit {
     pub transfer_id: String,
+}
+
+/// Instant static deposit quote (shared across all fulfillment plans returned
+/// alongside it).
+#[derive(Debug, Clone)]
+#[macros::derive_from(CreateInstantStaticDepositQuoteCreateInstantStaticDepositQuoteQuote)]
+pub struct InstantStaticDepositQuote {
+    pub id: String,
+    pub transaction_id: String,
+    pub output_index: i64,
+    pub deposit_amount: CurrencyAmount,
+    pub credit_amount: CurrencyAmount,
+    pub quote_signature: String,
+}
+
+/// A fulfillment plan for an instant static deposit claim. `confirmations == 0`
+/// is the 0-conf path.
+#[derive(Debug, Clone)]
+#[macros::derive_from(
+    CreateInstantStaticDepositQuoteCreateInstantStaticDepositQuoteFulfillmentPlans
+)]
+pub struct InstantStaticDepositPlan {
+    pub id: String,
+    pub amount: CurrencyAmount,
+    pub confirmations: i64,
+}
+
+/// Result of an instant static deposit quote request.
+#[derive(Debug, Clone)]
+#[macros::derive_from(CreateInstantStaticDepositQuoteCreateInstantStaticDepositQuote)]
+pub struct InstantStaticDepositQuoteResult {
+    pub quote: InstantStaticDepositQuote,
+    pub fulfillment_plans: Vec<InstantStaticDepositPlan>,
+}
+
+/// Claim output for an instant static deposit.
+#[derive(Debug, Clone)]
+#[macros::derive_from(CreateClaimInstantStaticDepositCreateClaimInstantStaticDeposit)]
+pub struct InstantStaticDepositClaim {
+    pub claim_id: String,
 }
 
 #[cfg(all(test, feature = "test-arbitrary-precision"))]

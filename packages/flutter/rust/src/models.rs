@@ -28,6 +28,7 @@ pub struct _Config {
     pub network: Network,
     pub sync_interval_secs: u32,
     pub max_deposit_claim_fee: Option<MaxFee>,
+    pub max_instant_deposit_claim_fee_bps: Option<u32>,
     pub lnurl_domain: Option<String>,
     pub prefer_spark_over_lightning: bool,
     pub external_input_parsers: Option<Vec<ExternalInputParser>>,
@@ -148,17 +149,24 @@ pub struct _ClaimDepositRequest {
     pub txid: String,
     pub vout: u32,
     pub max_fee: Option<MaxFee>,
+    pub max_instant_fee_bps: Option<u32>,
 }
 
 #[frb(mirror(ClaimDepositResponse))]
 pub struct _ClaimDepositResponse {
-    pub payment: Payment,
+    pub payment: Option<Payment>,
 }
 
 #[frb(mirror(Credentials))]
 pub struct _Credentials {
     pub username: String,
     pub password: String,
+}
+
+#[frb(mirror(InstantClaimStatus))]
+pub enum _InstantClaimStatus {
+    Declined,
+    Submitted { claim_id: String },
 }
 
 #[frb(mirror(DepositInfo))]
@@ -170,6 +178,7 @@ pub struct _DepositInfo {
     pub refund_tx: Option<String>,
     pub refund_tx_id: Option<String>,
     pub claim_error: Option<DepositClaimError>,
+    pub instant_claim_status: Option<InstantClaimStatus>,
 }
 
 #[frb(mirror(MaxFee))]
@@ -1174,6 +1183,9 @@ pub enum _UpdateDepositPayload {
     Refund {
         refund_txid: String,
         refund_tx: String,
+    },
+    InstantClaim {
+        status: InstantClaimStatus,
     },
 }
 

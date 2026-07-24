@@ -700,7 +700,7 @@ class SqliteStorage {
   listDeposits() {
     try {
       const stmt = this.db.prepare(`
-                SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id
+                SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status
                 FROM unclaimed_deposits
             `);
 
@@ -714,6 +714,9 @@ class SqliteStorage {
           claimError: row.claim_error ? JSON.parse(row.claim_error) : null,
           refundTx: row.refund_tx,
           refundTxId: row.refund_tx_id,
+          instantClaimStatus: row.instant_claim_status
+            ? JSON.parse(row.instant_claim_status)
+            : null,
         }))
       );
     } catch (error) {
@@ -735,12 +738,20 @@ class SqliteStorage {
         stmt.run(JSON.stringify(payload.error), txid, vout);
       } else if (payload.type === "refund") {
         const stmt = this.db.prepare(`
-          UPDATE unclaimed_deposits 
-          SET refund_tx = ?, refund_tx_id = ?, claim_error = NULL 
+          UPDATE unclaimed_deposits
+          SET refund_tx = ?, refund_tx_id = ?, claim_error = NULL
           WHERE txid = ? AND vout = ?
         `);
 
         stmt.run(payload.refundTx, payload.refundTxid, txid, vout);
+      } else if (payload.type === "instantClaim") {
+        const stmt = this.db.prepare(`
+          UPDATE unclaimed_deposits
+          SET instant_claim_status = ?
+          WHERE txid = ? AND vout = ?
+        `);
+
+        stmt.run(JSON.stringify(payload.status), txid, vout);
       } else {
         return Promise.reject(
           new StorageError(`Unknown payload type: ${payload.type}`)

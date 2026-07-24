@@ -30,6 +30,25 @@ pub struct ClaimStaticDeposit;
     query_path = "schema/queries.graphql",
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
+    response_derives = "Debug,Clone",
+    extern_enums("BitcoinNetwork", "CurrencyUnit")
+)]
+pub struct CreateInstantStaticDepositQuote;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    query_path = "schema/queries.graphql",
+    schema_path = "schema/spark.graphql",
+    variables_derives = "Clone",
+    response_derives = "Debug,Clone"
+)]
+pub struct CreateClaimInstantStaticDeposit;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    query_path = "schema/queries.graphql",
+    schema_path = "schema/spark.graphql",
+    variables_derives = "Clone",
     response_derives = "Debug,Clone,Serialize",
     extern_enums(
         "CurrencyUnit",

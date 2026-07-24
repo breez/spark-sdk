@@ -24,7 +24,11 @@ use crate::{
         SignStaticDepositRefundRequest, SparkSigner, StartStaticDepositRefundRequest,
         StartedStaticDepositRefund,
     },
-    ssp::{ClaimStaticDepositInput, ClaimStaticDepositRequestType, ServiceProvider},
+    ssp::{
+        ClaimStaticDepositInput, ClaimStaticDepositRequestType,
+        CreateClaimInstantStaticDepositInput, InstantStaticDepositPlan, InstantStaticDepositQuote,
+        InstantStaticDepositQuoteResult, ServiceProvider,
+    },
     tree::{TreeNode, TreeNodeId},
     utils::{
         paging::{PagingFilter, PagingResult, pager},
@@ -40,6 +44,12 @@ use super::ServiceError;
 
 const CLAIM_STATIC_DEPOSIT_ACTION: &str = "claim_static_deposit";
 
+// Domain tag and request-type discriminant for the instant (0-conf) claim user
+// statement, which is the BIP-340 tagged-hash pre-image (tag_hash || tag_hash ||
+// fields) the signer sha256-hashes, not a finished hash. Request type 3 is Instant.
+const CLAIM_INSTANT_STATIC_DEPOSIT_TAG: [&str; 2] = ["spark", "claim_instant_static_deposit"];
+const INSTANT_UTXO_SWAP_REQUEST_TYPE: u64 = 3;
+
 // Conservative minimum fee threshold for refund transactions
 // Based on 194 vbyte estimate for 1-in/1-out tx at 1 sat/vB minimum relay fee.
 const MIN_REFUND_FEE_SATS: u64 = 194;
@@ -47,6 +57,26 @@ const MIN_REFUND_FEE_SATS: u64 = 194;
 /// Witness vbytes for a single Schnorr signature: ceil(66 witness bytes / 4)
 /// Witness structure: 1 (stack items) + 1 (sig length varint) + 64 (signature) = 66 bytes
 const SCHNORR_SIG_WITNESS_VBYTES: u64 = 17;
+
+/// Builds the instant static deposit claim user statement. The field order and
+/// encoding must byte-match what the SSP validates for a 0-conf claim.
+fn serialize_instant_static_deposit_claim_payload(
+    network: &str,
+    credit_amount_sats: u64,
+    deposit_amount_sats: u64,
+    static_deposit_address: &str,
+    quote_signature: &[u8],
+) -> Vec<u8> {
+    TaggedHasher::new(&CLAIM_INSTANT_STATIC_DEPOSIT_TAG)
+        .add_string(network)
+        .add_u64(INSTANT_UTXO_SWAP_REQUEST_TYPE)
+        .add_u64(credit_amount_sats)
+        .add_u64(0) // secondary credit amount, always 0
+        .add_string(static_deposit_address)
+        .add_u64(deposit_amount_sats)
+        .add_bytes(quote_signature)
+        .signable_message()
+}
 
 /// A static deposit address.
 #[derive(Debug)]
@@ -286,8 +316,41 @@ impl DepositService {
             &quote_signature.serialize_der(),
         );
 
-        // The signer exports the static-deposit secret and signs the
-        // user-statement with the identity key.
+        // Sign the user-statement and export the ECIES-encrypted deposit secret
+        // the SSP needs to co-sign the claim.
+        let (encrypted_deposit_secret_key, user_signature) = self
+            .prepare_encrypted_static_deposit_claim(user_statement)
+            .await?;
+
+        // Call the service provider to claim the static deposit
+        let resp = self
+            .ssp_client
+            .claim_static_deposit(ClaimStaticDepositInput {
+                transaction_id: txid.to_string(),
+                output_index: output_index as i64,
+                network: self.network.into(),
+                credit_amount_sats: Some(credit_amount_sats),
+                request_type: Some(ClaimStaticDepositRequestType::FixedAmount),
+                max_fee_sats: None,
+                deposit_secret_key: None,
+                encrypted_deposit_secret_key: Some(encrypted_deposit_secret_key),
+                quote_signature: quote_signature.serialize_der().to_string(),
+                signature: user_signature.serialize_der().to_string(),
+            })
+            .await?;
+
+        Ok(resp.transfer_id)
+    }
+
+    /// Signs the claim `user_statement` with the identity key and exports the
+    /// static-deposit secret the SSP needs to co-sign the claim, ECIES-encrypted
+    /// (hex) to the SSP identity public key (same scheme as transfer leaf secret
+    /// ciphers) rather than sent in cleartext over GraphQL. Returns
+    /// `(encrypted_secret_hex, user_signature)`.
+    async fn prepare_encrypted_static_deposit_claim(
+        &self,
+        user_statement: Vec<u8>,
+    ) -> Result<(String, Signature), ServiceError> {
         let PreparedStaticDepositClaim {
             deposit_secret_key,
             user_signature,
@@ -313,24 +376,7 @@ impl DepositService {
             ServiceError::Generic(format!("ECIES encryption of deposit key failed: {e}"))
         })?;
 
-        // Call the service provider to claim the static deposit
-        let resp = self
-            .ssp_client
-            .claim_static_deposit(ClaimStaticDepositInput {
-                transaction_id: txid.to_string(),
-                output_index: output_index as i64,
-                network: self.network.into(),
-                credit_amount_sats: Some(credit_amount_sats),
-                request_type: Some(ClaimStaticDepositRequestType::FixedAmount),
-                max_fee_sats: None,
-                deposit_secret_key: None,
-                encrypted_deposit_secret_key: Some(hex::encode(encrypted_deposit_secret_key)),
-                quote_signature: quote_signature.serialize_der().to_string(),
-                signature: user_signature.serialize_der().to_string(),
-            })
-            .await?;
-
-        Ok(resp.transfer_id)
+        Ok((hex::encode(encrypted_deposit_secret_key), user_signature))
     }
 
     pub async fn refund_static_deposit(
@@ -1001,6 +1047,106 @@ impl DepositService {
             .await?;
 
         static_deposit_quote.try_into()
+    }
+
+    /// Fetch an instant static deposit quote and its fulfillment plans.
+    pub async fn fetch_instant_static_deposit_quote(
+        &self,
+        tx: Transaction,
+        output_index: Option<u32>,
+    ) -> Result<InstantStaticDepositQuoteResult, ServiceError> {
+        let output_index = match output_index {
+            Some(v) => v,
+            None => self
+                .find_static_deposit_tx_vout(&tx)
+                .await?
+                .ok_or(ServiceError::InvalidOutputIndex)?,
+        };
+        let result = self
+            .ssp_client
+            .get_instant_static_deposit_quote(
+                tx.compute_txid().to_string(),
+                output_index,
+                self.network.into(),
+            )
+            .await?;
+        Ok(result)
+    }
+
+    /// Claim an instant (0-conf) static deposit. `tx` is the funding
+    /// transaction: its output at the quote's `output_index` names the static
+    /// deposit address the UTXO paid to, which the signed user statement must
+    /// reference. `plan` must be the 0-conf fulfillment plan.
+    pub async fn claim_instant_static_deposit(
+        &self,
+        tx: Transaction,
+        quote: InstantStaticDepositQuote,
+        plan: InstantStaticDepositPlan,
+    ) -> Result<String, ServiceError> {
+        if plan.confirmations != 0 {
+            return Err(ServiceError::Generic(format!(
+                "instant claim supports only 0-conf plans, got {} confirmations",
+                plan.confirmations
+            )));
+        }
+
+        // `tx` must be the transaction the quote was issued for: the statement is
+        // signed against `tx`'s output, so a mismatched pair would sign the wrong
+        // address. (Public API; in-tree the caller always pairs them correctly.)
+        let quote_txid = Txid::from_str(&quote.transaction_id)
+            .map_err(|e| ServiceError::Generic(format!("invalid quote transaction id: {e}")))?;
+        if tx.compute_txid() != quote_txid {
+            return Err(ServiceError::Generic(
+                "funding tx does not match the quote transaction_id".to_string(),
+            ));
+        }
+
+        // Raw bytes of the SSP quote signature (hex) go into the user statement.
+        let quote_signature_bytes = hex::decode(&quote.quote_signature)
+            .map_err(|e| ServiceError::Generic(format!("invalid quote signature hex: {e}")))?;
+
+        // The statement names the address the UTXO actually paid to, derived from
+        // the funding output. The wallet's current static address may have rotated
+        // since the deposit landed, so it cannot be regenerated here.
+        let output_index = quote.output_index as usize;
+        let tx_out = tx.output.get(output_index).ok_or_else(|| {
+            ServiceError::Generic(format!("quote output_index {output_index} out of range"))
+        })?;
+        let params: Params = self.network.into();
+        let static_deposit_address = Address::from_script(&tx_out.script_pubkey, &params)
+            .map_err(|e| ServiceError::Generic(format!("invalid static deposit script: {e}")))?
+            .to_string();
+
+        // Sign the credit of the plan being claimed (equal to the quote credit
+        // today, but unambiguous if the SSP ever offers multiple plans). The
+        // deposit amount is the full UTXO value, which is quote-level.
+        let user_statement = serialize_instant_static_deposit_claim_payload(
+            &self.network.to_string(),
+            plan.amount.original_value,
+            quote.deposit_amount.original_value,
+            &static_deposit_address,
+            &quote_signature_bytes,
+        );
+
+        // Sign the user-statement and export the ECIES-encrypted deposit secret
+        // the SSP needs to co-sign the claim.
+        let (encrypted_deposit_secret_key, user_signature) = self
+            .prepare_encrypted_static_deposit_claim(user_statement)
+            .await?;
+
+        let resp = self
+            .ssp_client
+            .claim_instant_static_deposit(CreateClaimInstantStaticDepositInput {
+                static_deposit_quote_id: quote.id,
+                static_deposit_address_private_key_share: None,
+                encrypted_static_deposit_address_private_key_share: Some(
+                    encrypted_deposit_secret_key,
+                ),
+                signature: user_signature.serialize_der().to_string(),
+            })
+            .await?;
+
+        Ok(resp.claim_id)
     }
 
     async fn find_static_deposit_tx_vout(

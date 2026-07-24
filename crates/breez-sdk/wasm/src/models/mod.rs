@@ -135,6 +135,7 @@ pub struct DepositInfo {
     pub refund_tx: Option<String>,
     pub refund_tx_id: Option<String>,
     pub claim_error: Option<DepositClaimError>,
+    pub instant_claim_status: Option<InstantClaimStatus>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimDepositRequest)]
@@ -142,11 +143,12 @@ pub struct ClaimDepositRequest {
     pub txid: String,
     pub vout: u32,
     pub max_fee: Option<MaxFee>,
+    pub max_instant_fee_bps: Option<u32>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimDepositResponse)]
 pub struct ClaimDepositResponse {
-    pub payment: Payment,
+    pub payment: Option<Payment>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::RefundDepositRequest)]
@@ -187,6 +189,12 @@ pub enum DepositClaimError {
     Generic {
         message: String,
     },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::InstantClaimStatus)]
+pub enum InstantClaimStatus {
+    Declined,
+    Submitted { claim_id: String },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::InputType)]
@@ -657,6 +665,7 @@ pub struct Config {
     pub network: Network,
     pub sync_interval_secs: u32,
     pub max_deposit_claim_fee: Option<MaxFee>,
+    pub max_instant_deposit_claim_fee_bps: Option<u32>,
     pub lnurl_domain: Option<String>,
     pub prefer_spark_over_lightning: bool,
     pub external_input_parsers: Option<Vec<ExternalInputParser>>,
@@ -1445,6 +1454,9 @@ pub enum UpdateDepositPayload {
     Refund {
         refund_txid: String,
         refund_tx: String,
+    },
+    InstantClaim {
+        status: InstantClaimStatus,
     },
 }
 

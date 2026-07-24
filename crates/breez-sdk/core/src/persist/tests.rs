@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use chrono::Utc;
 
 use crate::{
-    DepositClaimError, LnurlWithdrawInfo, Payment, PaymentDetails, PaymentMetadata, PaymentMethod,
-    PaymentStatus, PaymentType, SparkHtlcDetails, SparkHtlcStatus, Storage, TokenMetadata,
-    TokenTransactionType, UpdateDepositPayload,
+    DepositClaimError, InstantClaimStatus, LnurlWithdrawInfo, Payment, PaymentDetails,
+    PaymentMetadata, PaymentMethod, PaymentStatus, PaymentType, SparkHtlcDetails, SparkHtlcStatus,
+    Storage, TokenMetadata, TokenTransactionType, UpdateDepositPayload,
     persist::{ObjectCacheRepository, StorageListPaymentsRequest},
     sync_storage::{Record, RecordId, UnversionedRecordChange},
 };
@@ -1406,6 +1406,80 @@ pub async fn test_deposit_refunds(storage: Box<dyn Storage>) {
         deposits[0].refund_tx,
         Some("0200000001abcd1234...".to_string())
     );
+}
+
+pub async fn test_instant_claim_status(storage: Box<dyn Storage>) {
+    // A freshly-added deposit has no instant-claim status.
+    storage
+        .add_deposit("tx_instant".to_string(), 0, 100_000, false)
+        .await
+        .unwrap();
+    let deposits = storage.list_deposits().await.unwrap();
+    assert_eq!(deposits.len(), 1);
+    assert_eq!(deposits[0].instant_claim_status, None);
+
+    // A declined status persists (no claim id).
+    storage
+        .update_deposit(
+            "tx_instant".to_string(),
+            0,
+            UpdateDepositPayload::InstantClaim {
+                status: InstantClaimStatus::Declined,
+            },
+        )
+        .await
+        .unwrap();
+    let deposits = storage.list_deposits().await.unwrap();
+    assert_eq!(deposits.len(), 1);
+    assert_eq!(
+        deposits[0].instant_claim_status,
+        Some(InstantClaimStatus::Declined)
+    );
+
+    // A submitted status persists together with its claim id, overwriting the
+    // previous status.
+    storage
+        .update_deposit(
+            "tx_instant".to_string(),
+            0,
+            UpdateDepositPayload::InstantClaim {
+                status: InstantClaimStatus::Submitted {
+                    claim_id: "claim-123".to_string(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let deposits = storage.list_deposits().await.unwrap();
+    assert_eq!(deposits.len(), 1);
+    assert_eq!(
+        deposits[0].instant_claim_status,
+        Some(InstantClaimStatus::Submitted {
+            claim_id: "claim-123".to_string()
+        })
+    );
+
+    // Re-observing the UTXO (the syncer upserts is_mature/amount) must preserve
+    // the status, otherwise a still-in-flight deposit could be re-claimed.
+    storage
+        .add_deposit("tx_instant".to_string(), 0, 100_000, true)
+        .await
+        .unwrap();
+    let deposits = storage.list_deposits().await.unwrap();
+    assert_eq!(deposits.len(), 1);
+    assert!(deposits[0].is_mature);
+    assert_eq!(
+        deposits[0].instant_claim_status,
+        Some(InstantClaimStatus::Submitted {
+            claim_id: "claim-123".to_string()
+        }),
+        "instant_claim_status must survive an add_deposit upsert"
+    );
+
+    storage
+        .delete_deposit("tx_instant".to_string(), 0)
+        .await
+        .unwrap();
 }
 
 pub async fn test_payment_type_filtering(storage: Box<dyn Storage>) {

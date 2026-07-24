@@ -110,6 +110,30 @@ func HandleFeeExceeded(sdk *breez_sdk_spark.BreezSdk, deposit breez_sdk_spark.De
 	return nil
 }
 
+func InstantClaim(sdk *breez_sdk_spark.BreezSdk, deposit breez_sdk_spark.DepositInfo) error {
+	// ANCHOR: instant-claim
+	// Claim a not-yet-mature deposit instantly (0-conf). Cap it at 4% (400 bps)
+	// of the deposit value.
+	maxInstantFeeBps := uint32(400)
+	claimRequest := breez_sdk_spark.ClaimDepositRequest{
+		Txid:             deposit.Txid,
+		Vout:             deposit.Vout,
+		MaxFee:           nil,
+		MaxInstantFeeBps: &maxInstantFeeBps,
+	}
+	_, err := sdk.ClaimDeposit(claimRequest)
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
+		return err
+	}
+	// ANCHOR_END: instant-claim
+	return nil
+}
+
 func RefundDeposit(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: refund-deposit
 	txid := "<your_deposit_txid>"

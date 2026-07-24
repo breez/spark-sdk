@@ -69,11 +69,27 @@ async fn handle_fee_exceeded(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()
                 max_fee: Some(MaxFee::Fixed {
                     amount: *required_fee_sats,
                 }),
+                max_instant_fee_bps: None,
             };
             sdk.claim_deposit(request).await?;
         }
     }
     // ANCHOR_END: handle-fee-exceeded
+    Ok(())
+}
+
+async fn instant_claim(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()> {
+    // ANCHOR: instant-claim
+    // Claim a not-yet-mature deposit instantly (0-conf). Cap it at 4% (400 bps)
+    // of the deposit value.
+    let request = ClaimDepositRequest {
+        txid: deposit.txid.clone(),
+        vout: deposit.vout,
+        max_fee: None,
+        max_instant_fee_bps: Some(400),
+    };
+    sdk.claim_deposit(request).await?;
+    // ANCHOR_END: instant-claim
     Ok(())
 }
 
@@ -139,6 +155,7 @@ async fn custom_claim_logic(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()>
                 max_fee: Some(MaxFee::Rate {
                     sat_per_vbyte: *required_fee_rate_sat_per_vbyte,
                 }),
+                max_instant_fee_bps: None,
             };
             sdk.claim_deposit(request).await?;
         }

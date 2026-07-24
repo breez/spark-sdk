@@ -33,6 +33,13 @@ async def configure_sdk():
     # with a leeway of 1 sats/vbyte
     config.max_deposit_claim_fee = MaxFee.NETWORK_RECOMMENDED(leeway_sat_per_vbyte=1)
     # ANCHOR_END: max-deposit-claim-fee
+
+    # ANCHOR: max-instant-deposit-claim-fee
+    # Opt into instant (0-conf) deposit claims, paying at most 4% (400 bps) of
+    # the deposit value as the SSP spread. Small deposits fall through to the
+    # normal claim.
+    config.max_instant_deposit_claim_fee_bps = 400
+    # ANCHOR_END: max-instant-deposit-claim-fee
     logging.info(f"Config: {config}")
 
 async def configure_private_enabled_default():
