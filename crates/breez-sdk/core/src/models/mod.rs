@@ -1092,6 +1092,20 @@ impl Fee {
     }
 }
 
+/// State of an instant (0-conf) claim attempt on a deposit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum InstantClaimStatus {
+    /// The instant claim was terminally declined: no 0-conf plan was offered, the
+    /// spread exceeded the ceiling, or the submission failed. The deposit falls
+    /// through to the normal claim once it matures.
+    Declined,
+    /// An instant claim was submitted and is settling. The deposit must not be
+    /// re-claimed (instant or normal) until the swap lands and it is reconciled
+    /// out. Carries the SSP claim id.
+    Submitted { claim_id: String },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct DepositInfo {
@@ -1102,7 +1116,8 @@ pub struct DepositInfo {
     pub refund_tx: Option<String>,
     pub refund_tx_id: Option<String>,
     pub claim_error: Option<DepositClaimError>,
-    pub instant_claim_attempted: bool,
+    /// Unset when no instant claim has been attempted.
+    pub instant_claim_status: Option<InstantClaimStatus>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

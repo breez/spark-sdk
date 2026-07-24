@@ -519,9 +519,9 @@ class PostgresMigrationManager {
         ],
       },
       {
-        name: "Add instant_claim_attempted to brz_unclaimed_deposits",
+        name: "Add instant claim status to brz_unclaimed_deposits",
         sql: [
-          `ALTER TABLE brz_unclaimed_deposits ADD COLUMN instant_claim_attempted BOOLEAN NOT NULL DEFAULT FALSE`,
+          `ALTER TABLE brz_unclaimed_deposits ADD COLUMN instant_claim_status JSONB`,
         ],
       },
     ];

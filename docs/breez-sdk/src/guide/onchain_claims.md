@@ -26,7 +26,7 @@ To claim instantly in the background, set the [maximum instant deposit claim fee
 
 You can also claim a specific not-yet-mature deposit on demand by passing a maximum instant fee, in basis points, to {{#name claim_deposit}}. The resulting transfer settles asynchronously, so no payment is returned; watch for it via {{#name list_payments}} or the [payment events](events.md).
 
-Because an instant claim settles asynchronously, the deposit remains in {{#name list_unclaimed_deposits}} with {{#name instant_claim_attempted}} set for a short time after it is submitted (a {{#enum SdkEvent::ClaimedDeposits}} event has already fired). It is removed automatically once the claim settles, so a listed deposit with {{#name instant_claim_attempted}} set may be an instant claim still in flight rather than one awaiting maturity.
+Because an instant claim settles asynchronously, the deposit remains in {{#name list_unclaimed_deposits}} with its {{#name instant_claim_status}} set to {{#enum InstantClaimStatus::Submitted}} for a short time after it is submitted (a {{#enum SdkEvent::ClaimedDeposits}} event has already fired). It is removed automatically once the claim settles, so a listed deposit marked {{#enum InstantClaimStatus::Submitted}} may be an instant claim still in flight rather than one awaiting maturity.
 
 {{#tabs refunding_payments:instant-claim}}
 

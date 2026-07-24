@@ -1,14 +1,15 @@
 use platform_utils::time::{Instant, SystemTime};
 use platform_utils::tokio;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tracing::{debug, error, info, trace, warn};
 
-use spark_wallet::{InstantStaticDepositPlan, InstantStaticDepositQuoteResult};
-
-use super::{BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncType, parse_input};
+use super::{
+    BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncType, deposits::InstantClaimOutcome,
+    parse_input,
+};
 use crate::{
-    DepositInfo, Fee, InputType, MaxFee, PaymentDetails, PaymentType,
+    DepositInfo, Fee, InputType, InstantClaimStatus, MaxFee, PaymentDetails, PaymentType,
     error::SdkError,
     events::{InternalSyncedEvent, SdkEvent},
     lnurl::ListMetadataRequest,
@@ -21,6 +22,32 @@ use crate::{
         utxo_fetcher::DetailedUtxo,
     },
 };
+
+/// Whether a matured deposit should be claimed now, given its instant-claim
+/// status. A `Submitted` instant claim is still settling, so the deposit must not
+/// be claimed until that claim settles and it is reconciled out; any other status
+/// (declined, or no instant attempt) is fine to claim.
+fn should_claim_matured_deposit(status: Option<&InstantClaimStatus>) -> bool {
+    !matches!(status, Some(InstantClaimStatus::Submitted { .. }))
+}
+
+/// Indexes the deposits that carry an instant-claim status by their outpoint.
+fn instant_claim_status_map(deposits: &[DepositInfo]) -> HashMap<TxOutput, InstantClaimStatus> {
+    deposits
+        .iter()
+        .filter_map(|d| {
+            d.instant_claim_status.clone().map(|status| {
+                (
+                    TxOutput {
+                        txid: d.txid.clone(),
+                        vout: d.vout,
+                    },
+                    status,
+                )
+            })
+        })
+        .collect()
+}
 
 impl BreezSdk {
     pub(in crate::sdk) async fn sync_single_lnurl_metadata(&self, payment: &mut Payment) {
@@ -287,16 +314,10 @@ impl BreezSdk {
                 vout: d.vout,
             })
             .collect();
-        // Deposits for which a 0-conf claim has already been attempted, so the
-        // one-shot instant path is not retried every sync.
-        let instant_attempted: HashSet<TxOutput> = existing_deposits
-            .iter()
-            .filter(|d| d.instant_claim_attempted)
-            .map(|d| TxOutput {
-                txid: d.txid.clone(),
-                vout: d.vout,
-            })
-            .collect();
+        // Instant-claim status per deposit: the one-shot instant path is not
+        // retried once any status is set, and a mature deposit whose instant claim
+        // is still `Submitted` is not claimed while that claim is in flight.
+        let instant_status = instant_claim_status_map(&existing_deposits);
 
         let all_utxos = DepositChainSyncer::new(
             self.chain_service.clone(),
@@ -326,8 +347,19 @@ impl BreezSdk {
         let mut claimed_deposits: Vec<DepositInfo> = Vec::new();
         let mut unclaimed_deposits: Vec<DepositInfo> = Vec::new();
         for (detailed_utxo, is_mature) in all_utxos {
+            let key = TxOutput {
+                txid: detailed_utxo.txid.to_string(),
+                vout: detailed_utxo.vout,
+            };
             let res = if is_mature {
-                // Mature deposit: claim via the normal (legacy) path.
+                // A submitted instant claim settles asynchronously; until it settles
+                // and the UTXO leaves the operator feed, the deposit can surface as
+                // mature. Claiming it here would race that in-flight claim, so skip it
+                // (reconcile_deposits drops the row once the claim settles).
+                if !should_claim_matured_deposit(instant_status.get(&key)) {
+                    continue;
+                }
+                // Mature deposit: claim via the normal path.
                 self.claim_utxo_and_resolve_deposit(
                     &detailed_utxo,
                     self.config.max_deposit_claim_fee.clone(),
@@ -337,12 +369,8 @@ impl BreezSdk {
                 .await
             } else {
                 // Not yet mature: attempt a one-shot 0-conf instant claim if enabled.
-                // Skip if the instant claim was already attempted.
-                let key = TxOutput {
-                    txid: detailed_utxo.txid.to_string(),
-                    vout: detailed_utxo.vout,
-                };
-                if instant_attempted.contains(&key) {
+                // Skip if an instant claim was already attempted (declined or submitted).
+                if instant_status.contains_key(&key) {
                     continue;
                 }
                 // Skip if instant claims are not enabled (no bps ceiling set).
@@ -413,51 +441,53 @@ impl BreezSdk {
         max_instant_fee_bps: u32,
         claimed_deposits: &mut Vec<DepositInfo>,
     ) -> Result<(), SdkError> {
-        match self
+        let outcome = match self
             .instant_claim_utxo(detailed_utxo, max_instant_fee_bps)
             .await
         {
-            Ok(InstantClaimOutcome::Submitted(claim_id)) => {
-                info!(
-                    "Instant claimed utxo {}:{} with claim_id: {claim_id}",
-                    detailed_utxo.txid, detailed_utxo.vout
-                );
-                // Mark, don't delete: the claim settles asynchronously, so the
-                // marker keeps the next sync from re-attempting in the window
-                // before the operator-side swap lands; reconcile_deposits removes
-                // the row once the UTXO leaves the feed.
-                self.storage
-                    .update_deposit(
-                        detailed_utxo.txid.to_string(),
-                        detailed_utxo.vout,
-                        UpdateDepositPayload::InstantClaimAttempted,
-                    )
-                    .await?;
-                let mut info = detailed_utxo.clone().into_deposit_info(false);
-                info.instant_claim_attempted = true;
-                claimed_deposits.push(info);
-            }
-            Ok(InstantClaimOutcome::Declined(reason)) => {
-                // Terminal decline (no 0-conf plan, or spread over the ceiling):
-                // mark so we don't re-quote every sync; the deposit is claimed by
-                // the legacy path at maturity.
-                info!(
-                    "Instant claim declined for utxo {}:{}: {reason}",
-                    detailed_utxo.txid, detailed_utxo.vout
-                );
-                self.storage
-                    .update_deposit(
-                        detailed_utxo.txid.to_string(),
-                        detailed_utxo.vout,
-                        UpdateDepositPayload::InstantClaimAttempted,
-                    )
-                    .await?;
-            }
+            Ok(outcome) => outcome,
             Err(e) => {
                 // Transient transport/indexing error (e.g. the SSP has not indexed
                 // the mempool tx yet): do NOT mark, so the next sync retries.
                 warn!(
                     "Instant claim transient error for utxo {}:{}, will retry: {e}",
+                    detailed_utxo.txid, detailed_utxo.vout
+                );
+                return Ok(());
+            }
+        };
+
+        // Mark, don't delete: a submitted claim settles asynchronously, so the
+        // marker keeps the next sync from re-attempting instant or normal path
+        // claiming a still-in-flight deposit; reconcile_deposits removes the row
+        // once the UTXO leaves the feed. A declined instant claim is marked so
+        // we don't re-quote it every sync; it is claimed by the normal path at
+        // maturity. The row already exists here (the deposit sync inserted it),
+        // so the update lands.
+        let status = outcome.status();
+        self.storage
+            .update_deposit(
+                detailed_utxo.txid.to_string(),
+                detailed_utxo.vout,
+                UpdateDepositPayload::InstantClaim {
+                    status: status.clone(),
+                },
+            )
+            .await?;
+
+        match outcome {
+            InstantClaimOutcome::Submitted(claim_id) => {
+                info!(
+                    "Instant claimed utxo {}:{} with claim_id: {claim_id}",
+                    detailed_utxo.txid, detailed_utxo.vout
+                );
+                let mut info = detailed_utxo.clone().into_deposit_info(false);
+                info.instant_claim_status = Some(status);
+                claimed_deposits.push(info);
+            }
+            InstantClaimOutcome::Declined(reason) => {
+                info!(
+                    "Instant claim declined for utxo {}:{}: {reason}",
                     detailed_utxo.txid, detailed_utxo.vout
                 );
             }
@@ -599,64 +629,6 @@ impl BreezSdk {
         );
         Ok(transfer_id)
     }
-
-    /// Attempts an instant 0-conf static deposit claim for `detailed_utxo`.
-    /// `Ok(Submitted)` on a submitted claim, `Ok(Declined)` for a terminal
-    /// outcome (no 0-conf plan, spread over the ceiling, or a failed claim
-    /// submission), and `Err` only for a failed quote fetch, which is transient
-    /// (the SSP may not have indexed the mempool tx yet) and should be retried.
-    pub(super) async fn instant_claim_utxo(
-        &self,
-        detailed_utxo: &DetailedUtxo,
-        max_instant_fee_bps: u32,
-    ) -> Result<InstantClaimOutcome, SdkError> {
-        // A failed quote fetch is transient (retry); everything after it is
-        // terminal and should be marked, not retried.
-        let quote_result = self
-            .spark_wallet
-            .fetch_instant_static_deposit_quote(detailed_utxo.tx.clone(), Some(detailed_utxo.vout))
-            .await?;
-        match select_instant_claim_plan(&quote_result, max_instant_fee_bps) {
-            InstantClaimPlan::Claimable(plan) => {
-                match self
-                    .spark_wallet
-                    .claim_instant_static_deposit(
-                        detailed_utxo.tx.clone(),
-                        quote_result.quote,
-                        plan,
-                    )
-                    .await
-                {
-                    Ok(claim_id) => Ok(InstantClaimOutcome::Submitted(claim_id)),
-                    // A claim submission failure has an unknown outcome (the SSP
-                    // may have accepted it before the response was lost), so treat
-                    // it as terminal and mark rather than re-submit into the
-                    // pre-swap window on the next sync.
-                    Err(e) => Ok(InstantClaimOutcome::Declined(e.into())),
-                }
-            }
-            InstantClaimPlan::NoPlan => Ok(InstantClaimOutcome::Declined(SdkError::Generic(
-                "No instant (0-conf) claim plan available".to_string(),
-            ))),
-            InstantClaimPlan::FeeExceeded {
-                spread_sats,
-                spread_bps,
-            } => Ok(InstantClaimOutcome::Declined(SdkError::Generic(format!(
-                "Instant claim declined for {}:{}: SSP spread {spread_bps} bps ({spread_sats} sats) exceeds max {max_instant_fee_bps} bps",
-                detailed_utxo.txid, detailed_utxo.vout
-            )))),
-        }
-    }
-}
-
-/// Result of an instant (0-conf) claim attempt.
-pub(super) enum InstantClaimOutcome {
-    /// Claim submitted; carries the claim id. Settles asynchronously.
-    Submitted(String),
-    /// A terminal outcome to mark rather than retry: no 0-conf plan, spread over
-    /// the ceiling, or a failed claim submission (whose outcome is unknown, so
-    /// re-submitting is unsafe). Distinct from a failed quote fetch, which retries.
-    Declined(SdkError),
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
@@ -675,172 +647,25 @@ impl BreezSdk {
     }
 }
 
-/// Classification of an instant quote's 0-conf plan against the bps ceiling.
-enum InstantClaimPlan {
-    /// The 0-conf plan is within the ceiling and should be claimed.
-    Claimable(InstantStaticDepositPlan),
-    /// No `confirmations == 0` fulfillment plan was offered.
-    NoPlan,
-    /// The SSP spread (`deposit - credit`) exceeds the ceiling, in both sats and
-    /// its basis-points-of-deposit form (for the decline message).
-    FeeExceeded { spread_sats: u64, spread_bps: u64 },
-}
-
-/// Selects the 0-conf fulfillment plan and checks the SSP spread
-/// (`deposit - credit`) against `max_bps`, as basis points of the deposit value.
-/// The spread carries a fixed component, so its bps grows as the deposit shrinks:
-/// a single bps ceiling therefore admits large deposits and declines small ones.
-fn select_instant_claim_plan(
-    quote_result: &InstantStaticDepositQuoteResult,
-    max_bps: u32,
-) -> InstantClaimPlan {
-    let Some(plan) = quote_result
-        .fulfillment_plans
-        .iter()
-        .find(|p| p.confirmations == 0)
-    else {
-        return InstantClaimPlan::NoPlan;
-    };
-    // Price the spread off the selected plan's `amount` (the credit for the plan
-    // we chose), not the quote-level credit. They are equal today (the SSP
-    // returns one plan per quote, verified on deployed regtest), but keying on the
-    // plan stays correct if the SSP ever returns multiple plans with differing
-    // amounts.
-    let deposit_sats = quote_result.quote.deposit_amount.original_value;
-    let spread_sats = deposit_sats.saturating_sub(plan.amount.original_value);
-    // Compare spread_bps <= max_bps without dividing (avoids rounding at the
-    // bound); saturating math keeps `spread * 10_000` from overflowing.
-    let within = u128::from(spread_sats).saturating_mul(10_000)
-        <= u128::from(max_bps).saturating_mul(u128::from(deposit_sats));
-    if within {
-        InstantClaimPlan::Claimable(plan.clone())
-    } else {
-        // checked_div yields None for a zero-value deposit, floored to 0 bps.
-        let spread_bps = u128::from(spread_sats)
-            .saturating_mul(10_000)
-            .checked_div(u128::from(deposit_sats))
-            .and_then(|bps| u64::try_from(bps).ok())
-            .unwrap_or(0);
-        InstantClaimPlan::FeeExceeded {
-            spread_sats,
-            spread_bps,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{InstantClaimPlan, select_instant_claim_plan};
-    use spark_wallet::{
-        CurrencyAmount, InstantStaticDepositPlan, InstantStaticDepositQuote,
-        InstantStaticDepositQuoteResult,
-    };
-
-    fn sats(value: u64) -> CurrencyAmount {
-        CurrencyAmount {
-            original_value: value,
-            ..Default::default()
-        }
-    }
-
-    /// Builds a quote crediting `credit_sats` out of a `deposit_sats` UTXO, with
-    /// one fulfillment plan per confirmation count in `plan_confirmations`.
-    fn quote_result(
-        deposit_sats: u64,
-        credit_sats: u64,
-        plan_confirmations: &[i64],
-    ) -> InstantStaticDepositQuoteResult {
-        InstantStaticDepositQuoteResult {
-            quote: InstantStaticDepositQuote {
-                id: "quote-id".to_string(),
-                transaction_id: "tx".to_string(),
-                output_index: 0,
-                deposit_amount: sats(deposit_sats),
-                credit_amount: sats(credit_sats),
-                quote_signature: "00".to_string(),
-            },
-            fulfillment_plans: plan_confirmations
-                .iter()
-                .enumerate()
-                .map(|(i, confirmations)| InstantStaticDepositPlan {
-                    id: format!("plan-{i}"),
-                    amount: sats(credit_sats),
-                    confirmations: *confirmations,
-                })
-                .collect(),
-        }
-    }
+    use super::should_claim_matured_deposit;
+    use crate::InstantClaimStatus;
 
     #[test]
-    fn selects_zero_conf_plan_within_bps() {
-        // Spread 1_000 of 100_000 = 100 bps, ceiling 200 bps -> claim.
-        let q = quote_result(100_000, 99_000, &[0, 1]);
-        let InstantClaimPlan::Claimable(plan) = select_instant_claim_plan(&q, 200) else {
-            panic!("expected a claimable 0-conf plan");
-        };
-        assert_eq!(plan.confirmations, 0);
-    }
-
-    #[test]
-    fn skips_when_no_zero_conf_plan() {
-        // Only 1-conf+ plans available -> the background cascade waits for maturity.
-        let q = quote_result(100_000, 99_000, &[1, 2]);
-        assert!(matches!(
-            select_instant_claim_plan(&q, 10_000),
-            InstantClaimPlan::NoPlan
-        ));
-    }
-
-    #[test]
-    fn skips_when_spread_over_bps_ceiling() {
-        // Spread 5_000 of 100_000 = 500 bps, ceiling 100 bps -> skip.
-        let q = quote_result(100_000, 95_000, &[0]);
-        assert!(matches!(
-            select_instant_claim_plan(&q, 100),
-            InstantClaimPlan::FeeExceeded {
-                spread_sats: 5_000,
-                spread_bps: 500
+    fn claim_matured_deposit_skips_only_submitted() {
+        // No instant attempt, or a declined one, falls through to the normal path
+        // claim.
+        assert!(should_claim_matured_deposit(None));
+        assert!(should_claim_matured_deposit(Some(
+            &InstantClaimStatus::Declined
+        )));
+        // A submitted instant claim is in flight, so claiming the matured deposit
+        // is skipped until the claim settles.
+        assert!(!should_claim_matured_deposit(Some(
+            &InstantClaimStatus::Submitted {
+                claim_id: "claim-1".to_string(),
             }
-        ));
-    }
-
-    #[test]
-    fn rejects_any_spread_at_zero_bps() {
-        // A 0 bps ceiling admits only a zero spread.
-        let q = quote_result(100_000, 99_000, &[0]);
-        assert!(matches!(
-            select_instant_claim_plan(&q, 0),
-            InstantClaimPlan::FeeExceeded { .. }
-        ));
-    }
-
-    #[test]
-    fn accepts_spread_equal_to_bps_ceiling() {
-        // Spread 1_000 of 100_000 = 100 bps, ceiling exactly 100 bps -> claim (inclusive).
-        let q = quote_result(100_000, 99_000, &[0]);
-        assert!(matches!(
-            select_instant_claim_plan(&q, 100),
-            InstantClaimPlan::Claimable(_)
-        ));
-    }
-
-    #[test]
-    fn one_bps_cap_admits_large_declines_small() {
-        // The SSP spread is ~199 sats + 300 bps, so its effective bps falls as the
-        // deposit grows. A single cap therefore admits a large deposit and declines
-        // a small one (which should wait for the legacy path). Values are measured.
-        let cap_bps = 400;
-        // 1_000 deposit: spread 229 -> 2290 bps -> declined.
-        let small = quote_result(1_000, 771, &[0]);
-        assert!(matches!(
-            select_instant_claim_plan(&small, cap_bps),
-            InstantClaimPlan::FeeExceeded { .. }
-        ));
-        // 100_000 deposit: spread 3_199 -> 319 bps -> claimed.
-        let large = quote_result(100_000, 96_801, &[0]);
-        assert!(matches!(
-            select_instant_claim_plan(&large, cap_bps),
-            InstantClaimPlan::Claimable(_)
-        ));
+        )));
     }
 }

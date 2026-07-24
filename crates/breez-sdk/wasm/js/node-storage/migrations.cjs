@@ -481,9 +481,9 @@ class MigrationManager {
         ],
       },
       {
-        name: "Add instant_claim_attempted to unclaimed_deposits",
+        name: "Add instant claim status to unclaimed_deposits",
         sql: [
-          `ALTER TABLE unclaimed_deposits ADD COLUMN instant_claim_attempted INTEGER NOT NULL DEFAULT 0`,
+          `ALTER TABLE unclaimed_deposits ADD COLUMN instant_claim_status TEXT`,
         ],
       },
     ];

@@ -530,12 +530,12 @@ impl MysqlStorage {
                         (user_id, provider, is_terminal)
                 )",
             )],
-            // Migration 21: Track whether a 0-conf instant claim has been
-            // attempted for a deposit.
+            // Migration 21: Track the state of a 0-conf instant claim as a
+            // JSON-encoded InstantClaimStatus (NULL when none has been attempted).
             vec![Migration::AddColumn {
                 table: "brz_unclaimed_deposits",
-                column: "instant_claim_attempted",
-                definition: "TINYINT(1) NOT NULL DEFAULT 0",
+                column: "instant_claim_status",
+                definition: "JSON NULL",
             }],
         ]
     }
@@ -1381,7 +1381,7 @@ impl Storage for MysqlStorage {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         let rows: Vec<Row> = conn
             .exec(
-                "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_attempted FROM brz_unclaimed_deposits WHERE user_id = ?",
+                "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status FROM brz_unclaimed_deposits WHERE user_id = ?",
                 (self.identity.clone(),),
             )
             .await
@@ -1408,7 +1408,7 @@ impl Storage for MysqlStorage {
                 claim_error,
                 refund_tx: get_opt_str(row, 5),
                 refund_tx_id: get_opt_str(row, 6),
-                instant_claim_attempted: get_opt_bool(row, 7).unwrap_or(false),
+                instant_claim_status: from_json_string_opt(get_opt_str(row, 7))?,
             });
         }
         Ok(deposits)
@@ -1443,10 +1443,12 @@ impl Storage for MysqlStorage {
                 .await
                 .map_err(map_db_error)?;
             }
-            UpdateDepositPayload::InstantClaimAttempted => {
+            UpdateDepositPayload::InstantClaim { status } => {
+                let status_json = serde_json::to_string(&status)
+                    .map_err(|e| StorageError::Serialization(e.to_string()))?;
                 conn.exec_drop(
-                    "UPDATE brz_unclaimed_deposits SET instant_claim_attempted = 1 WHERE user_id = ? AND txid = ? AND vout = ?",
-                    (self.identity.clone(), txid, i32::try_from(vout)?),
+                    "UPDATE brz_unclaimed_deposits SET instant_claim_status = ? WHERE user_id = ? AND txid = ? AND vout = ?",
+                    (status_json, self.identity.clone(), txid, i32::try_from(vout)?),
                 )
                 .await
                 .map_err(map_db_error)?;
@@ -2319,9 +2321,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_instant_claim_attempted() {
+    async fn test_instant_claim_status() {
         let fixture = MysqlTestFixture::new().await;
-        crate::persist::tests::test_instant_claim_attempted(Box::new(fixture.storage)).await;
+        crate::persist::tests::test_instant_claim_status(Box::new(fixture.storage)).await;
     }
 
     #[tokio::test]
