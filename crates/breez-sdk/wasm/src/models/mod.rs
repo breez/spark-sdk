@@ -135,7 +135,7 @@ pub struct DepositInfo {
     pub refund_tx: Option<String>,
     pub refund_tx_id: Option<String>,
     pub claim_error: Option<DepositClaimError>,
-    pub instant_claim_attempted: bool,
+    pub instant_claim_status: Option<InstantClaimStatus>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimDepositRequest)]
@@ -189,6 +189,12 @@ pub enum DepositClaimError {
     Generic {
         message: String,
     },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::InstantClaimStatus)]
+pub enum InstantClaimStatus {
+    Declined,
+    Submitted { claim_id: String },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::InputType)]
@@ -1449,7 +1455,9 @@ pub enum UpdateDepositPayload {
         refund_txid: String,
         refund_tx: String,
     },
-    InstantClaimAttempted,
+    InstantClaim {
+        status: InstantClaimStatus,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CheckLightningAddressRequest)]

@@ -648,7 +648,7 @@ async fn test_deposits_to_multiple_addresses(
 /// Manual instant (0-conf) claim path, end to end against the deployed SSP: it
 /// exercises the ported 0-conf user statement, the ECIES key-share transport, and
 /// the claim mutation. Auto-claiming is disabled on both fronts (the instant
-/// cascade is off via unset `max_instant_deposit_claim_fee_bps`, the legacy claim
+/// cascade is off via unset `max_instant_deposit_claim_fee_bps`, the normal claim
 /// is fee-blocked via `max_deposit_claim_fee` = 0), so the manual `claim_deposit`
 /// is the only thing that can claim the funded deposit.
 ///
@@ -756,6 +756,29 @@ async fn test_manual_instant_deposit_claim(
         "instant claim settles asynchronously; no synchronous payment is returned"
     );
 
+    // Mark-not-delete contract. claim_deposit marks the deposit Submitted, creating
+    // the row first if the background sync has not (the create-if-missing path), so
+    // right after the call the deposit is present and Submitted. reconcile_deposits
+    // only removes it once the claim settles, which the settle-poll below waits for,
+    // so the row is checked here first, while it is guaranteed present.
+    let deposits = bob
+        .sdk
+        .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
+        .await?
+        .deposits;
+    let dep = deposits
+        .iter()
+        .find(|d| d.txid == txid)
+        .expect("a submitted instant claim must be listed (created and marked)");
+    assert!(
+        matches!(
+            dep.instant_claim_status,
+            Some(InstantClaimStatus::Submitted { .. })
+        ),
+        "instant-claimed deposit must be marked Submitted: {:?}",
+        dep.instant_claim_status
+    );
+
     // Poll until the async credit settles. This is the end-to-end proof: the SSP
     // accepted the signed statement, key share, and claim, and fronted the credit.
     let balance = wait_for_balance(&bob.sdk, Some(start_balance + 1), None, 180).await?;
@@ -765,25 +788,6 @@ async fn test_manual_instant_deposit_claim(
         balance < start_balance + fund_amount,
         "instant credit should be below the funded amount (SSP spread): {balance}"
     );
-
-    // Opportunistic check of the mark-not-delete contract. claim_deposit does not
-    // create the deposit row, it only marks it: the background sync inserts the row
-    // (add_deposit) once the Spark operators index the UTXO, and reconcile_deposits
-    // later removes it once the SSP swaps the UTXO out of the operator feed. So the
-    // row may be absent here (not yet synced in, or already reconciled out); if
-    // present, it must carry the marker.
-    let deposits = bob
-        .sdk
-        .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
-        .await?
-        .deposits;
-    match deposits.iter().find(|d| d.txid == txid) {
-        Some(d) => assert!(
-            d.instant_claim_attempted,
-            "a listed instant-claimed deposit must be marked instant_claim_attempted"
-        ),
-        None => info!("instant-claimed deposit not listed (not yet synced in, or reconciled out)"),
-    }
 
     Ok(())
 }

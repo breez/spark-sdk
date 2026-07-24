@@ -563,9 +563,9 @@ class MysqlMigrationManager {
         ],
       },
       {
-        name: "Add instant_claim_attempted to brz_unclaimed_deposits",
+        name: "Add instant claim status to brz_unclaimed_deposits",
         sql: [
-          `ALTER TABLE brz_unclaimed_deposits ADD COLUMN instant_claim_attempted TINYINT(1) NOT NULL DEFAULT 0`,
+          `ALTER TABLE brz_unclaimed_deposits ADD COLUMN instant_claim_status JSON NULL`,
         ],
       },
     ];

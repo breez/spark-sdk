@@ -326,6 +326,7 @@ fn claim_deposit() {
         fee_sat,
         sat_per_vbyte,
         recommended_fee_leeway,
+        instant_fee_bps,
     } = parse_ok("claim-deposit tx1 0 --fee-sat 500")
     else {
         panic!("expected ClaimDeposit");
@@ -335,6 +336,7 @@ fn claim_deposit() {
     assert_eq!(fee_sat, Some(500));
     assert!(sat_per_vbyte.is_none());
     assert!(recommended_fee_leeway.is_none());
+    assert!(instant_fee_bps.is_none());
 
     let Command::ClaimDeposit {
         sat_per_vbyte,
@@ -346,6 +348,14 @@ fn claim_deposit() {
     };
     assert_eq!(sat_per_vbyte, Some(2));
     assert_eq!(recommended_fee_leeway, Some(3));
+
+    let Command::ClaimDeposit {
+        instant_fee_bps, ..
+    } = parse_ok("claim-deposit tx1 2 --instant-fee-bps 400")
+    else {
+        panic!("expected ClaimDeposit");
+    };
+    assert_eq!(instant_fee_bps, Some(400));
 
     parse_err("claim-deposit tx1");
     parse_err("claim-deposit tx1 notanumber");

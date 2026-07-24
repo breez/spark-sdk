@@ -163,6 +163,12 @@ pub struct _Credentials {
     pub password: String,
 }
 
+#[frb(mirror(InstantClaimStatus))]
+pub enum _InstantClaimStatus {
+    Declined,
+    Submitted { claim_id: String },
+}
+
 #[frb(mirror(DepositInfo))]
 pub struct _DepositInfo {
     pub txid: String,
@@ -172,7 +178,7 @@ pub struct _DepositInfo {
     pub refund_tx: Option<String>,
     pub refund_tx_id: Option<String>,
     pub claim_error: Option<DepositClaimError>,
-    pub instant_claim_attempted: bool,
+    pub instant_claim_status: Option<InstantClaimStatus>,
 }
 
 #[frb(mirror(MaxFee))]
@@ -1178,7 +1184,9 @@ pub enum _UpdateDepositPayload {
         refund_txid: String,
         refund_tx: String,
     },
-    InstantClaimAttempted,
+    InstantClaim {
+        status: InstantClaimStatus,
+    },
 }
 
 #[frb(mirror(Amount))]

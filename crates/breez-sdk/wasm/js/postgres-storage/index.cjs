@@ -730,7 +730,7 @@ class PostgresStorage {
   async listDeposits() {
     try {
       const result = await this.pool.query(
-        "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_attempted FROM brz_unclaimed_deposits WHERE user_id = $1",
+        "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status FROM brz_unclaimed_deposits WHERE user_id = $1",
         [this.identity]
       );
 
@@ -742,7 +742,7 @@ class PostgresStorage {
         claimError: row.claim_error || null,
         refundTx: row.refund_tx,
         refundTxId: row.refund_tx_id,
-        instantClaimAttempted: row.instant_claim_attempted ?? false,
+        instantClaimStatus: row.instant_claim_status || null,
       }));
     } catch (error) {
       throw new StorageError(
@@ -768,12 +768,12 @@ class PostgresStorage {
            WHERE user_id = $3 AND txid = $4 AND vout = $5`,
           [payload.refundTx, payload.refundTxid, this.identity, txid, vout]
         );
-      } else if (payload.type === "instantClaimAttempted") {
+      } else if (payload.type === "instantClaim") {
         await this.pool.query(
           `UPDATE brz_unclaimed_deposits
-           SET instant_claim_attempted = TRUE
-           WHERE user_id = $1 AND txid = $2 AND vout = $3`,
-          [this.identity, txid, vout]
+           SET instant_claim_status = $1
+           WHERE user_id = $2 AND txid = $3 AND vout = $4`,
+          [JSON.stringify(payload.status), this.identity, txid, vout]
         );
       } else {
         throw new StorageError(`Unknown payload type: ${payload.type}`);

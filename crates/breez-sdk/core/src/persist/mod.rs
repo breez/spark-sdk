@@ -28,9 +28,9 @@ use thiserror::Error;
 
 use crate::{
     AssetFilter, Contact, ConversionInfo, ConversionStatus, DepositClaimError, DepositInfo,
-    LightningAddressInfo, ListContactsRequest, ListPaymentsRequest, LnurlPayInfo,
-    LnurlWithdrawInfo, PaymentDetailsFilter, PaymentStatus, PaymentType, SparkHtlcStatus,
-    TokenBalance, TokenMetadata, TokenTransactionType,
+    InstantClaimStatus, LightningAddressInfo, ListContactsRequest, ListPaymentsRequest,
+    LnurlPayInfo, LnurlWithdrawInfo, PaymentDetailsFilter, PaymentStatus, PaymentType,
+    SparkHtlcStatus, TokenBalance, TokenMetadata, TokenTransactionType,
     models::Payment,
     sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
 };
@@ -73,7 +73,9 @@ pub enum UpdateDepositPayload {
         refund_txid: String,
         refund_tx: String,
     },
-    InstantClaimAttempted,
+    InstantClaim {
+        status: InstantClaimStatus,
+    },
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
