@@ -537,9 +537,14 @@ impl LeafOptimizer {
                     swap_reservation.leaves.iter().map(|l| l.value).collect();
                 let received_values: Vec<u64> = new_leaves.iter().map(|l| l.value).collect();
 
+                // Resolve the swap outputs' ancestors (best-effort), then finalize.
+                let pedigrees = self
+                    .tree_service
+                    .fetch_pedigrees_from_operators(&new_leaves)
+                    .await;
                 if let Err(e) = self
                     .tree_service
-                    .finalize_reservation(swap_reservation.id, Some(&new_leaves))
+                    .finalize_reservation(swap_reservation.id, Some(&pedigrees))
                     .await
                 {
                     error!(

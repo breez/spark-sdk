@@ -56,6 +56,12 @@ impl TestFixtures {
         Ok(Self { bitcoind, spark_so })
     }
 
+    /// Takes all operators offline by stopping their containers; bitcoind stays up.
+    /// See [`SparkSoFixture::stop_operators`].
+    pub async fn stop_operators(&self) -> Result<()> {
+        self.spark_so.stop_operators().await
+    }
+
     pub async fn create_wallet_config(&self) -> Result<SparkWalletConfig> {
         // Create a wallet configuration that points to our service operators
         let mut operator_configs = Vec::new();

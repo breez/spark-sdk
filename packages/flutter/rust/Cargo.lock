@@ -1201,6 +1201,7 @@ dependencies = [
  "rusqlite_migration",
  "serde",
  "serde_json",
+ "spark-sqlite",
  "spark-wallet",
  "thiserror 2.0.17",
  "tokio",
@@ -4731,6 +4732,21 @@ dependencies = [
  "tracing",
  "unicode-normalization",
  "utils",
+ "uuid",
+]
+
+[[package]]
+name = "spark-sqlite"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "macros 0.1.0",
+ "platform-utils 0.1.0",
+ "rusqlite",
+ "serde_json",
+ "spark-wallet",
+ "thiserror 2.0.17",
+ "tracing",
  "uuid",
 ]
 

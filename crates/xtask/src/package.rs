@@ -203,6 +203,7 @@ fn package_wasm_target(
     // For Node.js target, copy the JavaScript sqlite storage implementation
     if target == "nodejs" {
         copy_nodejs_storage_files(crate_dir, &out_path)?;
+        copy_nodejs_tree_store_files(crate_dir, &out_path)?;
         copy_postgres_storage_files(crate_dir, &out_path)?;
         copy_postgres_tree_store_files(crate_dir, &out_path)?;
         copy_postgres_token_store_files(crate_dir, &out_path)?;
@@ -215,6 +216,7 @@ fn package_wasm_target(
 
     if target == "web" || target == "bundler" {
         copy_web_storage_files(crate_dir, &out_path)?;
+        copy_web_tree_store_files(crate_dir, &out_path)?;
     }
 
     // The top-level packages/wasm/package.json exposes
@@ -1013,6 +1015,106 @@ fn copy_mysql_session_store_files(crate_dir: &Path, out_path: &Path) -> Result<(
     Ok(())
 }
 
+fn copy_nodejs_tree_store_files(crate_dir: &Path, out_path: &Path) -> Result<()> {
+    let js_src = crate_dir.join("js/node-tree-store");
+    if !js_src.exists() {
+        println!(
+            "Warning: Node.js tree store source directory not found at {:?}",
+            js_src
+        );
+        return Ok(());
+    }
+    let dest = out_path.join("tree-store");
+    std::fs::create_dir_all(&dest)?;
+    for file_name in ["index.cjs", "errors.cjs", "migrations.cjs"] {
+        let src_file = js_src.join(file_name);
+        let dest_file = dest.join(file_name);
+        if src_file.exists() {
+            std::fs::copy(&src_file, &dest_file).with_context(|| {
+                format!(
+                    "Failed to copy {} to {}",
+                    src_file.display(),
+                    dest_file.display()
+                )
+            })?;
+            println!("Copied Node.js tree store file: {}", file_name);
+        } else {
+            return Err(anyhow::anyhow!(
+                "Node.js tree store file not found: {}",
+                src_file.display()
+            ));
+        }
+    }
+    let package_json = serde_json::json!({
+        "name": "@breez-sdk/node-tree-store",
+        "version": "1.0.0",
+        "description": "Node.js SQLite tree store implementation for Breez SDK WASM (CommonJS)",
+        "main": "index.cjs",
+        "dependencies": { "better-sqlite3": "^9.2.2" }
+    });
+    std::fs::write(
+        dest.join("package.json"),
+        serde_json::to_string_pretty(&package_json)
+            .with_context(|| "Failed to serialize node tree store package.json")?,
+    )
+    .with_context(|| "Failed to write node tree store package.json".to_string())?;
+    println!(
+        "Successfully copied Node.js tree store files to {}",
+        dest.display()
+    );
+    Ok(())
+}
+
+fn copy_web_tree_store_files(crate_dir: &Path, out_path: &Path) -> Result<()> {
+    let js_src = crate_dir.join("js/web-tree-store");
+    if !js_src.exists() {
+        println!(
+            "Warning: Web tree store source directory not found at {:?}",
+            js_src
+        );
+        return Ok(());
+    }
+    let dest = out_path.join("tree-store");
+    std::fs::create_dir_all(&dest)?;
+    let src_file = js_src.join("index.js");
+    let dest_file = dest.join("index.js");
+    if src_file.exists() {
+        std::fs::copy(&src_file, &dest_file).with_context(|| {
+            format!(
+                "Failed to copy {} to {}",
+                src_file.display(),
+                dest_file.display()
+            )
+        })?;
+        println!("Copied ES6 web tree store file: index.js");
+    } else {
+        return Err(anyhow::anyhow!(
+            "ES6 web tree store file not found: {}",
+            src_file.display()
+        ));
+    }
+    let package_json = serde_json::json!({
+        "name": "@breez-sdk/web-tree-store",
+        "version": "1.0.0",
+        "description": "Web IndexedDB tree store implementation for Breez SDK WASM (ES6 modules)",
+        "type": "module",
+        "main": "index.js",
+        "exports": { ".": "./index.js", "./tree-store": "./index.js" },
+        "dependencies": {}
+    });
+    std::fs::write(
+        dest.join("package.json"),
+        serde_json::to_string_pretty(&package_json)
+            .with_context(|| "Failed to serialize web tree store package.json")?,
+    )
+    .with_context(|| "Failed to write web tree store package.json".to_string())?;
+    println!(
+        "Successfully copied Web tree store files to {}",
+        dest.display()
+    );
+    Ok(())
+}
+
 fn create_nodejs_entry_point(out_path: &Path) -> Result<()> {
     let entry_content = r#"// Node.js entry point for Breez SDK with automatic storage support
 const wasmModule = require('./breez_sdk_spark_wasm.js');
@@ -1028,6 +1130,19 @@ try {
 } catch (error) {
     console.warn('Breez SDK: Failed to load Node.js storage:', error.message);
     console.warn('Breez SDK: Storage operations may not work properly. Ignore this warning if you are not using the default storage.');
+}
+
+// Automatically import and set up the default tree store for Node.js
+try {
+    const { createNodeTreeStore } = require('./tree-store/index.cjs');
+
+    // Make createDefaultTreeStore available globally for the WASM bridge to find;
+    // the trailing argument runs migrations.
+    global.createDefaultTreeStore = (dbPath, logger) =>
+        createNodeTreeStore(dbPath, logger, true);
+} catch (error) {
+    console.warn('Breez SDK: Failed to load Node.js tree store:', error.message);
+    console.warn('Breez SDK: Tree state will not be persisted. Ignore this warning if you are not using the default storage.');
 }
 
 // Automatically import and set up the PostgreSQL storage for Node.js
@@ -1170,6 +1285,7 @@ fn update_nodejs_package_json(out_path: &Path) -> Result<()> {
     if let Some(files) = package_json.get_mut("files") {
         if let Some(files_array) = files.as_array_mut() {
             files_array.push(serde_json::Value::String("storage/".to_string()));
+            files_array.push(serde_json::Value::String("tree-store/".to_string()));
             files_array.push(serde_json::Value::String("postgres-storage/".to_string()));
             files_array.push(serde_json::Value::String(
                 "postgres-tree-store/".to_string(),
@@ -1195,6 +1311,7 @@ fn update_nodejs_package_json(out_path: &Path) -> Result<()> {
             "breez_sdk_spark_wasm.js",
             "breez_sdk_spark_wasm.d.ts",
             "storage/",
+            "tree-store/",
             "postgres-storage/",
             "postgres-tree-store/",
             "postgres-token-store/",
@@ -1308,15 +1425,28 @@ const setupWebStorage = async () => {
     try {
         // Dynamic import of storage module
         const { createDefaultStorage } = await import('./storage/index.js');
-        
+
         // Make createDefaultStorage available globally for WASM to find
         globalThis.createDefaultStorage = createDefaultStorage;
-        
+
         console.log('Breez SDK: Web IndexedDB storage automatically enabled');
         storageSetupComplete = true;
     } catch (error) {
         console.warn('Breez SDK: Failed to load Web storage:', error.message);
         console.warn('Breez SDK: Storage operations may not work properly. Ignore this warning if you are not using the default storage.');
+    }
+
+    try {
+        // Dynamic import of the IndexedDB tree store module
+        const { createWebTreeStore } = await import('./tree-store/index.js');
+
+        // Make createDefaultTreeStore available globally for the WASM bridge to
+        // find. The browser store uses its own `-tree` database.
+        globalThis.createDefaultTreeStore = (dbName, logger) =>
+            createWebTreeStore(`${dbName}-tree`, logger);
+    } catch (error) {
+        console.warn('Breez SDK: Failed to load Web tree store:', error.message);
+        console.warn('Breez SDK: Tree state will not be persisted. Ignore this warning if you are not using the default storage.');
     }
 };
 
@@ -1383,6 +1513,10 @@ fn update_web_package_json(out_path: &Path) -> Result<()> {
         "./storage": {
             "import": "./storage/index.js",
             "default": "./storage/index.js"
+        },
+        "./tree-store": {
+            "import": "./tree-store/index.js",
+            "default": "./tree-store/index.js"
         }
     });
 
@@ -1392,6 +1526,7 @@ fn update_web_package_json(out_path: &Path) -> Result<()> {
     if let Some(files) = package_json.get_mut("files") {
         if let Some(files_array) = files.as_array_mut() {
             files_array.push(serde_json::Value::String("storage/".to_string()));
+            files_array.push(serde_json::Value::String("tree-store/".to_string()));
             files_array.push(serde_json::Value::String("index.js".to_string()));
         }
     } else {
@@ -1400,6 +1535,7 @@ fn update_web_package_json(out_path: &Path) -> Result<()> {
             "breez_sdk_spark_wasm.js",
             "breez_sdk_spark_wasm.d.ts",
             "storage/",
+            "tree-store/",
             "index.js"
         ]);
     }
@@ -1428,4 +1564,109 @@ fn update_web_package_json(out_path: &Path) -> Result<()> {
 
     println!("Updated Web package.json with storage configuration");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The WASM crate directory, resolved from this crate's manifest so the test
+    /// reads the real tree-store JS packages that shipping copies from.
+    fn wasm_crate_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("workspace root")
+            .join("crates/breez-sdk/wasm")
+    }
+
+    fn temp_out(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "breez-xtask-pkg-test-{}-{name}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp out dir");
+        dir
+    }
+
+    /// Guards the Node.js packaging wiring for the default tree store: the
+    /// better-sqlite3 store is copied in, the entry point exposes
+    /// `createDefaultTreeStore` backed by it, and the package ships the directory.
+    /// Without this a default Node SDK silently falls back to an in-memory tree.
+    #[test]
+    fn nodejs_packaging_wires_the_default_tree_store() {
+        let crate_dir = wasm_crate_dir();
+        let out = temp_out("node");
+
+        copy_nodejs_tree_store_files(&crate_dir, &out).expect("copy node tree store");
+        create_nodejs_entry_point(&out).expect("create node entry point");
+        fs::write(
+            out.join("package.json"),
+            r#"{"name":"t","version":"1.0.0"}"#,
+        )
+        .expect("seed package.json");
+        update_nodejs_package_json(&out).expect("update node package.json");
+
+        assert!(
+            out.join("tree-store/index.cjs").exists(),
+            "node tree store was not copied into the package"
+        );
+        let entry = fs::read_to_string(out.join("index.js")).expect("read node entry");
+        assert!(
+            entry.contains("global.createDefaultTreeStore"),
+            "node entry does not expose createDefaultTreeStore"
+        );
+        assert!(
+            entry.contains("./tree-store/index.cjs") && entry.contains("createNodeTreeStore"),
+            "node entry does not back createDefaultTreeStore with the tree store"
+        );
+        let pkg = fs::read_to_string(out.join("package.json")).expect("read node package.json");
+        assert!(
+            pkg.contains("tree-store/"),
+            "node package.json does not ship the tree-store directory"
+        );
+
+        let _ = fs::remove_dir_all(&out);
+    }
+
+    /// Guards the browser packaging wiring for the default tree store: the
+    /// IndexedDB store is copied in, the entry point exposes
+    /// `createDefaultTreeStore` backed by it, and the package ships and exports
+    /// the directory.
+    #[test]
+    fn web_packaging_wires_the_default_tree_store() {
+        let crate_dir = wasm_crate_dir();
+        let out = temp_out("web");
+
+        copy_web_tree_store_files(&crate_dir, &out).expect("copy web tree store");
+        create_web_entry_point(&out).expect("create web entry point");
+        fs::write(
+            out.join("package.json"),
+            r#"{"name":"t","version":"1.0.0"}"#,
+        )
+        .expect("seed package.json");
+        update_web_package_json(&out).expect("update web package.json");
+
+        assert!(
+            out.join("tree-store/index.js").exists(),
+            "web tree store was not copied into the package"
+        );
+        let entry = fs::read_to_string(out.join("index.js")).expect("read web entry");
+        assert!(
+            entry.contains("globalThis.createDefaultTreeStore"),
+            "web entry does not expose createDefaultTreeStore"
+        );
+        assert!(
+            entry.contains("./tree-store/index.js") && entry.contains("createWebTreeStore"),
+            "web entry does not back createDefaultTreeStore with the tree store"
+        );
+        let pkg = fs::read_to_string(out.join("package.json")).expect("read web package.json");
+        assert!(
+            pkg.contains("tree-store/") && pkg.contains("./tree-store"),
+            "web package.json does not ship and export the tree-store directory"
+        );
+
+        let _ = fs::remove_dir_all(&out);
+    }
 }

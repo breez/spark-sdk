@@ -49,7 +49,7 @@ use spark::{
     },
     tree::{
         AutoOptimizationEvent, AutoOptimizationEventHandler, InMemoryTreeStore, LeafOptimizer,
-        LeafSelection, OptimizationError, OptimizationOutcome, ReservationPurpose,
+        LeafPedigree, LeafSelection, OptimizationError, OptimizationOutcome, ReservationPurpose,
         SelectLeavesOptions, SynchronousTreeService, TargetAmounts, TreeNode, TreeNodeId,
         TreeService, TreeStore, select_leaves_by_target_amounts, with_reserved_leaves,
     },
@@ -736,9 +736,15 @@ impl SparkWallet {
         vout: u32,
     ) -> Result<Vec<WalletLeaf>, SparkWalletError> {
         let deposit_nodes = self.deposit_service.claim_deposit(tx, vout).await?;
-        self.tree_service
-            .insert_leaves(deposit_nodes.clone())
-            .await?;
+        // A deposit is a root: it carries no ancestors.
+        let pedigrees = deposit_nodes
+            .iter()
+            .map(|leaf| LeafPedigree {
+                leaf: leaf.clone(),
+                ancestors: Vec::new(),
+            })
+            .collect();
+        self.tree_service.insert_leaves(pedigrees).await?;
         info!("Claimed deposit root node: {:?}", deposit_nodes);
 
         self.maybe_start_optimization().await;
@@ -1373,50 +1379,35 @@ impl SparkWallet {
         Ok(transfer)
     }
 
-    /// Sources the exit tree (leaves plus ancestors) from the operators,
-    /// re-fetching by ID any root the bulk response omitted (legacy mainnet
-    /// trees skip it). An incomplete chain is left as-is for the planner to skip.
-    async fn source_exit_tree_nodes(
+    /// Loads the exit tree (each leaf plus its ancestor chain) from the durable
+    /// tree store, so an exit builds with the operators offline: whatever chain was
+    /// already stored is returned, and an incomplete one is left for the planner to
+    /// skip.
+    async fn load_exit_tree_nodes(
         &self,
         leaf_ids: &[TreeNodeId],
     ) -> Result<HashMap<TreeNodeId, TreeNode>, SparkWalletError> {
         debug!(
             leaves = leaf_ids.len(),
-            "source_exit_tree_nodes: fetching exit tree from the operators"
+            "load_exit_tree_nodes: loading exit tree from local storage"
         );
-        let mut tree_nodes: HashMap<TreeNodeId, TreeNode> = self
-            .tree_service
-            .fetch_nodes(leaf_ids, true)
-            .await?
-            .into_iter()
-            .map(|n| (n.id.clone(), n))
-            .collect();
+        let pedigrees = self.tree_service.load_exit_chains(leaf_ids).await?;
+        let mut tree_nodes: HashMap<TreeNodeId, TreeNode> = HashMap::new();
+        for pedigree in pedigrees {
+            for node in pedigree.ancestors {
+                tree_nodes.insert(node.id.clone(), node);
+            }
+            tree_nodes.insert(pedigree.leaf.id.clone(), pedigree.leaf);
+        }
         for leaf_id in leaf_ids {
-            let Some(leaf) = tree_nodes.get(leaf_id).cloned() else {
-                // Offline sourcing from local storage is deferred.
-                warn!("Requested leaf {leaf_id} not returned by the operators; cannot exit it");
-                continue;
-            };
-            let tree_service = self.tree_service.clone();
-            if let Err(e) =
-                spark::services::build_unilateral_exit_chain(leaf, &mut tree_nodes, move |ids| {
-                    let tree_service = tree_service.clone();
-                    async move {
-                        tree_service
-                            .fetch_nodes(&ids, true)
-                            .await
-                            .map_err(|e| ServiceError::Generic(format!("{e}")))
-                    }
-                })
-                .await
-            {
-                debug!("Exit chain for leaf {leaf_id} incomplete while sourcing tree nodes: {e}");
+            if !tree_nodes.contains_key(leaf_id) {
+                warn!("Leaf {leaf_id} is not in local storage; cannot exit it");
             }
         }
         debug!(
             requested = leaf_ids.len(),
-            sourced = tree_nodes.len(),
-            "source_exit_tree_nodes: exit tree sourced"
+            loaded = tree_nodes.len(),
+            "load_exit_tree_nodes: exit tree loaded"
         );
         Ok(tree_nodes)
     }
@@ -1459,6 +1450,15 @@ impl SparkWallet {
         }
     }
 
+    /// Best-effort refresh so an exit plans against the latest tree state.
+    /// Non-fatal: when the operators are unreachable the exit proceeds from
+    /// whatever the durable store already holds.
+    async fn refresh_before_exit(&self) {
+        if let Err(e) = self.tree_service.refresh_leaves().await {
+            warn!("unilateral exit: refresh failed, planning from local state: {e:?}");
+        }
+    }
+
     /// Quotes the funding needed for a unilateral exit of the selected leaves.
     pub async fn quote_unilateral_exit(
         &self,
@@ -1469,8 +1469,9 @@ impl SparkWallet {
         change_dust_limit: u64,
         destination_script_len: usize,
     ) -> Result<spark::services::UnilateralExitQuote, SparkWalletError> {
+        self.refresh_before_exit().await;
         let (leaf_ids, filter) = self.resolve_leaf_selection(selection).await?;
-        let tree_nodes = self.source_exit_tree_nodes(&leaf_ids).await?;
+        let tree_nodes = self.load_exit_tree_nodes(&leaf_ids).await?;
         Ok(spark::services::quote_unilateral_exit(
             &tree_nodes,
             &leaf_ids,
@@ -1483,7 +1484,7 @@ impl SparkWallet {
         )?)
     }
 
-    /// Prepares a unilateral exit of the selected leaves: sources the exit tree,
+    /// Prepares a unilateral exit of the selected leaves: loads the exit tree,
     /// plans it, and derives each leaf's P2TR refund address. `Auto` keeps only
     /// profitable leaves; `Specific` exits every requested one.
     pub async fn prepare_unilateral_exit_plan(
@@ -1493,8 +1494,9 @@ impl SparkWallet {
         inputs: Vec<CpfpInput>,
         destination_script_len: usize,
     ) -> Result<PreparedUnilateralExit, SparkWalletError> {
+        self.refresh_before_exit().await;
         let (leaf_ids, filter) = self.resolve_leaf_selection(selection).await?;
-        let tree_nodes = self.source_exit_tree_nodes(&leaf_ids).await?;
+        let tree_nodes = self.load_exit_tree_nodes(&leaf_ids).await?;
         let plan = spark::services::plan_unilateral_exit(
             tree_nodes,
             &leaf_ids,
@@ -2420,7 +2422,14 @@ async fn claim_transfer(
     tree_service: &Arc<dyn TreeService>,
 ) -> Result<Vec<TreeNode>, SparkWalletError> {
     let claimed_nodes = transfer_service.claim_transfer(transfer, None).await?;
-    let result_nodes = tree_service.insert_leaves(claimed_nodes).await?;
+    // Resolve each claimed leaf's ancestors now, while the operators are reachable
+    // (we just claimed through them), so insert_leaves persists complete chains
+    // without a fetch of its own. Best-effort: if the fetch fails, the leaves are
+    // stored without ancestors and completed by a later refresh.
+    let pedigrees = tree_service
+        .fetch_pedigrees_from_operators(&claimed_nodes)
+        .await;
+    let result_nodes = tree_service.insert_leaves(pedigrees).await?;
     Ok(result_nodes)
 }
 
@@ -2597,7 +2606,12 @@ impl BackgroundProcessor {
     async fn process_deposit_event(&self, deposit: TreeNode) -> Result<(), SparkWalletError> {
         let id = deposit.id.clone();
         info!("Inserting deposit leaf: {:?}", deposit);
-        self.tree_service.insert_leaves(vec![deposit]).await?;
+        // A deposit is a root: it carries no ancestors.
+        let pedigree = LeafPedigree {
+            leaf: deposit,
+            ancestors: Vec::new(),
+        };
+        self.tree_service.insert_leaves(vec![pedigree]).await?;
         self.event_manager
             .notify_listeners(WalletEvent::DepositConfirmed(id));
         self.maybe_start_optimization().await;

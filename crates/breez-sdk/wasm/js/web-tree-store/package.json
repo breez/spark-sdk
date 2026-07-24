@@ -1,0 +1,15 @@
+{
+  "name": "@breeztech/web-tree-store",
+  "version": "1.0.0",
+  "description": "Browser IndexedDB tree store implementation for Breez SDK WASM (ES module)",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./tree-store": "./index.js"
+  },
+  "sideEffects": false,
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

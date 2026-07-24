@@ -24,8 +24,8 @@ pub use spark::{
         TokenInputs, TokenMintInput, TokenOutputToSpend, TokenTransaction, TokenTransactionStatus,
         TokenTransferInput, TransferId, TransferObserver, TransferObserverError, TransferStatus,
         TransferTokenOutput, TransferType, UnilateralExitPlan, UnilateralExitSelectedLeaf, Utxo,
-        build_cpfp_child, build_unilateral_exit_chain, compute_sweep_fee, csv_timelock,
-        p2tr_key_path_input_weight, p2wpkh_input_weight, walk_unilateral_exit_chain,
+        build_cpfp_child, compute_sweep_fee, csv_timelock, p2tr_key_path_input_weight,
+        p2wpkh_input_weight, walk_unilateral_exit_chain,
     },
     session_store::*,
     signer::{
@@ -53,12 +53,12 @@ pub use spark::{
     },
     tree::{
         AutoOptimizationEvent, DEFAULT_MAX_CONCURRENT_RESERVATIONS, DEFAULT_RESERVATION_TIMEOUT,
-        InMemoryTreeStore, LeafLike, LeafOptimizationOptions, LeafSelection, Leaves,
+        InMemoryTreeStore, LeafLike, LeafOptimizationOptions, LeafPedigree, LeafSelection, Leaves,
         LeavesReservation, LeavesReservationId, OptimizationError, OptimizationOutcome,
         ReservationPurpose, ReserveResult, SelectLeavesOptions, SigningKeyshare, TargetAmounts,
         TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore, VerifiedLeafKeys,
-        select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
-        verified_leaf_keys_from_leaves,
+        assemble_exit_chains, ensure_node_compatible, select_leaves_by_minimum_amount,
+        select_leaves_by_target_amounts, verified_leaf_keys_from_leaves,
     },
     utils::frost::aggregate_frost,
     utils::{

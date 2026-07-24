@@ -10,9 +10,9 @@ use tracing::{info, trace, warn};
 use uuid::Uuid;
 
 use crate::tree::{
-    LeafSelection, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose,
-    ReserveResult, TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError,
-    TreeStore, select_helper,
+    LeafPedigree, LeafSelection, Leaves, LeavesReservation, LeavesReservationId,
+    ReservationPurpose, ReserveResult, TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus,
+    TreeServiceError, TreeStore, assemble_exit_chains, ensure_node_compatible, select_helper,
 };
 
 /// Default maximum number of concurrent reservations allowed.
@@ -21,7 +21,9 @@ pub const DEFAULT_MAX_CONCURRENT_RESERVATIONS: usize = 30;
 /// Default timeout for acquiring a reservation permit.
 pub const DEFAULT_RESERVATION_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// A leaf bundled with the timestamp it was added/returned to the pool.
+/// A leaf bundled with the timestamp it was added/returned to the pool. A leaf is
+/// spendable whenever its status is `Available` and every operator reports it;
+/// its ancestor chain matters only at exit time, not for balance or selection.
 #[derive(Clone)]
 struct StoredLeaf {
     node: TreeNode,
@@ -34,17 +36,21 @@ struct StoredLeaf {
 }
 
 impl StoredLeaf {
-    fn available(node: &TreeNode, added_at: SystemTime) -> Self {
-        StoredLeaf {
+    fn from_pedigree(pedigree: &LeafPedigree, added_at: SystemTime) -> Self {
+        Self::from_node(&pedigree.leaf, added_at)
+    }
+
+    fn from_node(node: &TreeNode, added_at: SystemTime) -> Self {
+        Self {
             node: node.clone(),
             added_at,
             missing_from_operators: false,
         }
     }
 
-    fn missing_from_operators(node: &TreeNode, added_at: SystemTime) -> Self {
-        StoredLeaf {
-            node: node.clone(),
+    fn from_pedigree_missing(pedigree: &LeafPedigree, added_at: SystemTime) -> Self {
+        Self {
+            node: pedigree.leaf.clone(),
             added_at,
             missing_from_operators: true,
         }
@@ -68,6 +74,9 @@ struct ReservationEntry {
 struct LeavesState {
     /// Every unreserved leaf, whether or not the operators all reported it.
     leaves: HashMap<TreeNodeId, StoredLeaf>,
+    /// Ancestor nodes by id, never leaves. A leaf lives only in `leaves` or a
+    /// reservation; the intermediate nodes an exit walks through live here.
+    ancestors: HashMap<TreeNodeId, TreeNode>,
     leaves_reservations: HashMap<LeavesReservationId, ReservationEntry>,
     /// Leaf IDs that have been finalized (spent) with their spent timestamp.
     /// Prevents re-adding during refresh. Cleaned up when leaf is no longer
@@ -109,15 +118,19 @@ impl LeavesState {
 /// Commands sent to the store processor.
 enum StoreCommand {
     AddLeaves {
-        leaves: Vec<TreeNode>,
+        leaves: Vec<LeafPedigree>,
         response_tx: oneshot::Sender<Result<(), TreeServiceError>>,
     },
     GetLeaves {
         response_tx: oneshot::Sender<Result<Leaves, TreeServiceError>>,
     },
+    GetExitChains {
+        leaf_ids: Vec<TreeNodeId>,
+        response_tx: oneshot::Sender<Result<Vec<LeafPedigree>, TreeServiceError>>,
+    },
     SetLeaves {
-        leaves: Vec<TreeNode>,
-        missing_operators_leaves: Vec<TreeNode>,
+        leaves: Vec<LeafPedigree>,
+        missing_operators_leaves: Vec<LeafPedigree>,
         refresh_started_at: SystemTime,
         response_tx: oneshot::Sender<Result<(), TreeServiceError>>,
     },
@@ -135,13 +148,13 @@ enum StoreCommand {
     },
     FinalizeReservation {
         id: LeavesReservationId,
-        new_leaves: Option<Vec<TreeNode>>,
+        new_leaves: Option<Vec<LeafPedigree>>,
         response_tx: oneshot::Sender<Result<(), TreeServiceError>>,
     },
     UpdateReservation {
         reservation_id: LeavesReservationId,
-        reserved_leaves: Vec<TreeNode>,
-        change_leaves: Vec<TreeNode>,
+        reserved_leaves: Vec<LeafPedigree>,
+        change_leaves: Vec<LeafPedigree>,
         response_tx: oneshot::Sender<Result<LeavesReservation, TreeServiceError>>,
     },
     ReserveLeavesByIds {
@@ -248,6 +261,13 @@ impl InMemoryTreeStore {
                     let result = Self::process_get_leaves(&state);
                     let _ = response_tx.send(result);
                 }
+                StoreCommand::GetExitChains {
+                    leaf_ids,
+                    response_tx,
+                } => {
+                    let result = Self::process_get_exit_chains(&state, &leaf_ids);
+                    let _ = response_tx.send(result);
+                }
                 StoreCommand::SetLeaves {
                     leaves,
                     missing_operators_leaves,
@@ -283,8 +303,8 @@ impl InMemoryTreeStore {
                     leaves_to_keep,
                     response_tx,
                 } => {
-                    Self::process_cancel_reservation(&mut state, &id, &leaves_to_keep);
-                    let _ = response_tx.send(Ok(()));
+                    let result = Self::process_cancel_reservation(&mut state, &id, &leaves_to_keep);
+                    let _ = response_tx.send(result);
                 }
                 StoreCommand::FinalizeReservation {
                     id,
@@ -292,8 +312,9 @@ impl InMemoryTreeStore {
                     response_tx,
                 } => {
                     // Permit is automatically released when ReservationEntry is dropped
-                    Self::process_finalize_reservation(&mut state, &id, new_leaves.as_deref());
-                    let _ = response_tx.send(Ok(()));
+                    let result =
+                        Self::process_finalize_reservation(&mut state, &id, new_leaves.as_deref());
+                    let _ = response_tx.send(result);
                 }
                 StoreCommand::UpdateReservation {
                     reservation_id,
@@ -352,10 +373,15 @@ impl InMemoryTreeStore {
 
     fn process_add_leaves(
         state: &mut LeavesState,
-        leaves: &[TreeNode],
+        leaves: &[LeafPedigree],
     ) -> Result<(), TreeServiceError> {
         let now = SystemTime::now();
-        for leaf in leaves {
+        for pedigree in leaves {
+            Self::upsert_ancestors(state, &pedigree.ancestors)?;
+            let leaf = &pedigree.leaf;
+            if let Some(existing) = Self::find_node(state, &leaf.id) {
+                ensure_node_compatible(&existing, leaf)?;
+            }
             let mut updated_in_reservation: Option<LeavesReservationId> = None;
             for (res_id, entry) in &mut state.leaves_reservations {
                 if let Some(stored) = entry.leaves.iter_mut().find(|s| s.node.id == leaf.id) {
@@ -376,13 +402,9 @@ impl InMemoryTreeStore {
                 "leaf_lifecycle add_leaves: leaf={} value={} cleared_spent_marker={}",
                 leaf.id, leaf.value, was_spent
             );
-            // Overwrites any missing-from-operators entry for the same id: a
-            // refresh racing an in-flight claim classifies the claimed leaves as
-            // missing (the coordinator has them, a lagging operator does not),
-            // and the claim then adds the very same leaves.
             state
                 .leaves
-                .insert(leaf.id.clone(), StoredLeaf::available(leaf, now));
+                .insert(leaf.id.clone(), StoredLeaf::from_pedigree(pedigree, now));
         }
         Ok(())
     }
@@ -407,14 +429,12 @@ impl InMemoryTreeStore {
         let mut not_available = Vec::new();
         let mut available_missing_from_operators = Vec::new();
         for stored in state.leaves.values() {
-            let is_available = stored.node.status == TreeNodeStatus::Available;
-            match (stored.missing_from_operators, is_available) {
-                (true, true) => available_missing_from_operators.push(stored.node.clone()),
-                // A leaf the operators no longer report and that is not available
-                // is not spendable under any classification: leave it out.
-                (true, false) => (),
-                (false, true) => available.push(stored.node.clone()),
-                (false, false) => not_available.push(stored.node.clone()),
+            if stored.node.status != TreeNodeStatus::Available {
+                not_available.push(stored.node.clone());
+            } else if stored.missing_from_operators {
+                available_missing_from_operators.push(stored.node.clone());
+            } else {
+                available.push(stored.node.clone());
             }
         }
 
@@ -427,10 +447,90 @@ impl InMemoryTreeStore {
         })
     }
 
+    fn upsert_ancestors(
+        state: &mut LeavesState,
+        nodes: &[TreeNode],
+    ) -> Result<(), TreeServiceError> {
+        for node in nodes {
+            if let Some(existing) = state.ancestors.get(&node.id) {
+                ensure_node_compatible(existing, node)?;
+            }
+            state.ancestors.insert(node.id.clone(), node.clone());
+        }
+        Ok(())
+    }
+
+    /// Looks a node up wherever it lives: the leaf pool, a reservation, or the
+    /// ancestors.
+    fn find_node(state: &LeavesState, id: &TreeNodeId) -> Option<TreeNode> {
+        if let Some(stored) = state.leaves.get(id) {
+            return Some(stored.node.clone());
+        }
+        for entry in state.leaves_reservations.values() {
+            if let Some(stored) = entry.leaves.iter().find(|s| &s.node.id == id) {
+                return Some(stored.node.clone());
+            }
+        }
+        state.ancestors.get(id).cloned()
+    }
+
+    /// Drops ancestors no longer reachable from any leaf: a deleted leaf's
+    /// unshared ancestors go, while ancestors still shared by another leaf stay.
+    fn gc_ancestors(state: &mut LeavesState) {
+        let mut stack: Vec<TreeNodeId> = state
+            .leaves
+            .values()
+            .map(|s| &s.node)
+            .chain(
+                state
+                    .leaves_reservations
+                    .values()
+                    .flat_map(|e| e.leaves.iter().map(|s| &s.node)),
+            )
+            .filter_map(|n| n.parent_node_id.clone())
+            .collect();
+        let mut reachable: HashSet<TreeNodeId> = HashSet::new();
+        while let Some(id) = stack.pop() {
+            if !reachable.insert(id.clone()) {
+                continue;
+            }
+            if let Some(parent) = state
+                .ancestors
+                .get(&id)
+                .and_then(|a| a.parent_node_id.clone())
+            {
+                stack.push(parent);
+            }
+        }
+        state.ancestors.retain(|id, _| reachable.contains(id));
+    }
+
+    fn process_get_exit_chains(
+        state: &LeavesState,
+        leaf_ids: &[TreeNodeId],
+    ) -> Result<Vec<LeafPedigree>, TreeServiceError> {
+        // Gather every node a chain might walk through (ancestors, then reserved
+        // leaves, then pool leaves so a leaf wins over an ancestor of the same id,
+        // matching `find_node`), then shape each requested chain in one pass.
+        let mut nodes: HashMap<TreeNodeId, TreeNode> = HashMap::new();
+        for (id, node) in &state.ancestors {
+            nodes.insert(id.clone(), node.clone());
+        }
+        for entry in state.leaves_reservations.values() {
+            for stored in &entry.leaves {
+                nodes.insert(stored.node.id.clone(), stored.node.clone());
+            }
+        }
+        for (id, stored) in &state.leaves {
+            nodes.insert(id.clone(), stored.node.clone());
+        }
+        Ok(assemble_exit_chains(&nodes, leaf_ids))
+    }
+
     fn process_set_leaves(
         state: &mut LeavesState,
-        leaves: &[TreeNode],
-        missing_operators_leaves: &[TreeNode],
+        leaves: &[LeafPedigree],
+        missing_operators_leaves: &[LeafPedigree],
         refresh_started_at: SystemTime,
     ) -> Result<(), TreeServiceError> {
         let has_active_swap = state
@@ -474,9 +574,15 @@ impl InMemoryTreeStore {
             .retain(|_, spent_at| *spent_at >= refresh_started_at);
 
         let old_leaves = std::mem::take(&mut state.leaves);
+        let old_leaf_ids: Vec<TreeNodeId> = old_leaves.keys().cloned().collect();
 
         let now = SystemTime::now();
-        for leaf in leaves {
+        for pedigree in leaves {
+            Self::upsert_ancestors(state, &pedigree.ancestors)?;
+            let leaf = &pedigree.leaf;
+            if let Some(old) = old_leaves.get(&leaf.id) {
+                ensure_node_compatible(&old.node, leaf)?;
+            }
             if !state.spent_leaf_ids.contains_key(&leaf.id) {
                 let was_present = old_leaves.contains_key(&leaf.id);
                 if !was_present {
@@ -487,7 +593,7 @@ impl InMemoryTreeStore {
                 }
                 state
                     .leaves
-                    .insert(leaf.id.clone(), StoredLeaf::available(leaf, now));
+                    .insert(leaf.id.clone(), StoredLeaf::from_pedigree(pedigree, now));
             } else {
                 trace!(
                     "leaf_lifecycle set_leaves: skipped leaf={} (in spent_leaf_ids)",
@@ -498,11 +604,13 @@ impl InMemoryTreeStore {
         // Applied after the available leaves so that a leaf the coordinator
         // reports in both lists ends up flagged missing, matching the upsert
         // order of the SQL stores.
-        for leaf in missing_operators_leaves {
+        for pedigree in missing_operators_leaves {
+            Self::upsert_ancestors(state, &pedigree.ancestors)?;
+            let leaf = &pedigree.leaf;
             if !state.spent_leaf_ids.contains_key(&leaf.id) {
                 state.leaves.insert(
                     leaf.id.clone(),
-                    StoredLeaf::missing_from_operators(leaf, now),
+                    StoredLeaf::from_pedigree_missing(pedigree, now),
                 );
             }
         }
@@ -523,9 +631,15 @@ impl InMemoryTreeStore {
         for entry in state.leaves_reservations.values_mut() {
             for stored in &mut entry.leaves {
                 if let Some(fresh) = state.leaves.remove(&stored.node.id) {
+                    ensure_node_compatible(&stored.node, &fresh.node)?;
                     *stored = fresh;
                 }
             }
+        }
+
+        // Only a dropped leaf can orphan an ancestor; skip the walk otherwise.
+        if old_leaf_ids.iter().any(|id| !state.leaves.contains_key(id)) {
+            Self::gc_ancestors(state);
         }
 
         trace!(
@@ -557,6 +671,7 @@ impl InMemoryTreeStore {
         let available = state.available_balance();
         let pending = state.pending_balance();
 
+        // Filter to the selectable pool (available and reported by all operators)
         let leaves: Vec<TreeNode> = state
             .selectable_leaves()
             .map(|stored| stored.node.clone())
@@ -665,7 +780,7 @@ impl InMemoryTreeStore {
         state: &mut LeavesState,
         id: &LeavesReservationId,
         leaves_to_keep: &[TreeNode],
-    ) {
+    ) -> Result<(), TreeServiceError> {
         let removed = state.leaves_reservations.remove(id);
         let purpose = removed.as_ref().map(|e| e.purpose);
         let prior_ids: Vec<TreeNodeId> = removed
@@ -682,12 +797,16 @@ impl InMemoryTreeStore {
             id, purpose, prior_ids, keep_ids, dropped_ids
         );
 
+        // The kept leaves' ancestors stayed in the store the whole time the leaves
+        // were reserved (gc keeps chains reachable from a reservation), so returning
+        // a leaf to the pool needs only the leaf: its chain is already present.
         let now = SystemTime::now();
         for leaf in leaves_to_keep {
             state
                 .leaves
-                .insert(leaf.id.clone(), StoredLeaf::available(leaf, now));
+                .insert(leaf.id.clone(), StoredLeaf::from_node(leaf, now));
         }
+        Ok(())
     }
 
     /// Finalize a reservation (leaves are consumed) and optionally add new leaves.
@@ -695,9 +814,10 @@ impl InMemoryTreeStore {
     fn process_finalize_reservation(
         state: &mut LeavesState,
         id: &LeavesReservationId,
-        new_leaves: Option<&[TreeNode]>,
-    ) {
-        if let Some(entry) = state.leaves_reservations.remove(id) {
+        new_leaves: Option<&[LeafPedigree]>,
+    ) -> Result<(), TreeServiceError> {
+        let removed = state.leaves_reservations.remove(id);
+        if let Some(entry) = &removed {
             let now = SystemTime::now();
             for stored in &entry.leaves {
                 trace!(
@@ -716,17 +836,27 @@ impl InMemoryTreeStore {
 
         if let Some(resulting_leaves) = new_leaves {
             let now = SystemTime::now();
-            for leaf in resulting_leaves {
+            for pedigree in resulting_leaves {
+                Self::upsert_ancestors(state, &pedigree.ancestors)?;
+                let leaf = &pedigree.leaf;
+                if let Some(existing) = Self::find_node(state, &leaf.id) {
+                    ensure_node_compatible(&existing, leaf)?;
+                }
                 trace!(
                     "leaf_lifecycle finalize: adding new leaf={} value={} reservation={}",
                     leaf.id, leaf.value, id
                 );
                 state
                     .leaves
-                    .insert(leaf.id.clone(), StoredLeaf::available(leaf, now));
+                    .insert(leaf.id.clone(), StoredLeaf::from_pedigree(pedigree, now));
             }
         }
+        // Only a consumed (removed) reservation can orphan an ancestor.
+        if removed.is_some() {
+            Self::gc_ancestors(state);
+        }
         trace!("Finalized leaves reservation: {}", id);
+        Ok(())
     }
 
     /// Updates a reservation after a swap operation.
@@ -736,8 +866,8 @@ impl InMemoryTreeStore {
     fn process_update_reservation(
         state: &mut LeavesState,
         reservation_id: &LeavesReservationId,
-        reserved_leaves: &[TreeNode],
-        change_leaves: &[TreeNode],
+        reserved_leaves: &[LeafPedigree],
+        change_leaves: &[LeafPedigree],
     ) -> Result<LeavesReservation, TreeServiceError> {
         // Remove the existing reservation to get the permit
         let old_entry = state
@@ -750,22 +880,25 @@ impl InMemoryTreeStore {
         let permit = old_entry._permit;
 
         let now = SystemTime::now();
-        for leaf in change_leaves {
+        for pedigree in change_leaves {
+            Self::upsert_ancestors(state, &pedigree.ancestors)?;
             trace!(
                 "leaf_lifecycle update_reservation: adding change leaf={} value={} reservation={}",
-                leaf.id, leaf.value, reservation_id
+                pedigree.leaf.id, pedigree.leaf.value, reservation_id
             );
-            state
-                .leaves
-                .insert(leaf.id.clone(), StoredLeaf::available(leaf, now));
+            state.leaves.insert(
+                pedigree.leaf.id.clone(),
+                StoredLeaf::from_pedigree(pedigree, now),
+            );
         }
 
         // Re-insert the reservation with updated leaves but same permit
         // Pending change is cleared since the swap completed
-        let reserved: Vec<StoredLeaf> = reserved_leaves
-            .iter()
-            .map(|leaf| StoredLeaf::available(leaf, now))
-            .collect();
+        let mut reserved: Vec<StoredLeaf> = Vec::with_capacity(reserved_leaves.len());
+        for pedigree in reserved_leaves {
+            Self::upsert_ancestors(state, &pedigree.ancestors)?;
+            reserved.push(StoredLeaf::from_pedigree(pedigree, now));
+        }
         state.leaves_reservations.insert(
             reservation_id.clone(),
             ReservationEntry {
@@ -803,13 +936,7 @@ impl InMemoryTreeStore {
             return Err(TreeServiceError::NonReservableLeaves);
         }
         for leaf in leaves {
-            // A leaf the operators no longer report cannot back a payment or a
-            // swap, even though it still counts towards the balance.
-            let reservable = state
-                .leaves
-                .get(&leaf.id)
-                .is_some_and(|stored| !stored.missing_from_operators);
-            if !reservable {
+            if !state.leaves.contains_key(&leaf.id) {
                 return Err(TreeServiceError::NonReservableLeaves);
             }
         }
@@ -853,7 +980,9 @@ impl InMemoryTreeStore {
                 .leaves
                 .get(id)
                 .ok_or(TreeServiceError::NonReservableLeaves)?;
-            if stored.node.status != TreeNodeStatus::Available {
+            // A leaf the operators no longer report cannot back a payment or a
+            // swap, even though it still counts towards the balance.
+            if stored.node.status != TreeNodeStatus::Available || stored.missing_from_operators {
                 return Err(TreeServiceError::NonReservableLeaves);
             }
             selected.push(stored.node.clone());
@@ -886,7 +1015,7 @@ impl Default for InMemoryTreeStore {
 
 #[macros::async_trait]
 impl TreeStore for InMemoryTreeStore {
-    async fn add_leaves(&self, leaves: &[TreeNode]) -> Result<(), TreeServiceError> {
+    async fn add_leaves(&self, leaves: &[LeafPedigree]) -> Result<(), TreeServiceError> {
         let leaves = leaves.to_vec();
         self.send_command(|tx| StoreCommand::AddLeaves {
             leaves,
@@ -900,10 +1029,22 @@ impl TreeStore for InMemoryTreeStore {
             .await
     }
 
+    async fn get_exit_chains(
+        &self,
+        leaf_ids: &[TreeNodeId],
+    ) -> Result<Vec<LeafPedigree>, TreeServiceError> {
+        let leaf_ids = leaf_ids.to_vec();
+        self.send_command(|tx| StoreCommand::GetExitChains {
+            leaf_ids,
+            response_tx: tx,
+        })
+        .await
+    }
+
     async fn set_leaves(
         &self,
-        leaves: &[TreeNode],
-        missing_operators_leaves: &[TreeNode],
+        leaves: &[LeafPedigree],
+        missing_operators_leaves: &[LeafPedigree],
         refresh_started_at: SystemTime,
     ) -> Result<(), TreeServiceError> {
         let leaves = leaves.to_vec();
@@ -935,10 +1076,10 @@ impl TreeStore for InMemoryTreeStore {
     async fn finalize_reservation(
         &self,
         id: &LeavesReservationId,
-        new_leaves: Option<&[TreeNode]>,
+        new_leaves: Option<&[LeafPedigree]>,
     ) -> Result<(), TreeServiceError> {
         let id = id.clone();
-        let new_leaves = new_leaves.map(<[TreeNode]>::to_vec);
+        let new_leaves = new_leaves.map(<[LeafPedigree]>::to_vec);
         self.send_command(|tx| StoreCommand::FinalizeReservation {
             id,
             new_leaves,
@@ -1032,8 +1173,8 @@ impl TreeStore for InMemoryTreeStore {
     async fn update_reservation(
         &self,
         reservation_id: &LeavesReservationId,
-        reserved_leaves: &[TreeNode],
-        change_leaves: &[TreeNode],
+        reserved_leaves: &[LeafPedigree],
+        change_leaves: &[LeafPedigree],
     ) -> Result<LeavesReservation, TreeServiceError> {
         let reservation_id = reservation_id.clone();
         let reserved_leaves = reserved_leaves.to_vec();
@@ -1070,6 +1211,61 @@ mod tests {
     }
 
     #[async_test_all]
+    async fn test_upsert_and_get_leaf() {
+        shared_tests::test_upsert_and_get_leaf(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_get_exit_chains() {
+        shared_tests::test_get_exit_chains(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_get_exit_chain_missing_ancestor() {
+        shared_tests::test_get_exit_chain_missing_ancestor(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_incomplete_pedigree_still_spendable() {
+        shared_tests::test_incomplete_pedigree_still_spendable(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_exit_chain_after_swap_update() {
+        shared_tests::test_exit_chain_after_swap_update(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_exit_chain_after_cancel_reparent() {
+        shared_tests::test_exit_chain_after_cancel_reparent(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_node_update_in_place() {
+        shared_tests::test_node_update_in_place(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_leaf_reparented_by_renewal() {
+        shared_tests::test_leaf_reparented_by_renewal(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_ancestor_not_returned_as_leaf() {
+        shared_tests::test_ancestor_not_returned_as_leaf(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_unshared_ancestor_deleted_with_leaf() {
+        shared_tests::test_unshared_ancestor_deleted_with_leaf(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_shared_ancestor_survives_leaf_deletion() {
+        shared_tests::test_shared_ancestor_survives_leaf_deletion(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
     async fn test_add_leaves() {
         shared_tests::test_add_leaves(&InMemoryTreeStore::new()).await;
     }
@@ -1077,6 +1273,26 @@ mod tests {
     #[async_test_all]
     async fn test_add_leaves_duplicate_ids() {
         shared_tests::test_add_leaves_duplicate_ids(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_add_leaves_clears_missing_from_operators() {
+        shared_tests::test_add_leaves_clears_missing_from_operators(&InMemoryTreeStore::new())
+            .await;
+    }
+
+    #[async_test_all]
+    async fn test_missing_from_operators_leaves_are_not_selectable() {
+        shared_tests::test_missing_from_operators_leaves_are_not_selectable(
+            &InMemoryTreeStore::new(),
+        )
+        .await;
+    }
+
+    #[async_test_all]
+    async fn test_missing_from_operators_leaf_not_available() {
+        shared_tests::test_missing_from_operators_leaf_not_available(&InMemoryTreeStore::new())
+            .await;
     }
 
     #[async_test_all]
@@ -1141,6 +1357,12 @@ mod tests {
     #[async_test_all]
     async fn test_cancel_reservation_nonexistent() {
         shared_tests::test_cancel_reservation_nonexistent(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_cancel_reservation_nonexistent_keeps_leaves() {
+        shared_tests::test_cancel_reservation_nonexistent_keeps_leaves(&InMemoryTreeStore::new())
+            .await;
     }
 
     #[async_test_all]
@@ -1351,20 +1573,6 @@ mod tests {
     async fn test_missing_operators_replaced_on_set_leaves() {
         shared_tests::test_missing_operators_replaced_on_set_leaves(&InMemoryTreeStore::new())
             .await;
-    }
-
-    #[async_test_all]
-    async fn test_add_leaves_clears_missing_from_operators() {
-        shared_tests::test_add_leaves_clears_missing_from_operators(&InMemoryTreeStore::new())
-            .await;
-    }
-
-    #[async_test_all]
-    async fn test_missing_from_operators_leaves_are_not_selectable() {
-        shared_tests::test_missing_from_operators_leaves_are_not_selectable(
-            &InMemoryTreeStore::new(),
-        )
-        .await;
     }
 
     #[async_test_all]

@@ -33,9 +33,17 @@ impl StorageBackend for SqliteBackend {
             PublicKey::from_slice(&identity).map_err(|e| SdkError::Generic(e.to_string()))?;
         let db_path = crate::default_storage_path(&self.storage_dir, &network, &identity)?;
         let storage = Arc::new(SqliteStorage::new(&db_path)?);
+        let db_path = storage.get_db_path();
+        let db_path = db_path
+            .to_str()
+            .ok_or_else(|| SdkError::Generic("storage path is not valid UTF-8".to_string()))?;
+        let tree_store = Arc::new(
+            spark_sqlite::SqliteTreeStore::new(db_path)
+                .map_err(|e| SdkError::Generic(e.to_string()))?,
+        );
         Ok(Arc::new(ResolvedStores {
             storage,
-            tree_store: None,
+            tree_store: Some(tree_store),
             token_output_store: None,
             session_store: None,
         }))

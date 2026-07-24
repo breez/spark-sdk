@@ -10,7 +10,7 @@ test-utils = ["spark-wallet/test-utils"]
 # Passkey functionality
 passkey = ["dep:nostr", "dep:nostr-sdk"]
 # SQLite storage backend (optional). File-based; native-only.
-sqlite = ["dep:rusqlite", "dep:rusqlite_migration"]
+sqlite = ["dep:rusqlite", "dep:rusqlite_migration", "dep:spark-sqlite"]
 # PostgreSQL storage backend (optional, for server-side use cases)
 postgres = [
     "dep:spark-postgres",
@@ -59,6 +59,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 spark-mysql = { workspace = true, optional = true }
 spark-postgres = { workspace = true, optional = true }
+spark-sqlite = { workspace = true, optional = true }
 rusqlite = { workspace = true, optional = true }
 rusqlite_migration = { workspace = true, optional = true }
 spark-wallet.workspace = true
