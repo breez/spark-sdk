@@ -756,28 +756,10 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
     }
 }
 
-// PostgreSQL tests - only run when LNURL_TEST_POSTGRES_URL is set.
-// Example: LNURL_TEST_POSTGRES_URL="postgres://user:pass@localhost/lnurl_test" cargo test
 #[cfg(test)]
 mod postgres_tests {
     use crate::repository::shared_tests;
-
-    /// Connects, migrates, and clears `allowed_domains` for a clean slate.
-    /// Returns `None` (skipping the test) when `LNURL_TEST_POSTGRES_URL` is unset.
-    async fn setup_pool() -> Option<sqlx::PgPool> {
-        let url = std::env::var("LNURL_TEST_POSTGRES_URL").ok()?;
-        let pool = sqlx::PgPool::connect(&url).await.unwrap();
-        crate::postgresql::run_migrations(&pool).await.unwrap();
-        sqlx::query("DELETE FROM domain_attribution")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("DELETE FROM allowed_domains")
-            .execute(&pool)
-            .await
-            .unwrap();
-        Some(pool)
-    }
+    use crate::test_support::test_pool;
 
     /// Seed `a.com` with an api key the way admins do: allowlist it, then set its
     /// key in the attribution table.
@@ -794,9 +776,7 @@ mod postgres_tests {
 
     #[tokio::test]
     async fn list_domains_surfaces_api_keys() {
-        let Some(pool) = setup_pool().await else {
-            return;
-        };
+        let pool = test_pool("list_domains_surfaces_api_keys").await;
         seed_domain_with_api_key(&pool).await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::list_domains_surfaces_api_keys(&db).await;
@@ -804,9 +784,7 @@ mod postgres_tests {
 
     #[tokio::test]
     async fn set_domain_jwt_round_trips() {
-        let Some(pool) = setup_pool().await else {
-            return;
-        };
+        let pool = test_pool("set_domain_jwt_round_trips").await;
         seed_domain_with_api_key(&pool).await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::set_domain_jwt_round_trips(&db).await;
@@ -814,18 +792,14 @@ mod postgres_tests {
 
     #[tokio::test]
     async fn registering_taken_name_with_other_pubkey_is_rejected() {
-        let Some(pool) = setup_pool().await else {
-            return;
-        };
+        let pool = test_pool("registering_taken_name_rejected").await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::registering_taken_name_with_other_pubkey_is_rejected(&db).await;
     }
 
     #[tokio::test]
     async fn deleting_a_name_the_pubkey_no_longer_holds_is_a_no_op() {
-        let Some(pool) = setup_pool().await else {
-            return;
-        };
+        let pool = test_pool("deleting_name_not_held_no_op").await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::deleting_a_name_the_pubkey_no_longer_holds_is_a_no_op(&db).await;
     }

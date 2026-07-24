@@ -47,6 +47,12 @@ test: cargo-test wasm-test
 cargo-test:
 	cargo xtask test
 
+# The lnurl server is out of the workspace and its tests need a postgres to run
+# against, so they are not part of cargo-test. LNURL_TEST_POSTGRES_URL must point
+# at a disposable instance: the tests create and drop schemas in it.
+lnurl-test:
+	cargo test --manifest-path crates/breez-sdk/lnurl/Cargo.toml
+
 wasm-test: wasm-test-browser wasm-test-node wasm-test-mysql-timezone
 
 wasm-test-browser:

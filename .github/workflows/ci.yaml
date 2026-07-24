@@ -125,7 +125,37 @@ jobs:
 
       - name: Check git status
         uses: ./.github/actions/check-git-status
-  
+
+  lnurl-test:
+    name: LNURL server tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: lnurl_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      LNURL_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/lnurl_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Tests
+        run: make lnurl-test
+
   breez-test:
     name: Breez integration tests
     runs-on: ubuntu-latest
