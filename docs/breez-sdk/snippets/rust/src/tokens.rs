@@ -139,12 +139,12 @@ async fn send_token_batch(sdk: &BreezSdk) -> Result<()> {
     // names its own token and amount needs neither here.
     let recipients = vec![
         TokenBatchRecipient {
-            destination: "<spark address>".to_string(),
+            payment_request: "<spark address>".to_string(),
             amount: Some(1_000),
             token_identifier: Some("<token identifier>".to_string()),
         },
         TokenBatchRecipient {
-            destination: "<spark invoice>".to_string(),
+            payment_request: "<spark invoice>".to_string(),
             amount: None,
             token_identifier: None,
         },

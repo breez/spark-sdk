@@ -2,10 +2,10 @@ use spark_wallet::{SparkAddress, TokenRecipient};
 
 use crate::{
     error::SdkError,
-    events::SdkEvent,
     models::{
         ListPaymentsRequest, Payment, PaymentDetails, PaymentDetailsFilter,
         ResolvedTokenBatchRecipient, SendTokenBatchRequest, SendTokenBatchResponse,
+        TokenBatchDestination,
     },
     sdk::BreezSdk,
     signer::ExternalPreparedTokenTransaction,
@@ -30,7 +30,7 @@ pub(in crate::sdk) async fn send(
     )
     .await?;
 
-    emit_payments(sdk, &payments).await;
+    super::emit_payments(sdk, &payments).await;
 
     Ok(SendTokenBatchResponse { payments })
 }
@@ -44,21 +44,20 @@ pub(in crate::sdk) fn to_token_recipients(
 ) -> Result<Vec<TokenRecipient>, SdkError> {
     recipients
         .iter()
-        .map(|recipient| {
-            if recipient.invoice_details.is_some() {
-                return Ok(TokenRecipient::Invoice {
-                    invoice: recipient.destination.clone(),
+        .map(|recipient| match &recipient.destination {
+            TokenBatchDestination::SparkInvoice { invoice_details } => {
+                Ok(TokenRecipient::Invoice {
+                    invoice: invoice_details.invoice.clone(),
                     amount: Some(recipient.amount),
-                });
+                })
             }
-            Ok(TokenRecipient::Address {
+            TokenBatchDestination::SparkAddress { address } => Ok(TokenRecipient::Address {
                 token_id: recipient.token_identifier.clone(),
                 amount: recipient.amount,
-                receiver_address: recipient
-                    .destination
+                receiver_address: address
                     .parse::<SparkAddress>()
                     .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?,
-            })
+            }),
         })
         .collect()
 }
@@ -118,12 +117,4 @@ fn vout_of(payment_id: &str) -> u32 {
         .rsplit_once(':')
         .and_then(|(_, vout)| vout.parse().ok())
         .unwrap_or(u32::MAX)
-}
-
-pub(in crate::sdk) async fn emit_payments(sdk: &BreezSdk, payments: &[Payment]) {
-    for payment in payments {
-        sdk.event_emitter
-            .emit(&SdkEvent::from_payment(payment.clone()))
-            .await;
-    }
 }

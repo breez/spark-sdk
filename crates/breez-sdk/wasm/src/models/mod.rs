@@ -1317,7 +1317,7 @@ pub struct SendPaymentRequest {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::TokenBatchRecipient)]
 pub struct TokenBatchRecipient {
-    pub destination: String,
+    pub payment_request: String,
     pub amount: Option<u128>,
     pub token_identifier: Option<String>,
 }
@@ -1327,12 +1327,21 @@ pub struct PrepareSendTokenBatchRequest {
     pub recipients: Vec<TokenBatchRecipient>,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TokenBatchDestination)]
+pub enum TokenBatchDestination {
+    SparkAddress {
+        address: String,
+    },
+    SparkInvoice {
+        invoice_details: SparkInvoiceDetails,
+    },
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ResolvedTokenBatchRecipient)]
 pub struct ResolvedTokenBatchRecipient {
-    pub destination: String,
+    pub destination: TokenBatchDestination,
     pub amount: u128,
     pub token_identifier: String,
-    pub invoice_details: Option<SparkInvoiceDetails>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::TokenBatchTotal)]

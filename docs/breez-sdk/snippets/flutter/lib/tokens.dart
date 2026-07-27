@@ -115,12 +115,12 @@ Future<void> sendTokenBatch(BreezSdk sdk) async {
   // names its own token and amount needs neither here.
   final recipients = [
     TokenBatchRecipient(
-      destination: '<spark address>',
+      paymentRequest: '<spark address>',
       amount: BigInt.from(1000),
       tokenIdentifier: '<token identifier>',
     ),
     TokenBatchRecipient(
-      destination: '<spark invoice>',
+      paymentRequest: '<spark invoice>',
       amount: null,
       tokenIdentifier: null,
     ),

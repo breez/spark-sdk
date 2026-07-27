@@ -141,12 +141,12 @@ async def send_token_batch(sdk: BreezSdk):
         # names its own token and amount needs neither here.
         recipients = [
             TokenBatchRecipient(
-                destination="<spark address>",
+                payment_request="<spark address>",
                 amount=1_000,
                 token_identifier="<token identifier>",
             ),
             TokenBatchRecipient(
-                destination="<spark invoice>",
+                payment_request="<spark invoice>",
                 amount=None,
                 token_identifier=None,
             ),

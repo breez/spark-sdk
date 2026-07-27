@@ -1336,12 +1336,12 @@ async fn test_client_signing_token_batch() -> Result<()> {
         .prepare_send_token_batch(PrepareSendTokenBatchRequest {
             recipients: vec![
                 TokenBatchRecipient {
-                    destination: bob_spark_address,
+                    payment_request: bob_spark_address,
                     amount: Some(60),
                     token_identifier: Some(token_id.clone()),
                 },
                 TokenBatchRecipient {
-                    destination: bob_invoice,
+                    payment_request: bob_invoice,
                     amount: None,
                     token_identifier: None,
                 },

@@ -38,11 +38,11 @@ use crate::command::issuer::IssuerCommand;
 use crate::command::stable_balance::StableBalanceCommand;
 use crate::command::webhooks::WebhookCommand;
 
-/// A batch recipient parsed from `destination`, `destination:amount` or
-/// `destination:amount:token_identifier`.
+/// A batch recipient parsed from `payment_request`, `payment_request:amount` or
+/// `payment_request:amount:token_identifier`.
 #[derive(Clone, Debug)]
 pub struct TokenBatchRecipientArg {
-    destination: String,
+    payment_request: String,
     amount: Option<u128>,
     token_identifier: Option<String>,
 }
@@ -52,9 +52,9 @@ impl std::str::FromStr for TokenBatchRecipientArg {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut parts = s.split(':');
-        let destination = parts.next().unwrap_or_default().to_string();
-        if destination.is_empty() {
-            return Err(format!("Missing destination in '{s}'"));
+        let payment_request = parts.next().unwrap_or_default().to_string();
+        if payment_request.is_empty() {
+            return Err(format!("Missing payment request in '{s}'"));
         }
         let amount = match parts.next() {
             None | Some("") => None,
@@ -70,11 +70,11 @@ impl std::str::FromStr for TokenBatchRecipientArg {
         };
         if parts.next().is_some() {
             return Err(format!(
-                "Invalid recipient '{s}'. Expected \'destination[:amount[:token_identifier]]\'"
+                "Invalid recipient '{s}'. Expected \'payment_request[:amount[:token_identifier]]\'"
             ));
         }
         Ok(TokenBatchRecipientArg {
-            destination,
+            payment_request,
             amount,
             token_identifier,
         })
@@ -84,7 +84,7 @@ impl std::str::FromStr for TokenBatchRecipientArg {
 impl From<TokenBatchRecipientArg> for TokenBatchRecipient {
     fn from(arg: TokenBatchRecipientArg) -> Self {
         TokenBatchRecipient {
-            destination: arg.destination,
+            payment_request: arg.payment_request,
             amount: arg.amount,
             token_identifier: arg.token_identifier,
         }
@@ -246,10 +246,10 @@ pub enum Command {
 
     /// Pay several recipients with one token transaction
     PayTokenBatch {
-        /// A recipient, given as `destination`, `destination:amount` or
-        /// `destination:amount:token_identifier`. The destination is a Spark
-        /// address or a Spark invoice. Amount and token may be omitted only for
-        /// an invoice that carries them. Repeat for each recipient.
+        /// A recipient, given as `payment_request`, `payment_request:amount` or
+        /// `payment_request:amount:token_identifier`. The payment request is a
+        /// Spark address or a Spark invoice. Amount and token may be omitted
+        /// only for an invoice that carries them. Repeat for each recipient.
         #[arg(short = 'r', long = "recipient", required = true)]
         recipients: Vec<TokenBatchRecipientArg>,
     },

@@ -22,14 +22,12 @@ use crate::{
 
 use super::conversion;
 
-#[allow(clippy::large_enum_variant)]
+/// What publishing a signed package produced: one payment per recipient for a
+/// batch package, exactly one for every other kind.
 pub(in crate::sdk) enum PublishOutcome {
     SwapCompleted,
-    Sent(SendPaymentResponse),
-    Replayed(SendPaymentResponse),
-    /// A batch package: one payment per recipient, in recipient order.
-    SentBatch(Vec<Payment>),
-    ReplayedBatch(Vec<Payment>),
+    Sent(Vec<Payment>),
+    Replayed(Vec<Payment>),
 }
 
 pub(in crate::sdk) async fn publish_signed_package_inner(
@@ -59,7 +57,7 @@ pub(in crate::sdk) async fn publish_signed_package_inner(
                 .get_payment_by_id(prepare_transfer.transfer_id.clone())
                 .await
             {
-                return Ok(PublishOutcome::Replayed(SendPaymentResponse { payment }));
+                return Ok(PublishOutcome::Replayed(vec![payment]));
             }
             deferred_transfer_send(sdk, prepare_transfer, signed, *amount_sat, *fee_sat, target)
                 .await
@@ -87,7 +85,7 @@ pub(in crate::sdk) async fn publish_signed_package_inner(
             if let Ok(Some(payment_id)) = cache.fetch_published_package(&package_id).await
                 && let Ok(payment) = sdk.storage.get_payment_by_id(payment_id).await
             {
-                return Ok(PublishOutcome::Replayed(SendPaymentResponse { payment }));
+                return Ok(PublishOutcome::Replayed(vec![payment]));
             }
             let res = spark_address::send_token_signed(sdk, token_context, signed).await?;
             record_published_package(&cache, &package_id, &res.payment.id).await;
@@ -117,7 +115,7 @@ pub(in crate::sdk) async fn publish_signed_package_inner(
                 && let Ok(payments) =
                     token_batch::payments_for_published_batch(sdk, payment_id).await
             {
-                return Ok(PublishOutcome::ReplayedBatch(payments));
+                return Ok(PublishOutcome::Replayed(payments));
             }
             let payments = token_batch::send_signed(sdk, token_context, signed).await?;
             // Only the first id is recorded: the rest are recovered through the
@@ -125,7 +123,7 @@ pub(in crate::sdk) async fn publish_signed_package_inner(
             if let Some(payment) = payments.first() {
                 record_published_package(&cache, &package_id, &payment.id).await;
             }
-            return Ok(PublishOutcome::SentBatch(payments));
+            return Ok(PublishOutcome::Sent(payments));
         }
         _ => {
             return Err(SdkError::InvalidInput(
@@ -133,7 +131,7 @@ pub(in crate::sdk) async fn publish_signed_package_inner(
             ));
         }
     }?;
-    Ok(PublishOutcome::Sent(res))
+    Ok(PublishOutcome::Sent(vec![res.payment]))
 }
 
 /// Publishes a package that consolidates our own token outputs instead of paying
@@ -191,26 +189,45 @@ pub(in crate::sdk::payments) async fn publish_signed_transfer_package(
                 .to_string(),
         ));
     }
+    // Which response shape to return follows the kind of package that was
+    // published, not how many payments came out: a batch of one recipient is
+    // still a batch.
+    let is_batch = matches!(
+        signed_package.unsigned,
+        UnsignedTransferPackage::TokenBatch { .. }
+    );
     match publish_signed_package_inner(sdk, signed_package).await? {
         PublishOutcome::SwapCompleted => Ok(PublishSignedTransferPackageResponse::SwapCompleted),
-        PublishOutcome::Replayed(res) => Ok(PublishSignedTransferPackageResponse::PaymentSent {
-            payment: res.payment,
-        }),
-        PublishOutcome::Sent(res) => {
-            sdk.event_emitter
-                .emit(&SdkEvent::from_payment(res.payment.clone()))
-                .await;
-            Ok(PublishSignedTransferPackageResponse::PaymentSent {
-                payment: res.payment,
-            })
+        PublishOutcome::Replayed(payments) => transfer_package_response(is_batch, payments),
+        PublishOutcome::Sent(payments) => {
+            emit_payments(sdk, &payments).await;
+            transfer_package_response(is_batch, payments)
         }
-        PublishOutcome::ReplayedBatch(payments) => {
-            Ok(PublishSignedTransferPackageResponse::PaymentsSent { payments })
-        }
-        PublishOutcome::SentBatch(payments) => {
-            token_batch::emit_payments(sdk, &payments).await;
-            Ok(PublishSignedTransferPackageResponse::PaymentsSent { payments })
-        }
+    }
+}
+
+/// Shapes the payments a package produced into the response its kind calls for:
+/// every payment for a batch, the single one for anything else.
+fn transfer_package_response(
+    is_batch: bool,
+    payments: Vec<Payment>,
+) -> Result<PublishSignedTransferPackageResponse, SdkError> {
+    if is_batch {
+        return Ok(PublishSignedTransferPackageResponse::PaymentsSent { payments });
+    }
+    let payment = payments
+        .into_iter()
+        .next()
+        .ok_or_else(|| SdkError::Generic("published package produced no payment".to_string()))?;
+    Ok(PublishSignedTransferPackageResponse::PaymentSent { payment })
+}
+
+/// Raises a payment event for each of a published package's payments.
+pub(in crate::sdk) async fn emit_payments(sdk: &BreezSdk, payments: &[Payment]) {
+    for payment in payments {
+        sdk.event_emitter
+            .emit(&SdkEvent::from_payment(payment.clone()))
+            .await;
     }
 }
 

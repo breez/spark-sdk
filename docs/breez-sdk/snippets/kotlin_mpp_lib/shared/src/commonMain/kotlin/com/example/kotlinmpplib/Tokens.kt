@@ -142,7 +142,7 @@ class Tokens {
             // names its own token and amount needs neither here.
             val recipients = listOf(
                 TokenBatchRecipient(
-                    destination = "<spark address>",
+                    paymentRequest = "<spark address>",
                     // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer)
                     amount = BigInteger.fromLong(1_000L),
                     // Android (BigInteger from java.math)
@@ -150,7 +150,7 @@ class Tokens {
                     tokenIdentifier = "<token identifier>"
                 ),
                 TokenBatchRecipient(
-                    destination = "<spark invoice>",
+                    paymentRequest = "<spark invoice>",
                     amount = null,
                     tokenIdentifier = null
                 )

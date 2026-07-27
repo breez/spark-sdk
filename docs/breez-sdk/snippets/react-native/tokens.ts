@@ -114,12 +114,12 @@ const exampleSendTokenBatch = async (sdk: BreezSdk) => {
   // names its own token and amount needs neither here.
   const recipients: TokenBatchRecipient[] = [
     {
-      destination: '<spark address>',
+      paymentRequest: '<spark address>',
       amount: BigInt(1_000),
       tokenIdentifier: '<token identifier>'
     },
     {
-      destination: '<spark invoice>',
+      paymentRequest: '<spark invoice>',
       amount: undefined,
       tokenIdentifier: undefined
     }

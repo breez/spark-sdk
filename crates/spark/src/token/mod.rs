@@ -287,6 +287,11 @@ pub trait TokenOutputStore: Send + Sync {
 
     /// Reserves outputs covering every target in one atomic step, so a transaction
     /// spanning several tokens holds a single reservation rather than one per token.
+    ///
+    /// `targets` holds at most one entry per token identifier: a repeated token
+    /// selects from the same pool twice and reserves overlapping outputs. Its
+    /// order is preserved in the returned outputs, and so decides the input
+    /// ordering of the transaction built from them.
     async fn reserve_token_outputs(
         &self,
         targets: &[(String, ReservationTarget)],
@@ -295,6 +300,8 @@ pub trait TokenOutputStore: Send + Sync {
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError>;
 
+    /// Selects outputs covering every target without reserving them, under the
+    /// same `targets` contract as [`Self::reserve_token_outputs`].
     async fn select_token_outputs(
         &self,
         targets: &[(String, ReservationTarget)],
@@ -357,6 +364,11 @@ pub trait TokenOutputService: Send + Sync {
 
     /// Reserves outputs covering every target in one atomic step, so a transaction
     /// spanning several tokens holds a single reservation rather than one per token.
+    ///
+    /// `targets` holds at most one entry per token identifier: a repeated token
+    /// selects from the same pool twice and reserves overlapping outputs. Its
+    /// order is preserved in the returned outputs, and so decides the input
+    /// ordering of the transaction built from them.
     async fn reserve_token_outputs(
         &self,
         targets: &[(String, ReservationTarget)],
@@ -365,6 +377,8 @@ pub trait TokenOutputService: Send + Sync {
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError>;
 
+    /// Selects outputs covering every target without reserving them, under the
+    /// same `targets` contract as [`Self::reserve_token_outputs`].
     async fn select_token_outputs(
         &self,
         targets: &[(String, ReservationTarget)],

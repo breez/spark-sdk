@@ -7,7 +7,7 @@ use crate::{
     error::SdkError,
     models::{
         PrepareSendTokenBatchRequest, PrepareSendTokenBatchResponse, ResolvedTokenBatchRecipient,
-        TokenBatchRecipient, TokenBatchTotal,
+        TokenBatchDestination, TokenBatchRecipient, TokenBatchTotal,
     },
     sdk::BreezSdk,
     sdk::payments::validation,
@@ -32,10 +32,12 @@ pub(in crate::sdk::payments) async fn prepare(
         // The same invoice twice would attach twice and pay twice for one
         // request. A repeated plain address is two outputs to one payee, which
         // is a legitimate batch.
-        if resolved.invoice_details.is_some() && !invoices.insert(resolved.destination.clone()) {
+        if let TokenBatchDestination::SparkInvoice { invoice_details } = &resolved.destination
+            && !invoices.insert(invoice_details.invoice.clone())
+        {
             return Err(SdkError::InvalidInput(format!(
                 "Invoice appears more than once: {}",
-                resolved.destination
+                invoice_details.invoice
             )));
         }
         recipients.push(resolved);
@@ -69,39 +71,52 @@ fn validate_output_cap(recipient_count: usize, token_count: usize) -> Result<(),
     Ok(())
 }
 
-/// Resolves one requested recipient into the concrete token and amount that will
-/// be sent, decoding an invoice destination when there is one.
+/// Resolves one requested recipient into the concrete destination, token and
+/// amount that will be sent, decoding an invoice payment request when there is
+/// one.
 async fn resolve(
     sdk: &BreezSdk,
     recipient: TokenBatchRecipient,
     identity_public_key: &str,
 ) -> Result<ResolvedTokenBatchRecipient, SdkError> {
-    let (token_identifier, amount, invoice_details) =
-        match sdk.parse(&recipient.destination).await? {
+    let (token_identifier, amount, destination) =
+        match sdk.parse(&recipient.payment_request).await? {
             InputType::SparkInvoice(details) => {
                 let (token_identifier, amount) =
                     resolve_invoice(&details, &recipient, identity_public_key)?;
-                (token_identifier, amount, Some(details))
+                (
+                    token_identifier,
+                    amount,
+                    TokenBatchDestination::SparkInvoice {
+                        invoice_details: details,
+                    },
+                )
             }
             InputType::SparkAddress(_) => {
                 let token_identifier = recipient.token_identifier.clone().ok_or_else(|| {
                     SdkError::InvalidInput(format!(
                         "Token identifier is required for address {}",
-                        recipient.destination
+                        recipient.payment_request
                     ))
                 })?;
                 let amount = recipient.amount.ok_or_else(|| {
                     SdkError::InvalidInput(format!(
                         "Amount is required for address {}",
-                        recipient.destination
+                        recipient.payment_request
                     ))
                 })?;
-                (token_identifier, amount, None)
+                (
+                    token_identifier,
+                    amount,
+                    TokenBatchDestination::SparkAddress {
+                        address: recipient.payment_request.clone(),
+                    },
+                )
             }
             _ => {
                 return Err(SdkError::InvalidInput(format!(
                     "A batch recipient must be a Spark address or a Spark invoice: {}",
-                    recipient.destination
+                    recipient.payment_request
                 )));
             }
         };
@@ -109,15 +124,14 @@ async fn resolve(
     if amount == 0 {
         return Err(SdkError::InvalidInput(format!(
             "Amount must be greater than 0 for {}",
-            recipient.destination
+            recipient.payment_request
         )));
     }
 
     Ok(ResolvedTokenBatchRecipient {
-        destination: recipient.destination,
+        destination,
         amount,
         token_identifier,
-        invoice_details,
     })
 }
 
@@ -133,7 +147,7 @@ fn resolve_invoice(
     let token_identifier = details.token_identifier.clone().ok_or_else(|| {
         SdkError::InvalidInput(format!(
             "A batch pays tokens, but this invoice requests sats: {}",
-            recipient.destination
+            recipient.payment_request
         ))
     })?;
     if let Some(requested) = &recipient.token_identifier
@@ -141,7 +155,7 @@ fn resolve_invoice(
     {
         return Err(SdkError::InvalidInput(format!(
             "Requested token identifier does not match invoice token identifier: {}",
-            recipient.destination
+            recipient.payment_request
         )));
     }
 
@@ -149,13 +163,13 @@ fn resolve_invoice(
         (Some(invoice_amount), Some(requested)) if invoice_amount != requested => {
             Err(SdkError::InvalidInput(format!(
                 "Requested amount does not match invoice amount: {}",
-                recipient.destination
+                recipient.payment_request
             )))
         }
         (Some(amount), _) | (None, Some(amount)) => Ok((token_identifier, amount)),
         (None, None) => Err(SdkError::InvalidInput(format!(
             "Amount is required when the invoice has no amount: {}",
-            recipient.destination
+            recipient.payment_request
         ))),
     }
 }
@@ -212,7 +226,7 @@ mod tests {
 
     fn recipient(amount: Option<u128>, token: Option<&str>) -> TokenBatchRecipient {
         TokenBatchRecipient {
-            destination: "sparkrt1invoice".to_string(),
+            payment_request: "sparkrt1invoice".to_string(),
             amount,
             token_identifier: token.map(ToString::to_string),
         }
@@ -220,10 +234,11 @@ mod tests {
 
     fn resolved(token: &str, amount: u128) -> ResolvedTokenBatchRecipient {
         ResolvedTokenBatchRecipient {
-            destination: "sparkrt1address".to_string(),
+            destination: TokenBatchDestination::SparkAddress {
+                address: "sparkrt1address".to_string(),
+            },
             amount,
             token_identifier: token.to_string(),
-            invoice_details: None,
         }
     }
 

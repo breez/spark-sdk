@@ -1820,12 +1820,13 @@ pub struct SendPaymentRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct TokenBatchRecipient {
     /// Spark address or Spark invoice identifying the payee.
-    pub destination: String,
-    /// Amount in the token's base units. Required unless `destination` is an
+    pub payment_request: String,
+    /// Amount in the token's base units. Required unless `payment_request` is an
     /// invoice that carries its own amount.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub amount: Option<u128>,
-    /// Token to send. Required unless `destination` is an invoice that names one.
+    /// Token to send. Required unless `payment_request` is an invoice that names
+    /// one.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub token_identifier: Option<String>,
 }
@@ -1838,16 +1839,26 @@ pub struct PrepareSendTokenBatchRequest {
     pub recipients: Vec<TokenBatchRecipient>,
 }
 
-/// A recipient after prepare has resolved any invoice destination.
+/// Where a batch recipient is paid, once prepare has decoded its payment request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum TokenBatchDestination {
+    SparkAddress {
+        address: String,
+    },
+    SparkInvoice {
+        invoice_details: SparkInvoiceDetails,
+    },
+}
+
+/// A recipient after prepare has resolved the token and amount it is owed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ResolvedTokenBatchRecipient {
-    pub destination: String,
+    pub destination: TokenBatchDestination,
     /// Amount in the token's base units.
     pub amount: u128,
     pub token_identifier: String,
-    /// Present when `destination` was an invoice.
-    pub invoice_details: Option<SparkInvoiceDetails>,
 }
 
 /// What a batch debits for one token.

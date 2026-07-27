@@ -116,12 +116,12 @@ func sendTokenBatch(sdk: BreezSdk) async throws {
     // names its own token and amount needs neither here.
     let recipients = [
         TokenBatchRecipient(
-            destination: "<spark address>",
+            paymentRequest: "<spark address>",
             amount: BInt(1_000),
             tokenIdentifier: "<token identifier>"
         ),
         TokenBatchRecipient(
-            destination: "<spark invoice>",
+            paymentRequest: "<spark invoice>",
             amount: nil,
             tokenIdentifier: nil
         ),

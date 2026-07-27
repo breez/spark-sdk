@@ -244,6 +244,11 @@ pub async fn token_transaction_to_payments(
 /// depends on the order of `unmatched`, so callers must put it in a canonical
 /// order first, or two wallets seeing the same transaction from different sources
 /// would attribute those invoices differently.
+///
+/// An output paid to a plain address matches on the same three fields, so in a
+/// batch paying one payee the same token and amount both by address and by
+/// invoice, the address output can take the invoice. Only which of the two
+/// payments carries the invoice differs: both pay that payee that amount.
 fn take_invoice_for_output(
     unmatched: &mut Vec<SparkInvoiceDetails>,
     owner_public_key: &str,
@@ -452,6 +457,20 @@ mod tests {
             attribute(vec![a.clone(), b.clone()]),
             attribute(vec![b, a]),
             "attribution changed with the order the invoices arrived in"
+        );
+    }
+
+    #[macros::test_all]
+    fn an_address_output_takes_an_invoice_it_matches() {
+        // A batch paying alice 100 by address and 100 by invoice leaves two
+        // indistinguishable outputs, so the first one in vout order takes the
+        // single invoice even when it is the address output.
+        let mut unmatched = vec![invoice("alice", Some(TOKEN), Some(100))];
+
+        assert!(take_invoice_for_output(&mut unmatched, "alice", TOKEN, 100).is_some());
+        assert!(
+            take_invoice_for_output(&mut unmatched, "alice", TOKEN, 100).is_none(),
+            "the output paying the invoice is left without it"
         );
     }
 

@@ -170,12 +170,12 @@ func SendTokenBatch(sdk *breez_sdk_spark.BreezSdk) error {
 	tokenIdentifier := "<token identifier>"
 	recipients := []breez_sdk_spark.TokenBatchRecipient{
 		{
-			Destination:     "<spark address>",
+			PaymentRequest:  "<spark address>",
 			Amount:          &amount,
 			TokenIdentifier: &tokenIdentifier,
 		},
 		{
-			Destination:     "<spark invoice>",
+			PaymentRequest:  "<spark invoice>",
 			Amount:          nil,
 			TokenIdentifier: nil,
 		},

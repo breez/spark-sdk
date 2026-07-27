@@ -127,12 +127,12 @@ namespace BreezSdkSnippets
             // names its own token and amount needs neither here.
             var recipients = new TokenBatchRecipient[] {
                 new TokenBatchRecipient(
-                    destination: "<spark address>",
+                    paymentRequest: "<spark address>",
                     amount: new BigInteger(1_000),
                     tokenIdentifier: "<token identifier>"
                 ),
                 new TokenBatchRecipient(
-                    destination: "<spark invoice>",
+                    paymentRequest: "<spark invoice>",
                     amount: null,
                     tokenIdentifier: null
                 )

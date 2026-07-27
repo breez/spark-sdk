@@ -1262,12 +1262,12 @@ async fn test_08_token_batch(
         .prepare_send_token_batch(PrepareSendTokenBatchRequest {
             recipients: vec![
                 TokenBatchRecipient {
-                    destination: bob_address,
+                    payment_request: bob_address,
                     amount: Some(70),
                     token_identifier: Some(token.clone()),
                 },
                 TokenBatchRecipient {
-                    destination: bob_invoice.clone(),
+                    payment_request: bob_invoice.clone(),
                     amount: None,
                     token_identifier: None,
                 },
@@ -1281,17 +1281,18 @@ async fn test_08_token_batch(
     assert_eq!(prepare_response.totals[0].amount, 100);
     assert_eq!(prepare_response.recipients.len(), 2);
     assert!(
-        prepare_response.recipients[0].invoice_details.is_none(),
-        "the address recipient resolves to no invoice"
+        matches!(
+            prepare_response.recipients[0].destination,
+            TokenBatchDestination::SparkAddress { .. }
+        ),
+        "the address recipient resolves to an address"
     );
-    assert_eq!(
-        prepare_response.recipients[1]
-            .invoice_details
-            .as_ref()
-            .map(|i| i.amount),
-        Some(Some(30)),
-        "the invoice recipient carries the invoice it pays"
-    );
+    let TokenBatchDestination::SparkInvoice { invoice_details } =
+        &prepare_response.recipients[1].destination
+    else {
+        panic!("the invoice recipient carries the invoice it pays");
+    };
+    assert_eq!(invoice_details.amount, Some(30));
 
     let response = alice
         .sdk
@@ -1396,12 +1397,12 @@ async fn test_09_token_batch_prepare_rejections(
     assert!(
         prepare(vec![
             TokenBatchRecipient {
-                destination: bob_invoice.clone(),
+                payment_request: bob_invoice.clone(),
                 amount: None,
                 token_identifier: None,
             },
             TokenBatchRecipient {
-                destination: bob_invoice.clone(),
+                payment_request: bob_invoice.clone(),
                 amount: None,
                 token_identifier: None,
             },
@@ -1413,7 +1414,7 @@ async fn test_09_token_batch_prepare_rejections(
 
     assert!(
         prepare(vec![TokenBatchRecipient {
-            destination: bob_address.clone(),
+            payment_request: bob_address.clone(),
             amount: Some(5),
             token_identifier: None,
         }])
@@ -1424,7 +1425,7 @@ async fn test_09_token_batch_prepare_rejections(
 
     assert!(
         prepare(vec![TokenBatchRecipient {
-            destination: bob_address.clone(),
+            payment_request: bob_address.clone(),
             amount: None,
             token_identifier: Some(token.clone()),
         }])
@@ -1436,12 +1437,12 @@ async fn test_09_token_batch_prepare_rejections(
     // Two outputs to one payee is a legitimate batch, not a duplicate.
     let ok = prepare(vec![
         TokenBatchRecipient {
-            destination: bob_address.clone(),
+            payment_request: bob_address.clone(),
             amount: Some(5),
             token_identifier: Some(token.clone()),
         },
         TokenBatchRecipient {
-            destination: bob_address,
+            payment_request: bob_address,
             amount: Some(7),
             token_identifier: Some(token.clone()),
         },
@@ -1540,17 +1541,17 @@ async fn test_10_token_batch_invoice_attribution(
         .prepare_send_token_batch(PrepareSendTokenBatchRequest {
             recipients: vec![
                 TokenBatchRecipient {
-                    destination: invoice_a.clone(),
+                    payment_request: invoice_a.clone(),
                     amount: None,
                     token_identifier: None,
                 },
                 TokenBatchRecipient {
-                    destination: invoice_b.clone(),
+                    payment_request: invoice_b.clone(),
                     amount: None,
                     token_identifier: None,
                 },
                 TokenBatchRecipient {
-                    destination: bob_address,
+                    payment_request: bob_address,
                     amount: Some(70),
                     token_identifier: Some(token_a.clone()),
                 },

@@ -7,14 +7,14 @@ A single token transaction can pay multiple recipients at once. The batch API is
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.prepare_send_token_batch">API docs</a>
 </h2>
 
-Each recipient is identified by a destination, which is either a Spark address or a Spark invoice, and the two may be mixed freely in one batch:
+Each recipient is identified by a {{#name payment_request}}, which is either a Spark address or a Spark invoice, and the two may be mixed freely in one batch:
 
 - **Spark address**: the token identifier and the amount must be set, exactly as for a single-recipient send.
 - **Spark invoice**: the token and amount are taken from the invoice. The amount is only required if the invoice doesn't specify one. If the invoice specifies an amount, providing a different amount is not supported.
 
 The same invoice may only appear once in a batch. Repeating a plain Spark address is allowed: that is simply two outputs to the same payee.
 
-The response resolves every recipient into the concrete token and amount it will be paid, and reports {{#name totals}}: what the batch debits, one entry per distinct token. You may show these to the user before sending.
+The response resolves every recipient into the concrete {{#name destination}}, token and amount it will be paid, and reports {{#name totals}}: what the batch debits, one entry per distinct token. You may show these to the user before sending.
 
 {{#tabs tokens:send-token-batch}}
 

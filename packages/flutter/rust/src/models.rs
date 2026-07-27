@@ -908,7 +908,7 @@ pub enum _PublishSignedTransferPackageResponse {
 
 #[frb(mirror(TokenBatchRecipient))]
 pub struct _TokenBatchRecipient {
-    pub destination: String,
+    pub payment_request: String,
     pub amount: Option<u128>,
     pub token_identifier: Option<String>,
 }
@@ -918,12 +918,21 @@ pub struct _PrepareSendTokenBatchRequest {
     pub recipients: Vec<TokenBatchRecipient>,
 }
 
+#[frb(mirror(TokenBatchDestination))]
+pub enum _TokenBatchDestination {
+    SparkAddress {
+        address: String,
+    },
+    SparkInvoice {
+        invoice_details: SparkInvoiceDetails,
+    },
+}
+
 #[frb(mirror(ResolvedTokenBatchRecipient))]
 pub struct _ResolvedTokenBatchRecipient {
-    pub destination: String,
+    pub destination: TokenBatchDestination,
     pub amount: u128,
     pub token_identifier: String,
-    pub invoice_details: Option<SparkInvoiceDetails>,
 }
 
 #[frb(mirror(TokenBatchTotal))]
