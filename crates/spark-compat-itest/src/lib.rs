@@ -78,29 +78,31 @@ macro_rules! version_module {
                     });
                 }
 
-                Ok(SparkWalletConfig {
-                    network: Network::Regtest,
-                    operator_pool: OperatorPoolConfig::new(0, operator_configs)?,
-                    split_secret_threshold: spark_itest::fixtures::spark_so::MIN_SIGNERS as u32,
-                    reconnect_interval_seconds: 1,
-                    service_provider_config: ServiceProviderConfig {
-                        base_url: String::new(),
-                        schema_endpoint: None,
-                        identity_public_key: PublicKey::from_slice(&[2; 33])?,
-                        user_agent: Some("spark-compat-itest/0.1.0".to_string()),
-                        retry_config: RetryConfig::default(),
-                    },
-                    tokens_config: SparkWalletConfig::default_tokens_config(),
-                    leaf_optimization_options: LeafOptimizationOptions::default(),
-                    leaf_auto_optimize_enabled: false,
-                    token_outputs_optimization_options: TokenOutputsOptimizationOptions {
-                        min_outputs_threshold: 50,
-                        target_output_count: 5,
-                        auto_optimize_interval: None,
-                    },
-                    self_payment_allowed: false,
-                    max_concurrent_claims: 1,
-                })
+                // Started from the defaults and adjusted, not built as a literal:
+                // this body is compiled against two crate versions, so naming every
+                // field would break whenever one of them gains one.
+                let mut config = SparkWalletConfig::default_config(Network::Regtest);
+                config.operator_pool = OperatorPoolConfig::new(0, operator_configs)?;
+                config.split_secret_threshold = spark_itest::fixtures::spark_so::MIN_SIGNERS as u32;
+                config.reconnect_interval_seconds = 1;
+                config.service_provider_config = ServiceProviderConfig {
+                    base_url: String::new(),
+                    schema_endpoint: None,
+                    identity_public_key: PublicKey::from_slice(&[2; 33])?,
+                    user_agent: Some("spark-compat-itest/0.1.0".to_string()),
+                    retry_config: RetryConfig::default(),
+                };
+                config.tokens_config = SparkWalletConfig::default_tokens_config();
+                config.leaf_optimization_options = LeafOptimizationOptions::default();
+                config.leaf_auto_optimize_enabled = false;
+                config.token_outputs_optimization_options = TokenOutputsOptimizationOptions {
+                    min_outputs_threshold: 50,
+                    target_output_count: 5,
+                    auto_optimize_interval: None,
+                };
+                config.self_payment_allowed = false;
+                config.max_concurrent_claims = 1;
+                Ok(config)
             }
 
             $wallet

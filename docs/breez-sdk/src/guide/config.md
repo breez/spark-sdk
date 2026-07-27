@@ -84,6 +84,16 @@ This configuration option is only relevant when the SDK is initialized for the f
 
 </div>
 
+## Unilateral exit data
+
+Whether the SDK collects the data a [unilateral exit](./unilateral_exit.md) needs, in the background, as funds arrive. Defaults to `true`.
+
+An exit is built from each leaf's chain of pre-signed transactions. Holding that chain locally is what lets an exit be quoted and built when the Spark operators are unreachable, so a leaf is only exitable that way once its chain has been collected. Collection runs after an operation finishes rather than during it, which keeps it off the critical path of a payment. Freshly received funds are therefore briefly not yet exitable, for roughly one round trip to the operators.
+
+Set it to `false` if bandwidth matters more than being able to recover funds without the operators. Collection then happens only when a sync asks for it, by setting {{#name include_exit_chains}} on {{#name sync_wallet}}.
+
+The flag has no effect when [{{#name background_tasks_enabled}}](#background-tasks-enabled) is `false`, since nothing runs in the background at all. In [server mode](./server_mode.md), {{#name include_exit_chains}} is the only way to collect this data.
+
 ## Optimization configuration
 
 The SDK can automatically optimize both the Spark leaf set and a token's

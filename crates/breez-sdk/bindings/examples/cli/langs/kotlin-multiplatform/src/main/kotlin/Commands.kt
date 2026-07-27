@@ -212,7 +212,7 @@ suspend fun handleGetPayment(sdk: BreezSdk, reader: LineReader, args: List<Strin
 // --- sync ---
 
 suspend fun handleSync(sdk: BreezSdk, reader: LineReader, args: List<String>) {
-    val result = sdk.syncWallet(SyncWalletRequest)
+    val result = sdk.syncWallet(SyncWalletRequest())
     printValue(result)
 }
 

@@ -1,4 +1,5 @@
 mod error;
+mod exit_chain_resolver;
 mod leaf_optimizer;
 mod select_helper;
 mod service;
@@ -8,6 +9,7 @@ mod store;
 pub mod tests;
 
 pub use error::TreeServiceError;
+pub use exit_chain_resolver::{ExitChainResolver, ExitChainTrigger};
 pub use leaf_optimizer::*;
 use platform_utils::tokio::sync::watch;
 pub use select_helper::{
@@ -844,15 +846,20 @@ pub trait TreeService: Send + Sync {
         leaf_ids: &[TreeNodeId],
     ) -> Result<Vec<LeafPedigree>, TreeServiceError>;
 
-    /// Pairs each leaf with its ancestor chain, fetched from the operators (one
-    /// `include_parents` query). A producer of fresh leaves (a claim, a swap) calls
-    /// this before `insert_leaves`/`finalize_reservation` so they carry their chain.
+    /// Persists each leaf's ancestor chain, leaving the leaf pool untouched, so a
+    /// chain resolved after its leaf was stored completes it in place.
+    async fn store_exit_chains(&self, pedigrees: &[LeafPedigree]) -> Result<(), TreeServiceError>;
+
+    /// Ids of the stored leaves whose exit chain stops short of a root.
+    async fn leaves_missing_exit_chains(&self) -> Result<Vec<TreeNodeId>, TreeServiceError>;
+
+    /// Pairs each leaf id with its ancestor chain, fetched from the operators in
+    /// one `include_parents` query.
     ///
-    /// Best-effort: a failed fetch (e.g. a sporadic network error) is not fatal. The
-    /// affected leaves come back with no ancestors rather than erroring, so normal
-    /// operation continues and the chains are filled by a later refresh. A caller
-    /// that must not proceed without ancestors should check for empty ones.
-    async fn fetch_pedigrees_from_operators(&self, leaves: &[TreeNode]) -> Vec<LeafPedigree>;
+    /// Best-effort: a failed fetch (e.g. a sporadic network error) is not fatal and
+    /// yields nothing rather than erroring, so a caller can try again later. A chain
+    /// the operators cannot complete comes back partial, which a caller checks for.
+    async fn fetch_pedigrees_from_operators(&self, leaf_ids: &[TreeNodeId]) -> Vec<LeafPedigree>;
 
     /// Refreshes the tree state by fetching the latest leaves from the server.
     ///
@@ -897,7 +904,7 @@ pub trait TreeService: Send + Sync {
     ///
     /// # Parameters
     ///
-    /// * `leaves` - The leaves to insert, each paired with its known ancestors.
+    /// * `leaves` - The leaves to insert.
     ///
     /// # Returns
     ///
@@ -912,19 +919,17 @@ pub trait TreeService: Send + Sync {
     /// # Examples
     ///
     /// ```
-    /// use spark::tree::{TreeService, LeafPedigree, TreeNode, TreeServiceError};
+    /// use spark::tree::{TreeService, TreeNode, TreeServiceError};
     ///
-    /// # async fn example(tree_service: Box<dyn TreeService>, new_leaves: Vec<LeafPedigree>) -> Result<(), TreeServiceError> {
+    /// # async fn example(tree_service: Box<dyn TreeService>, new_leaves: Vec<TreeNode>) -> Result<(), TreeServiceError> {
     /// // Insert leaves
     /// let result = tree_service.insert_leaves(new_leaves).await?;
     /// println!("Inserted {} leaves", result.len());
     /// # Ok(())
     /// # }
     /// ```
-    async fn insert_leaves(
-        &self,
-        leaves: Vec<LeafPedigree>,
-    ) -> Result<Vec<TreeNode>, TreeServiceError>;
+    async fn insert_leaves(&self, leaves: Vec<TreeNode>)
+    -> Result<Vec<TreeNode>, TreeServiceError>;
 
     /// Selects and reserves leaves from the tree that match the specified target amounts.
     ///

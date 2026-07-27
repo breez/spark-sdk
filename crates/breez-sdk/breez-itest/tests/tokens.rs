@@ -23,7 +23,12 @@ async fn create_mint_test_token(instance: &SdkInstance) -> Result<TokenMetadata>
     info!("Minted 1,000,000 tokens");
 
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    instance
+        .sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     Ok(token_metadata)
 }
 
@@ -161,7 +166,11 @@ async fn test_01_token_transfer(
 
     // Sync Bob's wallet to receive the payment
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
 
     // Confirm payment is now completed for Bob
     let bob_payment = bob
@@ -360,7 +369,11 @@ async fn test_02_token_invoice(
 
     // Sync Bob's wallet
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
 
     let bob_payment = bob
         .sdk
@@ -495,7 +508,12 @@ async fn test_03_token_burning(#[future] alice_sdk: Result<SdkInstance>) -> Resu
 
     // Verify token balance after burning
     //tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    alice
+        .sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
 
     let after_burn_balance = alice
         .sdk
@@ -566,7 +584,12 @@ async fn test_04_token_freeze_unfreeze(
         .await?;
 
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    alice
+        .sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
 
     info!(
         "Created freezable token: {} ({})",
@@ -604,7 +627,11 @@ async fn test_04_token_freeze_unfreeze(
 
     // Sync and verify Bob received tokens
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
 
     let bob_balance = bob
         .sdk
@@ -859,7 +886,11 @@ async fn test_05_invoice_expiry(
             // If it succeeded, verify it was processed
             if send_resp.payment.status == PaymentStatus::Completed {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+                bob.sdk
+                    .sync_wallet(SyncWalletRequest {
+                        include_exit_chains: None,
+                    })
+                    .await?;
 
                 let bob_balance = bob
                     .sdk
@@ -918,7 +949,12 @@ async fn test_06_supply_limits(#[future] alice_sdk: Result<SdkInstance>) -> Resu
         .await?;
 
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    alice
+        .sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
 
     let balance = alice
         .sdk
@@ -1338,7 +1374,11 @@ async fn test_08_token_batch(
     assert_eq!(listed.len(), 2, "the batch is listable by transaction hash");
 
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let bob_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -1648,7 +1688,11 @@ async fn test_10_token_batch_invoice_attribution(
     // Receiver side: attribution is reconstructed from the synced transaction
     // alone, so it must land on the same invoice per amount.
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let bob_payments = bob
         .sdk
         .list_payments(ListPaymentsRequest {
@@ -1750,7 +1794,12 @@ async fn test_11_token_batch_across_tokens(
         })
         .await?;
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    alice
+        .sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
 
     let bob_address = bob
         .sdk
@@ -1815,7 +1864,11 @@ async fn test_11_token_batch_across_tokens(
     );
 
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let balances = bob
         .sdk
         .get_info(GetInfoRequest {

@@ -92,6 +92,7 @@ impl TestFixtures {
             tokens_config: SparkWalletConfig::default_tokens_config(),
             leaf_optimization_options: LeafOptimizationOptions::default(),
             leaf_auto_optimize_enabled: false,
+            exit_chain_auto_fetch_enabled: true,
             token_outputs_optimization_options: TokenOutputsOptimizationOptions {
                 min_outputs_threshold: 50,
                 target_output_count: 5,

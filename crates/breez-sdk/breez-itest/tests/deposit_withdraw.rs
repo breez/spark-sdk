@@ -54,7 +54,11 @@ async fn test_onchain_withdraw_to_static_address(
     ensure_funded(&mut alice, 120_000).await?;
 
     // Record Bob's initial balance
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let bob_initial = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -113,7 +117,11 @@ async fn test_onchain_withdraw_to_static_address(
     ));
 
     // Trigger Bob sync and wait for receive + claim
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let recv_payment =
         wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 180).await?;
     assert!(matches!(recv_payment.method, PaymentMethod::Deposit));
@@ -127,7 +135,11 @@ async fn test_onchain_withdraw_to_static_address(
     assert!(recv_payment.fees > 0);
 
     // Verify Bob's balance increased and no unclaimed deposits remain
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let bob_final = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -175,7 +187,11 @@ async fn test_deposit_fee_manual_claim(
     info!("Faucet txid: {}", txid);
 
     // Start sync and wait for UnclaimedDeposits due to fee limit
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let failed = wait_for_unclaimed_event(&mut bob.events, 180).await?;
     assert!(!failed.is_empty());
     let (txid_found, vout) = {
@@ -222,7 +238,11 @@ async fn test_deposit_fee_manual_claim(
     );
 
     // After manual claim, deposit should be removed from unclaimed list
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let deposits_after_claim = bob
         .sdk
         .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
@@ -253,7 +273,12 @@ async fn test_send_all_to_bitcoin_address(
     receive_and_fund(&mut alice, funding_amount, false).await?;
 
     // Get Alice's initial balance (less than funding_amount due to claim fees)
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    alice
+        .sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let alice_initial = alice
         .sdk
         .get_info(GetInfoRequest {
@@ -334,7 +359,12 @@ async fn test_send_all_to_bitcoin_address(
     assert!(matches!(send_resp.payment.method, PaymentMethod::Withdraw));
 
     // Verify Alice's balance is now 0
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    alice
+        .sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let alice_final = alice
         .sdk
         .get_info(GetInfoRequest {
@@ -371,7 +401,11 @@ async fn test_deposit_fee_refund(#[future] bob_no_fee_sdk: Result<SdkInstance>) 
     info!("Faucet txid: {}", txid);
 
     // Start sync and wait for UnclaimedDeposits due to no fee set
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let failed = wait_for_unclaimed_event(&mut bob.events, 180).await?;
     assert!(!failed.is_empty());
 
@@ -429,7 +463,11 @@ async fn test_deposit_fee_refund(#[future] bob_no_fee_sdk: Result<SdkInstance>) 
     info!("Refunded deposit with tx_id: {}", refund.tx_id);
 
     // Sync and assert the unclaimed deposit shows refund tx id or is removed post-confirmation
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     // give a brief moment for chain status to process
     sleep(Duration::from_secs(2)).await;
     let deposits_after_refund = bob
@@ -504,7 +542,11 @@ async fn test_deposit_low_amount_refund_fee_rate(
     );
 
     // Sync Bob and wait for UnclaimedDeposits (no fee set blocks auto-claim)
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let failed = wait_for_unclaimed_event(&mut bob.events, 180).await?;
     assert!(!failed.is_empty());
 

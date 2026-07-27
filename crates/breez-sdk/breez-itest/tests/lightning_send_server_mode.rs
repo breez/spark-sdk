@@ -56,7 +56,12 @@ async fn test_send_bolt11_invoice_server_mode(
 
     // Fund Alice via polling (server mode has no ClaimedDeposits event).
     ensure_funded_via_polling(&mut alice, 100_000).await?;
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    alice
+        .sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
 
     let bob_invoice = bob
         .sdk

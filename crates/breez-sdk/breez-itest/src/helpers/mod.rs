@@ -87,7 +87,10 @@ pub async fn wait_for_balance(
     wait_for(
         || async {
             // Sync wallet to ensure we have the latest balance
-            sdk.sync_wallet(SyncWalletRequest {}).await?;
+            sdk.sync_wallet(SyncWalletRequest {
+                include_exit_chains: None,
+            })
+            .await?;
             let info = sdk
                 .get_info(GetInfoRequest {
                     ensure_synced: Some(false),
@@ -158,7 +161,10 @@ pub async fn wait_for_token_balance_increase(
             let sdk = sdk.clone();
             let token_id = token_id.clone();
             async move {
-                sdk.sync_wallet(SyncWalletRequest {}).await?;
+                sdk.sync_wallet(SyncWalletRequest {
+                    include_exit_chains: None,
+                })
+                .await?;
                 let info = sdk
                     .get_info(GetInfoRequest {
                         ensure_synced: Some(false),
@@ -210,7 +216,10 @@ pub async fn wait_for_token_balance(
             let sdk = sdk.clone();
             let token_id = token_id.clone();
             async move {
-                sdk.sync_wallet(SyncWalletRequest {}).await?;
+                sdk.sync_wallet(SyncWalletRequest {
+                    include_exit_chains: None,
+                })
+                .await?;
                 let info = sdk
                     .get_info(GetInfoRequest {
                         ensure_synced: Some(false),

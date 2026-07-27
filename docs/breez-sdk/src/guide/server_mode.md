@@ -54,6 +54,8 @@ Call {{#name sync_wallet}} **only when an external event tells you the wallet st
 
 The {{#enum SdkEvent::Synced}} event pattern documented in [Listening to events](events.md) is **not available** in server mode — the SDK has no background subscriber to emit it. Treat {{#name sync_wallet}} as the synchronous primitive instead.
 
+If the wallets you run need to be able to [exit unilaterally](unilateral_exit.md) without the Spark operators, set {{#name include_exit_chains}} on the request. The data that makes a leaf exitable is normally collected by a background task, which does not exist here, so this is the only way to collect it in server mode. It costs one extra round trip on syncs that find leaves still missing it, so set it on the syncs that follow incoming funds rather than on every call. See [Unilateral exit data](./config.md#unilateral-exit-data).
+
 ### Claiming on-chain deposits
 
 Server-mode SDKs do not run the periodic deposit detection and claim sweep that the mobile profile uses. When your webhook or chain watcher observes a relevant on-chain deposit, handle it explicitly:

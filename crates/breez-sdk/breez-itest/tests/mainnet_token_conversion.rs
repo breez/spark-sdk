@@ -204,7 +204,11 @@ async fn test_token_conversion_success() -> Result<()> {
     );
 
     // Verify Bob received tokens
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let bob_token_balance_after_btc_to_token = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -236,7 +240,12 @@ async fn test_token_conversion_success() -> Result<()> {
     clear_event_receiver(&mut alice.events).await;
 
     // Get Alice's initial balance before receiving Bitcoin
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    alice
+        .sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let alice_balance_before_token_to_btc = alice
         .sdk
         .get_info(GetInfoRequest {
@@ -381,7 +390,12 @@ async fn test_token_conversion_success() -> Result<()> {
     );
 
     // Verify Alice received Bitcoin
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    alice
+        .sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let alice_balance_after_token_to_btc = alice
         .sdk
         .get_info(GetInfoRequest {
@@ -402,7 +416,11 @@ async fn test_token_conversion_success() -> Result<()> {
     );
 
     // Verify Bob's token balance decreased
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let bob_token_balance_after_token_to_btc = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -491,7 +509,12 @@ async fn test_token_conversion_failure() -> Result<()> {
     // Part B: Insufficient funds rejected at send
     // ==========================================
     info!("--- Part B: Insufficient funds failure ---");
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    alice
+        .sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let alice_balance = alice
         .sdk
         .get_info(GetInfoRequest {
@@ -584,7 +607,12 @@ async fn test_token_conversion_failure() -> Result<()> {
     );
 
     // Alice's balance must be intact — a rejected send spends nothing.
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    alice
+        .sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let alice_balance_after = alice
         .sdk
         .get_info(GetInfoRequest {

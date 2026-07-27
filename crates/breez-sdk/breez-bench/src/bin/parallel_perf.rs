@@ -684,7 +684,12 @@ async fn run_optimization(sdk: &BreezSdk, label: &str) -> Result<()> {
 
 /// Fund wallet via regtest faucet
 async fn fund_via_faucet(sdk_instance: &mut BenchSdkInstance, amount: u64) -> Result<()> {
-    sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    sdk_instance
+        .sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
 
     // Get deposit address
     let receive = sdk_instance
@@ -708,7 +713,12 @@ async fn fund_via_faucet(sdk_instance: &mut BenchSdkInstance, amount: u64) -> Re
     let start = Instant::now();
     let timeout = Duration::from_secs(30);
     loop {
-        sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
+        sdk_instance
+            .sdk
+            .sync_wallet(SyncWalletRequest {
+                include_exit_chains: None,
+            })
+            .await?;
         let info = sdk_instance
             .sdk
             .get_info(GetInfoRequest {

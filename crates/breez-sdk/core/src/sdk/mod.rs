@@ -236,6 +236,7 @@ pub fn default_config(network: Network) -> Config {
         max_deposit_claim_fee: Some(crate::MaxFee::Rate { sat_per_vbyte: 1 }),
         lnurl_domain,
         prefer_spark_over_lightning: false,
+        exit_chain_auto_fetch_enabled: true,
         external_input_parsers: None,
         use_default_external_input_parsers: true,
         real_time_sync_server_url: Some(BREEZ_SYNC_SERVICE_URL.to_string()),

@@ -30,6 +30,7 @@ pub struct _Config {
     pub max_deposit_claim_fee: Option<MaxFee>,
     pub lnurl_domain: Option<String>,
     pub prefer_spark_over_lightning: bool,
+    pub exit_chain_auto_fetch_enabled: bool,
     pub external_input_parsers: Option<Vec<ExternalInputParser>>,
     pub use_default_external_input_parsers: bool,
     pub real_time_sync_server_url: Option<String>,
@@ -1011,7 +1012,9 @@ pub enum _SuccessActionProcessed {
 }
 
 #[frb(mirror(SyncWalletRequest))]
-pub struct _SyncWalletRequest {}
+pub struct _SyncWalletRequest {
+    pub include_exit_chains: Option<bool>,
+}
 
 #[frb(mirror(SyncWalletResponse))]
 pub struct _SyncWalletResponse {}

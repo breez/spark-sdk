@@ -78,7 +78,12 @@ async fn test_01_lightning_hodl_success(
     );
 
     // Alice syncs and verifies the pending HODL receive.
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    alice
+        .sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
 
     let alice_pending = alice
         .sdk
@@ -157,7 +162,12 @@ async fn test_01_lightning_hodl_success(
     assert_eq!(bob_completed_payment.amount, 10_000);
 
     // Verify Alice's balance increased.
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    alice
+        .sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let alice_final_balance = alice
         .sdk
         .get_info(GetInfoRequest {

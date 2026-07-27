@@ -33,7 +33,11 @@ async fn test_01_spark_transfer(
     info!("Alice balance: {} sats", alice_balance);
 
     // Get Bob's initial balance
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let bob_initial_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -142,7 +146,11 @@ async fn test_01_spark_transfer(
     );
 
     // Verify Bob's balance increased
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let bob_final_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -261,7 +269,12 @@ async fn test_03_lightning_invoice_payment(
     ensure_funded(&mut alice, 100_000).await?;
 
     // Get Alice's initial balance
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    alice
+        .sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let alice_initial_balance = alice
         .sdk
         .get_info(GetInfoRequest {
@@ -273,7 +286,11 @@ async fn test_03_lightning_invoice_payment(
     info!("Alice initial balance: {} sats", alice_initial_balance);
 
     // Get Bob's initial balance
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let bob_initial_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -401,7 +418,7 @@ async fn test_03_lightning_invoice_payment(
         PaymentType::Send,
         "Alice should send a payment"
     );
-    //alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    //alice.sdk.sync_wallet(SyncWalletRequest { include_exit_chains: None }).await?;
     let alice_final_balance = alice
         .sdk
         .get_info(GetInfoRequest {
@@ -427,7 +444,11 @@ async fn test_03_lightning_invoice_payment(
     );
 
     // Verify Bob's balance increased by invoice amount
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let bob_final_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -805,7 +826,11 @@ async fn test_07_spark_invoice(
     info!("Alice balance: {} sats", alice_initial_balance);
 
     // Get Bob's initial balance
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let bob_initial_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -909,7 +934,11 @@ async fn test_07_spark_invoice(
     );
 
     // Verify Bob's balance increased
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let bob_final_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -950,7 +979,12 @@ async fn test_08_lightning_invoice_expiry_secs(
     ensure_funded(&mut alice, 50_000).await?;
 
     // Get Alice's initial balance
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    alice
+        .sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let alice_initial_balance = alice
         .sdk
         .get_info(GetInfoRequest {
@@ -962,7 +996,11 @@ async fn test_08_lightning_invoice_expiry_secs(
     info!("Alice initial balance: {} sats", alice_initial_balance);
 
     // Get Bob's initial balance
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let bob_initial_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -1085,7 +1123,11 @@ async fn test_08_lightning_invoice_expiry_secs(
     );
 
     // Verify Bob's balance increased
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let bob_final_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -1286,7 +1328,12 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
         wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
 
         // Sync and verify
-        alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+        alice
+            .sdk
+            .sync_wallet(SyncWalletRequest {
+                include_exit_chains: None,
+            })
+            .await?;
         let new_balance = alice
             .sdk
             .get_info(GetInfoRequest {
@@ -1362,7 +1409,12 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
     info!("Full balance payment completed on Bob's side");
 
     // Verify Alice's balance is zero
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    alice
+        .sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
     let alice_final = alice
         .sdk
         .get_info(GetInfoRequest {

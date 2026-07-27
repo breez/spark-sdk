@@ -61,10 +61,11 @@ use spark::{
         TokenOutputWithPrevOut, TokenService,
     },
     tree::{
-        AutoOptimizationEvent, AutoOptimizationEventHandler, InMemoryTreeStore, LeafOptimizer,
-        LeafPedigree, LeafSelection, OptimizationError, OptimizationOutcome, ReservationPurpose,
-        SelectLeavesOptions, SynchronousTreeService, TargetAmounts, TreeNode, TreeNodeId,
-        TreeService, TreeStore, select_leaves_by_target_amounts, with_reserved_leaves,
+        AutoOptimizationEvent, AutoOptimizationEventHandler, ExitChainResolver, ExitChainTrigger,
+        InMemoryTreeStore, LeafOptimizer, LeafPedigree, LeafSelection, OptimizationError,
+        OptimizationOutcome, ReservationPurpose, SelectLeavesOptions, SynchronousTreeService,
+        TargetAmounts, TreeNode, TreeNodeId, TreeService, TreeStore,
+        select_leaves_by_target_amounts, with_reserved_leaves,
     },
     utils::paging::{PagingFilter, PagingResult},
 };
@@ -276,6 +277,10 @@ pub struct SparkWallet {
     operator_pool: Arc<OperatorPool>,
     htlc_service: Arc<HtlcService>,
     leaf_optimizer: Arc<LeafOptimizer>,
+    /// Resolves exit chains. Runs on its own only when configured to and background
+    /// processing is started; an explicit sync can always drive it directly.
+    exit_chain_resolver: Arc<ExitChainResolver>,
+    exit_chain_trigger: ExitChainTrigger,
     /// One-shot, single-flight guard for `select_leaves_with_retry`'s call to
     /// `refresh_leaves`. The cell's `get_or_init` blocks concurrent callers
     /// during the in-flight refresh and short-circuits with a single atomic
@@ -402,6 +407,7 @@ impl SparkWallet {
             Arc::clone(&transfer_service),
         ));
 
+        let exit_chain_trigger = ExitChainTrigger::new();
         let tree_service: Arc<dyn TreeService> = Arc::new(SynchronousTreeService::new(
             identity_public_key,
             config.network,
@@ -410,6 +416,7 @@ impl SparkWallet {
             Arc::clone(&timelock_manager),
             Arc::clone(&spark_signer),
             Arc::clone(&swap_service),
+            Some(exit_chain_trigger.clone()),
         ));
 
         let token_output_service: Arc<dyn TokenOutputService> =
@@ -445,11 +452,17 @@ impl SparkWallet {
             event_manager: Arc::clone(&event_manager),
         });
 
+        let exit_chain_resolver = Arc::new(ExitChainResolver::new(
+            Arc::clone(&tree_service),
+            &exit_chain_trigger,
+        ));
+
         let leaf_optimizer = Arc::new(LeafOptimizer::new(
             config.leaf_optimization_options.clone(),
             Arc::clone(&swap_service),
             Arc::clone(&tree_service),
             Some(auto_optimization_event_handler),
+            Some(exit_chain_trigger.clone()),
         ));
 
         // Use the external cancellation token if provided, otherwise create an
@@ -482,6 +495,8 @@ impl SparkWallet {
             operator_pool,
             htlc_service,
             leaf_optimizer,
+            exit_chain_resolver,
+            exit_chain_trigger,
             select_leaves_refresh: tokio::sync::OnceCell::new(),
         })
     }
@@ -497,11 +512,20 @@ impl SparkWallet {
         Ok(leaves.into())
     }
 
-    /// Starts leaf optimization if auto-optimization is enabled.
-    async fn maybe_start_optimization(&self) {
+    /// Best-effort follow-up for an operation that changed the leaf set. Both steps
+    /// are independently configurable and neither blocks the caller.
+    async fn on_leaves_changed(&self) {
         if self.config.leaf_auto_optimize_enabled {
             self.leaf_optimizer.start().await;
         }
+        self.exit_chain_trigger.trigger();
+    }
+
+    /// Resolves the exit chains of any leaves still missing one, without waiting for
+    /// the background resolver. Errors are the caller's to handle.
+    pub async fn fetch_missing_exit_chains(&self) -> Result<(), SparkWalletError> {
+        self.exit_chain_resolver.resolve_missing().await?;
+        Ok(())
     }
 
     pub async fn pay_lightning_invoice(
@@ -604,7 +628,7 @@ impl SparkWallet {
             }
         };
 
-        self.maybe_start_optimization().await;
+        self.on_leaves_changed().await;
 
         Ok(PayLightningInvoiceResult {
             transfer: wallet_transfer,
@@ -751,18 +775,12 @@ impl SparkWallet {
         vout: u32,
     ) -> Result<Vec<WalletLeaf>, SparkWalletError> {
         let deposit_nodes = self.deposit_service.claim_deposit(tx, vout).await?;
-        // A deposit is a root: it carries no ancestors.
-        let pedigrees = deposit_nodes
-            .iter()
-            .map(|leaf| LeafPedigree {
-                leaf: leaf.clone(),
-                ancestors: Vec::new(),
-            })
-            .collect();
-        self.tree_service.insert_leaves(pedigrees).await?;
+        self.tree_service
+            .insert_leaves(deposit_nodes.clone())
+            .await?;
         info!("Claimed deposit root node: {:?}", deposit_nodes);
 
-        self.maybe_start_optimization().await;
+        self.on_leaves_changed().await;
 
         Ok(deposit_nodes.into_iter().map(WalletLeaf::from).collect())
     }
@@ -775,7 +793,7 @@ impl SparkWallet {
     ) -> Result<String, SparkWalletError> {
         let transfer_id = self.deposit_service.claim_static_deposit(quote).await?;
 
-        self.maybe_start_optimization().await;
+        self.on_leaves_changed().await;
 
         Ok(transfer_id)
     }
@@ -939,7 +957,7 @@ impl SparkWallet {
             )
         )?;
 
-        self.maybe_start_optimization().await;
+        self.on_leaves_changed().await;
 
         Ok(WalletTransfer::from_transfer(
             transfer,
@@ -963,7 +981,7 @@ impl SparkWallet {
         .await?;
 
         if !transfers.is_empty() {
-            self.maybe_start_optimization().await;
+            self.on_leaves_changed().await;
         }
 
         for transfer in &transfers {
@@ -1325,7 +1343,7 @@ impl SparkWallet {
             })
         )?;
 
-        self.maybe_start_optimization().await;
+        self.on_leaves_changed().await;
 
         create_transfer(
             transfer,
@@ -1468,6 +1486,13 @@ impl SparkWallet {
     async fn refresh_before_exit(&self) {
         if let Err(e) = self.tree_service.refresh_leaves().await {
             warn!("unilateral exit: refresh failed, planning from local state: {e:?}");
+        }
+        // An exit is planned entirely from stored chains, so resolve the missing ones
+        // here rather than racing the background resolver.
+        if let Err(e) = self.exit_chain_resolver.resolve_missing().await {
+            warn!(
+                "unilateral exit: resolving exit chains failed, planning from local state: {e:?}"
+            );
         }
     }
 
@@ -1715,6 +1740,10 @@ impl SparkWallet {
                     Arc::clone(&self.htlc_service),
                     Arc::clone(&self.leaf_optimizer),
                     self.config.leaf_auto_optimize_enabled,
+                    self.config
+                        .exit_chain_auto_fetch_enabled
+                        .then(|| Arc::clone(&self.exit_chain_resolver)),
+                    self.exit_chain_trigger.clone(),
                     Arc::clone(&self.token_service),
                     self.config.token_outputs_optimization_options.clone(),
                     self.config.max_concurrent_claims,
@@ -2546,14 +2575,7 @@ async fn claim_transfer(
     tree_service: &Arc<dyn TreeService>,
 ) -> Result<Vec<TreeNode>, SparkWalletError> {
     let claimed_nodes = transfer_service.claim_transfer(transfer, None).await?;
-    // Resolve each claimed leaf's ancestors now, while the operators are reachable
-    // (we just claimed through them), so insert_leaves persists complete chains
-    // without a fetch of its own. Best-effort: if the fetch fails, the leaves are
-    // stored without ancestors and completed by a later refresh.
-    let pedigrees = tree_service
-        .fetch_pedigrees_from_operators(&claimed_nodes)
-        .await;
-    let result_nodes = tree_service.insert_leaves(pedigrees).await?;
+    let result_nodes = tree_service.insert_leaves(claimed_nodes).await?;
     Ok(result_nodes)
 }
 
@@ -2580,6 +2602,8 @@ struct BackgroundProcessor {
     htlc_service: Arc<HtlcService>,
     leaf_optimizer: Arc<LeafOptimizer>,
     auto_optimize_enabled: bool,
+    exit_chain_resolver: Option<Arc<ExitChainResolver>>,
+    exit_chain_trigger: ExitChainTrigger,
     token_service: Arc<TokenService>,
     token_outputs_optimization_options: TokenOutputsOptimizationOptions,
     max_concurrent_claims: u32,
@@ -2598,6 +2622,8 @@ impl BackgroundProcessor {
         htlc_service: Arc<HtlcService>,
         leaf_optimizer: Arc<LeafOptimizer>,
         auto_optimize_enabled: bool,
+        exit_chain_resolver: Option<Arc<ExitChainResolver>>,
+        exit_chain_trigger: ExitChainTrigger,
         token_service: Arc<TokenService>,
         token_outputs_optimization_options: TokenOutputsOptimizationOptions,
         max_concurrent_claims: u32,
@@ -2613,16 +2639,19 @@ impl BackgroundProcessor {
             htlc_service,
             leaf_optimizer,
             auto_optimize_enabled,
+            exit_chain_resolver,
+            exit_chain_trigger,
             token_service,
             token_outputs_optimization_options,
             max_concurrent_claims,
         }
     }
 
-    async fn maybe_start_optimization(&self) {
+    async fn on_leaves_changed(&self) {
         if self.auto_optimize_enabled {
             self.leaf_optimizer.start().await;
         }
+        self.exit_chain_trigger.trigger();
     }
 
     pub async fn run_background_tasks(self: &Arc<Self>, cancellation_token: watch::Receiver<()>) {
@@ -2665,6 +2694,17 @@ impl BackgroundProcessor {
 
         if let Err(e) = self.token_service.refresh_tokens_outputs().await {
             error!("Error refreshing token outputs on startup: {:?}", e);
+        }
+
+        if let Some(resolver) = self.exit_chain_resolver.clone() {
+            let cancellation_token_clone = cancellation_token.clone();
+            let span = tracing::Span::current();
+            tokio::spawn(
+                async move {
+                    resolver.run(cancellation_token_clone).await;
+                }
+                .instrument(span),
+            );
         }
 
         // Start token output optimization background task if configured
@@ -2730,15 +2770,10 @@ impl BackgroundProcessor {
     async fn process_deposit_event(&self, deposit: TreeNode) -> Result<(), SparkWalletError> {
         let id = deposit.id.clone();
         info!("Inserting deposit leaf: {:?}", deposit);
-        // A deposit is a root: it carries no ancestors.
-        let pedigree = LeafPedigree {
-            leaf: deposit,
-            ancestors: Vec::new(),
-        };
-        self.tree_service.insert_leaves(vec![pedigree]).await?;
+        self.tree_service.insert_leaves(vec![deposit]).await?;
         self.event_manager
             .notify_listeners(WalletEvent::DepositConfirmed(id));
-        self.maybe_start_optimization().await;
+        self.on_leaves_changed().await;
         Ok(())
     }
 
@@ -2835,7 +2870,7 @@ impl BackgroundProcessor {
                 self.identity_public_key,
                 self.ssp_client.identity_public_key(),
             )));
-        self.maybe_start_optimization().await;
+        self.on_leaves_changed().await;
 
         Ok(())
     }
@@ -2860,7 +2895,7 @@ impl BackgroundProcessor {
                     transfers.len()
                 );
                 if !transfers.is_empty() {
-                    self.maybe_start_optimization().await;
+                    self.on_leaves_changed().await;
                 }
                 for transfer in &transfers {
                     self.event_manager

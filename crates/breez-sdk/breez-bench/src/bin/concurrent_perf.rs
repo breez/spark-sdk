@@ -792,7 +792,12 @@ async fn fund_via_faucet(
     const FAUCET_MAX_PER_CALL: u64 = 50_000;
     const FAUCET_MIN_PER_CALL: u64 = 1_000;
 
-    sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    sdk_instance
+        .sdk
+        .sync_wallet(SyncWalletRequest {
+            include_exit_chains: None,
+        })
+        .await?;
 
     let receive = sdk_instance
         .sdk
@@ -808,7 +813,12 @@ async fn fund_via_faucet(
     let mut remaining = target_amount;
     let mut chunk_idx = 0u32;
     while remaining > 0 {
-        sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
+        sdk_instance
+            .sdk
+            .sync_wallet(SyncWalletRequest {
+                include_exit_chains: None,
+            })
+            .await?;
         let info = sdk_instance
             .sdk
             .get_info(GetInfoRequest {
@@ -840,7 +850,12 @@ async fn fund_via_faucet(
         let claim_timeout = Duration::from_secs(240);
         let balance_before = info.balance_sats;
         let after = loop {
-            sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
+            sdk_instance
+                .sdk
+                .sync_wallet(SyncWalletRequest {
+                    include_exit_chains: None,
+                })
+                .await?;
             let snap = sdk_instance
                 .sdk
                 .get_info(GetInfoRequest {
@@ -877,7 +892,12 @@ async fn fund_via_faucet(
     let start = Instant::now();
     let timeout = Duration::from_secs(60);
     loop {
-        sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
+        sdk_instance
+            .sdk
+            .sync_wallet(SyncWalletRequest {
+                include_exit_chains: None,
+            })
+            .await?;
         let info = sdk_instance
             .sdk
             .get_info(GetInfoRequest {
@@ -905,7 +925,12 @@ async fn fund_via_faucet(
             let claim_timeout = Duration::from_secs(240);
             let balance_before = info.balance_sats;
             let after = loop {
-                sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
+                sdk_instance
+                    .sdk
+                    .sync_wallet(SyncWalletRequest {
+                        include_exit_chains: None,
+                    })
+                    .await?;
                 let snap = sdk_instance
                     .sdk
                     .get_info(GetInfoRequest {

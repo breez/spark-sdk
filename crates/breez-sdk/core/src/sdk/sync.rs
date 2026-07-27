@@ -498,6 +498,10 @@ impl BreezSdk {
         self.runtime
             .run_user_sync(self, super::SyncType::Full, true)
             .await?;
+        if request.include_exit_chains.unwrap_or_default() {
+            // After the sync, so the leaves it brought in are resolved too.
+            self.spark_wallet.fetch_missing_exit_chains().await?;
+        }
         Ok(SyncWalletResponse {})
     }
 }
