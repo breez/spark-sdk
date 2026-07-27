@@ -185,10 +185,10 @@ pub struct WebhookPayloadData {
     pub domain: String,
 }
 
-/// Backend-agnostic tests for the domain-attribution repository methods, run
-/// against both the `SQLite` and `PostgreSQL` implementations. Assertions look
-/// up domains by name rather than by count, so they tolerate a shared test
-/// database with rows from other tests.
+/// Tests for the domain-attribution repository methods, generic over the
+/// `LnurlRepository` implementation. Assertions look up domains by name rather
+/// than by count, so they tolerate a shared test database with rows from other
+/// tests.
 #[cfg(test)]
 pub mod shared_tests {
     use super::{LnurlRepository, LnurlRepositoryError};
