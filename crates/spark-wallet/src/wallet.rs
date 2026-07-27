@@ -2856,6 +2856,11 @@ impl AutoOptimizationEventHandler for WalletAutoOptimizationEventHandler {
     }
 }
 
+/// How often to check whether the leaves kept for their exit chain have been
+/// spent. They leave the balance the moment the operators stop reporting them,
+/// so this only bounds how long their rows outlive them.
+const SPENT_LEAF_PURGE_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
 struct BackgroundProcessor {
     operator_pool: Arc<OperatorPool>,
     event_manager: Arc<EventManager>,
@@ -2968,6 +2973,20 @@ impl BackgroundProcessor {
 
         if let Err(e) = self.token_service.refresh_tokens_outputs().await {
             error!("Error refreshing token outputs on startup: {:?}", e);
+        }
+
+        {
+            let cloned_self = Arc::clone(self);
+            let cancellation_token_clone = cancellation_token.clone();
+            let span = tracing::Span::current();
+            tokio::spawn(
+                async move {
+                    cloned_self
+                        .run_spent_leaf_purge(cancellation_token_clone)
+                        .await;
+                }
+                .instrument(span),
+            );
         }
 
         // Start token output optimization background task if configured
@@ -3219,6 +3238,36 @@ impl BackgroundProcessor {
                 }
                 _ = cancellation_token.changed() => {
                     info!("Stopping exit state forwarding");
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Clears out the leaves kept only for their exit chain once the operators
+    /// can prove they were spent. Housekeeping, not book-keeping: such a leaf is
+    /// already out of the balance and out of selection, so nothing waits on this
+    /// and it runs on its own slow timer rather than on the refresh, which sits
+    /// on the payment path. When there is nothing lingering it costs one local
+    /// read and no network at all.
+    async fn run_spent_leaf_purge(&self, mut cancellation_token: watch::Receiver<()>) {
+        let run_purge = || async {
+            match self.tree_service.purge_proven_spent_leaves().await {
+                Ok(0) => {}
+                Ok(removed) => info!("Removed {removed} leaves proven spent"),
+                Err(e) => debug!("Could not check whether kept leaves were spent: {e:?}"),
+            }
+        };
+
+        run_purge().await;
+
+        loop {
+            tokio::select! {
+                () = tokio::time::sleep(SPENT_LEAF_PURGE_INTERVAL) => {
+                    run_purge().await;
+                }
+                _ = cancellation_token.changed() => {
+                    debug!("Stopping the spent-leaf purge");
                     break;
                 }
             }

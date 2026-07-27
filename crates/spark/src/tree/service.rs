@@ -505,28 +505,62 @@ impl TreeService for SynchronousTreeService {
             return Ok(0);
         }
         let ids: Vec<TreeNodeId> = deleted.iter().map(|leaf| leaf.id.clone()).collect();
-        // By id rather than by owner. An owner query is status-filtered, and the
-        // operators drop Investigation, Lost and Reimbursed from it whatever we
-        // ask for, so it cannot tell a spent leaf from one it will not talk
-        // about. A lookup by id answers for a node in any status.
-        let theirs: HashMap<TreeNodeId, TreeNode> = self
-            .fetch_nodes(&ids, false)
-            .await?
-            .into_iter()
-            .map(|node| (node.id.clone(), node))
+        let source = Source::NodeIds(TreeNodeIds {
+            node_ids: ids.iter().map(ToString::to_string).collect(),
+        });
+
+        // Ask every operator, by id. By id because an owner query is
+        // status-filtered, and the operators drop Investigation, Lost and
+        // Reimbursed from it whatever statuses we ask for, so it cannot tell a
+        // spent leaf from one it will not talk about; a lookup by id answers for
+        // a node in any status. Every operator because this ends in a deletion,
+        // and no single one of them, coordinator included, gets to decide that on
+        // its own.
+        let operators: Vec<_> = self
+            .operator_pool
+            .get_all_operators()
+            .map(|op| (op.id, op.client.clone()))
             .collect();
-        let proven: Vec<TreeNodeId> = deleted
-            .iter()
-            .filter(|leaf| {
-                theirs
+        let operator_count = operators.len();
+        let responses = join_all(operators.iter().map(|(id, client)| {
+            let source = source.clone();
+            async move {
+                (
+                    *id,
+                    self.query_nodes(client, false, Some(source), vec![]).await,
+                )
+            }
+        }))
+        .await;
+
+        // An operator we could not reach has not vouched for anything, so its
+        // silence holds the leaves rather than counting towards a deletion.
+        let mut agreeing: HashMap<TreeNodeId, usize> = HashMap::new();
+        for (id, res) in responses {
+            let Ok(nodes) = res else {
+                debug!("purge: operator {id} unreachable, keeping every leaf this round");
+                return Ok(0);
+            };
+            let theirs: HashMap<TreeNodeId, TreeNode> =
+                nodes.into_iter().map(|n| (n.id.clone(), n)).collect();
+            for leaf in &deleted {
+                if theirs
                     .get(&leaf.id)
                     .is_some_and(|theirs| refund_timelock_dropped(leaf, theirs))
-            })
+                {
+                    *agreeing.entry(leaf.id.clone()).or_default() += 1;
+                }
+            }
+        }
+
+        let proven: Vec<TreeNodeId> = deleted
+            .iter()
+            .filter(|leaf| agreeing.get(&leaf.id) == Some(&operator_count))
             .map(|leaf| leaf.id.clone())
             .collect();
         if !proven.is_empty() {
             info!(
-                "Removing {} of {} kept leaves: their refunds were replaced at a lower timelock",
+                "Removing {} of {} kept leaves: every operator reports their refund replaced at a lower timelock",
                 proven.len(),
                 deleted.len()
             );
@@ -1596,6 +1630,29 @@ mod tests {
             output: vec![],
         });
         node
+    }
+
+    /// Deleting takes every operator. Counting agreement per leaf is what
+    /// enforces that, so a leaf only one of them vouches for stays put.
+    #[test_all]
+    fn a_leaf_is_only_proven_when_every_operator_agrees() {
+        let ours = leaf_with_refund_sequence(2000);
+        let lower = leaf_with_refund_sequence(1900);
+        let unchanged = leaf_with_refund_sequence(2000);
+
+        // Three operators, two of which report the replacement.
+        let agreeing = [&lower, &lower, &unchanged]
+            .iter()
+            .filter(|theirs| refund_timelock_dropped(&ours, theirs))
+            .count();
+        assert_eq!(agreeing, 2);
+        assert_ne!(agreeing, 3, "a leaf one operator still vouches for is kept");
+
+        let all = [&lower, &lower, &lower]
+            .iter()
+            .filter(|theirs| refund_timelock_dropped(&ours, theirs))
+            .count();
+        assert_eq!(all, 3, "unanimous replacement is what proves the spend");
     }
 
     /// A transfer decrements the refund timelock to hand the leaf to its next
