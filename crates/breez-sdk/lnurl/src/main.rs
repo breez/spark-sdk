@@ -24,8 +24,8 @@ use spark::session_store::InMemorySessionStore;
 use spark::ssp::{ServiceProvider, SparkWalletWebhookEventType};
 use spark::token::InMemoryTokenOutputStore;
 use spark::tree::InMemoryTreeStore;
+use spark_postgres::{PostgresStorageConfig, create_pool};
 use spark_wallet::{DefaultSigner, Network, SparkSignerAdapter, SparkWalletConfig};
-use sqlx::PgPool;
 use std::collections::HashSet;
 use std::str::FromStr;
 use std::{path::PathBuf, sync::Arc};
@@ -184,9 +184,16 @@ async fn main() -> Result<(), anyhow::Error> {
         ));
     }
 
-    let pool = PgPool::connect(&args.db_url)
-        .await
+    let pool = create_pool(&PostgresStorageConfig::with_defaults(args.db_url.clone()))
         .map_err(|e| anyhow!("failed to create connection pool: {:?}", e))?;
+
+    // The pool connects lazily, so an unreachable database or bad credentials
+    // would otherwise only surface once requests start arriving.
+    drop(
+        pool.get()
+            .await
+            .map_err(|e| anyhow!("failed to connect to the database: {:?}", e))?,
+    );
 
     if args.auto_migrate {
         debug!("running database migrations");

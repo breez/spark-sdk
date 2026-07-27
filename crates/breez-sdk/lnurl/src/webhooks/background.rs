@@ -321,7 +321,8 @@ mod tests {
 
     use axum::Router;
     use axum::routing::post;
-    use sqlx::{PgPool, Row};
+    use spark_postgres::deadpool_postgres::Pool;
+    use spark_postgres::tokio_postgres::Row;
     use tokio::sync::{RwLock, Semaphore};
 
     use super::*;
@@ -333,7 +334,7 @@ mod tests {
     const TEST_DOMAIN: &str = "test.example.com";
     const TEST_SECRET: &str = "test_webhook_secret";
 
-    async fn setup_test_db(label: &str) -> (crate::postgresql::LnurlRepository, PgPool) {
+    async fn setup_test_db(label: &str) -> (crate::postgresql::LnurlRepository, Pool) {
         let pool = crate::test_support::test_pool(label).await;
         let db = crate::postgresql::LnurlRepository::new(pool.clone());
         (db, pool)
@@ -348,30 +349,32 @@ mod tests {
         db.insert_webhook_deliveries(&[delivery]).await.unwrap();
     }
 
-    async fn insert_domain_webhook(pool: &PgPool, domain: &str, url: &str, secret: &str) {
-        sqlx::query(
-            "INSERT INTO domain_webhooks (domain, url, webhook_secret)
-             VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
-        )
-        .bind(domain)
-        .bind(url)
-        .bind(secret)
-        .execute(pool)
-        .await
-        .unwrap();
+    async fn insert_domain_webhook(pool: &Pool, domain: &str, url: &str, secret: &str) {
+        pool.get()
+            .await
+            .unwrap()
+            .execute(
+                "INSERT INTO domain_webhooks (domain, url, webhook_secret)
+                 VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+                &[&domain, &url, &secret],
+            )
+            .await
+            .unwrap();
     }
 
-    async fn get_delivery_by_identifier(pool: &PgPool, identifier: &str) -> sqlx::postgres::PgRow {
-        sqlx::query(
-            "SELECT id, identifier, domain, url, payload, created_at, succeeded_at,
-                    retry_count, next_retry_at, claimed_at,
-                    last_error_status_code, last_error_body
-             FROM webhook_deliveries WHERE identifier = $1",
-        )
-        .bind(identifier)
-        .fetch_one(pool)
-        .await
-        .unwrap()
+    async fn get_delivery_by_identifier(pool: &Pool, identifier: &str) -> Row {
+        pool.get()
+            .await
+            .unwrap()
+            .query_one(
+                "SELECT id, identifier, domain, url, payload, created_at, succeeded_at,
+                        retry_count, next_retry_at, claimed_at,
+                        last_error_status_code, last_error_body
+                 FROM webhook_deliveries WHERE identifier = $1",
+                &[&identifier],
+            )
+            .await
+            .unwrap()
     }
 
     fn new_semaphores() -> DomainSemaphores {
@@ -561,14 +564,15 @@ mod tests {
 
         // Manually make the delivery eligible for retry by setting next_retry_at to now.
         let id: i64 = row.try_get("id").unwrap();
-        sqlx::query(
-            "UPDATE webhook_deliveries SET next_retry_at = $1, claimed_at = NULL WHERE id = $2",
-        )
-        .bind(now_millis())
-        .bind(id)
-        .execute(&pool)
-        .await
-        .unwrap();
+        pool.get()
+            .await
+            .unwrap()
+            .execute(
+                "UPDATE webhook_deliveries SET next_retry_at = $1, claimed_at = NULL WHERE id = $2",
+                &[&now_millis(), &id],
+            )
+            .await
+            .unwrap();
 
         // Second attempt — should succeed.
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
@@ -762,12 +766,17 @@ mod tests {
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM webhook_deliveries WHERE identifier = $1")
-                .bind("no_config_1")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let count: i64 = pool
+            .get()
+            .await
+            .unwrap()
+            .query_one(
+                "SELECT COUNT(*) FROM webhook_deliveries WHERE identifier = $1",
+                &[&"no_config_1"],
+            )
+            .await
+            .unwrap()
+            .get(0);
         assert_eq!(count, 0, "unattempted delivery should be deleted");
     }
 
@@ -777,9 +786,14 @@ mod tests {
 
         // Insert a delivery that looks like it was previously attempted (url is set).
         insert_delivery(&db, "parked_1", TEST_DOMAIN).await;
-        sqlx::query("UPDATE webhook_deliveries SET url = 'http://old.example.com/hook' WHERE identifier = $1")
-            .bind("parked_1")
-            .execute(&pool)
+        pool.get()
+            .await
+            .unwrap()
+            .execute(
+                "UPDATE webhook_deliveries SET url = 'http://old.example.com/hook'
+                 WHERE identifier = $1",
+                &[&"parked_1"],
+            )
             .await
             .unwrap();
 

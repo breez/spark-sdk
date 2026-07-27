@@ -4,8 +4,14 @@ pub enum WebhookRepositoryError {
     General(anyhow::Error),
 }
 
-impl From<sqlx::Error> for WebhookRepositoryError {
-    fn from(e: sqlx::Error) -> Self {
+impl From<spark_postgres::tokio_postgres::Error> for WebhookRepositoryError {
+    fn from(e: spark_postgres::tokio_postgres::Error) -> Self {
+        Self::General(e.into())
+    }
+}
+
+impl From<spark_postgres::deadpool_postgres::PoolError> for WebhookRepositoryError {
+    fn from(e: spark_postgres::deadpool_postgres::PoolError) -> Self {
         Self::General(e.into())
     }
 }
