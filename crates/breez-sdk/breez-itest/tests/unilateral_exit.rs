@@ -74,6 +74,16 @@ async fn new_local_sdk(backend: SignerBackend) -> Result<LocalSdk> {
     build_local_sdk(fixtures, backend).await
 }
 
+/// Two wallets sharing one operator pool and bitcoind, so a leaf can be sent
+/// from one to the other. Each call to `build_local_sdk` derives its own
+/// identity, which is what makes them distinct parties.
+async fn new_local_sdk_pair(backend: SignerBackend) -> Result<(LocalSdk, LocalSdk)> {
+    let fixtures = Arc::new(TestFixtures::new().await?);
+    let sender = build_local_sdk(Arc::clone(&fixtures), backend).await?;
+    let receiver = build_local_sdk(fixtures, backend).await?;
+    Ok((sender, receiver))
+}
+
 /// Claims through the side-channel `SparkWallet`: the fixture's SSP stub has no
 /// URL, so the public claim path (which fetches a fee quote) can't be used.
 async fn deposit_and_claim(sdk: &LocalSdk, amount: Amount) -> Result<()> {
@@ -665,6 +675,111 @@ async fn test_full_exit_and_sweep(#[case] backend: SignerBackend) -> Result<()> 
         "swept {swept} must equal funding ({CPFP_SATS}) + recoverable \
          ({}) - total fee ({})",
         built.recoverable_value_sat, built.total_fee_sat
+    );
+    Ok(())
+}
+
+/// A leaf received through a Spark transfer exits like any other. Every other
+/// exit here drives a leaf its own wallet deposited; a received leaf reaches the
+/// wallet by a different route, and carries a refund the claim re-signed rather
+/// than the one the deposit produced. This drives that refund on chain and
+/// spends its output, which is what shows the claim's refund is broadcastable
+/// and the exit can spend what it pays to.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn test_exit_leaf_received_by_transfer(#[case] backend: SignerBackend) -> Result<()> {
+    let (sender, receiver) = new_local_sdk_pair(backend).await?;
+    deposit_and_claim(&sender, Amount::from_sat(LEAF_SATS)).await?;
+    wait_for_balance(&sender.sdk, Some(LEAF_SATS), None, 60).await?;
+
+    let receiver_address = receiver.spark_wallet.get_spark_address()?;
+    sender
+        .spark_wallet
+        .transfer(LEAF_SATS, &receiver_address, None)
+        .await?;
+
+    // The receiver claims in the background, and claiming is what re-signs the
+    // refund to its own leaf key. Waiting on the balance waits for that.
+    wait_for_balance(&receiver.sdk, Some(LEAF_SATS), None, 60).await?;
+
+    let cpfp = fund_p2tr_utxo(&receiver.fixtures.bitcoind, Amount::from_sat(CPFP_SATS)).await?;
+    let destination = cpfp.address.clone();
+
+    let quote = receiver
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: destination.to_string(),
+            selection: ExitLeafSelection::Auto,
+        })
+        .await?;
+    assert_quote_consistent(&quote, FEE_RATE, &destination.to_string(), p2tr_dust());
+    assert_eq!(
+        quote.leaves.len(),
+        1,
+        "the receiver holds exactly the transferred leaf"
+    );
+
+    let signer = signer_for(&cpfp.secret_key.secret_bytes())?;
+    let built = receiver
+        .sdk
+        .unilateral_exit(
+            UnilateralExitRequest {
+                prepared: quote.clone(),
+                funding_inputs: vec![cpfp_input(&cpfp)],
+            },
+            signer,
+        )
+        .await?;
+    assert_build_matches_quote(&quote, &built);
+
+    // The refund being driven is the one the claim signed, not the one the
+    // deposit produced. A deposited leaf's refund is timelocked at 2000 blocks
+    // and each transfer hands the leaf on one 100-block interval lower, so 1900
+    // is what a leaf that has moved exactly once carries. Without this the test
+    // would still pass on a leaf that never moved.
+    let refund = built
+        .transactions
+        .iter()
+        .find(|t| t.kind == UnilateralExitTxKind::Refund)
+        .expect("the exit drives the leaf's refund");
+    let refund_sequence = decode_tx(&refund.tx_hex)?.input[0]
+        .sequence
+        .to_consensus_u32()
+        & 0xFFFF;
+    assert_eq!(
+        refund_sequence, 1900,
+        "a leaf transferred once carries a refund one interval below a deposit's 2000"
+    );
+
+    assert_all_mined(&receiver, &built, &destination).await?;
+
+    let sweep_txid = built
+        .transactions
+        .iter()
+        .find(|t| t.kind == UnilateralExitTxKind::Sweep)
+        .map(|t| Txid::from_str(&t.txid))
+        .expect("the built set terminates in a sweep")?;
+    let sweep = receiver
+        .fixtures
+        .bitcoind
+        .get_transaction(&sweep_txid)
+        .await?;
+    let swept = sweep
+        .output
+        .iter()
+        .find(|o| o.script_pubkey == destination.script_pubkey())
+        .map(|o| o.value.to_sat())
+        .expect("the sweep pays the destination");
+    assert_eq!(
+        built.recoverable_value_sat, LEAF_SATS,
+        "the whole transferred leaf is what was recovered"
+    );
+    assert_eq!(
+        swept,
+        CPFP_SATS + built.recoverable_value_sat - built.total_fee_sat,
+        "the transferred value lands at the destination"
     );
     Ok(())
 }
