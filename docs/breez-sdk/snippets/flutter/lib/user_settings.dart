@@ -9,8 +9,6 @@ Future<void> getUserSettings(BreezSdk sdk) async {
 
 Future<void> updateUserSettings(BreezSdk sdk) async {
   // ANCHOR: update-user-settings
-  // Fields left as null are not changed. Settings that take an enum value
-  // accept Set to assign one, or Unset to clear it.
   await sdk.updateUserSettings(
       request: UpdateUserSettingsRequest(
           sparkPrivateModeEnabled: true,

@@ -12,8 +12,6 @@ pub(crate) async fn get_user_settings(sdk: &BreezSdk) -> Result<()> {
 
 pub(crate) async fn update_user_settings(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: update-user-settings
-    // Fields left as None are not changed. Settings that take an enum value
-    // accept Set to assign one, or Unset to clear it.
     sdk.update_user_settings(UpdateUserSettingsRequest {
         spark_private_mode_enabled: Some(true),
         stable_balance_active_label: None,

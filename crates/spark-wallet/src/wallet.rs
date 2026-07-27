@@ -18,7 +18,7 @@ use platform_utils::tokio;
 use spark::bitcoin::sighash_from_multi_input_tx;
 #[cfg(feature = "test-utils")]
 use spark::operator::rpc::spark::{
-    Network as ProtoNetwork, QueryNodesRequest, TreeNodeStatus as ProtoTreeNodeStatus,
+    QueryNodesRequest, TreeNodeStatus as ProtoTreeNodeStatus,
     query_nodes_request::Source as QueryNodesSource,
 };
 use spark::{
@@ -2082,7 +2082,7 @@ impl SparkWallet {
                     identity_public_key.serialize().to_vec(),
                 )),
                 statuses: vec![ProtoTreeNodeStatus::Available as i32],
-                network: self.proto_network() as i32,
+                network: self.config.network.to_proto_network() as i32,
                 include_parents: false,
                 offset: 0,
                 limit: 100,
@@ -2090,17 +2090,6 @@ impl SparkWallet {
             .await?;
 
         Ok(response.nodes.values().map(|node| node.value).sum())
-    }
-
-    /// `Network::to_proto_network` is crate-private to `spark`.
-    #[cfg(feature = "test-utils")]
-    fn proto_network(&self) -> ProtoNetwork {
-        match self.config.network {
-            crate::Network::Mainnet => ProtoNetwork::Mainnet,
-            crate::Network::Regtest => ProtoNetwork::Regtest,
-            crate::Network::Testnet => ProtoNetwork::Testnet,
-            crate::Network::Signet => ProtoNetwork::Signet,
-        }
     }
 
     /// Manually drives leaf optimization, blocking until the requested work

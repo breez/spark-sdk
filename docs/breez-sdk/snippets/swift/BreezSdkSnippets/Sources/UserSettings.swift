@@ -9,8 +9,6 @@ func getUserSettings(sdk: BreezSdk) async throws {
 
 func updateUserSettings(sdk: BreezSdk) async throws {
     // ANCHOR: update-user-settings
-    // Fields left as nil are not changed. Settings that take an enum value
-    // accept set to assign one, or unset to clear it.
     try await sdk.updateUserSettings(
         request: UpdateUserSettingsRequest(
             sparkPrivateModeEnabled: true,

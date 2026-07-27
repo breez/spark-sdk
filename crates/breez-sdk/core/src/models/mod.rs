@@ -2116,8 +2116,9 @@ pub struct UserSettings {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SparkMasterIdentityPublicKey {
-    /// Designate the holder of this hex encoded public key as the wallet's
-    /// master identity, replacing any previously designated key.
+    /// Designate the holder of this public key as the wallet's master
+    /// identity, replacing any previously designated key. Must be hex encoded
+    /// in the 33-byte compressed form.
     Set { public_key: String },
     /// Remove the designated master identity, leaving the owner as the only
     /// party able to read the wallet under private mode.

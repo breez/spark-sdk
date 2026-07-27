@@ -9,8 +9,6 @@ const exampleGetUserSettings = async (sdk: BreezSdk) => {
 
 const exampleUpdateUserSettings = async (sdk: BreezSdk) => {
   // ANCHOR: update-user-settings
-  // Fields left undefined are not changed. Settings that take an enum value
-  // accept set to assign one, or unset to clear it.
   await sdk.updateUserSettings({
     sparkPrivateModeEnabled: true,
     stableBalanceActiveLabel: undefined,

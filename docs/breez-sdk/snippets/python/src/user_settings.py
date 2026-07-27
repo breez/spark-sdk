@@ -20,8 +20,6 @@ async def get_user_settings(sdk: BreezSdk):
 
 async def update_user_settings(sdk: BreezSdk):
     # ANCHOR: update-user-settings
-    # Fields left as None are not changed. Settings that take an enum value
-    # accept SET to assign one, or UNSET to clear it.
     try:
         await sdk.update_user_settings(
             request=UpdateUserSettingsRequest(

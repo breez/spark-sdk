@@ -16,8 +16,6 @@ class UserSettings {
 
     suspend fun updateUserSettings(sdk: BreezSdk) {
         // ANCHOR: update-user-settings
-        // Fields left as null are not changed. Settings that take an enum value
-        // accept Set to assign one, or Unset to clear it.
         try {
             sdk.updateUserSettings(UpdateUserSettingsRequest(
                 sparkPrivateModeEnabled = true,

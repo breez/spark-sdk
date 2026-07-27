@@ -29,4 +29,6 @@ The following user settings are available:
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.update_user_settings">API docs</a>
 </h2>
 
+Every field of {{#name UpdateUserSettingsRequest}} is optional, and a field left unset is not changed. Settings that hold a value use an enum to distinguish assigning one from clearing it: {{#enum SparkMasterIdentityPublicKey::Set}} and {{#enum StableBalanceActiveLabel::Set}} assign, {{#enum SparkMasterIdentityPublicKey::Unset}} and {{#enum StableBalanceActiveLabel::Unset}} clear.
+
 {{#tabs user_settings:update-user-settings}}
