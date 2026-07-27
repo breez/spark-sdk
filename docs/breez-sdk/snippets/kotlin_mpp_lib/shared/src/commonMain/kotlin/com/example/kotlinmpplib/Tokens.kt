@@ -135,13 +135,13 @@ class Tokens {
         // ANCHOR_END: send-token-payment
     }
 
-    suspend fun sendTokenBatch(sdk: BreezSdk) {
-        // ANCHOR: send-token-batch
+    suspend fun sendBatch(sdk: BreezSdk) {
+        // ANCHOR: send-batch
         try {
             // Each recipient is a Spark address or a Spark invoice. An invoice that
             // names its own token and amount needs neither here.
             val recipients = listOf(
-                TokenBatchRecipient(
+                BatchRecipient(
                     paymentRequest = "<spark address>",
                     // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer)
                     amount = BigInteger.fromLong(1_000L),
@@ -149,7 +149,7 @@ class Tokens {
                     // amount = BigInteger.valueOf(1_000L),
                     tokenIdentifier = "<token identifier>"
                 ),
-                TokenBatchRecipient(
+                BatchRecipient(
                     paymentRequest = "<spark invoice>",
                     amount = null,
                     tokenIdentifier = null
@@ -157,17 +157,18 @@ class Tokens {
             )
 
             val prepareResponse =
-                sdk.prepareSendTokenBatch(PrepareSendTokenBatchRequest(recipients = recipients))
+                sdk.prepareSendBatch(PrepareSendBatchRequest(recipients = recipients))
 
             // Show what the batch debits, one entry per token
             for (total in prepareResponse.totals) {
+                // Unset would mean sats, which a batch cannot send yet
                 println("Token ID: ${total.tokenIdentifier}")
                 println("Total: ${total.amount} token base units")
             }
 
             // If the totals are acceptable, send the batch
             val sendResponse =
-                sdk.sendTokenBatch(SendTokenBatchRequest(prepareResponse = prepareResponse))
+                sdk.sendBatch(SendBatchRequest(prepareResponse = prepareResponse))
 
             // One payment per recipient, in the order they were requested
             for (payment in sendResponse.payments) {
@@ -176,7 +177,7 @@ class Tokens {
         } catch (e: Exception) {
             // handle error
         }
-        // ANCHOR_END: send-token-batch
+        // ANCHOR_END: send-batch
     }
 
     suspend fun fetchConversionLimits(sdk: BreezSdk) {

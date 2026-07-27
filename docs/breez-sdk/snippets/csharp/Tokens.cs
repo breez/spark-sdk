@@ -120,38 +120,39 @@ namespace BreezSdkSnippets
             // ANCHOR_END: send-token-payment
         }
 
-        async Task SendTokenBatch(BreezSdk sdk)
+        async Task SendBatch(BreezSdk sdk)
         {
-            // ANCHOR: send-token-batch
+            // ANCHOR: send-batch
             // Each recipient is a Spark address or a Spark invoice. An invoice that
             // names its own token and amount needs neither here.
-            var recipients = new TokenBatchRecipient[] {
-                new TokenBatchRecipient(
+            var recipients = new BatchRecipient[] {
+                new BatchRecipient(
                     paymentRequest: "<spark address>",
                     amount: new BigInteger(1_000),
                     tokenIdentifier: "<token identifier>"
                 ),
-                new TokenBatchRecipient(
+                new BatchRecipient(
                     paymentRequest: "<spark invoice>",
                     amount: null,
                     tokenIdentifier: null
                 )
             };
 
-            var prepareResponse = await sdk.PrepareSendTokenBatch(
-                request: new PrepareSendTokenBatchRequest(recipients: recipients)
+            var prepareResponse = await sdk.PrepareSendBatch(
+                request: new PrepareSendBatchRequest(recipients: recipients)
             );
 
             // Show what the batch debits, one entry per token
             foreach (var total in prepareResponse.totals)
             {
+                // Unset would mean sats, which a batch cannot send yet
                 Console.WriteLine($"Token ID: {total.tokenIdentifier}");
                 Console.WriteLine($"Total: {total.amount} token base units");
             }
 
             // If the totals are acceptable, send the batch
-            var sendResponse = await sdk.SendTokenBatch(
-                request: new SendTokenBatchRequest(prepareResponse: prepareResponse)
+            var sendResponse = await sdk.SendBatch(
+                request: new SendBatchRequest(prepareResponse: prepareResponse)
             );
 
             // One payment per recipient, in the order they were requested
@@ -159,7 +160,7 @@ namespace BreezSdkSnippets
             {
                 Console.WriteLine($"Payment: {payment}");
             }
-            // ANCHOR_END: send-token-batch
+            // ANCHOR_END: send-batch
         }
 
         async Task FetchConversionLimits(BreezSdk sdk)

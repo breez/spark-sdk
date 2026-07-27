@@ -6,15 +6,14 @@ use breez_sdk_itest::{
     ensure_funded, wait_for_payment_succeeded_event,
 };
 use breez_sdk_spark::{
-    BuildTransferPackageOptions, BuildUnsignedTokenBatchPackageRequest,
+    BatchRecipient, BuildTransferPackageOptions, BuildUnsignedBatchPackageRequest,
     BuildUnsignedTransferPackageRequest, CreateIssuerTokenRequest, FeePolicy, GetInfoRequest,
     LeafOptimizationConfig, MintIssuerTokenRequest, Network, OnchainConfirmationSpeed, Payment,
-    PaymentMethod, PaymentRequest, PaymentStatus, PaymentType, PrepareSendPaymentRequest,
-    PrepareSendTokenBatchRequest, PublishSignedTransferPackageRequest,
+    PaymentMethod, PaymentRequest, PaymentStatus, PaymentType, PrepareSendBatchRequest,
+    PrepareSendPaymentRequest, PublishSignedTransferPackageRequest,
     PublishSignedTransferPackageResponse, ReceivePaymentMethod, ReceivePaymentRequest,
-    SendPaymentMethod, SignedTransferPackage, SyncWalletRequest, TokenBatchRecipient,
-    TransferSignature, UnsignedTransferPackage, default_config, default_external_signers,
-    signer::ExternalSparkSigner,
+    SendPaymentMethod, SignedTransferPackage, SyncWalletRequest, TransferSignature,
+    UnsignedTransferPackage, default_config, default_external_signers, signer::ExternalSparkSigner,
 };
 use rand::RngCore;
 use tracing::info;
@@ -1333,14 +1332,14 @@ async fn test_client_signing_token_batch() -> Result<()> {
 
     let prepare_response = alice
         .sdk
-        .prepare_send_token_batch(PrepareSendTokenBatchRequest {
+        .prepare_send_batch(PrepareSendBatchRequest {
             recipients: vec![
-                TokenBatchRecipient {
+                BatchRecipient {
                     payment_request: bob_spark_address,
                     amount: Some(60),
                     token_identifier: Some(token_id.clone()),
                 },
-                TokenBatchRecipient {
+                BatchRecipient {
                     payment_request: bob_invoice,
                     amount: None,
                     token_identifier: None,
@@ -1351,9 +1350,7 @@ async fn test_client_signing_token_batch() -> Result<()> {
 
     let unsigned = alice
         .sdk
-        .build_unsigned_token_batch_package(BuildUnsignedTokenBatchPackageRequest {
-            prepare_response,
-        })
+        .build_unsigned_batch_package(BuildUnsignedBatchPackageRequest { prepare_response })
         .await?;
 
     let UnsignedTransferPackage::TokenBatch {

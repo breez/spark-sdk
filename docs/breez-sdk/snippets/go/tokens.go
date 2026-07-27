@@ -162,13 +162,13 @@ func SendTokenPayment(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
-func SendTokenBatch(sdk *breez_sdk_spark.BreezSdk) error {
-	// ANCHOR: send-token-batch
+func SendBatch(sdk *breez_sdk_spark.BreezSdk) error {
+	// ANCHOR: send-batch
 	// Each recipient is a Spark address or a Spark invoice. An invoice that
 	// names its own token and amount needs neither here.
 	amount := new(big.Int).SetInt64(1_000)
 	tokenIdentifier := "<token identifier>"
-	recipients := []breez_sdk_spark.TokenBatchRecipient{
+	recipients := []breez_sdk_spark.BatchRecipient{
 		{
 			PaymentRequest:  "<spark address>",
 			Amount:          &amount,
@@ -181,7 +181,7 @@ func SendTokenBatch(sdk *breez_sdk_spark.BreezSdk) error {
 		},
 	}
 
-	prepareResponse, err := sdk.PrepareSendTokenBatch(breez_sdk_spark.PrepareSendTokenBatchRequest{
+	prepareResponse, err := sdk.PrepareSendBatch(breez_sdk_spark.PrepareSendBatchRequest{
 		Recipients: recipients,
 	})
 
@@ -196,12 +196,17 @@ func SendTokenBatch(sdk *breez_sdk_spark.BreezSdk) error {
 
 	// Show what the batch debits, one entry per token
 	for _, total := range prepareResponse.Totals {
-		log.Printf("Token ID: %v", total.TokenIdentifier)
+		// Unset would mean sats, which a batch cannot send yet
+		tokenID := ""
+		if total.TokenIdentifier != nil {
+			tokenID = *total.TokenIdentifier
+		}
+		log.Printf("Token ID: %s", tokenID)
 		log.Printf("Total: %v token base units", total.Amount)
 	}
 
 	// If the totals are acceptable, send the batch
-	sendResponse, err := sdk.SendTokenBatch(breez_sdk_spark.SendTokenBatchRequest{
+	sendResponse, err := sdk.SendBatch(breez_sdk_spark.SendBatchRequest{
 		PrepareResponse: prepareResponse,
 	})
 
@@ -218,7 +223,7 @@ func SendTokenBatch(sdk *breez_sdk_spark.BreezSdk) error {
 	for _, payment := range sendResponse.Payments {
 		log.Printf("Payment: %#v", payment)
 	}
-	// ANCHOR_END: send-token-batch
+	// ANCHOR_END: send-batch
 	return nil
 }
 

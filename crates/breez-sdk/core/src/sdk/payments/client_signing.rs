@@ -7,7 +7,7 @@ use crate::{
     BitcoinAddressDetails, FeePolicy, SendOnchainFeeQuote,
     error::SdkError,
     models::{
-        BuildTransferPackageOptions, PrepareSendPaymentResponse, PrepareSendTokenBatchResponse,
+        BuildTransferPackageOptions, PrepareSendBatchResponse, PrepareSendPaymentResponse,
         SendPaymentMethod, SignedTransferPackage, TransferSignature, TransferTarget,
         UnsignedTransferPackage,
     },
@@ -250,11 +250,11 @@ async fn build_lightning_package(
     )
 }
 
-pub(in crate::sdk::payments) async fn build_unsigned_token_batch_package(
+pub(in crate::sdk::payments) async fn build_unsigned_batch_package(
     sdk: &BreezSdk,
-    prepare_response: &PrepareSendTokenBatchResponse,
+    prepare_response: &PrepareSendBatchResponse,
 ) -> Result<UnsignedTransferPackage, SdkError> {
-    let recipients = send::token_batch::to_token_recipients(&prepare_response.recipients)?;
+    let recipients = send::batch::to_token_recipients(&prepare_response.recipients)?;
     let prepared = sdk
         .spark_wallet
         .prepare_token_package(recipients, None, None)

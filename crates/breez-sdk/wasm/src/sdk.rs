@@ -361,34 +361,27 @@ impl BreezSdk {
         Ok(self.sdk.send_payment(request.into()).await?.into())
     }
 
-    #[wasm_bindgen(js_name = "prepareSendTokenBatch")]
-    pub async fn prepare_send_token_batch(
+    #[wasm_bindgen(js_name = "prepareSendBatch")]
+    pub async fn prepare_send_batch(
         &self,
-        request: PrepareSendTokenBatchRequest,
-    ) -> WasmResult<PrepareSendTokenBatchResponse> {
-        Ok(self
-            .sdk
-            .prepare_send_token_batch(request.into())
-            .await?
-            .into())
+        request: PrepareSendBatchRequest,
+    ) -> WasmResult<PrepareSendBatchResponse> {
+        Ok(self.sdk.prepare_send_batch(request.into()).await?.into())
     }
 
-    #[wasm_bindgen(js_name = "sendTokenBatch")]
-    pub async fn send_token_batch(
-        &self,
-        request: SendTokenBatchRequest,
-    ) -> WasmResult<SendTokenBatchResponse> {
-        Ok(self.sdk.send_token_batch(request.into()).await?.into())
+    #[wasm_bindgen(js_name = "sendBatch")]
+    pub async fn send_batch(&self, request: SendBatchRequest) -> WasmResult<SendBatchResponse> {
+        Ok(self.sdk.send_batch(request.into()).await?.into())
     }
 
-    #[wasm_bindgen(js_name = "buildUnsignedTokenBatchPackage")]
-    pub async fn build_unsigned_token_batch_package(
+    #[wasm_bindgen(js_name = "buildUnsignedBatchPackage")]
+    pub async fn build_unsigned_batch_package(
         &self,
-        request: BuildUnsignedTokenBatchPackageRequest,
+        request: BuildUnsignedBatchPackageRequest,
     ) -> WasmResult<UnsignedTransferPackage> {
         Ok(self
             .sdk
-            .build_unsigned_token_batch_package(request.into())
+            .build_unsigned_batch_package(request.into())
             .await?
             .into())
     }

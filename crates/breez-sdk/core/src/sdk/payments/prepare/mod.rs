@@ -1,9 +1,9 @@
+pub(in crate::sdk::payments) mod batch;
 mod bitcoin_address;
 mod bolt11;
 pub(in crate::sdk::payments) mod cross_chain;
 mod spark_address;
 mod spark_invoice;
-pub(in crate::sdk::payments) mod token_batch;
 
 use crate::{
     InputType,

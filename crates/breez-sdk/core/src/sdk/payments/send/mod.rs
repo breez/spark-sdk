@@ -1,9 +1,9 @@
+pub(in crate::sdk) mod batch;
 pub(super) mod bitcoin_address;
 pub(in crate::sdk) mod bolt11;
 pub(in crate::sdk::payments) mod cross_chain;
 pub(super) mod spark_address;
 pub(super) mod spark_invoice;
-pub(in crate::sdk) mod token_batch;
 
 use tracing::warn;
 
@@ -112,12 +112,11 @@ pub(in crate::sdk) async fn publish_signed_package_inner(
                 .await;
             }
             if let Ok(Some(payment_id)) = cache.fetch_published_package(&package_id).await
-                && let Ok(payments) =
-                    token_batch::payments_for_published_batch(sdk, payment_id).await
+                && let Ok(payments) = batch::payments_for_published_batch(sdk, payment_id).await
             {
                 return Ok(PublishOutcome::Replayed(payments));
             }
-            let payments = token_batch::send_signed(sdk, token_context, signed).await?;
+            let payments = batch::send_signed(sdk, token_context, signed).await?;
             // Only the first id is recorded: the rest are recovered through the
             // transaction hash it carries.
             if let Some(payment) = payments.first() {

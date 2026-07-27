@@ -3,9 +3,8 @@ use spark_wallet::{SparkAddress, TokenRecipient};
 use crate::{
     error::SdkError,
     models::{
-        ListPaymentsRequest, Payment, PaymentDetails, PaymentDetailsFilter,
-        ResolvedTokenBatchRecipient, SendTokenBatchRequest, SendTokenBatchResponse,
-        TokenBatchDestination,
+        BatchDestination, ListPaymentsRequest, Payment, PaymentDetails, PaymentDetailsFilter,
+        ResolvedBatchRecipient, SendBatchRequest, SendBatchResponse,
     },
     sdk::BreezSdk,
     signer::ExternalPreparedTokenTransaction,
@@ -14,8 +13,8 @@ use crate::{
 
 pub(in crate::sdk) async fn send(
     sdk: &BreezSdk,
-    request: SendTokenBatchRequest,
-) -> Result<SendTokenBatchResponse, SdkError> {
+    request: SendBatchRequest,
+) -> Result<SendBatchResponse, SdkError> {
     let recipients = to_token_recipients(&request.prepare_response.recipients)?;
 
     let token_transaction = sdk
@@ -32,7 +31,7 @@ pub(in crate::sdk) async fn send(
 
     super::emit_payments(sdk, &payments).await;
 
-    Ok(SendTokenBatchResponse { payments })
+    Ok(SendBatchResponse { payments })
 }
 
 /// Turns the prepare response back into what the wallet pays. Invoices are
@@ -40,19 +39,23 @@ pub(in crate::sdk) async fn send(
 /// re-validates them and attaches them to the transaction: a prepare response is
 /// caller-supplied, and an invoice may have expired since it was built.
 pub(in crate::sdk) fn to_token_recipients(
-    recipients: &[ResolvedTokenBatchRecipient],
+    recipients: &[ResolvedBatchRecipient],
 ) -> Result<Vec<TokenRecipient>, SdkError> {
     recipients
         .iter()
         .map(|recipient| match &recipient.destination {
-            TokenBatchDestination::SparkInvoice { invoice_details } => {
+            BatchDestination::SparkInvoice { invoice_details } => {
                 Ok(TokenRecipient::Invoice {
                     invoice: invoice_details.invoice.clone(),
                     amount: Some(recipient.amount),
                 })
             }
-            TokenBatchDestination::SparkAddress { address } => Ok(TokenRecipient::Address {
-                token_id: recipient.token_identifier.clone(),
+            BatchDestination::SparkAddress { address } => Ok(TokenRecipient::Address {
+                token_id: recipient.token_identifier.clone().ok_or_else(|| {
+                    SdkError::InvalidInput(format!(
+                        "A batch cannot send sats yet, so address {address} needs a token identifier"
+                    ))
+                })?,
                 amount: recipient.amount,
                 receiver_address: address
                     .parse::<SparkAddress>()

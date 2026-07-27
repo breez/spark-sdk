@@ -191,25 +191,25 @@ impl BreezSdk {
         self.inner.send_payment(request).await
     }
 
-    pub async fn prepare_send_token_batch(
+    pub async fn prepare_send_batch(
         &self,
-        request: PrepareSendTokenBatchRequest,
-    ) -> Result<PrepareSendTokenBatchResponse, SdkError> {
-        self.inner.prepare_send_token_batch(request).await
+        request: PrepareSendBatchRequest,
+    ) -> Result<PrepareSendBatchResponse, SdkError> {
+        self.inner.prepare_send_batch(request).await
     }
 
-    pub async fn send_token_batch(
+    pub async fn send_batch(
         &self,
-        request: SendTokenBatchRequest,
-    ) -> Result<SendTokenBatchResponse, SdkError> {
-        self.inner.send_token_batch(request).await
+        request: SendBatchRequest,
+    ) -> Result<SendBatchResponse, SdkError> {
+        self.inner.send_batch(request).await
     }
 
-    pub async fn build_unsigned_token_batch_package(
+    pub async fn build_unsigned_batch_package(
         &self,
-        request: BuildUnsignedTokenBatchPackageRequest,
+        request: BuildUnsignedBatchPackageRequest,
     ) -> Result<UnsignedTransferPackage, SdkError> {
-        self.inner.build_unsigned_token_batch_package(request).await
+        self.inner.build_unsigned_batch_package(request).await
     }
 
     pub async fn publish_signed_transfer_package(

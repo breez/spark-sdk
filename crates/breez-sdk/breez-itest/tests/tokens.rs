@@ -1259,14 +1259,14 @@ async fn test_08_token_batch(
 
     let prepare_response = alice
         .sdk
-        .prepare_send_token_batch(PrepareSendTokenBatchRequest {
+        .prepare_send_batch(PrepareSendBatchRequest {
             recipients: vec![
-                TokenBatchRecipient {
+                BatchRecipient {
                     payment_request: bob_address,
                     amount: Some(70),
                     token_identifier: Some(token.clone()),
                 },
-                TokenBatchRecipient {
+                BatchRecipient {
                     payment_request: bob_invoice.clone(),
                     amount: None,
                     token_identifier: None,
@@ -1277,17 +1277,20 @@ async fn test_08_token_batch(
 
     // One token, so one total covering both recipients.
     assert_eq!(prepare_response.totals.len(), 1);
-    assert_eq!(prepare_response.totals[0].token_identifier, token);
+    assert_eq!(
+        prepare_response.totals[0].token_identifier.as_ref(),
+        Some(&token)
+    );
     assert_eq!(prepare_response.totals[0].amount, 100);
     assert_eq!(prepare_response.recipients.len(), 2);
     assert!(
         matches!(
             prepare_response.recipients[0].destination,
-            TokenBatchDestination::SparkAddress { .. }
+            BatchDestination::SparkAddress { .. }
         ),
         "the address recipient resolves to an address"
     );
-    let TokenBatchDestination::SparkInvoice { invoice_details } =
+    let BatchDestination::SparkInvoice { invoice_details } =
         &prepare_response.recipients[1].destination
     else {
         panic!("the invoice recipient carries the invoice it pays");
@@ -1296,7 +1299,7 @@ async fn test_08_token_batch(
 
     let response = alice
         .sdk
-        .send_token_batch(SendTokenBatchRequest { prepare_response })
+        .send_batch(SendBatchRequest { prepare_response })
         .await?;
 
     assert_eq!(response.payments.len(), 2, "one payment per recipient");
@@ -1386,22 +1389,22 @@ async fn test_09_token_batch_prepare_rejections(
         .await?
         .payment_request;
 
-    let prepare = |recipients: Vec<TokenBatchRecipient>| {
+    let prepare = |recipients: Vec<BatchRecipient>| {
         alice
             .sdk
-            .prepare_send_token_batch(PrepareSendTokenBatchRequest { recipients })
+            .prepare_send_batch(PrepareSendBatchRequest { recipients })
     };
 
     assert!(prepare(vec![]).await.is_err(), "empty batch");
 
     assert!(
         prepare(vec![
-            TokenBatchRecipient {
+            BatchRecipient {
                 payment_request: bob_invoice.clone(),
                 amount: None,
                 token_identifier: None,
             },
-            TokenBatchRecipient {
+            BatchRecipient {
                 payment_request: bob_invoice.clone(),
                 amount: None,
                 token_identifier: None,
@@ -1413,7 +1416,7 @@ async fn test_09_token_batch_prepare_rejections(
     );
 
     assert!(
-        prepare(vec![TokenBatchRecipient {
+        prepare(vec![BatchRecipient {
             payment_request: bob_address.clone(),
             amount: Some(5),
             token_identifier: None,
@@ -1424,7 +1427,7 @@ async fn test_09_token_batch_prepare_rejections(
     );
 
     assert!(
-        prepare(vec![TokenBatchRecipient {
+        prepare(vec![BatchRecipient {
             payment_request: bob_address.clone(),
             amount: None,
             token_identifier: Some(token.clone()),
@@ -1436,12 +1439,12 @@ async fn test_09_token_batch_prepare_rejections(
 
     // Two outputs to one payee is a legitimate batch, not a duplicate.
     let ok = prepare(vec![
-        TokenBatchRecipient {
+        BatchRecipient {
             payment_request: bob_address.clone(),
             amount: Some(5),
             token_identifier: Some(token.clone()),
         },
-        TokenBatchRecipient {
+        BatchRecipient {
             payment_request: bob_address,
             amount: Some(7),
             token_identifier: Some(token.clone()),
@@ -1538,19 +1541,19 @@ async fn test_10_token_batch_invoice_attribution(
 
     let prepare_response = alice
         .sdk
-        .prepare_send_token_batch(PrepareSendTokenBatchRequest {
+        .prepare_send_batch(PrepareSendBatchRequest {
             recipients: vec![
-                TokenBatchRecipient {
+                BatchRecipient {
                     payment_request: invoice_a.clone(),
                     amount: None,
                     token_identifier: None,
                 },
-                TokenBatchRecipient {
+                BatchRecipient {
                     payment_request: invoice_b.clone(),
                     amount: None,
                     token_identifier: None,
                 },
-                TokenBatchRecipient {
+                BatchRecipient {
                     payment_request: bob_address,
                     amount: Some(70),
                     token_identifier: Some(token_a.clone()),
@@ -1559,20 +1562,20 @@ async fn test_10_token_batch_invoice_attribution(
         })
         .await?;
 
-    let totals: Vec<(String, u128)> = prepare_response
+    let totals: Vec<(Option<String>, u128)> = prepare_response
         .totals
         .iter()
         .map(|t| (t.token_identifier.clone(), t.amount))
         .collect();
     assert_eq!(
         totals,
-        vec![(token_a.clone(), 100), (token_b.clone(), 55)],
+        vec![(Some(token_a.clone()), 100), (Some(token_b.clone()), 55)],
         "one total per token, in first-requested order"
     );
 
     let response = alice
         .sdk
-        .send_token_batch(SendTokenBatchRequest { prepare_response })
+        .send_batch(SendBatchRequest { prepare_response })
         .await?;
     assert_eq!(response.payments.len(), 3, "one payment per recipient");
 

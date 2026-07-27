@@ -68,10 +68,9 @@ async fn sign_package(
                 info!("Approve combining token outputs before the batch is sent");
             } else {
                 for total in totals {
-                    info!(
-                        "Approve sending {} of token {}",
-                        total.amount, total.token_identifier
-                    );
+                    // Unset would mean sats, which a batch cannot send yet
+                    let token_id = total.token_identifier.as_deref().unwrap_or_default();
+                    info!("Approve sending {} of token {token_id}", total.amount);
                 }
             }
             TransferSignature::Token {

@@ -1649,7 +1649,7 @@ pub enum UnsignedTransferPackage {
         token_context: Vec<u8>,
         /// What the batch debits, per token. A batch spanning tokens has no
         /// single amount to report.
-        totals: Vec<TokenBatchTotal>,
+        totals: Vec<BatchTotal>,
         /// When set, this package re-shapes the wallet's token outputs instead of
         /// sending a payment. Publishing it returns `SwapCompleted`: rebuild the
         /// original send from the same prepare response and submit again.
@@ -1815,34 +1815,34 @@ pub struct SendPaymentRequest {
     pub idempotency_key: Option<String>,
 }
 
-/// A single payee in a batch token send.
+/// A single payee in a batch send.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct TokenBatchRecipient {
+pub struct BatchRecipient {
     /// Spark address or Spark invoice identifying the payee.
     pub payment_request: String,
-    /// Amount in the token's base units. Required unless `payment_request` is an
-    /// invoice that carries its own amount.
+    /// Amount to send, in the base units of the asset being sent. Required
+    /// unless `payment_request` is an invoice that carries its own amount.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub amount: Option<u128>,
-    /// Token to send. Required unless `payment_request` is an invoice that names
-    /// one.
+    /// Token to send. Unset means sats, which a batch cannot send yet, so a
+    /// plain address needs this set. An invoice that names a token does not.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub token_identifier: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct PrepareSendTokenBatchRequest {
-    /// The payees, all paid by one token transaction. They may span several
-    /// tokens, and may mix Spark addresses with Spark invoices.
-    pub recipients: Vec<TokenBatchRecipient>,
+pub struct PrepareSendBatchRequest {
+    /// The payees, all paid by one transaction. They may span several tokens,
+    /// and may mix Spark addresses with Spark invoices.
+    pub recipients: Vec<BatchRecipient>,
 }
 
 /// Where a batch recipient is paid, once prepare has decoded its payment request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum TokenBatchDestination {
+pub enum BatchDestination {
     SparkAddress {
         address: String,
     },
@@ -1851,52 +1851,55 @@ pub enum TokenBatchDestination {
     },
 }
 
-/// A recipient after prepare has resolved the token and amount it is owed.
+/// A recipient after prepare has resolved the asset and amount it is owed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct ResolvedTokenBatchRecipient {
-    pub destination: TokenBatchDestination,
-    /// Amount in the token's base units.
+pub struct ResolvedBatchRecipient {
+    pub destination: BatchDestination,
+    /// Amount in the base units of the asset this recipient is paid in.
     pub amount: u128,
-    pub token_identifier: String,
+    /// The token this recipient is paid in. Unset means sats, which a batch
+    /// cannot send yet.
+    pub token_identifier: Option<String>,
 }
 
-/// What a batch debits for one token.
+/// What a batch debits for one asset.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct TokenBatchTotal {
-    pub token_identifier: String,
-    /// Amount in the token's base units.
+pub struct BatchTotal {
+    /// The token debited. Unset means sats, which a batch cannot send yet.
+    pub token_identifier: Option<String>,
+    /// Amount in the asset's base units.
     pub amount: u128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct PrepareSendTokenBatchResponse {
+pub struct PrepareSendBatchResponse {
     /// The payees in the order they were requested, which is the order their
     /// payments come back in.
-    pub recipients: Vec<ResolvedTokenBatchRecipient>,
-    /// What the batch debits, one entry per distinct token.
-    pub totals: Vec<TokenBatchTotal>,
+    pub recipients: Vec<ResolvedBatchRecipient>,
+    /// What the batch debits, one entry per distinct asset.
+    pub totals: Vec<BatchTotal>,
 }
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct SendTokenBatchRequest {
-    pub prepare_response: PrepareSendTokenBatchResponse,
+pub struct SendBatchRequest {
+    pub prepare_response: PrepareSendBatchResponse,
 }
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct SendTokenBatchResponse {
+pub struct SendBatchResponse {
     /// One payment per recipient, in recipient order, all sharing a transaction
     /// hash.
     pub payments: Vec<Payment>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct BuildUnsignedTokenBatchPackageRequest {
-    pub prepare_response: PrepareSendTokenBatchResponse,
+pub struct BuildUnsignedBatchPackageRequest {
+    pub prepare_response: PrepareSendBatchResponse,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

@@ -73,10 +73,15 @@ func SignPackage(
 			log.Printf("Approve combining token outputs before the batch is sent")
 		} else {
 			for _, total := range pkg.Totals {
+				// Unset would mean sats, which a batch cannot send yet
+				tokenID := ""
+				if total.TokenIdentifier != nil {
+					tokenID = *total.TokenIdentifier
+				}
 				log.Printf(
-					"Approve sending %v of token %v",
+					"Approve sending %v of token %s",
 					total.Amount,
-					total.TokenIdentifier,
+					tokenID,
 				)
 			}
 		}

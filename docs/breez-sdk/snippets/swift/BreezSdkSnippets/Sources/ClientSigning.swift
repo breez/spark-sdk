@@ -41,7 +41,9 @@ func signPackage(signer: ExternalSparkSigner, unsigned: UnsignedTransferPackage)
             print("Approve combining token outputs before the batch is sent")
         } else {
             for total in totals {
-                print("Approve sending \(total.amount) of token \(total.tokenIdentifier)")
+                // Unset would mean sats, which a batch cannot send yet
+                let tokenId = total.tokenIdentifier ?? ""
+                print("Approve sending \(total.amount) of token \(tokenId)")
             }
         }
         signature = TransferSignature.token(

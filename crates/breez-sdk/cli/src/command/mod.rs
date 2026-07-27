@@ -8,18 +8,18 @@ mod webhooks;
 
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
-    AssetFilter, AuthorizeTransferRequest, BreezSdk, BuyBitcoinRequest,
+    AssetFilter, AuthorizeTransferRequest, BatchRecipient, BreezSdk, BuyBitcoinRequest,
     CheckLightningAddressRequest, ClaimDepositRequest, ClaimHtlcPaymentRequest,
     ClaimTransferRequest, ConversionOptions, ConversionType, CrossChainRoutePair, Fee, FeePolicy,
     FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
     InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
     LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
-    PaymentRequest, PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
-    PrepareSendTokenBatchRequest, ReceivePaymentMethod, ReceivePaymentRequest,
-    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
-    SendPaymentRequest, SendTokenBatchRequest, SparkHtlcOptions, SparkHtlcStatus,
-    SparkMasterIdentityPublicKey, SyncWalletRequest, TokenBatchRecipient, TokenIssuer,
-    TokenTransactionType, TransferAuthorization, UpdateUserSettingsRequest,
+    PaymentRequest, PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendBatchRequest,
+    PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    RegisterLightningAddressRequest, SendBatchRequest, SendPaymentMethod, SendPaymentOptions,
+    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SparkMasterIdentityPublicKey,
+    SyncWalletRequest, TokenIssuer, TokenTransactionType, TransferAuthorization,
+    UpdateUserSettingsRequest,
 };
 use clap::{Parser, ValueEnum};
 use rand::RngCore;
@@ -41,13 +41,13 @@ use crate::command::webhooks::WebhookCommand;
 /// A batch recipient parsed from `payment_request`, `payment_request:amount` or
 /// `payment_request:amount:token_identifier`.
 #[derive(Clone, Debug)]
-pub struct TokenBatchRecipientArg {
+pub struct BatchRecipientArg {
     payment_request: String,
     amount: Option<u128>,
     token_identifier: Option<String>,
 }
 
-impl std::str::FromStr for TokenBatchRecipientArg {
+impl std::str::FromStr for BatchRecipientArg {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -73,7 +73,7 @@ impl std::str::FromStr for TokenBatchRecipientArg {
                 "Invalid recipient '{s}'. Expected \'payment_request[:amount[:token_identifier]]\'"
             ));
         }
-        Ok(TokenBatchRecipientArg {
+        Ok(BatchRecipientArg {
             payment_request,
             amount,
             token_identifier,
@@ -81,9 +81,9 @@ impl std::str::FromStr for TokenBatchRecipientArg {
     }
 }
 
-impl From<TokenBatchRecipientArg> for TokenBatchRecipient {
-    fn from(arg: TokenBatchRecipientArg) -> Self {
-        TokenBatchRecipient {
+impl From<BatchRecipientArg> for BatchRecipient {
+    fn from(arg: BatchRecipientArg) -> Self {
+        BatchRecipient {
             payment_request: arg.payment_request,
             amount: arg.amount,
             token_identifier: arg.token_identifier,
@@ -245,13 +245,13 @@ pub enum Command {
     },
 
     /// Pay several recipients with one token transaction
-    PayTokenBatch {
+    PayBatch {
         /// A recipient, given as `payment_request`, `payment_request:amount` or
         /// `payment_request:amount:token_identifier`. The payment request is a
         /// Spark address or a Spark invoice. Amount and token may be omitted
         /// only for an invoice that carries them. Repeat for each recipient.
         #[arg(short = 'r', long = "recipient", required = true)]
-        recipients: Vec<TokenBatchRecipientArg>,
+        recipients: Vec<BatchRecipientArg>,
     },
 
     /// Pay using LNURL
@@ -873,18 +873,16 @@ pub(crate) async fn execute_command(
             print_value(&send_payment_response)?;
             Ok(true)
         }
-        Command::PayTokenBatch { recipients } => {
+        Command::PayBatch { recipients } => {
             let prepare_response = sdk
-                .prepare_send_token_batch(PrepareSendTokenBatchRequest {
+                .prepare_send_batch(PrepareSendBatchRequest {
                     recipients: recipients.into_iter().map(Into::into).collect(),
                 })
                 .await?;
 
             for total in &prepare_response.totals {
-                println!(
-                    "Sending {} base units of {}",
-                    total.amount, total.token_identifier
-                );
+                let asset = total.token_identifier.as_deref().unwrap_or("sats");
+                println!("Sending {} base units of {asset}", total.amount);
             }
             let line = rl
                 .readline_with_initial("Do you want to continue (y/n): ", ("y", ""))?
@@ -893,8 +891,7 @@ pub(crate) async fn execute_command(
                 return Err(anyhow::anyhow!("Payment cancelled"));
             }
 
-            let response =
-                Box::pin(sdk.send_token_batch(SendTokenBatchRequest { prepare_response })).await?;
+            let response = Box::pin(sdk.send_batch(SendBatchRequest { prepare_response })).await?;
 
             print_value(&response.payments)?;
             Ok(true)

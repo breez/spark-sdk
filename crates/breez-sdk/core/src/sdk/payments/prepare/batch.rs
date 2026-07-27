@@ -6,8 +6,8 @@ use crate::{
     InputType, SparkInvoiceDetails,
     error::SdkError,
     models::{
-        PrepareSendTokenBatchRequest, PrepareSendTokenBatchResponse, ResolvedTokenBatchRecipient,
-        TokenBatchDestination, TokenBatchRecipient, TokenBatchTotal,
+        BatchDestination, BatchRecipient, BatchTotal, PrepareSendBatchRequest,
+        PrepareSendBatchResponse, ResolvedBatchRecipient,
     },
     sdk::BreezSdk,
     sdk::payments::validation,
@@ -15,8 +15,8 @@ use crate::{
 
 pub(in crate::sdk::payments) async fn prepare(
     sdk: &BreezSdk,
-    request: PrepareSendTokenBatchRequest,
-) -> Result<PrepareSendTokenBatchResponse, SdkError> {
+    request: PrepareSendBatchRequest,
+) -> Result<PrepareSendBatchResponse, SdkError> {
     if request.recipients.is_empty() {
         return Err(SdkError::InvalidInput(
             "At least one recipient is required".to_string(),
@@ -32,7 +32,7 @@ pub(in crate::sdk::payments) async fn prepare(
         // The same invoice twice would attach twice and pay twice for one
         // request. A repeated plain address is two outputs to one payee, which
         // is a legitimate batch.
-        if let TokenBatchDestination::SparkInvoice { invoice_details } = &resolved.destination
+        if let BatchDestination::SparkInvoice { invoice_details } = &resolved.destination
             && !invoices.insert(invoice_details.invoice.clone())
         {
             return Err(SdkError::InvalidInput(format!(
@@ -46,7 +46,7 @@ pub(in crate::sdk::payments) async fn prepare(
     let totals = totals(&recipients)?;
     validate_output_cap(recipients.len(), totals.len())?;
 
-    Ok(PrepareSendTokenBatchResponse { recipients, totals })
+    Ok(PrepareSendBatchResponse { recipients, totals })
 }
 
 /// Rejects a batch that cannot fit the transaction output cap even before input
@@ -71,14 +71,17 @@ fn validate_output_cap(recipient_count: usize, token_count: usize) -> Result<(),
     Ok(())
 }
 
-/// Resolves one requested recipient into the concrete destination, token and
+/// Resolves one requested recipient into the concrete destination, asset and
 /// amount that will be sent, decoding an invoice payment request when there is
 /// one.
+///
+/// A bare address with no token identifier names sats, which a batch cannot
+/// send yet: only a token transaction can pay several recipients today.
 async fn resolve(
     sdk: &BreezSdk,
-    recipient: TokenBatchRecipient,
+    recipient: BatchRecipient,
     identity_public_key: &str,
-) -> Result<ResolvedTokenBatchRecipient, SdkError> {
+) -> Result<ResolvedBatchRecipient, SdkError> {
     let (token_identifier, amount, destination) =
         match sdk.parse(&recipient.payment_request).await? {
             InputType::SparkInvoice(details) => {
@@ -87,7 +90,7 @@ async fn resolve(
                 (
                     token_identifier,
                     amount,
-                    TokenBatchDestination::SparkInvoice {
+                    BatchDestination::SparkInvoice {
                         invoice_details: details,
                     },
                 )
@@ -95,7 +98,7 @@ async fn resolve(
             InputType::SparkAddress(_) => {
                 let token_identifier = recipient.token_identifier.clone().ok_or_else(|| {
                     SdkError::InvalidInput(format!(
-                        "Token identifier is required for address {}",
+                        "A batch cannot send sats yet, so address {} needs a token identifier",
                         recipient.payment_request
                     ))
                 })?;
@@ -108,7 +111,7 @@ async fn resolve(
                 (
                     token_identifier,
                     amount,
-                    TokenBatchDestination::SparkAddress {
+                    BatchDestination::SparkAddress {
                         address: recipient.payment_request.clone(),
                     },
                 )
@@ -128,10 +131,10 @@ async fn resolve(
         )));
     }
 
-    Ok(ResolvedTokenBatchRecipient {
+    Ok(ResolvedBatchRecipient {
         destination,
         amount,
-        token_identifier,
+        token_identifier: Some(token_identifier),
     })
 }
 
@@ -139,14 +142,14 @@ async fn resolve(
 /// itself specifies and rejecting a request that contradicts it.
 fn resolve_invoice(
     details: &SparkInvoiceDetails,
-    recipient: &TokenBatchRecipient,
+    recipient: &BatchRecipient,
     identity_public_key: &str,
 ) -> Result<(String, u128), SdkError> {
     validation::validate_spark_invoice_payable(details, identity_public_key)?;
 
     let token_identifier = details.token_identifier.clone().ok_or_else(|| {
         SdkError::InvalidInput(format!(
-            "A batch pays tokens, but this invoice requests sats: {}",
+            "A batch cannot send sats yet, but this invoice requests them: {}",
             recipient.payment_request
         ))
     })?;
@@ -174,10 +177,10 @@ fn resolve_invoice(
     }
 }
 
-/// Sums what the batch debits per token, in the order each token is first
+/// Sums what the batch debits per asset, in the order each asset is first
 /// requested.
-fn totals(recipients: &[ResolvedTokenBatchRecipient]) -> Result<Vec<TokenBatchTotal>, SdkError> {
-    let mut totals: Vec<TokenBatchTotal> = Vec::new();
+fn totals(recipients: &[ResolvedBatchRecipient]) -> Result<Vec<BatchTotal>, SdkError> {
+    let mut totals: Vec<BatchTotal> = Vec::new();
     for recipient in recipients {
         if let Some(total) = totals
             .iter_mut()
@@ -185,12 +188,12 @@ fn totals(recipients: &[ResolvedTokenBatchRecipient]) -> Result<Vec<TokenBatchTo
         {
             total.amount = total.amount.checked_add(recipient.amount).ok_or_else(|| {
                 SdkError::InvalidInput(format!(
-                    "Total amount overflows for token {}",
+                    "Total amount overflows for token {:?}",
                     recipient.token_identifier
                 ))
             })?;
         } else {
-            totals.push(TokenBatchTotal {
+            totals.push(BatchTotal {
                 token_identifier: recipient.token_identifier.clone(),
                 amount: recipient.amount,
             });
@@ -224,21 +227,21 @@ mod tests {
         }
     }
 
-    fn recipient(amount: Option<u128>, token: Option<&str>) -> TokenBatchRecipient {
-        TokenBatchRecipient {
+    fn recipient(amount: Option<u128>, token: Option<&str>) -> BatchRecipient {
+        BatchRecipient {
             payment_request: "sparkrt1invoice".to_string(),
             amount,
             token_identifier: token.map(ToString::to_string),
         }
     }
 
-    fn resolved(token: &str, amount: u128) -> ResolvedTokenBatchRecipient {
-        ResolvedTokenBatchRecipient {
-            destination: TokenBatchDestination::SparkAddress {
+    fn resolved(token: &str, amount: u128) -> ResolvedBatchRecipient {
+        ResolvedBatchRecipient {
+            destination: BatchDestination::SparkAddress {
                 address: "sparkrt1address".to_string(),
             },
             amount,
-            token_identifier: token.to_string(),
+            token_identifier: Some(token.to_string()),
         }
     }
 
@@ -318,9 +321,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(totals.len(), 2);
-        assert_eq!(totals[0].token_identifier, TOKEN);
+        assert_eq!(totals[0].token_identifier.as_deref(), Some(TOKEN));
         assert_eq!(totals[0].amount, 350);
-        assert_eq!(totals[1].token_identifier, OTHER_TOKEN);
+        assert_eq!(totals[1].token_identifier.as_deref(), Some(OTHER_TOKEN));
         assert_eq!(totals[1].amount, 5);
     }
 
