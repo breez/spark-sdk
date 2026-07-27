@@ -114,6 +114,25 @@ async fn test_ancestor_not_returned_as_leaf() {
 }
 
 #[wasm_bindgen_test]
+async fn test_store_ancestors_backfills_chain() {
+    let store = create_test_tree_store("pg_tree_store_anc_backfill").await;
+    breez_sdk_spark::tree_store_tests::test_store_ancestors_backfills_chain(&store).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_store_ancestors_does_not_revive_spent_leaf() {
+    let store = create_test_tree_store("pg_tree_store_anc_no_revive").await;
+    breez_sdk_spark::tree_store_tests::test_store_ancestors_does_not_revive_spent_leaf(&store)
+        .await;
+}
+
+#[wasm_bindgen_test]
+async fn test_store_ancestors_for_absent_leaf() {
+    let store = create_test_tree_store("pg_tree_store_anc_absent").await;
+    breez_sdk_spark::tree_store_tests::test_store_ancestors_for_absent_leaf(&store).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_unshared_ancestor_deleted_with_leaf() {
     let store = create_test_tree_store("pg_tree_ancestor_deleted").await;
     breez_sdk_spark::tree_store_tests::test_unshared_ancestor_deleted_with_leaf(&store).await;
@@ -525,4 +544,10 @@ async fn test_set_leaves_replaces_fully() {
 async fn test_reserve_leaves_by_ids_preserves_order() {
     let store = create_test_tree_store("pg_tree_reserve_by_ids_order").await;
     breez_sdk_spark::tree_store_tests::test_reserve_leaves_by_ids_preserves_order(&store).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_leaves_missing_exit_chains() {
+    let store = create_test_tree_store("pg_tree_missing_chains").await;
+    breez_sdk_spark::tree_store_tests::test_leaves_missing_exit_chains(&store).await;
 }

@@ -300,6 +300,57 @@ impl TreeStore for PostgresTreeStore {
         Ok(())
     }
 
+    async fn store_ancestors(&self, pedigrees: &[LeafPedigree]) -> Result<(), TreeServiceError> {
+        if pedigrees.is_empty() {
+            return Ok(());
+        }
+
+        let mut client = self.pool.get().await.map_err(map_err)?;
+        let tx = client.transaction().await.map_err(map_err)?;
+        // Serialize with set_leaves/finalize_reservation: without the lock, their
+        // GC could run concurrently and delete the ancestor rows this call just wrote.
+        self.acquire_write_lock(&tx).await?;
+
+        // A leaf can be spent between its chain being resolved and this write, and a
+        // chain is only ever removed with its leaf. Writing one for a leaf that is
+        // already gone would leave it behind for good.
+        let stored = self.existing_leaf_ids(&tx, pedigrees).await?;
+        let live: Vec<LeafPedigree> = pedigrees
+            .iter()
+            .filter(|pedigree| stored.contains(&pedigree.leaf.id.to_string()))
+            .cloned()
+            .collect();
+        self.upsert_pedigree_ancestors(&tx, &live).await?;
+
+        tx.commit().await.map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn leaves_missing_exit_chains(&self) -> Result<Vec<TreeNodeId>, TreeServiceError> {
+        let client = self.pool.get().await.map_err(map_err)?;
+        let rows = client
+            .query(
+                r"
+                SELECT l.id FROM brz_tree_leaves l
+                WHERE l.user_id = $1
+                  AND l.parent_node_id IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1 FROM brz_tree_ancestors a
+                    WHERE a.user_id = $1 AND a.leaf_id = l.id AND a.parent_node_id IS NULL
+                  )
+                ",
+                &[&self.identity],
+            )
+            .await
+            .map_err(map_err)?;
+        rows.into_iter()
+            .map(|row| {
+                let id: String = row.get(0);
+                TreeNodeId::from_str(&id).map_err(TreeServiceError::Generic)
+            })
+            .collect()
+    }
+
     async fn get_exit_chains(
         &self,
         leaf_ids: &[TreeNodeId],
@@ -1580,6 +1631,26 @@ impl PostgresTreeStore {
     /// it leaves any already-stored chain alone; a non-empty list replaces that
     /// leaf's stored rows wholesale, so a leaf reparented onto a new branch
     /// does not keep nodes it no longer descends from.
+    /// Ids among `pedigrees` whose leaf the pool still holds, reserved or not.
+    async fn existing_leaf_ids(
+        &self,
+        tx: &tokio_postgres::Transaction<'_>,
+        pedigrees: &[LeafPedigree],
+    ) -> Result<HashSet<String>, TreeServiceError> {
+        let ids: Vec<String> = pedigrees
+            .iter()
+            .map(|pedigree| pedigree.leaf.id.to_string())
+            .collect();
+        let rows = tx
+            .query(
+                "SELECT id FROM brz_tree_leaves WHERE user_id = $1 AND id = ANY($2)",
+                &[&self.identity, &ids],
+            )
+            .await
+            .map_err(map_err)?;
+        Ok(rows.iter().map(|row| row.get::<_, String>(0)).collect())
+    }
+
     async fn upsert_pedigree_ancestors(
         &self,
         tx: &tokio_postgres::Transaction<'_>,
@@ -2133,6 +2204,30 @@ mod tests {
     async fn test_ancestor_not_returned_as_leaf() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_ancestor_not_returned_as_leaf(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_store_ancestors_backfills_chain() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_store_ancestors_backfills_chain(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_store_ancestors_does_not_revive_spent_leaf() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_store_ancestors_does_not_revive_spent_leaf(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_store_ancestors_for_absent_leaf() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_store_ancestors_for_absent_leaf(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_leaves_missing_exit_chains() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_leaves_missing_exit_chains(&fixture.store).await;
     }
 
     #[tokio::test]

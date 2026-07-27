@@ -204,6 +204,17 @@ impl SqliteTreeStore {
 
     /// Replaces the ancestor rows owned by each pedigree's leaf (see
     /// `upsert_ancestors`).
+    /// Whether the leaf pool still holds `leaf_id`, reserved or not.
+    fn leaf_exists(conn: &Connection, leaf_id: &TreeNodeId) -> Result<bool, TreeServiceError> {
+        conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM brz_tree_leaves WHERE id = ?1)",
+            params![leaf_id.to_string()],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|exists| exists != 0)
+        .map_err(|e| generic("check leaf exists", e))
+    }
+
     fn upsert_pedigree_ancestors(
         conn: &Connection,
         pedigrees: &[LeafPedigree],
@@ -746,6 +757,50 @@ impl TreeStore for SqliteTreeStore {
             pedigrees.extend(assemble_exit_chains(&nodes, std::slice::from_ref(leaf_id)));
         }
         Ok(pedigrees)
+    }
+
+    async fn store_ancestors(&self, pedigrees: &[LeafPedigree]) -> Result<(), TreeServiceError> {
+        if pedigrees.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.get_connection()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| generic("begin store_ancestors", e))?;
+        for pedigree in pedigrees {
+            // The leaf can be spent between its chain being resolved and this write,
+            // and a chain is only ever removed with its leaf. Writing one for a leaf
+            // that is already gone would leave it behind for good.
+            if !Self::leaf_exists(&tx, &pedigree.leaf.id)? {
+                continue;
+            }
+            Self::upsert_ancestors(&tx, &pedigree.leaf.id, &pedigree.ancestors)?;
+        }
+        tx.commit()
+            .map_err(|e| generic("commit store_ancestors", e))?;
+        Ok(())
+    }
+
+    async fn leaves_missing_exit_chains(&self) -> Result<Vec<TreeNodeId>, TreeServiceError> {
+        let conn = self.get_connection()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT l.id FROM brz_tree_leaves l
+                 WHERE l.parent_node_id IS NOT NULL
+                   AND NOT EXISTS (
+                     SELECT 1 FROM brz_tree_ancestors a
+                     WHERE a.leaf_id = l.id AND a.parent_node_id IS NULL
+                   )",
+            )
+            .map_err(|e| generic("prepare leaves_missing_exit_chains", e))?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| generic("query leaves_missing_exit_chains", e))?
+            .collect::<Result<Vec<String>, _>>()
+            .map_err(|e| generic("read leaves_missing_exit_chains", e))?;
+        ids.into_iter()
+            .map(|id| TreeNodeId::from_str(&id).map_err(TreeServiceError::Generic))
+            .collect()
     }
 
     // ---- pool + reservations ----
@@ -1292,6 +1347,10 @@ mod tests {
         test_exit_chain_after_cancel_reparent,
         test_empty_pedigree_keeps_stored_chain,
         test_stored_chain_replaces_previous,
+        test_store_ancestors_backfills_chain,
+        test_store_ancestors_does_not_revive_spent_leaf,
+        test_store_ancestors_for_absent_leaf,
+        test_leaves_missing_exit_chains,
         // add / get leaves
         test_new,
         test_add_leaves,

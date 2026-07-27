@@ -427,6 +427,25 @@ async fn test_spent_leaves_not_restored_by_set_leaves() {
 }
 
 #[wasm_bindgen_test]
+async fn test_store_ancestors_backfills_chain() {
+    let store = create_test_tree_store().await;
+    breez_sdk_spark::tree_store_tests::test_store_ancestors_backfills_chain(&store).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_store_ancestors_does_not_revive_spent_leaf() {
+    let store = create_test_tree_store().await;
+    breez_sdk_spark::tree_store_tests::test_store_ancestors_does_not_revive_spent_leaf(&store)
+        .await;
+}
+
+#[wasm_bindgen_test]
+async fn test_store_ancestors_for_absent_leaf() {
+    let store = create_test_tree_store().await;
+    breez_sdk_spark::tree_store_tests::test_store_ancestors_for_absent_leaf(&store).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_swap_reservation_included_in_balance() {
     let store = create_test_tree_store().await;
     breez_sdk_spark::tree_store_tests::test_swap_reservation_included_in_balance(&store).await;
@@ -521,4 +540,10 @@ async fn test_update_reservation_preserves_purpose() {
 async fn test_upsert_and_get_leaf() {
     let store = create_test_tree_store().await;
     breez_sdk_spark::tree_store_tests::test_upsert_and_get_leaf(&store).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_leaves_missing_exit_chains() {
+    let store = create_test_tree_store().await;
+    breez_sdk_spark::tree_store_tests::test_leaves_missing_exit_chains(&store).await;
 }

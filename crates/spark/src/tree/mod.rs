@@ -528,6 +528,23 @@ pub trait TreeStore: Send + Sync {
     /// its `value` and verifying key are fixed, and a change to either errors.
     async fn add_leaves(&self, leaves: &[LeafPedigree]) -> Result<(), TreeServiceError>;
 
+    /// Stores the ancestors of `pedigrees`, leaving the leaf pool untouched.
+    ///
+    /// Unlike [`Self::add_leaves`], this neither inserts a leaf nor clears its spent
+    /// marker, so a leaf spent since its pedigree was resolved stays spent, and a
+    /// pedigree whose leaf the pool no longer holds is skipped: a chain is only ever
+    /// removed with its leaf, so one stored for a leaf that is already gone would
+    /// never be collected.
+    async fn store_ancestors(&self, pedigrees: &[LeafPedigree]) -> Result<(), TreeServiceError>;
+
+    /// Ids of the stored leaves whose exit chain stops short of a root, so it
+    /// cannot back a unilateral exit. A leaf that is itself a root needs no
+    /// ancestors and is never reported.
+    ///
+    /// Neither the leaves nor their chains are loaded, so the answer costs the
+    /// number of incomplete leaves rather than the size of the wallet.
+    async fn leaves_missing_exit_chains(&self) -> Result<Vec<TreeNodeId>, TreeServiceError>;
+
     /// Reconstructs the exit chains for many leaves at once, each as a
     /// [`LeafPedigree`] (the leaf plus its ancestors, nearest first), by walking
     /// `parent_node_id` up from each leaf. A leaf absent from the store is skipped;

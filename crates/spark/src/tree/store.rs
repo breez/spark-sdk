@@ -123,12 +123,19 @@ enum StoreCommand {
         leaves: Vec<LeafPedigree>,
         response_tx: oneshot::Sender<Result<(), TreeServiceError>>,
     },
+    StoreAncestors {
+        pedigrees: Vec<LeafPedigree>,
+        response_tx: oneshot::Sender<Result<(), TreeServiceError>>,
+    },
     GetLeaves {
         response_tx: oneshot::Sender<Result<Leaves, TreeServiceError>>,
     },
     GetExitChains {
         leaf_ids: Vec<TreeNodeId>,
         response_tx: oneshot::Sender<Result<Vec<LeafPedigree>, TreeServiceError>>,
+    },
+    LeavesMissingExitChains {
+        response_tx: oneshot::Sender<Result<Vec<TreeNodeId>, TreeServiceError>>,
     },
     SetLeaves {
         leaves: Vec<LeafPedigree>,
@@ -259,6 +266,13 @@ impl InMemoryTreeStore {
                     let result = Self::process_add_leaves(&mut state, &leaves);
                     let _ = response_tx.send(result);
                 }
+                StoreCommand::StoreAncestors {
+                    pedigrees,
+                    response_tx,
+                } => {
+                    let result = Self::process_store_ancestors(&mut state, &pedigrees);
+                    let _ = response_tx.send(result);
+                }
                 StoreCommand::GetLeaves { response_tx } => {
                     let result = Self::process_get_leaves(&state);
                     let _ = response_tx.send(result);
@@ -269,6 +283,9 @@ impl InMemoryTreeStore {
                 } => {
                     let result = Self::process_get_exit_chains(&state, &leaf_ids);
                     let _ = response_tx.send(result);
+                }
+                StoreCommand::LeavesMissingExitChains { response_tx } => {
+                    let _ = response_tx.send(Ok(Self::process_leaves_missing_exit_chains(&state)));
                 }
                 StoreCommand::SetLeaves {
                     leaves,
@@ -492,6 +509,30 @@ impl InMemoryTreeStore {
         })
     }
 
+    /// Leaf ids whose stored chain never reaches a parentless node. A leaf that is
+    /// itself a root is complete with no ancestors at all.
+    fn process_leaves_missing_exit_chains(state: &LeavesState) -> Vec<TreeNodeId> {
+        state
+            .leaves
+            .values()
+            .map(|stored| &stored.node)
+            .chain(
+                state
+                    .leaves_reservations
+                    .values()
+                    .flat_map(|entry| entry.leaves.iter().map(|stored| &stored.node)),
+            )
+            .filter(|leaf| {
+                leaf.parent_node_id.is_some()
+                    && !state
+                        .ancestors
+                        .get(&leaf.id)
+                        .is_some_and(|chain| chain.iter().any(|n| n.parent_node_id.is_none()))
+            })
+            .map(|leaf| leaf.id.clone())
+            .collect()
+    }
+
     fn process_get_exit_chains(
         state: &LeavesState,
         leaf_ids: &[TreeNodeId],
@@ -646,6 +687,24 @@ impl InMemoryTreeStore {
             preserved_count
         );
 
+        Ok(())
+    }
+
+    /// Writes only the ancestor chain of each pedigree: unlike `process_add_leaves`,
+    /// the leaf itself is never touched, so a spent leaf stays spent.
+    fn process_store_ancestors(
+        state: &mut LeavesState,
+        pedigrees: &[LeafPedigree],
+    ) -> Result<(), TreeServiceError> {
+        for pedigree in pedigrees {
+            // The leaf can be spent between its chain being resolved and this write,
+            // and a chain is only ever removed with its leaf. Writing one for a leaf
+            // that is already gone would leave it behind for good.
+            if Self::find_stored_leaf(state, &pedigree.leaf.id).is_none() {
+                continue;
+            }
+            Self::upsert_ancestors(state, &pedigree.leaf.id, &pedigree.ancestors)?;
+        }
         Ok(())
     }
 
@@ -1020,6 +1079,15 @@ impl TreeStore for InMemoryTreeStore {
         .await
     }
 
+    async fn store_ancestors(&self, pedigrees: &[LeafPedigree]) -> Result<(), TreeServiceError> {
+        let pedigrees = pedigrees.to_vec();
+        self.send_command(|tx| StoreCommand::StoreAncestors {
+            pedigrees,
+            response_tx: tx,
+        })
+        .await
+    }
+
     async fn get_leaves(&self) -> Result<Leaves, TreeServiceError> {
         self.send_command(|tx| StoreCommand::GetLeaves { response_tx: tx })
             .await
@@ -1035,6 +1103,11 @@ impl TreeStore for InMemoryTreeStore {
             response_tx: tx,
         })
         .await
+    }
+
+    async fn leaves_missing_exit_chains(&self) -> Result<Vec<TreeNodeId>, TreeServiceError> {
+        self.send_command(|tx| StoreCommand::LeavesMissingExitChains { response_tx: tx })
+            .await
     }
 
     async fn set_leaves(
@@ -1269,6 +1342,22 @@ mod tests {
     #[async_test_all]
     async fn test_stored_chain_replaces_previous() {
         shared_tests::test_stored_chain_replaces_previous(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_store_ancestors_backfills_chain() {
+        shared_tests::test_store_ancestors_backfills_chain(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_store_ancestors_does_not_revive_spent_leaf() {
+        shared_tests::test_store_ancestors_does_not_revive_spent_leaf(&InMemoryTreeStore::new())
+            .await;
+    }
+
+    #[async_test_all]
+    async fn test_store_ancestors_for_absent_leaf() {
+        shared_tests::test_store_ancestors_for_absent_leaf(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]

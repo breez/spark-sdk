@@ -213,6 +213,32 @@ impl TreeStore for WasmTreeStore {
         Ok(())
     }
 
+    async fn store_ancestors(&self, pedigrees: &[LeafPedigree]) -> Result<(), TreeServiceError> {
+        let pedigrees_js = serde_wasm_bindgen::to_value(pedigrees)
+            .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
+        let promise = self
+            .tree_store
+            .store_ancestors(pedigrees_js)
+            .map_err(js_error_to_tree_error)?;
+        JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_tree_error)?;
+        Ok(())
+    }
+
+    async fn leaves_missing_exit_chains(&self) -> Result<Vec<TreeNodeId>, TreeServiceError> {
+        let promise = self
+            .tree_store
+            .leaves_missing_exit_chains()
+            .map_err(js_error_to_tree_error)?;
+        let result = JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_tree_error)?;
+        let ids: Vec<TreeNodeId> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
+        Ok(ids)
+    }
+
     async fn get_exit_chains(
         &self,
         leaf_ids: &[TreeNodeId],
@@ -561,6 +587,8 @@ type LeafSelection =
 
 export interface TreeStore {
     addLeaves: (leaves: LeafPedigree[]) => Promise<void>;
+    storeAncestors: (pedigrees: LeafPedigree[]) => Promise<void>;
+    leavesMissingExitChains: () => Promise<string[]>;
     getLeaves: () => Promise<Leaves>;
     getExitChains: (leafIds: string[]) => Promise<LeafPedigree[]>;
     getAvailableBalance: () => Promise<bigint>;
@@ -582,6 +610,12 @@ extern "C" {
 
     #[wasm_bindgen(structural, method, js_name = addLeaves, catch)]
     pub fn add_leaves(this: &TreeStoreJs, leaves: JsValue) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = storeAncestors, catch)]
+    pub fn store_ancestors(this: &TreeStoreJs, pedigrees: JsValue) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = leavesMissingExitChains, catch)]
+    pub fn leaves_missing_exit_chains(this: &TreeStoreJs) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = getLeaves, catch)]
     pub fn get_leaves(this: &TreeStoreJs) -> Result<Promise, JsValue>;

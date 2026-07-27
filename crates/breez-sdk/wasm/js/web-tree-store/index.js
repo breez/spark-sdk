@@ -176,12 +176,13 @@ class WebTreeStore {
   // ===== Transaction runner =====
 
   /**
-   * Runs one transaction. `reads` is a list of `{ name, store, key? }`: with a
-   * key it is a `get`, without it a `getAll`. All reads are issued up front;
-   * once the last completes, `compute(results, tx)` runs synchronously in that
-   * read's success handler and may issue writes on `tx`. Its return value
-   * resolves the promise on `oncomplete`, so writes are durable before resolve.
-   * `compute` must never await a non-IDB promise (it would close `tx`).
+   * Runs one transaction. `reads` is a list of `{ name, store, key?, index? }`:
+   * with a key it is a `get`, without it a `getAll`; `index` reads through that
+   * index on `store` instead of the store directly. All reads are issued up
+   * front; once the last completes, `compute(results, tx)` runs synchronously
+   * in that read's success handler and may issue writes on `tx`. Its return
+   * value resolves the promise on `oncomplete`, so writes are durable before
+   * resolve. `compute` must never await a non-IDB promise (it would close `tx`).
    */
   _txRun(storeNames, mode, reads, compute) {
     return new Promise((resolve, reject) => {
@@ -254,7 +255,8 @@ class WebTreeStore {
         let req;
         try {
           const store = tx.objectStore(r.store);
-          req = "key" in r ? store.get(r.key) : store.getAll();
+          const source = r.index ? store.index(r.index) : store;
+          req = "key" in r ? source.get(r.key) : source.getAll();
         } catch (e) {
           done(() => reject(e));
           return;
@@ -340,6 +342,39 @@ class WebTreeStore {
     } catch (error) {
       if (error instanceof TreeStoreError) throw error;
       throw new TreeStoreError(`Failed to get exit chains: ${error.message}`, error);
+    }
+  }
+
+  /**
+   * Ids of the stored leaves whose exit chain stops short of a root: the leaf
+   * has a parent, but none of its ancestor rows is itself parentless.
+   * @returns {Promise<Array<string>>}
+   */
+  async leavesMissingExitChains() {
+    try {
+      return await this._txRun(
+        [STORE_LEAVES, STORE_ANCESTORS],
+        "readonly",
+        [
+          { name: "leaves", store: STORE_LEAVES },
+          { name: "ancestors", store: STORE_ANCESTORS, index: "leaf_id" },
+        ],
+        (res) => {
+          const rootLeafIds = new Set();
+          for (const row of res.ancestors) {
+            if (row.parent_node_id == null) rootLeafIds.add(row.leaf_id);
+          }
+          return res.leaves
+            .filter((l) => l.parent_node_id != null && !rootLeafIds.has(l.id))
+            .map((l) => l.id);
+        }
+      );
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to get leaves missing exit chains: ${error.message}`,
+        error
+      );
     }
   }
 
@@ -524,6 +559,45 @@ class WebTreeStore {
     } catch (error) {
       if (error instanceof TreeStoreError) throw error;
       throw new TreeStoreError(`Failed to add leaves: ${error.message}`, error);
+    }
+  }
+
+  async storeAncestors(pedigrees) {
+    try {
+      if (!pedigrees || pedigrees.length === 0) return;
+
+      await this._txRun(
+        [STORE_LEAVES, STORE_ANCESTORS],
+        "readwrite",
+        [
+          { name: "leaves", store: STORE_LEAVES },
+          { name: "ancestors", store: STORE_ANCESTORS },
+        ],
+        (res, tx) => {
+          const ancestorsStore = tx.objectStore(STORE_ANCESTORS);
+          const ancestorRowsByLeaf = this._ancestorRowsByLeaf(res.ancestors);
+          // A leaf can be spent between its chain being resolved and this write,
+          // and a chain is only ever removed with its leaf. Writing one for a leaf
+          // that is already gone would leave it behind for good.
+          const storedLeafIds = new Set(res.leaves.map((row) => row.id));
+
+          for (const p of pedigrees) {
+            if (!storedLeafIds.has(p.leaf.id)) {
+              continue;
+            }
+            this._replaceAncestors(
+              ancestorsStore,
+              ancestorRowsByLeaf,
+              res.leaves,
+              p.leaf.id,
+              p.ancestors
+            );
+          }
+        }
+      );
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(`Failed to store ancestors: ${error.message}`, error);
     }
   }
 

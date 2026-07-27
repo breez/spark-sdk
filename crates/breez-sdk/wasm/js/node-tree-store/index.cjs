@@ -176,6 +176,63 @@ class NodeTreeStore {
   }
 
   /**
+   * Store the ancestor chain of each pedigree, leaving the leaf pool and any
+   * spent marker untouched.
+   * @param {Array} pedigrees - Array of LeafPedigree { leaf, ancestors }
+   */
+  async storeAncestors(pedigrees) {
+    try {
+      if (!pedigrees || pedigrees.length === 0) {
+        return;
+      }
+      // A leaf can be spent between its chain being resolved and this write, and a
+      // chain is only ever removed with its leaf. Writing one for a leaf that is
+      // already gone would leave it behind for good.
+      const leafExists = this.db.prepare(
+        "SELECT 1 FROM brz_tree_leaves WHERE id = ?"
+      );
+      this.db.transaction(() => {
+        for (const pedigree of pedigrees) {
+          if (!leafExists.get(pedigree.leaf.id)) {
+            continue;
+          }
+          this._upsertAncestors(pedigree.leaf.id, pedigree.ancestors);
+        }
+      })();
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(`Failed to store ancestors: ${error.message}`, error);
+    }
+  }
+
+  /**
+   * Ids of the stored leaves whose exit chain stops short of a root: the leaf
+   * has a parent, but none of its ancestor rows is itself parentless.
+   * @returns {Promise<Array<string>>}
+   */
+  async leavesMissingExitChains() {
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT l.id FROM brz_tree_leaves l
+           WHERE l.parent_node_id IS NOT NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM brz_tree_ancestors a
+               WHERE a.leaf_id = l.id AND a.parent_node_id IS NULL
+             )`
+        )
+        .all();
+      return rows.map((r) => r.id);
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to get leaves missing exit chains: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Reconstruct the exit chains for many leaves in one query, each as
    * { leaf, ancestors } with ancestors nearest first. A leaf absent from the store
    * is skipped; a chain that hits a gap comes back partial.

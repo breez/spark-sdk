@@ -249,6 +249,75 @@ class PostgresTreeStore {
   }
 
   /**
+   * Store the ancestor chain of each pedigree, leaving the leaf pool and any
+   * spent marker untouched.
+   * @param {Array} pedigrees - Array of LeafPedigree { leaf, ancestors }
+   */
+  async storeAncestors(pedigrees) {
+    try {
+      if (!pedigrees || pedigrees.length === 0) {
+        return;
+      }
+
+      await this._withWriteTransaction(async (client) => {
+        // A leaf can be spent between its chain being resolved and this write, and
+        // a chain is only ever removed with its leaf. Writing one for a leaf that is
+        // already gone would leave it behind for good.
+        const stored = await client.query(
+          "SELECT id FROM brz_tree_leaves WHERE user_id = $1 AND id = ANY($2)",
+          [this.identity, pedigrees.map((p) => p.leaf.id)]
+        );
+        const storedLeafIds = new Set(stored.rows.map((row) => row.id));
+
+        for (const pedigree of pedigrees) {
+          if (!storedLeafIds.has(pedigree.leaf.id)) {
+            continue;
+          }
+          await this._batchUpsertAncestors(
+            client,
+            pedigree.leaf.id,
+            pedigree.ancestors
+          );
+        }
+      });
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to store ancestors: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Ids of the stored leaves whose exit chain stops short of a root: the leaf
+   * has a parent, but none of its ancestor rows is itself parentless.
+   * @returns {Promise<Array<string>>}
+   */
+  async leavesMissingExitChains() {
+    try {
+      const result = await this.pool.query(
+        `SELECT l.id
+         FROM brz_tree_leaves l
+         WHERE l.user_id = $1
+           AND l.parent_node_id IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM brz_tree_ancestors a
+             WHERE a.user_id = $1 AND a.leaf_id = l.id AND a.parent_node_id IS NULL
+           )`,
+        [this.identity]
+      );
+      return result.rows.map((r) => r.id);
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to get leaves missing exit chains: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Reconstruct the exit chains for many leaves in one query, each as
    * { leaf, ancestors } with ancestors nearest first. A leaf absent from the store
    * is skipped; a chain that hits a gap comes back partial.
