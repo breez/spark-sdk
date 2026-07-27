@@ -212,7 +212,7 @@ spark-token-primitives = "0.1.3"
 spark-wallet = { path = "crates/spark-wallet", default-features = false }
 syn = "2.0.105"
 test-log = { version = "0.2.18", default-features = false }
-testcontainers = "0.24.0"
+testcontainers = { version = "0.24.0", features = ["http_wait"] }
 testcontainers-modules = "0.12.1"
 testdir = "0.9.3"
 thiserror = "2.0.12"

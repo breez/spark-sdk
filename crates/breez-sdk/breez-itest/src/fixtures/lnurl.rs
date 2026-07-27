@@ -2,7 +2,7 @@ use crate::fixtures::docker::{DockerImageConfig, build_docker_image};
 use anyhow::Result;
 use testcontainers::{
     ContainerAsync, GenericImage, ImageExt,
-    core::{ContainerPort, Host, WaitFor, wait::LogWaitStrategy},
+    core::{ContainerPort, Host, WaitFor, wait::HttpWaitStrategy},
     runners::AsyncRunner,
 };
 use testcontainers_modules::postgres::Postgres;
@@ -112,9 +112,14 @@ impl LnurlFixture {
             &config.docker_config.image_tag,
         )
         .with_exposed_port(ContainerPort::Tcp(HTTP_PORT))
-        .with_wait_for(WaitFor::Log(LogWaitStrategy::stdout(
-            "starting lnurl server",
-        )))
+        // Not the startup log line: the server prints it before it migrates
+        // the database and binds, and logs nothing after, so waiting on it
+        // hands out a URL that nothing is listening on yet.
+        .with_wait_for(WaitFor::http(
+            HttpWaitStrategy::new("/health")
+                .with_port(ContainerPort::Tcp(HTTP_PORT))
+                .with_expected_status_code(200_u16),
+        ))
         .with_log_consumer(crate::log::TracingConsumer::new("lnurl"))
         .with_env_var("BREEZ_LNURL_NETWORK", &config.network)
         .with_env_var("BREEZ_LNURL_AUTO_MIGRATE", config.auto_migrate.to_string())

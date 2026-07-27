@@ -30,7 +30,7 @@ tracing.workspace = true
 [dev-dependencies]
 platform-utils.workspace = true
 tempfile = "3"
-tokio = { workspace = true, features = ["io-util", "process", "time"] }
+tokio = { workspace = true, features = ["io-util", "net", "process", "time"] }
 
 [lints]
 workspace = true
