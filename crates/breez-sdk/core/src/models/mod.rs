@@ -1835,7 +1835,8 @@ pub struct BatchRecipient {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendBatchRequest {
     /// The payees, all paid by one transaction. They may span several tokens,
-    /// and may mix Spark addresses with Spark invoices.
+    /// and may mix Spark addresses with Spark invoices. Once a Spark invoice is
+    /// among them, every recipient must be paid in the same token.
     pub recipients: Vec<BatchRecipient>,
 }
 

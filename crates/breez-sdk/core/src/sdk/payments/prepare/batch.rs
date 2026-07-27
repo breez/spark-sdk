@@ -45,6 +45,7 @@ pub(in crate::sdk::payments) async fn prepare(
 
     let totals = totals(&recipients)?;
     validate_output_cap(recipients.len(), totals.len())?;
+    validate_invoiced_batch_is_single_token(&recipients, &totals)?;
 
     Ok(PrepareSendBatchResponse { recipients, totals })
 }
@@ -66,6 +67,28 @@ fn validate_output_cap(recipient_count: usize, token_count: usize) -> Result<(),
         return Err(SdkError::InvalidInput(format!(
             "A batch is limited to {MAX_TOKEN_TX_OUTPUTS} outputs, counting one change output \
              per token: {recipient_count} recipients across {token_count} token(s) needs {outputs}"
+        )));
+    }
+    Ok(())
+}
+
+/// Rejects a batch that pays a Spark invoice and spans more than one token.
+///
+/// The operators read a token transaction carrying an invoice as paying the
+/// token of its first output, and require every attached invoice to name that
+/// same token. Such a batch has to be sent as one batch per token.
+fn validate_invoiced_batch_is_single_token(
+    recipients: &[ResolvedBatchRecipient],
+    totals: &[BatchTotal],
+) -> Result<(), SdkError> {
+    let pays_an_invoice = recipients
+        .iter()
+        .any(|r| matches!(r.destination, BatchDestination::SparkInvoice { .. }));
+    if pays_an_invoice && totals.len() > 1 {
+        return Err(SdkError::InvalidInput(format!(
+            "A batch that pays a Spark invoice is limited to a single token, but this one spans \
+             {}: send one batch per token",
+            totals.len()
         )));
     }
     Ok(())
@@ -308,6 +331,54 @@ mod tests {
         let mut details = invoice(Some(250), Some(TOKEN));
         details.sender_public_key = Some("someone else".to_string());
         let result = resolve_invoice(&details, &recipient(None, None), "us");
+        assert!(matches!(result, Err(SdkError::InvalidInput(_))));
+    }
+
+    fn resolved_invoice(token: &str, amount: u128) -> ResolvedBatchRecipient {
+        ResolvedBatchRecipient {
+            destination: BatchDestination::SparkInvoice {
+                invoice_details: invoice(Some(amount), Some(token)),
+            },
+            amount,
+            token_identifier: Some(token.to_string()),
+        }
+    }
+
+    fn single_token_check(recipients: &[ResolvedBatchRecipient]) -> Result<(), SdkError> {
+        validate_invoiced_batch_is_single_token(recipients, &totals(recipients).unwrap())
+    }
+
+    #[test_all]
+    fn an_address_only_batch_may_span_tokens() {
+        assert!(single_token_check(&[resolved(TOKEN, 100), resolved(OTHER_TOKEN, 5)]).is_ok());
+    }
+
+    #[test_all]
+    fn an_invoiced_batch_may_pay_one_token() {
+        assert!(
+            single_token_check(&[
+                resolved_invoice(TOKEN, 30),
+                resolved_invoice(TOKEN, 55),
+                resolved(TOKEN, 70),
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test_all]
+    fn an_invoiced_batch_spanning_two_tokens_is_rejected() {
+        // The second token is paid to an address: the operators read every
+        // created output, not only the invoiced ones.
+        let result = single_token_check(&[resolved_invoice(TOKEN, 30), resolved(OTHER_TOKEN, 70)]);
+        assert!(matches!(result, Err(SdkError::InvalidInput(_))));
+    }
+
+    #[test_all]
+    fn invoices_of_two_tokens_are_rejected() {
+        let result = single_token_check(&[
+            resolved_invoice(TOKEN, 30),
+            resolved_invoice(OTHER_TOKEN, 55),
+        ]);
         assert!(matches!(result, Err(SdkError::InvalidInput(_))));
     }
 

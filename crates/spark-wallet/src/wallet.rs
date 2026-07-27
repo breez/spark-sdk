@@ -1753,10 +1753,11 @@ impl SparkWallet {
     /// Transfers tokens to other Spark users.
     ///
     /// All recipients are paid by one transaction, and they may mix Spark
-    /// addresses with Spark invoices and span several token ids. Sats invoices
-    /// are not accepted: a sats payment moves leaves rather than token outputs
-    /// and cannot share a transaction, so use {@link fulfill_spark_invoice} for
-    /// those.
+    /// addresses with Spark invoices and span several token ids. A transaction
+    /// that pays a Spark invoice is the exception: it must stay on one token id.
+    /// Sats invoices are not accepted: a sats payment moves leaves rather than
+    /// token outputs and cannot share a transaction, so use {@link
+    /// fulfill_spark_invoice} for those.
     pub async fn transfer_tokens(
         &self,
         recipients: Vec<TokenRecipient>,
@@ -2051,6 +2052,8 @@ impl SparkWallet {
             outputs.push(output);
             deadlines.push(execute_before);
         }
+
+        validate_invoiced_transaction_is_single_token(&outputs)?;
 
         if !self.config.self_payment_allowed
             && outputs
@@ -2967,6 +2970,33 @@ fn token_output_from_invoice(
     ))
 }
 
+/// Rejects a token transaction that attaches a Spark invoice and pays more than
+/// one token.
+///
+/// The operators read such a transaction as paying the token id of its first
+/// output, and require every attached invoice to name that same token, so a
+/// mixed-token transaction carrying an invoice is rejected on broadcast. Failing
+/// here names the reason and costs nothing.
+fn validate_invoiced_transaction_is_single_token(
+    outputs: &[TransferTokenOutput],
+) -> Result<(), SparkWalletError> {
+    if !outputs.iter().any(|o| o.spark_invoice.is_some()) {
+        return Ok(());
+    }
+
+    let mut token_ids: Vec<&str> = outputs.iter().map(|o| o.token_id.as_str()).collect();
+    token_ids.sort_unstable();
+    token_ids.dedup();
+    if token_ids.len() > 1 {
+        return Err(SparkWalletError::ValidationError(format!(
+            "A token transaction that pays a Spark invoice must use a single token, but {} were requested: {}",
+            token_ids.len(),
+            token_ids.join(", ")
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3080,5 +3110,63 @@ mod tests {
         // into is_backoff_retryable_error would change the leaf-selection paths.
         let err = error_with_reason(tonic::Code::NotFound, MISSING_ENTITY_REASON);
         assert!(!is_backoff_retryable_error(&err));
+    }
+
+    const TOKEN_A: &str = "btkn1xgrvjwey5ngcagvap2dzzvsy4uk8ua9x69k82dwvt5e7ef9drm9qztux87";
+    const TOKEN_B: &str = "btkn1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq";
+
+    fn token_output(token_id: &str, invoice: Option<&str>) -> TransferTokenOutput {
+        const TEST_PUBKEY_BYTES: [u8; 33] = [
+            3, 141, 37, 201, 160, 148, 226, 93, 184, 201, 131, 47, 222, 91, 55, 171, 38, 95, 13,
+            248, 175, 190, 44, 132, 189, 75, 131, 204, 215, 82, 93, 167, 177,
+        ];
+        TransferTokenOutput {
+            token_id: token_id.to_string(),
+            amount: 100,
+            receiver_address: SparkAddress {
+                identity_public_key: PublicKey::from_slice(&TEST_PUBKEY_BYTES).unwrap(),
+                network: spark::Network::Mainnet,
+                spark_invoice_fields: None,
+            },
+            spark_invoice: invoice.map(ToString::to_string),
+        }
+    }
+
+    #[test]
+    fn several_tokens_are_allowed_without_an_invoice() {
+        let outputs = [token_output(TOKEN_A, None), token_output(TOKEN_B, None)];
+        assert!(validate_invoiced_transaction_is_single_token(&outputs).is_ok());
+    }
+
+    #[test]
+    fn several_invoices_are_allowed_on_one_token() {
+        let outputs = [
+            token_output(TOKEN_A, Some("spark1first")),
+            token_output(TOKEN_A, Some("spark1second")),
+            token_output(TOKEN_A, None),
+        ];
+        assert!(validate_invoiced_transaction_is_single_token(&outputs).is_ok());
+    }
+
+    #[test]
+    fn an_invoice_alongside_a_second_token_is_rejected() {
+        // The other token is paid to an address: the operators read every created
+        // output, not only the invoiced ones.
+        let outputs = [
+            token_output(TOKEN_A, Some("spark1invoice")),
+            token_output(TOKEN_B, None),
+        ];
+        let result = validate_invoiced_transaction_is_single_token(&outputs);
+        assert!(matches!(result, Err(SparkWalletError::ValidationError(_))));
+    }
+
+    #[test]
+    fn invoices_of_two_tokens_are_rejected() {
+        let outputs = [
+            token_output(TOKEN_A, Some("spark1first")),
+            token_output(TOKEN_B, Some("spark1second")),
+        ];
+        let result = validate_invoiced_transaction_is_single_token(&outputs);
+        assert!(matches!(result, Err(SparkWalletError::ValidationError(_))));
     }
 }

@@ -101,6 +101,10 @@ impl BreezSdk {
     ///
     /// A batch pays tokens: sending sats to several payees at once is not
     /// supported yet, so a recipient that resolves to sats is rejected.
+    ///
+    /// A batch that pays a Spark invoice is limited to a single token: the
+    /// operators reject a transaction that carries an invoice and pays more
+    /// than one. Send those as one batch per token.
     pub async fn prepare_send_batch(
         &self,
         request: PrepareSendBatchRequest,

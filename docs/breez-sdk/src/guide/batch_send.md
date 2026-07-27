@@ -16,6 +16,8 @@ Each recipient is identified by a {{#name payment_request}}, which is either a S
 
 The same invoice may only appear once in a batch. Repeating a plain Spark address is allowed: that is simply two outputs to the same payee.
 
+A batch that pays a Spark invoice is limited to a single token, and that includes its address recipients: the Spark operators reject a transaction that carries an invoice and pays more than one token. Prepare rejects such a batch, so split it into one batch per token. A batch of address recipients only may span as many tokens as you like.
+
 The response resolves every recipient into the concrete {{#name destination}}, asset and amount it will be paid, and reports {{#name totals}}: what the batch debits, one entry per distinct asset. You may show these to the user before sending.
 
 {{#tabs tokens:send-batch}}

@@ -63,7 +63,7 @@ Payments can be sent without holding an asset by converting on-the-fly as a step
 
 {{#tabs tokens:send-token-payment}}
 
-To pay several recipients at once, see [Sending to multiple recipients](./batch_send.md): one transaction can pay multiple payees, across several tokens, mixing Spark addresses and invoices.
+To pay several recipients at once, see [Sending to multiple recipients](./batch_send.md): one transaction can pay multiple payees, across several tokens, mixing Spark addresses and invoices. A batch that pays an invoice stays on one token.
 
 <h2 id="listing-payments">
     <a class="header" href="#listing-payments">Listing token payments</a>
