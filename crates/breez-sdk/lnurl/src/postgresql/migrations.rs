@@ -340,7 +340,7 @@ mod tests {
 
     #[tokio::test]
     async fn fresh_database_applies_every_migration() {
-        let pool = empty_test_pool("fresh_database").await;
+        let (_pg, pool) = empty_test_pool().await;
 
         run(&pool).await.expect("migrate fresh database");
 
@@ -350,7 +350,7 @@ mod tests {
 
     #[tokio::test]
     async fn fully_migrated_database_reruns_nothing() {
-        let pool = empty_test_pool("migrated_full").await;
+        let (_pg, pool) = empty_test_pool().await;
         migrate_as_previous_runner(&pool, migrations().len()).await;
 
         // Re-running migration 1 would fail: `users` already exists.
@@ -361,7 +361,7 @@ mod tests {
 
     #[tokio::test]
     async fn partially_migrated_database_applies_the_rest() {
-        let pool = empty_test_pool("migrated_partial").await;
+        let (_pg, pool) = empty_test_pool().await;
         migrate_as_previous_runner(&pool, 6).await;
         assert!(!table_exists(&pool, "domain_attribution").await);
 
@@ -373,7 +373,7 @@ mod tests {
 
     #[tokio::test]
     async fn adoption_is_idempotent() {
-        let pool = empty_test_pool("adoption_idempotent").await;
+        let (_pg, pool) = empty_test_pool().await;
         migrate_as_previous_runner(&pool, migrations().len()).await;
 
         run(&pool).await.expect("first run");
@@ -386,7 +386,7 @@ mod tests {
     /// database, so it has to be applied rather than adopted.
     #[tokio::test]
     async fn failed_migration_is_not_adopted() {
-        let pool = empty_test_pool("failed_migration").await;
+        let (_pg, pool) = empty_test_pool().await;
         migrate_as_previous_runner(&pool, 5).await;
         record_applied(&pool.get().await.unwrap(), 5, false).await;
 

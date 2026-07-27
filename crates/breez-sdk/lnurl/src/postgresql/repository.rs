@@ -791,7 +791,7 @@ mod postgres_tests {
 
     #[tokio::test]
     async fn list_domains_surfaces_api_keys() {
-        let pool = test_pool("list_domains_surfaces_api_keys").await;
+        let (_pg, pool) = test_pool().await;
         seed_domain_with_api_key(&pool).await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::list_domains_surfaces_api_keys(&db).await;
@@ -799,7 +799,7 @@ mod postgres_tests {
 
     #[tokio::test]
     async fn set_domain_jwt_round_trips() {
-        let pool = test_pool("set_domain_jwt_round_trips").await;
+        let (_pg, pool) = test_pool().await;
         seed_domain_with_api_key(&pool).await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::set_domain_jwt_round_trips(&db).await;
@@ -807,14 +807,14 @@ mod postgres_tests {
 
     #[tokio::test]
     async fn registering_taken_name_with_other_pubkey_is_rejected() {
-        let pool = test_pool("registering_taken_name_rejected").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::registering_taken_name_with_other_pubkey_is_rejected(&db).await;
     }
 
     #[tokio::test]
     async fn deleting_a_name_the_pubkey_no_longer_holds_is_a_no_op() {
-        let pool = test_pool("deleting_name_not_held_no_op").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::deleting_a_name_the_pubkey_no_longer_holds_is_a_no_op(&db).await;
     }

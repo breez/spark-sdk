@@ -185,14 +185,14 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     let pool = create_pool(&PostgresStorageConfig::with_defaults(args.db_url.clone()))
-        .map_err(|e| anyhow!("failed to create connection pool: {:?}", e))?;
+        .map_err(|e| anyhow!("failed to create connection pool: {e:?}"))?;
 
     // The pool connects lazily, so an unreachable database or bad credentials
     // would otherwise only surface once requests start arriving.
     drop(
         pool.get()
             .await
-            .map_err(|e| anyhow!("failed to connect to the database: {:?}", e))?,
+            .map_err(|e| anyhow!("failed to connect to the database: {e:?}"))?,
     );
 
     if args.auto_migrate {
@@ -350,7 +350,7 @@ where
         .map(|ca_cert_str| {
             let raw_ca = BASE64_STANDARD
                 .decode(ca_cert_str.trim())
-                .map_err(|e| anyhow!("failed to decode base64 ca_cert: {:?}", e))?;
+                .map_err(|e| anyhow!("failed to decode base64 ca_cert: {e:?}"))?;
             let (_, ca_cert) = X509Certificate::from_der(&raw_ca)
                 .map_err(|e| anyhow!("failed to parse ca certificate: {e:?}"))?;
             Ok::<_, anyhow::Error>(ca_cert.as_raw().to_vec())
@@ -388,7 +388,7 @@ where
         .nsec
         .map(|nsec| {
             let keys = nostr::Keys::from_str(&nsec)
-                .map_err(|e| anyhow!("failed to parse nsec key: {:?}", e))?;
+                .map_err(|e| anyhow!("failed to parse nsec key: {e:?}"))?;
             Ok::<_, anyhow::Error>(keys)
         })
         .transpose()?;

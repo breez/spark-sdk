@@ -46,7 +46,7 @@ brew install protobuf openssl pkg-config
 From the repository root:
 
 ```shell
-cargo build --release --manifest-path crates/breez-sdk/lnurl/Cargo.toml
+cargo build --release -p lnurl
 ```
 
 The compiled binary will be available at `target/release/lnurl`.
@@ -232,21 +232,12 @@ volumes:
 
 ## Testing
 
-The tests run against a real PostgreSQL instance. Each test gets its own schema,
-so they can share one database, but the tests create and drop schemas in it:
-point `LNURL_TEST_POSTGRES_URL` at a disposable instance, never at real data.
+The tests run against a real PostgreSQL instance, started per test as a
+throwaway container, so Docker has to be running.
 
 ```shell
-docker run -d --rm --name lnurl-pg-test \
-  -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=lnurl_test \
-  -p 55432:5432 postgres:16-alpine
-
-LNURL_TEST_POSTGRES_URL="postgres://postgres:postgres@localhost:55432/lnurl_test" \
-  make lnurl-test
+cargo test -p lnurl
 ```
-
-Without `LNURL_TEST_POSTGRES_URL` the database-backed tests fail rather than
-silently skip.
 
 ## License
 

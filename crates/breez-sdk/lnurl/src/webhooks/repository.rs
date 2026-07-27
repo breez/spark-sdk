@@ -203,19 +203,19 @@ mod postgres_tests {
 
     #[tokio::test]
     async fn webhook_delivery_success_marks_succeeded() {
-        let db = test_db("delivery_success_marks_succeeded").await;
+        let (_pg, db) = test_db().await;
         shared_tests::webhook_delivery_success_marks_succeeded(&db).await;
     }
 
     #[tokio::test]
     async fn webhook_delivery_failure_schedules_retry() {
-        let db = test_db("delivery_failure_schedules_retry").await;
+        let (_pg, db) = test_db().await;
         shared_tests::webhook_delivery_failure_schedules_retry(&db).await;
     }
 
     #[tokio::test]
     async fn delete_webhook_deliveries_older_than_removes_old() {
-        let db = test_db("delete_deliveries_older_than").await;
+        let (_pg, db) = test_db().await;
         shared_tests::delete_webhook_deliveries_older_than_removes_old(&db).await;
     }
 }

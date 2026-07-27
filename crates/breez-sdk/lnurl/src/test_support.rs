@@ -1,77 +1,43 @@
 //! Shared fixtures for the postgres-backed tests.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use spark_postgres::deadpool_postgres::Pool;
+use spark_postgres::{PostgresStorageConfig, create_pool};
+use testcontainers::ContainerAsync;
+use testcontainers::runners::AsyncRunner;
+use testcontainers_modules::postgres::Postgres;
 
-use spark_postgres::deadpool_postgres::{Manager, Pool};
-use spark_postgres::tokio_postgres::{Config, NoTls};
-
-/// Connection string to the throwaway postgres instance the tests run against.
-/// The tests create and drop schemas in it, so it must not point at real data.
-const URL_ENV: &str = "LNURL_TEST_POSTGRES_URL";
-
-static SCHEMA_COUNTER: AtomicU32 = AtomicU32::new(0);
-
-/// A migrated pool from [`empty_test_pool`].
-pub async fn test_pool(label: &str) -> Pool {
-    let pool = empty_test_pool(label).await;
+/// A pool over a throwaway postgres, migrated and empty of rows. The container
+/// is returned with it and stops as soon as it is dropped, so a test has to
+/// hold on to it for as long as it uses the pool.
+pub async fn test_pool() -> (ContainerAsync<Postgres>, Pool) {
+    let (container, pool) = empty_test_pool().await;
     crate::postgresql::run_migrations(&pool)
         .await
         .expect("run migrations");
-    pool
+    (container, pool)
 }
 
-/// A pool confined to its own freshly created, empty schema, so tests sharing
-/// one postgres instance never see each other's rows. `label` only has to be
-/// recognizable in a failure message: uniqueness comes from a counter.
-///
-/// Panics when `LNURL_TEST_POSTGRES_URL` is unset. Skipping instead would leave
-/// the whole repository suite passing without ever touching a database.
-pub async fn empty_test_pool(label: &str) -> Pool {
-    let url = std::env::var(URL_ENV).unwrap_or_else(|_| {
-        panic!(
-            "{URL_ENV} is not set. Point it at a disposable postgres instance, \
-             e.g. LNURL_TEST_POSTGRES_URL=postgres://postgres:postgres@localhost/lnurl_test"
-        )
-    });
-
-    let n = SCHEMA_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let mut schema = format!("t{n}_{label}");
-    // Postgres truncates identifiers past 63 bytes, which would silently merge
-    // two schemas whose names share a long prefix.
-    schema.truncate(63);
-
-    let config: Config = url.parse().expect("parse postgres url");
-    let admin = connect(&config).await;
-    admin
-        .batch_execute(&format!(
-            "DROP SCHEMA IF EXISTS \"{schema}\" CASCADE; CREATE SCHEMA \"{schema}\""
-        ))
+/// A pool over a throwaway postgres with no schema applied.
+pub async fn empty_test_pool() -> (ContainerAsync<Postgres>, Pool) {
+    let container = Postgres::default()
+        .start()
         .await
-        .expect("recreate test schema");
-    drop(admin);
-
-    // Pins every pooled connection to the test schema at startup, which is the
-    // deadpool equivalent of a per-connection `SET search_path`.
-    let mut scoped = config;
-    scoped.options(format!("-c search_path={schema}"));
-    let manager = Manager::new(scoped, NoTls);
-    Pool::builder(manager)
-        .max_size(5)
-        .build()
-        .expect("build test pool")
-}
-
-/// Connects a standalone client, driving its connection on a background task.
-async fn connect(config: &Config) -> spark_postgres::tokio_postgres::Client {
-    let (client, connection) = config
-        .connect(NoTls)
+        .expect("start postgres container");
+    let port = container
+        .get_host_port_ipv4(5432)
         .await
-        .expect("connect to test postgres");
-    tokio::spawn(connection);
-    client
+        .expect("get container port");
+
+    let pool = create_pool(&PostgresStorageConfig::with_defaults(format!(
+        "host=127.0.0.1 port={port} user=postgres password=postgres dbname=postgres"
+    )))
+    .expect("create test pool");
+
+    (container, pool)
 }
 
 /// A repository over a pool from [`test_pool`].
-pub async fn test_db(label: &str) -> crate::postgresql::LnurlRepository {
-    crate::postgresql::LnurlRepository::new(test_pool(label).await)
+pub async fn test_db() -> (ContainerAsync<Postgres>, crate::postgresql::LnurlRepository) {
+    let (container, pool) = test_pool().await;
+    (container, crate::postgresql::LnurlRepository::new(pool))
 }

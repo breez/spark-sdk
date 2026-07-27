@@ -1,53 +1,44 @@
 [package]
 name = "lnurl"
 edition = "2024"
-version = "0.1.0"
-
-[workspace]
+version.workspace = true
 
 [dependencies]
-anyhow = "1.0.98"
-async-trait = "0.1.88"
+anyhow.workspace = true
+async-trait.workspace = true
 axum = { version = "0.8.4", features = ["macros"] }
 axum-extra = { version = "0.10.1" }
-base64 = "0.22.1"
-bitcoin = { version = "0.32.6", features = ["serde"] }
-clap = { version = "4.5.40", features = ["derive"] }
-figment = { version = "0.10.19", features = ["env", "toml"] }
-hex = "0.4.3"
-lightning-invoice = { version = "0.33.2", features = ["std"] }
-lnurl-models = { path = "../lnurl-models" }
-nostr = { version = "0.43.1", default-features = false, features = ["std", "nip57"] }
-nostr-sdk = { version = "0.43.0", default-features = false, features = ["nip57"] }
-platform-utils = { path = "../../platform-utils" }
-rand = "0.8"
-reqwest = { version = "0.12.23", default-features = false, features = ["json", "http2", "charset", "system-proxy", "rustls-tls"] }
+base64.workspace = true
+bitcoin.workspace = true
+clap = { workspace = true, features = ["derive"] }
+figment = { workspace = true, features = ["env", "toml"] }
+hex.workspace = true
+lightning-invoice = { workspace = true, features = ["std"] }
+lnurl-models.workspace = true
+nostr = { workspace = true, features = ["nip57"] }
+nostr-sdk = { workspace = true, features = ["nip57"] }
+platform-utils.workspace = true
+rand.workspace = true
+reqwest.workspace = true
 regex = "1.11.2"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
-serde_with = "3.13.0"
-spark = { path = "../../spark" }
-spark-postgres = { path = "../../spark-postgres" }
-spark-wallet = { path = "../../spark-wallet" }
-thiserror = "2.0.12"
-tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros", "signal"] }
-tonic = "0.12.3"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+spark.workspace = true
+spark-postgres.workspace = true
+spark-wallet.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
 tower-http = { version = "0.6.6", features = ["cors"] }
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 x509-parser = { version = "0.18.0", features = ["verify"] }
+
+[dev-dependencies]
+testcontainers.workspace = true
+testcontainers-modules = { workspace = true, features = ["postgres"] }
 
 [features]
 dev = []
 
 [lints]
-clippy.suspicious = { level = "warn", priority = -1 }
-clippy.complexity = { level = "warn", priority = -1 }
-clippy.perf = { level = "warn", priority = -1 }
-clippy.style = { level = "warn", priority = -1 }
-clippy.pedantic = { level = "warn", priority = -1 }
-clippy.missing_errors_doc = "allow"
-clippy.missing_panics_doc = "allow"
-clippy.must_use_candidate = "allow"
-clippy.struct_field_names = "allow"
-clippy.arithmetic_side_effects = "warn"
+workspace = true

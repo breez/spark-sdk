@@ -299,7 +299,7 @@ where
     nostr_client.disconnect().await;
 
     if let Err(e) = result {
-        return Err(anyhow::anyhow!("Failed to send zap event: {}", e));
+        return Err(anyhow::anyhow!("Failed to send zap event: {e}"));
     }
 
     // Update the zap record with the zap event
@@ -400,19 +400,19 @@ mod postgres_tests {
 
     #[tokio::test]
     async fn take_pending_zap_receipts_claims_items() {
-        let db = test_db("zap_claims_items").await;
+        let (_pg, db) = test_db().await;
         shared_tests::take_pending_zap_receipts_claims_items(&db).await;
     }
 
     #[tokio::test]
     async fn take_pending_zap_receipts_respects_next_retry_at() {
-        let db = test_db("zap_respects_next_retry_at").await;
+        let (_pg, db) = test_db().await;
         shared_tests::take_pending_zap_receipts_respects_next_retry_at(&db).await;
     }
 
     #[tokio::test]
     async fn take_pending_zap_receipts_respects_limit() {
-        let db = test_db("zap_respects_limit").await;
+        let (_pg, db) = test_db().await;
         shared_tests::take_pending_zap_receipts_respects_limit(&db).await;
     }
 }
