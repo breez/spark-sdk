@@ -12,19 +12,11 @@ use tracing::{Instrument, debug, info};
 // Setup helpers
 // ---------------------
 
-/// Start an LNURL server fixture.
-/// When `use_postgres` is true the server runs against a PostgreSQL
-/// testcontainer; otherwise it uses in-memory SQLite.
-async fn setup_lnurl(use_postgres: bool) -> LnurlFixture {
-    if use_postgres {
-        LnurlFixture::new_with_postgres()
-            .await
-            .expect("Failed to start Lnurl service with PostgreSQL")
-    } else {
-        LnurlFixture::new()
-            .await
-            .expect("Failed to start Lnurl service")
-    }
+/// Start an LNURL server fixture backed by a PostgreSQL testcontainer.
+async fn setup_lnurl() -> LnurlFixture {
+    LnurlFixture::new()
+        .await
+        .expect("Failed to start Lnurl service")
 }
 
 /// Fixture: Alice SDK for LNURL testing (sender)
@@ -88,11 +80,9 @@ async fn build_sdk_for_lnurl(
 }
 
 /// Set up Bob SDK with an LNURL server (receiver).
-/// When `use_postgres` is true the LNURL server runs against a PostgreSQL
-/// testcontainer; otherwise it uses in-memory SQLite.
-async fn setup_bob(use_postgres: bool) -> Result<SdkInstance> {
+async fn setup_bob() -> Result<SdkInstance> {
     async {
-        let lnurl = Arc::new(setup_lnurl(use_postgres).await);
+        let lnurl = Arc::new(setup_lnurl().await);
         let lnurl_domain = lnurl.http_url().to_string();
 
         let temp_dir = tempfile::Builder::new()
@@ -198,13 +188,11 @@ async fn client_sign_lnurl_pay(
 
 /// Test registering a Lightning address
 #[rstest]
-#[case::sqlite(false)]
-#[case::postgres(true)]
 #[test_log::test(tokio::test)]
-async fn test_01_register_lightning_address(#[case] use_postgres: bool) -> Result<()> {
+async fn test_01_register_lightning_address() -> Result<()> {
     info!("=== Starting test_01_register_lightning_address ===");
 
-    let bob = setup_bob(use_postgres).await?;
+    let bob = setup_bob().await?;
     let username = "bobtest";
 
     // Register a Lightning address for Bob
@@ -234,13 +222,11 @@ async fn test_01_register_lightning_address(#[case] use_postgres: bool) -> Resul
 
 /// Test checking Lightning address availability
 #[rstest]
-#[case::sqlite(false)]
-#[case::postgres(true)]
 #[test_log::test(tokio::test)]
-async fn test_02_check_lightning_address_available(#[case] use_postgres: bool) -> Result<()> {
+async fn test_02_check_lightning_address_available() -> Result<()> {
     info!("=== Starting test_02_check_lightning_address_available ===");
 
-    let bob = setup_bob(use_postgres).await?;
+    let bob = setup_bob().await?;
 
     // Test available username
     let available_response = bob
@@ -278,13 +264,11 @@ async fn test_02_check_lightning_address_available(#[case] use_postgres: bool) -
 
 /// Test getting Lightning address
 #[rstest]
-#[case::sqlite(false)]
-#[case::postgres(true)]
 #[test_log::test(tokio::test)]
-async fn test_03_get_lightning_address(#[case] use_postgres: bool) -> Result<()> {
+async fn test_03_get_lightning_address() -> Result<()> {
     info!("=== Starting test_03_get_lightning_address ===");
 
-    let bob = setup_bob(use_postgres).await?;
+    let bob = setup_bob().await?;
     let username = "bobgettest";
     let description = "Bob's get test Lightning address";
 
@@ -326,13 +310,11 @@ async fn test_03_get_lightning_address(#[case] use_postgres: bool) -> Result<()>
 
 /// Test deleting a Lightning address
 #[rstest]
-#[case::sqlite(false)]
-#[case::postgres(true)]
 #[test_log::test(tokio::test)]
-async fn test_04_delete_lightning_address(#[case] use_postgres: bool) -> Result<()> {
+async fn test_04_delete_lightning_address() -> Result<()> {
     info!("=== Starting test_04_delete_lightning_address ===");
 
-    let bob = setup_bob(use_postgres).await?;
+    let bob = setup_bob().await?;
     let username = "bobdeletetest";
 
     // Register an address first
@@ -379,18 +361,12 @@ async fn test_04_delete_lightning_address(#[case] use_postgres: bool) -> Result<
 
 /// Test LNURL payments between Alice and Bob
 #[rstest]
-#[case::sqlite(false)]
-#[case::postgres(true)]
 #[test_log::test(tokio::test)]
-async fn test_05_lnurl_payment_flow(
-    #[future] alice_sdk: Result<SdkInstance>,
-
-    #[case] use_postgres: bool,
-) -> Result<()> {
+async fn test_05_lnurl_payment_flow(#[future] alice_sdk: Result<SdkInstance>) -> Result<()> {
     info!("=== Starting test_05_lnurl_payment_flow ===");
 
     let mut alice = alice_sdk.await?;
-    let mut bob = setup_bob(use_postgres).await?;
+    let mut bob = setup_bob().await?;
 
     let username = "bobpayment";
     let description = "Bob's payment test Lightning address";
@@ -522,18 +498,12 @@ async fn lnurl_spark_address_fixture() -> LnurlFixture {
 
 /// Test LNURL full balance payment - sends entire balance via LNURL
 #[rstest]
-#[case::sqlite(false)]
-#[case::postgres(true)]
 #[test_log::test(tokio::test)]
-async fn test_07_lnurl_send_all_payment(
-    #[future] alice_sdk: Result<SdkInstance>,
-
-    #[case] use_postgres: bool,
-) -> Result<()> {
+async fn test_07_lnurl_send_all_payment(#[future] alice_sdk: Result<SdkInstance>) -> Result<()> {
     info!("=== Starting test_07_lnurl_send_all_payment ===");
 
     let mut alice = alice_sdk.await?;
-    let mut bob = setup_bob(use_postgres).await?;
+    let mut bob = setup_bob().await?;
 
     let username = "bobfullbalance";
     let description = "Bob's full balance test Lightning address";
@@ -663,18 +633,14 @@ async fn test_07_lnurl_send_all_payment(
 /// - fee(balance) > fee(balance - fee(balance))
 /// - The SDK must overpay the fee to fully spend the balance
 #[rstest]
-#[case::sqlite(false)]
-#[case::postgres(true)]
 #[test_log::test(tokio::test)]
 async fn test_08_lnurl_send_all_with_fee_overpayment(
     #[future] alice_sdk: Result<SdkInstance>,
-
-    #[case] use_postgres: bool,
 ) -> Result<()> {
     info!("=== Starting test_08_lnurl_send_all_with_fee_overpayment ===");
 
     let mut alice = alice_sdk.await?;
-    let mut bob = setup_bob(use_postgres).await?;
+    let mut bob = setup_bob().await?;
 
     let username = "boboverpay";
     let description = "Bob's overpayment test Lightning address";
@@ -999,13 +965,11 @@ async fn test_08_lnurl_send_all_with_fee_overpayment(
 
 /// Test that the invoice expiry query parameter is passed through to the generated invoice
 #[rstest]
-#[case::sqlite(false)]
-#[case::postgres(true)]
 #[test_log::test(tokio::test)]
-async fn test_09_invoice_expiry_parameter(#[case] use_postgres: bool) -> Result<()> {
+async fn test_09_invoice_expiry_parameter() -> Result<()> {
     info!("=== Starting test_09_invoice_expiry_parameter ===");
 
-    let bob = setup_bob(use_postgres).await?;
+    let bob = setup_bob().await?;
     let username = "bobexpiry";
 
     // Register a Lightning address for Bob
@@ -1246,13 +1210,11 @@ async fn test_11_lnurl_spark_address_payment(
 /// Transfer an already-registered username from pubkey A to pubkey B in a
 /// single atomic operation.
 #[rstest]
-#[case::sqlite(false)]
-#[case::postgres(true)]
 #[test_log::test(tokio::test)]
-async fn test_12_transfer_lightning_address(#[case] use_postgres: bool) -> Result<()> {
+async fn test_12_transfer_lightning_address() -> Result<()> {
     info!("=== Starting test_12_transfer_lightning_address ===");
 
-    let lnurl = Arc::new(setup_lnurl(use_postgres).await);
+    let lnurl = Arc::new(setup_lnurl().await);
     let alice = build_sdk_for_lnurl(Arc::clone(&lnurl), "breez-sdk-transfer-alice").await?;
     let bob = build_sdk_for_lnurl(Arc::clone(&lnurl), "breez-sdk-transfer-bob").await?;
 
@@ -1339,13 +1301,11 @@ async fn test_12_transfer_lightning_address(#[case] use_postgres: bool) -> Resul
 /// A transfer whose new owner is the current owner (`from_pk == to_pk`) must be
 /// rejected by the server, not silently succeed.
 #[rstest]
-#[case::sqlite(false)]
-#[case::postgres(true)]
 #[test_log::test(tokio::test)]
-async fn test_13_transfer_to_self_rejected(#[case] use_postgres: bool) -> Result<()> {
+async fn test_13_transfer_to_self_rejected() -> Result<()> {
     info!("=== Starting test_13_transfer_to_self_rejected ===");
 
-    let lnurl = Arc::new(setup_lnurl(use_postgres).await);
+    let lnurl = Arc::new(setup_lnurl().await);
     let alice = build_sdk_for_lnurl(Arc::clone(&lnurl), "breez-sdk-self-transfer-alice").await?;
 
     let username = "selftransfer";
@@ -1400,7 +1360,7 @@ async fn test_14_client_signing_lnurl_pay() -> Result<()> {
     let alice_mnemonic = random_mnemonic()?;
     let mut alice =
         build_signing_alice(alice_mnemonic.clone(), "breez-sdk-alice-lnurl-signing").await?;
-    let mut bob = setup_bob(false).await?;
+    let mut bob = setup_bob().await?;
 
     let client_signer =
         default_external_signers(alice_mnemonic, None, Network::Regtest, None)?.spark_signer;
@@ -1504,7 +1464,7 @@ async fn test_15_client_signing_lnurl_pay_fees_included() -> Result<()> {
     let alice_mnemonic = random_mnemonic()?;
     let mut alice =
         build_signing_alice(alice_mnemonic.clone(), "breez-sdk-alice-lnurl-signing-fi").await?;
-    let mut bob = setup_bob(false).await?;
+    let mut bob = setup_bob().await?;
 
     let client_signer =
         default_external_signers(alice_mnemonic, None, Network::Regtest, None)?.spark_signer;
@@ -1595,7 +1555,7 @@ async fn test_16_client_signing_lnurl_pay_publish_twice() -> Result<()> {
         "breez-sdk-alice-lnurl-signing-twice",
     )
     .await?;
-    let mut bob = setup_bob(false).await?;
+    let mut bob = setup_bob().await?;
 
     let client_signer =
         default_external_signers(alice_mnemonic, None, Network::Regtest, None)?.spark_signer;

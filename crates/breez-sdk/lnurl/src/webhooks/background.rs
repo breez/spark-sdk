@@ -321,7 +321,7 @@ mod tests {
 
     use axum::Router;
     use axum::routing::post;
-    use sqlx::{Row, SqlitePool};
+    use sqlx::{PgPool, Row};
     use tokio::sync::{RwLock, Semaphore};
 
     use super::*;
@@ -333,13 +333,9 @@ mod tests {
     const TEST_DOMAIN: &str = "test.example.com";
     const TEST_SECRET: &str = "test_webhook_secret";
 
-    async fn setup_test_db() -> (crate::sqlite::LnurlRepository, SqlitePool) {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .connect(":memory:")
-            .await
-            .unwrap();
-        crate::sqlite::run_migrations(&pool).await.unwrap();
-        let db = crate::sqlite::LnurlRepository::new(pool.clone());
+    async fn setup_test_db(label: &str) -> (crate::postgresql::LnurlRepository, PgPool) {
+        let pool = crate::test_support::test_pool(label).await;
+        let db = crate::postgresql::LnurlRepository::new(pool.clone());
         (db, pool)
     }
 
@@ -352,7 +348,7 @@ mod tests {
         db.insert_webhook_deliveries(&[delivery]).await.unwrap();
     }
 
-    async fn insert_domain_webhook(pool: &SqlitePool, domain: &str, url: &str, secret: &str) {
+    async fn insert_domain_webhook(pool: &PgPool, domain: &str, url: &str, secret: &str) {
         sqlx::query(
             "INSERT INTO domain_webhooks (domain, url, webhook_secret)
              VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
@@ -365,10 +361,7 @@ mod tests {
         .unwrap();
     }
 
-    async fn get_delivery_by_identifier(
-        pool: &SqlitePool,
-        identifier: &str,
-    ) -> sqlx::sqlite::SqliteRow {
+    async fn get_delivery_by_identifier(pool: &PgPool, identifier: &str) -> sqlx::postgres::PgRow {
         sqlx::query(
             "SELECT id, identifier, domain, url, payload, created_at, succeeded_at,
                     retry_count, next_retry_at, claimed_at,
@@ -416,7 +409,7 @@ mod tests {
 
     #[tokio::test]
     async fn successful_delivery_marks_succeeded() {
-        let (db, pool) = setup_test_db().await;
+        let (db, pool) = setup_test_db("bg_successful_delivery").await;
 
         let router = Router::new().route("/hook", post(|| async { axum::http::StatusCode::OK }));
         let base_url = start_mock_server(router).await;
@@ -448,7 +441,7 @@ mod tests {
 
     #[tokio::test]
     async fn server_error_causes_retry() {
-        let (db, pool) = setup_test_db().await;
+        let (db, pool) = setup_test_db("bg_server_error_retry").await;
 
         let router = Router::new().route(
             "/hook",
@@ -491,7 +484,7 @@ mod tests {
 
     #[tokio::test]
     async fn connection_error_causes_retry() {
-        let (db, pool) = setup_test_db().await;
+        let (db, pool) = setup_test_db("bg_connection_error_retry").await;
 
         // Port 1 — nothing is listening there.
         let url = "http://127.0.0.1:1/hook";
@@ -525,7 +518,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_delivery_is_retried_and_succeeds() {
-        let (db, pool) = setup_test_db().await;
+        let (db, pool) = setup_test_db("bg_retried_and_succeeds").await;
 
         let counter = Arc::new(AtomicUsize::new(0));
 
@@ -591,7 +584,7 @@ mod tests {
 
     #[tokio::test]
     async fn error_body_is_truncated() {
-        let (db, pool) = setup_test_db().await;
+        let (db, pool) = setup_test_db("bg_error_body_truncated").await;
 
         let long_body: String = "x".repeat(1000);
         let router = Router::new().route(
@@ -651,7 +644,7 @@ mod tests {
 
     #[tokio::test]
     async fn slow_server_does_not_block_fast_server() {
-        let (db, pool) = setup_test_db().await;
+        let (db, pool) = setup_test_db("bg_slow_does_not_block_fast").await;
 
         let slow_domain = "slow.example.com";
         let fast_domain = "fast.example.com";
@@ -723,7 +716,7 @@ mod tests {
 
     #[tokio::test]
     async fn per_domain_throttling_unclaims_excess() {
-        let (db, pool) = setup_test_db().await;
+        let (db, pool) = setup_test_db("bg_throttling_unclaims").await;
 
         let router = Router::new().route("/hook", post(|| async { axum::http::StatusCode::OK }));
         let base_url = start_mock_server(router).await;
@@ -758,7 +751,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_config_deletes_unattempted_delivery() {
-        let (db, pool) = setup_test_db().await;
+        let (db, pool) = setup_test_db("bg_no_config_deletes").await;
 
         insert_delivery(&db, "no_config_1", "unknown.example.com").await;
 
@@ -780,7 +773,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_config_parks_previously_attempted_delivery() {
-        let (db, pool) = setup_test_db().await;
+        let (db, pool) = setup_test_db("bg_no_config_parks").await;
 
         // Insert a delivery that looks like it was previously attempted (url is set).
         insert_delivery(&db, "parked_1", TEST_DOMAIN).await;
@@ -810,7 +803,7 @@ mod tests {
         use axum::body::Bytes;
         use axum::http::HeaderMap;
 
-        let (db, pool) = setup_test_db().await;
+        let (db, pool) = setup_test_db("bg_signature_header").await;
 
         let received_sig = Arc::new(tokio::sync::Mutex::new(String::new()));
         let received_body = Arc::new(tokio::sync::Mutex::new(String::new()));

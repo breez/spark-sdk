@@ -19,9 +19,6 @@ pub struct LnurlImageConfig {
     pub network: String,
     /// Whether to auto-migrate the database
     pub auto_migrate: bool,
-    /// Database URL. Use `:memory:` for in-memory SQLite or a
-    /// `postgres://...` URL for PostgreSQL.
-    pub db_url: String,
     /// Whether to include Spark address routing hints in Lightning invoices
     pub include_spark_address: bool,
 }
@@ -39,7 +36,6 @@ impl Default for LnurlImageConfig {
             },
             network: "regtest".to_string(),
             auto_migrate: true,
-            db_url: ":memory:".to_string(),
             include_spark_address: false,
         }
     }
@@ -65,12 +61,6 @@ impl LnurlImageConfig {
         self
     }
 
-    /// Set the database URL (`:memory:` for SQLite, `postgres://...` for PostgreSQL)
-    pub fn with_db_url(mut self, db_url: impl Into<String>) -> Self {
-        self.db_url = db_url.into();
-        self
-    }
-
     /// Set whether to include Spark address routing hints in invoices
     pub fn with_include_spark_address(mut self, include_spark_address: bool) -> Self {
         self.include_spark_address = include_spark_address;
@@ -81,10 +71,10 @@ impl LnurlImageConfig {
 pub struct LnurlFixture {
     pub container: ContainerAsync<GenericImage>,
     pub http_url: String,
-    /// Keeps the PostgreSQL container alive when the LNURL server uses a
-    /// Postgres backend. `None` when using SQLite.
+    /// Keeps the PostgreSQL container the server is pointed at alive for the
+    /// lifetime of the fixture.
     #[allow(dead_code)]
-    pg_container: Option<ContainerAsync<Postgres>>,
+    pg_container: ContainerAsync<Postgres>,
 }
 
 impl LnurlFixture {
@@ -94,10 +84,27 @@ impl LnurlFixture {
         Self::with_config(LnurlImageConfig::default()).await
     }
 
-    /// Create a new LnurlFixture with a custom configuration
+    /// Create a new LnurlFixture with a custom configuration.
+    ///
+    /// Starts a PostgreSQL testcontainer and points the LNURL server at it:
+    /// postgres is the server's only supported database.
     pub async fn with_config(config: LnurlImageConfig) -> Result<Self> {
         // Build the Docker image from the context
         build_docker_image(&config.docker_config).await?;
+
+        let pg_container = Postgres::default()
+            .start()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to start PostgreSQL container: {e}"))?;
+        let pg_port = pg_container
+            .get_host_port_ipv4(5432)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to get PostgreSQL host port: {e}"))?;
+        // The LNURL server runs inside Docker, so it reaches PostgreSQL
+        // via the host gateway.
+        let db_url =
+            format!("postgres://postgres:postgres@host.docker.internal:{pg_port}/postgres");
+        info!("Starting LNURL server with PostgreSQL backend at port {pg_port}");
 
         // Create container from the built image with environment variables
         let mut container = GenericImage::new(
@@ -111,7 +118,7 @@ impl LnurlFixture {
         .with_log_consumer(crate::log::TracingConsumer::new("lnurl"))
         .with_env_var("BREEZ_LNURL_NETWORK", &config.network)
         .with_env_var("BREEZ_LNURL_AUTO_MIGRATE", config.auto_migrate.to_string())
-        .with_env_var("BREEZ_LNURL_DB_URL", &config.db_url);
+        .with_env_var("BREEZ_LNURL_DB_URL", &db_url);
 
         // Add additional test-friendly defaults
         container = container
@@ -148,35 +155,8 @@ impl LnurlFixture {
         Ok(Self {
             container,
             http_url,
-            pg_container: None,
+            pg_container,
         })
-    }
-
-    /// Create a new LnurlFixture backed by a PostgreSQL database.
-    ///
-    /// Starts a Postgres testcontainer, then launches the LNURL server
-    /// configured to connect to it via `host.docker.internal`.
-    pub async fn new_with_postgres() -> Result<Self> {
-        let pg_container = Postgres::default()
-            .start()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to start PostgreSQL container: {e}"))?;
-
-        let host_port = pg_container
-            .get_host_port_ipv4(5432)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to get PostgreSQL host port: {e}"))?;
-
-        // The LNURL server runs inside Docker, so it reaches PostgreSQL
-        // via the host gateway.
-        let db_url =
-            format!("postgres://postgres:postgres@host.docker.internal:{host_port}/postgres");
-
-        info!("Starting LNURL server with PostgreSQL backend at port {host_port}");
-        let config = LnurlImageConfig::default().with_db_url(db_url);
-        let mut fixture = Self::with_config(config).await?;
-        fixture.pg_container = Some(pg_container);
-        Ok(fixture)
     }
 
     pub fn http_url(&self) -> &str {

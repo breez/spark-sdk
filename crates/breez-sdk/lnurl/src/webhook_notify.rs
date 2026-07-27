@@ -255,89 +255,25 @@ mod shared_tests {
 }
 
 #[cfg(test)]
-mod sqlite_tests {
-    use super::shared_tests;
-
-    async fn setup_test_db() -> crate::sqlite::LnurlRepository {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .connect(":memory:")
-            .await
-            .unwrap();
-        crate::sqlite::run_migrations(&pool).await.unwrap();
-        crate::sqlite::LnurlRepository::new(pool)
-    }
-
-    #[tokio::test]
-    async fn enqueue_webhooks_creates_delivery() {
-        let db = setup_test_db().await;
-        shared_tests::enqueue_webhooks_creates_delivery(&db).await;
-    }
-
-    #[tokio::test]
-    async fn enqueue_webhooks_skips_invoice_without_domain() {
-        let db = setup_test_db().await;
-        shared_tests::enqueue_webhooks_skips_invoice_without_domain(&db).await;
-    }
-
-    #[tokio::test]
-    async fn enqueue_webhooks_is_idempotent() {
-        let db = setup_test_db().await;
-        shared_tests::enqueue_webhooks_is_idempotent(&db).await;
-    }
-}
-
-// PostgreSQL tests - only run when LNURL_TEST_POSTGRES_URL is set.
-// Example: LNURL_TEST_POSTGRES_URL="postgres://user:pass@localhost/lnurl_test" cargo test
-#[cfg(test)]
 mod postgres_tests {
     use super::shared_tests;
-
-    async fn setup_test_db() -> Option<crate::postgresql::LnurlRepository> {
-        let url = std::env::var("LNURL_TEST_POSTGRES_URL").ok()?;
-        let pool = sqlx::PgPool::connect(&url).await.ok()?;
-        crate::postgresql::run_migrations(&pool).await.ok()?;
-
-        sqlx::query("DELETE FROM webhook_deliveries")
-            .execute(&pool)
-            .await
-            .ok()?;
-        sqlx::query("DELETE FROM domain_webhooks")
-            .execute(&pool)
-            .await
-            .ok()?;
-        sqlx::query("DELETE FROM invoices")
-            .execute(&pool)
-            .await
-            .ok()?;
-        sqlx::query("DELETE FROM settings")
-            .execute(&pool)
-            .await
-            .ok()?;
-
-        Some(crate::postgresql::LnurlRepository::new(pool))
-    }
+    use crate::test_support::test_db;
 
     #[tokio::test]
     async fn enqueue_webhooks_creates_delivery() {
-        let Some(db) = setup_test_db().await else {
-            return;
-        };
+        let db = test_db("enqueue_creates_delivery").await;
         shared_tests::enqueue_webhooks_creates_delivery(&db).await;
     }
 
     #[tokio::test]
     async fn enqueue_webhooks_skips_invoice_without_domain() {
-        let Some(db) = setup_test_db().await else {
-            return;
-        };
+        let db = test_db("enqueue_skips_without_domain").await;
         shared_tests::enqueue_webhooks_skips_invoice_without_domain(&db).await;
     }
 
     #[tokio::test]
     async fn enqueue_webhooks_is_idempotent() {
-        let Some(db) = setup_test_db().await else {
-            return;
-        };
+        let db = test_db("enqueue_is_idempotent").await;
         shared_tests::enqueue_webhooks_is_idempotent(&db).await;
     }
 }

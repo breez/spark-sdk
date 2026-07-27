@@ -394,75 +394,25 @@ mod shared_tests {
 }
 
 #[cfg(test)]
-mod sqlite_tests {
-    use super::shared_tests;
-
-    async fn setup_test_db() -> crate::sqlite::LnurlRepository {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .connect(":memory:")
-            .await
-            .unwrap();
-        crate::sqlite::run_migrations(&pool).await.unwrap();
-        crate::sqlite::LnurlRepository::new(pool)
-    }
-
-    #[tokio::test]
-    async fn take_pending_zap_receipts_claims_items() {
-        let db = setup_test_db().await;
-        shared_tests::take_pending_zap_receipts_claims_items(&db).await;
-    }
-
-    #[tokio::test]
-    async fn take_pending_zap_receipts_respects_next_retry_at() {
-        let db = setup_test_db().await;
-        shared_tests::take_pending_zap_receipts_respects_next_retry_at(&db).await;
-    }
-
-    #[tokio::test]
-    async fn take_pending_zap_receipts_respects_limit() {
-        let db = setup_test_db().await;
-        shared_tests::take_pending_zap_receipts_respects_limit(&db).await;
-    }
-}
-
-#[cfg(test)]
 mod postgres_tests {
     use super::shared_tests;
-
-    async fn setup_test_db() -> Option<crate::postgresql::LnurlRepository> {
-        let url = std::env::var("LNURL_TEST_POSTGRES_URL").ok()?;
-        let pool = sqlx::PgPool::connect(&url).await.ok()?;
-        crate::postgresql::run_migrations(&pool).await.ok()?;
-
-        sqlx::query("DELETE FROM pending_zap_receipts")
-            .execute(&pool)
-            .await
-            .ok()?;
-
-        Some(crate::postgresql::LnurlRepository::new(pool))
-    }
+    use crate::test_support::test_db;
 
     #[tokio::test]
     async fn take_pending_zap_receipts_claims_items() {
-        let Some(db) = setup_test_db().await else {
-            return;
-        };
+        let db = test_db("zap_claims_items").await;
         shared_tests::take_pending_zap_receipts_claims_items(&db).await;
     }
 
     #[tokio::test]
     async fn take_pending_zap_receipts_respects_next_retry_at() {
-        let Some(db) = setup_test_db().await else {
-            return;
-        };
+        let db = test_db("zap_respects_next_retry_at").await;
         shared_tests::take_pending_zap_receipts_respects_next_retry_at(&db).await;
     }
 
     #[tokio::test]
     async fn take_pending_zap_receipts_respects_limit() {
-        let Some(db) = setup_test_db().await else {
-            return;
-        };
+        let db = test_db("zap_respects_limit").await;
         shared_tests::take_pending_zap_receipts_respects_limit(&db).await;
     }
 }

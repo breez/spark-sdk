@@ -25,7 +25,7 @@ use spark::ssp::{ServiceProvider, SparkWalletWebhookEventType};
 use spark::token::InMemoryTokenOutputStore;
 use spark::tree::InMemoryTreeStore;
 use spark_wallet::{DefaultSigner, Network, SparkSignerAdapter, SparkWalletConfig};
-use sqlx::{PgPool, SqlitePool, sqlite::SqlitePoolOptions};
+use sqlx::PgPool;
 use std::collections::HashSet;
 use std::str::FromStr;
 use std::{path::PathBuf, sync::Arc};
@@ -43,8 +43,9 @@ mod partner_jwt;
 mod postgresql;
 mod repository;
 mod routes;
-mod sqlite;
 mod state;
+#[cfg(test)]
+mod test_support;
 mod time;
 mod user;
 mod webhook_notify;
@@ -177,44 +178,25 @@ async fn main() -> Result<(), anyhow::Error> {
         info!("starting lnurl server without config file");
     }
 
-    if args.db_url.trim().to_lowercase().starts_with("postgres") {
-        let pool = PgPool::connect(&args.db_url)
-            .await
-            .map_err(|e| anyhow!("failed to create connection pool: {:?}", e))?;
+    if !args.db_url.trim().to_lowercase().starts_with("postgres") {
+        return Err(anyhow!(
+            "db_url must be a postgres connection string: postgres is the only supported database"
+        ));
+    }
 
-        if args.auto_migrate {
-            debug!("running postgres database migrations");
-            postgresql::run_migrations(&pool).await?;
-            debug!("finished running postgres database migrations");
-        } else {
-            debug!("skipping postgres database migrations");
-        }
-        let repository = postgresql::LnurlRepository::new(pool);
-        run_server(args, repository).await?;
-    } else {
-        // For in-memory databases, limit to 1 connection so all queries share
-        // the same database. Each separate connection to `:memory:` creates its
-        // own independent database.
-        let pool = if args.db_url.contains(":memory:") {
-            SqlitePoolOptions::new()
-                .max_connections(1)
-                .connect(&args.db_url)
-                .await
-        } else {
-            SqlitePool::connect(&args.db_url).await
-        }
+    let pool = PgPool::connect(&args.db_url)
+        .await
         .map_err(|e| anyhow!("failed to create connection pool: {:?}", e))?;
 
-        if args.auto_migrate {
-            debug!("running sqlite database migrations");
-            sqlite::run_migrations(&pool).await?;
-            debug!("finished running sqlite database migrations");
-        } else {
-            debug!("skipping sqlite database migrations");
-        }
-        let repository = sqlite::LnurlRepository::new(pool);
-        run_server(args, repository).await?;
+    if args.auto_migrate {
+        debug!("running database migrations");
+        postgresql::run_migrations(&pool).await?;
+        debug!("finished running database migrations");
+    } else {
+        debug!("skipping database migrations");
     }
+    let repository = postgresql::LnurlRepository::new(pool);
+    run_server(args, repository).await?;
 
     Ok(())
 }
