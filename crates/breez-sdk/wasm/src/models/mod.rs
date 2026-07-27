@@ -1667,6 +1667,7 @@ pub struct OutgoingChange {
 pub struct UserSettings {
     pub spark_private_mode_enabled: bool,
     pub stable_balance_active_label: Option<String>,
+    pub spark_master_identity_public_key: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::StableBalanceActiveLabel)]
@@ -1675,10 +1676,17 @@ pub enum StableBalanceActiveLabel {
     Unset,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkMasterIdentityPublicKey)]
+pub enum SparkMasterIdentityPublicKey {
+    Set { public_key: String },
+    Unset,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::UpdateUserSettingsRequest)]
 pub struct UpdateUserSettingsRequest {
     pub spark_private_mode_enabled: Option<bool>,
     pub stable_balance_active_label: Option<StableBalanceActiveLabel>,
+    pub spark_master_identity_public_key: Option<SparkMasterIdentityPublicKey>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimHtlcPaymentRequest)]

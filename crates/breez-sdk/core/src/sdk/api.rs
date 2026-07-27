@@ -1,5 +1,6 @@
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
 use breez_sdk_common::buy::cashapp::CashAppProvider;
+use spark_wallet::MasterIdentityPublicKeyUpdate;
 use std::str::FromStr;
 use tracing::{debug, info};
 
@@ -14,7 +15,9 @@ use crate::{
     error::SdkError,
     events::EventListener,
     issuer::TokenIssuer,
-    models::{GetInfoRequest, GetInfoResponse, StableBalanceActiveLabel},
+    models::{
+        GetInfoRequest, GetInfoResponse, SparkMasterIdentityPublicKey, StableBalanceActiveLabel,
+    },
     persist::ObjectCacheRepository,
     utils::token::get_tokens_metadata_cached_or_query,
 };
@@ -244,6 +247,9 @@ impl BreezSdk {
         Ok(UserSettings {
             spark_private_mode_enabled: spark_user_settings.private_enabled,
             stable_balance_active_label,
+            spark_master_identity_public_key: spark_user_settings
+                .master_identity_public_key
+                .map(|key| key.to_string()),
         })
     }
 
@@ -254,11 +260,26 @@ impl BreezSdk {
         &self,
         request: UpdateUserSettingsRequest,
     ) -> Result<(), SdkError> {
-        if let Some(spark_private_mode_enabled) = request.spark_private_mode_enabled {
-            self.spark_wallet
-                .update_wallet_settings(spark_private_mode_enabled)
-                .await?;
-        }
+        let master_identity_public_key = request
+            .spark_master_identity_public_key
+            .map(|update| match update {
+                SparkMasterIdentityPublicKey::Set { public_key } => {
+                    PublicKey::from_str(&public_key)
+                        .map(MasterIdentityPublicKeyUpdate::Set)
+                        .map_err(|_| {
+                            SdkError::InvalidInput("Invalid master identity public key".to_string())
+                        })
+                }
+                SparkMasterIdentityPublicKey::Unset => Ok(MasterIdentityPublicKeyUpdate::Clear),
+            })
+            .transpose()?;
+
+        self.spark_wallet
+            .update_wallet_settings(
+                request.spark_private_mode_enabled,
+                master_identity_public_key,
+            )
+            .await?;
 
         if let Some(active_label) = request.stable_balance_active_label {
             let sb = self

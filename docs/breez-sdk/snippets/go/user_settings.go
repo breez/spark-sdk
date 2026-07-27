@@ -27,9 +27,18 @@ func GetUserSettings(sdk *breez_sdk_spark.BreezSdk) error {
 
 func UpdateUserSettings(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: update-user-settings
+	// Fields left nil are not changed. Settings that take an enum value
+	// accept Set to assign one, or Unset to clear it.
 	sparkPrivateModeEnabled := true
+	masterIdentityPublicKey := breez_sdk_spark.SparkMasterIdentityPublicKey(
+		breez_sdk_spark.SparkMasterIdentityPublicKeySet{
+			PublicKey: "<hex encoded public key>",
+		},
+	)
 	err := sdk.UpdateUserSettings(breez_sdk_spark.UpdateUserSettingsRequest{
-		SparkPrivateModeEnabled: &sparkPrivateModeEnabled,
+		SparkPrivateModeEnabled:      &sparkPrivateModeEnabled,
+		StableBalanceActiveLabel:     nil,
+		SparkMasterIdentityPublicKey: &masterIdentityPublicKey,
 	})
 
 	if err != nil {

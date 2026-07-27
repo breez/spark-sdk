@@ -17,8 +17,8 @@ use breez_sdk_spark::{
     PaymentRequest, PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
     ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
     RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
-    SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, TokenTransactionType,
-    TransferAuthorization, UpdateUserSettingsRequest,
+    SparkHtlcOptions, SparkHtlcStatus, SparkMasterIdentityPublicKey, SyncWalletRequest,
+    TokenIssuer, TokenTransactionType, TransferAuthorization, UpdateUserSettingsRequest,
 };
 use clap::{Parser, ValueEnum};
 use rand::RngCore;
@@ -367,6 +367,15 @@ pub enum Command {
         /// Whether spark private mode is enabled.
         #[clap(short = 'p', long = "private")]
         spark_private_mode_enabled: Option<bool>,
+
+        /// Hex encoded public key to designate as the wallet's master identity,
+        /// allowing its holder to read the wallet under private mode.
+        #[clap(short = 'm', long = "master-key", conflicts_with = "clear_master_key")]
+        master_key: Option<String>,
+
+        /// Remove the wallet's designated master identity.
+        #[clap(long = "clear-master-key", action = clap::ArgAction::SetTrue)]
+        clear_master_key: bool,
     },
 
     /// Get the status of the Spark network services
@@ -1061,10 +1070,18 @@ pub(crate) async fn execute_command(
         }
         Command::SetUserSettings {
             spark_private_mode_enabled,
+            master_key,
+            clear_master_key,
         } => {
+            let spark_master_identity_public_key = match (master_key, clear_master_key) {
+                (Some(public_key), _) => Some(SparkMasterIdentityPublicKey::Set { public_key }),
+                (None, true) => Some(SparkMasterIdentityPublicKey::Unset),
+                (None, false) => None,
+            };
             sdk.update_user_settings(UpdateUserSettingsRequest {
                 spark_private_mode_enabled,
                 stable_balance_active_label: None,
+                spark_master_identity_public_key,
             })
             .await?;
             Ok(true)

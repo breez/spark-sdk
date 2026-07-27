@@ -18,7 +18,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 spark-mysql.workspace = true
 spark-postgres.workspace = true
-spark-wallet.workspace = true
+spark-wallet = { workspace = true, features = ["test-utils"] }
 test-log = { workspace = true, features = ["trace"] }
 testcontainers.workspace = true
 testcontainers-modules = { workspace = true, features = ["postgres", "mysql"] }

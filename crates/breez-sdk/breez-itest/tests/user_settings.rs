@@ -60,6 +60,7 @@ async fn test_01_spark_private_mode_user_setting(
         .sdk
         .update_user_settings(UpdateUserSettingsRequest {
             stable_balance_active_label: None,
+            spark_master_identity_public_key: None,
             spark_private_mode_enabled: Some(false),
         })
         .await?;
@@ -67,6 +68,7 @@ async fn test_01_spark_private_mode_user_setting(
         .sdk
         .update_user_settings(UpdateUserSettingsRequest {
             stable_balance_active_label: None,
+            spark_master_identity_public_key: None,
             spark_private_mode_enabled: Some(true),
         })
         .await?;
@@ -96,6 +98,88 @@ async fn test_01_spark_private_mode_user_setting(
     assert!(reinitialized_non_private_settings.spark_private_mode_enabled);
 
     info!("=== Test test_01_spark_private_mode_user_setting PASSED ===");
+    Ok(())
+}
+
+/// Test 1b: Master identity public key user setting
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_01b_spark_master_identity_public_key_user_setting(
+    persistent_sdk_private: ReinitializableSdkInstance,
+) -> Result<()> {
+    info!("=== Starting test_01b_spark_master_identity_public_key_user_setting ===");
+
+    const MASTER_KEY: &str = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+    const OTHER_MASTER_KEY: &str =
+        "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5";
+
+    let instance = persistent_sdk_private.build_sdk().await?;
+
+    let initial_settings = instance.sdk.get_user_settings().await?;
+    assert_eq!(initial_settings.spark_master_identity_public_key, None);
+    assert!(initial_settings.spark_private_mode_enabled);
+
+    // Designating a master identity must leave private mode untouched.
+    instance
+        .sdk
+        .update_user_settings(UpdateUserSettingsRequest {
+            spark_private_mode_enabled: None,
+            stable_balance_active_label: None,
+            spark_master_identity_public_key: Some(SparkMasterIdentityPublicKey::Set {
+                public_key: MASTER_KEY.to_string(),
+            }),
+        })
+        .await?;
+    let settings = instance.sdk.get_user_settings().await?;
+    assert_eq!(
+        settings.spark_master_identity_public_key.as_deref(),
+        Some(MASTER_KEY)
+    );
+    assert!(settings.spark_private_mode_enabled);
+
+    // Setting again replaces the previously designated key.
+    instance
+        .sdk
+        .update_user_settings(UpdateUserSettingsRequest {
+            spark_private_mode_enabled: None,
+            stable_balance_active_label: None,
+            spark_master_identity_public_key: Some(SparkMasterIdentityPublicKey::Set {
+                public_key: OTHER_MASTER_KEY.to_string(),
+            }),
+        })
+        .await?;
+    let settings = instance.sdk.get_user_settings().await?;
+    assert_eq!(
+        settings.spark_master_identity_public_key.as_deref(),
+        Some(OTHER_MASTER_KEY)
+    );
+
+    instance
+        .sdk
+        .update_user_settings(UpdateUserSettingsRequest {
+            spark_private_mode_enabled: None,
+            stable_balance_active_label: None,
+            spark_master_identity_public_key: Some(SparkMasterIdentityPublicKey::Unset),
+        })
+        .await?;
+    let settings = instance.sdk.get_user_settings().await?;
+    assert_eq!(settings.spark_master_identity_public_key, None);
+    assert!(settings.spark_private_mode_enabled);
+
+    let err = instance
+        .sdk
+        .update_user_settings(UpdateUserSettingsRequest {
+            spark_private_mode_enabled: None,
+            stable_balance_active_label: None,
+            spark_master_identity_public_key: Some(SparkMasterIdentityPublicKey::Set {
+                public_key: "not-a-public-key".to_string(),
+            }),
+        })
+        .await
+        .expect_err("a malformed master identity public key must be rejected");
+    assert!(matches!(err, SdkError::InvalidInput(_)));
+
+    info!("=== Test test_01b_spark_master_identity_public_key_user_setting PASSED ===");
     Ok(())
 }
 
@@ -154,6 +238,7 @@ async fn test_02_stable_balance_user_setting(
         .update_user_settings(UpdateUserSettingsRequest {
             spark_private_mode_enabled: None,
             stable_balance_active_label: Some(StableBalanceActiveLabel::Unset),
+            spark_master_identity_public_key: None,
         })
         .await?;
     let settings = sdk_instance.sdk.get_user_settings().await?;
@@ -167,6 +252,7 @@ async fn test_02_stable_balance_user_setting(
             stable_balance_active_label: Some(StableBalanceActiveLabel::Set {
                 label: "BEAN".to_string(),
             }),
+            spark_master_identity_public_key: None,
         })
         .await?;
     let settings = sdk_instance.sdk.get_user_settings().await?;

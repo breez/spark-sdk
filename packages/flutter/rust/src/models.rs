@@ -1506,6 +1506,7 @@ pub struct _RecordChange {
 pub struct _UserSettings {
     pub spark_private_mode_enabled: bool,
     pub stable_balance_active_label: Option<String>,
+    pub spark_master_identity_public_key: Option<String>,
 }
 
 #[frb(mirror(StableBalanceActiveLabel))]
@@ -1514,10 +1515,17 @@ pub enum _StableBalanceActiveLabel {
     Unset,
 }
 
+#[frb(mirror(SparkMasterIdentityPublicKey))]
+pub enum _SparkMasterIdentityPublicKey {
+    Set { public_key: String },
+    Unset,
+}
+
 #[frb(mirror(UpdateUserSettingsRequest))]
 pub struct _UpdateUserSettingsRequest {
     pub spark_private_mode_enabled: Option<bool>,
     pub stable_balance_active_label: Option<StableBalanceActiveLabel>,
+    pub spark_master_identity_public_key: Option<SparkMasterIdentityPublicKey>,
 }
 
 #[frb(mirror(CreateIssuerTokenRequest))]

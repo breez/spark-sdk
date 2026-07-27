@@ -16,9 +16,16 @@ class UserSettings {
 
     suspend fun updateUserSettings(sdk: BreezSdk) {
         // ANCHOR: update-user-settings
+        // Fields left as null are not changed. Settings that take an enum value
+        // accept Set to assign one, or Unset to clear it.
         try {
-            val sparkPrivateModeEnabled = true
-            sdk.updateUserSettings(UpdateUserSettingsRequest(sparkPrivateModeEnabled))
+            sdk.updateUserSettings(UpdateUserSettingsRequest(
+                sparkPrivateModeEnabled = true,
+                stableBalanceActiveLabel = null,
+                sparkMasterIdentityPublicKey = SparkMasterIdentityPublicKey.Set(
+                    publicKey = "<hex encoded public key>"
+                )
+            ))
         } catch (e: Exception) {
             // handle error
         }

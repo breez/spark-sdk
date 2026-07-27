@@ -1,6 +1,7 @@
 import logging
 from breez_sdk_spark import (
     BreezSdk,
+    SparkMasterIdentityPublicKey,
     StableBalanceActiveLabel,
     UpdateUserSettingsRequest,
 )
@@ -19,11 +20,16 @@ async def get_user_settings(sdk: BreezSdk):
 
 async def update_user_settings(sdk: BreezSdk):
     # ANCHOR: update-user-settings
+    # Fields left as None are not changed. Settings that take an enum value
+    # accept SET to assign one, or UNSET to clear it.
     try:
-        spark_private_mode_enabled = True
         await sdk.update_user_settings(
             request=UpdateUserSettingsRequest(
-                spark_private_mode_enabled=spark_private_mode_enabled
+                spark_private_mode_enabled=True,
+                stable_balance_active_label=None,
+                spark_master_identity_public_key=SparkMasterIdentityPublicKey.SET(
+                    public_key="<hex encoded public key>"
+                )
             )
         )
     except Exception as error:

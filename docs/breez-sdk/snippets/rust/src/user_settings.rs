@@ -12,10 +12,14 @@ pub(crate) async fn get_user_settings(sdk: &BreezSdk) -> Result<()> {
 
 pub(crate) async fn update_user_settings(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: update-user-settings
-    let spark_private_mode_enabled = true;
+    // Fields left as None are not changed. Settings that take an enum value
+    // accept Set to assign one, or Unset to clear it.
     sdk.update_user_settings(UpdateUserSettingsRequest {
-        spark_private_mode_enabled: Some(spark_private_mode_enabled),
+        spark_private_mode_enabled: Some(true),
         stable_balance_active_label: None,
+        spark_master_identity_public_key: Some(SparkMasterIdentityPublicKey::Set {
+            public_key: "<hex encoded public key>".to_string(),
+        }),
     })
     .await?;
     // ANCHOR_END: update-user-settings
@@ -29,6 +33,7 @@ pub(crate) async fn activate_stable_balance(sdk: &BreezSdk) -> Result<()> {
         stable_balance_active_label: Some(StableBalanceActiveLabel::Set {
             label: "USDB".to_string(),
         }),
+        spark_master_identity_public_key: None,
     })
     .await?;
     // ANCHOR_END: activate-stable-balance
@@ -40,6 +45,7 @@ pub(crate) async fn deactivate_stable_balance(sdk: &BreezSdk) -> Result<()> {
     sdk.update_user_settings(UpdateUserSettingsRequest {
         spark_private_mode_enabled: None,
         stable_balance_active_label: Some(StableBalanceActiveLabel::Unset),
+        spark_master_identity_public_key: None,
     })
     .await?;
     // ANCHOR_END: deactivate-stable-balance

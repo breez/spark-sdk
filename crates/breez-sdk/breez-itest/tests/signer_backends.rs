@@ -366,6 +366,7 @@ async fn assert_update_settings_fails_under_deny_export(config: Config) -> Resul
         .update_user_settings(UpdateUserSettingsRequest {
             spark_private_mode_enabled: Some(true),
             stable_balance_active_label: None,
+            spark_master_identity_public_key: None,
         })
         .await
         .expect_err(
