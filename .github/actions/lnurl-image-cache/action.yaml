@@ -15,14 +15,15 @@ runs:
     # dependency change ships a stale image. Regenerate the list with:
     #   cd crates/breez-sdk/lnurl && cargo tree -e normal,build --prefix none \
     #     | grep -o '(.*)' | sort -u
-    # External dependencies are pinned by the crate's own Cargo.lock, which
-    # the first pattern covers.
+    # External dependencies are pinned by the workspace Cargo.lock, and the
+    # release profile the binary is built with lives in the workspace
+    # Cargo.toml, so both are part of the key.
     - name: Restore lnurl server image
       id: cache
       uses: actions/cache@v4
       with:
         path: /tmp/breez-lnurl-built.tar
-        key: lnurl-image-${{ runner.os }}-${{ hashFiles('crates/breez-sdk/lnurl/**', 'crates/breez-sdk/lnurl-models/**', 'crates/macros/**', 'crates/platform-utils/**', 'crates/spark/**', 'crates/spark-wallet/**', 'crates/utils/**') }}
+        key: lnurl-image-${{ runner.os }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'crates/breez-sdk/lnurl/**', 'crates/breez-sdk/lnurl-models/**', 'crates/macros/**', 'crates/platform-utils/**', 'crates/spark/**', 'crates/spark-postgres/**', 'crates/spark-wallet/**', 'crates/utils/**') }}
 
     - name: Load lnurl server image
       if: steps.cache.outputs.cache-hit == 'true'

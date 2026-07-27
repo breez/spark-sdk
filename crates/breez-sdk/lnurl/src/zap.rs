@@ -339,7 +339,7 @@ where
 
     // A send every relay rejected still returns Ok, carrying each failure in
     // `failed`, so reaching nobody has to be read off the success set.
-    let output = result.map_err(|e| anyhow::anyhow!("Failed to send zap event: {}", e))?;
+    let output = result.map_err(|e| anyhow::anyhow!("Failed to send zap event: {e}"))?;
     if output.success.is_empty() {
         return Err(anyhow::anyhow!(
             "no relay accepted the zap receipt: {:?}",
@@ -529,19 +529,19 @@ mod postgres_tests {
 
     #[tokio::test]
     async fn take_pending_zap_receipts_claims_items() {
-        let db = test_db("zap_claims_items").await;
+        let (_pg, db) = test_db().await;
         shared_tests::take_pending_zap_receipts_claims_items(&db).await;
     }
 
     #[tokio::test]
     async fn take_pending_zap_receipts_respects_next_retry_at() {
-        let db = test_db("zap_respects_next_retry_at").await;
+        let (_pg, db) = test_db().await;
         shared_tests::take_pending_zap_receipts_respects_next_retry_at(&db).await;
     }
 
     #[tokio::test]
     async fn take_pending_zap_receipts_respects_limit() {
-        let db = test_db("zap_respects_limit").await;
+        let (_pg, db) = test_db().await;
         shared_tests::take_pending_zap_receipts_respects_limit(&db).await;
     }
 }

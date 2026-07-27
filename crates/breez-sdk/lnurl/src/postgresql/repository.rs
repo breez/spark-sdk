@@ -1119,7 +1119,7 @@ mod postgres_tests {
 
     #[tokio::test]
     async fn list_domains_surfaces_api_keys() {
-        let pool = test_pool("list_domains_surfaces_api_keys").await;
+        let (_pg, pool) = test_pool().await;
         seed_domain_with_api_key(&pool).await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::list_domains_surfaces_api_keys(&db).await;
@@ -1127,7 +1127,7 @@ mod postgres_tests {
 
     #[tokio::test]
     async fn set_domain_jwt_round_trips() {
-        let pool = test_pool("set_domain_jwt_round_trips").await;
+        let (_pg, pool) = test_pool().await;
         seed_domain_with_api_key(&pool).await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::set_domain_jwt_round_trips(&db).await;
@@ -1135,126 +1135,126 @@ mod postgres_tests {
 
     #[tokio::test]
     async fn registering_taken_name_with_other_pubkey_is_rejected() {
-        let pool = test_pool("registering_taken_name_rejected").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::registering_taken_name_with_other_pubkey_is_rejected(&db).await;
     }
 
     #[tokio::test]
     async fn deleting_a_name_the_pubkey_no_longer_holds_is_a_no_op() {
-        let pool = test_pool("deleting_name_not_held_no_op").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::deleting_a_name_the_pubkey_no_longer_holds_is_a_no_op(&db).await;
     }
 
     #[tokio::test]
     async fn a_statement_is_claimable_once() {
-        let pool = test_pool("claim_statement_twice").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::a_statement_is_claimable_once(&db).await;
     }
 
     #[tokio::test]
     async fn a_transfer_runs_once() {
-        let pool = test_pool("transfer_runs_once").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::a_transfer_runs_once(&db).await;
     }
 
     #[tokio::test]
     async fn a_failed_transfer_stays_retryable() {
-        let pool = test_pool("failed_transfer_retryable").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::a_failed_transfer_stays_retryable(&db).await;
     }
 
     #[tokio::test]
     async fn pruning_removes_only_expired_claims() {
-        let pool = test_pool("prune_expired_claims").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::pruning_removes_only_expired_claims(&db).await;
     }
 
     #[tokio::test]
     async fn a_transfer_pair_is_spendable_once_across_domains() {
-        let pool = test_pool("transfer_pair_spendable_once").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::a_transfer_pair_is_spendable_once_across_domains(&db).await;
     }
 
     #[tokio::test]
     async fn a_released_name_is_held_for_the_pubkey_that_released_it() {
-        let pool = test_pool("released_name_is_held").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::a_released_name_is_held_for_the_pubkey_that_released_it(&db).await;
     }
 
     #[tokio::test]
     async fn registering_another_name_holds_the_one_left_behind() {
-        let pool = test_pool("renaming_holds_old_name").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::registering_another_name_holds_the_one_left_behind(&db).await;
     }
 
     #[tokio::test]
     async fn registering_twice_at_once_holds_the_name_that_loses() {
-        let pool = test_pool("registering_twice_at_once").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::registering_twice_at_once_holds_the_name_that_loses(&db).await;
     }
 
     #[tokio::test]
     async fn a_transfer_holds_the_name_the_target_gave_up() {
-        let pool = test_pool("transfer_holds_target_name").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::a_transfer_holds_the_name_the_target_gave_up(&db).await;
     }
 
     #[tokio::test]
     async fn the_registration_limit_bounds_name_changes() {
-        let pool = test_pool("limit_bounds_name_changes").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::the_registration_limit_bounds_name_changes(&db).await;
     }
 
     #[tokio::test]
     async fn re_registering_the_held_name_is_not_counted() {
-        let pool = test_pool("limit_rereg_not_counted").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::re_registering_the_held_name_is_not_counted(&db).await;
     }
 
     #[tokio::test]
     async fn registrations_outside_the_window_do_not_count() {
-        let pool = test_pool("limit_window_expiry").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::registrations_outside_the_window_do_not_count(&db).await;
     }
 
     #[tokio::test]
     async fn a_refused_registration_does_not_consume_quota() {
-        let pool = test_pool("limit_refused_no_quota").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::a_refused_registration_does_not_consume_quota(&db).await;
     }
 
     #[tokio::test]
     async fn reclaiming_a_reserved_name_consumes_quota() {
-        let pool = test_pool("limit_reclaim_counts").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::reclaiming_a_reserved_name_consumes_quota(&db).await;
     }
 
     #[tokio::test]
     async fn a_transfer_ignores_the_registration_limit() {
-        let pool = test_pool("limit_transfer_ignores").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::a_transfer_ignores_the_registration_limit(&db).await;
     }
 
     #[tokio::test]
     async fn pruning_removes_only_old_registrations() {
-        let pool = test_pool("limit_prune_old_rows").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::pruning_removes_only_old_registrations(&db).await;
     }
@@ -1266,7 +1266,7 @@ mod postgres_tests {
     async fn a_lapsed_hold_lets_anyone_register_the_name() {
         use crate::repository::{LnurlRepository, NameStatus};
 
-        let pool = test_pool("lapsed_hold_frees_name").await;
+        let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool.clone());
         let domain = "lapsed.com";
 

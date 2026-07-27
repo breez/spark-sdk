@@ -332,6 +332,8 @@ mod tests {
     use axum::routing::post;
     use spark_postgres::deadpool_postgres::Pool;
     use spark_postgres::tokio_postgres::Row;
+    use testcontainers::ContainerAsync;
+    use testcontainers_modules::postgres::Postgres;
     use tokio::sync::{RwLock, Semaphore};
 
     use super::*;
@@ -343,10 +345,14 @@ mod tests {
     const TEST_DOMAIN: &str = "test.example.com";
     const TEST_SECRET: &str = "test_webhook_secret";
 
-    async fn setup_test_db(label: &str) -> (crate::postgresql::LnurlRepository, Pool) {
-        let pool = crate::test_support::test_pool(label).await;
+    async fn setup_test_db() -> (
+        ContainerAsync<Postgres>,
+        crate::postgresql::LnurlRepository,
+        Pool,
+    ) {
+        let (container, pool) = crate::test_support::test_pool().await;
         let db = crate::postgresql::LnurlRepository::new(pool.clone());
-        (db, pool)
+        (container, db, pool)
     }
 
     async fn insert_delivery(db: &impl WebhookRepository, identifier: &str, domain: &str) {
@@ -465,7 +471,7 @@ mod tests {
 
     #[tokio::test]
     async fn successful_delivery_marks_succeeded() {
-        let (db, pool) = setup_test_db("bg_successful_delivery").await;
+        let (_pg, db, pool) = setup_test_db().await;
 
         let router = Router::new().route("/hook", post(|| async { axum::http::StatusCode::OK }));
         let base_url = start_mock_server(router).await;
@@ -481,7 +487,7 @@ mod tests {
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
 
         let row = wait_for_delivery(&pool, "success_1", "the delivery to succeed", |row| {
-            row.try_get::<Option<i64>, _>("succeeded_at")
+            row.try_get::<_, Option<i64>>("succeeded_at")
                 .unwrap()
                 .is_some()
         })
@@ -501,7 +507,7 @@ mod tests {
 
     #[tokio::test]
     async fn server_error_causes_retry() {
-        let (db, pool) = setup_test_db("bg_server_error_retry").await;
+        let (_pg, db, pool) = setup_test_db().await;
 
         let router = Router::new().route(
             "/hook",
@@ -525,7 +531,7 @@ mod tests {
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
 
         let row = wait_for_delivery(&pool, "error_1", "the delivery to be retried", |row| {
-            row.try_get::<i32, _>("retry_count").unwrap() == 1
+            row.try_get::<_, i32>("retry_count").unwrap() == 1
         })
         .await;
         let succeeded_at: Option<i64> = row.try_get("succeeded_at").unwrap();
@@ -546,7 +552,7 @@ mod tests {
 
     #[tokio::test]
     async fn connection_error_causes_retry() {
-        let (db, pool) = setup_test_db("bg_connection_error_retry").await;
+        let (_pg, db, pool) = setup_test_db().await;
 
         // Port 1 — nothing is listening there.
         let url = "http://127.0.0.1:1/hook";
@@ -560,7 +566,7 @@ mod tests {
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
 
         let row = wait_for_delivery(&pool, "conn_err_1", "the delivery to be retried", |row| {
-            row.try_get::<i32, _>("retry_count").unwrap() == 1
+            row.try_get::<_, i32>("retry_count").unwrap() == 1
         })
         .await;
         let succeeded_at: Option<i64> = row.try_get("succeeded_at").unwrap();
@@ -582,7 +588,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_delivery_is_retried_and_succeeds() {
-        let (db, pool) = setup_test_db("bg_retried_and_succeeds").await;
+        let (_pg, db, pool) = setup_test_db().await;
 
         let counter = Arc::new(AtomicUsize::new(0));
 
@@ -617,7 +623,7 @@ mod tests {
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
 
         let row = wait_for_delivery(&pool, "retry_1", "the first attempt to fail", |row| {
-            row.try_get::<i32, _>("retry_count").unwrap() == 1
+            row.try_get::<_, i32>("retry_count").unwrap() == 1
         })
         .await;
         let retry_count: i32 = row.try_get("retry_count").unwrap();
@@ -641,7 +647,7 @@ mod tests {
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
 
         let row = wait_for_delivery(&pool, "retry_1", "the retry to succeed", |row| {
-            row.try_get::<Option<i64>, _>("succeeded_at")
+            row.try_get::<_, Option<i64>>("succeeded_at")
                 .unwrap()
                 .is_some()
         })
@@ -655,7 +661,7 @@ mod tests {
 
     #[tokio::test]
     async fn error_body_is_truncated() {
-        let (db, pool) = setup_test_db("bg_error_body_truncated").await;
+        let (_pg, db, pool) = setup_test_db().await;
 
         let long_body: String = "x".repeat(1000);
         let router = Router::new().route(
@@ -681,7 +687,7 @@ mod tests {
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
 
         let row = wait_for_delivery(&pool, "truncate_1", "the error body to be stored", |row| {
-            row.try_get::<Option<String>, _>("last_error_body")
+            row.try_get::<_, Option<String>>("last_error_body")
                 .unwrap()
                 .is_some()
         })
@@ -767,7 +773,7 @@ mod tests {
 
     #[tokio::test]
     async fn slow_server_does_not_block_fast_server() {
-        let (db, pool) = setup_test_db("bg_slow_does_not_block_fast").await;
+        let (_pg, db, pool) = setup_test_db().await;
 
         let slow_domain = "slow.example.com";
         let fast_domain = "fast.example.com";
@@ -839,7 +845,7 @@ mod tests {
 
     #[tokio::test]
     async fn per_domain_throttling_unclaims_excess() {
-        let (db, pool) = setup_test_db("bg_throttling_unclaims").await;
+        let (_pg, db, pool) = setup_test_db().await;
 
         let router = Router::new().route("/hook", post(|| async { axum::http::StatusCode::OK }));
         let base_url = start_mock_server(router).await;
@@ -862,7 +868,7 @@ mod tests {
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
 
         let row = wait_for_delivery(&pool, "throttle_1", "the delivery to be unclaimed", |row| {
-            row.try_get::<Option<i64>, _>("claimed_at")
+            row.try_get::<_, Option<i64>>("claimed_at")
                 .unwrap()
                 .is_none()
         })
@@ -878,7 +884,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_config_deletes_unattempted_delivery() {
-        let (db, pool) = setup_test_db("bg_no_config_deletes").await;
+        let (_pg, db, pool) = setup_test_db().await;
 
         insert_delivery(&db, "no_config_1", "unknown.example.com").await;
 
@@ -907,7 +913,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_config_parks_previously_attempted_delivery() {
-        let (db, pool) = setup_test_db("bg_no_config_parks").await;
+        let (_pg, db, pool) = setup_test_db().await;
 
         // Insert a delivery that looks like it was previously attempted (url is set).
         insert_delivery(&db, "parked_1", TEST_DOMAIN).await;
@@ -929,7 +935,7 @@ mod tests {
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
 
         let row = wait_for_delivery(&pool, "parked_1", "the delivery to be parked", |row| {
-            row.try_get::<i64, _>("next_retry_at").unwrap() == i64::MAX
+            row.try_get::<_, i64>("next_retry_at").unwrap() == i64::MAX
         })
         .await;
         let next_retry_at: i64 = row.try_get("next_retry_at").unwrap();
@@ -944,7 +950,7 @@ mod tests {
         use axum::body::Bytes;
         use axum::http::HeaderMap;
 
-        let (db, pool) = setup_test_db("bg_signature_header").await;
+        let (_pg, db, pool) = setup_test_db().await;
 
         let received_sig = Arc::new(tokio::sync::Mutex::new(String::new()));
         let received_body = Arc::new(tokio::sync::Mutex::new(String::new()));

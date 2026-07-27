@@ -247,19 +247,19 @@ mod postgres_tests {
 
     #[tokio::test]
     async fn invoice_paid_enqueues_zap_when_preimage_already_stored() {
-        let db = test_db("invoice_paid_enqueues_zap").await;
+        let (_pg, db) = test_db().await;
         shared_tests::invoice_paid_enqueues_zap_when_preimage_already_stored(&db).await;
     }
 
     #[tokio::test]
     async fn get_or_create_setting_returns_default_on_first_call() {
-        let db = test_db("setting_default_on_first_call").await;
+        let (_pg, db) = test_db().await;
         shared_tests::get_or_create_setting_returns_default_on_first_call(&db).await;
     }
 
     #[tokio::test]
     async fn get_or_create_setting_returns_existing_on_subsequent_calls() {
-        let db = test_db("setting_existing_on_subsequent").await;
+        let (_pg, db) = test_db().await;
         shared_tests::get_or_create_setting_returns_existing_on_subsequent_calls(&db).await;
     }
 }
