@@ -7,6 +7,7 @@ edition = "2024"
 anyhow.workspace = true
 async-trait.workspace = true
 bitcoin = { workspace = true, features = ["serde"] }
+bytes.workspace = true
 futures.workspace = true
 hex.workspace = true
 rand.workspace = true
