@@ -370,11 +370,11 @@ pub enum Command {
 
         /// Hex encoded public key to designate as the wallet's master identity,
         /// allowing its holder to read the wallet under private mode.
-        #[clap(short = 'm', long = "master-key", conflicts_with = "clear_master_key")]
+        #[clap(short, long, conflicts_with = "clear_master_key")]
         master_key: Option<String>,
 
         /// Remove the wallet's designated master identity.
-        #[clap(long = "clear-master-key", action = clap::ArgAction::SetTrue)]
+        #[clap(long, action = clap::ArgAction::SetTrue)]
         clear_master_key: bool,
     },
 
