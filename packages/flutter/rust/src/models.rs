@@ -163,9 +163,20 @@ pub struct _Credentials {
     pub password: String,
 }
 
+#[frb(mirror(InstantClaimDeclineReason))]
+pub enum _InstantClaimDeclineReason {
+    NoPlan,
+    FeeExceeded {
+        max_bps: u32,
+        quoted_bps: u32,
+        quoted_sats: u64,
+    },
+    SubmissionFailed,
+}
+
 #[frb(mirror(InstantClaimStatus))]
 pub enum _InstantClaimStatus {
-    Declined,
+    Declined { reason: InstantClaimDeclineReason },
     Submitted { claim_id: String },
 }
 

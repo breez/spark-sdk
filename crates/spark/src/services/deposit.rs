@@ -1070,6 +1070,13 @@ impl DepositService {
                 self.network.into(),
             )
             .await?;
+        // Guard against the SSP quoting a different output than the one requested.
+        if result.quote.output_index != i64::from(output_index) {
+            return Err(ServiceError::Generic(format!(
+                "instant quote output index {} does not match requested {output_index}",
+                result.quote.output_index
+            )));
+        }
         Ok(result)
     }
 

@@ -9,7 +9,8 @@ use super::{
     parse_input,
 };
 use crate::{
-    DepositInfo, Fee, InputType, InstantClaimStatus, MaxFee, PaymentDetails, PaymentType,
+    DepositInfo, Fee, InputType, InstantClaimDeclineReason, InstantClaimStatus, MaxFee,
+    PaymentDetails, PaymentType,
     error::SdkError,
     events::{InternalSyncedEvent, SdkEvent},
     lnurl::ListMetadataRequest,
@@ -29,6 +30,20 @@ use crate::{
 /// (declined, or no instant attempt) is fine to claim.
 fn should_claim_matured_deposit(status: Option<&InstantClaimStatus>) -> bool {
     !matches!(status, Some(InstantClaimStatus::Submitted { .. }))
+}
+
+/// Whether the cascade should (re)attempt an instant claim at `ceiling_bps`. Only a
+/// `FeeExceeded` decline is retryable, and only at a strictly higher ceiling than the
+/// one that failed: a manual attempt's ceiling may be below the config's, and the
+/// strict bound stops a fixed config ceiling re-quoting every sync. Others are terminal.
+fn instant_claim_worth_attempting(status: Option<&InstantClaimStatus>, ceiling_bps: u32) -> bool {
+    match status {
+        None => true,
+        Some(InstantClaimStatus::Declined {
+            reason: InstantClaimDeclineReason::FeeExceeded { max_bps, .. },
+        }) => ceiling_bps > *max_bps,
+        Some(_) => false,
+    }
 }
 
 /// Indexes the deposits that carry an instant-claim status by their outpoint.
@@ -314,10 +329,6 @@ impl BreezSdk {
                 vout: d.vout,
             })
             .collect();
-        // Instant-claim status per deposit: the one-shot instant path is not
-        // retried once any status is set, and a mature deposit whose instant claim
-        // is still `Submitted` is not claimed while that claim is in flight.
-        let instant_status = instant_claim_status_map(&existing_deposits);
 
         let all_utxos = DepositChainSyncer::new(
             self.chain_service.clone(),
@@ -344,6 +355,11 @@ impl BreezSdk {
                 .await;
         }
 
+        // Read after the chain sync (a round-trip per UTXO): a manual instant claim
+        // landing during the sync must be visible here, or the cascade could normal-
+        // claim on top of the in-flight instant one.
+        let instant_status = instant_claim_status_map(&self.storage.list_deposits().await?);
+
         let mut claimed_deposits: Vec<DepositInfo> = Vec::new();
         let mut unclaimed_deposits: Vec<DepositInfo> = Vec::new();
         for (detailed_utxo, is_mature) in all_utxos {
@@ -369,15 +385,16 @@ impl BreezSdk {
                 .await
             } else {
                 // Not yet mature: attempt a one-shot 0-conf instant claim if enabled.
-                // Skip if an instant claim was already attempted (declined or submitted).
-                if instant_status.contains_key(&key) {
-                    continue;
-                }
                 // Skip if instant claims are not enabled (no bps ceiling set).
                 let Some(max_instant_fee_bps) = self.config.max_instant_deposit_claim_fee_bps
                 else {
                     continue;
                 };
+                // Skip unless the deposit is worth attempting at this ceiling: never
+                // tried, or a prior fee-exceeded decline whose ceiling was lower.
+                if !instant_claim_worth_attempting(instant_status.get(&key), max_instant_fee_bps) {
+                    continue;
+                }
                 self.instant_claim_utxo_and_resolve_deposit(
                     &detailed_utxo,
                     max_instant_fee_bps,
@@ -485,9 +502,9 @@ impl BreezSdk {
                 info.instant_claim_status = Some(status);
                 claimed_deposits.push(info);
             }
-            InstantClaimOutcome::Declined(reason) => {
+            InstantClaimOutcome::Declined { error, .. } => {
                 info!(
-                    "Instant claim declined for utxo {}:{}: {reason}",
+                    "Instant claim declined for utxo {}:{}: {error}",
                     detailed_utxo.txid, detailed_utxo.vout
                 );
             }
@@ -649,23 +666,70 @@ impl BreezSdk {
 
 #[cfg(test)]
 mod tests {
-    use super::should_claim_matured_deposit;
-    use crate::InstantClaimStatus;
+    use super::{instant_claim_worth_attempting, should_claim_matured_deposit};
+    use crate::{InstantClaimDeclineReason, InstantClaimStatus};
+
+    fn declined(reason: InstantClaimDeclineReason) -> InstantClaimStatus {
+        InstantClaimStatus::Declined { reason }
+    }
+
+    fn submitted() -> InstantClaimStatus {
+        InstantClaimStatus::Submitted {
+            claim_id: "claim-1".to_string(),
+        }
+    }
+
+    fn fee_exceeded(max_bps: u32) -> InstantClaimDeclineReason {
+        InstantClaimDeclineReason::FeeExceeded {
+            max_bps,
+            quoted_bps: 0,
+            quoted_sats: 0,
+        }
+    }
 
     #[test]
     fn claim_matured_deposit_skips_only_submitted() {
         // No instant attempt, or a declined one, falls through to the normal path
         // claim.
         assert!(should_claim_matured_deposit(None));
-        assert!(should_claim_matured_deposit(Some(
-            &InstantClaimStatus::Declined
-        )));
+        assert!(should_claim_matured_deposit(Some(&declined(
+            InstantClaimDeclineReason::NoPlan
+        ))));
+        assert!(should_claim_matured_deposit(Some(&declined(fee_exceeded(
+            400
+        )))));
         // A submitted instant claim is in flight, so claiming the matured deposit
         // is skipped until the claim settles.
-        assert!(!should_claim_matured_deposit(Some(
-            &InstantClaimStatus::Submitted {
-                claim_id: "claim-1".to_string(),
-            }
-        )));
+        assert!(!should_claim_matured_deposit(Some(&submitted())));
+    }
+
+    #[test]
+    fn instant_retry_only_fee_exceeded_at_a_higher_ceiling() {
+        // Never attempted -> attempt.
+        assert!(instant_claim_worth_attempting(None, 400));
+        // Fee-exceeded at a lower ceiling than we can now offer -> retry.
+        assert!(instant_claim_worth_attempting(
+            Some(&declined(fee_exceeded(100))),
+            400
+        ));
+        // Fee-exceeded at the same or a higher ceiling -> do not re-quote.
+        assert!(!instant_claim_worth_attempting(
+            Some(&declined(fee_exceeded(400))),
+            400
+        ));
+        assert!(!instant_claim_worth_attempting(
+            Some(&declined(fee_exceeded(500))),
+            400
+        ));
+        // Terminal reasons and in-flight submissions are never re-attempted.
+        assert!(!instant_claim_worth_attempting(
+            Some(&declined(InstantClaimDeclineReason::NoPlan)),
+            400
+        ));
+        assert!(!instant_claim_worth_attempting(
+            Some(&declined(InstantClaimDeclineReason::SubmissionFailed)),
+            400
+        ));
+        assert!(!instant_claim_worth_attempting(Some(&submitted()), 400));
     }
 }

@@ -9,8 +9,9 @@ use spark_wallet::{
 use tracing::{error, info, trace};
 
 use crate::{
-    ClaimDepositRequest, ClaimDepositResponse, InstantClaimStatus, ListUnclaimedDepositsRequest,
-    ListUnclaimedDepositsResponse, RefundDepositRequest, RefundDepositResponse,
+    ClaimDepositRequest, ClaimDepositResponse, InstantClaimDeclineReason, InstantClaimStatus,
+    ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, RefundDepositRequest,
+    RefundDepositResponse,
     error::SdkError,
     models::Payment,
     persist::UpdateDepositPayload,
@@ -252,9 +253,9 @@ impl BreezSdk {
                 );
                 Ok(ClaimDepositResponse { payment: None })
             }
-            InstantClaimOutcome::Declined(e) => {
-                error!("Instant claim declined: {e:?}");
-                Err(e)
+            InstantClaimOutcome::Declined { error, .. } => {
+                error!("Instant claim declined: {error:?}");
+                Err(error)
             }
         }
     }
@@ -289,21 +290,30 @@ impl BreezSdk {
                     .await
                 {
                     Ok(claim_id) => Ok(InstantClaimOutcome::Submitted(claim_id)),
-                    // Terminal, not retried: the SSP may have accepted the claim
-                    // before the response was lost, so re-submitting could double-claim.
-                    Err(e) => Ok(InstantClaimOutcome::Declined(e.into())),
+                    Err(e) => Ok(InstantClaimOutcome::Declined {
+                        error: e.into(),
+                        reason: InstantClaimDeclineReason::SubmissionFailed,
+                    }),
                 }
             }
-            InstantClaimPlan::NoPlan => Ok(InstantClaimOutcome::Declined(SdkError::Generic(
-                "No instant (0-conf) claim plan available".to_string(),
-            ))),
+            InstantClaimPlan::NoPlan => Ok(InstantClaimOutcome::Declined {
+                error: SdkError::Generic("No instant (0-conf) claim plan available".to_string()),
+                reason: InstantClaimDeclineReason::NoPlan,
+            }),
             InstantClaimPlan::FeeExceeded {
-                spread_sats,
-                spread_bps,
-            } => Ok(InstantClaimOutcome::Declined(SdkError::Generic(format!(
-                "Instant claim declined for {}:{}: SSP spread {spread_bps} bps ({spread_sats} sats) exceeds max {max_instant_fee_bps} bps",
-                detailed_utxo.txid, detailed_utxo.vout
-            )))),
+                quoted_sats,
+                quoted_bps,
+            } => Ok(InstantClaimOutcome::Declined {
+                error: SdkError::Generic(format!(
+                    "Instant claim declined for {}:{}: SSP spread {quoted_bps} bps ({quoted_sats} sats) exceeds max {max_instant_fee_bps} bps",
+                    detailed_utxo.txid, detailed_utxo.vout
+                )),
+                reason: InstantClaimDeclineReason::FeeExceeded {
+                    max_bps: max_instant_fee_bps,
+                    quoted_bps,
+                    quoted_sats,
+                },
+            }),
         }
     }
 }
@@ -312,10 +322,14 @@ impl BreezSdk {
 pub(super) enum InstantClaimOutcome {
     /// Claim submitted; carries the claim id. Settles asynchronously.
     Submitted(String),
-    /// A terminal outcome to mark rather than retry: no 0-conf plan, spread over
-    /// the ceiling, or a failed claim submission (whose outcome is unknown, so
-    /// re-submitting is unsafe). Distinct from a failed quote fetch, which retries.
-    Declined(SdkError),
+    /// A resolved decline to mark rather than retry via `Err`: no 0-conf plan,
+    /// spread over the ceiling, or a failed submission. Distinct from a failed
+    /// quote fetch, which is transient and retries. Carries the error for the
+    /// caller and the reason for the persisted status.
+    Declined {
+        error: SdkError,
+        reason: InstantClaimDeclineReason,
+    },
 }
 
 impl InstantClaimOutcome {
@@ -325,7 +339,9 @@ impl InstantClaimOutcome {
             InstantClaimOutcome::Submitted(claim_id) => InstantClaimStatus::Submitted {
                 claim_id: claim_id.clone(),
             },
-            InstantClaimOutcome::Declined(_) => InstantClaimStatus::Declined,
+            InstantClaimOutcome::Declined { reason, .. } => InstantClaimStatus::Declined {
+                reason: reason.clone(),
+            },
         }
     }
 }
@@ -338,7 +354,7 @@ enum InstantClaimPlan {
     NoPlan,
     /// The SSP spread (`deposit - credit`) exceeds the ceiling, in both sats and
     /// its basis-points-of-deposit form (for the decline message).
-    FeeExceeded { spread_sats: u64, spread_bps: u64 },
+    FeeExceeded { quoted_sats: u64, quoted_bps: u32 },
 }
 
 /// Selects the 0-conf fulfillment plan and checks the SSP spread
@@ -358,20 +374,21 @@ fn select_instant_claim_plan(
     else {
         return InstantClaimPlan::NoPlan;
     };
-    let spread_sats = deposit_sats.saturating_sub(plan.amount.original_value);
-    let within = u128::from(spread_sats).saturating_mul(10_000)
+    let quoted_sats = deposit_sats.saturating_sub(plan.amount.original_value);
+    let within = u128::from(quoted_sats).saturating_mul(10_000)
         <= u128::from(max_bps).saturating_mul(u128::from(deposit_sats));
     if within {
         InstantClaimPlan::Claimable(plan.clone())
     } else {
-        let spread_bps = u128::from(spread_sats)
+        // spread <= deposit, so quoted_bps <= 10_000; it fits u32 (the ceiling type).
+        let quoted_bps = u128::from(quoted_sats)
             .saturating_mul(10_000)
             .checked_div(u128::from(deposit_sats))
-            .and_then(|bps| u64::try_from(bps).ok())
+            .and_then(|bps| u32::try_from(bps).ok())
             .unwrap_or(0);
         InstantClaimPlan::FeeExceeded {
-            spread_sats,
-            spread_bps,
+            quoted_sats,
+            quoted_bps,
         }
     }
 }
@@ -446,8 +463,8 @@ mod tests {
         assert!(matches!(
             select_instant_claim_plan(&q, 100_000, 100),
             InstantClaimPlan::FeeExceeded {
-                spread_sats: 5_000,
-                spread_bps: 500
+                quoted_sats: 5_000,
+                quoted_bps: 500
             }
         ));
     }

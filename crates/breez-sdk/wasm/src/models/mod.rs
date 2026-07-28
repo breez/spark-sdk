@@ -191,9 +191,20 @@ pub enum DepositClaimError {
     },
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::InstantClaimDeclineReason)]
+pub enum InstantClaimDeclineReason {
+    NoPlan,
+    FeeExceeded {
+        max_bps: u32,
+        quoted_bps: u32,
+        quoted_sats: u64,
+    },
+    SubmissionFailed,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::InstantClaimStatus)]
 pub enum InstantClaimStatus {
-    Declined,
+    Declined { reason: InstantClaimDeclineReason },
     Submitted { claim_id: String },
 }
 

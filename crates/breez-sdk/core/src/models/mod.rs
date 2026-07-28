@@ -1092,16 +1092,34 @@ impl Fee {
     }
 }
 
+/// Why an instant (0-conf) claim was declined.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum InstantClaimDeclineReason {
+    /// The SSP offered no 0-conf fulfillment plan for the deposit.
+    NoPlan,
+    /// The SSP spread exceeded the ceiling (`max_bps`). The instant claim can be
+    /// retried with a higher ceiling. `quoted_bps` / `quoted_sats` are the spread
+    /// the SSP quoted at the time.
+    FeeExceeded {
+        max_bps: u32,
+        quoted_bps: u32,
+        quoted_sats: u64,
+    },
+    /// The claim submission failed with an unknown outcome.
+    SubmissionFailed,
+}
+
 /// State of an instant (0-conf) claim attempt on a deposit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum InstantClaimStatus {
-    /// The instant claim was terminally declined: no 0-conf plan was offered, the
-    /// spread exceeded the ceiling, or the submission failed. The deposit falls
-    /// through to the normal claim once it matures.
-    Declined,
+    /// The instant claim was declined. The deposit falls through to the normal
+    /// claim once it matures; the background sync may re-attempt an instant claim
+    /// only when the reason permits (see [`InstantClaimDeclineReason`]).
+    Declined { reason: InstantClaimDeclineReason },
     /// An instant claim was submitted and is settling. The deposit must not be
-    /// re-claimed (instant or normal) until the swap lands and it is reconciled
+    /// re-claimed (instant or normal) until the claim settles and it is reconciled
     /// out. Carries the SSP claim id.
     Submitted { claim_id: String },
 }
@@ -1128,7 +1146,8 @@ pub struct ClaimDepositRequest {
     pub max_fee: Option<MaxFee>,
     /// Set to request an instant (0-conf) claim instead of waiting for the
     /// deposit to mature, bounding the SSP spread at this many basis points of
-    /// the deposit value (100 bps = 1%).
+    /// the deposit value (100 bps = 1%). When set, the call takes the instant
+    /// path and `max_fee` is ignored.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub max_instant_fee_bps: Option<u32>,
 }
