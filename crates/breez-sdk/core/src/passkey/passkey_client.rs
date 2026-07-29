@@ -212,7 +212,7 @@ impl PasskeyClient {
             .create_passkey(request.exclude_credentials.unwrap_or_default())
             .await?;
 
-        let setup = self
+        let setup = match self
             .passkey
             .setup_wallet(SetupWalletRequest {
                 label: request.label,
@@ -223,7 +223,21 @@ impl PasskeyClient {
                 allow_credentials: vec![credential.credential_id.clone()],
                 prefer_immediately_available_credentials: None,
             })
-            .await?;
+            .await
+        {
+            Ok(setup) => setup,
+            // The credential is on the device from here on, so the error
+            // has to carry it. Dropping it leaves the host unable to tell
+            // "nothing was created" from "created, not derived", and the
+            // natural recovery (register again) strands this passkey.
+            Err(e) => {
+                return Err(PasskeyError::CreatedButNotDerived {
+                    credential_id: credential.credential_id,
+                    kind: e.kind(),
+                    reason: e.to_string(),
+                });
+            }
+        };
 
         Ok(RegisterResponse {
             wallet: setup.wallet,

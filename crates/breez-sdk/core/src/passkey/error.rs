@@ -118,6 +118,20 @@ pub enum PasskeyError {
     #[error("Invalid salt: {0}")]
     InvalidSalt(String),
 
+    /// Registration created the credential, then failed to derive from
+    /// it. The passkey exists on the device: recover by signing in
+    /// pinned to `credential_id`. Registering again would leave this one
+    /// behind, owning a wallet nothing points to.
+    ///
+    /// `kind` classifies the derive failure that followed the create, so
+    /// hosts keep the branching they would have had on the inner error.
+    #[error("Passkey created but derivation failed: {reason}")]
+    CreatedButNotDerived {
+        credential_id: Vec<u8>,
+        kind: ErrorKind,
+        reason: String,
+    },
+
     #[error("Passkey error: {0}")]
     Generic(String),
 }
@@ -130,6 +144,7 @@ impl PasskeyError {
     pub fn kind(&self) -> ErrorKind {
         match self {
             Self::Prf(inner) => inner.kind(),
+            Self::CreatedButNotDerived { kind, .. } => *kind,
             _ => ErrorKind::Internal,
         }
     }
