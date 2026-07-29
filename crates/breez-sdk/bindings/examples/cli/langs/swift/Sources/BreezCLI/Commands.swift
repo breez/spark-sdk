@@ -981,8 +981,26 @@ func handleSetUserSettings(_ sdk: BreezSdk, _ args: [String]) async throws {
     let privateModeStr = fp.get("p", "private", "spark-private-mode")
     let privateMode: Bool? = privateModeStr.map { $0 == "true" }
 
+    let masterKey = fp.get("m", "master-key")
+    let clearMasterKey = fp.has("clear-master-key")
+
+    if masterKey != nil && clearMasterKey {
+        print("Error: --master-key and --clear-master-key are mutually exclusive")
+        return
+    }
+
+    let sparkMasterIdentityPublicKey: SparkMasterIdentityPublicKey?
+    if let publicKey = masterKey {
+        sparkMasterIdentityPublicKey = .set(publicKey: publicKey)
+    } else if clearMasterKey {
+        sparkMasterIdentityPublicKey = .unset
+    } else {
+        sparkMasterIdentityPublicKey = nil
+    }
+
     try await sdk.updateUserSettings(request: UpdateUserSettingsRequest(
-        sparkPrivateModeEnabled: privateMode
+        sparkPrivateModeEnabled: privateMode,
+        sparkMasterIdentityPublicKey: sparkMasterIdentityPublicKey
     ))
     print("User settings updated")
 }

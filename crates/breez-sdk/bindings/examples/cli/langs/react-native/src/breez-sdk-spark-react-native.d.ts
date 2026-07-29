@@ -59,6 +59,9 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export const WebhookEventType: any;
   export type WebhookEventType = any;
 
+  export const SparkMasterIdentityPublicKey: any;
+  export type SparkMasterIdentityPublicKey = any;
+
   export const StableBalanceActiveLabel: any;
   export type StableBalanceActiveLabel = any;
 

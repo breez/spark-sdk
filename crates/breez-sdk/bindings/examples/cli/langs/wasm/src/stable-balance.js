@@ -33,7 +33,8 @@ function registerStableBalanceCommands(program, getSdk) {
       const sdk = getSdk()
       await sdk.updateUserSettings({
         sparkPrivateModeEnabled: undefined,
-        stableBalanceActiveLabel: { type: 'set', label }
+        stableBalanceActiveLabel: { type: 'set', label },
+        sparkMasterIdentityPublicKey: undefined
       })
       const settings = await sdk.getUserSettings()
       printValue(settings)
@@ -47,7 +48,8 @@ function registerStableBalanceCommands(program, getSdk) {
       const sdk = getSdk()
       await sdk.updateUserSettings({
         sparkPrivateModeEnabled: undefined,
-        stableBalanceActiveLabel: { type: 'unset' }
+        stableBalanceActiveLabel: { type: 'unset' },
+        sparkMasterIdentityPublicKey: undefined
       })
       const settings = await sdk.getUserSettings()
       printValue(settings)

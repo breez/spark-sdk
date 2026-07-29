@@ -291,7 +291,7 @@ public static class Commands
     private static readonly HashSet<string> BooleanFlags = new()
     {
         "--fees-included", "--from-bitcoin", "--hodl", "-f", "--freezable",
-        "--new-address"
+        "--new-address", "--clear-master-key"
     };
 
     private static string[] GetPositionalArgs(string[] args)
@@ -1219,9 +1219,28 @@ public static class Commands
     {
         var privateModeStr = GetFlag(args, "-p", "--private");
         bool? sparkPrivateMode = privateModeStr != null ? privateModeStr.ToLower() == "true" : null;
+        var masterKey = GetFlag(args, "-m", "--master-key");
+        var clearMasterKey = HasFlag(args, "--clear-master-key");
+
+        if (masterKey != null && clearMasterKey)
+        {
+            Console.Error.WriteLine("Cannot specify both --master-key and --clear-master-key");
+            return;
+        }
+
+        SparkMasterIdentityPublicKey? sparkMasterIdentityPublicKey = null;
+        if (masterKey != null)
+        {
+            sparkMasterIdentityPublicKey = new SparkMasterIdentityPublicKey.Set(publicKey: masterKey);
+        }
+        else if (clearMasterKey)
+        {
+            sparkMasterIdentityPublicKey = new SparkMasterIdentityPublicKey.Unset();
+        }
 
         await sdk.UpdateUserSettings(new UpdateUserSettingsRequest(
-            sparkPrivateModeEnabled: sparkPrivateMode
+            sparkPrivateModeEnabled: sparkPrivateMode,
+            sparkMasterIdentityPublicKey: sparkMasterIdentityPublicKey
         ));
         Console.WriteLine("User settings updated");
     }

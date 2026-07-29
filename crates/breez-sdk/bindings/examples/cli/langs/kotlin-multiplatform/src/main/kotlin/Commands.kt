@@ -1014,9 +1014,24 @@ suspend fun handleGetUserSettings(sdk: BreezSdk, reader: LineReader, args: List<
 suspend fun handleSetUserSettings(sdk: BreezSdk, reader: LineReader, args: List<String>) {
     val fp = FlagParser(args)
     val privateMode = fp.getString("p", "private", "spark-private-mode")
+    val masterKey = fp.getString("m", "master-key")
+    val clearMasterKey = fp.hasFlag("clear-master-key")
+
+    if (masterKey != null && clearMasterKey) {
+        println("Error: --master-key and --clear-master-key are mutually exclusive")
+        return
+    }
+
+    val sparkMasterIdentityPublicKey = when {
+        masterKey != null -> SparkMasterIdentityPublicKey.Set(publicKey = masterKey)
+        clearMasterKey -> SparkMasterIdentityPublicKey.Unset
+        else -> null
+    }
 
     val req = UpdateUserSettingsRequest(
         sparkPrivateModeEnabled = if (privateMode != null) privateMode.lowercase() == "true" else null,
+        stableBalanceActiveLabel = null,
+        sparkMasterIdentityPublicKey = sparkMasterIdentityPublicKey,
     )
 
     sdk.updateUserSettings(req)

@@ -63,7 +63,11 @@ Future<void> _handleSet(BreezSdk sdk, List<String> args) async {
   }
   final label = args[0];
   await sdk.updateUserSettings(
-    request: UpdateUserSettingsRequest(stableBalanceActiveLabel: StableBalanceActiveLabel_Set(label: label)),
+    request: UpdateUserSettingsRequest(
+      sparkPrivateModeEnabled: null,
+      stableBalanceActiveLabel: StableBalanceActiveLabel_Set(label: label),
+      sparkMasterIdentityPublicKey: null,
+    ),
   );
   final settings = await sdk.getUserSettings();
   printValue(settings);
@@ -73,7 +77,11 @@ Future<void> _handleSet(BreezSdk sdk, List<String> args) async {
 
 Future<void> _handleUnset(BreezSdk sdk, List<String> args) async {
   await sdk.updateUserSettings(
-    request: UpdateUserSettingsRequest(stableBalanceActiveLabel: StableBalanceActiveLabel_Unset()),
+    request: UpdateUserSettingsRequest(
+      sparkPrivateModeEnabled: null,
+      stableBalanceActiveLabel: StableBalanceActiveLabel_Unset(),
+      sparkMasterIdentityPublicKey: null,
+    ),
   );
   final settings = await sdk.getUserSettings();
   printValue(settings);

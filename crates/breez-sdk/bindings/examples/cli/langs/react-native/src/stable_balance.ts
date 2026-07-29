@@ -76,6 +76,7 @@ async function handleSet(sdk: BreezSdkInterface, args: string[]): Promise<string
   await sdk.updateUserSettings({
     sparkPrivateModeEnabled: undefined,
     stableBalanceActiveLabel: new StableBalanceActiveLabel.Set({ label }),
+    sparkMasterIdentityPublicKey: undefined,
   })
   const settings = await sdk.getUserSettings()
   return formatValue(settings)
@@ -87,6 +88,7 @@ async function handleUnset(sdk: BreezSdkInterface): Promise<string> {
   await sdk.updateUserSettings({
     sparkPrivateModeEnabled: undefined,
     stableBalanceActiveLabel: new StableBalanceActiveLabel.Unset(),
+    sparkMasterIdentityPublicKey: undefined,
   })
   const settings = await sdk.getUserSettings()
   return formatValue(settings)
