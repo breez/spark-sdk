@@ -12,7 +12,7 @@ from breez_sdk_spark import (
     PasskeyClient,
     PrfProvider,
     PrfProviderError,
-    PasskeyCredential,
+    CreatePasskeyOutput,
     RegisterRequest,
     SignInRequest,
     connect,
@@ -33,8 +33,14 @@ class CustomPrfProvider(PrfProvider):
     async def is_supported(self) -> bool:
         raise NotImplementedError("Check platform passkey availability")
 
-    async def create_passkey(self, exclude_credentials: list[bytes]) -> PasskeyCredential:
+    async def create_passkey(
+        self, exclude_credentials: list[bytes], salts: list[str]
+    ) -> CreatePasskeyOutput:
         # Register a credential and return its ID plus attestation.
+        #
+        # Return seeds=None unless the platform evaluated PRF during the create
+        # ceremony and gave one output per salt. Seeds returned here must equal
+        # what derive_seeds returns for the same salts.
         raise NotImplementedError("Implement registration via native passkey API")
 
     async def check_domain_association(self) -> DomainAssociation:

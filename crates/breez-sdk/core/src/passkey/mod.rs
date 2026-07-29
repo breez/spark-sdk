@@ -56,8 +56,8 @@ pub use derivation::ACCOUNT_MASTER_SALT;
 use derivation::prf_to_mnemonic;
 pub use error::{ErrorKind, PasskeyError, PrfProviderError};
 pub use models::{
-    CreatePasskeyOutput, DeriveSeedsOutput, PasskeyConfig, PasskeyCredential, PasskeyProviderOptions,
-    SetupWalletRequest, Wallet, WalletSetup,
+    CreatePasskeyOutput, DeriveSeedsOutput, PasskeyConfig, PasskeyCredential,
+    PasskeyProviderOptions, SetupWalletRequest, Wallet, WalletSetup,
 };
 pub use passkey_client::{
     ConnectWithPasskeyRequest, ConnectWithPasskeyResponse, PasskeyAvailability, PasskeyClient,
@@ -302,9 +302,7 @@ impl Passkey {
             label: label.clone(),
         };
 
-        if publish_label
-            && let Ok(client) = self.nostr_client().await
-        {
+        if publish_label && let Ok(client) = self.nostr_client().await {
             // The label publish is a non-fatal discovery convenience, so run
             // it off the critical path rather than blocking on slow relays.
             // store_label is idempotent, so the bounded retry is safe.

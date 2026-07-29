@@ -7,9 +7,7 @@ use std::sync::Arc;
 
 use super::Passkey;
 use super::error::{PasskeyError, PrfProviderError};
-use super::models::{
-    CreatePasskeyOutput, PasskeyConfig, PasskeyCredential, SetupWalletRequest, Wallet,
-};
+use super::models::{PasskeyConfig, PasskeyCredential, SetupWalletRequest, Wallet};
 use super::passkey_prf_provider::PrfProvider;
 #[cfg(test)]
 use super::{LabelStore, LabelStoreBuilder};
@@ -232,12 +230,7 @@ impl PasskeyClient {
             let setup = self
                 .passkey
                 .finish_wallet_setup(label, seeds, Some(credential.credential_id.clone()), true)
-                .await
-                .map_err(|e| PasskeyError::CreatedButNotDerived {
-                    credential_id: credential.credential_id.clone(),
-                    kind: e.kind(),
-                    reason: e.to_string(),
-                })?;
+                .await?;
             return Ok(RegisterResponse {
                 wallet: setup.wallet,
                 credential: Some(credential),
@@ -442,7 +435,7 @@ mod tests {
     use std::sync::Mutex;
 
     use super::super::error::PrfProviderError;
-    use super::super::{DeriveSeedsOutput, DeriveSeedsRequest};
+    use super::super::{CreatePasskeyOutput, DeriveSeedsOutput, DeriveSeedsRequest};
     // Wasm-safe tokio (tokio_with_wasm under wasm-bindgen-test) so the sleep in
     // wait_for_stored uses web timers instead of std::time, which is unsupported
     // on wasm32-unknown-unknown.
@@ -786,7 +779,9 @@ mod tests {
     fn mnemonic_of(wallet: &Wallet) -> String {
         match &wallet.seed {
             crate::Seed::Mnemonic { mnemonic, .. } => mnemonic.clone(),
-            other => panic!("expected a mnemonic seed, got {other:?}"),
+            other @ crate::Seed::Entropy(_) => {
+                panic!("expected a mnemonic seed, got {other:?}")
+            }
         }
     }
 

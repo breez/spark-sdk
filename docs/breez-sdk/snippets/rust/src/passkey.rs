@@ -1,8 +1,7 @@
 use anyhow::Result;
 use breez_sdk_spark::passkey::{
     ConnectWithPasskeyRequest, DeriveSeedsOutput, DeriveSeedsRequest, DomainAssociation, ErrorKind,
-    CreatePasskeyOutput, PasskeyAvailability, PasskeyClient, PasskeyCredential, PrfProvider,
-    PrfProviderError,
+    CreatePasskeyOutput, PasskeyAvailability, PasskeyClient, PrfProvider, PrfProviderError,
     RegisterRequest, SignInRequest, SignInResponse, Wallet,
 };
 use breez_sdk_spark::{connect, default_config, ConnectRequest, Network};

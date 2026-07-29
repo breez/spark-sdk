@@ -17,10 +17,12 @@ import {
   type PrfProvider,
   type DeriveSeedsRequest,
   type DeriveSeedsOutput,
-  type CreatePasskeyOutput,
   DomainAssociation,
 } from '@breeztech/breez-sdk-spark-react-native'
-import { PasskeyProvider as PlatformPasskeyProvider } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
+import {
+  PasskeyProvider as PlatformPasskeyProvider,
+  type CreatePasskeyOutput,
+} from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
 import RNFS from 'react-native-fs'
 import { generateRandomBytes, hmacSha256 } from './crypto_utils'
 
