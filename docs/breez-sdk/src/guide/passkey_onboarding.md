@@ -89,6 +89,12 @@ Most passkey failures normalize to a {{#name PrfProviderError}} variant. Match o
 | {{#enum PrfProviderError::Configuration}} | Entitlement missing, AASA stale, or assetlinks malformed | Developer-facing error; surface the {{#enum PasskeyAvailability::NotAssociated}} reason. |
 | {{#enum PrfProviderError::Generic}} | Network or generic failure | Generic "try again later" UI. |
 
+Those rows cover {{#name PasskeyClient.sign_in}}, and
+{{#name PasskeyClient.register}} up to the point the credential is created.
+Once it exists, every failure arrives as the variant below instead, whatever
+caused it: a cancel, a timeout or an unsupported authenticator during the
+derive no longer surfaces as its own `PrfProviderError`.
+
 {{#name PasskeyClient.register}} has one failure of its own that is **not** a
 {{#name PrfProviderError}}:
 
