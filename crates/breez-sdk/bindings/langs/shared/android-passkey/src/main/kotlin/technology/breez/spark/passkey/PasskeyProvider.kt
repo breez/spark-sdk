@@ -1,6 +1,7 @@
 package technology.breez.spark.passkey
 
 import android.app.Activity
+import breez_sdk_spark.CreatePasskeyOutput
 import breez_sdk_spark.DeriveSeedsOutput
 import breez_sdk_spark.DeriveSeedsRequest
 import breez_sdk_spark.DomainAssociation
@@ -142,10 +143,31 @@ public class PasskeyProvider(
      * registered IDs in `excludeCredentials` so the platform refuses a
      * duplicate even after reinstall.
      */
-    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): PasskeyCredential {
+    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): PasskeyCredential =
+        createPasskeyWithPrf(excludeCredentials, emptyList()).credential
+
+    /**
+     * Registers with `prf.eval` requested, so an authenticator that
+     * evaluates PRF at create returns the seeds here and the caller needs
+     * no assertion. Credential Manager reports a credential it has not
+     * finished indexing as absent, so removing that assertion removes the
+     * only step that can trip over it.
+     *
+     * `seeds` stays null on authenticators that report PRF support without
+     * evaluating, which is every pre-eval-at-create implementation. The
+     * caller then derives as it always has.
+     */
+    override suspend fun createPasskeyWithPrf(
+        excludeCredentials: List<ByteArray>,
+        salts: List<String>,
+    ): CreatePasskeyOutput {
         try {
-            val c = core.register(excludeCredentials)
-            return PasskeyCredential(c.credentialId, c.userId, c.aaguid, c.backupEligible)
+            val registration = core.register(excludeCredentials, salts)
+            val c = registration.credential
+            return CreatePasskeyOutput(
+                PasskeyCredential(c.credentialId, c.userId, c.aaguid, c.backupEligible),
+                registration.seeds,
+            )
         } catch (e: CredentialManagerPrfCoreException) {
             throw e.toPrfProviderException()
         }
