@@ -56,7 +56,7 @@ pub use derivation::ACCOUNT_MASTER_SALT;
 use derivation::prf_to_mnemonic;
 pub use error::{ErrorKind, PasskeyError, PrfProviderError};
 pub use models::{
-    DeriveSeedsOutput, PasskeyConfig, PasskeyCredential, PasskeyProviderOptions,
+    CreatePasskeyOutput, DeriveSeedsOutput, PasskeyConfig, PasskeyCredential, PasskeyProviderOptions,
     SetupWalletRequest, Wallet, WalletSetup,
 };
 pub use passkey_client::{
@@ -224,12 +224,8 @@ impl Passkey {
         &self,
         request: SetupWalletRequest,
     ) -> Result<WalletSetup, PasskeyError> {
-        let label = request.label.unwrap_or_else(|| self.default_label.clone());
-        validate_label(&label)?;
-
-        // [account_master, label]: dual-salt single ceremony where the
-        // platform supports it, fallback to two prompts otherwise.
-        let salts = vec![ACCOUNT_MASTER_SALT.to_string(), label.clone()];
+        let label = self.resolve_label(request.label)?;
+        let salts = Self::wallet_salts(&label);
         let expected = salts.len();
 
         let DeriveSeedsOutput {
@@ -251,6 +247,33 @@ impl Passkey {
             ))));
         }
 
+        self.finish_wallet_setup(label, seeds, credential_id, request.publish_label)
+            .await
+    }
+
+    /// Salts backing one wallet, in the order `finish_wallet_setup`
+    /// consumes them: `[account_master, label]`. A dual-salt ceremony
+    /// covers both at once where the platform supports it.
+    pub(crate) fn wallet_salts(label: &str) -> Vec<String> {
+        vec![ACCOUNT_MASTER_SALT.to_string(), label.to_string()]
+    }
+
+    pub(crate) fn resolve_label(&self, label: Option<String>) -> Result<String, PasskeyError> {
+        let label = label.unwrap_or_else(|| self.default_label.clone());
+        validate_label(&label)?;
+        Ok(label)
+    }
+
+    /// Everything after the PRF outputs exist, so a caller that already
+    /// has them (a create ceremony that evaluated PRF inline) reaches the
+    /// same wallet without a second ceremony.
+    pub(crate) async fn finish_wallet_setup(
+        &self,
+        label: String,
+        seeds: Vec<Vec<u8>>,
+        credential_id: Option<Vec<u8>>,
+        publish_label: bool,
+    ) -> Result<WalletSetup, PasskeyError> {
         // Prime (or rebind) the Nostr client cache with the keys derived
         // in this ceremony so subsequent label ops don't trigger another
         // PRF, even when this `PasskeyClient` is reused across credentials
@@ -270,7 +293,7 @@ impl Passkey {
             label: label.clone(),
         };
 
-        if request.publish_label
+        if publish_label
             && let Ok(client) = self.nostr_client().await
         {
             // The label publish is a non-fatal discovery convenience, so run

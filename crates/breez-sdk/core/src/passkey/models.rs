@@ -51,6 +51,22 @@ pub struct DeriveSeedsOutput {
     pub credential_id: Option<Vec<u8>>,
 }
 
+/// A newly created credential, plus the PRF outputs when the platform
+/// evaluated them during the create ceremony itself.
+///
+/// `seeds` present means no assertion is needed: the caller skips the
+/// second ceremony, and with it the window in which a credential exists
+/// but is not yet resolvable. Absent means the platform returned no PRF
+/// results at create (or dropped one of a pair), so the caller derives
+/// through [`super::PrfProvider::derive_seeds`] as before.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CreatePasskeyOutput {
+    pub credential: PasskeyCredential,
+    /// One output per requested salt, in request order.
+    pub seeds: Option<Vec<Vec<u8>>>,
+}
+
 /// A passkey credential from a register or sign-in ceremony.
 /// `credential_id` is always set; the attestation fields are
 /// populated on registration and absent on sign-in (an assertion

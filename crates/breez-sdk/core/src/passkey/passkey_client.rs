@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use super::Passkey;
 use super::error::{PasskeyError, PrfProviderError};
-use super::models::{PasskeyConfig, PasskeyCredential, SetupWalletRequest, Wallet};
+use super::models::{
+    CreatePasskeyOutput, PasskeyConfig, PasskeyCredential, SetupWalletRequest, Wallet,
+};
 use super::passkey_prf_provider::PrfProvider;
 #[cfg(test)]
 use super::{LabelStore, LabelStoreBuilder};
@@ -206,16 +208,42 @@ impl PasskeyClient {
         &self,
         request: RegisterRequest,
     ) -> Result<RegisterResponse, PasskeyError> {
-        let credential = self
+        let label = self.passkey.resolve_label(request.label)?;
+        let salts = Passkey::wallet_salts(&label);
+
+        // Ask for the PRF outputs in the create ceremony itself. A platform
+        // that returns them removes the assertion below, and with it the
+        // window where the credential exists but is not yet resolvable.
+        let created = self
             .passkey
             .prf_provider()
-            .create_passkey(request.exclude_credentials.unwrap_or_default())
+            .create_passkey_with_prf(
+                request.exclude_credentials.unwrap_or_default(),
+                salts.clone(),
+            )
             .await?;
+        let credential = created.credential;
+
+        if let Some(seeds) = created.seeds.filter(|seeds| seeds.len() == salts.len()) {
+            let setup = self
+                .passkey
+                .finish_wallet_setup(label, seeds, Some(credential.credential_id.clone()), true)
+                .await
+                .map_err(|e| PasskeyError::CreatedButNotDerived {
+                    credential_id: credential.credential_id.clone(),
+                    kind: e.kind(),
+                    reason: e.to_string(),
+                })?;
+            return Ok(RegisterResponse {
+                wallet: setup.wallet,
+                credential: Some(credential),
+            });
+        }
 
         let setup = match self
             .passkey
             .setup_wallet(SetupWalletRequest {
-                label: request.label,
+                label: Some(label),
                 publish_label: true,
                 // Pin the derive to the just-created credential so the
                 // seed comes from it, not another resident passkey for
@@ -431,6 +459,9 @@ mod tests {
         /// `allow_credentials` seen on each `derive_seeds` call, so tests
         /// can assert pinning.
         derive_allow: Mutex<Vec<Vec<Vec<u8>>>>,
+        /// Return PRF outputs from the create ceremony, as an
+        /// authenticator supporting `prf.eval` at registration does.
+        prf_at_create: bool,
     }
 
     impl MockProvider {
@@ -443,6 +474,7 @@ mod tests {
                 derive_errors: Mutex::new(Vec::new()),
                 derive_credential_id: None,
                 derive_allow: Mutex::new(Vec::new()),
+                prf_at_create: false,
             }
         }
 
@@ -462,6 +494,13 @@ mod tests {
 
         fn queue_derive_error(&self, err: PrfProviderError) {
             self.derive_errors.lock().unwrap().push(err);
+        }
+
+        /// Mimic an authenticator that evaluates PRF during the create
+        /// ceremony, so `register` needs no assertion.
+        fn with_prf_at_create(mut self) -> Self {
+            self.prf_at_create = true;
+            self
         }
 
         fn output_for(&self, salt: &str) -> Vec<u8> {
@@ -531,6 +570,18 @@ mod tests {
                 aaguid: Some(vec![0; 16]),
                 backup_eligible: Some(true),
             })
+        }
+
+        async fn create_passkey_with_prf(
+            &self,
+            exclude_credentials: Vec<Vec<u8>>,
+            salts: Vec<String>,
+        ) -> Result<CreatePasskeyOutput, PrfProviderError> {
+            let credential = self.create_passkey(exclude_credentials).await?;
+            let seeds = self
+                .prf_at_create
+                .then(|| salts.iter().map(|s| self.output_for(s)).collect());
+            Ok(CreatePasskeyOutput { credential, seeds })
         }
     }
 
@@ -692,6 +743,45 @@ mod tests {
         assert!(!allow.is_empty());
         for call in allow.iter() {
             assert_eq!(call, &vec![vec![0xab, 0xcd, 0xef]]);
+        }
+    }
+
+    #[macros::async_test_all]
+    async fn register_skips_the_assertion_when_create_evaluates_prf() {
+        let provider = Arc::new(MockProvider::new([7u8; 32]).with_prf_at_create());
+        let client = test_client(provider.clone(), None);
+        let with_prf = client
+            .register(RegisterRequest {
+                label: Some("alice".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        // No assertion ran, so nothing can race the new credential
+        // becoming resolvable.
+        assert!(provider.derive_allow.lock().unwrap().is_empty());
+        assert!(with_prf.credential.is_some());
+
+        // Same wallet either way: the fast path is a shortcut, not a
+        // different derivation.
+        let fallback_provider = Arc::new(MockProvider::new([7u8; 32]));
+        let fallback = test_client(fallback_provider.clone(), None)
+            .register(RegisterRequest {
+                label: Some("alice".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(!fallback_provider.derive_allow.lock().unwrap().is_empty());
+        assert_eq!(mnemonic_of(&with_prf.wallet), mnemonic_of(&fallback.wallet));
+        assert_eq!(with_prf.wallet.label, fallback.wallet.label);
+    }
+
+    fn mnemonic_of(wallet: &Wallet) -> String {
+        match &wallet.seed {
+            crate::Seed::Mnemonic { mnemonic, .. } => mnemonic.clone(),
+            other => panic!("expected a mnemonic seed, got {other:?}"),
         }
     }
 

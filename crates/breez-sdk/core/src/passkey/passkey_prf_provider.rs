@@ -1,5 +1,5 @@
 use super::error::PrfProviderError;
-use super::models::{DeriveSeedsOutput, PasskeyCredential};
+use super::models::{CreatePasskeyOutput, DeriveSeedsOutput, PasskeyCredential};
 
 /// Per-call inputs for [`PrfProvider::derive_seeds`]. Hosts that
 /// don't need per-ceremony overrides fall back to [`Default`]
@@ -93,6 +93,32 @@ pub trait PrfProvider: Send + Sync {
     ) -> Result<PasskeyCredential, PrfProviderError> {
         let _ = exclude_credentials;
         Err(PrfProviderError::PrfNotSupported)
+    }
+
+    /// [`Self::create_passkey`] that also evaluates PRF for `salts` in the
+    /// create ceremony, where the platform supports it.
+    ///
+    /// Worth overriding because the assertion that would otherwise follow
+    /// a create can outrun the platform's own credential bookkeeping: on
+    /// Android the new credential is briefly not resolvable, and the miss
+    /// is indistinguishable from a deleted passkey. Returning seeds here
+    /// removes that second ceremony, so the window cannot be hit.
+    ///
+    /// The default keeps the two-ceremony flow, so a provider that cannot
+    /// evaluate PRF at create needs no changes. Return `seeds: None` for
+    /// anything short of one output per salt (some authenticators drop
+    /// `prf.eval.second`): a partial result is not usable, and the caller
+    /// falls back to [`Self::derive_seeds`].
+    async fn create_passkey_with_prf(
+        &self,
+        exclude_credentials: Vec<Vec<u8>>,
+        salts: Vec<String>,
+    ) -> Result<CreatePasskeyOutput, PrfProviderError> {
+        let _ = salts;
+        Ok(CreatePasskeyOutput {
+            credential: self.create_passkey(exclude_credentials).await?,
+            seeds: None,
+        })
     }
 
     /// Advisory check against the platform's out-of-band verification
