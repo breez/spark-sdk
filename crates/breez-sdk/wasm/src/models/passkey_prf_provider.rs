@@ -5,7 +5,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, js_sys::Promise};
 
 use breez_sdk_spark::passkey::{
-    DeriveSeedsOutput, DeriveSeedsRequest, PasskeyCredential, PrfProviderError,
+    CreatePasskeyOutput, DeriveSeedsOutput, DeriveSeedsRequest, PasskeyCredential, PrfProviderError,
 };
 
 pub(crate) fn js_error_to_prf_provider_error(js_error: JsValue) -> PrfProviderError {
@@ -161,7 +161,12 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
     async fn create_passkey(
         &self,
         exclude_credentials: Vec<Vec<u8>>,
-    ) -> Result<PasskeyCredential, PrfProviderError> {
+        salts: Vec<String>,
+    ) -> Result<CreatePasskeyOutput, PrfProviderError> {
+        // The JS provider contract has no eval-at-create hook, so the
+        // browser keeps the two-ceremony flow and the caller derives
+        // through `derive_seeds` as before.
+        let _ = salts;
         // Custom providers may not implement explicit creation; fall
         // back to the trait default (`PrfNotSupported`).
         if !self.js_has_method("createPasskey", &self.supports_create) {
@@ -177,7 +182,10 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
             .await
             .map_err(js_error_to_prf_provider_error)?;
 
-        parse_passkey_credential(&result)
+        Ok(CreatePasskeyOutput {
+            credential: parse_passkey_credential(&result)?,
+            seeds: None,
+        })
     }
 }
 

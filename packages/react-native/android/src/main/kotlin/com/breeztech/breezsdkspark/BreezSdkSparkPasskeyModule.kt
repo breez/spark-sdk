@@ -223,7 +223,7 @@ class BreezSdkSparkPasskeyModule(
                     userDisplayName = userDisplayName,
                     activityProvider = { activity },
                     graceTracker = graceTracker,
-                ).register(excludeIds)
+                ).register(excludeIds).credential
                 // The core's `register` arms the shared grace tracker so the
                 // next `deriveSeeds` call holds out the credential's
                 // PRF-readiness window without the wrapper having to.
