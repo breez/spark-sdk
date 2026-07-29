@@ -475,6 +475,10 @@ public class CredentialManagerPrfCore(
             ?.optJSONObject("prf")
             ?.optJSONObject("results")
             ?: return null
+        // Never throw: the passkey exists by now, so a decode failure that
+        // escapes fails the whole registration, and the caller's natural
+        // recovery is to register again and strand this one. Null falls
+        // back to the assertion path, which derives from the same passkey.
         val first = results.optString("first").takeIf { it.isNotEmpty() } ?: return null
         val out = ArrayList<ByteArray>(2)
         out.add(decodeBase64UrlOrNull(first, "registration prf.first") ?: return null)
