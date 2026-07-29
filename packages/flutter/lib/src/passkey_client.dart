@@ -5,11 +5,11 @@ import 'rust/models.dart'
     show
         ConnectWithPasskeyRequest,
         ConnectWithPasskeyResponse,
+        CreatePasskeyOutput,
         DeriveSeedsOutput,
         DeriveSeedsRequest,
         PasskeyAvailability,
         PasskeyConfig,
-        PasskeyCredential,
         PasskeyProviderOptions,
         RegisterRequest,
         RegisterResponse,

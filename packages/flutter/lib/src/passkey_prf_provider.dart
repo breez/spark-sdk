@@ -3,7 +3,12 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 
 import 'rust/models.dart'
-    show DeriveSeedsOutput, DeriveSeedsRequest, PasskeyCredential, PasskeyProviderOptions;
+    show
+        CreatePasskeyOutput,
+        DeriveSeedsOutput,
+        DeriveSeedsRequest,
+        PasskeyCredential,
+        PasskeyProviderOptions;
 
 /// Result of verifying that the app is associated with its RP domain.
 /// Switch on the subtype to handle each outcome.
