@@ -113,7 +113,8 @@ public static class StableBalanceCommands
 
         await sdk.UpdateUserSettings(new UpdateUserSettingsRequest(
             sparkPrivateModeEnabled: null,
-            stableBalanceActiveLabel: new StableBalanceActiveLabel.Set(label: args[0])
+            stableBalanceActiveLabel: new StableBalanceActiveLabel.Set(label: args[0]),
+            sparkMasterIdentityPublicKey: null
         ));
         var settings = await sdk.GetUserSettings();
         Serialization.PrintValue(settings);
@@ -125,7 +126,8 @@ public static class StableBalanceCommands
     {
         await sdk.UpdateUserSettings(new UpdateUserSettingsRequest(
             sparkPrivateModeEnabled: null,
-            stableBalanceActiveLabel: new StableBalanceActiveLabel.Unset()
+            stableBalanceActiveLabel: new StableBalanceActiveLabel.Unset(),
+            sparkMasterIdentityPublicKey: null
         ));
         var settings = await sdk.GetUserSettings();
         Serialization.PrintValue(settings);
