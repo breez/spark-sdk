@@ -60,6 +60,21 @@ export interface PasskeyCredential {
 }
 
 /**
+ * Result of {@link PasskeyProvider.createPasskey}: the new credential, plus
+ * the PRF outputs when the authenticator evaluated them during the create
+ * ceremony. `seeds` null means it did not, so the caller derives through
+ * {@link PasskeyProvider.deriveSeeds}.
+ *
+ * Seeds returned here must equal what `deriveSeeds` returns for the same
+ * salts: the wallet is derived from them either way, so a mismatch means
+ * register and sign-in land on different wallets.
+ */
+export interface CreatePasskeyOutput {
+  credential: PasskeyCredential;
+  seeds: Uint8Array[] | null;
+}
+
+/**
  * Result of {@link PasskeyProvider.checkDomainAssociation}. Switch on `kind`
  * to handle each outcome.
  */
@@ -199,13 +214,18 @@ export class PasskeyProvider {
   }
 
   /**
-   * Register a new PRF-capable passkey (one prompt, no seed derivation): use
-   * it to split credential creation from derivation in multi-step onboarding.
-   * `excludeCredentials` blocks re-registering a device that already holds a
-   * credential, surfaced as a `credentialAlreadyExists` failure. The returned
-   * user handle is minted fresh per call (never host-supplied).
+   * Register a new PRF-capable passkey. `excludeCredentials` blocks
+   * re-registering a device that already holds a credential, surfaced as a
+   * `credentialAlreadyExists` failure. The returned user handle is minted
+   * fresh per call (never host-supplied).
+   *
+   * `salts` is accepted for parity with the trait but not evaluated here, so
+   * `seeds` is always null and the caller derives through `deriveSeeds`.
    */
-  async createPasskey(excludeCredentials: Uint8Array[] = []): Promise<PasskeyCredential> {
+  async createPasskey(
+    excludeCredentials: Uint8Array[] = [],
+    salts: string[] = []
+  ): Promise<CreatePasskeyOutput> {
     if (!BreezSdkSparkPasskey) {
       throw passkeyModuleUnavailableError('createPasskey');
     }
@@ -227,10 +247,15 @@ export class PasskeyProvider {
       );
 
       return {
-        credentialId: base64ToUint8Array(result.credentialId),
-        userId: base64ToUint8Array(result.userId),
-        aaguid: result.aaguid ? base64ToUint8Array(result.aaguid) : null,
-        backupEligible: result.backupEligible,
+        credential: {
+          credentialId: base64ToUint8Array(result.credentialId),
+          userId: base64ToUint8Array(result.userId),
+          aaguid: result.aaguid ? base64ToUint8Array(result.aaguid) : null,
+          backupEligible: result.backupEligible,
+        },
+        // The native module has no eval-at-create hook yet, so the caller
+        // derives through `deriveSeeds` as before.
+        seeds: null,
       };
     } catch (err) {
       throw mapNativeError(err);

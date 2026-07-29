@@ -2,7 +2,8 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use breez_sdk_spark::passkey::{
-    ConnectWithPasskeyRequest, ConnectWithPasskeyResponse, DeriveSeedsOutput, DeriveSeedsRequest,
+    ConnectWithPasskeyRequest, ConnectWithPasskeyResponse, CreatePasskeyOutput, DeriveSeedsOutput,
+    DeriveSeedsRequest,
     PasskeyAvailability, PasskeyConfig, PasskeyCredential, PasskeyError, PrfProvider,
     PrfProviderError, RegisterRequest, RegisterResponse, SignInRequest, SignInResponse,
 };
@@ -86,12 +87,20 @@ impl PrfProvider for CallbackPrfProvider {
     async fn create_passkey(
         &self,
         exclude_credentials: Vec<Vec<u8>>,
-    ) -> Result<PasskeyCredential, PrfProviderError> {
+        salts: Vec<String>,
+    ) -> Result<CreatePasskeyOutput, PrfProviderError> {
+        // The Dart callback has no eval-at-create hook, so the Dart-facing
+        // contract stays as it was and the caller derives through
+        // `derive_seeds`.
+        let _ = salts;
         let result = AssertUnwindSafe((self.create_passkey_fn)(exclude_credentials))
             .catch_unwind()
             .await
             .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
-        result.map_err(dart_error_to_prf)
+        Ok(CreatePasskeyOutput {
+            credential: result.map_err(dart_error_to_prf)?,
+            seeds: None,
+        })
     }
 }
 

@@ -18,8 +18,15 @@ class CustomPrfProvider : PrfProvider {
         TODO("Check platform passkey availability")
     }
 
-    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): PasskeyCredential {
+    override suspend fun createPasskey(
+        excludeCredentials: List<ByteArray>,
+        salts: List<String>,
+    ): CreatePasskeyOutput {
         // Register a credential and return its ID plus attestation.
+        //
+        // Return `seeds = null` unless the platform evaluated PRF during the
+        // create ceremony and gave one output per salt. Seeds returned here
+        // must equal what `deriveSeeds` returns for the same salts.
         TODO("Implement registration via native passkey API")
     }
 

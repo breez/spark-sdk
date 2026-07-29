@@ -217,7 +217,7 @@ impl PasskeyClient {
         let created = self
             .passkey
             .prf_provider()
-            .create_passkey_with_prf(
+            .create_passkey(
                 request.exclude_credentials.unwrap_or_default(),
                 salts.clone(),
             )
@@ -558,30 +558,27 @@ mod tests {
         async fn create_passkey(
             &self,
             _exclude_credentials: Vec<Vec<u8>>,
-        ) -> Result<PasskeyCredential, PrfProviderError> {
+            salts: Vec<String>,
+        ) -> Result<CreatePasskeyOutput, PrfProviderError> {
             if self.fail_create {
                 return Err(PrfProviderError::PrfNotSupported);
             }
-            let mut count = self.create_calls.lock().unwrap();
-            *count = count.checked_add(1).expect("create_calls overflow");
-            Ok(PasskeyCredential {
-                credential_id: vec![0xab, 0xcd, 0xef],
-                user_id: Some(vec![0u8; 16]),
-                aaguid: Some(vec![0; 16]),
-                backup_eligible: Some(true),
-            })
-        }
-
-        async fn create_passkey_with_prf(
-            &self,
-            exclude_credentials: Vec<Vec<u8>>,
-            salts: Vec<String>,
-        ) -> Result<CreatePasskeyOutput, PrfProviderError> {
-            let credential = self.create_passkey(exclude_credentials).await?;
+            {
+                let mut count = self.create_calls.lock().unwrap();
+                *count = count.checked_add(1).expect("create_calls overflow");
+            }
             let seeds = self
                 .prf_at_create
                 .then(|| salts.iter().map(|s| self.output_for(s)).collect());
-            Ok(CreatePasskeyOutput { credential, seeds })
+            Ok(CreatePasskeyOutput {
+                credential: PasskeyCredential {
+                    credential_id: vec![0xab, 0xcd, 0xef],
+                    user_id: Some(vec![0u8; 16]),
+                    aaguid: Some(vec![0; 16]),
+                    backup_eligible: Some(true),
+                },
+                seeds,
+            })
         }
     }
 

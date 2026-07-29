@@ -143,9 +143,6 @@ public class PasskeyProvider(
      * registered IDs in `excludeCredentials` so the platform refuses a
      * duplicate even after reinstall.
      */
-    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): PasskeyCredential =
-        createPasskeyWithPrf(excludeCredentials, emptyList()).credential
-
     /**
      * Registers with `prf.eval` requested, so an authenticator that
      * evaluates PRF at create returns the seeds here and the caller needs
@@ -157,12 +154,12 @@ public class PasskeyProvider(
      * evaluating, which is every pre-eval-at-create implementation. The
      * caller then derives as it always has.
      */
-    override suspend fun createPasskeyWithPrf(
+    override suspend fun createPasskey(
         excludeCredentials: List<ByteArray>,
         salts: List<String>,
     ): CreatePasskeyOutput {
         try {
-            val registration = core.registerWithPrf(excludeCredentials, salts)
+            val registration = core.register(excludeCredentials, salts)
             val c = registration.credential
             return CreatePasskeyOutput(
                 PasskeyCredential(c.credentialId, c.userId, c.aaguid, c.backupEligible),

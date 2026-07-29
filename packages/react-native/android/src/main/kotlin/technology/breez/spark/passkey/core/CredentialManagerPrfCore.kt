@@ -602,20 +602,6 @@ public class CredentialManagerPrfCore(
      */
     public suspend fun register(
         excludeCredentials: List<ByteArray> = emptyList(),
-    ): PasskeyCredential = registerWithPrf(excludeCredentials, emptyList()).credential
-
-    /**
-     * [register] that also asks the create ceremony to evaluate PRF for
-     * [salts]. An authenticator that answers makes registration a single
-     * ceremony, so no assertion follows it into the window where the new
-     * credential is not yet resolvable.
-     *
-     * `PasskeyRegistration.seeds` is null when the authenticator reported
-     * PRF support without evaluating, and when it returned fewer outputs
-     * than salts. Callers derive through [deriveSeeds] in both cases.
-     */
-    public suspend fun registerWithPrf(
-        excludeCredentials: List<ByteArray> = emptyList(),
         salts: List<String> = emptyList(),
     ): PasskeyRegistration = withContext(Dispatchers.Main) {
         val startedAtMs = System.currentTimeMillis()
@@ -713,11 +699,13 @@ public class CredentialManagerPrfCore(
             // partial derive is no derive at all.
             val seeds = readRegistrationPrfResults(responseJson)
                 ?.takeIf { it.size == salts.size }
-            // Arm the post-create grace so a fallback derive doesn't race
-            // the credential's PRF-readiness window (see grace tracker).
-            // Unnecessary when seeds came back inline, but harmless: the
-            // window is consumed without waiting when nothing asserts.
-            graceTracker.arm(postCreateGraceMs)
+            // Arm the post-create grace only when a derive still has to
+            // run: the window exists for that assertion. Arming it on the
+            // inline-seeds path would leave it set for whatever derive
+            // came next, which is a different ceremony entirely.
+            if (seeds == null) {
+                graceTracker.arm(postCreateGraceMs)
+            }
             PasskeyRegistration(
                 PasskeyCredential(credentialId, userIdBytes, aaguid, backupEligible),
                 seeds,
