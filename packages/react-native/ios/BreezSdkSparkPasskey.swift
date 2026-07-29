@@ -101,7 +101,7 @@ class BreezSdkSparkPasskey: NSObject {
         )
         Task { @MainActor in
             do {
-                let registered = try await core.register(excludeCredentials: excludeIds)
+                let registered = try await core.register(excludeCredentials: excludeIds).credential
                 resolve([
                     "credentialId": registered.credentialId.base64EncodedString(),
                     "userId": registered.userId.base64EncodedString(),

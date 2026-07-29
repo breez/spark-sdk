@@ -90,6 +90,20 @@ public struct IosPasskeyCredential {
     }
 }
 
+/// A created credential, plus the PRF outputs when the authenticator
+/// evaluated them during the create ceremony. `seeds` is nil when it did
+/// not, so the caller derives through `deriveSeeds` as before.
+@available(iOS 18.0, macOS 15.0, *)
+public struct IosPasskeyRegistration {
+    public let credential: IosPasskeyCredential
+    public let seeds: [Data]?
+
+    public init(credential: IosPasskeyCredential, seeds: [Data]?) {
+        self.credential = credential
+        self.seeds = seeds
+    }
+}
+
 /// Result of `deriveSeeds`: one 32-byte PRF output per salt (input
 /// order) plus the asserted credential ID. `credentialId` is `nil` when
 /// no assertion ran (empty `salts`).
@@ -551,10 +565,17 @@ public final class PasskeyAssertionCore {
     /// tracker is armed on success. `userId` is never host-supplied: the
     /// core mints a fresh random 16-byte value and returns it on
     /// `IosPasskeyCredential.userId`.
+    /// Asking the create ceremony to evaluate PRF for `salts` makes
+    /// registration a single ceremony, so no assertion follows it.
+    ///
+    /// `IosPasskeyRegistration.seeds` is nil when the authenticator
+    /// reported PRF support without evaluating, and when it returned fewer
+    /// outputs than salts. Callers derive through `deriveSeeds` in both.
     @discardableResult
     public func register(
-        excludeCredentials: [Data] = []
-    ) async throws -> IosPasskeyCredential {
+        excludeCredentials: [Data] = [],
+        salts: [String] = []
+    ) async throws -> IosPasskeyRegistration {
         let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
         let challenge = Self.randomBytes(count: 32)
         let resolvedUserId = Self.randomBytes(count: 16)
@@ -575,7 +596,13 @@ public final class PasskeyAssertionCore {
             }
         }
 
-        PasskeyPRFHelper.setRegistrationPRFOn(request)
+        // Asking the create ceremony to evaluate PRF removes the
+        // assertion that would otherwise follow it.
+        PasskeyPRFHelper.setRegistrationPRFOn(
+            request,
+            withSalt1: salts.first.map { Data($0.utf8) },
+            salt2: salts.count > 1 ? Data(salts[1].utf8) : nil
+        )
 
         let delegate = PasskeyDelegate()
         let controller = ASAuthorizationController(authorizationRequests: [request])
@@ -586,8 +613,9 @@ public final class PasskeyAssertionCore {
         // our minted handle to attach to the returned credential.
         delegate.registrationUserId = resolvedUserId
 
-        let credential: IosPasskeyCredential = try await withCheckedThrowingContinuation { continuation in
+        let registration: IosPasskeyRegistration = try await withCheckedThrowingContinuation { continuation in
             delegate.registrationContinuation = continuation
+            delegate.registrationSaltCount = salts.count
             delegate.extractPrf = false
             DispatchQueue.main.async {
                 // Capture start time inside the closure so the wait for
@@ -600,7 +628,7 @@ public final class PasskeyAssertionCore {
         // Arm the post-create grace so the immediate derive doesn't race
         // the credential's PRF-readiness window (see grace tracker).
         await graceTracker.arm(after: postCreateGraceTotal)
-        return credential
+        return registration
     }
 
     public static func randomBytes(count: Int) -> Data {
@@ -682,7 +710,10 @@ private final class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate
     /// Resolves `(first, second?, credentialId)`; `second` is nil for a
     /// single salt or a dropped `saltInput2`.
     var assertionContinuation: CheckedContinuation<(Data, Data?, Data), Error>?
-    var registrationContinuation: CheckedContinuation<IosPasskeyCredential, Error>?
+    var registrationContinuation: CheckedContinuation<IosPasskeyRegistration, Error>?
+    /// Salts requested at create, so the delegate knows how many PRF
+    /// outputs a complete result carries.
+    var registrationSaltCount: Int = 0
     /// User handle the core minted for the in-flight registration; copied
     /// into the returned `IosPasskeyCredential.userId` (the platform
     /// never echoes `user.id` back).
@@ -739,12 +770,32 @@ private final class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate
                 aaguid = meta.aaguid
                 backupEligible = meta.backupEligible
             }
+            // Only usable as a complete set: Apple Passwords is known to
+            // drop `prf.second` on assertions, and a partial derive is no
+            // derive at all, so anything short of one output per salt
+            // falls back to the assertion path.
+            var seeds: [Data]? = nil
+            if registrationSaltCount > 0 {
+                var collected: [Data] = []
+                if let first = PasskeyPRFHelper.extractPRFOutput(from: credential) {
+                    collected.append(first)
+                    if let second = PasskeyPRFHelper.extractSecondPRFOutput(from: credential) {
+                        collected.append(second)
+                    }
+                }
+                if collected.count == registrationSaltCount {
+                    seeds = collected
+                }
+            }
             registrationContinuation?.resume(
-                returning: IosPasskeyCredential(
-                    credentialId: credential.credentialID,
-                    userId: registrationUserId,
-                    aaguid: aaguid,
-                    backupEligible: backupEligible
+                returning: IosPasskeyRegistration(
+                    credential: IosPasskeyCredential(
+                        credentialId: credential.credentialID,
+                        userId: registrationUserId,
+                        aaguid: aaguid,
+                        backupEligible: backupEligible
+                    ),
+                    seeds: seeds
                 ))
         }
     }

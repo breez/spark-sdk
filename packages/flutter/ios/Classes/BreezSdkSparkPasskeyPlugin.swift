@@ -71,7 +71,7 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
         )
         Task { @MainActor in
             do {
-                let registered = try await core.register(excludeCredentials: excludeCredentials)
+                let registered = try await core.register(excludeCredentials: excludeCredentials).credential
                 result([
                     "credentialId": registered.credentialId.base64EncodedString(),
                     "userId": registered.userId.base64EncodedString(),
