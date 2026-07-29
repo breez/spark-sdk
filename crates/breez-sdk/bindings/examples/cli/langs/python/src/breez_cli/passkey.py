@@ -48,7 +48,7 @@ class FilePrfProvider(PrfProvider):
     async def is_supported(self) -> bool:
         return True
 
-    async def create_passkey(self, exclude_credentials):
+    async def create_passkey(self, exclude_credentials, salts):
         raise NotImplementedError
 
     async def check_domain_association(self) -> DomainAssociation:
@@ -77,7 +77,7 @@ class YubiKeyPrfProvider(PrfProvider):
     async def is_supported(self) -> bool:
         return False
 
-    async def create_passkey(self, exclude_credentials):
+    async def create_passkey(self, exclude_credentials, salts):
         raise NotImplementedError
 
     async def check_domain_association(self) -> DomainAssociation:
@@ -104,7 +104,7 @@ class Fido2PrfProvider(PrfProvider):
     async def is_supported(self) -> bool:
         return False
 
-    async def create_passkey(self, exclude_credentials):
+    async def create_passkey(self, exclude_credentials, salts):
         raise NotImplementedError
 
     async def check_domain_association(self) -> DomainAssociation:
