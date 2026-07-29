@@ -162,7 +162,7 @@ public class PasskeyProvider(
         salts: List<String>,
     ): CreatePasskeyOutput {
         try {
-            val registration = core.register(excludeCredentials, salts)
+            val registration = core.registerWithPrf(excludeCredentials, salts)
             val c = registration.credential
             return CreatePasskeyOutput(
                 PasskeyCredential(c.credentialId, c.userId, c.aaguid, c.backupEligible),
