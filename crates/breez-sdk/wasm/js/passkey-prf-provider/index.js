@@ -259,12 +259,19 @@ export class PasskeyProvider {
      * `excludeCredentials` (already-registered IDs) to surface a repeat
      * registration as `PasskeyAlreadyExistsError`.
      *
+     * Asking the create ceremony to evaluate PRF for `salts` removes the
+     * assertion that would otherwise follow it, so registration costs one
+     * prompt instead of two. Browsers that acknowledge PRF without
+     * evaluating return `seeds: null` and the caller derives as before.
+     *
      * @param {Uint8Array[]} [excludeCredentials]
-     * @returns {Promise<PasskeyCredential>} `aaguid`/`backupEligible`
-     *   are null on browsers without `getAuthenticatorData()`.
+     * @param {string[]} [salts] Salts to evaluate during the ceremony.
+     * @returns {Promise<CreatePasskeyOutput>} `aaguid`/`backupEligible`
+     *   are null on browsers without `getAuthenticatorData()`. `seeds` is
+     *   null unless the browser returned one output per salt.
      */
-    async createPasskey(excludeCredentials = []) {
-        return await this._registerCredential(excludeCredentials);
+    async createPasskey(excludeCredentials = [], salts = []) {
+        return await this._registerCredential(excludeCredentials, salts);
     }
 
     /**
@@ -507,7 +514,7 @@ export class PasskeyProvider {
      * @returns {Promise<{ credentialId: Uint8Array, userId: Uint8Array, aaguid: Uint8Array | null, backupEligible: boolean | null }>}
      * @private
      */
-    async _registerCredential(excludeCredentials = []) {
+    async _registerCredential(excludeCredentials = [], salts = []) {
         // Fresh per-call user.id: reusing one across creates on the same
         // rpId silently overwrites the prior credential on some
         // authenticators. (WebAuthn requires 1 to 64 bytes.)
@@ -540,7 +547,18 @@ export class PasskeyProvider {
             authenticatorSelection,
             // Explicit so future security review can't read it as ambient.
             attestation: 'none',
-            extensions: { prf: {} },
+            extensions: {
+                prf: salts.length > 0
+                    ? {
+                        eval: {
+                            first: new TextEncoder().encode(salts[0]),
+                            ...(salts.length > 1
+                                ? { second: new TextEncoder().encode(salts[1]) }
+                                : {}),
+                        },
+                    }
+                    : {},
+            },
         };
 
         if (Array.isArray(this.hints) && this.hints.length > 0) {
@@ -599,12 +617,30 @@ export class PasskeyProvider {
             );
         }
 
+        // Only usable as a complete set: a browser that drops the second
+        // output leaves a partial derive, which is no derive at all, so
+        // fall back to the assertion path rather than half-deriving.
+        let seeds = null;
+        const results = extensionResults.prf.results;
+        if (salts.length > 0 && results && results.first) {
+            const collected = [new Uint8Array(results.first)];
+            if (results.second) {
+                collected.push(new Uint8Array(results.second));
+            }
+            if (collected.length === salts.length) {
+                seeds = collected;
+            }
+        }
+
         const meta = extractRegistrationMetadata(credential);
         return {
-            credentialId: new Uint8Array(credential.rawId),
-            userId: resolvedUserId,
-            aaguid: meta ? meta.aaguid : null,
-            backupEligible: meta ? meta.backupEligible : null,
+            credential: {
+                credentialId: new Uint8Array(credential.rawId),
+                userId: resolvedUserId,
+                aaguid: meta ? meta.aaguid : null,
+                backupEligible: meta ? meta.backupEligible : null,
+            },
+            seeds,
         };
     }
 

@@ -135,7 +135,7 @@ export declare class PasskeyProvider {
      *   `excludeCredentials` already exists on the device.
      * @throws If the user cancels or PRF is not supported.
      */
-    createPasskey(excludeCredentials?: Uint8Array[]): Promise<PasskeyCredential>;
+    createPasskey(excludeCredentials?: Uint8Array[], salts?: string[]): Promise<CreatePasskeyOutput>;
 
     /**
      * Check if a PRF-capable passkey is available on this device.

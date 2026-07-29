@@ -76,6 +76,20 @@ pub struct PasskeyCredential {
     pub backup_eligible: Option<bool>,
 }
 
+/// A created credential, plus the PRF outputs when the browser evaluated
+/// them during the create ceremony. `seeds` is null when it did not, so
+/// the caller derives through `deriveSeeds`.
+///
+/// Seeds returned here must equal what `deriveSeeds` returns for the same
+/// salts: the wallet is derived from them either way, so a mismatch means
+/// register and sign-in land on different wallets.
+#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::CreatePasskeyOutput)]
+pub struct CreatePasskeyOutput {
+    pub credential: PasskeyCredential,
+    #[tsify(type = "Uint8Array[] | null")]
+    pub seeds: Option<Vec<Vec<u8>>>,
+}
+
 /// Request shape for `PasskeyClient.register`.
 #[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::RegisterRequest)]
 pub struct RegisterRequest {
