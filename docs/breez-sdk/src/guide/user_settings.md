@@ -15,6 +15,8 @@ The following user settings are available:
 
 - **Stable balance active label**: Controls which stable token is active for automatic Bitcoin-to-token conversion. Set to a label from your [stable balance configuration](./config.md#stable-balance-configuration) to activate, or unset to deactivate. See the [Stable balance](./stable_balance.md) guide for details.
 
+- **Spark master identity public key**: A second public key that Spark accepts as a reader of the wallet while private mode is enabled. It enables watch-only views of a private wallet: designate a key you control, and a Spark client authenticating with the corresponding private key can query the wallet's Bitcoin balance and payment history. The master identity is read-only, so making payments still requires the wallet's own keys. The same public key can be designated across many wallets.
+
 <h2 id="getting-the-current-user-settings">
     <a class="header" href="#getting-the-current-user-settings">Getting the current user settings</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.get_user_settings">API docs</a>
@@ -26,5 +28,7 @@ The following user settings are available:
     <a class="header" href="#updating-the-user-settings">Updating the user settings</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.update_user_settings">API docs</a>
 </h2>
+
+Every field of {{#name UpdateUserSettingsRequest}} is optional, and a field left unset is not changed. Settings that hold a value use an enum to distinguish assigning one from clearing it: {{#enum SparkMasterIdentityPublicKey::Set}} and {{#enum StableBalanceActiveLabel::Set}} assign, {{#enum SparkMasterIdentityPublicKey::Unset}} and {{#enum StableBalanceActiveLabel::Unset}} clear.
 
 {{#tabs user_settings:update-user-settings}}

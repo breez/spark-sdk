@@ -1,5 +1,6 @@
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
 use breez_sdk_common::buy::cashapp::CashAppProvider;
+use spark_wallet::MasterIdentityPublicKeyUpdate;
 use std::str::FromStr;
 use tracing::{debug, info};
 
@@ -14,7 +15,9 @@ use crate::{
     error::SdkError,
     events::EventListener,
     issuer::TokenIssuer,
-    models::{GetInfoRequest, GetInfoResponse, StableBalanceActiveLabel},
+    models::{
+        GetInfoRequest, GetInfoResponse, SparkMasterIdentityPublicKey, StableBalanceActiveLabel,
+    },
     persist::ObjectCacheRepository,
     utils::token::get_tokens_metadata_cached_or_query,
 };
@@ -244,6 +247,9 @@ impl BreezSdk {
         Ok(UserSettings {
             spark_private_mode_enabled: spark_user_settings.private_enabled,
             stable_balance_active_label,
+            spark_master_identity_public_key: spark_user_settings
+                .master_identity_public_key
+                .map(|key| key.to_string()),
         })
     }
 
@@ -254,11 +260,22 @@ impl BreezSdk {
         &self,
         request: UpdateUserSettingsRequest,
     ) -> Result<(), SdkError> {
-        if let Some(spark_private_mode_enabled) = request.spark_private_mode_enabled {
-            self.spark_wallet
-                .update_wallet_settings(spark_private_mode_enabled)
-                .await?;
-        }
+        let master_identity_public_key = request
+            .spark_master_identity_public_key
+            .map(|update| match update {
+                SparkMasterIdentityPublicKey::Set { public_key } => {
+                    parse_compressed_public_key(&public_key).map(MasterIdentityPublicKeyUpdate::Set)
+                }
+                SparkMasterIdentityPublicKey::Unset => Ok(MasterIdentityPublicKeyUpdate::Clear),
+            })
+            .transpose()?;
+
+        self.spark_wallet
+            .update_wallet_settings(
+                request.spark_private_mode_enabled,
+                master_identity_public_key,
+            )
+            .await?;
 
         if let Some(active_label) = request.stable_balance_active_label {
             let sb = self
@@ -417,5 +434,47 @@ impl BreezSdk {
         };
 
         Ok(BuyBitcoinResponse { url })
+    }
+}
+
+/// Parses a 33-byte compressed public key from hex.
+///
+/// Rejects the uncompressed encoding, which `PublicKey::from_str` also accepts:
+/// Spark serializes identity keys compressed, so accepting it would make the
+/// key read back differ from the one that was set.
+fn parse_compressed_public_key(hex_encoded: &str) -> Result<PublicKey, SdkError> {
+    let invalid = || SdkError::InvalidInput("Invalid master identity public key".to_string());
+    let bytes: [u8; 33] = hex::decode(hex_encoded)
+        .map_err(|_| invalid())?
+        .try_into()
+        .map_err(|_| invalid())?;
+    PublicKey::from_slice(&bytes).map_err(|_| invalid())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const COMPRESSED: &str = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+    const UNCOMPRESSED: &str = "0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179\
+        8483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8";
+
+    #[test]
+    fn parse_compressed_public_key_round_trips() {
+        let key = parse_compressed_public_key(COMPRESSED).unwrap();
+        assert_eq!(key.to_string(), COMPRESSED);
+    }
+
+    #[test]
+    fn parse_compressed_public_key_rejects_invalid() {
+        for input in ["", "not-a-public-key", UNCOMPRESSED, &COMPRESSED[..64]] {
+            assert!(
+                matches!(
+                    parse_compressed_public_key(input),
+                    Err(SdkError::InvalidInput(_))
+                ),
+                "expected {input} to be rejected"
+            );
+        }
     }
 }

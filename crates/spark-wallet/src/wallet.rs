@@ -16,6 +16,11 @@ use futures::stream::{self, StreamExt};
 use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use platform_utils::tokio;
 use spark::bitcoin::sighash_from_multi_input_tx;
+#[cfg(feature = "test-utils")]
+use spark::operator::rpc::spark::{
+    QueryNodesRequest, TreeNodeStatus as ProtoTreeNodeStatus,
+    query_nodes_request::Source as QueryNodesSource,
+};
 use spark::{
     address::{
         SatsPayment, SparkAddress, SparkAddressPaymentType, SparkInvoiceFields, TokensPayment,
@@ -27,7 +32,10 @@ use spark::{
         OperatorPool,
         rpc::{
             ConnectionManager, DefaultConnectionManager, OperatorRpcError,
-            spark::{PreimageRequestRole, QuerySparkInvoicesRequest, UpdateWalletSettingRequest},
+            spark::{
+                PreimageRequestRole, QuerySparkInvoicesRequest, UpdateWalletSettingRequest,
+                update_wallet_setting_request::MasterIdentityPublicKey as ProtoMasterIdentityPublicKey,
+            },
         },
     },
     services::{
@@ -60,9 +68,9 @@ use tonic_types::StatusExt;
 use tracing::{Instrument, debug, error, info, trace, warn};
 
 use crate::{
-    FulfillSparkInvoiceResult, ListTokenTransactionsRequest, ListTransfersRequest, PreimageRequest,
-    QuerySparkInvoiceResult, TokenBalance, WalletEvent, WalletLeaves, WalletSettings,
-    WithdrawInnerParams,
+    FulfillSparkInvoiceResult, ListTokenTransactionsRequest, ListTransfersRequest,
+    MasterIdentityPublicKeyUpdate, PreimageRequest, QuerySparkInvoiceResult, TokenBalance,
+    WalletEvent, WalletLeaves, WalletSettings, WithdrawInnerParams,
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
     unilateral_exit::{CpfpChangeInput, ExitLeafSelection, PreparedUnilateralExit, RefundOutput},
@@ -2010,8 +2018,7 @@ impl SparkWallet {
     }
 
     pub async fn query_wallet_settings(&self) -> Result<WalletSettings, SparkWalletError> {
-        Ok(self
-            .operator_pool
+        self.operator_pool
             .get_coordinator()
             .client
             .query_wallet_setting()
@@ -2020,22 +2027,69 @@ impl SparkWallet {
             .ok_or(SparkWalletError::Generic(
                 "Response doesn't include wallet settings".to_string(),
             ))?
-            .into())
+            .try_into()
     }
 
+    /// Updates the wallet settings, leaving any setting passed as `None`
+    /// untouched. Passing `None` for every setting performs no request.
     pub async fn update_wallet_settings(
         &self,
-        private_enabled: bool,
+        private_enabled: Option<bool>,
+        master_identity_public_key: Option<MasterIdentityPublicKeyUpdate>,
     ) -> Result<(), SparkWalletError> {
+        // The operator rejects an update that carries no field.
+        if private_enabled.is_none() && master_identity_public_key.is_none() {
+            return Ok(());
+        }
+
         self.operator_pool
             .get_coordinator()
             .client
             .update_wallet_setting(UpdateWalletSettingRequest {
-                private_enabled: Some(private_enabled),
-                master_identity_public_key: None,
+                private_enabled,
+                master_identity_public_key: master_identity_public_key.map(|update| match update {
+                    MasterIdentityPublicKeyUpdate::Set(key) => {
+                        ProtoMasterIdentityPublicKey::SetMasterIdentityPublicKey(
+                            key.serialize().to_vec(),
+                        )
+                    }
+                    MasterIdentityPublicKeyUpdate::Clear => {
+                        ProtoMasterIdentityPublicKey::ClearMasterIdentityPublicKey(true)
+                    }
+                }),
             })
             .await?;
         Ok(())
+    }
+
+    /// Sums the available leaves of an arbitrary wallet, using this wallet's
+    /// own session.
+    ///
+    /// Under Spark private mode the operators serve identity-keyed reads only
+    /// to the target wallet's owner or its designated master identity, and
+    /// return nothing otherwise.
+    #[cfg(feature = "test-utils")]
+    pub async fn query_available_balance_of(
+        &self,
+        identity_public_key: &PublicKey,
+    ) -> Result<u64, SparkWalletError> {
+        let response = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .query_nodes(QueryNodesRequest {
+                source: Some(QueryNodesSource::OwnerIdentityPubkey(
+                    identity_public_key.serialize().to_vec(),
+                )),
+                statuses: vec![ProtoTreeNodeStatus::Available as i32],
+                network: self.config.network.to_proto_network() as i32,
+                include_parents: false,
+                offset: 0,
+                limit: 100,
+            })
+            .await?;
+
+        Ok(response.nodes.values().map(|node| node.value).sum())
     }
 
     /// Manually drives leaf optimization, blocking until the requested work

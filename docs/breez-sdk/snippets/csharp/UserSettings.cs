@@ -16,10 +16,13 @@ namespace BreezSdkSnippets
         async Task UpdateUserSettings(BreezSdk sdk)
         {
             // ANCHOR: update-user-settings
-            var sparkPrivateModeEnabled = true;
             await sdk.UpdateUserSettings(
                 request: new UpdateUserSettingsRequest(
-                    sparkPrivateModeEnabled: sparkPrivateModeEnabled
+                    sparkPrivateModeEnabled: true,
+                    stableBalanceActiveLabel: null,
+                    sparkMasterIdentityPublicKey: new SparkMasterIdentityPublicKey.Set(
+                        publicKey: "<hex encoded public key>"
+                    )
                 )
             );
             // ANCHOR_END: update-user-settings

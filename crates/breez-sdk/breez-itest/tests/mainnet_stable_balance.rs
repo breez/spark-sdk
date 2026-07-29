@@ -773,6 +773,7 @@ async fn test_stable_balance_zz_deactivation() -> Result<()> {
         .update_user_settings(UpdateUserSettingsRequest {
             spark_private_mode_enabled: None,
             stable_balance_active_label: Some(StableBalanceActiveLabel::Unset),
+            spark_master_identity_public_key: None,
         })
         .await?;
 

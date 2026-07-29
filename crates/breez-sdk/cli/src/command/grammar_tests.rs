@@ -538,11 +538,39 @@ fn user_settings() {
     ));
     let Command::SetUserSettings {
         spark_private_mode_enabled,
+        master_key,
+        clear_master_key,
     } = parse_ok("set-user-settings -p true")
     else {
         panic!("expected SetUserSettings");
     };
     assert_eq!(spark_private_mode_enabled, Some(true));
+    assert_eq!(master_key, None);
+    assert!(!clear_master_key);
+
+    let Command::SetUserSettings {
+        master_key,
+        clear_master_key,
+        ..
+    } = parse_ok("set-user-settings -m 02a1b2")
+    else {
+        panic!("expected SetUserSettings");
+    };
+    assert_eq!(master_key.as_deref(), Some("02a1b2"));
+    assert!(!clear_master_key);
+
+    let Command::SetUserSettings {
+        master_key,
+        clear_master_key,
+        ..
+    } = parse_ok("set-user-settings --clear-master-key")
+    else {
+        panic!("expected SetUserSettings");
+    };
+    assert_eq!(master_key, None);
+    assert!(clear_master_key);
+
+    parse_err("set-user-settings -m 02a1b2 --clear-master-key");
 }
 
 #[test]

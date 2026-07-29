@@ -388,14 +388,40 @@ impl TryFrom<InvoiceTransferType> for SparkInvoiceTransferType {
 #[derive(Clone, Debug, Serialize)]
 pub struct WalletSettings {
     pub private_enabled: bool,
+
+    /// The identity public key that may read this wallet in addition to its
+    /// owner, or `None` when no such key is designated.
+    pub master_identity_public_key: Option<PublicKey>,
 }
 
-impl From<WalletSetting> for WalletSettings {
-    fn from(value: WalletSetting) -> Self {
-        WalletSettings {
+impl TryFrom<WalletSetting> for WalletSettings {
+    type Error = SparkWalletError;
+    fn try_from(value: WalletSetting) -> Result<Self, Self::Error> {
+        Ok(WalletSettings {
             private_enabled: value.private_enabled,
-        }
+            master_identity_public_key: value
+                .master_identity_public_key
+                .map(|key| {
+                    PublicKey::from_slice(&key).map_err(|_| {
+                        SparkWalletError::ValidationError(
+                            "Invalid master identity public key".to_string(),
+                        )
+                    })
+                })
+                .transpose()?,
+        })
     }
+}
+
+/// Specifies how to update the identity public key that may read the wallet in
+/// addition to its owner.
+#[derive(Clone, Debug)]
+pub enum MasterIdentityPublicKeyUpdate {
+    /// Designate `key` as the wallet's master identity public key, replacing
+    /// any previously designated key.
+    Set(PublicKey),
+    /// Remove the designated master identity public key, if any.
+    Clear,
 }
 
 pub(crate) struct WithdrawInnerParams<'a> {

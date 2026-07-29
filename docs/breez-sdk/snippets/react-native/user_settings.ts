@@ -1,4 +1,8 @@
-import { type BreezSdk, StableBalanceActiveLabel } from '@breeztech/breez-sdk-spark-react-native'
+import {
+  type BreezSdk,
+  SparkMasterIdentityPublicKey,
+  StableBalanceActiveLabel
+} from '@breeztech/breez-sdk-spark-react-native'
 
 const exampleGetUserSettings = async (sdk: BreezSdk) => {
   // ANCHOR: get-user-settings
@@ -9,10 +13,12 @@ const exampleGetUserSettings = async (sdk: BreezSdk) => {
 
 const exampleUpdateUserSettings = async (sdk: BreezSdk) => {
   // ANCHOR: update-user-settings
-  const sparkPrivateModeEnabled = true
   await sdk.updateUserSettings({
-    sparkPrivateModeEnabled,
-    stableBalanceActiveLabel: undefined
+    sparkPrivateModeEnabled: true,
+    stableBalanceActiveLabel: undefined,
+    sparkMasterIdentityPublicKey: new SparkMasterIdentityPublicKey.Set({
+      publicKey: '<hex encoded public key>'
+    })
   })
   // ANCHOR_END: update-user-settings
 }
@@ -21,7 +27,8 @@ const exampleActivateStableBalance = async (sdk: BreezSdk) => {
   // ANCHOR: activate-stable-balance
   await sdk.updateUserSettings({
     sparkPrivateModeEnabled: undefined,
-    stableBalanceActiveLabel: new StableBalanceActiveLabel.Set({ label: 'USDB' })
+    stableBalanceActiveLabel: new StableBalanceActiveLabel.Set({ label: 'USDB' }),
+    sparkMasterIdentityPublicKey: undefined
   })
   // ANCHOR_END: activate-stable-balance
 }
@@ -30,7 +37,8 @@ const exampleDeactivateStableBalance = async (sdk: BreezSdk) => {
   // ANCHOR: deactivate-stable-balance
   await sdk.updateUserSettings({
     sparkPrivateModeEnabled: undefined,
-    stableBalanceActiveLabel: new StableBalanceActiveLabel.Unset()
+    stableBalanceActiveLabel: new StableBalanceActiveLabel.Unset(),
+    sparkMasterIdentityPublicKey: undefined
   })
   // ANCHOR_END: deactivate-stable-balance
 }

@@ -30,6 +30,7 @@ pub async fn handle_command(
             sdk.update_user_settings(UpdateUserSettingsRequest {
                 spark_private_mode_enabled: None,
                 stable_balance_active_label: Some(StableBalanceActiveLabel::Set { label }),
+                spark_master_identity_public_key: None,
             })
             .await?;
             let settings = sdk.get_user_settings().await?;
@@ -40,6 +41,7 @@ pub async fn handle_command(
             sdk.update_user_settings(UpdateUserSettingsRequest {
                 spark_private_mode_enabled: None,
                 stable_balance_active_label: Some(StableBalanceActiveLabel::Unset),
+                spark_master_identity_public_key: None,
             })
             .await?;
             let settings = sdk.get_user_settings().await?;

@@ -46,7 +46,7 @@ impl FromStr for Network {
 }
 
 impl Network {
-    pub(crate) fn to_proto_network(self) -> operator_rpc::spark::Network {
+    pub fn to_proto_network(self) -> operator_rpc::spark::Network {
         match self {
             Network::Mainnet => operator_rpc::spark::Network::Mainnet,
             Network::Regtest => operator_rpc::spark::Network::Regtest,

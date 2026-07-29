@@ -9,10 +9,11 @@ func getUserSettings(sdk: BreezSdk) async throws {
 
 func updateUserSettings(sdk: BreezSdk) async throws {
     // ANCHOR: update-user-settings
-    let sparkPrivateModeEnabled = true
     try await sdk.updateUserSettings(
         request: UpdateUserSettingsRequest(
-            sparkPrivateModeEnabled: sparkPrivateModeEnabled
+            sparkPrivateModeEnabled: true,
+            stableBalanceActiveLabel: nil,
+            sparkMasterIdentityPublicKey: .set(publicKey: "<hex encoded public key>")
         ))
     // ANCHOR_END: update-user-settings
 }

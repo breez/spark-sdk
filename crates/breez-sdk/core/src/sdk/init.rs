@@ -126,6 +126,7 @@ impl BreezSdk {
         self.update_user_settings(crate::UpdateUserSettingsRequest {
             spark_private_mode_enabled: Some(true),
             stable_balance_active_label: None,
+            spark_master_identity_public_key: None,
         })
         .await?;
         ObjectCacheRepository::new(self.storage.clone())

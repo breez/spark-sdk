@@ -266,6 +266,7 @@ pub(crate) async fn server_mode_provisioning(sdk: &BreezSdk) -> Result<()> {
     sdk.update_user_settings(UpdateUserSettingsRequest {
         spark_private_mode_enabled: Some(true),
         stable_balance_active_label: None,
+        spark_master_identity_public_key: None,
     })
     .await?;
 

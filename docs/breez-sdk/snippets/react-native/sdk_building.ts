@@ -170,7 +170,8 @@ const exampleServerModeProvisioning = async (sdk: BreezSdk) => {
   // server-mode SDKs do not, so opt in once here via updateUserSettings.
   await sdk.updateUserSettings({
     sparkPrivateModeEnabled: true,
-    stableBalanceActiveLabel: undefined
+    stableBalanceActiveLabel: undefined,
+    sparkMasterIdentityPublicKey: undefined
   })
 
   await sdk.disconnect()

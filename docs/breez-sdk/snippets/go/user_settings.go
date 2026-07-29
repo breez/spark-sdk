@@ -28,8 +28,15 @@ func GetUserSettings(sdk *breez_sdk_spark.BreezSdk) error {
 func UpdateUserSettings(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: update-user-settings
 	sparkPrivateModeEnabled := true
+	masterIdentityPublicKey := breez_sdk_spark.SparkMasterIdentityPublicKey(
+		breez_sdk_spark.SparkMasterIdentityPublicKeySet{
+			PublicKey: "<hex encoded public key>",
+		},
+	)
 	err := sdk.UpdateUserSettings(breez_sdk_spark.UpdateUserSettingsRequest{
-		SparkPrivateModeEnabled: &sparkPrivateModeEnabled,
+		SparkPrivateModeEnabled:      &sparkPrivateModeEnabled,
+		StableBalanceActiveLabel:     nil,
+		SparkMasterIdentityPublicKey: &masterIdentityPublicKey,
 	})
 
 	if err != nil {

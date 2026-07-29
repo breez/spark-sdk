@@ -2120,6 +2120,23 @@ pub struct UserSettings {
 
     /// The label of the currently active stable balance token, or `None` if deactivated.
     pub stable_balance_active_label: Option<String>,
+
+    /// The hex encoded public key designated as this wallet's master identity
+    /// key, or `None` if none is designated.
+    pub spark_master_identity_public_key: Option<String>,
+}
+
+/// Specifies how to update the wallet's Spark master identity public key.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum SparkMasterIdentityPublicKey {
+    /// Designate the holder of this public key as the wallet's master
+    /// identity, replacing any previously designated key. Must be hex encoded
+    /// in the 33-byte compressed form.
+    Set { public_key: String },
+    /// Remove the designated master identity, leaving the owner as the only
+    /// party able to read the wallet under private mode.
+    Unset,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -2129,6 +2146,14 @@ pub struct UpdateUserSettingsRequest {
     /// Update the active stable balance token. `None` means no change.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub stable_balance_active_label: Option<StableBalanceActiveLabel>,
+
+    /// Designate or remove the wallet's master identity, a second public key
+    /// the Spark operators accept as a reader of this wallet's balance and
+    /// history while `spark_private_mode_enabled` is set. The master identity
+    /// can only read: payments still require the owner's keys. `None` means no
+    /// change.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub spark_master_identity_public_key: Option<SparkMasterIdentityPublicKey>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

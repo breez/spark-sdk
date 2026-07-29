@@ -17,8 +17,13 @@ class UserSettings {
     suspend fun updateUserSettings(sdk: BreezSdk) {
         // ANCHOR: update-user-settings
         try {
-            val sparkPrivateModeEnabled = true
-            sdk.updateUserSettings(UpdateUserSettingsRequest(sparkPrivateModeEnabled))
+            sdk.updateUserSettings(UpdateUserSettingsRequest(
+                sparkPrivateModeEnabled = true,
+                stableBalanceActiveLabel = null,
+                sparkMasterIdentityPublicKey = SparkMasterIdentityPublicKey.Set(
+                    publicKey = "<hex encoded public key>"
+                )
+            ))
         } catch (e: Exception) {
             // handle error
         }
