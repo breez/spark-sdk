@@ -1,5 +1,5 @@
 import type {
-  PasskeyCredential
+  CreatePasskeyOutput
 } from '@breeztech/breez-sdk-spark'
 import { connect, defaultConfig } from '@breeztech/breez-sdk-spark'
 import {

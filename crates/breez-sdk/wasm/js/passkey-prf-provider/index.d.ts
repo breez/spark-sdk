@@ -4,11 +4,18 @@ import type {
     PasskeyProviderOptions,
     PrfProvider,
     PasskeyCredential,
+    CreatePasskeyOutput,
     DeriveSeedsResult,
     DeriveSeedOptions
 } from '../breez_sdk_spark_wasm.js';
 
-export type { PasskeyCredential, DeriveSeedsResult, DeriveSeedOptions, PasskeyProviderOptions };
+export type {
+    PasskeyCredential,
+    CreatePasskeyOutput,
+    DeriveSeedsResult,
+    DeriveSeedOptions,
+    PasskeyProviderOptions
+};
 
 /**
  * Outcome of a domain-association check: whether `rpId` is a valid

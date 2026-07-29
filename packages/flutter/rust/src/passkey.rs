@@ -4,7 +4,7 @@ use std::sync::Arc;
 use breez_sdk_spark::passkey::{
     ConnectWithPasskeyRequest, ConnectWithPasskeyResponse, CreatePasskeyOutput, DeriveSeedsOutput,
     DeriveSeedsRequest,
-    PasskeyAvailability, PasskeyConfig, PasskeyCredential, PasskeyError, PrfProvider,
+    PasskeyAvailability, PasskeyConfig, PasskeyError, PrfProvider,
     PrfProviderError, RegisterRequest, RegisterResponse, SignInRequest, SignInResponse,
 };
 use flutter_rust_bridge::{DartFnFuture, frb};
@@ -216,8 +216,8 @@ mod tests {
         CallbackPrfProvider {
             derive_seeds_fn: Arc::new(derive_bulk),
             is_supported_fn: Arc::new(is_available),
-            create_passkey_fn: Arc::new(|_req| {
-                panicking::<anyhow::Result<PasskeyCredential>>("create_passkey not used")
+            create_passkey_fn: Arc::new(|_req, _salts| {
+                panicking::<anyhow::Result<CreatePasskeyOutput>>("create_passkey not used")
             }),
         }
     }

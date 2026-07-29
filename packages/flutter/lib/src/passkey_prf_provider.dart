@@ -82,16 +82,6 @@ abstract class PrfProvider {
   );
 }
 
-/// A created credential, plus the PRF outputs when the authenticator
-/// evaluated them during the create ceremony.
-class CreatePasskeyOutput {
-  const CreatePasskeyOutput({required this.credential, this.seeds});
-
-  final PasskeyCredential credential;
-
-  /// One output per salt, or null when the ceremony evaluated none.
-  final List<Uint8List>? seeds;
-}
 
 /// Built-in Flutter passkey PRF provider using platform-native APIs
 /// (iOS AuthenticationServices, Android Credential Manager). The

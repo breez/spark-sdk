@@ -1,5 +1,5 @@
 import type {
-  PasskeyCredential
+  CreatePasskeyOutput
 } from '@breeztech/breez-sdk-spark-react-native'
 import {
   PasskeyAvailability_Tags,

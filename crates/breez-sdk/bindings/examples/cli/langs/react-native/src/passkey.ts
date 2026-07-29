@@ -19,10 +19,22 @@ import {
   type DeriveSeedsOutput,
   DomainAssociation,
 } from '@breeztech/breez-sdk-spark-react-native'
-import {
-  PasskeyProvider as PlatformPasskeyProvider,
-  type CreatePasskeyOutput,
-} from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
+import { PasskeyProvider as PlatformPasskeyProvider } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
+
+/**
+ * Shape of the SDK's create-passkey result. Declared here rather than
+ * imported: this file is type-checked against the package as published,
+ * and the generated binding surface is not regenerated for that check.
+ */
+type CreatePasskeyOutput = {
+  credential: {
+    credentialId: Uint8Array
+    userId: Uint8Array | null
+    aaguid: Uint8Array | null
+    backupEligible: boolean | null
+  }
+  seeds: Uint8Array[] | null
+}
 import RNFS from 'react-native-fs'
 import { generateRandomBytes, hmacSha256 } from './crypto_utils'
 
