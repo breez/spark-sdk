@@ -21,6 +21,7 @@ val COMMAND_NAMES = listOf(
     "list-payments",
     "receive",
     "pay",
+    "pay-batch",
     "lnurl-pay",
     "lnurl-withdraw",
     "lnurl-auth",
@@ -57,6 +58,7 @@ fun buildCommandRegistry(): Map<String, CliCommand> {
         "list-payments" to CliCommand("list-payments", "List payments", ::handleListPayments),
         "receive" to CliCommand("receive", "Receive a payment", ::handleReceive),
         "pay" to CliCommand("pay", "Pay the given payment request", ::handlePay),
+        "pay-batch" to CliCommand("pay-batch", "Pay several recipients with one token transaction", ::handlePayBatch),
         "lnurl-pay" to CliCommand("lnurl-pay", "Pay using LNURL", ::handleLnurlPay),
         "lnurl-withdraw" to CliCommand("lnurl-withdraw", "Withdraw using LNURL", ::handleLnurlWithdraw),
         "lnurl-auth" to CliCommand("lnurl-auth", "Authenticate using LNURL", ::handleLnurlAuth),
@@ -521,6 +523,63 @@ suspend fun handlePay(sdk: BreezSdk, reader: LineReader, args: List<String>) {
         )
     )
     printValue(result)
+}
+
+// --- pay-batch ---
+
+suspend fun handlePayBatch(sdk: BreezSdk, reader: LineReader, args: List<String>) {
+    val fp = FlagParser(args)
+    val recipientStrs = fp.getAll("r", "recipient")
+
+    if (recipientStrs.isEmpty()) {
+        println("Usage: pay-batch -r <recipient> [-r <recipient> ...]")
+        println("Each recipient: payment_request[:amount[:token_identifier]]")
+        return
+    }
+
+    val recipients = recipientStrs.map { s ->
+        val parts = s.split(":", limit = 4)
+        val paymentRequest = parts[0]
+        if (paymentRequest.isEmpty()) {
+            println("Error: Missing payment request in '$s'")
+            return
+        }
+        val amount = if (parts.size > 1 && parts[1].isNotEmpty()) {
+            try {
+                BigInteger.parseString(parts[1])
+            } catch (e: Exception) {
+                println("Error: Invalid amount '${parts[1]}': must be a valid number")
+                return
+            }
+        } else null
+        val tokenIdentifier = if (parts.size > 2 && parts[2].isNotEmpty()) parts[2] else null
+        if (parts.size > 3) {
+            println("Error: Invalid recipient '$s'. Expected 'payment_request[:amount[:token_identifier]]'")
+            return
+        }
+        BatchRecipient(
+            paymentRequest = paymentRequest,
+            amount = amount,
+            tokenIdentifier = tokenIdentifier,
+        )
+    }
+
+    val prepareResponse = sdk.prepareSendBatch(
+        PrepareSendBatchRequest(recipients = recipients)
+    )
+
+    for (total in prepareResponse.totals) {
+        val asset = total.tokenIdentifier ?: "sats"
+        println("Sending ${total.amount} base units of $asset")
+    }
+    val line = readlineWithDefault(reader, "Do you want to continue (y/n): ", "y").lowercase()
+    if (line != "y") {
+        println("Payment cancelled")
+        return
+    }
+
+    val response = sdk.sendBatch(SendBatchRequest(prepareResponse = prepareResponse))
+    printValue(response.payments)
 }
 
 // --- lnurl-pay ---

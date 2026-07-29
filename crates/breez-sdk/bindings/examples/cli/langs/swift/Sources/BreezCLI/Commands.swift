@@ -7,7 +7,7 @@ import CryptoKit
 
 struct FlagParser {
     var positional: [String] = []
-    private var flags: [String: String] = [:]
+    private var flags: [String: [String]] = [:]
 
     init(_ args: [String]) {
         var i = 0
@@ -16,19 +16,19 @@ struct FlagParser {
             if arg.hasPrefix("--") {
                 let key = String(arg.dropFirst(2))
                 if i + 1 < args.count && !args[i + 1].hasPrefix("-") {
-                    flags[key] = args[i + 1]
+                    flags[key, default: []].append(args[i + 1])
                     i += 2
                 } else {
-                    flags[key] = ""
+                    flags[key, default: []].append("")
                     i += 1
                 }
             } else if arg.hasPrefix("-") && arg.count == 2 {
                 let key = String(arg.dropFirst(1))
                 if i + 1 < args.count && !args[i + 1].hasPrefix("-") {
-                    flags[key] = args[i + 1]
+                    flags[key, default: []].append(args[i + 1])
                     i += 2
                 } else {
-                    flags[key] = ""
+                    flags[key, default: []].append("")
                     i += 1
                 }
             } else {
@@ -40,9 +40,19 @@ struct FlagParser {
 
     func get(_ keys: String...) -> String? {
         for key in keys {
-            if let val = flags[key], !val.isEmpty { return val }
+            if let vals = flags[key], let last = vals.last, !last.isEmpty { return last }
         }
         return nil
+    }
+
+    func getAll(_ keys: String...) -> [String] {
+        for key in keys {
+            if let vals = flags[key] {
+                let nonEmpty = vals.filter { !$0.isEmpty }
+                if !nonEmpty.isEmpty { return nonEmpty }
+            }
+        }
+        return []
     }
 
     func has(_ keys: String...) -> Bool {
@@ -68,6 +78,7 @@ let commandNames: [String] = [
     "list-payments",
     "receive",
     "pay",
+    "pay-batch",
     "lnurl-pay",
     "lnurl-withdraw",
     "lnurl-auth",
@@ -103,6 +114,7 @@ func buildCommandRegistry() -> [String: CommandEntry] {
         "list-payments":                     CommandEntry(name: "list-payments", description: "List payments", run: handleListPayments),
         "receive":                           CommandEntry(name: "receive", description: "Receive a payment", run: handleReceive),
         "pay":                               CommandEntry(name: "pay", description: "Pay the given payment request", run: handlePay),
+        "pay-batch":                         CommandEntry(name: "pay-batch", description: "Pay several recipients with one token transaction", run: handlePayBatch),
         "lnurl-pay":                         CommandEntry(name: "lnurl-pay", description: "Pay using LNURL", run: handleLnurlPay),
         "lnurl-withdraw":                    CommandEntry(name: "lnurl-withdraw", description: "Withdraw using LNURL", run: handleLnurlWithdraw),
         "lnurl-auth":                        CommandEntry(name: "lnurl-auth", description: "Authenticate using LNURL", run: handleLnurlAuth),
@@ -517,6 +529,71 @@ func handlePay(_ sdk: BreezSdk, _ args: [String]) async throws {
         idempotencyKey: idempotencyKey
     ))
     printValue(result)
+}
+
+// --- pay-batch ---
+
+func handlePayBatch(_ sdk: BreezSdk, _ args: [String]) async throws {
+    let fp = FlagParser(args)
+    let recipientStrs = fp.getAll("r", "recipient")
+    if recipientStrs.isEmpty {
+        print("Usage: pay-batch -r <recipient> [-r <recipient> ...]")
+        print("Recipient format: payment_request[:amount[:token_identifier]]")
+        return
+    }
+
+    var recipients: [BatchRecipient] = []
+    for raw in recipientStrs {
+        let parts = raw.split(separator: ":", omittingEmptySubsequences: false).map { String($0) }
+        let paymentRequest = parts[0]
+        if paymentRequest.isEmpty {
+            print("Error: Missing payment request in '\(raw)'")
+            return
+        }
+        let amount: BInt?
+        if parts.count > 1 && !parts[1].isEmpty {
+            guard let parsed = BInt(parts[1]) else {
+                print("Error: Invalid amount '\(parts[1])': must be a valid number")
+                return
+            }
+            amount = parsed
+        } else {
+            amount = nil
+        }
+        let tokenIdentifier: String?
+        if parts.count > 2 && !parts[2].isEmpty {
+            tokenIdentifier = parts[2]
+        } else {
+            tokenIdentifier = nil
+        }
+        if parts.count > 3 {
+            print("Error: Invalid recipient '\(raw)'. Expected 'payment_request[:amount[:token_identifier]]'")
+            return
+        }
+        recipients.append(BatchRecipient(
+            paymentRequest: paymentRequest,
+            amount: amount,
+            tokenIdentifier: tokenIdentifier
+        ))
+    }
+
+    let prepareResponse = try await sdk.prepareSendBatch(
+        request: PrepareSendBatchRequest(recipients: recipients))
+
+    for total in prepareResponse.totals {
+        let asset = total.tokenIdentifier ?? "sats"
+        print("Sending \(total.amount) base units of \(asset)")
+    }
+
+    let line = readlineWithDefault("Do you want to continue (y/n): ", defaultValue: "y")
+    if line.trimmingCharacters(in: .whitespaces).lowercased() != "y" {
+        print("Payment cancelled")
+        return
+    }
+
+    let response = try await sdk.sendBatch(
+        request: SendBatchRequest(prepareResponse: prepareResponse))
+    printValue(response.payments)
 }
 
 // --- lnurl-pay ---

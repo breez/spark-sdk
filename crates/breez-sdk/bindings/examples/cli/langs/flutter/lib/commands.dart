@@ -16,6 +16,7 @@ const commandNames = [
   'list-payments',
   'receive',
   'pay',
+  'pay-batch',
   'lnurl-pay',
   'lnurl-withdraw',
   'lnurl-auth',
@@ -58,6 +59,7 @@ Map<String, CommandEntry> buildCommandRegistry() {
     'list-payments': CommandEntry('List payments', _handleListPayments),
     'receive': CommandEntry('Receive a payment', _handleReceive),
     'pay': CommandEntry('Pay the given payment request', _handlePay),
+    'pay-batch': CommandEntry('Pay several recipients with one token transaction', _handlePayBatch),
     'lnurl-pay': CommandEntry('Pay using LNURL', _handleLnurlPay),
     'lnurl-withdraw': CommandEntry('Withdraw using LNURL', _handleLnurlWithdraw),
     'lnurl-auth': CommandEntry('Authenticate using LNURL', _handleLnurlAuth),
@@ -492,6 +494,76 @@ Future<void> _handlePay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args
     ),
   );
   printValue(sendResponse);
+}
+
+// --- pay-batch ---
+
+BatchRecipient? _parseBatchRecipient(String s) {
+  final parts = s.split(':');
+  final paymentRequest = parts[0];
+  if (paymentRequest.isEmpty) {
+    print("Missing payment request in '$s'");
+    return null;
+  }
+
+  BigInt? amount;
+  if (parts.length > 1 && parts[1].isNotEmpty) {
+    final parsed = BigInt.tryParse(parts[1]);
+    if (parsed == null) {
+      print("Invalid amount '${parts[1]}': must be a valid number");
+      return null;
+    }
+    amount = parsed;
+  }
+
+  String? tokenIdentifier;
+  if (parts.length > 2 && parts[2].isNotEmpty) {
+    tokenIdentifier = parts[2];
+  }
+
+  if (parts.length > 3) {
+    print("Invalid recipient '$s'. Expected 'payment_request[:amount[:token_identifier]]'");
+    return null;
+  }
+
+  return BatchRecipient(paymentRequest: paymentRequest, amount: amount, tokenIdentifier: tokenIdentifier);
+}
+
+Future<void> _handlePayBatch(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
+  final parser = _parser('pay-batch')
+    ..addMultiOption('recipient', abbr: 'r', help: 'payment_request[:amount[:token_identifier]]');
+  final results = _parseArgs(parser, args, 'pay-batch -r <recipient> [-r <recipient> ...]');
+  if (results == null) return;
+
+  final recipientStrs = results.multiOption('recipient');
+  if (recipientStrs.isEmpty) {
+    print('At least one --recipient (-r) is required');
+    return;
+  }
+
+  final recipients = <BatchRecipient>[];
+  for (final s in recipientStrs) {
+    final r = _parseBatchRecipient(s);
+    if (r == null) return;
+    recipients.add(r);
+  }
+
+  final prepareResponse = await sdk.prepareSendBatch(
+    request: PrepareSendBatchRequest(recipients: recipients),
+  );
+
+  for (final total in prepareResponse.totals) {
+    final asset = total.tokenIdentifier ?? 'sats';
+    print('Sending ${total.amount} base units of $asset');
+  }
+  final answer = prompt('Do you want to continue (y/n): ', defaultValue: 'y');
+  if (answer.toLowerCase() != 'y') {
+    print('Payment cancelled');
+    return;
+  }
+
+  final response = await sdk.sendBatch(request: SendBatchRequest(prepareResponse: prepareResponse));
+  printValue(response.payments);
 }
 
 // --- lnurl-pay ---

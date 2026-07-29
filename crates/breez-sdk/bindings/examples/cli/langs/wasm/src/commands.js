@@ -63,6 +63,7 @@ const COMMAND_NAMES = [
   'stable-balance get',
   'stable-balance set',
   'stable-balance unset',
+  'pay-batch',
   'advanced unilateral-exit'
 ]
 
@@ -391,6 +392,52 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
       })
 
       printValue(sendPaymentResponse)
+    })
+
+  // --- pay-batch ---
+  program
+    .command('pay-batch')
+    .description('Pay several recipients with one token transaction')
+    .requiredOption('-r, --recipient <values...>', 'Recipients as payment_request[:amount[:token_identifier]]')
+    .action(async (options) => {
+      const sdk = getSdk()
+
+      const recipients = options.recipient.map((r) => {
+        const parts = r.split(':')
+        const paymentRequest = parts[0]
+        if (!paymentRequest) {
+          throw new Error(`Missing payment request in '${r}'`)
+        }
+        const amountStr = parts[1]
+        let amount
+        if (amountStr != null && amountStr !== '') {
+          amount = BigInt(amountStr)
+        }
+        const tokenId = parts[2]
+        let tokenIdentifier
+        if (tokenId != null && tokenId !== '') {
+          tokenIdentifier = tokenId
+        }
+        if (parts.length > 3) {
+          throw new Error(`Invalid recipient '${r}'. Expected 'payment_request[:amount[:token_identifier]]'`)
+        }
+        return { paymentRequest, amount, tokenIdentifier }
+      })
+
+      const prepareResponse = await sdk.prepareSendBatch({ recipients })
+
+      for (const total of prepareResponse.totals) {
+        const asset = total.tokenIdentifier || 'sats'
+        console.log(`Sending ${total.amount} base units of ${asset}`)
+      }
+      const answer = await questionWithDefault(rl, 'Do you want to continue (y/n): ', 'y')
+      if (answer.toLowerCase() !== 'y') {
+        throw new Error('Payment cancelled')
+      }
+
+      const response = await sdk.sendBatch({ prepareResponse })
+
+      printValue(response.payments)
     })
 
   // --- lnurl-pay ---

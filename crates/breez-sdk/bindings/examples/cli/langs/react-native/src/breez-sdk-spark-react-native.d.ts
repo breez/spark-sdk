@@ -99,6 +99,7 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export type DomainAssociation = any;
 
   // --- types only ---
+  export type BatchRecipient = any;
   export type BreezSdkInterface = any;
   export type TokenIssuerInterface = any;
   export type SdkEvent = any;
