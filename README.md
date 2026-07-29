@@ -55,7 +55,7 @@ The [Breez SDK - Spark cli](https://github.com/breez/spark-sdk/tree/main/crates/
 Looking for a quick way to try the Breez SDK in the browser or as PWA? Check out our demo app *Glow*:
 
 - **Live demo:** [https://glow-app.co](https://glow-app.co)
-- **Repo:** [breez/breez-sdk-spark-example](https://github.com/breez/breez-sdk-spark-example)  
+- **Repo:** [breez/glow-web](https://github.com/breez/glow-web)  
 
 > **Note:** The demo is for demonstration purposes only and not intended for production use.
 
