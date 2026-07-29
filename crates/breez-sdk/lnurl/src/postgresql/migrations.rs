@@ -20,11 +20,16 @@ pub async fn run(pool: &Pool) -> Result<(), PostgresError> {
 
 /// Resumes a database migrated by the previous runner, which tracked applied
 /// migrations in `_sqlx_migrations` keyed by file version instead of by the
-/// ordinal used here. It applied them in order and stopped at the first
-/// failure, so its successful rows are a prefix of [`migrations`]: recording
-/// that many ordinals picks up where it left off rather than re-running from
-/// migration 1. No-op unless `_sqlx_migrations` is present, which costs a fresh
-/// database a single probe.
+/// ordinal used here. It applied them in ascending version order and stopped at
+/// the first failure, so its successful rows are a prefix of [`migrations`]:
+/// recording that many ordinals picks up where it left off rather than
+/// re-running from migration 1.
+///
+/// Returns as soon as [`MIGRATIONS_TABLE`] exists, so this runs at most once per
+/// database and can be deleted outright once every deployment is past the
+/// cutover. `_sqlx_migrations` is deliberately left in place: a rollback to the
+/// previous binary has to find its own tracker, or it re-runs migration 1
+/// against a populated schema and fails to start.
 async fn adopt_applied_prefix(pool: &Pool) -> Result<(), PostgresError> {
     let mut client = pool.get().await.map_err(map_pool_error)?;
     let tx = client.transaction().await.map_err(map_db_error)?;
@@ -33,33 +38,46 @@ async fn adopt_applied_prefix(pool: &Pool) -> Result<(), PostgresError> {
         .await
         .map_err(|e| PostgresError::Initialization(format!("Failed to acquire adopt lock: {e}")))?;
 
-    let previous_tracker_exists: bool = tx
-        .query_one(
-            "SELECT EXISTS (
-                 SELECT 1 FROM information_schema.tables
-                 WHERE table_schema = current_schema() AND table_name = '_sqlx_migrations'
-             )",
-            &[],
-        )
+    let table_exists_sql = "SELECT EXISTS (
+             SELECT 1 FROM information_schema.tables
+             WHERE table_schema = current_schema() AND table_name = $1
+         )";
+
+    let already_adopted: bool = tx
+        .query_one(table_exists_sql, &[&MIGRATIONS_TABLE])
         .await
         .map_err(map_db_error)?
         .get(0);
+    if already_adopted {
+        return Ok(());
+    }
 
+    let previous_tracker_exists: bool = tx
+        .query_one(table_exists_sql, &[&"_sqlx_migrations"])
+        .await
+        .map_err(map_db_error)?
+        .get(0);
     if !previous_tracker_exists {
         return Ok(());
     }
 
+    // LEAST bounds the adopted prefix to migrations that actually exist here:
+    // a tracker with more rows than this list would otherwise record versions
+    // no statement backs, and every later migration would be skipped as applied.
+    let migration_count = i32::try_from(migrations().len()).unwrap_or(i32::MAX);
     tx.batch_execute(&format!(
-        "CREATE TABLE IF NOT EXISTS {MIGRATIONS_TABLE} (
+        "CREATE TABLE {MIGRATIONS_TABLE} (
              version INTEGER PRIMARY KEY,
              applied_at TIMESTAMPTZ DEFAULT NOW()
          );
          INSERT INTO {MIGRATIONS_TABLE} (version)
          SELECT generate_series(
              1,
-             (SELECT COUNT(*) FROM _sqlx_migrations WHERE success)::int
-         )
-         ON CONFLICT (version) DO NOTHING;"
+             LEAST(
+                 (SELECT COUNT(*) FROM _sqlx_migrations WHERE success)::int,
+                 {migration_count}
+             )
+         );"
     ))
     .await
     .map_err(map_db_error)?;
@@ -68,9 +86,16 @@ async fn adopt_applied_prefix(pool: &Pool) -> Result<(), PostgresError> {
     Ok(())
 }
 
-/// The migrations, in the order the previous runner applied them: ascending
-/// numeric file version, which put every 14-digit version after every 8-digit
-/// one. Position is the tracked version, so entries are only ever appended.
+/// The migrations, ordered by ascending numeric file version, which put every
+/// 14-digit version after every 8-digit one. That is the order the previous
+/// runner applies them in on a fresh database, and therefore the order
+/// [`adopt_applied_prefix`] assumes a partially migrated one stopped along. It
+/// is not necessarily the order a long-lived database saw them in: the runner
+/// applies whatever is missing whenever it is added, so a file added late but
+/// numbered early ran late. Only matters for adoption, since the statements
+/// between any two adjacent versions here are independent of each other.
+///
+/// Position is the tracked version, so entries are only ever appended.
 #[allow(clippy::too_many_lines)]
 fn migrations() -> Vec<Vec<String>> {
     vec![
@@ -378,6 +403,24 @@ mod tests {
 
         run(&pool).await.expect("first run");
         run(&pool).await.expect("second run");
+
+        assert_eq!(applied_versions(&pool).await, all_versions());
+    }
+
+    /// A tracker holding more successful rows than there are migrations here
+    /// must not record versions no statement backs: those would mark later
+    /// migrations as already applied and skip them forever.
+    #[tokio::test]
+    async fn adoption_is_bounded_by_the_migration_list() {
+        let (_pg, pool) = empty_test_pool().await;
+        let count = migrations().len();
+        migrate_as_previous_runner(&pool, count).await;
+        let client = pool.get().await.unwrap();
+        for i in count..count.saturating_add(3) {
+            record_applied(&client, i, true).await;
+        }
+
+        run(&pool).await.expect("adopt over-long tracker");
 
         assert_eq!(applied_versions(&pool).await, all_versions());
     }

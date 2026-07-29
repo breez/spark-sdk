@@ -56,6 +56,14 @@ fn default_user_agent() -> String {
     concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")).to_string()
 }
 
+/// How long establishing a new database connection may take.
+const DB_CONNECT_TIMEOUT_SECS: u64 = 10;
+
+/// How long a request may wait for a pooled connection before giving up. Longer
+/// than the connect timeout so a request queued behind a saturated pool still
+/// gets a chance at a freshly opened connection.
+const DB_POOL_WAIT_TIMEOUT_SECS: u64 = 30;
+
 #[derive(Clone, Parser, Debug, Serialize, Deserialize)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -184,7 +192,12 @@ async fn main() -> Result<(), anyhow::Error> {
         ));
     }
 
-    let pool = create_pool(&PostgresStorageConfig::with_defaults(args.db_url.clone()))
+    let mut pool_config = PostgresStorageConfig::with_defaults(args.db_url.clone());
+    // deadpool defaults both timeouts to "wait forever", which turns an
+    // unreachable database into a hung process rather than a failed request.
+    pool_config.create_timeout_secs = Some(DB_CONNECT_TIMEOUT_SECS);
+    pool_config.wait_timeout_secs = Some(DB_POOL_WAIT_TIMEOUT_SECS);
+    let pool = create_pool(&pool_config)
         .map_err(|e| anyhow!("failed to create connection pool: {e:?}"))?;
 
     // The pool connects lazily, so an unreachable database or bad credentials
