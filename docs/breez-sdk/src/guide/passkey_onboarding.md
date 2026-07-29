@@ -77,7 +77,7 @@ Register a fresh credential:
 
 ## Error recovery
 
-Every passkey failure normalizes to a {{#name PrfProviderError}} variant. Match on the variant to drive recovery:
+Most passkey failures normalize to a {{#name PrfProviderError}} variant. Match on the variant to drive recovery:
 
 | Variant | What it means | Recommended action |
 |---|---|---|
@@ -88,6 +88,21 @@ Every passkey failure normalizes to a {{#name PrfProviderError}} variant. Match 
 | {{#enum PrfProviderError::PrfNotSupported}} | Authenticator lacks the PRF extension | Fall back to mnemonic onboarding. |
 | {{#enum PrfProviderError::Configuration}} | Entitlement missing, AASA stale, or assetlinks malformed | Developer-facing error; surface the {{#enum PasskeyAvailability::NotAssociated}} reason. |
 | {{#enum PrfProviderError::Generic}} | Network or generic failure | Generic "try again later" UI. |
+
+{{#name PasskeyClient.register}} has one failure of its own that is **not** a
+{{#name PrfProviderError}}:
+
+| Variant | What it means | Recommended action |
+|---|---|---|
+| {{#enum PasskeyError::CreatedButNotDerived}} | The passkey was created, then deriving from it failed | Sign in pinned to the `credential_id` on the error. **Do not** register again. |
+
+Handle it explicitly. The passkey exists on the device from that point on, so
+registering again leaves the first one behind owning a wallet nothing points
+to. A catch-all `else` branch will not fail to compile: it routes this into
+your generic "try again" path, which is usually a retry that registers a
+second passkey. `kind()` reports the classification of the derive failure that
+followed the create, so a caller branching on `kind()` alone cannot tell this
+apart from a plain derive failure.
 
 Web exposes typed exception classes (`PasskeyAlreadyExistsError`, `PasskeyTimedOutError`, `PasskeyCredentialNotFoundError`) for `instanceof` matching. Rust callers can branch on the collapsed `error.kind()` instead of every variant.
 
