@@ -8,6 +8,7 @@ import breez_sdk_spark
 from breez_sdk_spark import (
     AssetFilter,
     AuthorizeTransferRequest,
+    BatchRecipient,
     BuyBitcoinRequest,
     CheckLightningAddressRequest,
     ClaimDepositRequest,
@@ -34,11 +35,13 @@ from breez_sdk_spark import (
     PaymentStatus,
     PaymentType,
     PrepareLnurlPayRequest,
+    PrepareSendBatchRequest,
     PrepareSendPaymentRequest,
     ReceivePaymentMethod,
     ReceivePaymentRequest,
     RefundDepositRequest,
     RegisterLightningAddressRequest,
+    SendBatchRequest,
     SendPaymentMethod,
     SendPaymentOptions,
     SendPaymentRequest,
@@ -61,6 +64,7 @@ COMMAND_NAMES = [
     "list-payments",
     "receive",
     "pay",
+    "pay-batch",
     "lnurl-pay",
     "lnurl-withdraw",
     "lnurl-auth",
@@ -408,6 +412,74 @@ async def _handle_pay(sdk, _token_issuer, session, args):
         )
     )
     print_value(send_response)
+
+
+# --- pay-batch ---
+
+def _parse_batch_recipient(s):
+    """Parse a recipient string: payment_request[:amount[:token_identifier]]."""
+    parts = s.split(":")
+    payment_request = parts[0]
+    if not payment_request:
+        raise argparse.ArgumentTypeError(f"Missing payment request in '{s}'")
+
+    amount = None
+    if len(parts) >= 2 and parts[1]:
+        try:
+            amount = int(parts[1])
+        except ValueError:
+            raise argparse.ArgumentTypeError(
+                f"Invalid amount '{parts[1]}': must be a valid number"
+            )
+
+    token_identifier = None
+    if len(parts) >= 3 and parts[2]:
+        token_identifier = parts[2]
+
+    if len(parts) > 3:
+        raise argparse.ArgumentTypeError(
+            f"Invalid recipient '{s}'. Expected "
+            "'payment_request[:amount[:token_identifier]]'"
+        )
+
+    return BatchRecipient(
+        payment_request=payment_request,
+        amount=amount,
+        token_identifier=token_identifier,
+    )
+
+
+def _build_pay_batch_parser():
+    p = _parser("pay-batch", "Pay several recipients with one token transaction")
+    p.add_argument(
+        "-r", "--recipient",
+        type=_parse_batch_recipient,
+        action="append",
+        required=True,
+        dest="recipients",
+        help="payment_request[:amount[:token_identifier]] (repeat for each recipient)",
+    )
+    return p
+
+
+async def _handle_pay_batch(sdk, _token_issuer, session, args):
+    prepare_response = await sdk.prepare_send_batch(
+        request=PrepareSendBatchRequest(recipients=args.recipients)
+    )
+
+    for total in prepare_response.totals:
+        asset = total.token_identifier if total.token_identifier else "sats"
+        print(f"Sending {total.amount} base units of {asset}")
+
+    line = await session.prompt_async("Do you want to continue (y/n): ", default="y")
+    if line.strip().lower() != "y":
+        print("Payment cancelled")
+        return
+
+    response = await sdk.send_batch(
+        request=SendBatchRequest(prepare_response=prepare_response)
+    )
+    print_value(response.payments)
 
 
 # --- lnurl-pay ---
@@ -1040,6 +1112,7 @@ def build_command_registry():
         "list-payments": (_build_list_payments_parser(), _handle_list_payments),
         "receive": (_build_receive_parser(), _handle_receive),
         "pay": (_build_pay_parser(), _handle_pay),
+        "pay-batch": (_build_pay_batch_parser(), _handle_pay_batch),
         "lnurl-pay": (_build_lnurl_pay_parser(), _handle_lnurl_pay),
         "lnurl-withdraw": (_build_lnurl_withdraw_parser(), _handle_lnurl_withdraw),
         "lnurl-auth": (_build_lnurl_auth_parser(), _handle_lnurl_auth),
