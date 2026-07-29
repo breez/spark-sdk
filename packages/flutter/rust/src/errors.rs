@@ -1,4 +1,4 @@
-pub use breez_sdk_spark::passkey::{PasskeyError, PrfProviderError};
+pub use breez_sdk_spark::passkey::{ErrorKind, PasskeyError, PrfProviderError};
 pub use breez_sdk_spark::{DepositClaimError, Fee, SdkError, StorageError};
 use flutter_rust_bridge::frb;
 
@@ -72,6 +72,21 @@ pub enum _PrfProviderError {
     Generic(String),
 }
 
+/// Mirrored so `_PasskeyError::CreatedButNotDerived` can carry the
+/// classification of the derive failure that followed the create.
+#[frb(mirror(ErrorKind))]
+pub enum _ErrorKind {
+    Cancel,
+    NoCredential,
+    PrfUnsupported,
+    PrfFailed,
+    Configuration,
+    AlreadyExists,
+    Timeout,
+    AuthFailure,
+    Internal,
+}
+
 #[frb(mirror(PasskeyError))]
 pub enum _PasskeyError {
     Prf(PrfProviderError),
@@ -82,5 +97,10 @@ pub enum _PasskeyError {
     InvalidPrfOutput(String),
     MnemonicError(String),
     InvalidSalt(String),
+    CreatedButNotDerived {
+        credential_id: Vec<u8>,
+        kind: ErrorKind,
+        reason: String,
+    },
     Generic(String),
 }
