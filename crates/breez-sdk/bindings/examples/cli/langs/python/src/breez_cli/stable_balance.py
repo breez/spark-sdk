@@ -41,6 +41,7 @@ async def _handle_set(sdk, args):
         request=UpdateUserSettingsRequest(
             spark_private_mode_enabled=None,
             stable_balance_active_label=StableBalanceActiveLabel.SET(label=args.label),
+            spark_master_identity_public_key=None,
         )
     )
     settings = await sdk.get_user_settings()
@@ -57,6 +58,7 @@ async def _handle_unset(sdk, _args):
         request=UpdateUserSettingsRequest(
             spark_private_mode_enabled=None,
             stable_balance_active_label=StableBalanceActiveLabel.UNSET(),
+            spark_master_identity_public_key=None,
         )
     )
     settings = await sdk.get_user_settings()

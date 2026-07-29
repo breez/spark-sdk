@@ -44,6 +44,7 @@ from breez_sdk_spark import (
     SendPaymentRequest,
     SparkHtlcOptions,
     SparkHtlcStatus,
+    SparkMasterIdentityPublicKey,
     SyncWalletRequest,
     TokenTransactionType,
     TransferAuthorization,
@@ -865,13 +866,28 @@ def _build_set_user_settings_parser():
     p = _parser("set-user-settings", "Update user settings")
     _add_bool_option(p, "-p", "--private", dest="spark_private_mode_enabled",
                      help="Whether spark private mode is enabled")
+    group = p.add_mutually_exclusive_group()
+    group.add_argument("-m", "--master-key", default=None,
+                       help="Hex encoded public key to designate as the wallet's master identity")
+    group.add_argument("--clear-master-key", action="store_true", default=False,
+                       help="Remove the wallet's designated master identity")
     return p
 
 async def _handle_set_user_settings(sdk, _token_issuer, _session, args):
+    if args.master_key is not None:
+        spark_master_identity_public_key = SparkMasterIdentityPublicKey.SET(
+            public_key=args.master_key,
+        )
+    elif args.clear_master_key:
+        spark_master_identity_public_key = SparkMasterIdentityPublicKey.UNSET()
+    else:
+        spark_master_identity_public_key = None
+
     await sdk.update_user_settings(
         request=UpdateUserSettingsRequest(
             spark_private_mode_enabled=args.spark_private_mode_enabled,
             stable_balance_active_label=None,
+            spark_master_identity_public_key=spark_master_identity_public_key,
         )
     )
     print("User settings updated")

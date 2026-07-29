@@ -983,12 +983,36 @@ Future<void> _handleGetUserSettings(BreezSdk sdk, TokenIssuer tokenIssuer, List<
 // --- set-user-settings ---
 
 Future<void> _handleSetUserSettings(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
-  final parser = _parser('set-user-settings')..addOption('private', abbr: 'p');
+  final parser =
+      _parser('set-user-settings')
+        ..addOption('private', abbr: 'p')
+        ..addOption('master-key', abbr: 'm', help: 'Hex encoded public key for master identity')
+        ..addFlag('clear-master-key', defaultsTo: false, help: 'Remove the master identity');
   final results = _parseArgs(parser, args, 'set-user-settings [options]');
   if (results == null) return;
+
+  final masterKey = results.option('master-key');
+  final clearMasterKey = results.flag('clear-master-key');
+  if (masterKey != null && clearMasterKey) {
+    print('Cannot specify both --master-key and --clear-master-key');
+    return;
+  }
+
   final privateMode = _parseBool(results.option('private'));
 
-  await sdk.updateUserSettings(request: UpdateUserSettingsRequest(sparkPrivateModeEnabled: privateMode));
+  SparkMasterIdentityPublicKey? sparkMasterIdentityPublicKey;
+  if (masterKey != null) {
+    sparkMasterIdentityPublicKey = SparkMasterIdentityPublicKey_Set(publicKey: masterKey);
+  } else if (clearMasterKey) {
+    sparkMasterIdentityPublicKey = SparkMasterIdentityPublicKey_Unset();
+  }
+
+  await sdk.updateUserSettings(
+    request: UpdateUserSettingsRequest(
+      sparkPrivateModeEnabled: privateMode,
+      sparkMasterIdentityPublicKey: sparkMasterIdentityPublicKey,
+    ),
+  );
   print('User settings updated');
 }
 

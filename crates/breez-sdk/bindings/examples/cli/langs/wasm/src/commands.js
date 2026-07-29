@@ -820,13 +820,28 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
     .command('set-user-settings')
     .description('Update user settings')
     .option('-p, --private [value]', 'Whether spark private mode is enabled')
+    .option('-m, --master-key <key>', 'Hex encoded public key to designate as the wallet\'s master identity')
+    .option('--clear-master-key', 'Remove the wallet\'s designated master identity')
     .action(async (options) => {
       const sdk = getSdk()
+      if (options.masterKey && options.clearMasterKey) {
+        throw new Error('Cannot specify both --master-key and --clear-master-key')
+      }
       let sparkPrivateModeEnabled
       if (options.private != null) {
         sparkPrivateModeEnabled = options.private === 'true' || options.private === true
       }
-      await sdk.updateUserSettings({ sparkPrivateModeEnabled, stableBalanceActiveLabel: undefined })
+      let sparkMasterIdentityPublicKey
+      if (options.masterKey) {
+        sparkMasterIdentityPublicKey = { type: 'set', publicKey: options.masterKey }
+      } else if (options.clearMasterKey) {
+        sparkMasterIdentityPublicKey = { type: 'unset' }
+      }
+      await sdk.updateUserSettings({
+        sparkPrivateModeEnabled,
+        stableBalanceActiveLabel: undefined,
+        sparkMasterIdentityPublicKey
+      })
       console.log('User settings updated')
     })
 

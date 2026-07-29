@@ -29,6 +29,7 @@ import {
   MaxFee,
   Fee,
   SparkHtlcStatus,
+  SparkMasterIdentityPublicKey,
   TokenTransactionType,
   BuyBitcoinRequest,
   getSparkStatus,
@@ -1155,9 +1156,24 @@ async function handleSetUserSettings(sdk: BreezSdkInterface, _tokenIssuer: Token
     sparkPrivateModeEnabled = privateModeStr === 'true'
   }
 
+  const masterKey = parseFlag(args, '--master-key', '-m')
+  const clearMasterKey = hasFlag(args, '--clear-master-key')
+
+  if (masterKey !== undefined && clearMasterKey) {
+    return 'Error: --master-key and --clear-master-key are mutually exclusive'
+  }
+
+  let sparkMasterIdentityPublicKey: SparkMasterIdentityPublicKey | undefined
+  if (masterKey !== undefined) {
+    sparkMasterIdentityPublicKey = new SparkMasterIdentityPublicKey.Set({ publicKey: masterKey })
+  } else if (clearMasterKey) {
+    sparkMasterIdentityPublicKey = new SparkMasterIdentityPublicKey.Unset()
+  }
+
   await sdk.updateUserSettings({
     sparkPrivateModeEnabled,
     stableBalanceActiveLabel: undefined,
+    sparkMasterIdentityPublicKey,
   })
   return 'User settings updated'
 }

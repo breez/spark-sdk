@@ -73,6 +73,7 @@ suspend fun handleStableBalanceSet(sdk: BreezSdk, reader: LineReader, args: List
         UpdateUserSettingsRequest(
             sparkPrivateModeEnabled = null,
             stableBalanceActiveLabel = StableBalanceActiveLabel.Set(label = args[0]),
+            sparkMasterIdentityPublicKey = null,
         )
     )
     val settings = sdk.getUserSettings()
@@ -84,6 +85,7 @@ suspend fun handleStableBalanceUnset(sdk: BreezSdk, reader: LineReader, args: Li
         UpdateUserSettingsRequest(
             sparkPrivateModeEnabled = null,
             stableBalanceActiveLabel = StableBalanceActiveLabel.Unset,
+            sparkMasterIdentityPublicKey = null,
         )
     )
     val settings = sdk.getUserSettings()

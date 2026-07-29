@@ -1222,14 +1222,31 @@ func handleSetUserSettings(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, 
 	fs := flag.NewFlagSet("set-user-settings", flag.ContinueOnError)
 	privateMode := fs.String("p", "", "Enable spark private mode (true/false)")
 	fs.StringVar(privateMode, "private", "", "Enable spark private mode (true/false)")
+	masterKey := fs.String("m", "", "Hex encoded public key for master identity")
+	fs.StringVar(masterKey, "master-key", "", "Hex encoded public key for master identity")
+	clearMasterKey := fs.Bool("clear-master-key", false, "Remove the wallet's designated master identity")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	if *masterKey != "" && *clearMasterKey {
+		return fmt.Errorf("cannot specify both --master-key and --clear-master-key")
 	}
 
 	req := breez_sdk_spark.UpdateUserSettingsRequest{}
 	if *privateMode != "" {
 		val := *privateMode == "true"
 		req.SparkPrivateModeEnabled = &val
+	}
+
+	if *masterKey != "" {
+		var mk breez_sdk_spark.SparkMasterIdentityPublicKey = breez_sdk_spark.SparkMasterIdentityPublicKeySet{
+			PublicKey: *masterKey,
+		}
+		req.SparkMasterIdentityPublicKey = &mk
+	} else if *clearMasterKey {
+		var mk breez_sdk_spark.SparkMasterIdentityPublicKey = breez_sdk_spark.SparkMasterIdentityPublicKeyUnset{}
+		req.SparkMasterIdentityPublicKey = &mk
 	}
 
 	if err := liftError(sdk.UpdateUserSettings(req)); err != nil {
