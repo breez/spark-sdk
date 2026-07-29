@@ -1,6 +1,7 @@
 use bitcoin::hashes::{Hash, HashEngine, sha256};
 use lnurl_models::ListMetadataMetadata;
 use spark_postgres::deadpool_postgres::{GenericClient, Pool};
+use spark_postgres::tokio_postgres;
 
 use crate::repository::{
     DomainConfig, Invoice, LnurlSenderComment, NameStatus, PendingZapReceipt, RegistrationLimit,
@@ -42,15 +43,17 @@ where
 {
     // DO NOTHING rather than DO UPDATE, so the first claim survives. A returned
     // row therefore means this call inserted it.
-    let inserted = client
-        .query_opt(
+    let stmt = client
+        .prepare_cached(
             "INSERT INTO used_signed_messages
                  (statement_hash, route, expires_at, created_at)
              VALUES ($1, $2, $3, $4)
              ON CONFLICT (statement_hash) DO NOTHING
              RETURNING statement_hash",
-            &[&statement_hash, &route, &expires_at, &now()],
         )
+        .await?;
+    let inserted = client
+        .query_opt(&stmt, &[&statement_hash, &route, &expires_at, &now()])
         .await?;
 
     Ok(inserted.is_some())
@@ -73,16 +76,18 @@ async fn reserve_name<C>(
 where
     C: GenericClient,
 {
-    client
-        .execute(
+    let stmt = client
+        .prepare_cached(
             "INSERT INTO released_names (domain, name, pubkey, released_at, reclaimable_from)
              VALUES ($1, $2, $3, $4, NULL)
              ON CONFLICT (domain, name) DO UPDATE
              SET pubkey = excluded.pubkey
              ,   released_at = excluded.released_at
              ,   reclaimable_from = excluded.reclaimable_from",
-            &[&domain, &name, &pubkey, &now()],
         )
+        .await?;
+    client
+        .execute(&stmt, &[&domain, &name, &pubkey, &now()])
         .await?;
     Ok(())
 }
@@ -97,17 +102,17 @@ async fn reserved_for_other<C>(
 where
     C: GenericClient,
 {
-    let held = client
-        .query_opt(
+    let stmt = client
+        .prepare_cached(
             "SELECT pubkey, reclaimable_from FROM released_names WHERE domain = $1 AND name = $2",
-            &[&domain, &name],
         )
         .await?;
+    let held = client.query_opt(&stmt, &[&domain, &name]).await?;
 
     Ok(match held {
         Some(row) => {
-            let holder: String = row.get(0);
-            let reclaimable_from: Option<i64> = row.get(1);
+            let holder: String = row.try_get(0)?;
+            let reclaimable_from: Option<i64> = row.try_get(1)?;
             holder != pubkey && reclaimable_from.is_none_or(|from| now() < from)
         }
         None => false,
@@ -125,13 +130,11 @@ async fn name_of<C>(
 where
     C: GenericClient,
 {
-    let held = client
-        .query_opt(
-            "SELECT name FROM users WHERE domain = $1 AND pubkey = $2",
-            &[&domain, &pubkey],
-        )
+    let stmt = client
+        .prepare_cached("SELECT name FROM users WHERE domain = $1 AND pubkey = $2")
         .await?;
-    Ok(held.map(|row| row.get(0)))
+    let held = client.query_opt(&stmt, &[&domain, &pubkey]).await?;
+    Ok(held.map(|row| row.try_get(0)).transpose()?)
 }
 
 /// Log a registration that changed the held name and enforce `limit`, all
@@ -147,22 +150,26 @@ async fn record_registration<C>(
 where
     C: GenericClient,
 {
-    client
-        .execute(
+    let insert_stmt = client
+        .prepare_cached(
             "INSERT INTO address_registrations (domain, pubkey, created_at) VALUES ($1, $2, $3)",
-            &[&domain, &pubkey, &now()],
         )
+        .await?;
+    client
+        .execute(&insert_stmt, &[&domain, &pubkey, &now()])
         .await?;
 
     let cutoff = now().saturating_sub(i64::try_from(limit.window_secs).unwrap_or(i64::MAX));
-    let count: i64 = client
-        .query_one(
+    let count_stmt = client
+        .prepare_cached(
             "SELECT COUNT(*) FROM address_registrations
              WHERE domain = $1 AND pubkey = $2 AND created_at > $3",
-            &[&domain, &pubkey, &cutoff],
         )
+        .await?;
+    let count: i64 = client
+        .query_one(&count_stmt, &[&domain, &pubkey, &cutoff])
         .await?
-        .get(0);
+        .try_get(0)?;
 
     if count > i64::from(limit.max_per_window) {
         return Err(LnurlRepositoryError::RegistrationLimitExceeded);
@@ -208,10 +215,11 @@ where
     keys.sort_unstable();
     keys.dedup();
 
+    let stmt = client
+        .prepare_cached("SELECT pg_advisory_xact_lock($1)")
+        .await?;
     for key in keys {
-        client
-            .execute("SELECT pg_advisory_xact_lock($1)", &[&key])
-            .await?;
+        client.execute(&stmt, &[&key]).await?;
     }
     Ok(())
 }
@@ -238,12 +246,10 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let tx = client.transaction().await?;
         lock_registrations(&tx, domain, &[pubkey]).await?;
 
-        let rows_affected = tx
-            .execute(
-                "DELETE FROM users WHERE domain = $1 AND pubkey = $2 AND name = $3",
-                &[&domain, &pubkey, &name],
-            )
+        let stmt = tx
+            .prepare_cached("DELETE FROM users WHERE domain = $1 AND pubkey = $2 AND name = $3")
             .await?;
+        let rows_affected = tx.execute(&stmt, &[&domain, &pubkey, &name]).await?;
         if rows_affected == 0 {
             // Nothing was given up, so nothing is held. The tx rolls back on
             // drop.
@@ -261,20 +267,25 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         name: &str,
     ) -> Result<Option<User>, LnurlRepositoryError> {
         let client = self.pool.get().await?;
-        let maybe_user = client
-            .query_opt(
+        let stmt = client
+            .prepare_cached(
                 "SELECT pubkey, name, description
                  FROM users
                  WHERE domain = $1 AND name = $2",
-                &[&domain, &name],
             )
+            .await?;
+        let maybe_user = client
+            .query_opt(&stmt, &[&domain, &name])
             .await?
-            .map(|row| User {
-                domain: domain.to_string(),
-                pubkey: row.get(0),
-                name: row.get(1),
-                description: row.get(2),
-            });
+            .map(|row| {
+                Ok::<_, tokio_postgres::Error>(User {
+                    domain: domain.to_string(),
+                    pubkey: row.try_get(0)?,
+                    name: row.try_get(1)?,
+                    description: row.try_get(2)?,
+                })
+            })
+            .transpose()?;
         Ok(maybe_user)
     }
 
@@ -284,20 +295,25 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         pubkey: &str,
     ) -> Result<Option<User>, LnurlRepositoryError> {
         let client = self.pool.get().await?;
-        let maybe_user = client
-            .query_opt(
+        let stmt = client
+            .prepare_cached(
                 "SELECT pubkey, name, description
                  FROM users
                  WHERE domain = $1 AND pubkey = $2",
-                &[&domain, &pubkey],
             )
+            .await?;
+        let maybe_user = client
+            .query_opt(&stmt, &[&domain, &pubkey])
             .await?
-            .map(|row| User {
-                domain: domain.to_string(),
-                pubkey: row.get(0),
-                name: row.get(1),
-                description: row.get(2),
-            });
+            .map(|row| {
+                Ok::<_, tokio_postgres::Error>(User {
+                    domain: domain.to_string(),
+                    pubkey: row.try_get(0)?,
+                    name: row.try_get(1)?,
+                    description: row.try_get(2)?,
+                })
+            })
+            .transpose()?;
         Ok(maybe_user)
     }
 
@@ -319,13 +335,18 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         // index is what serializes this against a release of the same name, so
         // a release that commits first is always visible below rather than
         // being read as absent and overtaken.
+        let upsert_stmt = tx
+            .prepare_cached(
+                "INSERT INTO users (domain, pubkey, name, description, updated_at)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT(domain, pubkey) DO UPDATE
+                 SET name = excluded.name
+                 ,   description = excluded.description
+                 ,   updated_at = excluded.updated_at",
+            )
+            .await?;
         tx.execute(
-            "INSERT INTO users (domain, pubkey, name, description, updated_at)
-             VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT(domain, pubkey) DO UPDATE
-             SET name = excluded.name
-             ,   description = excluded.description
-             ,   updated_at = excluded.updated_at",
+            &upsert_stmt,
             &[
                 &user.domain,
                 &user.pubkey,
@@ -342,11 +363,11 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         }
         // Whatever hold stood on this name was this pubkey's own, or had
         // lapsed; either way holding it no longer means anything.
-        tx.execute(
-            "DELETE FROM released_names WHERE domain = $1 AND name = $2",
-            &[&user.domain, &user.name],
-        )
-        .await?;
+        let release_stmt = tx
+            .prepare_cached("DELETE FROM released_names WHERE domain = $1 AND name = $2")
+            .await?;
+        tx.execute(&release_stmt, &[&user.domain, &user.name])
+            .await?;
 
         let name_changed = previous.as_deref() != Some(user.name.as_str());
         if let Some(previous) = previous
@@ -370,18 +391,20 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         asking_pubkey: Option<&str>,
     ) -> Result<NameStatus, LnurlRepositoryError> {
         let client = self.pool.get().await?;
-        let row = client
-            .query_one(
+        let stmt = client
+            .prepare_cached(
                 "SELECT EXISTS(SELECT 1 FROM users WHERE domain = $1 AND name = $2)
                       , EXISTS(SELECT 1 FROM released_names
                                WHERE domain = $1 AND name = $2
                                  AND ($4::text IS NULL OR pubkey <> $4)
                                  AND (reclaimable_from IS NULL OR reclaimable_from > $3))",
-                &[&domain, &name, &now(), &asking_pubkey],
             )
             .await?;
-        let taken: bool = row.get(0);
-        let reserved: bool = row.get(1);
+        let row = client
+            .query_one(&stmt, &[&domain, &name, &now(), &asking_pubkey])
+            .await?;
+        let taken: bool = row.try_get(0)?;
+        let reserved: bool = row.try_get(1)?;
 
         Ok(match (taken, reserved) {
             (true, _) => NameStatus::Taken,
@@ -415,13 +438,14 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             return Err(LnurlRepositoryError::StatementAlreadyUsed);
         }
 
+        let delete_stmt = tx
+            .prepare_cached("DELETE FROM users WHERE domain = $1 AND pubkey = $2 RETURNING name")
+            .await?;
         let source_name = tx
-            .query_opt(
-                "DELETE FROM users WHERE domain = $1 AND pubkey = $2 RETURNING name",
-                &[&domain, &from_pubkey],
-            )
+            .query_opt(&delete_stmt, &[&domain, &from_pubkey])
             .await?
-            .map(|row| row.get::<_, String>(0));
+            .map(|row| row.try_get::<_, String>(0))
+            .transpose()?;
         match source_name {
             Some(name) if name == username => {}
             // Source pubkey doesn't currently own this username. The tx is
@@ -433,13 +457,18 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         // Accepting the transfer gives up whatever name the target holds now.
         let target_previous = name_of(&tx, domain, to_pubkey).await?;
 
+        let insert_stmt = tx
+            .prepare_cached(
+                "INSERT INTO users (domain, pubkey, name, description, updated_at)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT(domain, pubkey) DO UPDATE
+                 SET name = excluded.name
+                 ,   description = excluded.description
+                 ,   updated_at = excluded.updated_at",
+            )
+            .await?;
         tx.execute(
-            "INSERT INTO users (domain, pubkey, name, description, updated_at)
-             VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT(domain, pubkey) DO UPDATE
-             SET name = excluded.name
-             ,   description = excluded.description
-             ,   updated_at = excluded.updated_at",
+            &insert_stmt,
             &[
                 &domain,
                 &to_pubkey,
@@ -472,30 +501,26 @@ impl crate::repository::LnurlRepository for LnurlRepository {
 
     async fn delete_expired_signed_messages(&self, now: i64) -> Result<u64, LnurlRepositoryError> {
         let client = self.pool.get().await?;
-        let deleted = client
-            .execute(
-                "DELETE FROM used_signed_messages WHERE expires_at < $1",
-                &[&now],
-            )
+        let stmt = client
+            .prepare_cached("DELETE FROM used_signed_messages WHERE expires_at < $1")
             .await?;
+        let deleted = client.execute(&stmt, &[&now]).await?;
         Ok(deleted)
     }
 
     async fn delete_old_registrations(&self, cutoff: i64) -> Result<u64, LnurlRepositoryError> {
         let client = self.pool.get().await?;
-        let deleted = client
-            .execute(
-                "DELETE FROM address_registrations WHERE created_at < $1",
-                &[&cutoff],
-            )
+        let stmt = client
+            .prepare_cached("DELETE FROM address_registrations WHERE created_at < $1")
             .await?;
+        let deleted = client.execute(&stmt, &[&cutoff]).await?;
         Ok(deleted)
     }
 
     async fn upsert_zap(&self, zap: &Zap) -> Result<(), LnurlRepositoryError> {
         let client = self.pool.get().await?;
-        client
-            .execute(
+        let stmt = client
+            .prepare_cached(
                 "INSERT INTO zaps (payment_hash, zap_request, zap_event
                 , user_pubkey, invoice_expiry, updated_at, is_user_nostr_key)
                  VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -506,6 +531,11 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                  ,   invoice_expiry = excluded.invoice_expiry
                  ,   updated_at = excluded.updated_at
                  ,   is_user_nostr_key = excluded.is_user_nostr_key",
+            )
+            .await?;
+        client
+            .execute(
+                &stmt,
                 &[
                     &zap.payment_hash,
                     &zap.zap_request,
@@ -525,14 +555,19 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         comment: &LnurlSenderComment,
     ) -> Result<(), LnurlRepositoryError> {
         let client = self.pool.get().await?;
-        client
-            .execute(
+        let stmt = client
+            .prepare_cached(
                 "INSERT INTO sender_comments (payment_hash, user_pubkey, sender_comment, updated_at)
                  VALUES ($1, $2, $3, $4)
                  ON CONFLICT(payment_hash) DO UPDATE
                  SET user_pubkey = excluded.user_pubkey
                  ,   sender_comment = excluded.sender_comment
                  ,   updated_at = excluded.updated_at",
+            )
+            .await?;
+        client
+            .execute(
+                &stmt,
                 &[
                     &comment.payment_hash,
                     &comment.user_pubkey,
@@ -555,8 +590,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let offset = i64::from(offset);
         let limit = i64::from(limit);
         let client = self.pool.get().await?;
-        let rows = client
-            .query(
+        let stmt = client
+            .prepare_cached(
                 "SELECT ph.payment_hash
                  ,      sc.sender_comment
                  ,      z.zap_request
@@ -575,74 +610,78 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                  LEFT JOIN sender_comments sc ON ph.payment_hash = sc.payment_hash
                  ORDER BY updated_at ASC
                  OFFSET $2 LIMIT $3",
-                &[&pubkey, &offset, &limit, &updated_after],
             )
+            .await?;
+        let rows = client
+            .query(&stmt, &[&pubkey, &offset, &limit, &updated_after])
             .await?;
         let metadata = rows
             .into_iter()
-            .map(|row| ListMetadataMetadata {
-                payment_hash: row.get(0),
-                sender_comment: row.get(1),
-                nostr_zap_request: row.get(2),
-                nostr_zap_receipt: row.get(3),
-                updated_at: row.get(4),
-                preimage: row.get(5),
+            .map(|row| {
+                Ok(ListMetadataMetadata {
+                    payment_hash: row.try_get(0)?,
+                    sender_comment: row.try_get(1)?,
+                    nostr_zap_request: row.try_get(2)?,
+                    nostr_zap_receipt: row.try_get(3)?,
+                    updated_at: row.try_get(4)?,
+                    preimage: row.try_get(5)?,
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, tokio_postgres::Error>>()?;
         Ok(metadata)
     }
 
     async fn list_domains(&self) -> Result<Vec<DomainConfig>, LnurlRepositoryError> {
         let client = self.pool.get().await?;
-        let rows = client
-            .query(
+        let stmt = client
+            .prepare_cached(
                 "SELECT d.domain, a.api_key, a.jwt \
                  FROM allowed_domains d \
                  LEFT JOIN domain_attribution a ON a.domain = d.domain",
-                &[],
             )
             .await?;
+        let rows = client.query(&stmt, &[]).await?;
 
         let domains = rows
             .into_iter()
-            .map(|row| DomainConfig {
-                domain: row.get(0),
-                api_key: row.get(1),
-                jwt: row.get(2),
+            .map(|row| {
+                Ok(DomainConfig {
+                    domain: row.try_get(0)?,
+                    api_key: row.try_get(1)?,
+                    jwt: row.try_get(2)?,
+                })
             })
-            .collect();
+            .collect::<Result<Vec<DomainConfig>, tokio_postgres::Error>>()?;
 
         Ok(domains)
     }
 
     async fn add_domain(&self, domain: &str) -> Result<(), LnurlRepositoryError> {
         let client = self.pool.get().await?;
-        client
-            .execute(
+        let stmt = client
+            .prepare_cached(
                 "INSERT INTO allowed_domains (domain)
                  VALUES ($1)
                  ON CONFLICT(domain) DO NOTHING",
-                &[&domain],
             )
             .await?;
+        client.execute(&stmt, &[&domain]).await?;
         Ok(())
     }
 
     async fn set_domain_jwt(&self, domain: &str, jwt: &str) -> Result<(), LnurlRepositoryError> {
         let client = self.pool.get().await?;
-        client
-            .execute(
-                "UPDATE domain_attribution SET jwt = $2 WHERE domain = $1",
-                &[&domain, &jwt],
-            )
+        let stmt = client
+            .prepare_cached("UPDATE domain_attribution SET jwt = $2 WHERE domain = $1")
             .await?;
+        client.execute(&stmt, &[&domain, &jwt]).await?;
         Ok(())
     }
 
     async fn upsert_invoice(&self, invoice: &Invoice) -> Result<(), LnurlRepositoryError> {
         let client = self.pool.get().await?;
-        client
-            .execute(
+        let stmt = client
+            .prepare_cached(
                 "INSERT INTO invoices (payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                  ON CONFLICT(payment_hash) DO UPDATE
@@ -653,6 +692,11 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                  ,   updated_at = excluded.updated_at
                  ,   domain = excluded.domain
                  ,   amount_received_sat = excluded.amount_received_sat",
+            )
+            .await?;
+        client
+            .execute(
+                &stmt,
                 &[
                     &invoice.payment_hash,
                     &invoice.user_pubkey,
@@ -674,25 +718,30 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         payment_hash: &str,
     ) -> Result<Option<Invoice>, LnurlRepositoryError> {
         let client = self.pool.get().await?;
-        let maybe_invoice = client
-            .query_opt(
+        let stmt = client
+            .prepare_cached(
                 "SELECT payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat
                  FROM invoices
                  WHERE payment_hash = $1",
-                &[&payment_hash],
             )
+            .await?;
+        let maybe_invoice = client
+            .query_opt(&stmt, &[&payment_hash])
             .await?
-            .map(|row| Invoice {
-                payment_hash: row.get(0),
-                user_pubkey: row.get(1),
-                invoice: row.get(2),
-                preimage: row.get(3),
-                invoice_expiry: row.get(4),
-                created_at: row.get(5),
-                updated_at: row.get(6),
-                domain: row.get(7),
-                amount_received_sat: row.get(8),
-            });
+            .map(|row| {
+                Ok::<_, tokio_postgres::Error>(Invoice {
+                    payment_hash: row.try_get(0)?,
+                    user_pubkey: row.try_get(1)?,
+                    invoice: row.try_get(2)?,
+                    preimage: row.try_get(3)?,
+                    invoice_expiry: row.try_get(4)?,
+                    created_at: row.try_get(5)?,
+                    updated_at: row.try_get(6)?,
+                    domain: row.try_get(7)?,
+                    amount_received_sat: row.try_get(8)?,
+                })
+            })
+            .transpose()?;
         Ok(maybe_invoice)
     }
 
@@ -701,8 +750,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         payment_hash: &str,
     ) -> Result<(Option<Zap>, Option<Invoice>), LnurlRepositoryError> {
         let client = self.pool.get().await?;
-        let row = client
-            .query_one(
+        let stmt = client
+            .prepare_cached(
                 "SELECT z.payment_hash   AS z_payment_hash
                  ,      z.zap_request    AS z_zap_request
                  ,      z.zap_event      AS z_zap_event
@@ -722,35 +771,41 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                  FROM (SELECT $1::text AS payment_hash) ph
                  LEFT JOIN zaps z ON z.payment_hash = ph.payment_hash
                  LEFT JOIN invoices i ON i.payment_hash = ph.payment_hash",
-                &[&payment_hash],
             )
             .await?;
+        let row = client.query_one(&stmt, &[&payment_hash]).await?;
 
         let zap = row
-            .get::<_, Option<String>>("z_payment_hash")
-            .map(|ph| Zap {
-                payment_hash: ph,
-                zap_request: row.get("z_zap_request"),
-                zap_event: row.get("z_zap_event"),
-                user_pubkey: row.get("z_user_pubkey"),
-                invoice_expiry: row.get("z_invoice_expiry"),
-                updated_at: row.get("z_updated_at"),
-                is_user_nostr_key: row.get("z_is_user_nostr_key"),
-            });
+            .try_get::<_, Option<String>>("z_payment_hash")?
+            .map(|ph| {
+                Ok::<_, tokio_postgres::Error>(Zap {
+                    payment_hash: ph,
+                    zap_request: row.try_get("z_zap_request")?,
+                    zap_event: row.try_get("z_zap_event")?,
+                    user_pubkey: row.try_get("z_user_pubkey")?,
+                    invoice_expiry: row.try_get("z_invoice_expiry")?,
+                    updated_at: row.try_get("z_updated_at")?,
+                    is_user_nostr_key: row.try_get("z_is_user_nostr_key")?,
+                })
+            })
+            .transpose()?;
 
         let invoice = row
-            .get::<_, Option<String>>("i_payment_hash")
-            .map(|ph| Invoice {
-                payment_hash: ph,
-                user_pubkey: row.get("i_user_pubkey"),
-                invoice: row.get("i_invoice"),
-                preimage: row.get("i_preimage"),
-                invoice_expiry: row.get("i_invoice_expiry"),
-                created_at: row.get("i_created_at"),
-                updated_at: row.get("i_updated_at"),
-                domain: row.get("i_domain"),
-                amount_received_sat: row.get("i_amount_received_sat"),
-            });
+            .try_get::<_, Option<String>>("i_payment_hash")?
+            .map(|ph| {
+                Ok::<_, tokio_postgres::Error>(Invoice {
+                    payment_hash: ph,
+                    user_pubkey: row.try_get("i_user_pubkey")?,
+                    invoice: row.try_get("i_invoice")?,
+                    preimage: row.try_get("i_preimage")?,
+                    invoice_expiry: row.try_get("i_invoice_expiry")?,
+                    created_at: row.try_get("i_created_at")?,
+                    updated_at: row.try_get("i_updated_at")?,
+                    domain: row.try_get("i_domain")?,
+                    amount_received_sat: row.try_get("i_amount_received_sat")?,
+                })
+            })
+            .transpose()?;
 
         Ok((zap, invoice))
     }
@@ -759,11 +814,16 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         pending: &PendingZapReceipt,
     ) -> Result<(), LnurlRepositoryError> {
         let client = self.pool.get().await?;
-        client
-            .execute(
+        let stmt = client
+            .prepare_cached(
                 "INSERT INTO pending_zap_receipts (payment_hash, created_at, retry_count, next_retry_at)
                  VALUES ($1, $2, $3, $4)
                  ON CONFLICT(payment_hash) DO NOTHING",
+            )
+            .await?;
+        client
+            .execute(
+                &stmt,
                 &[
                     &pending.payment_hash,
                     &pending.created_at,
@@ -783,8 +843,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let stale_threshold = now.saturating_sub(300_000); // 5 minutes
         let limit = i64::from(limit);
         let client = self.pool.get().await?;
-        let rows = client
-            .query(
+        let stmt = client
+            .prepare_cached(
                 "UPDATE pending_zap_receipts
                  SET claimed_at = $2
                  WHERE payment_hash IN (
@@ -796,18 +856,22 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                      FOR UPDATE SKIP LOCKED
                  )
                  RETURNING payment_hash, created_at, retry_count, next_retry_at",
-                &[&now, &now, &stale_threshold, &limit],
             )
+            .await?;
+        let rows = client
+            .query(&stmt, &[&now, &now, &stale_threshold, &limit])
             .await?;
         let pending = rows
             .into_iter()
-            .map(|row| PendingZapReceipt {
-                payment_hash: row.get(0),
-                created_at: row.get(1),
-                retry_count: row.get(2),
-                next_retry_at: row.get(3),
+            .map(|row| {
+                Ok::<_, tokio_postgres::Error>(PendingZapReceipt {
+                    payment_hash: row.try_get(0)?,
+                    created_at: row.try_get(1)?,
+                    retry_count: row.try_get(2)?,
+                    next_retry_at: row.try_get(3)?,
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(pending)
     }
 
@@ -818,13 +882,15 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         next_retry_at: i64,
     ) -> Result<(), LnurlRepositoryError> {
         let client = self.pool.get().await?;
-        client
-            .execute(
+        let stmt = client
+            .prepare_cached(
                 "UPDATE pending_zap_receipts
                  SET retry_count = $2, next_retry_at = $3, claimed_at = NULL
                  WHERE payment_hash = $1",
-                &[&payment_hash, &retry_count, &next_retry_at],
             )
+            .await?;
+        client
+            .execute(&stmt, &[&payment_hash, &retry_count, &next_retry_at])
             .await?;
         Ok(())
     }
@@ -834,12 +900,10 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         payment_hash: &str,
     ) -> Result<(), LnurlRepositoryError> {
         let client = self.pool.get().await?;
-        client
-            .execute(
-                "DELETE FROM pending_zap_receipts WHERE payment_hash = $1",
-                &[&payment_hash],
-            )
+        let stmt = client
+            .prepare_cached("DELETE FROM pending_zap_receipts WHERE payment_hash = $1")
             .await?;
+        client.execute(&stmt, &[&payment_hash]).await?;
         Ok(())
     }
 
@@ -849,15 +913,15 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         default_value: &str,
     ) -> Result<String, LnurlRepositoryError> {
         let client = self.pool.get().await?;
-        let row = client
-            .query_one(
+        let stmt = client
+            .prepare_cached(
                 "INSERT INTO settings (key, value) VALUES ($1, $2)
                  ON CONFLICT(key) DO UPDATE SET value = settings.value
                  RETURNING value",
-                &[&key, &default_value],
             )
             .await?;
-        Ok(row.get(0))
+        let row = client.query_one(&stmt, &[&key, &default_value]).await?;
+        Ok(row.try_get(0)?)
     }
 
     async fn get_webhook_payloads(
@@ -868,8 +932,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             return Ok(vec![]);
         }
         let client = self.pool.get().await?;
-        let rows = client
-            .query(
+        let stmt = client
+            .prepare_cached(
                 "SELECT i.payment_hash, i.user_pubkey, i.invoice, i.preimage, i.amount_received_sat,
                         u.name, u.domain,
                         sc.sender_comment,
@@ -882,31 +946,31 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                  WHERE i.payment_hash = ANY($1)
                    AND i.domain IS NOT NULL
                    AND i.preimage IS NOT NULL",
-                &[&payment_hashes],
             )
             .await?;
+        let rows = client.query(&stmt, &[&payment_hashes]).await?;
         let results = rows
             .into_iter()
             .map(|row| {
-                let name: Option<String> = row.get(5);
-                let user_domain: Option<String> = row.get(6);
+                let name: Option<String> = row.try_get(5)?;
+                let user_domain: Option<String> = row.try_get(6)?;
                 let lightning_address = match (name, user_domain) {
                     (Some(n), Some(d)) => Some(format!("{n}@{d}")),
                     _ => None,
                 };
-                WebhookPayloadData {
-                    payment_hash: row.get(0),
-                    user_pubkey: row.get(1),
-                    invoice: row.get(2),
-                    preimage: row.get(3),
-                    amount_received_sat: row.get(4),
+                Ok::<_, tokio_postgres::Error>(WebhookPayloadData {
+                    payment_hash: row.try_get(0)?,
+                    user_pubkey: row.try_get(1)?,
+                    invoice: row.try_get(2)?,
+                    preimage: row.try_get(3)?,
+                    amount_received_sat: row.try_get(4)?,
                     lightning_address,
-                    sender_comment: row.get(7),
-                    domain: row.get(8),
-                    nostr_zap_request: row.get(9),
-                }
+                    sender_comment: row.try_get(7)?,
+                    domain: row.try_get(8)?,
+                    nostr_zap_request: row.try_get(9)?,
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(results)
     }
 }
@@ -927,13 +991,15 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
         let created_ats: Vec<i64> = vec![now; deliveries.len()];
 
         let client = self.pool.get().await?;
-        client
-            .execute(
+        let stmt = client
+            .prepare_cached(
                 "INSERT INTO webhook_deliveries (identifier, domain, payload, created_at, next_retry_at)
                  SELECT * FROM UNNEST($1::text[], $2::text[], $3::text[], $4::bigint[], $4::bigint[])
                  ON CONFLICT (identifier, domain) DO NOTHING",
-                &[&identifiers, &domains, &payloads, &created_ats],
             )
+            .await?;
+        client
+            .execute(&stmt, &[&identifiers, &domains, &payloads, &created_ats])
             .await?;
         Ok(())
     }
@@ -944,8 +1010,8 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
         let now = now_millis();
         let stale_threshold = now.saturating_sub(300_000); // 5 minutes
         let client = self.pool.get().await?;
-        let rows = client
-            .query(
+        let stmt = client
+            .prepare_cached(
                 "UPDATE webhook_deliveries
                  SET claimed_at = $2
                  WHERE id IN (
@@ -970,22 +1036,24 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
                      ) d
                  )
                  RETURNING id, identifier, domain, url, payload, created_at, retry_count, next_retry_at",
-                &[&now, &now, &stale_threshold],
             )
             .await?;
+        let rows = client.query(&stmt, &[&now, &now, &stale_threshold]).await?;
         let deliveries = rows
             .into_iter()
-            .map(|row| WebhookDelivery {
-                id: row.get(0),
-                identifier: row.get(1),
-                domain: row.get(2),
-                url: row.get(3),
-                payload: row.get(4),
-                created_at: row.get(5),
-                retry_count: row.get(6),
-                next_retry_at: row.get(7),
+            .map(|row| {
+                Ok::<_, tokio_postgres::Error>(WebhookDelivery {
+                    id: row.try_get(0)?,
+                    identifier: row.try_get(1)?,
+                    domain: row.try_get(2)?,
+                    url: row.try_get(3)?,
+                    payload: row.try_get(4)?,
+                    created_at: row.try_get(5)?,
+                    retry_count: row.try_get(6)?,
+                    next_retry_at: row.try_get(7)?,
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(deliveries)
     }
 
@@ -996,12 +1064,12 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
         url: &str,
     ) -> Result<(), WebhookRepositoryError> {
         let client = self.pool.get().await?;
-        client
-            .execute(
+        let stmt = client
+            .prepare_cached(
                 "UPDATE webhook_deliveries SET succeeded_at = $2, url = $3 WHERE id = $1",
-                &[&id, &succeeded_at, &url],
             )
             .await?;
+        client.execute(&stmt, &[&id, &succeeded_at, &url]).await?;
         Ok(())
     }
 
@@ -1015,12 +1083,17 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
         url: &str,
     ) -> Result<(), WebhookRepositoryError> {
         let client = self.pool.get().await?;
-        client
-            .execute(
+        let stmt = client
+            .prepare_cached(
                 "UPDATE webhook_deliveries
                  SET retry_count = $2, next_retry_at = $3, claimed_at = NULL,
                      last_error_status_code = $4, last_error_body = $5, url = $6
                  WHERE id = $1",
+            )
+            .await?;
+        client
+            .execute(
+                &stmt,
                 &[&id, &retry_count, &next_retry_at, &status_code, &body, &url],
             )
             .await?;
@@ -1032,12 +1105,10 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
             return Ok(());
         }
         let client = self.pool.get().await?;
-        client
-            .execute(
-                "UPDATE webhook_deliveries SET claimed_at = NULL WHERE id = ANY($1)",
-                &[&ids],
-            )
+        let stmt = client
+            .prepare_cached("UPDATE webhook_deliveries SET claimed_at = NULL WHERE id = ANY($1)")
             .await?;
+        client.execute(&stmt, &[&ids]).await?;
         Ok(())
     }
 
@@ -1046,50 +1117,49 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
         before: i64,
     ) -> Result<u64, WebhookRepositoryError> {
         let client = self.pool.get().await?;
-        let rows_affected = client
-            .execute(
-                "DELETE FROM webhook_deliveries WHERE created_at < $1",
-                &[&before],
-            )
+        let stmt = client
+            .prepare_cached("DELETE FROM webhook_deliveries WHERE created_at < $1")
             .await?;
+        let rows_affected = client.execute(&stmt, &[&before]).await?;
         Ok(rows_affected)
     }
 
     async fn delete_webhook_delivery(&self, id: i64) -> Result<(), WebhookRepositoryError> {
         let client = self.pool.get().await?;
-        client
-            .execute("DELETE FROM webhook_deliveries WHERE id = $1", &[&id])
+        let stmt = client
+            .prepare_cached("DELETE FROM webhook_deliveries WHERE id = $1")
             .await?;
+        client.execute(&stmt, &[&id]).await?;
         Ok(())
     }
 
     async fn park_webhook_delivery(&self, id: i64) -> Result<(), WebhookRepositoryError> {
         let client = self.pool.get().await?;
-        client
-            .execute(
+        let stmt = client
+            .prepare_cached(
                 "UPDATE webhook_deliveries SET next_retry_at = $2, claimed_at = NULL WHERE id = $1",
-                &[&id, &i64::MAX],
             )
             .await?;
+        client.execute(&stmt, &[&id, &i64::MAX]).await?;
         Ok(())
     }
 
     async fn list_webhook_configs(&self) -> Result<Vec<WebhookConfig>, WebhookRepositoryError> {
         let client = self.pool.get().await?;
-        let rows = client
-            .query(
-                "SELECT domain, url, webhook_secret FROM domain_webhooks",
-                &[],
-            )
+        let stmt = client
+            .prepare_cached("SELECT domain, url, webhook_secret FROM domain_webhooks")
             .await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| WebhookConfig {
-                domain: row.get(0),
-                url: row.get(1),
-                secret: row.get(2),
+        let rows = client.query(&stmt, &[]).await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(WebhookConfig {
+                    domain: row.try_get(0)?,
+                    url: row.try_get(1)?,
+                    secret: row.try_get(2)?,
+                })
             })
-            .collect())
+            .collect::<Result<Vec<_>, tokio_postgres::Error>>()
+            .map_err(|e| WebhookRepositoryError::General(e.into()))
     }
 }
 
