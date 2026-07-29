@@ -69,8 +69,7 @@
 # UX Guidelines
 
 - [Overview](guide/uxguide.md)
+- [Login & backup](guide/uxguide_login.md)
+- [Displaying payments](guide/uxguide_display.md)
 - [Receiving payments](guide/uxguide_receive.md)
 - [Sending payments](guide/uxguide_send.md)
-- [Displaying payments](guide/uxguide_display.md)
-- [Seed & key management](guide/uxguide_seed.md)
-- [Passkey login](guide/uxguide_passkey.md)

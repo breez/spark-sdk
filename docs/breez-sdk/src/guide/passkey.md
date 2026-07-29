@@ -14,6 +14,6 @@ One passkey can be associated with multiple wallets, each under its own label, d
 
 ## Further reading
 
-- **[UX guidelines](uxguide_passkey.md)** - recommended onboarding UX, prompt counts, and error-recovery patterns.
+- **[UX guidelines](uxguide_login.md)** - recommended onboarding UX, prompt counts, and error-recovery patterns.
 
 For the full technical specification, see the <a target="_blank" href="https://github.com/breez/passkey-login/blob/main/spec.md">Passkey Login spec</a>.
