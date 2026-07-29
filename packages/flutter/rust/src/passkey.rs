@@ -32,8 +32,11 @@ struct CallbackPrfProvider {
         dyn Fn(DeriveSeedsRequest) -> DartFnFuture<anyhow::Result<DeriveSeedsOutput>> + Send + Sync,
     >,
     is_supported_fn: Arc<dyn Fn() -> DartFnFuture<anyhow::Result<bool>> + Send + Sync>,
-    create_passkey_fn:
-        Arc<dyn Fn(Vec<Vec<u8>>) -> DartFnFuture<anyhow::Result<PasskeyCredential>> + Send + Sync>,
+    create_passkey_fn: Arc<
+        dyn Fn(Vec<Vec<u8>>, Vec<String>) -> DartFnFuture<anyhow::Result<CreatePasskeyOutput>>
+            + Send
+            + Sync,
+    >,
 }
 
 /// Convert a Dart-thrown error into a [`PrfProviderError`]. The Dart
@@ -89,18 +92,11 @@ impl PrfProvider for CallbackPrfProvider {
         exclude_credentials: Vec<Vec<u8>>,
         salts: Vec<String>,
     ) -> Result<CreatePasskeyOutput, PrfProviderError> {
-        // The Dart callback has no eval-at-create hook, so the Dart-facing
-        // contract stays as it was and the caller derives through
-        // `derive_seeds`.
-        let _ = salts;
-        let result = AssertUnwindSafe((self.create_passkey_fn)(exclude_credentials))
+        let result = AssertUnwindSafe((self.create_passkey_fn)(exclude_credentials, salts))
             .catch_unwind()
             .await
             .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
-        Ok(CreatePasskeyOutput {
-            credential: result.map_err(dart_error_to_prf)?,
-            seeds: None,
-        })
+        result.map_err(dart_error_to_prf)
     }
 }
 
@@ -123,7 +119,7 @@ impl PasskeyClient {
         + Sync
         + 'static,
         is_supported: impl Fn() -> DartFnFuture<anyhow::Result<bool>> + Send + Sync + 'static,
-        create_passkey: impl Fn(Vec<Vec<u8>>) -> DartFnFuture<anyhow::Result<PasskeyCredential>>
+        create_passkey: impl Fn(Vec<Vec<u8>>, Vec<String>) -> DartFnFuture<anyhow::Result<CreatePasskeyOutput>>
         + Send
         + Sync
         + 'static,

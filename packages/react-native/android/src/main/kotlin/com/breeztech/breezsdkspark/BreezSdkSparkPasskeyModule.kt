@@ -200,6 +200,7 @@ class BreezSdkSparkPasskeyModule(
         userName: String,
         userDisplayName: String,
         excludeCredentialsBase64: com.facebook.react.bridge.ReadableArray,
+        registerSaltsArg: com.facebook.react.bridge.ReadableArray,
         promise: Promise,
     ) {
         val activity = currentActivity
@@ -214,16 +215,22 @@ class BreezSdkSparkPasskeyModule(
             excludeIds.add(Base64.decode(b64, Base64.NO_WRAP))
         }
 
+        val registerSalts = mutableListOf<String>()
+        for (i in 0 until registerSaltsArg.size()) {
+            registerSaltsArg.getString(i)?.let { registerSalts.add(it) }
+        }
+
         scope.launch {
             try {
-                val credential = CredentialManagerPrfCore(
+                val registration = CredentialManagerPrfCore(
                     rpId = rpId,
                     rpName = rpName,
                     userName = userName,
                     userDisplayName = userDisplayName,
                     activityProvider = { activity },
                     graceTracker = graceTracker,
-                ).register(excludeIds).credential
+                ).register(excludeIds, registerSalts)
+                val credential = registration.credential
                 // The core's `register` arms the shared grace tracker so the
                 // next `deriveSeeds` call holds out the credential's
                 // PRF-readiness window without the wrapper having to.
@@ -239,6 +246,19 @@ class BreezSdkSparkPasskeyModule(
                     map.putBoolean("backupEligible", credential.backupEligible!!)
                 } else {
                     map.putNull("backupEligible")
+                }
+                // Null unless the authenticator evaluated PRF during the
+                // create ceremony and returned one output per salt. The JS
+                // side then skips the assertion entirely.
+                val seeds = registration.seeds
+                if (seeds != null) {
+                    val seedsArr = Arguments.createArray()
+                    for (seed in seeds) {
+                        seedsArr.pushString(Base64.encodeToString(seed, Base64.NO_WRAP))
+                    }
+                    map.putArray("seeds", seedsArr)
+                } else {
+                    map.putNull("seeds")
                 }
                 promise.resolve(map)
             } catch (e: CredentialManagerPrfCoreException) {

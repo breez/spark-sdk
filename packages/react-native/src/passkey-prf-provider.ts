@@ -219,8 +219,10 @@ export class PasskeyProvider {
    * `credentialAlreadyExists` failure. The returned user handle is minted
    * fresh per call (never host-supplied).
    *
-   * `salts` is accepted for parity with the trait but not evaluated here, so
-   * `seeds` is always null and the caller derives through `deriveSeeds`.
+   * Asking the create ceremony to evaluate PRF for `salts` removes the
+   * assertion that would otherwise follow it. `seeds` is null when the
+   * authenticator reported PRF support without evaluating, or returned
+   * fewer outputs than salts; the caller then derives as before.
    */
   async createPasskey(
     excludeCredentials: Uint8Array[] = [],
@@ -238,12 +240,14 @@ export class PasskeyProvider {
         userId: string;
         aaguid: string | null;
         backupEligible: boolean | null;
+        seeds: string[] | null;
       } = await BreezSdkSparkPasskey.createPasskey(
         this.rpId,
         this.rpName,
         this.userName,
         this.userDisplayName,
-        excludeBase64
+        excludeBase64,
+        salts
       );
 
       return {
@@ -253,9 +257,9 @@ export class PasskeyProvider {
           aaguid: result.aaguid ? base64ToUint8Array(result.aaguid) : null,
           backupEligible: result.backupEligible,
         },
-        // The native module has no eval-at-create hook yet, so the caller
-        // derives through `deriveSeeds` as before.
-        seeds: null,
+        // Null unless the authenticator evaluated PRF during the create
+        // ceremony and returned one output per salt.
+        seeds: result.seeds ? result.seeds.map(base64ToUint8Array) : null,
       };
     } catch (err) {
       throw mapNativeError(err);
