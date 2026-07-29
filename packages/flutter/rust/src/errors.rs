@@ -23,7 +23,9 @@ pub enum _DepositClaimError {
 #[frb(mirror(SdkError))]
 pub enum _SdkError {
     SparkError(String),
-    InsufficientFunds,
+    InsufficientFunds {
+        token_identifier: Option<String>,
+    },
     InvalidUuid(String),
     InvalidInput(String),
     NetworkError(String),

@@ -237,7 +237,7 @@ impl TokenOutputStore for PostgresTokenStore {
     #[allow(clippy::too_many_lines, clippy::cast_possible_wrap)]
     async fn set_tokens_outputs(
         &self,
-        token_outputs: &[TokenOutputs],
+        token_outputs: &TokenOutputs,
         refresh_started_at: SystemTime,
     ) -> Result<(), TokenOutputServiceError> {
         // Convert SystemTime to chrono for PostgreSQL
@@ -316,12 +316,9 @@ impl TokenOutputStore for PostgresTokenStore {
 
         // Build a set of all incoming outpoints for reconciliation
         let incoming_outpoints: HashSet<(String, i32)> = token_outputs
+            .outputs
             .iter()
-            .flat_map(|to| {
-                to.outputs
-                    .iter()
-                    .map(|o| (o.prev_tx_hash.clone(), o.prev_tx_vout as i32))
-            })
+            .map(|o| (o.prev_tx_hash.clone(), o.prev_tx_vout as i32))
             .collect();
 
         // Reconcile reservations: find reserved outputs that no longer exist
@@ -452,17 +449,20 @@ impl TokenOutputStore for PostgresTokenStore {
         .map_err(map_err)?;
 
         // Insert new metadata and outputs, excluding spent and reserved
-        for to in token_outputs {
-            // Upsert metadata
-            self.upsert_metadata(&tx, &to.metadata).await?;
+        for (token_identifier, outputs) in group_outputs_by_token(&token_outputs.outputs) {
+            let Some(metadata) = token_outputs.metadata_for(&token_identifier) else {
+                warn!("Skipping outputs of token {token_identifier}: no metadata provided");
+                continue;
+            };
+            self.upsert_metadata(&tx, metadata).await?;
 
             // Insert outputs that aren't currently reserved or spent
-            for output in &to.outputs {
+            for output in outputs {
                 let outpoint = (output.prev_tx_hash.clone(), output.prev_tx_vout as i32);
                 if reserved_outpoints.contains(&outpoint) || spent_outpoints.contains(&outpoint) {
                     continue;
                 }
-                self.insert_single_output(&tx, &to.metadata.identifier, output)
+                self.insert_single_output(&tx, &token_identifier, output)
                     .await?;
             }
         }
@@ -471,7 +471,7 @@ impl TokenOutputStore for PostgresTokenStore {
 
         trace!(
             "Updated {} token outputs in PostgreSQL",
-            token_outputs.len()
+            token_outputs.outputs.len()
         );
         Ok(())
     }
@@ -649,7 +649,7 @@ impl TokenOutputStore for PostgresTokenStore {
     async fn update_token_outputs(
         &self,
         outputs_to_remove: &[(String, u32)],
-        outputs_to_add: Option<&TokenOutputs>,
+        outputs_to_add: &TokenOutputs,
     ) -> Result<(), TokenOutputServiceError> {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
@@ -682,21 +682,17 @@ impl TokenOutputStore for PostgresTokenStore {
             }
         }
 
-        // 2. Insert new outputs.
-        if let Some(token_outputs) = outputs_to_add {
-            self.upsert_metadata(&tx, &token_outputs.metadata).await?;
+        // 2. Insert new outputs, grouped by the token each one names.
+        for (token_identifier, outputs) in group_outputs_by_token(&outputs_to_add.outputs) {
+            let Some(metadata) = outputs_to_add.metadata_for(&token_identifier) else {
+                warn!("Skipping outputs of token {token_identifier}: no metadata provided");
+                continue;
+            };
+            self.upsert_metadata(&tx, metadata).await?;
 
             // Clear spent status for outputs being (re-)added.
-            let tx_hashes: Vec<String> = token_outputs
-                .outputs
-                .iter()
-                .map(|o| o.prev_tx_hash.clone())
-                .collect();
-            let vouts: Vec<i32> = token_outputs
-                .outputs
-                .iter()
-                .map(|o| o.prev_tx_vout as i32)
-                .collect();
+            let tx_hashes: Vec<String> = outputs.iter().map(|o| o.prev_tx_hash.clone()).collect();
+            let vouts: Vec<i32> = outputs.iter().map(|o| o.prev_tx_vout as i32).collect();
             if !tx_hashes.is_empty() {
                 tx.execute(
                     "DELETE FROM brz_token_spent_outputs \
@@ -710,8 +706,8 @@ impl TokenOutputStore for PostgresTokenStore {
                 .map_err(map_err)?;
             }
 
-            for output in &token_outputs.outputs {
-                self.insert_single_output(&tx, &token_outputs.metadata.identifier, output)
+            for output in outputs {
+                self.insert_single_output(&tx, &token_identifier, output)
                     .await?;
             }
         }
@@ -720,262 +716,64 @@ impl TokenOutputStore for PostgresTokenStore {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines, clippy::cast_possible_wrap)]
     async fn reserve_token_outputs(
         &self,
-        token_identifier: &str,
-        target: ReservationTarget,
+        targets: &[(String, ReservationTarget)],
         purpose: TokenReservationPurpose,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
-        match target {
-            ReservationTarget::MinTotalValue(amount) => {
-                if amount == 0 {
-                    return Err(TokenOutputServiceError::Generic(
-                        "Amount to reserve must be greater than zero".to_string(),
-                    ));
-                }
-            }
-            ReservationTarget::MaxOutputCount(count) => {
-                if count == 0 {
-                    return Err(TokenOutputServiceError::Generic(
-                        "Count to reserve must be greater than zero".to_string(),
-                    ));
-                }
-            }
-        }
+        validate_targets(targets)?;
 
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
 
+        // Selection and reservation of every target share this transaction and the
+        // write lock it holds, so a multi-token reservation is all-or-nothing: no
+        // concurrent writer can take an output between two targets being selected.
         self.acquire_write_lock(&tx).await?;
 
-        // Get metadata
-        let metadata_row = tx
-            .query_opt(
-                "SELECT * FROM brz_token_metadata WHERE user_id = $1 AND identifier = $2",
-                &[&self.identity, &token_identifier],
+        let selected = self
+            .select_for_targets(
+                &*tx,
+                targets,
+                preferred_outputs.as_deref(),
+                selection_strategy,
             )
-            .await
-            .map_err(map_err)?
-            .ok_or_else(|| {
-                TokenOutputServiceError::Generic(format!(
-                    "Token outputs not found for identifier: {token_identifier}"
-                ))
-            })?;
-        let metadata = Self::metadata_from_row(&metadata_row)?;
+            .await?;
 
-        // Get available (non-reserved) outputs
-        let rows = tx
-            .query(
-                r"SELECT o.owner_public_key, o.revocation_commitment,
-                         o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
-                         o.token_public_key, o.token_amount, o.prev_tx_hash, o.prev_tx_vout,
-                         o.token_identifier AS identifier
-                  FROM brz_token_outputs o
-                  WHERE o.user_id = $1
-                    AND o.token_identifier = $2
-                    AND o.reservation_id IS NULL",
-                &[&self.identity, &token_identifier],
-            )
-            .await
-            .map_err(map_err)?;
-
-        let mut outputs: Vec<TokenOutputWithPrevOut> = rows
-            .iter()
-            .map(Self::output_from_row)
-            .collect::<Result<Vec<_>, _>>()?;
-
-        // Filter by preferred if provided
-        if let Some(ref preferred) = preferred_outputs {
-            let preferred_outpoints: HashSet<(&str, u32)> = preferred
-                .iter()
-                .map(|p| (p.prev_tx_hash.as_str(), p.prev_tx_vout))
-                .collect();
-            outputs.retain(|o| {
-                preferred_outpoints.contains(&(o.prev_tx_hash.as_str(), o.prev_tx_vout))
-            });
-        }
-
-        // Check sufficiency for MinTotalValue
-        if let ReservationTarget::MinTotalValue(amount) = target
-            && outputs.iter().map(|o| o.output.token_amount).sum::<u128>() < amount
-        {
-            return Err(TokenOutputServiceError::InsufficientFunds);
-        }
-
-        // Select outputs using the same logic as InMemory
-        let selected_outputs = if let ReservationTarget::MinTotalValue(amount) = target
-            && let Some(output) = outputs.iter().find(|o| o.output.token_amount == amount)
-        {
-            vec![output.clone()]
-        } else {
-            match selection_strategy {
-                None | Some(SelectionStrategy::SmallestFirst) => {
-                    outputs.sort_by_key(|o| o.output.token_amount);
-                }
-                Some(SelectionStrategy::LargestFirst) => {
-                    outputs.sort_by_key(|o| std::cmp::Reverse(o.output.token_amount));
-                }
-            }
-
-            match target {
-                ReservationTarget::MinTotalValue(amount) => {
-                    let mut selected = Vec::new();
-                    let mut remaining = amount;
-                    for output in outputs {
-                        if remaining == 0 {
-                            break;
-                        }
-                        selected.push(output.clone());
-                        remaining = remaining.saturating_sub(output.output.token_amount);
-                    }
-                    if remaining > 0 {
-                        return Err(TokenOutputServiceError::InsufficientFunds);
-                    }
-                    selected
-                }
-                ReservationTarget::MaxOutputCount(count) => {
-                    outputs.truncate(count);
-                    outputs
-                }
-            }
-        };
-
-        // Create reservation
         let reservation_id = Uuid::now_v7().to_string();
-        let purpose_str = match purpose {
-            TokenReservationPurpose::Payment => "Payment",
-            TokenReservationPurpose::Swap => "Swap",
-        };
-
-        tx.execute(
-            "INSERT INTO brz_token_reservations (user_id, id, purpose) VALUES ($1, $2, $3)",
-            &[&self.identity, &reservation_id, &purpose_str],
-        )
-        .await
-        .map_err(map_err)?;
-
-        // Set reservation_id on selected outputs (by outpoint)
-        let selected_tx_hashes: Vec<String> = selected_outputs
-            .iter()
-            .map(|o| o.prev_tx_hash.clone())
-            .collect();
-        let selected_vouts: Vec<i32> = selected_outputs
-            .iter()
-            .map(|o| o.prev_tx_vout as i32)
-            .collect();
-        tx.execute(
-            "UPDATE brz_token_outputs SET reservation_id = $1 \
-             WHERE user_id = $4 \
-               AND (prev_tx_hash, prev_tx_vout) IN ( \
-                 SELECT * FROM UNNEST($2::text[], $3::int[]) \
-               )",
-            &[
-                &reservation_id,
-                &selected_tx_hashes,
-                &selected_vouts,
-                &self.identity,
-            ],
-        )
-        .await
-        .map_err(map_err)?;
+        self.insert_reservation(&tx, &reservation_id, purpose)
+            .await?;
+        self.assign_reservation(&tx, &reservation_id, &selected.outputs)
+            .await?;
 
         tx.commit().await.map_err(map_err)?;
 
-        let reservation_token_outputs = TokenOutputs {
-            metadata,
-            outputs: selected_outputs,
-        };
-
-        Ok(TokenOutputsReservation::new(
-            reservation_id,
-            reservation_token_outputs,
-        ))
+        Ok(TokenOutputsReservation::new(reservation_id, selected))
     }
 
     async fn select_token_outputs(
         &self,
-        token_identifier: &str,
-        target: ReservationTarget,
+        targets: &[(String, ReservationTarget)],
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputs, TokenOutputServiceError> {
-        match target {
-            ReservationTarget::MinTotalValue(amount) => {
-                if amount == 0 {
-                    return Err(TokenOutputServiceError::Generic(
-                        "Amount to reserve must be greater than zero".to_string(),
-                    ));
-                }
-            }
-            ReservationTarget::MaxOutputCount(count) => {
-                if count == 0 {
-                    return Err(TokenOutputServiceError::Generic(
-                        "Count to reserve must be greater than zero".to_string(),
-                    ));
-                }
-            }
-        }
+        validate_targets(targets)?;
 
         let client = self.pool.get().await.map_err(map_err)?;
-
-        let metadata_row = client
-            .query_opt(
-                "SELECT * FROM brz_token_metadata WHERE user_id = $1 AND identifier = $2",
-                &[&self.identity, &token_identifier],
-            )
-            .await
-            .map_err(map_err)?
-            .ok_or_else(|| {
-                TokenOutputServiceError::Generic(format!(
-                    "Token outputs not found for identifier: {token_identifier}"
-                ))
-            })?;
-        let metadata = Self::metadata_from_row(&metadata_row)?;
-
-        let rows = client
-            .query(
-                r"SELECT o.owner_public_key, o.revocation_commitment,
-                         o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
-                         o.token_public_key, o.token_amount, o.prev_tx_hash, o.prev_tx_vout,
-                         o.token_identifier AS identifier
-                  FROM brz_token_outputs o
-                  WHERE o.user_id = $1
-                    AND o.token_identifier = $2
-                    AND o.reservation_id IS NULL",
-                &[&self.identity, &token_identifier],
-            )
-            .await
-            .map_err(map_err)?;
-
-        let mut outputs: Vec<TokenOutputWithPrevOut> = rows
-            .iter()
-            .map(Self::output_from_row)
-            .collect::<Result<Vec<_>, _>>()?;
-
-        if let Some(ref preferred) = preferred_outputs {
-            let preferred_outpoints: HashSet<(&str, u32)> = preferred
-                .iter()
-                .map(|p| (p.prev_tx_hash.as_str(), p.prev_tx_vout))
-                .collect();
-            outputs.retain(|o| {
-                preferred_outpoints.contains(&(o.prev_tx_hash.as_str(), o.prev_tx_vout))
-            });
-        }
-
-        let selected_outputs = select_token_outputs_from(outputs, target, selection_strategy)?;
-        Ok(TokenOutputs {
-            metadata,
-            outputs: selected_outputs,
-        })
+        self.select_for_targets(
+            &**client,
+            targets,
+            preferred_outputs.as_deref(),
+            selection_strategy,
+        )
+        .await
     }
 
     #[allow(clippy::cast_possible_wrap)]
     async fn reserve_token_outputs_by_outpoints(
         &self,
-        token_identifier: &str,
         outpoints: &[(String, u32)],
         purpose: TokenReservationPurpose,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
@@ -989,37 +787,23 @@ impl TokenOutputStore for PostgresTokenStore {
         let tx = client.transaction().await.map_err(map_err)?;
         self.acquire_write_lock(&tx).await?;
 
-        let metadata_row = tx
-            .query_opt(
-                "SELECT * FROM brz_token_metadata WHERE user_id = $1 AND identifier = $2",
-                &[&self.identity, &token_identifier],
-            )
-            .await
-            .map_err(map_err)?
-            .ok_or_else(|| {
-                TokenOutputServiceError::Generic(format!(
-                    "Token outputs not found for identifier: {token_identifier}"
-                ))
-            })?;
-        let metadata = Self::metadata_from_row(&metadata_row)?;
-
         let tx_hashes: Vec<String> = outpoints.iter().map(|(h, _)| h.clone()).collect();
         let vouts: Vec<i32> = outpoints.iter().map(|(_, v)| *v as i32).collect();
 
+        // The outpoints are not scoped to a token: they may belong to several.
         let rows = tx
             .query(
                 r"SELECT o.owner_public_key, o.revocation_commitment,
                          o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                          o.token_public_key, o.token_amount, o.prev_tx_hash, o.prev_tx_vout,
-                         o.token_identifier AS identifier
+                         o.token_identifier
                   FROM brz_token_outputs o
                   WHERE o.user_id = $1
-                    AND o.token_identifier = $2
                     AND o.reservation_id IS NULL
                     AND (o.prev_tx_hash, o.prev_tx_vout) IN (
-                      SELECT * FROM UNNEST($3::text[], $4::int[])
+                      SELECT * FROM UNNEST($2::text[], $3::int[])
                     )",
-                &[&self.identity, &token_identifier, &tx_hashes, &vouts],
+                &[&self.identity, &tx_hashes, &vouts],
             )
             .await
             .map_err(map_err)?;
@@ -1032,32 +816,20 @@ impl TokenOutputStore for PostgresTokenStore {
         let distinct: HashSet<(&str, u32)> =
             outpoints.iter().map(|(h, v)| (h.as_str(), *v)).collect();
         if selected_outputs.len() != distinct.len() {
-            return Err(TokenOutputServiceError::InsufficientFunds);
+            return Err(TokenOutputServiceError::InsufficientFunds {
+                token_identifier: None,
+            });
         }
 
+        let metadata = self
+            .fetch_metadata(&*tx, &token_identifiers_of(&selected_outputs))
+            .await?;
+
         let reservation_id = Uuid::now_v7().to_string();
-        let purpose_str = match purpose {
-            TokenReservationPurpose::Payment => "Payment",
-            TokenReservationPurpose::Swap => "Swap",
-        };
-
-        tx.execute(
-            "INSERT INTO brz_token_reservations (user_id, id, purpose) VALUES ($1, $2, $3)",
-            &[&self.identity, &reservation_id, &purpose_str],
-        )
-        .await
-        .map_err(map_err)?;
-
-        tx.execute(
-            "UPDATE brz_token_outputs SET reservation_id = $1 \
-             WHERE user_id = $4 \
-               AND (prev_tx_hash, prev_tx_vout) IN ( \
-                 SELECT * FROM UNNEST($2::text[], $3::int[]) \
-               )",
-            &[&reservation_id, &tx_hashes, &vouts, &self.identity],
-        )
-        .await
-        .map_err(map_err)?;
+        self.insert_reservation(&tx, &reservation_id, purpose)
+            .await?;
+        self.assign_reservation(&tx, &reservation_id, &selected_outputs)
+            .await?;
 
         tx.commit().await.map_err(map_err)?;
 
@@ -1378,6 +1150,175 @@ impl PostgresTokenStore {
         Ok(())
     }
 
+    /// Selects available outputs covering every target, without reserving them.
+    ///
+    /// The result carries metadata for every requested token. A target whose token
+    /// is unknown to this tenant is an error, and a target that cannot be covered by
+    /// the available outputs yields `InsufficientFunds`. Outputs picked for one target
+    /// are withheld from the next, so repeated entries for the same token do not
+    /// select the same output twice.
+    async fn select_for_targets<C>(
+        &self,
+        client: &C,
+        targets: &[(String, ReservationTarget)],
+        preferred_outputs: Option<&[TokenOutputWithPrevOut]>,
+        selection_strategy: Option<SelectionStrategy>,
+    ) -> Result<TokenOutputs, TokenOutputServiceError>
+    where
+        C: tokio_postgres::GenericClient + Sync,
+    {
+        let token_identifiers: Vec<String> = {
+            let mut seen = HashSet::new();
+            targets
+                .iter()
+                .filter(|(id, _)| seen.insert(id.clone()))
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+
+        let metadata = self.fetch_metadata(client, &token_identifiers).await?;
+        for identifier in &token_identifiers {
+            if !metadata.iter().any(|m| &m.identifier == identifier) {
+                return Err(TokenOutputServiceError::Generic(format!(
+                    "Token outputs not found for identifier: {identifier}"
+                )));
+            }
+        }
+
+        let rows = client
+            .query(
+                r"SELECT o.owner_public_key, o.revocation_commitment,
+                         o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
+                         o.token_public_key, o.token_amount, o.prev_tx_hash, o.prev_tx_vout,
+                         o.token_identifier
+                  FROM brz_token_outputs o
+                  WHERE o.user_id = $1
+                    AND o.token_identifier = ANY($2)
+                    AND o.reservation_id IS NULL",
+                &[&self.identity, &token_identifiers],
+            )
+            .await
+            .map_err(map_err)?;
+
+        let mut available: Vec<TokenOutputWithPrevOut> = rows
+            .iter()
+            .map(Self::output_from_row)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if let Some(preferred) = preferred_outputs {
+            let preferred_outpoints: HashSet<(&str, u32)> = preferred
+                .iter()
+                .map(|p| (p.prev_tx_hash.as_str(), p.prev_tx_vout))
+                .collect();
+            available.retain(|o| {
+                preferred_outpoints.contains(&(o.prev_tx_hash.as_str(), o.prev_tx_vout))
+            });
+        }
+
+        let mut available_per_token: HashMap<String, Vec<TokenOutputWithPrevOut>> = HashMap::new();
+        for output in available {
+            available_per_token
+                .entry(output.output.token_identifier.clone())
+                .or_default()
+                .push(output);
+        }
+
+        let mut selected_outputs = Vec::new();
+        for (token_identifier, target) in targets {
+            let candidates = available_per_token
+                .remove(token_identifier)
+                .unwrap_or_default();
+            let selected = select_token_outputs_from(
+                token_identifier,
+                candidates.clone(),
+                *target,
+                selection_strategy,
+            )?;
+
+            let taken: HashSet<(String, u32)> = selected
+                .iter()
+                .map(|o| (o.prev_tx_hash.clone(), o.prev_tx_vout))
+                .collect();
+            let leftover: Vec<TokenOutputWithPrevOut> = candidates
+                .into_iter()
+                .filter(|o| !taken.contains(&(o.prev_tx_hash.clone(), o.prev_tx_vout)))
+                .collect();
+            available_per_token.insert(token_identifier.clone(), leftover);
+
+            selected_outputs.extend(selected);
+        }
+
+        Ok(TokenOutputs {
+            metadata,
+            outputs: selected_outputs,
+        })
+    }
+
+    /// Loads this tenant's metadata for the given token identifiers. Unknown
+    /// identifiers are simply absent from the result.
+    async fn fetch_metadata<C>(
+        &self,
+        client: &C,
+        token_identifiers: &[String],
+    ) -> Result<Vec<TokenMetadata>, TokenOutputServiceError>
+    where
+        C: tokio_postgres::GenericClient + Sync,
+    {
+        if token_identifiers.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = client
+            .query(
+                "SELECT * FROM brz_token_metadata WHERE user_id = $1 AND identifier = ANY($2)",
+                &[&self.identity, &token_identifiers],
+            )
+            .await
+            .map_err(map_err)?;
+        rows.iter().map(Self::metadata_from_row).collect()
+    }
+
+    async fn insert_reservation(
+        &self,
+        tx: &tokio_postgres::Transaction<'_>,
+        reservation_id: &str,
+        purpose: TokenReservationPurpose,
+    ) -> Result<(), TokenOutputServiceError> {
+        let purpose_str = match purpose {
+            TokenReservationPurpose::Payment => "Payment",
+            TokenReservationPurpose::Swap => "Swap",
+        };
+        tx.execute(
+            "INSERT INTO brz_token_reservations (user_id, id, purpose) VALUES ($1, $2, $3)",
+            &[&self.identity, &reservation_id, &purpose_str],
+        )
+        .await
+        .map_err(map_err)?;
+        Ok(())
+    }
+
+    /// Points the given outputs at the reservation, addressing them by outpoint.
+    #[allow(clippy::cast_possible_wrap)]
+    async fn assign_reservation(
+        &self,
+        tx: &tokio_postgres::Transaction<'_>,
+        reservation_id: &str,
+        outputs: &[TokenOutputWithPrevOut],
+    ) -> Result<(), TokenOutputServiceError> {
+        let tx_hashes: Vec<String> = outputs.iter().map(|o| o.prev_tx_hash.clone()).collect();
+        let vouts: Vec<i32> = outputs.iter().map(|o| o.prev_tx_vout as i32).collect();
+        tx.execute(
+            "UPDATE brz_token_outputs SET reservation_id = $1 \
+             WHERE user_id = $4 \
+               AND (prev_tx_hash, prev_tx_vout) IN ( \
+                 SELECT * FROM UNNEST($2::text[], $3::int[]) \
+               )",
+            &[&reservation_id, &tx_hashes, &vouts, &self.identity],
+        )
+        .await
+        .map_err(map_err)?;
+        Ok(())
+    }
+
     /// Inserts a single output into the database.
     #[allow(clippy::cast_possible_wrap)]
     async fn insert_single_output(
@@ -1575,6 +1516,59 @@ impl PostgresTokenStore {
     }
 }
 
+/// Rejects targets that can never be satisfied.
+fn validate_targets(
+    targets: &[(String, ReservationTarget)],
+) -> Result<(), TokenOutputServiceError> {
+    if targets.is_empty() {
+        return Err(TokenOutputServiceError::Generic(
+            "No reservation targets provided".to_string(),
+        ));
+    }
+    for (_, target) in targets {
+        match target {
+            ReservationTarget::MinTotalValue(0) => {
+                return Err(TokenOutputServiceError::Generic(
+                    "Amount to reserve must be greater than zero".to_string(),
+                ));
+            }
+            ReservationTarget::MaxOutputCount(0) => {
+                return Err(TokenOutputServiceError::Generic(
+                    "Count to reserve must be greater than zero".to_string(),
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Groups outputs by the token each one names, keeping first-seen token order.
+fn group_outputs_by_token(
+    outputs: &[TokenOutputWithPrevOut],
+) -> Vec<(String, Vec<&TokenOutputWithPrevOut>)> {
+    let mut grouped: Vec<(String, Vec<&TokenOutputWithPrevOut>)> = Vec::new();
+    for output in outputs {
+        let identifier = &output.output.token_identifier;
+        if let Some(entry) = grouped.iter_mut().find(|(id, _)| id == identifier) {
+            entry.1.push(output);
+        } else {
+            grouped.push((identifier.clone(), vec![output]));
+        }
+    }
+    grouped
+}
+
+/// The distinct token identifiers the outputs belong to, in first-seen order.
+fn token_identifiers_of(outputs: &[TokenOutputWithPrevOut]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    outputs
+        .iter()
+        .map(|o| o.output.token_identifier.clone())
+        .filter(|id| seen.insert(id.clone()))
+        .collect()
+}
+
 /// Maps any error to `TokenOutputServiceError`.
 fn map_err<E: std::fmt::Display>(e: E) -> TokenOutputServiceError {
     TokenOutputServiceError::Generic(e.to_string())
@@ -1710,6 +1704,51 @@ mod tests {
     async fn test_reserve_token_outputs_by_outpoints() {
         let fixture = PostgresTokenStoreTestFixture::new().await;
         shared_tests::test_reserve_token_outputs_by_outpoints(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_multi_token_reservation_rolls_back_on_shortfall() {
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+        shared_tests::test_multi_token_reservation_rolls_back_on_shortfall(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_multi_token_reservation_rolls_back_on_first_token() {
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+        shared_tests::test_multi_token_reservation_rolls_back_on_first_token(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_multi_token_reservation_rolls_back_on_unknown_token() {
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+        shared_tests::test_multi_token_reservation_rolls_back_on_unknown_token(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_multi_token_reservation_cancel_restores_every_token() {
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+        shared_tests::test_multi_token_reservation_cancel_restores_every_token(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_multi_token_reservation_finalize_spends_every_token() {
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+        shared_tests::test_multi_token_reservation_finalize_spends_every_token(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_by_outpoints_rolls_back_on_missing() {
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_by_outpoints_rolls_back_on_missing(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_by_outpoints_spans_tokens() {
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_by_outpoints_spans_tokens(&fixture.store).await;
     }
 
     #[tokio::test]
@@ -1950,7 +1989,7 @@ mod tests {
         fixture
             .store
             .set_tokens_outputs(
-                std::slice::from_ref(&token1),
+                &token1,
                 shared_tests::future_refresh_start(&fixture.store).await,
             )
             .await
@@ -1959,8 +1998,7 @@ mod tests {
         let reservation = fixture
             .store
             .reserve_token_outputs(
-                "token-1",
-                ReservationTarget::MinTotalValue(100),
+                &[("token-1".to_string(), ReservationTarget::MinTotalValue(100))],
                 TokenReservationPurpose::Swap,
                 None,
                 None,
@@ -1993,7 +2031,7 @@ mod tests {
         fixture
             .store
             .set_tokens_outputs(
-                std::slice::from_ref(&token1_refresh),
+                &token1_refresh,
                 shared_tests::future_refresh_start(&fixture.store).await,
             )
             .await
@@ -2035,7 +2073,7 @@ mod tests {
         fixture
             .store
             .set_tokens_outputs(
-                &[token_outputs],
+                &token_outputs,
                 shared_tests::future_refresh_start(&fixture.store).await,
             )
             .await
@@ -2043,8 +2081,7 @@ mod tests {
         let reservation = fixture
             .store
             .reserve_token_outputs(
-                "token-1",
-                ReservationTarget::MinTotalValue(100),
+                &[("token-1".to_string(), ReservationTarget::MinTotalValue(100))],
                 TokenReservationPurpose::Payment,
                 None,
                 None,
@@ -2154,14 +2191,11 @@ mod tests {
         // Plus a token only B holds — A must never see it (0-balance leakage).
         let b_only_token2 = shared_tests::create_token_outputs(2, vec![777]);
 
-        fx.a.set_tokens_outputs(
-            std::slice::from_ref(&a_token1),
-            shared_tests::future_refresh_start(&fx.a).await,
-        )
-        .await
-        .unwrap();
+        fx.a.set_tokens_outputs(&a_token1, shared_tests::future_refresh_start(&fx.a).await)
+            .await
+            .unwrap();
         fx.b.set_tokens_outputs(
-            &[b_token1, b_only_token2],
+            &shared_tests::merge_token_outputs([b_token1, b_only_token2]),
             shared_tests::future_refresh_start(&fx.b).await,
         )
         .await
@@ -2213,8 +2247,7 @@ mod tests {
         // --- reserve on A must not consume B's outputs ---
         let res_a =
             fx.a.reserve_token_outputs(
-                "token-1",
-                ReservationTarget::MinTotalValue(100),
+                &[("token-1".to_string(), ReservationTarget::MinTotalValue(100))],
                 TokenReservationPurpose::Payment,
                 None,
                 None,
@@ -2237,8 +2270,7 @@ mod tests {
         // --- A reserving "token-2" must fail (B's token, A doesn't see it) ---
         let res_a_t2 =
             fx.a.reserve_token_outputs(
-                "token-2",
-                ReservationTarget::MinTotalValue(100),
+                &[("token-2".to_string(), ReservationTarget::MinTotalValue(100))],
                 TokenReservationPurpose::Payment,
                 None,
                 None,
@@ -2263,8 +2295,7 @@ mod tests {
         // B's row even though only A had ever set_tokens_outputs first. ---
         let res_b_swap =
             fx.b.reserve_token_outputs(
-                "token-1",
-                ReservationTarget::MinTotalValue(500),
+                &[("token-1".to_string(), ReservationTarget::MinTotalValue(500))],
                 TokenReservationPurpose::Swap,
                 None,
                 None,
@@ -2285,9 +2316,7 @@ mod tests {
         // both tenants must end up with their own row, and A's outputs/balance
         // for "token-2" must differ from B's.
         let a_token2 = shared_tests::create_token_outputs(2, vec![999]);
-        fx.a.update_token_outputs(&[], Some(&a_token2))
-            .await
-            .unwrap();
+        fx.a.update_token_outputs(&[], &a_token2).await.unwrap();
 
         let bal_a = fx.a.get_token_balances().await.unwrap();
         let bal_a_t2 = bal_a

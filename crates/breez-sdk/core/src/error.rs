@@ -19,8 +19,12 @@ pub enum SdkError {
     #[error("SparkSdkError: {0}")]
     SparkError(String),
 
-    #[error("Insufficient funds")]
-    InsufficientFunds,
+    #[error("Insufficient funds{}", .token_identifier.as_deref().map(|t| format!(" for token {t}")).unwrap_or_default())]
+    InsufficientFunds {
+        /// The token that cannot cover the payment. Unset when the shortfall is
+        /// in sats or when no single token can be named.
+        token_identifier: Option<String>,
+    },
 
     #[error("Invalid UUID: {0}")]
     InvalidUuid(String),
@@ -213,7 +217,12 @@ impl From<serde_json::Error> for SdkError {
 impl From<SparkWalletError> for SdkError {
     fn from(e: SparkWalletError) -> Self {
         match e {
-            SparkWalletError::InsufficientFunds => SdkError::InsufficientFunds,
+            SparkWalletError::InsufficientFunds => SdkError::InsufficientFunds {
+                token_identifier: None,
+            },
+            SparkWalletError::TokenOutputServiceError(
+                spark_wallet::TokenOutputServiceError::InsufficientFunds { token_identifier },
+            ) => SdkError::InsufficientFunds { token_identifier },
             SparkWalletError::ServiceError(spark_wallet::ServiceError::InvalidInput(msg)) => {
                 SdkError::InvalidInput(msg)
             }

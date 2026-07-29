@@ -36,16 +36,18 @@ function buildTokenOutputs(amounts) {
   const issuerPk = pubkeyHex(1);
 
   return {
-    metadata: {
-      identifier,
-      issuerPublicKey: issuerPk,
-      name: `${ticker} Token`,
-      ticker,
-      decimals: 8,
-      maxSupply: "1000000",
-      isFreezable: false,
-      creationEntityPublicKey: null,
-    },
+    metadata: [
+      {
+        identifier,
+        issuerPublicKey: issuerPk,
+        name: `${ticker} Token`,
+        ticker,
+        decimals: 8,
+        maxSupply: "1000000",
+        isFreezable: false,
+        creationEntityPublicKey: null,
+      },
+    ],
     outputs: amounts.map((amount, i) => ({
       output: {
         id: `output-${identifier}-${amount}`,
@@ -80,14 +82,17 @@ async function main() {
 
     // 1. Initial set with a future refresh start, so the outputs aren't
     //    treated as stale.
-    await store.setTokensOutputs([token], Date.now() + 10_000);
+    await store.setTokensOutputs(token, Date.now() + 10_000);
 
     // 2. Mark output 100 (at prev_tx_hash 'tx-hash-0', vout 0) as spent.
-    await store.updateTokenOutputs([["tx-hash-0", 0]], null);
+    await store.updateTokenOutputs(
+      [["tx-hash-0", 0]],
+      { metadata: [], outputs: [] }
+    );
 
     // 3. Replay setTokensOutputs with a refresh start in the past (60s ago).
     //    The spent marker should suppress re-adding output 100.
-    await store.setTokensOutputs([token], Date.now() - 60_000);
+    await store.setTokensOutputs(token, Date.now() - 60_000);
 
     const result = await store.getTokenOutputs({
       type: "identifier",

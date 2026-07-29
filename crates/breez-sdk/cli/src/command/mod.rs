@@ -8,17 +8,18 @@ mod webhooks;
 
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
-    AssetFilter, AuthorizeTransferRequest, BreezSdk, BuyBitcoinRequest,
+    AssetFilter, AuthorizeTransferRequest, BatchRecipient, BreezSdk, BuyBitcoinRequest,
     CheckLightningAddressRequest, ClaimDepositRequest, ClaimHtlcPaymentRequest,
     ClaimTransferRequest, ConversionOptions, ConversionType, CrossChainRoutePair, Fee, FeePolicy,
     FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
     InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
     LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
-    PaymentRequest, PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
-    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
-    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
-    SparkHtlcOptions, SparkHtlcStatus, SparkMasterIdentityPublicKey, SyncWalletRequest,
-    TokenIssuer, TokenTransactionType, TransferAuthorization, UpdateUserSettingsRequest,
+    PaymentRequest, PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendBatchRequest,
+    PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    RegisterLightningAddressRequest, SendBatchRequest, SendPaymentMethod, SendPaymentOptions,
+    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SparkMasterIdentityPublicKey,
+    SyncWalletRequest, TokenIssuer, TokenTransactionType, TransferAuthorization,
+    UpdateUserSettingsRequest,
 };
 use clap::{Parser, ValueEnum};
 use rand::RngCore;
@@ -36,6 +37,59 @@ use crate::command::contacts::ContactCommand;
 use crate::command::issuer::IssuerCommand;
 use crate::command::stable_balance::StableBalanceCommand;
 use crate::command::webhooks::WebhookCommand;
+
+/// A batch recipient parsed from `payment_request`, `payment_request:amount` or
+/// `payment_request:amount:token_identifier`.
+#[derive(Clone, Debug)]
+pub struct BatchRecipientArg {
+    payment_request: String,
+    amount: Option<u128>,
+    token_identifier: Option<String>,
+}
+
+impl std::str::FromStr for BatchRecipientArg {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut parts = s.split(':');
+        let payment_request = parts.next().unwrap_or_default().to_string();
+        if payment_request.is_empty() {
+            return Err(format!("Missing payment request in '{s}'"));
+        }
+        let amount = match parts.next() {
+            None | Some("") => None,
+            Some(amount) => Some(
+                amount
+                    .parse::<u128>()
+                    .map_err(|_| format!("Invalid amount '{amount}': must be a valid number"))?,
+            ),
+        };
+        let token_identifier = match parts.next() {
+            None | Some("") => None,
+            Some(token_identifier) => Some(token_identifier.to_string()),
+        };
+        if parts.next().is_some() {
+            return Err(format!(
+                "Invalid recipient '{s}'. Expected \'payment_request[:amount[:token_identifier]]\'"
+            ));
+        }
+        Ok(BatchRecipientArg {
+            payment_request,
+            amount,
+            token_identifier,
+        })
+    }
+}
+
+impl From<BatchRecipientArg> for BatchRecipient {
+    fn from(arg: BatchRecipientArg) -> Self {
+        BatchRecipient {
+            payment_request: arg.payment_request,
+            amount: arg.amount,
+            token_identifier: arg.token_identifier,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 #[clap(rename_all = "lower")]
@@ -188,6 +242,16 @@ pub enum Command {
         /// If set, fees will be deducted from the specified amount instead of added on top.
         #[arg(long = "fees-included", action = clap::ArgAction::SetTrue)]
         fees_included: bool,
+    },
+
+    /// Pay several recipients with one token transaction
+    PayBatch {
+        /// A recipient, given as `payment_request`, `payment_request:amount` or
+        /// `payment_request:amount:token_identifier`. The payment request is a
+        /// Spark address or a Spark invoice. Amount and token may be omitted
+        /// only for an invoice that carries them. Repeat for each recipient.
+        #[arg(short = 'r', long = "recipient", required = true)]
+        recipients: Vec<BatchRecipientArg>,
     },
 
     /// Pay using LNURL
@@ -807,6 +871,29 @@ pub(crate) async fn execute_command(
             .await?;
 
             print_value(&send_payment_response)?;
+            Ok(true)
+        }
+        Command::PayBatch { recipients } => {
+            let prepare_response = sdk
+                .prepare_send_batch(PrepareSendBatchRequest {
+                    recipients: recipients.into_iter().map(Into::into).collect(),
+                })
+                .await?;
+
+            for total in &prepare_response.totals {
+                let asset = total.token_identifier.as_deref().unwrap_or("sats");
+                println!("Sending {} base units of {asset}", total.amount);
+            }
+            let line = rl
+                .readline_with_initial("Do you want to continue (y/n): ", ("y", ""))?
+                .to_lowercase();
+            if line != "y" {
+                return Err(anyhow::anyhow!("Payment cancelled"));
+            }
+
+            let response = Box::pin(sdk.send_batch(SendBatchRequest { prepare_response })).await?;
+
+            print_value(&response.payments)?;
             Ok(true)
         }
         Command::LnurlPay {

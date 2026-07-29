@@ -7,11 +7,12 @@ use crate::{
     RefundPendingConversionsResponse, WaitForPaymentIdentifier,
     error::SdkError,
     models::{
-        BuildUnsignedTransferPackageRequest, ListPaymentsRequest, ListPaymentsResponse, Payment,
-        PaymentRequest, PrepareSendPaymentRequest, PrepareSendPaymentResponse,
+        BuildUnsignedBatchPackageRequest, BuildUnsignedTransferPackageRequest, ListPaymentsRequest,
+        ListPaymentsResponse, Payment, PaymentRequest, PrepareSendBatchRequest,
+        PrepareSendBatchResponse, PrepareSendPaymentRequest, PrepareSendPaymentResponse,
         PublishSignedTransferPackageRequest, PublishSignedTransferPackageResponse,
-        ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentRequest, SendPaymentResponse,
-        UnsignedTransferPackage,
+        ReceivePaymentRequest, ReceivePaymentResponse, SendBatchRequest, SendBatchResponse,
+        SendPaymentRequest, SendPaymentResponse, UnsignedTransferPackage,
     },
     utils::payments::get_payment_with_conversion_details,
 };
@@ -90,6 +91,58 @@ impl BreezSdk {
             tracing::Span::current().record("payment_id", key);
         }
         Box::pin(send::orchestrate_send(self, request, false, None)).await
+    }
+
+    /// Prepares a send to several payees, all paid by one transaction.
+    ///
+    /// Each recipient is a Spark address or a Spark invoice, and one batch may
+    /// span several tokens. The response resolves every invoice into the asset
+    /// and amount it requests, and reports what the batch debits per asset.
+    ///
+    /// A batch pays tokens: sending sats to several payees at once is not
+    /// supported yet, so a recipient that resolves to sats is rejected.
+    ///
+    /// A batch that pays a Spark invoice is limited to a single token: the
+    /// operators reject a transaction that carries an invoice and pays more
+    /// than one. Send those as one batch per token.
+    pub async fn prepare_send_batch(
+        &self,
+        request: PrepareSendBatchRequest,
+    ) -> Result<PrepareSendBatchResponse, SdkError> {
+        prepare::batch::prepare(self, request).await
+    }
+
+    /// Sends the batch prepared by [`BreezSdk::prepare_send_batch`], returning
+    /// one payment per recipient in recipient order.
+    ///
+    /// Retrying after a failure that leaves the outcome unknown may pay twice:
+    /// a token transfer has no idempotency key, since the operator can only be
+    /// asked about a transaction by a hash that is computed while broadcasting.
+    /// Look for the batch with a `Token` payment details filter on the
+    /// transaction hash before sending it again.
+    #[instrument(level = "info", target = "breez_sdk_core::send_batch", skip_all)]
+    pub async fn send_batch(
+        &self,
+        request: SendBatchRequest,
+    ) -> Result<SendBatchResponse, SdkError> {
+        self.maybe_ensure_spark_private_mode_initialized().await?;
+        Box::pin(send::batch::send(self, request)).await
+    }
+
+    /// Builds the unsigned package for the batch prepared by
+    /// [`BreezSdk::prepare_send_batch`], for signing outside the SDK.
+    ///
+    /// Publish the signed package with
+    /// [`BreezSdk::publish_signed_transfer_package`], which returns every payment.
+    pub async fn build_unsigned_batch_package(
+        &self,
+        request: BuildUnsignedBatchPackageRequest,
+    ) -> Result<UnsignedTransferPackage, SdkError> {
+        Box::pin(client_signing::build_unsigned_batch_package(
+            self,
+            &request.prepare_response,
+        ))
+        .await
     }
 
     pub async fn build_unsigned_transfer_package(

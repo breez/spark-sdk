@@ -684,6 +684,12 @@ pub enum _UnsignedTransferPackage {
         fee: u128,
         is_swap: bool,
     },
+    TokenBatch {
+        prepare_token_transaction: ExternalPrepareTokenTransactionRequest,
+        token_context: Vec<u8>,
+        totals: Vec<BatchTotal>,
+        is_swap: bool,
+    },
 }
 
 #[frb(mirror(TransferTarget))]
@@ -897,6 +903,63 @@ pub struct _PublishSignedTransferPackageRequest {
 pub enum _PublishSignedTransferPackageResponse {
     SwapCompleted,
     PaymentSent { payment: Payment },
+    PaymentsSent { payments: Vec<Payment> },
+}
+
+#[frb(mirror(BatchRecipient))]
+pub struct _BatchRecipient {
+    pub payment_request: String,
+    pub amount: Option<u128>,
+    pub token_identifier: Option<String>,
+}
+
+#[frb(mirror(PrepareSendBatchRequest))]
+pub struct _PrepareSendBatchRequest {
+    pub recipients: Vec<BatchRecipient>,
+}
+
+#[frb(mirror(BatchDestination))]
+pub enum _BatchDestination {
+    SparkAddress {
+        address: String,
+    },
+    SparkInvoice {
+        invoice_details: SparkInvoiceDetails,
+    },
+}
+
+#[frb(mirror(ResolvedBatchRecipient))]
+pub struct _ResolvedBatchRecipient {
+    pub destination: BatchDestination,
+    pub amount: u128,
+    pub token_identifier: Option<String>,
+}
+
+#[frb(mirror(BatchTotal))]
+pub struct _BatchTotal {
+    pub token_identifier: Option<String>,
+    pub amount: u128,
+}
+
+#[frb(mirror(PrepareSendBatchResponse))]
+pub struct _PrepareSendBatchResponse {
+    pub recipients: Vec<ResolvedBatchRecipient>,
+    pub totals: Vec<BatchTotal>,
+}
+
+#[frb(mirror(SendBatchRequest))]
+pub struct _SendBatchRequest {
+    pub prepare_response: PrepareSendBatchResponse,
+}
+
+#[frb(mirror(SendBatchResponse))]
+pub struct _SendBatchResponse {
+    pub payments: Vec<Payment>,
+}
+
+#[frb(mirror(BuildUnsignedBatchPackageRequest))]
+pub struct _BuildUnsignedBatchPackageRequest {
+    pub prepare_response: PrepareSendBatchResponse,
 }
 
 #[frb(mirror(BuildUnsignedLnurlPayPackageRequest))]

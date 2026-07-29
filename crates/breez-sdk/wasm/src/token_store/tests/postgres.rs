@@ -90,3 +90,61 @@ async fn test_reserve_with_preferred_outputs_insufficient() {
     breez_sdk_spark::token_store_tests::test_reserve_with_preferred_outputs_insufficient(&store)
         .await;
 }
+
+#[wasm_bindgen_test]
+async fn test_multi_token_reservation_rolls_back_on_shortfall() {
+    let store = create_test_token_store("pg_token_multi_rolls_back_on_shortfall").await;
+    breez_sdk_spark::token_store_tests::test_multi_token_reservation_rolls_back_on_shortfall(
+        &store,
+    )
+    .await;
+}
+
+#[wasm_bindgen_test]
+async fn test_multi_token_reservation_rolls_back_on_first_token() {
+    let store = create_test_token_store("pg_token_multi_rolls_back_on_first_token").await;
+    breez_sdk_spark::token_store_tests::test_multi_token_reservation_rolls_back_on_first_token(
+        &store,
+    )
+    .await;
+}
+
+#[wasm_bindgen_test]
+async fn test_multi_token_reservation_rolls_back_on_unknown_token() {
+    let store = create_test_token_store("pg_token_multi_rolls_back_on_unknown_token").await;
+    breez_sdk_spark::token_store_tests::test_multi_token_reservation_rolls_back_on_unknown_token(
+        &store,
+    )
+    .await;
+}
+
+#[wasm_bindgen_test]
+async fn test_multi_token_reservation_cancel_restores_every_token() {
+    let store = create_test_token_store("pg_token_multi_cancel_restores_every_token").await;
+    breez_sdk_spark::token_store_tests::test_multi_token_reservation_cancel_restores_every_token(
+        &store,
+    )
+    .await;
+}
+
+#[wasm_bindgen_test]
+async fn test_multi_token_reservation_finalize_spends_every_token() {
+    let store = create_test_token_store("pg_token_multi_finalize_spends_every_token").await;
+    breez_sdk_spark::token_store_tests::test_multi_token_reservation_finalize_spends_every_token(
+        &store,
+    )
+    .await;
+}
+
+#[wasm_bindgen_test]
+async fn test_reserve_by_outpoints_rolls_back_on_missing() {
+    let store = create_test_token_store("pg_token_by_outpoints_rolls_back_on_missing").await;
+    breez_sdk_spark::token_store_tests::test_reserve_by_outpoints_rolls_back_on_missing(&store)
+        .await;
+}
+
+#[wasm_bindgen_test]
+async fn test_reserve_by_outpoints_spans_tokens() {
+    let store = create_test_token_store("pg_token_by_outpoints_spans_tokens").await;
+    breez_sdk_spark::token_store_tests::test_reserve_by_outpoints_spans_tokens(&store).await;
+}

@@ -1,3 +1,4 @@
+pub(in crate::sdk) mod batch;
 pub(super) mod bitcoin_address;
 pub(in crate::sdk) mod bolt11;
 pub(in crate::sdk::payments) mod cross_chain;
@@ -7,7 +8,7 @@ pub(super) mod spark_invoice;
 use tracing::warn;
 
 use crate::{
-    ConversionEstimate, SendPaymentMethod,
+    ConversionEstimate, Payment, SendPaymentMethod,
     error::SdkError,
     events::SdkEvent,
     models::{
@@ -21,11 +22,12 @@ use crate::{
 
 use super::conversion;
 
-#[allow(clippy::large_enum_variant)]
+/// What publishing a signed package produced: one payment per recipient for a
+/// batch package, exactly one for every other kind.
 pub(in crate::sdk) enum PublishOutcome {
     SwapCompleted,
-    Sent(SendPaymentResponse),
-    Replayed(SendPaymentResponse),
+    Sent(Vec<Payment>),
+    Replayed(Vec<Payment>),
 }
 
 pub(in crate::sdk) async fn publish_signed_package_inner(
@@ -55,7 +57,7 @@ pub(in crate::sdk) async fn publish_signed_package_inner(
                 .get_payment_by_id(prepare_transfer.transfer_id.clone())
                 .await
             {
-                return Ok(PublishOutcome::Replayed(SendPaymentResponse { payment }));
+                return Ok(PublishOutcome::Replayed(vec![payment]));
             }
             deferred_transfer_send(sdk, prepare_transfer, signed, *amount_sat, *fee_sat, target)
                 .await
@@ -69,41 +71,58 @@ pub(in crate::sdk) async fn publish_signed_package_inner(
             },
             TransferSignature::Token { signed },
         ) => {
-            // Token replay-safety relies on a local record keyed by the package
-            // digest: unlike transfer and swap, a token transaction is queryable
-            // at the operator only by its final hash, which is computed during
-            // broadcast and so is unknown from the package after a crash. A crash
-            // between the operator broadcast and recording the digest here is
-            // therefore not recoverable from the package; the integrator must
-            // reconcile local state (sync) before rebuilding, or the retry fails
-            // on the already-spent outputs rather than double-spending.
             let package_id = hex::encode(&prepare_token_transaction.digest);
             if *is_swap {
-                if let Ok(Some(_)) = cache.fetch_published_package(&package_id).await {
-                    return Ok(PublishOutcome::SwapCompleted);
-                }
-                spark_address::broadcast_signed_token_package(sdk, token_context, signed).await?;
-                if let Err(e) = cache
-                    .save_published_package(&package_id, "consolidation")
-                    .await
-                {
-                    warn!("Failed to record the published token consolidation package: {e:?}");
-                }
-                return Ok(PublishOutcome::SwapCompleted);
+                return publish_token_consolidation(
+                    sdk,
+                    &cache,
+                    &package_id,
+                    token_context,
+                    signed,
+                )
+                .await;
             }
             if let Ok(Some(payment_id)) = cache.fetch_published_package(&package_id).await
                 && let Ok(payment) = sdk.storage.get_payment_by_id(payment_id).await
             {
-                return Ok(PublishOutcome::Replayed(SendPaymentResponse { payment }));
+                return Ok(PublishOutcome::Replayed(vec![payment]));
             }
             let res = spark_address::send_token_signed(sdk, token_context, signed).await?;
-            if let Err(e) = cache
-                .save_published_package(&package_id, &res.payment.id)
-                .await
-            {
-                warn!("Failed to record the published token package: {e:?}");
-            }
+            record_published_package(&cache, &package_id, &res.payment.id).await;
             Ok(res)
+        }
+        (
+            UnsignedTransferPackage::TokenBatch {
+                prepare_token_transaction,
+                token_context,
+                is_swap,
+                ..
+            },
+            TransferSignature::Token { signed },
+        ) => {
+            let package_id = hex::encode(&prepare_token_transaction.digest);
+            if *is_swap {
+                return publish_token_consolidation(
+                    sdk,
+                    &cache,
+                    &package_id,
+                    token_context,
+                    signed,
+                )
+                .await;
+            }
+            if let Ok(Some(payment_id)) = cache.fetch_published_package(&package_id).await
+                && let Ok(payments) = batch::payments_for_published_batch(sdk, payment_id).await
+            {
+                return Ok(PublishOutcome::Replayed(payments));
+            }
+            let payments = batch::send_signed(sdk, token_context, signed).await?;
+            // Only the first id is recorded: the rest are recovered through the
+            // transaction hash it carries.
+            if let Some(payment) = payments.first() {
+                record_published_package(&cache, &package_id, &payment.id).await;
+            }
+            return Ok(PublishOutcome::Sent(payments));
         }
         _ => {
             return Err(SdkError::InvalidInput(
@@ -111,7 +130,43 @@ pub(in crate::sdk) async fn publish_signed_package_inner(
             ));
         }
     }?;
-    Ok(PublishOutcome::Sent(res))
+    Ok(PublishOutcome::Sent(vec![res.payment]))
+}
+
+/// Publishes a package that consolidates our own token outputs instead of paying
+/// anyone, which both token package kinds can turn out to be.
+async fn publish_token_consolidation(
+    sdk: &BreezSdk,
+    cache: &ObjectCacheRepository,
+    package_id: &str,
+    token_context: &[u8],
+    signed: &crate::signer::ExternalPreparedTokenTransaction,
+) -> Result<PublishOutcome, SdkError> {
+    if let Ok(Some(_)) = cache.fetch_published_package(package_id).await {
+        return Ok(PublishOutcome::SwapCompleted);
+    }
+    spark_address::broadcast_signed_token_package(sdk, token_context, signed).await?;
+    record_published_package(cache, package_id, "consolidation").await;
+    Ok(PublishOutcome::SwapCompleted)
+}
+
+/// Records that a token package was published, so a re-publish replays its
+/// payments instead of spending the same outputs again.
+///
+/// A token transaction is queryable at the operator only by its final hash,
+/// which is computed during broadcast and so is unknown from the package after a
+/// crash. A crash between the broadcast and this record is therefore not
+/// recoverable from the package: the integrator must reconcile local state
+/// (sync) before rebuilding, or the retry fails on the already-spent outputs
+/// rather than double-spending.
+async fn record_published_package(
+    cache: &ObjectCacheRepository,
+    package_id: &str,
+    payment_id: &str,
+) {
+    if let Err(e) = cache.save_published_package(package_id, payment_id).await {
+        warn!("Failed to record the published token package: {e:?}");
+    }
 }
 
 pub(in crate::sdk::payments) async fn publish_signed_transfer_package(
@@ -133,19 +188,45 @@ pub(in crate::sdk::payments) async fn publish_signed_transfer_package(
                 .to_string(),
         ));
     }
+    // Which response shape to return follows the kind of package that was
+    // published, not how many payments came out: a batch of one recipient is
+    // still a batch.
+    let is_batch = matches!(
+        signed_package.unsigned,
+        UnsignedTransferPackage::TokenBatch { .. }
+    );
     match publish_signed_package_inner(sdk, signed_package).await? {
         PublishOutcome::SwapCompleted => Ok(PublishSignedTransferPackageResponse::SwapCompleted),
-        PublishOutcome::Replayed(res) => Ok(PublishSignedTransferPackageResponse::PaymentSent {
-            payment: res.payment,
-        }),
-        PublishOutcome::Sent(res) => {
-            sdk.event_emitter
-                .emit(&SdkEvent::from_payment(res.payment.clone()))
-                .await;
-            Ok(PublishSignedTransferPackageResponse::PaymentSent {
-                payment: res.payment,
-            })
+        PublishOutcome::Replayed(payments) => transfer_package_response(is_batch, payments),
+        PublishOutcome::Sent(payments) => {
+            emit_payments(sdk, &payments).await;
+            transfer_package_response(is_batch, payments)
         }
+    }
+}
+
+/// Shapes the payments a package produced into the response its kind calls for:
+/// every payment for a batch, the single one for anything else.
+fn transfer_package_response(
+    is_batch: bool,
+    payments: Vec<Payment>,
+) -> Result<PublishSignedTransferPackageResponse, SdkError> {
+    if is_batch {
+        return Ok(PublishSignedTransferPackageResponse::PaymentsSent { payments });
+    }
+    let payment = payments
+        .into_iter()
+        .next()
+        .ok_or_else(|| SdkError::Generic("published package produced no payment".to_string()))?;
+    Ok(PublishSignedTransferPackageResponse::PaymentSent { payment })
+}
+
+/// Raises a payment event for each of a published package's payments.
+pub(in crate::sdk) async fn emit_payments(sdk: &BreezSdk, payments: &[Payment]) {
+    for payment in payments {
+        sdk.event_emitter
+            .emit(&SdkEvent::from_payment(payment.clone()))
+            .await;
     }
 }
 

@@ -49,6 +49,25 @@ namespace BreezSdkSnippets
                         signed: await signer.PrepareTokenTransaction(token.prepareTokenTransaction)
                     );
                     break;
+                case UnsignedTransferPackage.TokenBatch tokenBatch:
+                    if (tokenBatch.isSwap)
+                    {
+                        Console.WriteLine("Approve combining token outputs " +
+                            "before the batch is sent");
+                    }
+                    else
+                    {
+                        foreach (var total in tokenBatch.totals)
+                        {
+                            Console.WriteLine($"Approve sending {total.amount} of token " +
+                                $"{total.tokenIdentifier}");
+                        }
+                    }
+                    signature = new TransferSignature.Token(
+                        signed: await signer.PrepareTokenTransaction(
+                            tokenBatch.prepareTokenTransaction)
+                    );
+                    break;
                 default:
                     throw new Exception("Unknown transfer package");
             }
@@ -94,6 +113,9 @@ namespace BreezSdkSnippets
                         continue;
                     case PublishSignedTransferPackageResponse.PaymentSent paymentSent:
                         return paymentSent.payment;
+                    // Only a batch package pays several recipients at once
+                    case PublishSignedTransferPackageResponse.PaymentsSent:
+                        throw new Exception("unexpected batch response for a single payment");
                 }
             }
             // ANCHOR_END: client-signing-send

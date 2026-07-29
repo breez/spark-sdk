@@ -1,4 +1,3 @@
-use std::slice;
 use std::time::Duration;
 
 use super::*;
@@ -8,6 +7,15 @@ use crate::token::tests as shared_tests;
 
 #[cfg(feature = "browser-tests")]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+fn merge_token_outputs(sets: impl IntoIterator<Item = TokenOutputs>) -> TokenOutputs {
+    let mut merged = TokenOutputs::default();
+    for set in sets {
+        merged.metadata.extend(set.metadata);
+        merged.outputs.extend(set.outputs);
+    }
+    merged
+}
 
 fn create_token_outputs(identifier_no: u8, output_amounts: Vec<u128>) -> TokenOutputs {
     shared_tests::create_token_outputs(identifier_no, output_amounts)
@@ -44,14 +52,16 @@ async fn test_reserve_token_outputs_and_set_add_output() {
     let token2 = create_token_outputs(2, vec![500, 1000]);
 
     let result = store
-        .set_tokens_outputs(&[token1.clone(), token2.clone()], future_refresh_start())
+        .set_tokens_outputs(
+            &merge_token_outputs([token1.clone(), token2.clone()]),
+            future_refresh_start(),
+        )
         .await;
     assert!(result.is_ok());
 
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(300),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(300))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -68,7 +78,7 @@ async fn test_reserve_token_outputs_and_set_add_output() {
 
     let token1_updated = create_token_outputs(1, vec![100, 200, 300, 400]);
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1_updated), future_refresh_start())
+        .set_tokens_outputs(&token1_updated, future_refresh_start())
         .await;
     assert!(result.is_ok());
 
@@ -97,14 +107,16 @@ async fn test_reserve_token_outputs_and_set_remove_reserved_output() {
     let token2 = create_token_outputs(2, vec![500, 1000]);
 
     let result = store
-        .set_tokens_outputs(&[token1.clone(), token2.clone()], future_refresh_start())
+        .set_tokens_outputs(
+            &merge_token_outputs([token1.clone(), token2.clone()]),
+            future_refresh_start(),
+        )
         .await;
     assert!(result.is_ok());
 
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(300),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(300))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -121,7 +133,7 @@ async fn test_reserve_token_outputs_and_set_remove_reserved_output() {
 
     let token1_updated = create_token_outputs(1, vec![100, 200, 400]);
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1_updated), future_refresh_start())
+        .set_tokens_outputs(&token1_updated, future_refresh_start())
         .await;
     assert!(result.is_ok());
 
@@ -140,8 +152,7 @@ async fn test_reserve_token_outputs_and_set_remove_reserved_output() {
 
     let reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(300),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(300))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -158,7 +169,7 @@ async fn test_reserve_token_outputs_and_set_remove_reserved_output() {
 
     let token1_updated = create_token_outputs(1, vec![100, 400]);
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1_updated), future_refresh_start())
+        .set_tokens_outputs(&token1_updated, future_refresh_start())
         .await;
     assert!(result.is_ok());
 
@@ -186,14 +197,13 @@ async fn test_set_reconciles_reservation_with_empty_outputs() {
     let token1 = create_token_outputs(1, vec![100, 200, 300]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(&token1, future_refresh_start())
         .await;
     assert!(result.is_ok());
 
     let _reservation = store
         .reserve_token_outputs(
-            "token-1",
-            ReservationTarget::MinTotalValue(300),
+            &[("token-1".to_string(), ReservationTarget::MinTotalValue(300))],
             ReservationPurpose::Payment,
             None,
             None,
@@ -201,7 +211,9 @@ async fn test_set_reconciles_reservation_with_empty_outputs() {
         .await
         .unwrap();
 
-    let result = store.set_tokens_outputs(&[], future_refresh_start()).await;
+    let result = store
+        .set_tokens_outputs(&TokenOutputs::default(), future_refresh_start())
+        .await;
     assert!(result.is_ok());
 
     // InMemory-specific: check internal state
@@ -251,6 +263,48 @@ async fn test_select_token_outputs() {
 async fn test_reserve_token_outputs_by_outpoints() {
     let store = InMemoryTokenOutputStore::default();
     shared_tests::test_reserve_token_outputs_by_outpoints(&store).await;
+}
+
+#[async_test_all]
+async fn test_multi_token_reservation_rolls_back_on_shortfall() {
+    let store = InMemoryTokenOutputStore::default();
+    shared_tests::test_multi_token_reservation_rolls_back_on_shortfall(&store).await;
+}
+
+#[async_test_all]
+async fn test_multi_token_reservation_rolls_back_on_first_token() {
+    let store = InMemoryTokenOutputStore::default();
+    shared_tests::test_multi_token_reservation_rolls_back_on_first_token(&store).await;
+}
+
+#[async_test_all]
+async fn test_multi_token_reservation_rolls_back_on_unknown_token() {
+    let store = InMemoryTokenOutputStore::default();
+    shared_tests::test_multi_token_reservation_rolls_back_on_unknown_token(&store).await;
+}
+
+#[async_test_all]
+async fn test_multi_token_reservation_cancel_restores_every_token() {
+    let store = InMemoryTokenOutputStore::default();
+    shared_tests::test_multi_token_reservation_cancel_restores_every_token(&store).await;
+}
+
+#[async_test_all]
+async fn test_multi_token_reservation_finalize_spends_every_token() {
+    let store = InMemoryTokenOutputStore::default();
+    shared_tests::test_multi_token_reservation_finalize_spends_every_token(&store).await;
+}
+
+#[async_test_all]
+async fn test_reserve_by_outpoints_rolls_back_on_missing() {
+    let store = InMemoryTokenOutputStore::default();
+    shared_tests::test_reserve_by_outpoints_rolls_back_on_missing(&store).await;
+}
+
+#[async_test_all]
+async fn test_reserve_by_outpoints_spans_tokens() {
+    let store = InMemoryTokenOutputStore::default();
+    shared_tests::test_reserve_by_outpoints_spans_tokens(&store).await;
 }
 
 #[async_test_all]
