@@ -206,6 +206,12 @@ impl PasskeyClient {
         &self,
         request: RegisterRequest,
     ) -> Result<RegisterResponse, PasskeyError> {
+        // Validate before anything is created: an invalid label would
+        // otherwise mint a real passkey and only then fail, and the
+        // recovery that failure points at runs the same validation on the
+        // same label.
+        let label = self.passkey.resolve_label(request.label)?;
+
         let credential = self
             .passkey
             .prf_provider()
@@ -215,7 +221,7 @@ impl PasskeyClient {
         let setup = match self
             .passkey
             .setup_wallet(SetupWalletRequest {
-                label: request.label,
+                label: Some(label),
                 publish_label: true,
                 // Pin the derive to the just-created credential so the
                 // seed comes from it, not another resident passkey for
@@ -230,13 +236,17 @@ impl PasskeyClient {
             // has to carry it. Dropping it leaves the host unable to tell
             // "nothing was created" from "created, not derived", and the
             // natural recovery (register again) strands this passkey.
-            Err(e) => {
+            //
+            // Only the authenticator's own failures are wrapped: the rest
+            // are SDK-internal and keep their own variant, so hosts have
+            // one shape to unwrap rather than two.
+            Err(PasskeyError::Prf(source)) => {
                 return Err(PasskeyError::CreatedButNotDerived {
                     credential_id: credential.credential_id,
-                    kind: e.kind(),
-                    reason: e.to_string(),
+                    source,
                 });
             }
+            Err(e) => return Err(e),
         };
 
         Ok(RegisterResponse {

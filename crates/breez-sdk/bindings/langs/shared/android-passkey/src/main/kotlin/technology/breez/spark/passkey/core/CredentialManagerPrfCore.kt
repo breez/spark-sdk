@@ -82,12 +82,14 @@ private const val CORE_TAG = "PasskeyPrfCore"
 // =====================================================================
 
 /**
- * A newly-registered passkey is briefly not ready for the immediate
- * post-create assertion: Credential Manager can drop `prf.second` from a
- * dual-salt assertion (forcing a second single-salt prompt) or surface
- * the credential as not yet discoverable in the picker. [arm] opens a
- * window in which the next derive re-asks instead of trusting the first
- * miss.
+ * A newly-registered passkey is briefly not discoverable, so the
+ * immediate post-create assertion can miss a credential that exists.
+ * [arm] opens a window in which the next derive re-asks instead of
+ * trusting that first miss.
+ *
+ * Scoped to that case only: the retry catches `NoCredentialException`,
+ * so a dropped `prf.second` is not covered and still falls through to
+ * the single-salt recover in [CredentialManagerPrfCore.deriveSeeds].
  *
  * The window is a ceiling, not a wait: indexing takes as long as the
  * device takes, so a fixed sleep either returns before the credential is

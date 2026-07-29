@@ -220,12 +220,20 @@ impl Passkey {
     /// [`Self::store_label`] need no extra PRF prompts.
     /// `publish_label = false` skips the Nostr write: used by
     /// speculative cold-restore.
+    /// Resolve a caller-supplied label against the configured default and
+    /// validate it. Exposed so a caller can reject a bad label before
+    /// driving any ceremony.
+    pub(crate) fn resolve_label(&self, label: Option<String>) -> Result<String, PasskeyError> {
+        let label = label.unwrap_or_else(|| self.default_label.clone());
+        validate_label(&label)?;
+        Ok(label)
+    }
+
     pub async fn setup_wallet(
         &self,
         request: SetupWalletRequest,
     ) -> Result<WalletSetup, PasskeyError> {
-        let label = request.label.unwrap_or_else(|| self.default_label.clone());
-        validate_label(&label)?;
+        let label = self.resolve_label(request.label)?;
 
         // [account_master, label]: dual-salt single ceremony where the
         // platform supports it, fallback to two prompts otherwise.
