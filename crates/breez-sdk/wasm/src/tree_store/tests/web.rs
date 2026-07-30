@@ -507,6 +507,12 @@ async fn test_absent_leaf_is_kept_for_its_exit_chain() {
 }
 
 #[wasm_bindgen_test]
+async fn test_remove_leaves_spares_a_revived_leaf() {
+    let store = create_test_tree_store("wtree_test_remove_leaves_spares_a_revived_leaf").await;
+    breez_sdk_spark::tree_store_tests::test_remove_leaves_spares_a_revived_leaf(&store).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_empty_pedigree_keeps_stored_chain() {
     let store = create_test_tree_store("wtree_test_empty_pedigree_keeps_stored_chain").await;
     breez_sdk_spark::tree_store_tests::test_empty_pedigree_keeps_stored_chain(&store).await;

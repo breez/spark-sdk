@@ -797,17 +797,24 @@ impl TreeStore for SqliteTreeStore {
             .map_err(|e| generic("begin remove_leaves", e))?;
         // Each leaf owns its chain, so its ancestor rows go with it, and in that
         // order so no ancestor row is ever left without its leaf.
+        // Only a row still marked and still unreserved goes: the purge read its
+        // list, then spent seconds asking the operators, and a refresh landing in
+        // that window may have brought the leaf back or a payment reserved it.
         for id in leaf_ids {
-            tx.execute(
-                "DELETE FROM brz_tree_ancestors WHERE leaf_id = ?1",
-                params![id.to_string()],
-            )
-            .map_err(|e| generic("remove leaf ancestors", e))?;
-            tx.execute(
-                "DELETE FROM brz_tree_leaves WHERE id = ?1",
-                params![id.to_string()],
-            )
-            .map_err(|e| generic("remove leaf", e))?;
+            let removed = tx
+                .execute(
+                    "DELETE FROM brz_tree_leaves
+                     WHERE id = ?1 AND is_deleted = 1 AND reservation_id IS NULL",
+                    params![id.to_string()],
+                )
+                .map_err(|e| generic("remove leaf", e))?;
+            if removed > 0 {
+                tx.execute(
+                    "DELETE FROM brz_tree_ancestors WHERE leaf_id = ?1",
+                    params![id.to_string()],
+                )
+                .map_err(|e| generic("remove leaf ancestors", e))?;
+            }
         }
         tx.commit()
             .map_err(|e| generic("commit remove_leaves", e))?;
@@ -1331,6 +1338,7 @@ mod tests {
         test_leaf_reparented_by_renewal,
         test_ancestor_not_returned_as_leaf,
         test_absent_leaf_is_kept_for_its_exit_chain,
+        test_remove_leaves_spares_a_revived_leaf,
         test_deleted_leaves_are_listed_and_removable,
         test_absent_leaf_keeps_shared_ancestor,
         test_incomplete_pedigree_still_spendable,

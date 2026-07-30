@@ -496,15 +496,23 @@ impl TreeStore for PostgresTreeStore {
         let tx = client.transaction().await.map_err(map_err)?;
         // Each leaf owns its chain, so its ancestor rows go with it, and in that
         // order so no ancestor row is ever left without its leaf.
+        // Only a row still marked and still unreserved goes: the purge read its
+        // list, then spent seconds asking the operators, and a refresh landing in
+        // that window may have brought the leaf back or a payment reserved it.
+        let removed = tx
+            .query(
+                "DELETE FROM brz_tree_leaves \
+                 WHERE user_id = $1 AND id = ANY($2) \
+                   AND is_deleted = TRUE AND reservation_id IS NULL \
+                 RETURNING id",
+                &[&self.identity, &ids],
+            )
+            .await
+            .map_err(map_err)?;
+        let removed_ids: Vec<String> = removed.iter().map(|row| row.get("id")).collect();
         tx.execute(
             "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)",
-            &[&self.identity, &ids],
-        )
-        .await
-        .map_err(map_err)?;
-        tx.execute(
-            "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND id = ANY($2)",
-            &[&self.identity, &ids],
+            &[&self.identity, &removed_ids],
         )
         .await
         .map_err(map_err)?;
@@ -2151,6 +2159,12 @@ mod tests {
     async fn test_absent_leaf_is_kept_for_its_exit_chain() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_absent_leaf_is_kept_for_its_exit_chain(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_remove_leaves_spares_a_revived_leaf() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_remove_leaves_spares_a_revived_leaf(&fixture.store).await;
     }
 
     #[tokio::test]

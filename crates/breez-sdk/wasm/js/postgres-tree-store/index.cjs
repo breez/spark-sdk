@@ -443,14 +443,21 @@ class PostgresTreeStore {
       await this._withWriteTransaction(async (client) => {
         // Each leaf owns its chain, so its ancestor rows go with it, and in
         // that order so no ancestor row is ever left without its leaf.
-        await client.query(
-          "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)",
+        // Only a row still marked and still unreserved goes: the purge read its
+        // list, then spent seconds asking the operators, and a refresh landing in
+        // that window may have brought the leaf back or a payment reserved it.
+        const removed = await client.query(
+          `DELETE FROM brz_tree_leaves WHERE user_id = $1 AND id = ANY($2)
+             AND is_deleted = TRUE AND reservation_id IS NULL RETURNING id`,
           [this.identity, leafIds]
         );
-        await client.query(
-          "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND id = ANY($2)",
-          [this.identity, leafIds]
-        );
+        const removedIds = removed.rows.map((r) => r.id);
+        if (removedIds.length > 0) {
+          await client.query(
+            "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)",
+            [this.identity, removedIds]
+          );
+        }
       });
     } catch (error) {
       if (error instanceof TreeStoreError) throw error;

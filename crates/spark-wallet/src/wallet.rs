@@ -1582,13 +1582,18 @@ impl SparkWallet {
                 // mid-exit leaf the operators now report OnChain, so Auto resumes it)
                 // and the missing-from-operators ones, which are the operator-dropped
                 // case unilateral exit exists for: they count towards the balance, so
-                // omitting them would strand exactly the funds most at risk.
+                // omitting them would strand exactly the funds most at risk. The
+                // leaves kept only for their chain are in no bucket at all, so they
+                // are asked for separately: their row exists to be exitable, which
+                // takes something actually selecting them.
                 let leaves = self.tree_service.list_leaves().await?;
+                let kept_for_exit = self.tree_service.list_leaves_kept_for_exit().await?;
                 let mut leaf_ids: Vec<TreeNodeId> = leaves
                     .available
                     .into_iter()
                     .chain(leaves.not_available)
                     .chain(leaves.available_missing_from_operators)
+                    .chain(kept_for_exit)
                     .map(|l| l.id)
                     .collect();
                 leaf_ids.sort();

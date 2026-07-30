@@ -638,6 +638,45 @@ pub async fn test_deleted_leaves_are_listed_and_removable(store: &dyn TreeStore)
     assert!(exit_chain(store, &leaf.id).await.is_none());
 }
 
+/// `remove_leaves` only takes a leaf that is still marked. The purge reads its
+/// list, then spends seconds asking the operators, so a refresh that brings the
+/// leaf back in that window must survive the delete that was already in flight.
+pub async fn test_remove_leaves_spares_a_revived_leaf(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+    let pedigree = LeafPedigree {
+        leaf: leaf.clone(),
+        ancestors: vec![root],
+    };
+    store
+        .add_leaves(std::slice::from_ref(&pedigree))
+        .await
+        .unwrap();
+
+    let refresh_start = future_refresh_start(store).await;
+    store.set_leaves(&[], &[], refresh_start).await.unwrap();
+    assert_eq!(store.get_deleted_leaves().await.unwrap().len(), 1);
+
+    // The refresh the purge raced with: the leaf is reported again, clearing the
+    // mark, before the delete it decided on lands.
+    store
+        .add_leaves(std::slice::from_ref(&pedigree))
+        .await
+        .unwrap();
+    store
+        .remove_leaves(std::slice::from_ref(&leaf.id))
+        .await
+        .unwrap();
+
+    let available = get_available(store).await;
+    assert_eq!(
+        available.len(),
+        1,
+        "a revived leaf survives the stale delete"
+    );
+    assert_eq!(exit_chain_ids(store, &leaf.id).await, vec!["root", "leaf"]);
+}
+
 /// A refresh reporting only one of two leaves keeps both, so the unreported one
 /// stays exitable and each leaf keeps its own copy of the ancestor they share.
 pub async fn test_absent_leaf_keeps_shared_ancestor(store: &dyn TreeStore) {

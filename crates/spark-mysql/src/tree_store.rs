@@ -587,19 +587,25 @@ impl TreeStore for MysqlTreeStore {
         let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
         // Each leaf owns its chain, so its ancestor rows go with it, and in that
         // order so no ancestor row is ever left without its leaf.
+        // Only a row still marked and still unreserved goes: the purge read its
+        // list, then spent seconds asking the operators, and a refresh landing in
+        // that window may have brought the leaf back or a payment reserved it.
         for id in leaf_ids {
             tx.exec_drop(
-                "DELETE FROM brz_tree_ancestors WHERE user_id = ? AND leaf_id = ?",
+                "DELETE FROM brz_tree_leaves \
+                 WHERE user_id = ? AND id = ? AND is_deleted = 1 AND reservation_id IS NULL",
                 (self.identity.clone(), id.to_string()),
             )
             .await
             .map_err(map_err)?;
-            tx.exec_drop(
-                "DELETE FROM brz_tree_leaves WHERE user_id = ? AND id = ?",
-                (self.identity.clone(), id.to_string()),
-            )
-            .await
-            .map_err(map_err)?;
+            if tx.affected_rows() > 0 {
+                tx.exec_drop(
+                    "DELETE FROM brz_tree_ancestors WHERE user_id = ? AND leaf_id = ?",
+                    (self.identity.clone(), id.to_string()),
+                )
+                .await
+                .map_err(map_err)?;
+            }
         }
         tx.commit().await.map_err(map_err)?;
         self.notify_balance_change();
@@ -2505,6 +2511,12 @@ mod tests {
     async fn test_absent_leaf_is_kept_for_its_exit_chain() {
         let fixture = MysqlTreeStoreTestFixture::new().await;
         shared_tests::test_absent_leaf_is_kept_for_its_exit_chain(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_remove_leaves_spares_a_revived_leaf() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_remove_leaves_spares_a_revived_leaf(&fixture.store).await;
     }
 
     #[tokio::test]

@@ -929,6 +929,11 @@ pub trait TreeService: Send + Sync {
     /// operators can now prove, and returns how many went. Deliberately separate
     /// from [`TreeService::refresh_leaves`]: proving a spend costs a query per
     /// batch, and a refresh sits on the payment path.
+    /// The leaves kept only for their exit chain. They belong to none of
+    /// [`Leaves`]'s buckets, so this is the only way an exit can reach them, and
+    /// keeping the row would be pointless if nothing could.
+    async fn list_leaves_kept_for_exit(&self) -> Result<Vec<TreeNode>, TreeServiceError>;
+
     async fn purge_proven_spent_leaves(&self) -> Result<usize, TreeServiceError>;
 
     /// Inserts new leaves into the tree, each with the ancestors the caller

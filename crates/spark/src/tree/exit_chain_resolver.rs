@@ -281,6 +281,10 @@ mod tests {
             unimplemented!("not exercised by ExitChainResolver")
         }
 
+        async fn list_leaves_kept_for_exit(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
+            unimplemented!("not exercised by ExitChainResolver")
+        }
+
         async fn purge_proven_spent_leaves(&self) -> Result<usize, TreeServiceError> {
             unimplemented!("not exercised by ExitChainResolver")
         }
