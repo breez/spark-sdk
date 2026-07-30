@@ -1224,20 +1224,24 @@ fn leaf_copies_agree(a: &TreeNode, b: &TreeNode) -> bool {
 /// spendable one. `OnChain` and `Exited` are the two an exit drives a leaf
 /// through, and they have to be asked for: a refresh that requested only
 /// `Available` lost the leaf from every operator's response at once the moment
-/// its node txs confirmed, and the store, reading that absence as a spend,
-/// deleted the chain the exit still needed to resume. `ParentExited` is the same
-/// problem one level down: exiting one leaf puts every other leaf under that
-/// parent into it, so a partial exit would drop the siblings it did not touch.
+/// its node txs confirmed, and the leaf then counted as one nobody reports.
 /// `RenewLocked` is the transient equivalent during a timelock renewal.
 ///
 /// `TransferLocked` is deliberately absent: a leaf of ours in that status is one
 /// we are sending, and re-reading it would undo the send.
+///
+/// `ParentExited` belongs here on the same reasoning as `OnChain`, and cannot be
+/// asked for: the operator rejects the whole query with `unknown tree node
+/// status`, so one unrecognised status costs every leaf in the refresh rather
+/// than the ones in that status. Leaving it out is the graceful half of that
+/// trade: a leaf under an exited parent is reported by nobody, so it is kept for
+/// its chain and stays exitable, out of the balance rather than out of reach.
+/// Nothing here may name a status the operators do not know.
 fn held_leaf_statuses() -> Vec<i32> {
     vec![
         ProtoTreeNodeStatus::Available as i32,
         ProtoTreeNodeStatus::OnChain as i32,
         ProtoTreeNodeStatus::Exited as i32,
-        ProtoTreeNodeStatus::ParentExited as i32,
         ProtoTreeNodeStatus::RenewLocked as i32,
     ]
 }
@@ -1793,13 +1797,19 @@ mod tests {
                 ProtoTreeNodeStatus::Available as i32,
                 ProtoTreeNodeStatus::OnChain as i32,
                 ProtoTreeNodeStatus::Exited as i32,
-                ProtoTreeNodeStatus::ParentExited as i32,
                 ProtoTreeNodeStatus::RenewLocked as i32,
             ]
         );
         assert!(
             !req.statuses
                 .contains(&(ProtoTreeNodeStatus::TransferLocked as i32))
+        );
+        // The operator rejects the entire query on a status it does not know,
+        // which costs every leaf in the refresh and not just the ones in that
+        // status. `ParentExited` is the one our proto has and it does not.
+        assert!(
+            !req.statuses
+                .contains(&(ProtoTreeNodeStatus::ParentExited as i32))
         );
         assert!(matches!(req.source, Some(Source::OwnerIdentityPubkey(_))));
     }
