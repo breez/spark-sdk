@@ -1207,12 +1207,26 @@ impl SparkWallet {
         .await
     }
 
-    /// Claims a transfer and performs a tree-store insert.
+    /// Claims a transfer, inserts its leaves into the tree store, and reports the
+    /// claim to listeners. Returns the transfer at its post-claim status.
     pub async fn process_transfer(
         &self,
-        transfer: &WalletTransfer,
-    ) -> Result<Vec<TreeNode>, SparkWalletError> {
-        claim_transfer(transfer.raw(), &self.transfer_service, &self.tree_service).await
+        transfer: WalletTransfer,
+    ) -> Result<WalletTransfer, SparkWalletError> {
+        let nodes =
+            claim_transfer(transfer.raw(), &self.transfer_service, &self.tree_service).await?;
+        let claimed = transfer.claimed();
+
+        // A claim reports success without producing leaves when the transfer had
+        // none for us, which a caller polling a transfer it sent itself reaches.
+        // Nothing changed then, so there is nothing to report.
+        if !nodes.is_empty() {
+            self.event_manager
+                .notify_listeners(WalletEvent::TransferClaimed(claimed.clone()));
+            self.on_leaves_changed().await;
+        }
+
+        Ok(claimed)
     }
 
     /// Queries the SSP for user requests by their associated transfer IDs
@@ -2828,17 +2842,17 @@ impl BackgroundProcessor {
         claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
         trace!("Claimed transfer from event");
 
-        // Update transfer status before notifying listeners
-        let mut claimed_transfer = transfer;
-        claimed_transfer.status = TransferStatus::Completed;
         self.event_manager
-            .notify_listeners(WalletEvent::TransferClaimed(WalletTransfer::from_transfer(
-                claimed_transfer,
-                ssp_transfer,
-                htlc,
-                self.identity_public_key,
-                self.ssp_client.identity_public_key(),
-            )));
+            .notify_listeners(WalletEvent::TransferClaimed(
+                WalletTransfer::from_transfer(
+                    transfer,
+                    ssp_transfer,
+                    htlc,
+                    self.identity_public_key,
+                    self.ssp_client.identity_public_key(),
+                )
+                .claimed(),
+            ));
         self.on_leaves_changed().await;
 
         Ok(())

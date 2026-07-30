@@ -137,6 +137,15 @@ impl WalletTransfer {
         &self.raw
     }
 
+    /// The same transfer at the status a successful claim leaves it in. Promotes
+    /// the underlying `Transfer` alongside the projection, since that is what a
+    /// caller re-claims from.
+    pub(crate) fn claimed(mut self) -> Self {
+        self.status = TransferStatus::Completed;
+        self.raw.status = TransferStatus::Completed;
+        self
+    }
+
     pub fn from_preimage_request_with_transfer(
         value: PreimageRequestWithTransfer,
         our_public_key: PublicKey,
