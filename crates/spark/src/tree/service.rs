@@ -3,11 +3,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::PublicKey;
 use platform_utils::tokio;
 use platform_utils::tokio::sync::broadcast;
 use tracing::{debug, error, info, trace, warn};
 
+use crate::bitcoin::{BitcoinService, sighash_from_tx, verify_finalized_taproot_signature_tx};
 use crate::services::csv_timelock;
 use crate::tree::{
     LeafPedigree, LeafSelection, Leaves, ReservationPurpose, ReserveResult, SelectLeavesOptions,
@@ -523,9 +525,6 @@ impl TreeService for SynchronousTreeService {
             return Ok(0);
         }
         let ids: Vec<TreeNodeId> = deleted.iter().map(|leaf| leaf.id.clone()).collect();
-        let source = Source::NodeIds(TreeNodeIds {
-            node_ids: ids.iter().map(ToString::to_string).collect(),
-        });
 
         // Ask every operator, by id. By id because an owner query is
         // status-filtered, and the operators drop Investigation, Lost and
@@ -539,49 +538,27 @@ impl TreeService for SynchronousTreeService {
             .get_all_operators()
             .map(|op| (op.id, op.client.clone()))
             .collect();
-        let operator_count = operators.len();
-        if operator_count == 0 {
+        if operators.is_empty() {
             return Ok(0);
         }
-        let responses = join_all(operators.iter().map(|(id, client)| {
-            let source = source.clone();
-            async move {
-                (
-                    *id,
-                    self.query_nodes(client, false, Some(source), vec![]).await,
-                )
-            }
+        let ids = &ids;
+        let responses = join_all(operators.iter().map(|(id, client)| async move {
+            (*id, self.query_nodes_by_id_batched(client, ids).await)
         }))
         .await;
 
-        // An operator we could not reach has not vouched for anything, so its
-        // silence holds the leaves rather than counting towards a deletion.
-        let mut agreeing: HashMap<TreeNodeId, usize> = HashMap::new();
-        for (id, res) in responses {
-            let Ok(nodes) = res else {
-                debug!("purge: operator {id} unreachable, keeping every leaf this round");
-                return Ok(0);
-            };
-            let theirs: HashMap<TreeNodeId, TreeNode> =
-                nodes.into_iter().map(|n| (n.id.clone(), n)).collect();
-            for leaf in &deleted {
-                if theirs
-                    .get(&leaf.id)
-                    .is_some_and(|theirs| refund_left_us(&self.identity_pubkey, leaf, theirs))
-                {
-                    *agreeing.entry(leaf.id.clone()).or_default() += 1;
-                }
-            }
-        }
-
-        let proven: Vec<TreeNodeId> = deleted
-            .iter()
-            .filter(|leaf| agreeing.get(&leaf.id) == Some(&operator_count))
-            .map(|leaf| leaf.id.clone())
-            .collect();
+        let bitcoin_service = BitcoinService::new(self.network);
+        let Some(proven) = prove_spent_leaves(
+            &bitcoin_service,
+            &self.identity_pubkey,
+            &deleted,
+            &responses,
+        ) else {
+            return Ok(0);
+        };
         if !proven.is_empty() {
             info!(
-                "Removing {} of {} kept leaves: every operator reports their refund replaced at a lower timelock",
+                "Removing {} of {} kept leaves: every operator reports their refund replaced, at a lower timelock, by one we co-signed",
                 proven.len(),
                 deleted.len()
             );
@@ -591,9 +568,61 @@ impl TreeService for SynchronousTreeService {
     }
 }
 
-/// Whether the operators' copy of a leaf says it has left us: it funds the same
-/// node, it is owned by somebody else, and its refund replaced ours at a lower
-/// timelock.
+/// How many node ids go into one `QueryNodes` request. The kept set has no
+/// bound: a leaf the operators will not talk about is never proven and stays
+/// forever, so the set only grows and cannot be sent in a single message.
+const PURGE_QUERY_BATCH: usize = 100;
+
+/// The ids every operator agrees have left us.
+///
+/// `None` when any operator failed to answer: silence has not vouched for
+/// anything, so it holds every leaf rather than counting towards a deletion.
+/// Agreement is counted per distinct operator, so a pool that answered twice for
+/// one of them cannot pass for agreement another never gave.
+fn prove_spent_leaves<E>(
+    bitcoin_service: &BitcoinService,
+    identity: &PublicKey,
+    deleted: &[TreeNode],
+    responses: &[(usize, Result<Vec<TreeNode>, E>)],
+) -> Option<Vec<TreeNodeId>> {
+    let mut agreeing: HashMap<&TreeNodeId, HashSet<usize>> = HashMap::new();
+    let mut answered: HashSet<usize> = HashSet::new();
+    for (id, res) in responses {
+        let Ok(nodes) = res else {
+            debug!("purge: operator {id} unreachable, keeping every leaf this round");
+            return None;
+        };
+        answered.insert(*id);
+        let theirs: HashMap<&TreeNodeId, &TreeNode> = nodes.iter().map(|n| (&n.id, n)).collect();
+        for leaf in deleted {
+            if theirs
+                .get(&leaf.id)
+                .is_some_and(|theirs| refund_left_us(bitcoin_service, identity, leaf, theirs))
+            {
+                agreeing.entry(&leaf.id).or_default().insert(*id);
+            }
+        }
+    }
+    let operator_count = answered.len();
+    if operator_count == 0 {
+        return None;
+    }
+    Some(
+        deleted
+            .iter()
+            .filter(|leaf| {
+                agreeing
+                    .get(&leaf.id)
+                    .is_some_and(|ops| ops.len() == operator_count)
+            })
+            .map(|leaf| leaf.id.clone())
+            .collect(),
+    )
+}
+
+/// Whether the operators' copy of a leaf proves it has left us: it is owned by
+/// somebody else, and it replaces our refund, spending the same node output at a
+/// lower timelock under a signature we must have taken part in.
 ///
 /// The owner is what makes this directional. A lower timelock on its own does
 /// not mean the leaf was handed on: a claim re-signs at `enforce_timelock`,
@@ -602,7 +631,19 @@ impl TreeService for SynchronousTreeService {
 /// claim). Requiring both means a leaf that returned to us is never mistaken for
 /// one that left, and anything the operators will not talk about proves nothing
 /// and stays exactly where it is.
-fn refund_left_us(identity: &PublicKey, ours: &TreeNode, theirs: &TreeNode) -> bool {
+///
+/// The signature is what makes it evidence rather than testimony. Everything
+/// else here is read straight off a response, so an operator set that answers in
+/// concert could otherwise hand us a bare transaction and have us delete the
+/// chain we keep in order to survive exactly that party. A leaf is 2-of-2, so a
+/// signature that verifies under our own `verifying_public_key` is one we took
+/// part in producing, and no operator can forge it.
+fn refund_left_us(
+    bitcoin_service: &BitcoinService,
+    identity: &PublicKey,
+    ours: &TreeNode,
+    theirs: &TreeNode,
+) -> bool {
     // Their copy has to name an owner, and it has to be someone else. An absent
     // owner is not evidence either way, so it keeps the leaf.
     let Some(owner) = theirs.owner_identity_public_key else {
@@ -611,18 +652,37 @@ fn refund_left_us(identity: &PublicKey, ours: &TreeNode, theirs: &TreeNode) -> b
     if owner == *identity {
         return false;
     }
-    // And it has to be the same node: one that funds a different transaction is
-    // not the leaf we asked about, so its timelock says nothing about ours.
-    if ours.node_tx != theirs.node_tx {
-        return false;
-    }
-    let (Some(ours), Some(theirs)) = (&ours.refund_tx, &theirs.refund_tx) else {
+    let (Some(our_refund), Some(their_refund)) = (&ours.refund_tx, &theirs.refund_tx) else {
         return false;
     };
-    match (csv_timelock(ours), csv_timelock(theirs)) {
-        (Some(ours), Some(theirs)) => theirs < ours,
-        _ => false,
+    // A replacement spends the output ours does. Checking it against our own
+    // stored node tx, rather than against the copy they sent, is what stops a
+    // rewritten node tx carrying a rewritten refund past this.
+    let funding = bitcoin::OutPoint::new(ours.node_tx.compute_txid(), 0);
+    if their_refund
+        .input
+        .first()
+        .is_none_or(|input| input.previous_output != funding)
+    {
+        return false;
     }
+    match (csv_timelock(our_refund), csv_timelock(their_refund)) {
+        (Some(ours), Some(theirs)) if theirs < ours => {}
+        _ => return false,
+    }
+    let Some(funded) = ours.node_tx.output.first() else {
+        return false;
+    };
+    let Ok(sighash) = sighash_from_tx(their_refund, 0, funded) else {
+        return false;
+    };
+    verify_finalized_taproot_signature_tx(
+        bitcoin_service,
+        their_refund,
+        &sighash.to_raw_hash().to_byte_array(),
+        &ours.verifying_public_key,
+    )
+    .is_ok()
 }
 
 impl SynchronousTreeService {
@@ -967,6 +1027,26 @@ impl SynchronousTreeService {
             items,
             next: paging.next_from_offset(nodes.offset),
         })
+    }
+
+    /// Looks nodes up by id in batches, so a caller holding an unbounded set of
+    /// ids does not put all of them in one request.
+    async fn query_nodes_by_id_batched(
+        &self,
+        client: &SparkRpcClient,
+        ids: &[TreeNodeId],
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        let mut nodes = Vec::with_capacity(ids.len());
+        for batch in ids.chunks(PURGE_QUERY_BATCH) {
+            let source = Source::NodeIds(TreeNodeIds {
+                node_ids: batch.iter().map(ToString::to_string).collect(),
+            });
+            nodes.extend(
+                self.query_nodes(client, false, Some(source), vec![])
+                    .await?,
+            );
+        }
+        Ok(nodes)
     }
 
     async fn query_nodes(
@@ -1687,43 +1767,148 @@ mod tests {
         pubkey_from(0x11)
     }
 
-    /// A node at `seq`, owned by `owner`.
-    fn leaf_owned_at(owner: PublicKey, seq: u32) -> TreeNode {
+    fn keypair_from(byte: u8) -> bitcoin::secp256k1::Keypair {
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        bitcoin::secp256k1::Keypair::from_seckey_slice(&secp, &[byte; 32]).unwrap()
+    }
+
+    /// The signing group of the leaf under test. A leaf is 2-of-2, so this one
+    /// keypair stands in for the whole group: a refund only verifies under it if
+    /// we took part in signing.
+    fn leaf_signer() -> bitcoin::secp256k1::Keypair {
+        keypair_from(0x33)
+    }
+
+    /// A leaf of ours, funded by a node output and refunded at `seq`.
+    fn our_leaf(seq: u32) -> TreeNode {
         let mut node = create_test_leaves(&[1_000]).remove(0);
-        node.owner_identity_public_key = Some(owner);
-        node.refund_tx = Some(Transaction {
-            version: Version::non_standard(3),
-            lock_time: LockTime::ZERO,
-            input: vec![bitcoin::TxIn {
-                sequence: bitcoin::Sequence::from_consensus(seq),
-                ..Default::default()
-            }],
-            output: vec![],
-        });
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let verifying = leaf_signer().public_key();
+        node.verifying_public_key = verifying;
+        node.owner_identity_public_key = Some(us());
+        let (x_only, _) = verifying.x_only_public_key();
+        node.node_tx.output = vec![bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(1_000),
+            script_pubkey: bitcoin::ScriptBuf::new_p2tr(&secp, x_only, None),
+        }];
+        node.refund_tx = Some(refund_spending(&node, seq));
         node
     }
 
-    /// Deleting takes every operator. Counting agreement per leaf is what
-    /// enforces that, so a leaf only one of them vouches for stays put.
+    /// An unsigned refund of `leaf` at `seq`.
+    fn refund_spending(leaf: &TreeNode, seq: u32) -> Transaction {
+        Transaction {
+            version: Version::non_standard(3),
+            lock_time: LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(leaf.node_tx.compute_txid(), 0),
+                sequence: bitcoin::Sequence::from_consensus(seq),
+                ..Default::default()
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(900),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        }
+    }
+
+    /// Signs `refund` against the output of `funded` it spends.
+    fn sign_refund(refund: &mut Transaction, funded: &TreeNode, kp: &bitcoin::secp256k1::Keypair) {
+        use bitcoin::key::TapTweak;
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let sighash = sighash_from_tx(refund, 0, &funded.node_tx.output[0]).unwrap();
+        let tweaked = kp.tap_tweak(&secp, None).to_keypair();
+        let sig = secp.sign_schnorr_no_aux_rand(
+            &bitcoin::secp256k1::Message::from_digest(sighash.to_raw_hash().to_byte_array()),
+            &tweaked,
+        );
+        refund.input[0].witness = bitcoin::Witness::from_slice(&[sig.serialize()]);
+    }
+
+    /// The operators' copy of `ours`: same node, owned by `owner`, refunded at
+    /// `seq` under a signature `signer` produced.
+    fn their_copy(
+        ours: &TreeNode,
+        owner: PublicKey,
+        seq: u32,
+        signer: &bitcoin::secp256k1::Keypair,
+    ) -> TreeNode {
+        let mut theirs = ours.clone();
+        theirs.owner_identity_public_key = Some(owner);
+        let mut refund = refund_spending(ours, seq);
+        sign_refund(&mut refund, ours, signer);
+        theirs.refund_tx = Some(refund);
+        theirs
+    }
+
+    fn service() -> BitcoinService {
+        BitcoinService::new(Network::Regtest)
+    }
+
+    /// Deleting takes every operator, counted per distinct operator: a leaf one
+    /// of them still vouches for stays put, and an operator answering twice does
+    /// not cover for one that disagreed.
     #[test_all]
     fn a_leaf_is_only_proven_when_every_operator_agrees() {
-        let ours = leaf_owned_at(us(), 2000);
-        let gone = leaf_owned_at(other_owner(), 1900);
-        let unchanged = leaf_owned_at(other_owner(), 2000);
+        let ours = our_leaf(2000);
+        let deleted = vec![ours.clone()];
+        let gone = their_copy(&ours, other_owner(), 1900, &leaf_signer());
+        let unchanged = their_copy(&ours, other_owner(), 2000, &leaf_signer());
+        let proven = |responses: &[(usize, Result<Vec<TreeNode>, ()>)]| {
+            prove_spent_leaves(&service(), &us(), &deleted, responses)
+        };
 
-        // Three operators, two of which report the replacement.
-        let agreeing = [&gone, &gone, &unchanged]
-            .iter()
-            .filter(|theirs| refund_left_us(&us(), &ours, theirs))
-            .count();
-        assert_eq!(agreeing, 2);
-        assert_ne!(agreeing, 3, "a leaf one operator still vouches for is kept");
+        assert_eq!(
+            proven(&[
+                (0, Ok(vec![gone.clone()])),
+                (1, Ok(vec![gone.clone()])),
+                (2, Ok(vec![gone.clone()])),
+            ]),
+            Some(vec![ours.id.clone()]),
+            "unanimous replacement is what proves the spend"
+        );
 
-        let all = [&gone, &gone, &gone]
-            .iter()
-            .filter(|theirs| refund_left_us(&us(), &ours, theirs))
-            .count();
-        assert_eq!(all, 3, "unanimous replacement is what proves the spend");
+        assert_eq!(
+            proven(&[
+                (0, Ok(vec![gone.clone()])),
+                (1, Ok(vec![gone.clone()])),
+                (2, Ok(vec![unchanged.clone()])),
+            ]),
+            Some(Vec::new()),
+            "a leaf one operator still vouches for is kept"
+        );
+
+        assert_eq!(
+            proven(&[
+                (0, Ok(vec![gone.clone()])),
+                (1, Ok(vec![gone.clone()])),
+                (2, Ok(Vec::new())),
+            ]),
+            Some(Vec::new()),
+            "an operator that does not report the leaf has vouched for nothing"
+        );
+
+        assert_eq!(
+            proven(&[
+                (0, Ok(vec![gone.clone()])),
+                (1, Ok(vec![gone.clone()])),
+                (2, Err(())),
+            ]),
+            None,
+            "an unreachable operator holds every leaf, however the rest answered"
+        );
+
+        assert_eq!(
+            proven(&[
+                (0, Ok(vec![gone.clone()])),
+                (1, Ok(vec![unchanged])),
+                (0, Ok(vec![gone])),
+            ]),
+            Some(Vec::new()),
+            "one operator answering twice is not two operators agreeing"
+        );
+
+        assert_eq!(proven(&[]), None, "no operators prove nothing");
     }
 
     /// A leaf has left us only when somebody else owns it AND its refund
@@ -1733,46 +1918,83 @@ mod tests {
     /// timelock too and must not be mistaken for one that left.
     #[test_all]
     fn a_leaf_left_only_when_someone_else_owns_it_at_a_lower_timelock() {
-        let ours = leaf_owned_at(us(), 2000);
+        let ours = our_leaf(2000);
+        let signer = leaf_signer();
+        let left = |theirs: &TreeNode| refund_left_us(&service(), &us(), &ours, theirs);
 
-        assert!(refund_left_us(
-            &us(),
-            &ours,
-            &leaf_owned_at(other_owner(), 1900)
-        ));
+        assert!(left(&their_copy(&ours, other_owner(), 1900, &signer)));
 
         // The HTLC shape that rounds down on a claim back to us: lower, but ours.
-        let ours_htlc = leaf_owned_at(us(), 1970);
+        let ours_htlc = our_leaf(1970);
         assert!(
-            !refund_left_us(&us(), &ours_htlc, &leaf_owned_at(us(), 1900)),
+            !refund_left_us(
+                &service(),
+                &us(),
+                &ours_htlc,
+                &their_copy(&ours_htlc, us(), 1900, &signer)
+            ),
             "a leaf claimed back to us is not a leaf that left"
         );
 
         // Someone else owns it, but the refund did not move.
-        assert!(!refund_left_us(
-            &us(),
-            &ours,
-            &leaf_owned_at(other_owner(), 2000)
-        ));
+        assert!(!left(&their_copy(&ours, other_owner(), 2000, &signer)));
         // A renewal moves the timelock the other way.
-        assert!(!refund_left_us(
-            &us(),
-            &ours,
-            &leaf_owned_at(other_owner(), 2100)
-        ));
+        assert!(!left(&their_copy(&ours, other_owner(), 2100, &signer)));
 
-        let mut no_owner = leaf_owned_at(other_owner(), 1900);
+        let mut no_owner = their_copy(&ours, other_owner(), 1900, &signer);
         no_owner.owner_identity_public_key = None;
-        assert!(!refund_left_us(&us(), &ours, &no_owner));
+        assert!(!left(&no_owner));
 
-        let mut no_refund = leaf_owned_at(other_owner(), 1900);
+        let mut no_refund = their_copy(&ours, other_owner(), 1900, &signer);
         no_refund.refund_tx = None;
-        assert!(!refund_left_us(&us(), &ours, &no_refund));
+        assert!(!left(&no_refund));
+    }
 
-        // A different node entirely says nothing about ours.
-        let mut other_node = leaf_owned_at(other_owner(), 1900);
-        other_node.node_tx.lock_time = bitcoin::absolute::LockTime::from_height(7).unwrap();
-        assert!(!refund_left_us(&us(), &ours, &other_node));
+    /// The replacement has to be evidence, not testimony. Every other condition
+    /// is read straight off an operator's response, so an operator set answering
+    /// in concert could hand us a fabricated one; the signature is what they
+    /// cannot produce without us.
+    #[test_all]
+    fn a_replacement_we_did_not_sign_proves_nothing() {
+        let ours = our_leaf(2000);
+        let left = |theirs: &TreeNode| refund_left_us(&service(), &us(), &ours, theirs);
+
+        // Everything a response controls, and no witness at all.
+        let mut unsigned = their_copy(&ours, other_owner(), 1900, &leaf_signer());
+        unsigned.refund_tx.as_mut().unwrap().input[0].witness = bitcoin::Witness::new();
+        assert!(!left(&unsigned), "an unwitnessed refund is not proof");
+
+        // Signed, but by a key that is not the leaf's signing group.
+        assert!(
+            !left(&their_copy(&ours, other_owner(), 1900, &keypair_from(0x44))),
+            "a refund signed by someone else is not proof"
+        );
+
+        // A well-formed, correctly signed refund of a different node. Its own
+        // chain is fine, but it says nothing about the leaf we asked about.
+        let mut elsewhere = our_leaf(2000);
+        elsewhere.node_tx.lock_time = bitcoin::absolute::LockTime::from_height(7).unwrap();
+        elsewhere.refund_tx = Some(refund_spending(&elsewhere, 2000));
+        assert_ne!(
+            elsewhere.node_tx.compute_txid(),
+            ours.node_tx.compute_txid()
+        );
+        let mut foreign = their_copy(&elsewhere, other_owner(), 1900, &leaf_signer());
+        foreign.id = ours.id.clone();
+        assert!(
+            !left(&foreign),
+            "a refund spending another node's output is not proof"
+        );
+
+        // The same refund, relabelled to claim it funds our node. The outpoint
+        // is checked against our own stored node tx, so relabelling theirs does
+        // not help, and the signature commits to the real one regardless.
+        let mut relabelled = foreign.clone();
+        relabelled.node_tx = ours.node_tx.clone();
+        assert!(
+            !left(&relabelled),
+            "a rewritten node tx does not make a foreign refund ours"
+        );
     }
 
     /// The refresh asks for the statuses a leaf we hold can be reported in, so a

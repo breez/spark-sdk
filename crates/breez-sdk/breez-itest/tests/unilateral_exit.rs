@@ -784,6 +784,68 @@ async fn test_exit_leaf_received_by_transfer(#[case] backend: SignerBackend) -> 
     Ok(())
 }
 
+/// A leaf sent from elsewhere is retired here, but only on the operators' proof
+/// that it went. The side-channel wallet and the SDK share an identity and keep
+/// separate stores, so they stand in for two devices: one sends the leaf, and
+/// the other has to work out that it is gone.
+///
+/// This is the only coverage of the purge against real operators, and what it
+/// pins is that they answer for a node its owner has changed: the proof is a
+/// lookup by node id, and a wallet asking after a leaf it no longer owns is
+/// exactly the case that has to come back. If it did not, nothing would ever be
+/// provable and every sent leaf would be kept forever.
+///
+/// It is also the only test here that fails when the refresh itself is broken.
+/// Every other exit test plans from the local store and treats a refresh error
+/// as non-fatal, so all of them pass against operators the refresh cannot even
+/// query; this one needs the leaf to have gone from the store, which takes a
+/// refresh that worked.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn test_leaf_sent_from_another_device_is_purged(
+    #[case] backend: SignerBackend,
+) -> Result<()> {
+    let (sender, receiver) = new_local_sdk_pair(backend).await?;
+    deposit_and_claim(&sender, Amount::from_sat(LEAF_SATS)).await?;
+    // Waiting on the SDK's balance is what puts the leaf in the SDK's own store,
+    // which is the store the purge later has to clear.
+    wait_for_balance(&sender.sdk, Some(LEAF_SATS), None, 60).await?;
+
+    // The other device sends it on, and the receiver's claim re-signs the refund
+    // at a lower timelock. That re-signed refund is the proof.
+    let receiver_address = receiver.spark_wallet.get_spark_address()?;
+    sender
+        .spark_wallet
+        .transfer(LEAF_SATS, &receiver_address, None)
+        .await?;
+    wait_for_balance(&receiver.sdk, Some(LEAF_SATS), None, 60).await?;
+
+    // Quoting refreshes, which finds the leaf gone from every operator and keeps
+    // it for its chain, and then purges it once they all report the replacement.
+    let quote = sender
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: fund_p2tr_utxo(&sender.fixtures.bitcoind, Amount::from_sat(CPFP_SATS))
+                .await?
+                .address
+                .to_string(),
+            selection: ExitLeafSelection::Auto,
+        })
+        .await?;
+    assert!(
+        quote.leaves.is_empty(),
+        "a leaf every operator reports as someone else's is not ours to exit, and \
+         a quote still offering it would spend fees driving a leaf that is gone"
+    );
+    assert_eq!(
+        quote.recoverable_value_sat, 0,
+        "nothing is recoverable once the leaf has been proven spent"
+    );
+    Ok(())
+}
+
 /// Re-running a completed exit re-drives nothing. `Auto` drops the exited leaf
 /// from the available set once the exit is mined, but it is still sourceable by
 /// id, so forcing it back in with `Specific` runs the build rather than the
