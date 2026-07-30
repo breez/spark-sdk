@@ -143,7 +143,7 @@ impl BreezSdk {
             let wallet_synced = if sync_type.contains(SyncType::Wallet) {
                 debug!("sync_wallet_internal: Starting Wallet sync");
                 let wallet_start = Instant::now();
-                match self.spark_wallet.sync().await {
+                let synced = match self.spark_wallet.sync().await {
                     Ok(()) => {
                         debug!(
                             "sync_wallet_internal: Wallet sync completed in {:?}",
@@ -158,7 +158,13 @@ impl BreezSdk {
                         );
                         false
                     }
-                }
+                };
+                // Fired either way: the wallet sync refreshes leaves before it
+                // touches tokens or claims, so a later step failing still
+                // leaves newly reported leaves needing a chain. Nothing else
+                // catches those, since a refresh answers to no operation.
+                self.exit_chain_trigger.trigger();
+                synced
             } else {
                 trace!("sync_wallet_internal: Skipping Wallet sync");
                 false
@@ -499,11 +505,11 @@ impl BreezSdk {
             .run_user_sync(self, super::SyncType::Full, true)
             .await?;
         // Awaited rather than left to the background collection, so a caller
-        // that syncs before going offline knows its funds are exitable by the
-        // time this returns. Runs after the sync, so the leaves it brought in
-        // are collected for too.
+        // that syncs before going offline knows the collection has run by the
+        // time this returns. After the sync, so the leaves it brought in are
+        // collected for too.
         if self.config.exit_chain_auto_fetch_enabled {
-            self.spark_wallet.fetch_missing_exit_chains().await?;
+            self.runtime.collect_exit_chains(self).await?;
         }
         Ok(SyncWalletResponse {})
     }

@@ -1316,6 +1316,7 @@ mod tests {
         test_store_ancestors_does_not_revive_spent_leaf,
         test_store_ancestors_for_absent_leaf,
         test_leaves_missing_exit_chains,
+        test_stored_chain_survives_refresh,
         // add / get leaves
         test_new,
         test_add_leaves,

@@ -8,8 +8,8 @@ use tracing::{debug, error, info, trace, warn};
 use crate::{
     services::Swap,
     tree::{
-        ExitChainTrigger, LeafPedigree, ReservationPurpose, SelectLeavesOptions, TargetAmounts,
-        TreeNode, TreeService, TreeServiceError,
+        LeafPedigree, ReservationPurpose, SelectLeavesOptions, TargetAmounts, TreeNode,
+        TreeService, TreeServiceError,
     },
 };
 
@@ -188,11 +188,6 @@ pub struct LeafOptimizer {
     cancel_rx: watch::Receiver<bool>,
     terminated: Arc<Notify>,
     event_handler: Option<Arc<dyn AutoOptimizationEventHandler>>,
-    /// Optimization runs detached, so its swap outputs appear after the operation
-    /// that started it has returned and signalled. Without a signal of its own they
-    /// would wait for an unrelated later operation, which on an idle wallet may
-    /// never come.
-    exit_chain_trigger: Option<ExitChainTrigger>,
 }
 
 impl LeafOptimizer {
@@ -201,7 +196,6 @@ impl LeafOptimizer {
         swap_service: Arc<Swap>,
         tree_service: Arc<dyn TreeService>,
         event_handler: Option<Arc<dyn AutoOptimizationEventHandler>>,
-        exit_chain_trigger: Option<ExitChainTrigger>,
     ) -> Self {
         let (cancel_tx, cancel_rx) = watch::channel(false);
         Self {
@@ -213,7 +207,6 @@ impl LeafOptimizer {
             cancel_rx,
             terminated: Arc::new(Notify::new()),
             event_handler,
-            exit_chain_trigger,
         }
     }
 
@@ -544,8 +537,9 @@ impl LeafOptimizer {
                     swap_reservation.leaves.iter().map(|l| l.value).collect();
                 let received_values: Vec<u64> = new_leaves.iter().map(|l| l.value).collect();
 
-                // The swap outputs go on without their chains; the trigger below
-                // hands the resolving to the background resolver.
+                // The swap outputs go on without their chains: resolving them
+                // here would spend a round trip on leaves a later round may
+                // swap away again.
                 let pedigrees: Vec<LeafPedigree> = new_leaves
                     .iter()
                     .map(|leaf| LeafPedigree {
@@ -563,10 +557,6 @@ impl LeafOptimizer {
                         e
                     );
                 }
-                if let Some(trigger) = &self.exit_chain_trigger {
-                    trigger.trigger();
-                }
-
                 if emit_events {
                     self.emit_event(AutoOptimizationEvent::RoundCompleted {
                         current_round: round,

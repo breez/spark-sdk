@@ -874,10 +874,6 @@ fn finalize_spark_wallet_config(
     spark_wallet_config.service_provider_config.user_agent = Some(user_agent.to_string());
     spark_wallet_config.leaf_auto_optimize_enabled =
         background_services_enabled && config.leaf_optimization_config.auto_enabled;
-    // Not gated on background services, unlike the flag above: with them off the
-    // background fetch never runs, but the flag still decides whether an explicit
-    // sync collects, which is the only collection left in that case.
-    spark_wallet_config.exit_chain_auto_fetch_enabled = config.exit_chain_auto_fetch_enabled;
     spark_wallet_config.leaf_optimization_options.multiplicity =
         config.leaf_optimization_config.multiplicity;
 

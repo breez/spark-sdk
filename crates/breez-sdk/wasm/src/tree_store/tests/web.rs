@@ -544,3 +544,9 @@ async fn test_leaves_missing_exit_chains() {
     let store = create_test_tree_store("wtree_test_leaves_missing_exit_chains").await;
     breez_sdk_spark::tree_store_tests::test_leaves_missing_exit_chains(&store).await;
 }
+
+#[wasm_bindgen_test]
+async fn test_stored_chain_survives_refresh() {
+    let store = create_test_tree_store("wtree_test_stored_chain_survives_refresh").await;
+    breez_sdk_spark::tree_store_tests::test_stored_chain_survives_refresh(&store).await;
+}

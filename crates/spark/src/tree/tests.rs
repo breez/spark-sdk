@@ -700,6 +700,60 @@ pub async fn test_leaves_missing_exit_chains(store: &dyn TreeStore) {
     assert_eq!(missing_chain_ids(store).await, vec!["bare"]);
 }
 
+/// A refresh reports leaves without their chains, so it must leave the chains
+/// already stored alone. A store that treats the empty incoming chain as "none"
+/// rather than "unknown" reports every leaf as missing one after every refresh,
+/// and the collection then refetches chains it already holds.
+pub async fn test_stored_chain_survives_refresh(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let complete =
+        create_test_node_with_parent("complete", Some("root"), TreeNodeStatus::Available);
+    let bare = create_test_node_with_parent("bare", Some("root"), TreeNodeStatus::Available);
+
+    store
+        .add_leaves(&[
+            LeafPedigree {
+                leaf: complete.clone(),
+                ancestors: vec![root],
+            },
+            LeafPedigree {
+                leaf: bare.clone(),
+                ancestors: Vec::new(),
+            },
+        ])
+        .await
+        .unwrap();
+    assert_eq!(missing_chain_ids(store).await, vec!["bare"]);
+
+    // A refresh only rebuilds rows older than its start, and the leaves were
+    // just added, so the boundary has to sit clearly after them on the store's
+    // own clock. Otherwise the rebuild never happens and this passes vacuously.
+    let refresh_start = future_refresh_start(store).await;
+    store
+        .set_leaves(
+            &[
+                LeafPedigree {
+                    leaf: complete,
+                    ancestors: Vec::new(),
+                },
+                LeafPedigree {
+                    leaf: bare,
+                    ancestors: Vec::new(),
+                },
+            ],
+            &[],
+            refresh_start,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        missing_chain_ids(store).await,
+        vec!["bare"],
+        "a refresh must not discard the chain a leaf already had"
+    );
+}
+
 async fn missing_chain_ids(store: &dyn TreeStore) -> Vec<String> {
     store
         .leaves_missing_exit_chains()

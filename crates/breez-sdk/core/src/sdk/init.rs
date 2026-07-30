@@ -32,6 +32,7 @@ impl BreezSdk {
             lnurl_auth_signer: params.lnurl_auth_signer,
             event_emitter: params.event_emitter,
             shutdown_sender: params.shutdown_sender,
+            exit_chain_trigger: super::exit_chain_downloader::ExitChainTrigger::new(),
             runtime: params.runtime,
             sync_coordinator: params.sync_coordinator,
             initial_synced_watcher,

@@ -1299,6 +1299,11 @@ mod tests {
     }
 
     #[async_test_all]
+    async fn test_stored_chain_survives_refresh() {
+        shared_tests::test_stored_chain_survives_refresh(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
     async fn test_node_update_in_place() {
         shared_tests::test_node_update_in_place(&InMemoryTreeStore::new()).await;
     }

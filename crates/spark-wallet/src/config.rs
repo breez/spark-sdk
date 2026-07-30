@@ -22,9 +22,6 @@ pub struct SparkWalletConfig {
     pub tokens_config: TokensConfig,
     pub leaf_optimization_options: LeafOptimizationOptions,
     pub leaf_auto_optimize_enabled: bool,
-    /// Whether the background resolver fills in missing exit chains on its own.
-    /// With this off they are only resolved when a sync explicitly asks.
-    pub exit_chain_auto_fetch_enabled: bool,
     pub token_outputs_optimization_options: TokenOutputsOptimizationOptions,
     pub self_payment_allowed: bool,
     /// Maximum number of concurrent transfer claims.
@@ -68,7 +65,6 @@ impl SparkWalletConfig {
                 tokens_config: Self::default_tokens_config(),
                 leaf_optimization_options: LeafOptimizationOptions::default(),
                 leaf_auto_optimize_enabled: true,
-                exit_chain_auto_fetch_enabled: true,
                 token_outputs_optimization_options: TokenOutputsOptimizationOptions {
                     min_outputs_threshold: 50,
                     target_output_count: 5,
@@ -91,7 +87,6 @@ impl SparkWalletConfig {
                 tokens_config: Self::default_tokens_config(),
                 leaf_optimization_options: LeafOptimizationOptions::default(),
                 leaf_auto_optimize_enabled: true,
-                exit_chain_auto_fetch_enabled: true,
                 token_outputs_optimization_options: TokenOutputsOptimizationOptions {
                     min_outputs_threshold: 50,
                     target_output_count: 5,

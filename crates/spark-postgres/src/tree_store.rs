@@ -2181,6 +2181,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_stored_chain_survives_refresh() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_stored_chain_survives_refresh(&fixture.store).await;
+    }
+
+    #[tokio::test]
     async fn test_unshared_ancestor_deleted_with_leaf() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_unshared_ancestor_deleted_with_leaf(&fixture.store).await;

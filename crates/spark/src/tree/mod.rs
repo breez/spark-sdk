@@ -9,7 +9,7 @@ mod store;
 pub mod tests;
 
 pub use error::TreeServiceError;
-pub use exit_chain_resolver::{ExitChainResolver, ExitChainTrigger};
+pub use exit_chain_resolver::ExitChainResolver;
 pub use leaf_optimizer::*;
 use platform_utils::tokio::sync::watch;
 pub use select_helper::{
@@ -520,8 +520,9 @@ pub trait TreeStore: Send + Sync {
     /// cannot back a unilateral exit. A leaf that is itself a root needs no
     /// ancestors and is never reported.
     ///
-    /// Neither the leaves nor their chains are loaded, so the answer costs the
-    /// number of incomplete leaves rather than the size of the wallet.
+    /// Returns ids only, but assume it costs the size of the wallet: the SQL
+    /// backends derive the answer by joining every stored leaf against its
+    /// ancestors. A backend that keeps the answer denormalized can do better.
     async fn leaves_missing_exit_chains(&self) -> Result<Vec<TreeNodeId>, TreeServiceError>;
 
     /// Reconstructs the exit chains for many leaves at once, each as a

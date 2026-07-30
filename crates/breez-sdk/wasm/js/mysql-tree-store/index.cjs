@@ -334,16 +334,18 @@ class MysqlTreeStore {
    */
   async leavesMissingExitChains() {
     try {
+      // A LEFT JOIN anti-join plans better on MySQL than a correlated NOT
+      // EXISTS. The join keeps only each leaf's root ancestor row (if any);
+      // an unmatched leaf (`a.leaf_id IS NULL`) has no root in its chain.
       const [rows] = await this.pool.query(
         `SELECT l.id
          FROM brz_tree_leaves l
+         LEFT JOIN brz_tree_ancestors a
+           ON a.user_id = l.user_id AND a.leaf_id = l.id AND a.parent_node_id IS NULL
          WHERE l.user_id = ?
            AND l.parent_node_id IS NOT NULL
-           AND NOT EXISTS (
-             SELECT 1 FROM brz_tree_ancestors a
-             WHERE a.user_id = ? AND a.leaf_id = l.id AND a.parent_node_id IS NULL
-           )`,
-        [this.identity, this.identity]
+           AND a.leaf_id IS NULL`,
+        [this.identity]
       );
       return rows.map((r) => r.id);
     } catch (error) {

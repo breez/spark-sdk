@@ -8,8 +8,8 @@ use platform_utils::tokio;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::tree::{
-    ExitChainTrigger, LeafPedigree, LeafSelection, Leaves, ReservationPurpose, ReserveResult,
-    SelectLeavesOptions, TreeNodeStatus,
+    LeafPedigree, LeafSelection, Leaves, ReservationPurpose, ReserveResult, SelectLeavesOptions,
+    TreeNodeStatus,
 };
 use crate::{
     Network,
@@ -42,9 +42,6 @@ pub struct SynchronousTreeService {
     timelock_manager: Arc<TimelockManager>,
     spark_signer: Arc<dyn SparkSigner>,
     swap_service: Arc<Swap>,
-    /// Wakes the exit chain resolver once a refresh has replaced the leaf set, so the
-    /// chains of anything newly reported are resolved without another full download.
-    exit_chain_trigger: Option<ExitChainTrigger>,
 }
 
 #[macros::async_trait]
@@ -411,9 +408,9 @@ impl TreeService for SynchronousTreeService {
             .filter(|leaf_id| !ignored_leaves_map.contains_key(&leaf_id.id))
             .cloned()
             .collect::<Vec<_>>();
-        // The leaves carry no chains, so an already-stored chain is left alone rather
-        // than rewritten on every refresh. Anything newly reported is resolved by the
-        // trigger below.
+        // The leaves carry no chains, so an already-stored chain is left alone
+        // rather than rewritten on every refresh. Collecting the chains of
+        // anything newly reported is the caller's to schedule.
         let bare = |leaves: Vec<TreeNode>| -> Vec<LeafPedigree> {
             leaves
                 .into_iter()
@@ -428,9 +425,6 @@ impl TreeService for SynchronousTreeService {
         self.state
             .set_leaves(&pedigrees, &missing_operator_pedigrees, refresh_started_at)
             .await?;
-        if let Some(trigger) = &self.exit_chain_trigger {
-            trigger.trigger();
-        }
         Ok(())
     }
 
@@ -449,7 +443,6 @@ impl SynchronousTreeService {
         timelock_manager: Arc<TimelockManager>,
         spark_signer: Arc<dyn SparkSigner>,
         swap_service: Arc<Swap>,
-        exit_chain_trigger: Option<ExitChainTrigger>,
     ) -> Self {
         SynchronousTreeService {
             identity_pubkey,
@@ -459,7 +452,6 @@ impl SynchronousTreeService {
             timelock_manager,
             spark_signer,
             swap_service,
-            exit_chain_trigger,
         }
     }
 

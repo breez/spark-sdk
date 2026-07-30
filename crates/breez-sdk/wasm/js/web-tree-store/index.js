@@ -21,7 +21,7 @@ const RESERVATION_TIMEOUT_MS = 300 * 1000; // 5 minutes
 /** Spent-leaf markers older than this (relative to a refresh) are pruned. */
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 const STORE_LEAVES = "leaves";
 const STORE_ANCESTORS = "ancestors";
@@ -105,6 +105,12 @@ class WebTreeStore {
           leaves.createIndex("reservation_id", "reservation_id", {
             unique: false,
           });
+          // Stored 0/1 rather than as a boolean: IndexedDB rejects booleans as
+          // index keys, and indexing this is what keeps leavesMissingExitChains
+          // off a full scan of the store.
+          leaves.createIndex("chain_complete", "chain_complete", {
+            unique: false,
+          });
         }
 
         // Intermediate exit-chain nodes, kept separate from the leaf pool and
@@ -125,33 +131,58 @@ class WebTreeStore {
           ancestors.createIndex("leaf_id", "leaf_id", { unique: false });
         }
 
-        // v3 denormalized each leaf's chain completeness onto its row. Backfill
-        // it from the ancestor rows that survive this upgrade, so an existing
-        // wallet does not refetch every chain it already holds.
-        if (event.oldVersion > 0 && event.oldVersion < 3) {
+        // v3 denormalized each leaf's chain completeness onto its row, and v4
+        // made that flag indexable. Both upgrades rewrite every leaf row, so
+        // they are mutually exclusive rather than chained: an older wallet
+        // backfills straight to the indexable form. The index is created here
+        // and populated by the rewrites below, since createIndex cannot run
+        // from an async callback.
+        if (event.oldVersion > 0 && event.oldVersion < 4) {
           const tx = event.target.transaction;
           const leaves = tx.objectStore(STORE_LEAVES);
-          const ancestors = tx.objectStore(STORE_ANCESTORS);
-          const rootedLeafIds = new Set();
-          ancestors.openCursor().onsuccess = (cursorEvent) => {
-            const cursor = cursorEvent.target.result;
-            if (cursor) {
-              if (cursor.value.parent_node_id == null) {
-                rootedLeafIds.add(cursor.value.leaf_id);
+          if (!leaves.indexNames.contains("chain_complete")) {
+            leaves.createIndex("chain_complete", "chain_complete", {
+              unique: false,
+            });
+          }
+
+          if (event.oldVersion < 3) {
+            // Backfill from the ancestor rows that survive this upgrade, so an
+            // existing wallet does not refetch every chain it already holds.
+            const ancestors = tx.objectStore(STORE_ANCESTORS);
+            const rootedLeafIds = new Set();
+            ancestors.openCursor().onsuccess = (cursorEvent) => {
+              const cursor = cursorEvent.target.result;
+              if (cursor) {
+                if (cursor.value.parent_node_id == null) {
+                  rootedLeafIds.add(cursor.value.leaf_id);
+                }
+                cursor.continue();
+                return;
               }
-              cursor.continue();
-              return;
-            }
+              leaves.openCursor().onsuccess = (leafEvent) => {
+                const leafCursor = leafEvent.target.result;
+                if (!leafCursor) return;
+                const row = leafCursor.value;
+                row.chain_complete =
+                  row.parent_node_id == null || rootedLeafIds.has(row.id)
+                    ? 1
+                    : 0;
+                leafCursor.update(row);
+                leafCursor.continue();
+              };
+            };
+          } else {
+            // v3 wrote booleans, which cannot be index keys.
             leaves.openCursor().onsuccess = (leafEvent) => {
               const leafCursor = leafEvent.target.result;
               if (!leafCursor) return;
               const row = leafCursor.value;
-              row.chain_complete =
-                row.parent_node_id == null || rootedLeafIds.has(row.id);
+              row.chain_complete = row.chain_complete ? 1 : 0;
               leafCursor.update(row);
               leafCursor.continue();
             };
-          };
+          }
         }
 
         if (!db.objectStoreNames.contains(STORE_RESERVATIONS)) {
@@ -285,7 +316,12 @@ class WebTreeStore {
         try {
           const store = tx.objectStore(r.store);
           const source = r.index ? store.index(r.index) : store;
-          req = "key" in r ? source.get(r.key) : source.getAll();
+          if (r.keysOnly) {
+            // Primary keys of the matching records, without reading a value.
+            req = source.getAllKeys(r.key);
+          } else {
+            req = "key" in r ? source.get(r.key) : source.getAll();
+          }
         } catch (e) {
           done(() => reject(e));
           return;
@@ -381,14 +417,22 @@ class WebTreeStore {
    */
   async leavesMissingExitChains() {
     try {
+      // A leaf that is itself a root is always flagged complete, so the flag
+      // alone selects what needs a chain, and the index yields the leaf ids
+      // without deserializing a single stored node.
       return await this._txRun(
         [STORE_LEAVES],
         "readonly",
-        [{ name: "leaves", store: STORE_LEAVES }],
-        (res) =>
-          res.leaves
-            .filter((l) => l.parent_node_id != null && !l.chain_complete)
-            .map((l) => l.id)
+        [
+          {
+            name: "ids",
+            store: STORE_LEAVES,
+            index: "chain_complete",
+            key: 0,
+            keysOnly: true,
+          },
+        ],
+        (res) => res.ids
       );
     } catch (error) {
       if (error instanceof TreeStoreError) throw error;
@@ -616,7 +660,10 @@ class WebTreeStore {
               leafRow
             );
             if (chainComplete !== !!leafRow.chain_complete) {
-              leavesStore.put({ ...leafRow, chain_complete: chainComplete });
+              leavesStore.put({
+                ...leafRow,
+                chain_complete: chainComplete ? 1 : 0,
+              });
             }
           }
         }
@@ -696,6 +743,12 @@ class WebTreeStore {
           // below, so its ancestor rows must survive: only ids that do NOT
           // reappear (truly gone, e.g. spent) get their ancestor rows dropped
           // alongside them.
+          // Taken before the deletion below, because a leaf reported again is
+          // rebuilt from its pedigree and a refresh carries no chains. An empty
+          // chain means "unknown", so the flag the row already held has to come
+          // from here, or every refresh would report every leaf as missing one.
+          const priorRows = new Map(leafMap);
+
           const deletedIds = [];
           for (const row of Array.from(leafMap.values())) {
             if (row.reservation_id == null && row.added_at < refreshMs) {
@@ -719,12 +772,12 @@ class WebTreeStore {
             );
           }
           for (const p of leafPedigrees) {
-            const row = this._pedigreeLeafRow(p, false, leafMap.get(p.leaf.id));
+            const row = this._pedigreeLeafRow(p, false, priorRows.get(p.leaf.id));
             leavesStore.put(row);
             leafMap.set(row.id, row);
           }
           for (const p of missingPedigrees) {
-            const row = this._pedigreeLeafRow(p, true, leafMap.get(p.leaf.id));
+            const row = this._pedigreeLeafRow(p, true, priorRows.get(p.leaf.id));
             leavesStore.put(row);
             leafMap.set(row.id, row);
           }
@@ -769,6 +822,9 @@ class WebTreeStore {
           const keepIds = new Set(keep.map((l) => l.id));
           const ancestorRowsByLeaf = this._ancestorRowsByLeaf(res.ancestors);
           const leafMap = new Map(res.leaves.map((r) => [r.id, r]));
+          // A kept leaf keeps its ancestor rows, so the row rebuilt below has to
+          // keep the flag that describes them.
+          const priorRows = new Map(leafMap);
           for (const l of res.leaves) {
             if (l.reservation_id !== id) continue;
             leavesStore.delete(l.id);
@@ -787,7 +843,14 @@ class WebTreeStore {
             // Only re-insert the leaves: a kept leaf's ancestor rows were left
             // untouched above.
             for (const leaf of keep) {
-              leavesStore.put(this._leafRow(leaf, false, leafMap.get(leaf.id)));
+              // The chain flag carries over: those rows were deliberately kept.
+              // So does any reservation other than this one, since a leaf the
+              // refresh released and another reservation then took is not this
+              // cancellation's to free.
+              const prior = priorRows.get(leaf.id);
+              const held = prior?.reservation_id === id ? undefined : prior;
+              const chainComplete = this._chainComplete(leaf, undefined, prior);
+              leavesStore.put(this._leafRow(leaf, false, held, chainComplete));
             }
           }
         }
@@ -1177,12 +1240,16 @@ class WebTreeStore {
       is_missing_from_operators: !!isMissing,
       reservation_id: existingRow ? existingRow.reservation_id ?? null : null,
       added_at: this._nowMs(),
-      // Denormalized so leavesMissingExitChains is a scan of this store alone
-      // rather than of every ancestor row as well.
-      chain_complete:
+      // Denormalized and indexed so leavesMissingExitChains reads only the ids
+      // it wants, rather than every leaf row. Stored 0/1: IndexedDB rejects
+      // booleans as index keys.
+      chain_complete: (
         chainComplete !== undefined
           ? chainComplete
-          : this._chainComplete(node, undefined, existingRow),
+          : this._chainComplete(node, undefined, existingRow)
+      )
+        ? 1
+        : 0,
       data: node,
     };
   }

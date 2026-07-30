@@ -1,6 +1,7 @@
 mod api;
 mod contacts;
 mod deposits;
+pub(crate) mod exit_chain_downloader;
 mod helpers;
 mod init;
 mod lightning_address;
@@ -90,6 +91,9 @@ pub struct BreezSdk {
     pub(crate) lnurl_auth_signer: Option<Arc<LnurlAuthSignerAdapter>>,
     pub(crate) event_emitter: Arc<EventEmitter>,
     pub(crate) shutdown_sender: watch::Sender<()>,
+    /// Wakes the exit chain downloader once an operation has changed the leaf
+    /// set. Held even when collection is off, so nothing has to branch on it.
+    pub(crate) exit_chain_trigger: exit_chain_downloader::ExitChainTrigger,
     pub(crate) runtime: SdkRuntime,
     /// Coordinator for coalescing duplicate sync requests
     pub(crate) sync_coordinator: SyncCoordinator,

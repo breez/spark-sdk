@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use platform_utils::time::{Duration, SystemTime};
 use platform_utils::tokio;
-use spark_wallet::{SparkWallet, WalletEvent, WalletTransfer};
+use spark_wallet::{AutoOptimizationEvent, SparkWallet, WalletEvent, WalletTransfer};
 use tokio::{
     select,
     sync::{broadcast, watch},
@@ -24,9 +24,26 @@ use crate::{
 use crate::{PaymentType, StorageListPaymentsRequest, StoragePaymentDetailsFilter};
 
 use super::{RuntimeEvent, RuntimeProfile};
+use crate::sdk::exit_chain_downloader::{ExitChainSource, run_downloader};
 use crate::sdk::{BreezSdk, SyncCoordinator, SyncRequest, SyncType, helpers::BalanceWatcher};
 
 pub(super) struct ClientRuntime;
+
+/// Collects the data a unilateral exit needs, in the background, whenever an
+/// operation has changed the leaf set. Started by the client runtime only, and
+/// only when the config asks for collection: server mode runs no background
+/// work, and there `sync_wallet` is what collects.
+fn spawn_exit_chain_downloader(sdk: &BreezSdk) {
+    let span = tracing::Span::current();
+    tokio::spawn(
+        run_downloader(
+            sdk.exit_chain_trigger.clone(),
+            Arc::clone(&sdk.spark_wallet) as Arc<dyn ExitChainSource>,
+            sdk.shutdown_sender.subscribe(),
+        )
+        .instrument(span),
+    );
+}
 
 #[macros::async_trait]
 impl RuntimeProfile for ClientRuntime {
@@ -53,6 +70,9 @@ impl RuntimeProfile for ClientRuntime {
         if let Some(stable_balance) = &sdk.stable_balance {
             stable_balance.spawn_conversion_worker(sdk.shutdown_sender.subscribe());
         }
+        if sdk.config.exit_chain_auto_fetch_enabled {
+            spawn_exit_chain_downloader(sdk);
+        }
     }
 
     async fn run_user_sync(
@@ -64,6 +84,12 @@ impl RuntimeProfile for ClientRuntime {
         sdk.sync_coordinator
             .trigger_sync_and_wait(sync_type, force)
             .await
+    }
+
+    async fn collect_exit_chains(&self, sdk: &BreezSdk) -> Result<(), SdkError> {
+        // Waits on the downloader rather than collecting here, so a sync that
+        // lands while it is already working joins that work instead of racing it.
+        sdk.exit_chain_trigger.collect().await
     }
 
     async fn get_info(
@@ -263,6 +289,7 @@ async fn on_sync_request(
 async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
     match event {
         WalletEvent::DepositConfirmed(_) => {
+            sdk.exit_chain_trigger.trigger();
             info!("Deposit confirmed");
             false
         }
@@ -279,6 +306,8 @@ async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
             false
         }
         WalletEvent::TransferClaimed(transfer) => {
+            // Claimed funds are new leaves with no chain yet.
+            sdk.exit_chain_trigger.trigger();
             info!("Transfer claimed");
             // Drop any unclaimed-deposit record for this outpoint independently
             // of payment ingestion, so conversion failures do not leave it stale.
@@ -326,6 +355,21 @@ async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
         }
         WalletEvent::AutoOptimization(event) => {
             info!("AutoOptimization event: {:?}", event);
+            // Rounds that already completed leave new leaves behind even when
+            // the run as a whole did not finish, so every end state wakes the
+            // downloader. Matched exhaustively so a new end state has to decide.
+            let ended = match event {
+                AutoOptimizationEvent::Completed
+                | AutoOptimizationEvent::Cancelled
+                | AutoOptimizationEvent::Failed { .. } => true,
+                // Skipped runs no round at all, and the other two are progress.
+                AutoOptimizationEvent::Skipped
+                | AutoOptimizationEvent::Started { .. }
+                | AutoOptimizationEvent::RoundCompleted { .. } => false,
+            };
+            if ended {
+                sdk.exit_chain_trigger.trigger();
+            }
             // Only the background auto-optimizer reaches this branch;
             // manually-triggered optimize_leaves calls return their result
             // directly and never produce wallet-level optimization events.
