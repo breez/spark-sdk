@@ -1,5 +1,12 @@
 dkg:
   min_available_keys: 100
+knobs:
+  # Static knobs apply because the entrypoint runs the operator with `-local`.
+  static_values:
+    # A full-size round (1000 keys) costs minutes of CPU when several clusters
+    # run at once. Tests get their keyshares from the committed seed, so this
+    # only bounds the cost of a replenishment round after a pool drains.
+    spark.so.dkg.batch_size: 300
 bitcoind:
   regtest:
     network: regtest

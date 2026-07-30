@@ -116,6 +116,10 @@ enum Commands {
     /// Run integration tests (containers etc.)
     Itest {},
 
+    /// Regenerate the keyshare seed that local operator clusters load, by
+    /// running one cluster that generates its own keyshares via DKG.
+    CaptureItestKeyshares {},
+
     /// Run cross-version signer compatibility tests: flows started by the
     /// previous SDK release (git tag pinned in spark-compat-itest) are
     /// finished by the current build, and vice versa.
@@ -170,6 +174,7 @@ fn main() -> Result<()> {
             skip_build,
         } => check_doc_snippets_cmd(package, skip_build),
         Commands::Itest {} => itest_cmd(),
+        Commands::CaptureItestKeyshares {} => capture_itest_keyshares_cmd(),
         Commands::CompatItest {} => compat_itest_cmd(),
         Commands::FlutterCheck {} => flutter_check_cmd(),
         Commands::SyncPasskeyCore { check } => sync_passkey_core_cmd(check),
@@ -905,6 +910,19 @@ fn itest_cmd() -> Result<()> {
         "cargo test -p breez-sdk-itest --features local-itest --test unilateral_exit --no-fail-fast -- --test-threads=2"
     )
     .run()?;
+    Ok(())
+}
+
+fn capture_itest_keyshares_cmd() -> Result<()> {
+    let sh = prepare_itest_images()?;
+
+    cmd!(
+        sh,
+        "cargo test -p spark-itest --test capture_keyshares -- --ignored --nocapture"
+    )
+    .run()?;
+
+    println!("Keyshare seed regenerated. Review and commit crates/spark-itest/keyshares/.");
     Ok(())
 }
 

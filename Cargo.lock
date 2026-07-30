@@ -6769,6 +6769,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "bitcoin",
+ "bytes",
  "futures",
  "hex",
  "platform-utils 0.1.0",
