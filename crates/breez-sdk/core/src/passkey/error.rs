@@ -142,8 +142,8 @@ impl PasskeyError {
     /// reports the classification of the `PrfProviderError` it wraps, so
     /// it is indistinguishable here from the same failure before the
     /// credential existed: match the variant itself to tell them apart.
-    /// The remaining variants map to `Internal`, since they stem from SDK
-    /// or network state rather than the authenticator.
+    /// The remaining non-Prf variants map to `Internal`, since they stem
+    /// from SDK or network state rather than the authenticator.
     #[must_use]
     pub fn kind(&self) -> ErrorKind {
         match self {
