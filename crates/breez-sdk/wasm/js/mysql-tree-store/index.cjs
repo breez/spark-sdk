@@ -608,19 +608,23 @@ class MysqlTreeStore {
         // its ancestor rows stay with it. The upserts below clear the mark on
         // whatever came back.
         await conn.query(
-          "UPDATE brz_tree_leaves SET is_deleted = 1 WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?",
+          "UPDATE brz_tree_leaves SET is_deleted = 1 WHERE user_id = ? AND reservation_id IS NULL AND added_at < ? AND is_deleted = 0",
           [this.identity, refreshTimestamp]
         );
 
         // A leaf we spent ourselves is the one absence already accounted for, so
-        // it goes for good and takes its ancestor rows with it below.
-        const deletedIds = Array.from(spentIds);
-        if (deletedIds.length > 0) {
-          await conn.query(
+        // it goes for good and takes its ancestor rows with it.
+        // Per id, so the ids whose rows actually went are the ones whose chains
+        // go too: a spent leaf still held by a reservation keeps its row, and a
+        // row without its chain is the one thing this store must never produce.
+        const deletedIds = [];
+        for (const id of spentIds) {
+          const [res] = await conn.query(
             `DELETE FROM brz_tree_leaves WHERE user_id = ? AND reservation_id IS NULL
-               AND id IN (${buildPlaceholders(deletedIds.length)})`,
-            [this.identity, ...deletedIds]
+               AND id = ?`,
+            [this.identity, id]
           );
+          if (res.affectedRows > 0) deletedIds.push(id);
         }
 
         await this._batchUpsertLeaves(conn, leaves, false, spentIds);

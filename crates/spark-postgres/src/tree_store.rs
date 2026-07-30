@@ -668,7 +668,8 @@ impl TreeStore for PostgresTreeStore {
         // prevents deadlocks.
         tx.execute(
             "UPDATE brz_tree_leaves SET is_deleted = TRUE \
-             WHERE user_id = $1 AND reservation_id IS NULL AND added_at < $2",
+             WHERE user_id = $1 AND reservation_id IS NULL AND added_at < $2 \
+               AND is_deleted = FALSE",
             &[&self.identity, &refresh_timestamp],
         )
         .await

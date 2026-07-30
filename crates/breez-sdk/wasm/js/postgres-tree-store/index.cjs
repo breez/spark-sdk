@@ -576,7 +576,7 @@ class PostgresTreeStore {
         // its ancestor rows stay with it. The upserts below clear the mark on
         // whatever came back.
         await client.query(
-          "UPDATE brz_tree_leaves SET is_deleted = TRUE WHERE user_id = $1 AND reservation_id IS NULL AND added_at < $2",
+          "UPDATE brz_tree_leaves SET is_deleted = TRUE WHERE user_id = $1 AND reservation_id IS NULL AND added_at < $2 AND is_deleted = FALSE",
           [this.identity, refreshTimestamp]
         );
 

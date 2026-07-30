@@ -696,18 +696,20 @@ pub async fn test_kept_leaf_cannot_back_a_payment(store: &dyn TreeStore) {
 
 /// Cancelling a reservation keeps a leaf the verification would not vouch for,
 /// chain and all. One operator declining to confirm a leaf is not proof it was
-/// spent, and with the operators unreachable the verification returns nothing at
-/// all: that is the case this store exists for, not a reason to destroy chains.
+/// spent, so it is held back from payments rather than destroyed, and the purge
+/// decides later on the evidence. (A verification that fails outright is the
+/// other half of this: it vouches for nothing, so it keeps every leaf instead.)
 pub async fn test_cancel_keeps_an_unverified_leaf(store: &dyn TreeStore) {
     let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
     let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
-    store
-        .add_leaves(&[LeafPedigree {
+    add_with_chains(
+        store,
+        &[LeafPedigree {
             leaf: leaf.clone(),
             ancestors: vec![root],
-        }])
-        .await
-        .unwrap();
+        }],
+    )
+    .await;
 
     let reservation = reserve_leaves(store, None, false, ReservationPurpose::Payment)
         .await

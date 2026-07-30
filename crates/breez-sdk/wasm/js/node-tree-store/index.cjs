@@ -501,7 +501,7 @@ class NodeTreeStore {
         // whatever came back.
         this.db
           .prepare(
-            "UPDATE brz_tree_leaves SET is_deleted = 1 WHERE reservation_id IS NULL AND added_at < ?"
+            "UPDATE brz_tree_leaves SET is_deleted = 1 WHERE reservation_id IS NULL AND added_at < ? AND is_deleted = 0"
           )
           .run(refreshMs);
 

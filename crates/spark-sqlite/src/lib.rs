@@ -965,25 +965,37 @@ impl TreeStore for SqliteTreeStore {
         Self::cleanup_spent_markers(&tx, refresh_ms)?;
         let spent = Self::spent_ids_since(&tx, refresh_ms)?;
 
-        // Delete non-reserved pool leaves older than the refresh; reserved and
+        // Mark the non-reserved pool leaves older than the refresh; reserved and
         // after-refresh leaves are immune. Leaves present in the refresh below are
         // re-inserted, which clears the mark again. A marked leaf stays a row, so
-        // the orphan sweep below leaves its ancestors alone.
+        // the orphan sweep below leaves its ancestors alone. Already-marked rows
+        // are skipped: they match this predicate forever, and rewriting them on
+        // every refresh is pure churn.
         tx.execute(
             "UPDATE brz_tree_leaves SET is_deleted = 1
-             WHERE reservation_id IS NULL AND added_at < ?1",
+             WHERE reservation_id IS NULL AND added_at < ?1 AND is_deleted = 0",
             params![refresh_ms],
         )
         .map_err(|e| generic("mark unreported leaves", e))?;
 
         // A leaf we spent ourselves is the one absence already accounted for, so
-        // it goes for good and takes its ancestor rows with it.
+        // it goes for good and takes its ancestor rows with it, and only when its
+        // row actually went: a row without its chain is the one thing this store
+        // must never produce.
         for id in &spent {
-            tx.execute(
-                "DELETE FROM brz_tree_leaves WHERE id = ?1 AND reservation_id IS NULL",
-                params![id],
-            )
-            .map_err(|e| generic("delete spent leaf", e))?;
+            let removed = tx
+                .execute(
+                    "DELETE FROM brz_tree_leaves WHERE id = ?1 AND reservation_id IS NULL",
+                    params![id],
+                )
+                .map_err(|e| generic("delete spent leaf", e))?;
+            if removed > 0 {
+                tx.execute(
+                    "DELETE FROM brz_tree_ancestors WHERE leaf_id = ?1",
+                    params![id],
+                )
+                .map_err(|e| generic("delete spent leaf ancestors", e))?;
+            }
         }
 
         Self::upsert_leaves(&tx, leaves.iter(), false, Some(&spent))?;

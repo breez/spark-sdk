@@ -142,7 +142,6 @@ async fn test_store_ancestors_for_absent_leaf() {
 }
 
 #[wasm_bindgen_test]
-
 async fn test_absent_leaf_is_kept_for_its_exit_chain() {
     let store = create_test_tree_store("pg_tree_ancestor_deleted").await;
     breez_sdk_spark::tree_store_tests::test_absent_leaf_is_kept_for_its_exit_chain(&store).await;

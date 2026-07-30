@@ -1771,6 +1771,11 @@ mod tests {
         assert!(!refund_left_us(&us(), &ours, &other_node));
     }
 
+    /// The refresh asks for the statuses a leaf we hold can be reported in, so a
+    /// leaf part-way through an exit keeps coming back instead of vanishing from
+    /// every operator at once. `TransferLocked` is deliberately not among them: a
+    /// leaf of ours in that status is one we are sending, and re-reading it would
+    /// undo the send.
     #[test_all]
     fn refresh_query_requests_held_leaf_statuses() {
         let owner = PublicKey::from_slice(&[2; 33]).unwrap();
