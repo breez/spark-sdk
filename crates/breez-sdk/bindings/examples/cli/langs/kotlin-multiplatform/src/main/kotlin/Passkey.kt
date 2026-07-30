@@ -95,7 +95,10 @@ class FilePrfProvider(dataDir: String) : PrfProvider {
 
     override suspend fun isSupported(): Boolean = true
 
-    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): PasskeyCredential {
+    override suspend fun createPasskey(
+        excludeCredentials: List<ByteArray>,
+        salts: List<String>,
+    ): CreatePasskeyOutput {
         throw UnsupportedOperationException(
             "File-backed PRF provider does not implement create-credential; " +
                 "use sign-in by label instead."
@@ -121,7 +124,10 @@ class NotYetSupportedProvider(private val name: String) : PrfProvider {
 
     override suspend fun isSupported(): Boolean = notYet()
 
-    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): PasskeyCredential = notYet()
+    override suspend fun createPasskey(
+        excludeCredentials: List<ByteArray>,
+        salts: List<String>,
+    ): CreatePasskeyOutput = notYet()
 
     override suspend fun checkDomainAssociation(): DomainAssociation =
         DomainAssociation.Skipped("$name does not verify domain association")

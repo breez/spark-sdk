@@ -20,8 +20,23 @@ API_AVAILABLE(ios(18.0), macos(15.0))
                        withSalt1:(NSData *)salt1
                            salt2:(NSData * _Nullable)salt2;
 
-/// Set PRF registration input on a registration request.
+/// Set PRF registration input on a registration request, support-only.
 + (void)setRegistrationPRFOnRequest:(ASAuthorizationPlatformPublicKeyCredentialRegistrationRequest *)request;
+
+/// Set PRF registration input asking the create ceremony to evaluate up
+/// to two salts. Pass nil for `salt1` to only probe support, nil for
+/// `salt2` to evaluate one.
++ (void)setRegistrationPRFOnRequest:(ASAuthorizationPlatformPublicKeyCredentialRegistrationRequest *)request
+                          withSalt1:(NSData * _Nullable)salt1
+                              salt2:(NSData * _Nullable)salt2;
+
+/// Extract the PRF output (first salt result) from a registration
+/// credential. Returns nil when the authenticator evaluated nothing at
+/// create, which is the pre-eval-at-create behavior.
++ (NSData * _Nullable)extractPRFOutputFromRegistration:(ASAuthorizationPlatformPublicKeyCredentialRegistration *)credential;
+
+/// Extract the second PRF output from a registration credential.
++ (NSData * _Nullable)extractSecondPRFOutputFromRegistration:(ASAuthorizationPlatformPublicKeyCredentialRegistration *)credential;
 
 /// Extract the PRF output (first salt result) from an assertion credential.
 /// Returns nil if PRF output is not available.

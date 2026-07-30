@@ -3,7 +3,12 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 
 import 'rust/models.dart'
-    show DeriveSeedsOutput, DeriveSeedsRequest, PasskeyCredential, PasskeyProviderOptions;
+    show
+        CreatePasskeyOutput,
+        DeriveSeedsOutput,
+        DeriveSeedsRequest,
+        PasskeyCredential,
+        PasskeyProviderOptions;
 
 /// Result of verifying that the app is associated with its RP domain.
 /// Switch on the subtype to handle each outcome.
@@ -68,7 +73,15 @@ abstract class PrfProvider {
   /// Register a new PRF-capable credential. `excludeCredentials` blocks
   /// re-registering the same device, surfaced as a
   /// `credentialAlreadyExists` failure.
-  Future<PasskeyCredential> createPasskey(List<Uint8List> excludeCredentials);
+  /// Asking the create ceremony to evaluate PRF for `salts` removes the
+  /// assertion that would otherwise follow it. Return `seeds` null when the
+  /// authenticator reported PRF support without evaluating, or returned
+  /// fewer outputs than salts: a partial derive is no derive at all, and
+  /// the caller falls back to [deriveSeeds].
+  ///
+  /// Seeds returned here must equal what [deriveSeeds] returns for the same
+  /// salts, or register and sign-in land on different wallets.
+  Future<CreatePasskeyOutput> createPasskey(List<Uint8List> excludeCredentials, List<String> salts);
 }
 
 /// Built-in Flutter passkey PRF provider using platform-native APIs
@@ -141,12 +154,13 @@ class PasskeyProvider implements PrfProvider {
   /// is minted fresh per call (never host-supplied) and returned via
   /// [PasskeyCredential.userId]. Throws [PasskeyPrfException] on failure.
   @override
-  Future<PasskeyCredential> createPasskey(List<Uint8List> excludeCredentials) async {
+  Future<CreatePasskeyOutput> createPasskey(List<Uint8List> excludeCredentials, List<String> salts) async {
     final args = <String, Object?>{
       'rpId': _rpId,
       'rpName': _rpName,
       'userName': _userName,
       'userDisplayName': _userDisplayName,
+      'salts': salts,
     };
     if (excludeCredentials.isNotEmpty) {
       args['excludeCredentials'] = excludeCredentials.map(base64Encode).toList();
@@ -159,11 +173,15 @@ class PasskeyProvider implements PrfProvider {
       final aaguidB64 = map['aaguid'] as String?;
       final aaguid = aaguidB64 == null ? null : base64Decode(aaguidB64);
       final backupEligible = map['backupEligible'] as bool?;
-      return PasskeyCredential(
-        credentialId: credentialId,
-        userId: userId,
-        aaguid: aaguid,
-        backupEligible: backupEligible,
+      final seedsB64 = (map['seeds'] as List<Object?>?)?.cast<String>();
+      return CreatePasskeyOutput(
+        credential: PasskeyCredential(
+          credentialId: credentialId,
+          userId: userId,
+          aaguid: aaguid,
+          backupEligible: backupEligible,
+        ),
+        seeds: seedsB64?.map(base64Decode).toList(),
       );
     } on PlatformException catch (e) {
       throw _mapPlatformException(e);

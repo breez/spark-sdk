@@ -58,6 +58,8 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
             return
         }
 
+        let salts = args["salts"] as? [String] ?? []
+
         var excludeCredentials: [Data] = []
         if let rawIds = args["excludeCredentials"] as? [FlutterStandardTypedData] {
             excludeCredentials = rawIds.map { $0.data }
@@ -71,12 +73,19 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
         )
         Task { @MainActor in
             do {
-                let registered = try await core.register(excludeCredentials: excludeCredentials)
+                let registration = try await core.register(
+                    excludeCredentials: excludeCredentials,
+                    salts: salts
+                )
+                let registered = registration.credential
                 result([
                     "credentialId": registered.credentialId.base64EncodedString(),
                     "userId": registered.userId.base64EncodedString(),
                     "aaguid": registered.aaguid?.base64EncodedString() as Any?,
                     "backupEligible": registered.backupEligible as Any?,
+                    // Null unless the authenticator evaluated PRF during the
+                    // create ceremony and returned one output per salt.
+                    "seeds": registration.seeds?.map { $0.base64EncodedString() } as Any?,
                 ])
             } catch let err as PasskeyAssertionError {
                 result(Self.flutterError(from: err))

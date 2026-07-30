@@ -138,7 +138,7 @@ public class FilePrfProvider : PrfProvider
 
     public Task<bool> IsSupported() => Task.FromResult(true);
 
-    public Task<PasskeyCredential> CreatePasskey(byte[][] excludeCredentials)
+    public Task<CreatePasskeyOutput> CreatePasskey(byte[][] excludeCredentials, string[] salts)
     {
         throw new NotSupportedException(
             "File-backed PRF provider does not implement create-credential; " +
@@ -173,7 +173,7 @@ public class NotYetSupportedProvider : PrfProvider
 
     public Task<bool> IsSupported() => throw NotYet();
 
-    public Task<PasskeyCredential> CreatePasskey(byte[][] excludeCredentials) => throw NotYet();
+    public Task<CreatePasskeyOutput> CreatePasskey(byte[][] excludeCredentials, string[] salts) => throw NotYet();
 
     public Task<DomainAssociation> CheckDomainAssociation() =>
         Task.FromResult<DomainAssociation>(

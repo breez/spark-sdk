@@ -2,8 +2,9 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use breez_sdk_spark::passkey::{
-    ConnectWithPasskeyRequest, ConnectWithPasskeyResponse, DeriveSeedsOutput, DeriveSeedsRequest,
-    PasskeyAvailability, PasskeyConfig, PasskeyCredential, PasskeyError, PrfProvider,
+    ConnectWithPasskeyRequest, ConnectWithPasskeyResponse, CreatePasskeyOutput, DeriveSeedsOutput,
+    DeriveSeedsRequest,
+    PasskeyAvailability, PasskeyConfig, PasskeyError, PrfProvider,
     PrfProviderError, RegisterRequest, RegisterResponse, SignInRequest, SignInResponse,
 };
 use flutter_rust_bridge::{DartFnFuture, frb};
@@ -31,8 +32,11 @@ struct CallbackPrfProvider {
         dyn Fn(DeriveSeedsRequest) -> DartFnFuture<anyhow::Result<DeriveSeedsOutput>> + Send + Sync,
     >,
     is_supported_fn: Arc<dyn Fn() -> DartFnFuture<anyhow::Result<bool>> + Send + Sync>,
-    create_passkey_fn:
-        Arc<dyn Fn(Vec<Vec<u8>>) -> DartFnFuture<anyhow::Result<PasskeyCredential>> + Send + Sync>,
+    create_passkey_fn: Arc<
+        dyn Fn(Vec<Vec<u8>>, Vec<String>) -> DartFnFuture<anyhow::Result<CreatePasskeyOutput>>
+            + Send
+            + Sync,
+    >,
 }
 
 /// Convert a Dart-thrown error into a [`PrfProviderError`]. The Dart
@@ -86,8 +90,9 @@ impl PrfProvider for CallbackPrfProvider {
     async fn create_passkey(
         &self,
         exclude_credentials: Vec<Vec<u8>>,
-    ) -> Result<PasskeyCredential, PrfProviderError> {
-        let result = AssertUnwindSafe((self.create_passkey_fn)(exclude_credentials))
+        salts: Vec<String>,
+    ) -> Result<CreatePasskeyOutput, PrfProviderError> {
+        let result = AssertUnwindSafe((self.create_passkey_fn)(exclude_credentials, salts))
             .catch_unwind()
             .await
             .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
@@ -114,7 +119,7 @@ impl PasskeyClient {
         + Sync
         + 'static,
         is_supported: impl Fn() -> DartFnFuture<anyhow::Result<bool>> + Send + Sync + 'static,
-        create_passkey: impl Fn(Vec<Vec<u8>>) -> DartFnFuture<anyhow::Result<PasskeyCredential>>
+        create_passkey: impl Fn(Vec<Vec<u8>>, Vec<String>) -> DartFnFuture<anyhow::Result<CreatePasskeyOutput>>
         + Send
         + Sync
         + 'static,
@@ -211,8 +216,8 @@ mod tests {
         CallbackPrfProvider {
             derive_seeds_fn: Arc::new(derive_bulk),
             is_supported_fn: Arc::new(is_available),
-            create_passkey_fn: Arc::new(|_req| {
-                panicking::<anyhow::Result<PasskeyCredential>>("create_passkey not used")
+            create_passkey_fn: Arc::new(|_req, _salts| {
+                panicking::<anyhow::Result<CreatePasskeyOutput>>("create_passkey not used")
             }),
         }
     }

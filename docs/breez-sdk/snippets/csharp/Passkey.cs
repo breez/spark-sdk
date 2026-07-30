@@ -4,7 +4,8 @@ namespace BreezSdkSnippets
 {
     // ANCHOR: implement-prf-provider
     // Implement PrfProvider for a custom authenticator (hardware key, FIDO2,
-    // file-backed). Only DeriveSeeds and IsSupported are required.
+    // file-backed). Every method is required: interface members are
+    // bodiless, unlike the Rust trait's defaults.
     class CustomPrfProvider : PrfProvider
     {
         public async Task<DeriveSeedsOutput> DeriveSeeds(DeriveSeedsRequest request)
@@ -18,9 +19,13 @@ namespace BreezSdkSnippets
             throw new NotImplementedException("Check platform passkey availability");
         }
 
-        public async Task<PasskeyCredential> CreatePasskey(byte[][] excludeCredentials)
+        public async Task<CreatePasskeyOutput> CreatePasskey(byte[][] excludeCredentials, string[] salts)
         {
             // Register a credential and return its ID plus attestation.
+            //
+            // Return a null Seeds unless the platform evaluated PRF during the
+            // create ceremony and gave one output per salt. Seeds returned here
+            // must equal what DeriveSeeds returns for the same salts.
             throw new NotImplementedException("Implement registration via native passkey API");
         }
 

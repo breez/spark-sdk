@@ -3,7 +3,8 @@ import Foundation
 
 // ANCHOR: implement-prf-provider
 // Implement PrfProvider for a custom authenticator (hardware key, FIDO2,
-// file-backed). Only deriveSeeds and isSupported are required.
+// file-backed). Every method is required: Swift conformance has no
+// defaults, unlike the Rust trait.
 class CustomPrfProvider: PrfProvider {
     func deriveSeeds(request: DeriveSeedsRequest) async throws -> DeriveSeedsOutput {
         // Return one 32-byte PRF output per salt, in input order.
@@ -14,8 +15,15 @@ class CustomPrfProvider: PrfProvider {
         fatalError("Check platform passkey availability")
     }
 
-    func createPasskey(excludeCredentials: [Data]) async throws -> PasskeyCredential {
+    func createPasskey(
+        excludeCredentials: [Data],
+        salts: [String]
+    ) async throws -> CreatePasskeyOutput {
         // Register a credential and return its ID plus attestation.
+        //
+        // Return `seeds: nil` unless the platform evaluated PRF during the
+        // create ceremony and gave one output per salt. Seeds returned here
+        // must equal what `deriveSeeds` returns for the same salts.
         fatalError("Implement registration via WebAuthn create() / native API")
     }
 

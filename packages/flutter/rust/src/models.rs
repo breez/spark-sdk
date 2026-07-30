@@ -1915,6 +1915,12 @@ pub struct _PasskeyCredential {
     pub backup_eligible: Option<bool>,
 }
 
+#[frb(mirror(CreatePasskeyOutput))]
+pub struct _CreatePasskeyOutput {
+    pub credential: PasskeyCredential,
+    pub seeds: Option<Vec<Vec<u8>>>,
+}
+
 #[frb(mirror(RegisterRequest))]
 pub struct _RegisterRequest {
     pub label: Option<String>,

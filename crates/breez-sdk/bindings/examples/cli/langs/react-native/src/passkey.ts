@@ -17,10 +17,24 @@ import {
   type PrfProvider,
   type DeriveSeedsRequest,
   type DeriveSeedsOutput,
-  type PasskeyCredential,
   DomainAssociation,
 } from '@breeztech/breez-sdk-spark-react-native'
 import { PasskeyProvider as PlatformPasskeyProvider } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
+
+/**
+ * Shape of the SDK's create-passkey result. Declared here rather than
+ * imported: this file is type-checked against the package as published,
+ * and the generated binding surface is not regenerated for that check.
+ */
+type CreatePasskeyOutput = {
+  credential: {
+    credentialId: Uint8Array
+    userId: Uint8Array | null
+    aaguid: Uint8Array | null
+    backupEligible: boolean | null
+  }
+  seeds: Uint8Array[] | null
+}
 import RNFS from 'react-native-fs'
 import { generateRandomBytes, hmacSha256 } from './crypto_utils'
 
@@ -193,7 +207,10 @@ class FilePrfProvider implements PrfProvider {
   }
 
   /** File-backed seeds derive lazily; there is no credential to register. */
-  createPasskey = async (_excludeCredentials: ArrayBuffer[]): Promise<PasskeyCredential> => {
+  createPasskey = async (
+    _excludeCredentials: ArrayBuffer[],
+    _salts: string[]
+  ): Promise<CreatePasskeyOutput> => {
     throw new Error('file-backed PRF provider does not support credential creation; use sign-in by label instead')
   }
 
@@ -230,7 +247,10 @@ class NotYetSupportedProvider implements PrfProvider {
     return false
   }
 
-  createPasskey = async (_excludeCredentials: ArrayBuffer[]): Promise<PasskeyCredential> => {
+  createPasskey = async (
+    _excludeCredentials: ArrayBuffer[],
+    _salts: string[]
+  ): Promise<CreatePasskeyOutput> => {
     throw this.notYet()
   }
 

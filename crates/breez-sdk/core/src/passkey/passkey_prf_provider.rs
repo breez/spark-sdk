@@ -1,5 +1,5 @@
 use super::error::PrfProviderError;
-use super::models::{DeriveSeedsOutput, PasskeyCredential};
+use super::models::{CreatePasskeyOutput, DeriveSeedsOutput};
 
 /// Per-call inputs for [`PrfProvider::derive_seeds`]. Hosts that
 /// don't need per-ceremony overrides fall back to [`Default`]
@@ -78,20 +78,35 @@ pub trait PrfProvider: Send + Sync {
     /// device. Hosts gate UX on the result.
     async fn is_supported(&self) -> Result<bool, PrfProviderError>;
 
-    /// Explicit registration. Platform passkey providers override this to
-    /// drive the OS create ceremony and surface the credential metadata
-    /// hosts need for `exclude_credentials` bookkeeping. CLI / hardware
-    /// providers register lazily in [`Self::derive_seeds`] and inherit the
-    /// default `PrfNotSupported`.
+    /// Explicit registration: drive the OS create ceremony, and where the
+    /// platform supports it, evaluate PRF for `salts` in the same
+    /// ceremony. Platform passkey providers override this to surface the
+    /// credential metadata hosts need for `exclude_credentials`
+    /// bookkeeping. CLI / hardware providers register lazily in
+    /// [`Self::derive_seeds`] and inherit the default `PrfNotSupported`.
     ///
     /// `exclude_credentials` lists already-registered IDs and surfaces
     /// duplicates as `CredentialAlreadyExists`. The `user.id` is always
     /// provider-minted and returned on `PasskeyCredential.user_id`.
+    ///
+    /// Returning seeds removes the assertion that would otherwise follow
+    /// a create, and with it the window where the new credential exists
+    /// but the platform cannot yet resolve it. Return `seeds: None` for
+    /// anything short of one output per salt (some authenticators drop
+    /// `prf.eval.second`): a partial result is not usable, and the caller
+    /// falls back to [`Self::derive_seeds`]. Empty `salts` means the
+    /// caller wants the credential only.
+    ///
+    /// Seeds returned here must equal what [`Self::derive_seeds`] would
+    /// return for the same salts. The wallet is derived from them either
+    /// way, so a mismatch means register and sign-in land on different
+    /// wallets, and the one register created is unreachable.
     async fn create_passkey(
         &self,
         exclude_credentials: Vec<Vec<u8>>,
-    ) -> Result<PasskeyCredential, PrfProviderError> {
-        let _ = exclude_credentials;
+        salts: Vec<String>,
+    ) -> Result<CreatePasskeyOutput, PrfProviderError> {
+        let _ = (exclude_credentials, salts);
         Err(PrfProviderError::PrfNotSupported)
     }
 

@@ -90,6 +90,7 @@ class BreezSdkSparkPasskey: NSObject {
         userName: String,
         userDisplayName: String,
         excludeCredentials: [String],
+        registerSalts: [String],
         resolve: @escaping RCTPromiseResolveBlock,
         reject: @escaping RCTPromiseRejectBlock
     ) {
@@ -101,12 +102,20 @@ class BreezSdkSparkPasskey: NSObject {
         )
         Task { @MainActor in
             do {
-                let registered = try await core.register(excludeCredentials: excludeIds)
+                let registration = try await core.register(
+                    excludeCredentials: excludeIds,
+                    salts: registerSalts
+                )
+                let registered = registration.credential
+                // Null unless the authenticator evaluated PRF during the
+                // create ceremony and returned one output per salt. The JS
+                // side then skips the assertion entirely.
                 resolve([
                     "credentialId": registered.credentialId.base64EncodedString(),
                     "userId": registered.userId.base64EncodedString(),
                     "aaguid": registered.aaguid?.base64EncodedString() as Any?,
                     "backupEligible": registered.backupEligible as Any?,
+                    "seeds": registration.seeds?.map { $0.base64EncodedString() } as Any?,
                 ])
             } catch let err as PasskeyAssertionError {
                 Self.reject(err, reject: reject, defaultMessage: "User cancelled registration")

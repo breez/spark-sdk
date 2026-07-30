@@ -1,5 +1,5 @@
 import type {
-  PasskeyCredential
+  CreatePasskeyOutput
 } from '@breeztech/breez-sdk-spark'
 import { connect, defaultConfig } from '@breeztech/breez-sdk-spark'
 import {
@@ -21,9 +21,14 @@ class CustomPrfProvider {
   }
 
   createPasskey = async (
-    _excludeCredentials: Uint8Array[]
-  ): Promise<PasskeyCredential> => {
+    _excludeCredentials: Uint8Array[],
+    _salts: string[]
+  ): Promise<CreatePasskeyOutput> => {
     // Register a credential and return its ID plus attestation.
+    //
+    // Return `seeds: null` unless the browser evaluated PRF during the
+    // create ceremony and gave one output per salt. Seeds returned here
+    // must equal what `deriveSeeds` returns for the same salts.
     throw new Error('Implement registration via WebAuthn create() / native API')
   }
 

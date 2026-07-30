@@ -10,8 +10,15 @@ Future<DeriveSeedsOutput> deriveSeeds(DeriveSeedsRequest request) async {
   throw UnimplementedError('Implement using platform passkey APIs');
 }
 
-Future<PasskeyCredential> createPasskey(List<Uint8List> excludeCredentials) async {
+Future<CreatePasskeyOutput> createPasskey(
+  List<Uint8List> excludeCredentials,
+  List<String> salts,
+) async {
   // Register a credential and return its ID plus attestation.
+  //
+  // Return `seeds` null unless the platform evaluated PRF during the create
+  // ceremony and gave one output per salt. Seeds returned here must equal
+  // what `deriveSeeds` returns for the same salts.
   throw UnimplementedError('Implement registration via native passkey API');
 }
 

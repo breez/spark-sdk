@@ -83,7 +83,10 @@ class FilePrfProvider: PrfProvider {
 
     func isSupported() async throws -> Bool { true }
 
-    func createPasskey(excludeCredentials: [Data]) async throws -> PasskeyCredential {
+    func createPasskey(
+        excludeCredentials: [Data],
+        salts: [String]
+    ) async throws -> CreatePasskeyOutput {
         throw PrfProviderError.Generic(
             "File-backed PRF provider does not implement create-credential; " +
             "use sign-in by label instead."
@@ -115,7 +118,10 @@ class YubiKeyPrfProvider: PrfProvider {
 
     func isSupported() async throws -> Bool { false }
 
-    func createPasskey(excludeCredentials: [Data]) async throws -> PasskeyCredential {
+    func createPasskey(
+        excludeCredentials: [Data],
+        salts: [String]
+    ) async throws -> CreatePasskeyOutput {
         throw notYet()
     }
 
@@ -144,7 +150,10 @@ class Fido2PrfProvider: PrfProvider {
 
     func isSupported() async throws -> Bool { false }
 
-    func createPasskey(excludeCredentials: [Data]) async throws -> PasskeyCredential {
+    func createPasskey(
+        excludeCredentials: [Data],
+        salts: [String]
+    ) async throws -> CreatePasskeyOutput {
         throw notYet()
     }
 

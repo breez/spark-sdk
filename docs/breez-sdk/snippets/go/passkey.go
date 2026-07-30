@@ -9,7 +9,8 @@ import (
 
 // ANCHOR: implement-prf-provider
 // Implement the PrfProvider interface for a custom authenticator (hardware
-// key, FIDO2, file-backed). Only DeriveSeeds and IsSupported are required.
+// key, FIDO2, file-backed). Every method is required: satisfying a Go
+// interface has no defaults, unlike the Rust trait.
 type CustomPrfProvider struct{}
 
 func (p *CustomPrfProvider) DeriveSeeds(
@@ -25,8 +26,13 @@ func (p *CustomPrfProvider) IsSupported() (bool, error) {
 
 func (p *CustomPrfProvider) CreatePasskey(
 	excludeCredentials [][]byte,
-) (breez_sdk_spark.PasskeyCredential, error) {
+	salts []string,
+) (breez_sdk_spark.CreatePasskeyOutput, error) {
 	// Register a credential and return its ID plus attestation.
+	//
+	// Return a nil Seeds unless the platform evaluated PRF during the create
+	// ceremony and gave one output per salt. Seeds returned here must equal
+	// what DeriveSeeds returns for the same salts.
 	panic("Implement registration via native passkey API")
 }
 
