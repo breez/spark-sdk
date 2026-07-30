@@ -427,6 +427,12 @@ async fn test_spent_leaves_not_restored_by_set_leaves() {
 }
 
 #[wasm_bindgen_test]
+async fn test_set_leaves_skips_chains_of_spent_leaves() {
+    let store = create_test_tree_store().await;
+    breez_sdk_spark::tree_store_tests::test_set_leaves_skips_chains_of_spent_leaves(&store).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_store_ancestors_backfills_chain() {
     let store = create_test_tree_store().await;
     breez_sdk_spark::tree_store_tests::test_store_ancestors_backfills_chain(&store).await;

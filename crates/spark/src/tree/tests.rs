@@ -324,8 +324,7 @@ pub async fn test_exit_chain_after_cancel_reparent(store: &dyn TreeStore) {
     assert_eq!(store.get_available_balance().await.unwrap(), leaf.value);
 }
 
-/// Re-storing an existing node updates its mutable fields (status, transactions,
-/// parent) in place; `value` and the verifying key are fixed.
+/// Re-storing an existing node updates it in place rather than duplicating it.
 pub async fn test_node_update_in_place(store: &dyn TreeStore) {
     let ancestor = create_test_node_with_parent("root", None, TreeNodeStatus::Available);
     let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
@@ -337,8 +336,7 @@ pub async fn test_node_update_in_place(store: &dyn TreeStore) {
         .await
         .unwrap();
 
-    // Re-store the ancestor with a new status and a new parent, both applied;
-    // its value and verifying key are unchanged.
+    // Re-store the ancestor with a new status and a new parent, both applied.
     let mut updated = ancestor.clone();
     updated.status = TreeNodeStatus::OnChain;
     updated.parent_node_id = Some(TreeNodeId::from_str("new-parent").unwrap());
@@ -852,8 +850,13 @@ pub async fn test_add_leaves_duplicate_ids(store: &dyn TreeStore) {
     let leaf2 = create_test_tree_node("node1", 200); // Same id, different value
 
     store.add_leaves(&as_pedigrees(&[leaf1])).await.unwrap();
-    // A different value under the same id is a real incompatibility, not an update.
-    assert!(store.add_leaves(&as_pedigrees(&[leaf2])).await.is_err());
+    // The operators are the source of truth: the later report wins, and the id
+    // is updated in place rather than stored twice.
+    store.add_leaves(&as_pedigrees(&[leaf2])).await.unwrap();
+
+    let stored = get_available(store).await;
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].value, 200);
 }
 
 pub async fn test_set_leaves(store: &dyn TreeStore) {
@@ -1901,6 +1904,67 @@ pub async fn test_spent_leaves_not_restored_by_set_leaves(store: &dyn TreeStore)
     assert!(
         !available.iter().any(|l| l.id.to_string() == "node1"),
         "Spent leaf node1 should not be restored by set_leaves when refresh started before spend"
+    );
+}
+
+/// A refresh that reports an already-spent leaf must not store its chain: the
+/// leaf itself is skipped, and a chain is only ever removed with its leaf, so
+/// the rows would never be collected.
+pub async fn test_set_leaves_skips_chains_of_spent_leaves(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    // Needs a parent: a parentless leaf's chain is unreachable by the ancestor
+    // walk, so a stray row stored under it would not be observable below.
+    let mut leaf = create_test_node_with_parent("node1", Some("root"), TreeNodeStatus::Available);
+    leaf.value = 100;
+    store
+        .add_leaves(&as_pedigrees(&[leaf.clone()]))
+        .await
+        .unwrap();
+
+    let reservation = reserve_leaves(
+        store,
+        Some(&TargetAmounts::new_amount_and_fee(100, None)),
+        true,
+        ReservationPurpose::Payment,
+    )
+    .await
+    .unwrap();
+    store
+        .finalize_reservation(&reservation.id, None)
+        .await
+        .unwrap();
+
+    // A refresh that started before the spend still reports the leaf, now with
+    // a chain. The leaf is suppressed, so its chain must be too.
+    let refresh_start = past_refresh_start(store).await;
+    store
+        .set_leaves(
+            &[LeafPedigree {
+                leaf: leaf.clone(),
+                ancestors: vec![root],
+            }],
+            &[],
+            refresh_start,
+        )
+        .await
+        .unwrap();
+
+    assert!(get_available(store).await.is_empty());
+    // Re-adding the leaf would surface any chain stored for it above.
+    store
+        .add_leaves(&[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: Vec::new(),
+        }])
+        .await
+        .unwrap();
+    assert!(
+        exit_chain(store, &leaf.id)
+            .await
+            .expect("leaf was just added")
+            .ancestors
+            .is_empty(),
+        "a chain stored for a spent leaf outlived it"
     );
 }
 

@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::tree::{
     LeafPedigree, LeafSelection, Leaves, LeavesReservation, LeavesReservationId,
     ReservationPurpose, ReserveResult, TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus,
-    TreeServiceError, TreeStore, assemble_exit_chains, ensure_node_compatible, select_helper,
+    TreeServiceError, TreeStore, assemble_exit_chains, select_helper,
 };
 
 /// Default maximum number of concurrent reservations allowed.
@@ -398,9 +398,6 @@ impl InMemoryTreeStore {
         for pedigree in leaves {
             Self::upsert_ancestors(state, &pedigree.leaf.id, &pedigree.ancestors)?;
             let leaf = &pedigree.leaf;
-            if let Some(existing) = Self::find_stored_leaf(state, &leaf.id) {
-                ensure_node_compatible(&existing, leaf)?;
-            }
             let mut updated_in_reservation: Option<LeavesReservationId> = None;
             for (res_id, entry) in &mut state.leaves_reservations {
                 if let Some(stored) = entry.leaves.iter_mut().find(|s| s.node.id == leaf.id) {
@@ -482,14 +479,6 @@ impl InMemoryTreeStore {
         // Scanning every leaf's chain for a matching id would make each write cost
         // the size of the whole wallet, and a node stored under another leaf backs
         // only that leaf's exit.
-        let previous = state.ancestors.get(leaf_id).cloned().unwrap_or_default();
-        for node in nodes {
-            let existing = Self::find_stored_leaf(state, &node.id)
-                .or_else(|| previous.iter().find(|n| n.id == node.id).cloned());
-            if let Some(existing) = existing {
-                ensure_node_compatible(&existing, node)?;
-            }
-        }
         state.ancestors.insert(leaf_id.clone(), nodes.to_vec());
         Ok(())
     }
@@ -608,12 +597,11 @@ impl InMemoryTreeStore {
 
         let now = SystemTime::now();
         for pedigree in leaves {
-            Self::upsert_ancestors(state, &pedigree.leaf.id, &pedigree.ancestors)?;
             let leaf = &pedigree.leaf;
-            if let Some(old) = old_leaves.get(&leaf.id) {
-                ensure_node_compatible(&old.node, leaf)?;
-            }
+            // A chain is only ever removed with its leaf, so writing one for a
+            // leaf skipped as spent would leave it behind for good.
             if !state.spent_leaf_ids.contains_key(&leaf.id) {
+                Self::upsert_ancestors(state, &pedigree.leaf.id, &pedigree.ancestors)?;
                 let was_present = old_leaves.contains_key(&leaf.id);
                 if !was_present {
                     info!(
@@ -635,9 +623,9 @@ impl InMemoryTreeStore {
         // reports in both lists ends up flagged missing, matching the upsert
         // order of the SQL stores.
         for pedigree in missing_operators_leaves {
-            Self::upsert_ancestors(state, &pedigree.leaf.id, &pedigree.ancestors)?;
             let leaf = &pedigree.leaf;
             if !state.spent_leaf_ids.contains_key(&leaf.id) {
+                Self::upsert_ancestors(state, &pedigree.leaf.id, &pedigree.ancestors)?;
                 state.leaves.insert(
                     leaf.id.clone(),
                     StoredLeaf::from_pedigree_missing(pedigree, now),
@@ -661,7 +649,6 @@ impl InMemoryTreeStore {
         for entry in state.leaves_reservations.values_mut() {
             for stored in &mut entry.leaves {
                 if let Some(fresh) = state.leaves.remove(&stored.node.id) {
-                    ensure_node_compatible(&stored.node, &fresh.node)?;
                     *stored = fresh;
                 }
             }
@@ -894,9 +881,6 @@ impl InMemoryTreeStore {
             for pedigree in resulting_leaves {
                 Self::upsert_ancestors(state, &pedigree.leaf.id, &pedigree.ancestors)?;
                 let leaf = &pedigree.leaf;
-                if let Some(existing) = Self::find_stored_leaf(state, &leaf.id) {
-                    ensure_node_compatible(&existing, leaf)?;
-                }
                 trace!(
                     "leaf_lifecycle finalize: adding new leaf={} value={} reservation={}",
                     leaf.id, leaf.value, id
@@ -1310,6 +1294,11 @@ mod tests {
     }
 
     #[async_test_all]
+    async fn test_leaves_missing_exit_chains() {
+        shared_tests::test_leaves_missing_exit_chains(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
     async fn test_node_update_in_place() {
         shared_tests::test_node_update_in_place(&InMemoryTreeStore::new()).await;
     }
@@ -1574,6 +1563,11 @@ mod tests {
     #[async_test_all]
     async fn test_spent_leaves_not_restored_by_set_leaves() {
         shared_tests::test_spent_leaves_not_restored_by_set_leaves(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_set_leaves_skips_chains_of_spent_leaves() {
+        shared_tests::test_set_leaves_skips_chains_of_spent_leaves(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]

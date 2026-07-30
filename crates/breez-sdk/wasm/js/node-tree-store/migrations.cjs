@@ -1,9 +1,10 @@
 /**
  * Database Migration Manager for the Breez SDK Node.js SQLite Tree Store.
  *
- * The store shares the wallet's main SQLite database file, so its tables carry
- * the `brz_` prefix to stay clear of the main storage's. Schema mirrors the Rust
- * `spark-sqlite` tree store (crates/spark-sqlite/src/lib.rs).
+ * The store shares the wallet's main SQLite database file. Its `tree` table
+ * names are what keep it clear of the main storage's; the `brz_` prefix on top
+ * of those is for consistency with the Postgres and MySQL backends. Schema
+ * mirrors the Rust `spark-sqlite` tree store (crates/spark-sqlite/src/lib.rs).
  */
 
 // TreeStoreError arrives as a parameter to avoid a circular require.

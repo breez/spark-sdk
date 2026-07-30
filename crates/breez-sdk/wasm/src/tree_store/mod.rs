@@ -564,8 +564,9 @@ interface LeavesReservation {
     leaves: TreeNode[];
 }
 
-/** A leaf together with its ancestor chain (root to parent), so a stored leaf
- *  always brings the intermediate nodes its exit chain walks through. */
+/** A leaf together with its ancestor chain, nearest parent first up to the
+ *  root, so a stored leaf always brings the intermediate nodes its exit chain
+ *  walks through. */
 interface LeafPedigree {
     leaf: TreeNode;
     ancestors: TreeNode[];
@@ -594,7 +595,7 @@ export interface TreeStore {
     getAvailableBalance: () => Promise<bigint>;
     getVerifiedLeafKeys: () => Promise<[string, string, string][]>;
     setLeaves: (leaves: LeafPedigree[], missingLeaves: LeafPedigree[], refreshStartedAtMs: number) => Promise<void>;
-    cancelReservation: (id: string, leavesToKeep: LeafPedigree[]) => Promise<void>;
+    cancelReservation: (id: string, leavesToKeep: TreeNode[]) => Promise<void>;
     finalizeReservation: (id: string, newLeaves: LeafPedigree[] | null) => Promise<void>;
     tryReserveLeaves: (targetAmounts: TargetAmounts | null, exactOnly: boolean, purpose: string) => Promise<ReserveResult>;
     now: () => Promise<number>;

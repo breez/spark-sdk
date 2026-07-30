@@ -365,30 +365,26 @@ class MysqlTreeStore {
   async getExitChains(leafIds) {
     try {
       if (!leafIds || leafIds.length === 0) return [];
-      // Each requested leaf's own ancestor rows plus the leaves themselves,
-      // walked one chain at a time so a node id stored under another leaf can
-      // never cross-contaminate this one.
+      // One query loads each requested leaf's own row plus its ancestor rows,
+      // both tagged by the owning leaf id (a leaf's own row is tagged with its
+      // own id). Reading them in two queries could pair a leaf with ancestors
+      // from a different snapshot. Grouping by that tag keeps each leaf's node
+      // set separate, so a node id stored under another leaf can never
+      // cross-contaminate this one.
       const placeholders = buildPlaceholders(leafIds.length);
-      const [ancestorRows] = await this.pool.query(
-        `SELECT leaf_id, data FROM brz_tree_ancestors WHERE user_id = ? AND leaf_id IN (${placeholders})`,
-        [this.identity, ...leafIds]
-      );
-      const [leafRows] = await this.pool.query(
-        `SELECT data FROM brz_tree_leaves WHERE user_id = ? AND id IN (${placeholders})`,
-        [this.identity, ...leafIds]
+      const [rows] = await this.pool.query(
+        `SELECT leaf_id, data FROM brz_tree_ancestors WHERE user_id = ? AND leaf_id IN (${placeholders})
+         UNION ALL
+         SELECT id AS leaf_id, data FROM brz_tree_leaves WHERE user_id = ? AND id IN (${placeholders})`,
+        [this.identity, ...leafIds, this.identity, ...leafIds]
       );
 
-      const leavesById = new Map();
-      for (const r of leafRows) {
-        const node = parseJson(r.data);
-        leavesById.set(node.id, node);
-      }
-      const ancestorsByLeaf = new Map();
-      for (const r of ancestorRows) {
-        let nodes = ancestorsByLeaf.get(r.leaf_id);
+      const nodesByLeaf = new Map();
+      for (const r of rows) {
+        let nodes = nodesByLeaf.get(r.leaf_id);
         if (!nodes) {
           nodes = new Map();
-          ancestorsByLeaf.set(r.leaf_id, nodes);
+          nodesByLeaf.set(r.leaf_id, nodes);
         }
         const node = parseJson(r.data);
         nodes.set(node.id, node);
@@ -396,10 +392,8 @@ class MysqlTreeStore {
 
       const result = [];
       for (const id of leafIds) {
-        const leaf = leavesById.get(id);
-        if (!leaf) continue;
-        const nodes = ancestorsByLeaf.get(id) || new Map();
-        nodes.set(leaf.id, leaf);
+        const nodes = nodesByLeaf.get(id);
+        if (!nodes) continue;
         const pedigree = assembleExitChain(nodes, id);
         if (pedigree) result.push(pedigree);
       }
@@ -569,7 +563,10 @@ class MysqlTreeStore {
           [this.identity, refreshTimestamp]
         );
 
+        // A chain is only ever removed with its leaf, so writing one for a leaf
+        // skipped as spent below would leave it behind for good.
         for (const pedigree of leaves.concat(missingLeaves || [])) {
+          if (spentIds.has(pedigree.leaf.id)) continue;
           await this._batchUpsertAncestors(conn, pedigree.leaf.id, pedigree.ancestors);
         }
         await this._batchUpsertLeaves(conn, leaves.map((p) => p.leaf), false, spentIds);
@@ -1187,7 +1184,6 @@ class MysqlTreeStore {
     if (filtered.length === 0) return;
 
     const leafNodes = filtered;
-    await this._checkLeavesCompatible(conn, leafNodes);
 
     // All chunks run inside the caller's transaction, so the full set still
     // lands atomically. UTC_TIMESTAMP(6) is re-evaluated per statement, so
@@ -1234,78 +1230,12 @@ class MysqlTreeStore {
   }
 
   /**
-   * Errors if any incoming node conflicts with a same-id node in `existing` on
-   * a field that must not change (value, verifying key).
-   */
-  _assertNodesCompatible(nodes, existing) {
-    for (const node of nodes) {
-      const old = existing.get(node.id);
-      if (!old) continue;
-      if (old.value !== node.value) {
-        throw new TreeStoreError(
-          `node ${node.id} value changed from ${old.value} to ${node.value}`
-        );
-      }
-      if (old.verifying_public_key !== node.verifying_public_key) {
-        throw new TreeStoreError(`node ${node.id} verifying public key changed`);
-      }
-    }
-  }
-
-  /**
-   * Leaf-side compatibility check: matches an incoming leaf against any stored
-   * node (leaf or ancestor, under any leaf) with the same id.
-   */
-  async _checkLeavesCompatible(conn, nodes) {
-    if (!nodes || nodes.length === 0) return;
-    const ids = nodes.map((n) => n.id);
-    const placeholders = ids.map(() => "?").join(", ");
-    const [rows] = await conn.query(
-      `SELECT data FROM brz_tree_leaves WHERE user_id = ? AND id IN (${placeholders})
-       UNION ALL
-       SELECT data FROM brz_tree_ancestors WHERE user_id = ? AND id IN (${placeholders})`,
-      [this.identity, ...ids, this.identity, ...ids]
-    );
-    const existing = new Map();
-    for (const row of rows) {
-      const node = parseJson(row.data);
-      existing.set(node.id, node);
-    }
-    this._assertNodesCompatible(nodes, existing);
-  }
-
-  /**
-   * Ancestor-side compatibility check. Scoped to any stored leaf plus this
-   * same leaf's own previous copy, not every leaf's copy of a shared ancestor:
-   * matching across leaves would cost the size of the whole ancestor table on
-   * every write, which is the scaling problem leaf-owned rows exist to avoid.
-   */
-  async _checkAncestorsCompatible(conn, leafId, nodes) {
-    if (!nodes || nodes.length === 0) return;
-    const ids = nodes.map((n) => n.id);
-    const placeholders = ids.map(() => "?").join(", ");
-    const [rows] = await conn.query(
-      `SELECT data FROM brz_tree_leaves WHERE user_id = ? AND id IN (${placeholders})
-       UNION ALL
-       SELECT data FROM brz_tree_ancestors WHERE user_id = ? AND leaf_id = ? AND id IN (${placeholders})`,
-      [this.identity, ...ids, this.identity, leafId, ...ids]
-    );
-    const existing = new Map();
-    for (const row of rows) {
-      const node = parseJson(row.data);
-      existing.set(node.id, node);
-    }
-    this._assertNodesCompatible(nodes, existing);
-  }
-
-  /**
    * Replaces `leafId`'s ancestor rows wholesale (delete then insert). An empty
    * `nodes` list is a no-op: it means the chain is unknown, not that the leaf
    * has none, so a stored chain must survive being re-added without one.
    */
   async _batchUpsertAncestors(conn, leafId, nodes) {
     if (!nodes || nodes.length === 0) return;
-    await this._checkAncestorsCompatible(conn, leafId, nodes);
 
     await conn.query(
       "DELETE FROM brz_tree_ancestors WHERE user_id = ? AND leaf_id = ?",

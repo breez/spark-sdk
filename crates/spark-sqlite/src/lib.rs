@@ -15,8 +15,9 @@
 //! Ports the proven reservation/refresh/spent logic of `spark-postgres`, reusing
 //! the shared leaf-selection algorithm (`select_leaves_by_target_amounts`).
 //!
-//! The store shares the wallet's main `SQLite` database file, so its tables are
-//! `brz_`-prefixed to stay clear of the main storage's.
+//! The store shares the wallet's main `SQLite` database file. Its `tree` table
+//! names are what keep it clear of the main storage's; the `brz_` prefix on top
+//! of those is for consistency with the Postgres and `MySQL` backends.
 
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
@@ -108,20 +109,23 @@ const TREE_MIGRATIONS: &[&str] = &[
 /// Applies pending migrations, tracking the version in its own table rather than
 /// the file's `PRAGMA user_version`, which the shared main storage owns.
 fn run_tree_migrations(conn: &mut Connection) -> Result<(), TreeServiceError> {
-    conn.execute_batch(
+    // Bootstrap and version read run inside the transaction too: on a shared
+    // file a second opener could otherwise read the same version and replay a
+    // migration that this one is still applying.
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| generic("begin tree migration", e))?;
+    tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS brz_tree_schema_migrations (version INTEGER PRIMARY KEY);",
     )
     .map_err(|e| generic("create tree migrations table", e))?;
-    let current: i64 = conn
+    let current: i64 = tx
         .query_row(
             "SELECT COALESCE(MAX(version), 0) FROM brz_tree_schema_migrations",
             [],
             |row| row.get(0),
         )
         .map_err(|e| generic("read tree schema version", e))?;
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|e| generic("begin tree migration", e))?;
     for (index, sql) in TREE_MIGRATIONS.iter().enumerate() {
         let version = i64::try_from(index).unwrap_or(i64::MAX).saturating_add(1);
         if version > current {
@@ -215,11 +219,18 @@ impl SqliteTreeStore {
         .map_err(|e| generic("check leaf exists", e))
     }
 
+    /// Writes each pedigree's chain, skipping any id in `skip_ids`. A chain is
+    /// only ever removed with its leaf, so writing one for a leaf the caller is
+    /// about to skip as spent would leave it behind for good.
     fn upsert_pedigree_ancestors(
         conn: &Connection,
         pedigrees: &[LeafPedigree],
+        skip_ids: Option<&HashSet<String>>,
     ) -> Result<(), TreeServiceError> {
         for pedigree in pedigrees {
+            if skip_ids.is_some_and(|skip| skip.contains(&pedigree.leaf.id.to_string())) {
+                continue;
+            }
             Self::upsert_ancestors(conn, &pedigree.leaf.id, &pedigree.ancestors)?;
         }
         Ok(())
@@ -238,9 +249,6 @@ impl SqliteTreeStore {
             return Ok(());
         }
         let leaf_id = leaf_id.to_string();
-        for node in nodes {
-            Self::check_compatible(conn, node, Some(&leaf_id))?;
-        }
         conn.execute(
             "DELETE FROM brz_tree_ancestors WHERE leaf_id = ?1",
             params![leaf_id],
@@ -323,48 +331,6 @@ impl SqliteTreeStore {
         Ok(())
     }
 
-    /// Errors if `node` conflicts with a stored node of the same id on a field
-    /// that must not change (`value`, verifying key). Projects those two columns
-    /// instead of loading and deserializing the full node blob on every write.
-    /// `owning_leaf` scopes the ancestor half to one leaf's chain. Matching the id
-    /// across every leaf would cost the size of the whole ancestor table per write,
-    /// and a node stored under another leaf backs only that leaf's exit.
-    fn check_compatible(
-        conn: &Connection,
-        node: &TreeNode,
-        owning_leaf: Option<&str>,
-    ) -> Result<(), TreeServiceError> {
-        let existing: Option<(i64, String)> = conn
-            .query_row(
-                "SELECT value, verifying_public_key FROM brz_tree_leaves WHERE id = ?1
-                 UNION ALL
-                 SELECT value, verifying_public_key FROM brz_tree_ancestors
-                 WHERE leaf_id = ?2 AND id = ?1
-                 LIMIT 1",
-                params![node.id.to_string(), owning_leaf],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .map_err(|e| generic("check compatible", e))?;
-        let Some((value, verifying_key)) = existing else {
-            return Ok(());
-        };
-        // Mirror `ensure_node_compatible`: value and verifying key are fixed for an id.
-        if value != i64::try_from(node.value).unwrap_or(i64::MAX) {
-            return Err(TreeServiceError::Generic(format!(
-                "node {} value changed from {} to {}",
-                node.id, value, node.value
-            )));
-        }
-        if verifying_key != node.verifying_public_key.to_string() {
-            return Err(TreeServiceError::Generic(format!(
-                "node {} verifying public key changed",
-                node.id
-            )));
-        }
-        Ok(())
-    }
-
     // ---- pool leaf helpers ----
 
     /// Upserts leaves into the pool, skipping any id in `skip_ids` (spent).
@@ -382,7 +348,6 @@ impl SqliteTreeStore {
             if skip_ids.is_some_and(|s| s.contains(&id)) {
                 continue;
             }
-            Self::check_compatible(conn, leaf, None)?;
             let data = serde_json::to_string(leaf).map_err(|e| generic("serialize leaf", e))?;
             conn.execute(
                 "INSERT INTO brz_tree_leaves
@@ -816,7 +781,7 @@ impl TreeStore for SqliteTreeStore {
         let ids: Vec<String> = leaves.iter().map(|p| p.leaf.id.to_string()).collect();
         // Receiving a leaf back clears any prior spent marker.
         Self::remove_spent(&tx, &ids)?;
-        Self::upsert_pedigree_ancestors(&tx, leaves)?;
+        Self::upsert_pedigree_ancestors(&tx, leaves, None)?;
         Self::upsert_leaves(&tx, leaves.iter().map(|p| &p.leaf), false, None)?;
         tx.commit().map_err(|e| generic("commit add_leaves", e))?;
         self.notify();
@@ -977,8 +942,8 @@ impl TreeStore for SqliteTreeStore {
         )
         .map_err(|e| generic("delete old leaves", e))?;
 
-        Self::upsert_pedigree_ancestors(&tx, leaves)?;
-        Self::upsert_pedigree_ancestors(&tx, missing_operators_leaves)?;
+        Self::upsert_pedigree_ancestors(&tx, leaves, Some(&spent))?;
+        Self::upsert_pedigree_ancestors(&tx, missing_operators_leaves, Some(&spent))?;
         Self::upsert_leaves(&tx, leaves.iter().map(|p| &p.leaf), false, Some(&spent))?;
         Self::upsert_leaves(
             &tx,
@@ -1046,7 +1011,7 @@ impl TreeStore for SqliteTreeStore {
         )
         .map_err(|e| generic("delete reservation", e))?;
         if let Some(new_leaves) = new_leaves {
-            Self::upsert_pedigree_ancestors(&tx, new_leaves)?;
+            Self::upsert_pedigree_ancestors(&tx, new_leaves, None)?;
             Self::upsert_leaves(&tx, new_leaves.iter().map(|p| &p.leaf), false, None)?;
             if is_swap {
                 Self::mark_swap_completed(&tx)?;
@@ -1241,8 +1206,8 @@ impl TreeStore for SqliteTreeStore {
         Self::delete_reserved(&tx, reservation_id)?;
         // The pre-swap reserved leaves are consumed; their chains go with them.
         Self::delete_ancestors_for_leaves(&tx, &old)?;
-        Self::upsert_pedigree_ancestors(&tx, change_leaves)?;
-        Self::upsert_pedigree_ancestors(&tx, reserved_leaves)?;
+        Self::upsert_pedigree_ancestors(&tx, change_leaves, None)?;
+        Self::upsert_pedigree_ancestors(&tx, reserved_leaves, None)?;
         Self::upsert_leaves(&tx, change_leaves.iter().map(|p| &p.leaf), false, None)?;
         Self::upsert_leaves(&tx, reserved_leaves.iter().map(|p| &p.leaf), false, None)?;
         let reserved_nodes: Vec<TreeNode> =
@@ -1374,6 +1339,7 @@ mod tests {
         test_payment_reservation_does_not_block_set_leaves,
         // spent markers
         test_spent_leaves_not_restored_by_set_leaves,
+        test_set_leaves_skips_chains_of_spent_leaves,
         test_spent_ids_cleaned_up_when_no_longer_in_refresh,
         test_add_leaves_clears_spent_status,
         test_change_leaves_from_swap_protected,

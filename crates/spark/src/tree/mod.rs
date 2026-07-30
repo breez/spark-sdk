@@ -488,29 +488,6 @@ pub struct LeafPedigree {
     pub ancestors: Vec<TreeNode>,
 }
 
-/// Fails when `incoming` cannot be the same node as `existing`. A node's `value`
-/// and `verifying_public_key` are fixed for its id (transactions, parent and
-/// status may change over its life, e.g. on a transfer or timelock renewal); a
-/// change to either is real corruption, not an update.
-pub fn ensure_node_compatible(
-    existing: &TreeNode,
-    incoming: &TreeNode,
-) -> Result<(), TreeServiceError> {
-    if existing.value != incoming.value {
-        return Err(TreeServiceError::Generic(format!(
-            "node {} value changed from {} to {}",
-            incoming.id, existing.value, incoming.value
-        )));
-    }
-    if existing.verifying_public_key != incoming.verifying_public_key {
-        return Err(TreeServiceError::Generic(format!(
-            "node {} verifying public key changed",
-            incoming.id
-        )));
-    }
-    Ok(())
-}
-
 /// A low-level storage interface for managing tree nodes and leaf reservations.
 ///
 /// `TreeStore` provides the fundamental storage operations for tree nodes, including
@@ -526,8 +503,8 @@ pub fn ensure_node_compatible(
 #[macros::async_trait]
 pub trait TreeStore: Send + Sync {
     /// Adds leaves to the pool together with their ancestors. Re-adding an
-    /// existing id refreshes its mutable fields (status, transactions, parent);
-    /// its `value` and verifying key are fixed, and a change to either errors.
+    /// existing id overwrites the stored node: the operators are the source of
+    /// truth for every field, including `value` and the verifying key.
     async fn add_leaves(&self, leaves: &[LeafPedigree]) -> Result<(), TreeServiceError>;
 
     /// Stores the ancestors of `pedigrees`, leaving the leaf pool untouched.

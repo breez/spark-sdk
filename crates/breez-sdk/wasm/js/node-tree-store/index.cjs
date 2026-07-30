@@ -3,8 +3,10 @@
  *
  * The single durable source of truth for one wallet's leaves, ancestors,
  * reservations, and spent records. It shares the wallet's main better-sqlite3
- * database file, so its tables are `brz_`-prefixed to stay clear of the main
- * storage's. There is no tenant/user column and no advisory locking:
+ * database file. Its `tree` table names are what keep it clear of the main
+ * storage's; the `brz_` prefix on top of those is for consistency with the
+ * Postgres and MySQL backends. There is no tenant/user column and no advisory
+ * locking:
  * better-sqlite3 is synchronous and each method runs its transaction to
  * completion without yielding.
  *
@@ -440,10 +442,10 @@ class NodeTreeStore {
           .all(refreshMs)
           .map((r) => r.id);
 
-        for (const pedigree of leaves) {
-          this._upsertAncestors(pedigree.leaf.id, pedigree.ancestors);
-        }
-        for (const pedigree of missingLeaves) {
+        // A chain is only ever removed with its leaf, so writing one for a leaf
+        // skipped as spent below would leave it behind for good.
+        for (const pedigree of leaves.concat(missingLeaves || [])) {
+          if (spentIds.has(pedigree.leaf.id)) continue;
           this._upsertAncestors(pedigree.leaf.id, pedigree.ancestors);
         }
         this._upsertLeaves(leaves.map((p) => p.leaf), false, spentIds);
@@ -781,74 +783,6 @@ class NodeTreeStore {
   // ===== Private DB helpers (synchronous) =====
 
   /**
-   * Look a node up as a leaf first, then as an ancestor (any leaf's copy).
-   * Returns the parsed node or null.
-   */
-  _getNodeSync(id) {
-    const row = this.db
-      .prepare(
-        `SELECT data FROM brz_tree_leaves WHERE id = ?
-         UNION ALL
-         SELECT data FROM brz_tree_ancestors WHERE id = ?
-         LIMIT 1`
-      )
-      .get(id, id);
-    return row ? JSON.parse(row.data) : null;
-  }
-
-  /** Looks a node up as a leaf only. Returns the parsed node or null. */
-  _getLeafNodeSync(id) {
-    const row = this.db.prepare("SELECT data FROM brz_tree_leaves WHERE id = ?").get(id);
-    return row ? JSON.parse(row.data) : null;
-  }
-
-  /** This leaf's own existing copy of ancestor `id`, or null. */
-  _getOwnAncestorSync(leafId, id) {
-    const row = this.db
-      .prepare("SELECT data FROM brz_tree_ancestors WHERE leaf_id = ? AND id = ?")
-      .get(leafId, id);
-    return row ? JSON.parse(row.data) : null;
-  }
-
-  /**
-   * Error if an incoming node conflicts with `existing` on a field that must
-   * not change (value, verifying key). Mirrors the Rust `ensure_node_compatible`
-   * rule.
-   */
-  _assertCompatible(existing, node) {
-    if (!existing) return;
-    if (existing.value !== node.value) {
-      throw new TreeStoreError(
-        `node ${node.id} value changed from ${existing.value} to ${node.value}`
-      );
-    }
-    if (existing.verifying_public_key !== node.verifying_public_key) {
-      throw new TreeStoreError(`node ${node.id} verifying public key changed`);
-    }
-  }
-
-  /**
-   * Leaf-side compatibility check: matches an incoming leaf against any stored
-   * node (leaf or ancestor, under any leaf) with the same id.
-   */
-  _checkLeafCompatible(node) {
-    this._assertCompatible(this._getNodeSync(node.id), node);
-  }
-
-  /**
-   * Ancestor-side compatibility check. Scoped to any stored leaf plus this
-   * same leaf's own previous copy, not every leaf's copy of a shared ancestor:
-   * matching across leaves would cost the size of the whole ancestor table on
-   * every write, which is the scaling problem leaf-owned rows exist to avoid.
-   */
-  _checkAncestorCompatible(leafId, node) {
-    this._assertCompatible(
-      this._getLeafNodeSync(node.id) || this._getOwnAncestorSync(leafId, node.id),
-      node
-    );
-  }
-
-  /**
    * Upsert leaf pedigrees into the pool, skipping any id in `skipIds` (spent).
    * Refreshes the leaf's mutable fields; preserves reservation_id (not in the
    * SET list).
@@ -873,7 +807,6 @@ class NodeTreeStore {
     const now = Date.now();
     for (const leaf of leaves) {
       if (skipIds && skipIds.has(leaf.id)) continue;
-      this._checkLeafCompatible(leaf);
       stmt.run(
         leaf.id,
         leaf.parent_node_id ?? null,
@@ -895,9 +828,6 @@ class NodeTreeStore {
    */
   _upsertAncestors(leafId, nodes) {
     if (!nodes || nodes.length === 0) return;
-    for (const node of nodes) {
-      this._checkAncestorCompatible(leafId, node);
-    }
     this.db.prepare("DELETE FROM brz_tree_ancestors WHERE leaf_id = ?").run(leafId);
     const stmt = this.db.prepare(
       `INSERT INTO brz_tree_ancestors

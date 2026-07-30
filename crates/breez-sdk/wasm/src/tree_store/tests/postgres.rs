@@ -379,6 +379,12 @@ async fn test_spent_leaves_not_restored_by_set_leaves() {
 }
 
 #[wasm_bindgen_test]
+async fn test_set_leaves_skips_chains_of_spent_leaves() {
+    let store = create_test_tree_store("pg_tree_spent_not_restored").await;
+    breez_sdk_spark::tree_store_tests::test_set_leaves_skips_chains_of_spent_leaves(&store).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_spent_ids_cleaned_up_when_no_longer_in_refresh() {
     let store = create_test_tree_store("pg_tree_spent_cleanup").await;
     breez_sdk_spark::tree_store_tests::test_spent_ids_cleaned_up_when_no_longer_in_refresh(&store)

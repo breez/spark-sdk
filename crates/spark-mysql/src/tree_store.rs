@@ -1110,7 +1110,8 @@ impl MysqlTreeStore {
 
         let leaf_ids: Vec<String> = leaves.iter().map(|p| p.leaf.id.to_string()).collect();
         self.batch_remove_spent_leaves(&mut tx, &leaf_ids).await?;
-        self.upsert_pedigree_ancestors(&mut tx, leaves).await?;
+        self.upsert_pedigree_ancestors(&mut tx, leaves, None)
+            .await?;
         self.batch_upsert_leaves(&mut tx, leaves.iter().map(|p| &p.leaf), false, None)
             .await?;
 
@@ -1137,7 +1138,7 @@ impl MysqlTreeStore {
             .filter(|pedigree| stored.contains(&pedigree.leaf.id.to_string()))
             .cloned()
             .collect();
-        self.upsert_pedigree_ancestors(&mut tx, &live).await?;
+        self.upsert_pedigree_ancestors(&mut tx, &live, None).await?;
         tx.commit().await.map_err(map_err)?;
         Ok(())
     }
@@ -1273,8 +1274,9 @@ impl MysqlTreeStore {
         .await
         .map_err(map_err)?;
 
-        self.upsert_pedigree_ancestors(&mut tx, leaves).await?;
-        self.upsert_pedigree_ancestors(&mut tx, missing_operators_leaves)
+        self.upsert_pedigree_ancestors(&mut tx, leaves, Some(&spent_ids))
+            .await?;
+        self.upsert_pedigree_ancestors(&mut tx, missing_operators_leaves, Some(&spent_ids))
             .await?;
         self.batch_upsert_leaves(
             &mut tx,
@@ -1434,7 +1436,8 @@ impl MysqlTreeStore {
         .map_err(map_err)?;
 
         if let Some(pedigrees) = new_leaves {
-            self.upsert_pedigree_ancestors(&mut tx, pedigrees).await?;
+            self.upsert_pedigree_ancestors(&mut tx, pedigrees, None)
+                .await?;
             for pedigree in pedigrees {
                 let l = &pedigree.leaf;
                 trace!(
@@ -1758,9 +1761,9 @@ impl MysqlTreeStore {
 
         // Swap outputs are fresh nodes whose chain is otherwise unstored, so
         // upsert both sets' ancestors to keep the leaves offline-exitable.
-        self.upsert_pedigree_ancestors(&mut tx, change_leaves)
+        self.upsert_pedigree_ancestors(&mut tx, change_leaves, None)
             .await?;
-        self.upsert_pedigree_ancestors(&mut tx, reserved_leaves)
+        self.upsert_pedigree_ancestors(&mut tx, reserved_leaves, None)
             .await?;
 
         self.batch_upsert_leaves(&mut tx, change_leaves.iter().map(|p| &p.leaf), false, None)
@@ -1842,8 +1845,6 @@ impl MysqlTreeStore {
             return Ok(());
         }
 
-        self.check_nodes_compatible(tx, &filtered).await?;
-
         // All chunks run inside the caller's transaction, so the full set still
         // lands atomically. `UTC_TIMESTAMP(6)` is re-evaluated per statement, so
         // `added_at` can differ by microseconds between chunks; every value is
@@ -1893,69 +1894,6 @@ impl MysqlTreeStore {
                 .map_err(map_err)?;
         }
 
-        Ok(())
-    }
-
-    /// Errors if any incoming node conflicts with a stored node of the same id
-    /// on a field that must not change (`value`, verifying key). One query loads
-    /// the existing rows (leaf or ancestor) for the batch.
-    async fn check_nodes_compatible(
-        &self,
-        tx: &mut mysql_async::Transaction<'_>,
-        nodes: &[&TreeNode],
-    ) -> Result<(), TreeServiceError> {
-        if nodes.is_empty() {
-            return Ok(());
-        }
-        let placeholders = build_placeholders(nodes.len());
-        let sql = format!(
-            "SELECT id, value, verifying_public_key
-             FROM brz_tree_leaves WHERE user_id = ? AND id IN ({placeholders})
-             UNION ALL
-             SELECT id, value, verifying_public_key
-             FROM brz_tree_ancestors WHERE user_id = ? AND id IN ({placeholders})"
-        );
-        let mut params: Vec<Value> =
-            Vec::with_capacity(nodes.len().saturating_mul(2).saturating_add(2));
-        params.push(Value::from(self.identity.clone()));
-        for node in nodes {
-            params.push(Value::from(node.id.to_string()));
-        }
-        params.push(Value::from(self.identity.clone()));
-        for node in nodes {
-            params.push(Value::from(node.id.to_string()));
-        }
-        let rows: Vec<(String, i64, String)> = tx
-            .exec(&sql, Params::Positional(params))
-            .await
-            .map_err(map_err)?;
-
-        // `(value, verifying_public_key)` are the two immutable fields; compare
-        // them directly rather than deserializing the full node. Mirrors
-        // `ensure_node_compatible`.
-        let mut existing: HashMap<String, (i64, String)> = HashMap::new();
-        for (id, value, verifying) in rows {
-            existing.insert(id, (value, verifying));
-        }
-        for node in nodes {
-            let Some((value, verifying)) = existing.get(&node.id.to_string()) else {
-                continue;
-            };
-            #[allow(clippy::cast_possible_wrap)]
-            let incoming_value = node.value as i64;
-            if *value != incoming_value {
-                return Err(TreeServiceError::Generic(format!(
-                    "node {} value changed from {} to {}",
-                    node.id, value, node.value
-                )));
-            }
-            if *verifying != node.verifying_public_key.to_string() {
-                return Err(TreeServiceError::Generic(format!(
-                    "node {} verifying public key changed",
-                    node.id
-                )));
-            }
-        }
         Ok(())
     }
 
@@ -2035,10 +1973,14 @@ impl MysqlTreeStore {
         &self,
         tx: &mut mysql_async::Transaction<'_>,
         pedigrees: &[LeafPedigree],
+        skip_ids: Option<&HashSet<String>>,
     ) -> Result<(), TreeServiceError> {
+        // A chain is only ever removed with its leaf, so writing one for a leaf
+        // the caller is about to skip as spent would leave it behind for good.
         let with_ancestors: Vec<&LeafPedigree> = pedigrees
             .iter()
             .filter(|p| !p.ancestors.is_empty())
+            .filter(|p| !skip_ids.is_some_and(|skip| skip.contains(&p.leaf.id.to_string())))
             .collect();
         if with_ancestors.is_empty() {
             return Ok(());
@@ -2998,6 +2940,12 @@ mod tests {
     async fn test_spent_leaves_not_restored_by_set_leaves() {
         let fixture = MysqlTreeStoreTestFixture::new().await;
         shared_tests::test_spent_leaves_not_restored_by_set_leaves(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_set_leaves_skips_chains_of_spent_leaves() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_set_leaves_skips_chains_of_spent_leaves(&fixture.store).await;
     }
 
     #[tokio::test]

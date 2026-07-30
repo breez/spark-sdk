@@ -4745,7 +4745,6 @@ dependencies = [
  "rusqlite",
  "serde_json",
  "spark-wallet",
- "thiserror 2.0.17",
  "tracing",
  "uuid",
 ]
