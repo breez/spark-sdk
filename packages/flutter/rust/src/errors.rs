@@ -82,5 +82,9 @@ pub enum _PasskeyError {
     InvalidPrfOutput(String),
     MnemonicError(String),
     InvalidSalt(String),
+    CreatedButNotDerived {
+        credential_id: Vec<u8>,
+        source: PrfProviderError,
+    },
     Generic(String),
 }
