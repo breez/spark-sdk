@@ -320,10 +320,14 @@ export interface PrfProvider {
      * `excludeCredentials` lists already-registered IDs; a match raises
      * `PasskeyAlreadyExistsError`.
      *
+     * Evaluating PRF for `salts` in the same ceremony returns the seeds on
+     * `seeds`, and the caller then needs no assertion. Return `seeds: null`
+     * when the authenticator evaluated none, or fewer than one per salt.
+     *
      * @throws `PasskeyAlreadyExistsError` when an entry in
      *   `excludeCredentials` matches a credential already on the device.
      */
-    createPasskey?(excludeCredentials: Uint8Array[]): Promise<PasskeyCredential>;
+    createPasskey?(excludeCredentials: Uint8Array[], salts: string[]): Promise<CreatePasskeyOutput>;
 
     /**
      * Whether this provider can produce PRF outputs on the current

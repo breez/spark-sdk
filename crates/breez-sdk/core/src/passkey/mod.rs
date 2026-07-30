@@ -267,12 +267,6 @@ impl Passkey {
         vec![ACCOUNT_MASTER_SALT.to_string(), label.to_string()]
     }
 
-    pub(crate) fn resolve_label(&self, label: Option<String>) -> Result<String, PasskeyError> {
-        let label = label.unwrap_or_else(|| self.default_label.clone());
-        validate_label(&label)?;
-        Ok(label)
-    }
-
     /// Everything after the PRF outputs exist, so a caller that already
     /// has them (a create ceremony that evaluated PRF inline) reaches the
     /// same wallet without a second ceremony.

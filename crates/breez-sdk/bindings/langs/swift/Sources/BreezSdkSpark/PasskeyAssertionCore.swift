@@ -561,17 +561,15 @@ public final class PasskeyAssertionCore {
 
     /// Register a new passkey with PRF support. `excludeCredentials` lists
     /// already-registered IDs the platform must refuse as duplicates.
-    /// Evaluating PRF for `salts` in the same ceremony returns the seeds
-    /// inline; the post-create grace tracker is armed only when it did
-    /// not, so a following derive still has its window. `userId` is never host-supplied: the
-    /// core mints a fresh random 16-byte value and returns it on
-    /// `IosPasskeyCredential.userId`.
+    /// `userId` is never host-supplied: the core mints a fresh random
+    /// 16-byte value and returns it on `IosPasskeyCredential.userId`.
+    ///
     /// Asking the create ceremony to evaluate PRF for `salts` makes
     /// registration a single ceremony, so no assertion follows it.
-    ///
     /// `IosPasskeyRegistration.seeds` is nil when the authenticator
     /// reported PRF support without evaluating, and when it returned fewer
-    /// outputs than salts. Callers derive through `deriveSeeds` in both.
+    /// outputs than salts; callers derive through `deriveSeeds` in both,
+    /// and the post-create grace tracker is armed only in those cases.
     @discardableResult
     public func register(
         excludeCredentials: [Data] = [],
