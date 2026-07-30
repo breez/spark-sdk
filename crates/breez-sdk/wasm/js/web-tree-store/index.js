@@ -870,26 +870,27 @@ class WebTreeStore {
           // gone (e.g. released by stale cleanup): dropping them here would lose
           // the leaves until the next refresh. The deletes below no-op in that case.
           const leavesStore = tx.objectStore(STORE_LEAVES);
-          const ancestorsStore = tx.objectStore(STORE_ANCESTORS);
           const reservationsStore = tx.objectStore(STORE_RESERVATIONS);
 
           const keepIds = new Set(keep.map((l) => l.id));
-          const ancestorRowsByLeaf = this._ancestorRowsByLeaf(res.ancestors);
           const leafMap = new Map(res.leaves.map((r) => [r.id, r]));
           // A kept leaf keeps its ancestor rows, so the row rebuilt below has to
           // keep the flag that describes them.
           const priorRows = new Map(leafMap);
+          // A leaf the verification would not vouch for is marked, not dropped:
+          // one operator declining to confirm it is not proof it was spent, and
+          // its chain is the only way to exit it if it is still ours. The
+          // re-insert below clears the mark on everything kept.
           for (const l of res.leaves) {
             if (l.reservation_id !== id) continue;
-            leavesStore.delete(l.id);
-            leafMap.delete(l.id);
-            // A kept leaf's ancestor rows stay put; a dropped leaf's are
-            // removed with it.
-            if (!keepIds.has(l.id)) {
-              for (const existingId of (ancestorRowsByLeaf.get(l.id) || new Map()).keys()) {
-                ancestorsStore.delete([l.id, existingId]);
-              }
+            if (keepIds.has(l.id)) {
+              leavesStore.delete(l.id);
+              leafMap.delete(l.id);
+              continue;
             }
+            const marked = { ...l, reservation_id: null, is_deleted: true };
+            leavesStore.put(marked);
+            leafMap.set(marked.id, marked);
           }
           reservationsStore.delete(id);
 

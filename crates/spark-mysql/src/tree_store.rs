@@ -1395,25 +1395,14 @@ impl MysqlTreeStore {
             id, prior_leaf_ids, keep_ids, dropped_ids
         );
 
-        // A dropped leaf leaves the pool for good, so its ancestor rows go with
-        // it; a kept leaf's ancestor rows are left untouched, having stayed in
-        // the store the whole time it was reserved.
-        if !dropped_ids.is_empty() {
-            let placeholders = build_placeholders(dropped_ids.len());
-            let sql = format!(
-                "DELETE FROM brz_tree_ancestors WHERE user_id = ? AND leaf_id IN ({placeholders})"
-            );
-            let mut params: Vec<Value> = Vec::with_capacity(dropped_ids.len().saturating_add(1));
-            params.push(Value::from(self.identity.clone()));
-            params.extend(dropped_ids.iter().cloned().map(Value::from));
-            tx.exec_drop(&sql, Params::Positional(params))
-                .await
-                .map_err(map_err)?;
-        }
-
+        // A leaf the verification would not vouch for is marked, not dropped:
+        // one operator declining to confirm it is not proof it was spent, and
+        // its chain is the only way to exit it if it is still ours. The upsert
+        // below clears the mark on everything kept.
         tx.exec_drop(
-            "DELETE FROM brz_tree_leaves WHERE user_id = ? AND reservation_id = ?",
-            (self.identity.clone(), id),
+            "UPDATE brz_tree_leaves SET reservation_id = NULL, is_deleted = 1 \
+             WHERE user_id = ? AND reservation_id = ?",
+            (self.identity.clone(), id.clone()),
         )
         .await
         .map_err(map_err)?;
@@ -2528,6 +2517,12 @@ mod tests {
     async fn test_kept_leaf_cannot_back_a_payment() {
         let fixture = MysqlTreeStoreTestFixture::new().await;
         shared_tests::test_kept_leaf_cannot_back_a_payment(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_cancel_keeps_an_unverified_leaf() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_cancel_keeps_an_unverified_leaf(&fixture.store).await;
     }
 
     #[tokio::test]

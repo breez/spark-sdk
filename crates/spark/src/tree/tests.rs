@@ -694,6 +694,41 @@ pub async fn test_kept_leaf_cannot_back_a_payment(store: &dyn TreeStore) {
     assert_eq!(store.get_deleted_leaves().await.unwrap().len(), 1);
 }
 
+/// Cancelling a reservation keeps a leaf the verification would not vouch for,
+/// chain and all. One operator declining to confirm a leaf is not proof it was
+/// spent, and with the operators unreachable the verification returns nothing at
+/// all: that is the case this store exists for, not a reason to destroy chains.
+pub async fn test_cancel_keeps_an_unverified_leaf(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+    store
+        .add_leaves(&[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![root],
+        }])
+        .await
+        .unwrap();
+
+    let reservation = reserve_leaves(store, None, false, ReservationPurpose::Payment)
+        .await
+        .unwrap();
+    assert_eq!(reservation.leaves.len(), 1);
+
+    // The verification vouched for nothing, as it does when the operators cannot
+    // be reached at all.
+    store
+        .cancel_reservation(&reservation.id, &[])
+        .await
+        .unwrap();
+
+    // Out of the balance, since nothing confirmed it, but still ours to exit.
+    assert_eq!(store.get_available_balance().await.unwrap(), 0);
+    assert!(get_available(store).await.is_empty());
+    let kept = store.get_deleted_leaves().await.unwrap();
+    assert_eq!(kept.len(), 1, "the unverified leaf is kept, not dropped");
+    assert_eq!(exit_chain_ids(store, &leaf.id).await, vec!["root", "leaf"]);
+}
+
 /// A refresh reporting only one of two leaves keeps both, so the unreported one
 /// stays exitable and each leaf keeps its own copy of the ancestor they share.
 pub async fn test_absent_leaf_keeps_shared_ancestor(store: &dyn TreeStore) {

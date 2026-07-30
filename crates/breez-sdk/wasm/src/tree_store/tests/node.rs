@@ -528,6 +528,12 @@ async fn test_kept_leaf_cannot_back_a_payment() {
 }
 
 #[wasm_bindgen_test]
+async fn test_cancel_keeps_an_unverified_leaf() {
+    let store = create_test_tree_store().await;
+    breez_sdk_spark::tree_store_tests::test_cancel_keeps_an_unverified_leaf(&store).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_empty_pedigree_keeps_stored_chain() {
     let store = create_test_tree_store().await;
     breez_sdk_spark::tree_store_tests::test_empty_pedigree_keeps_stored_chain(&store).await;

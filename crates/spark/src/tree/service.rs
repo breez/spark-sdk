@@ -923,11 +923,17 @@ impl SynchronousTreeService {
             }
         }
 
+        // The query is what tells us anything about these leaves, so failing it
+        // tells us nothing. Hand them all back: the operators being unreachable
+        // is the case this whole store exists for, and it is not a reason to
+        // stop believing in leaves we hold.
         warn!(
-            "leaf_lifecycle cancel_verify_dropped_all: reservation={} reason=query_failed error={:?}",
-            reservation.id, last_err
+            "leaf_lifecycle cancel_verify_query_failed: reservation={} keeping={} error={:?}",
+            reservation.id,
+            reservation.leaves.len(),
+            last_err
         );
-        Vec::new()
+        reservation.leaves.clone()
     }
 
     async fn query_nodes_inner(

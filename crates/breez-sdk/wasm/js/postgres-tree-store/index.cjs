@@ -635,19 +635,12 @@ class PostgresTreeStore {
         // Return leavesToKeep to the pool even when the reservation is already
         // gone (e.g. released by stale cleanup): dropping them here would lose
         // the leaves until the next refresh. The deletes no-op in that case.
-        // Only the leaves are re-inserted: a kept leaf's ancestor rows stay put
-        // (they are not touched below); a dropped leaf's are removed with it.
-        const keepIds = new Set((leavesToKeep || []).map((l) => l.id));
-        const reservedResult = await client.query(
-          "SELECT id FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
-          [this.identity, id]
-        );
-        const droppedIds = reservedResult.rows
-          .map((r) => r.id)
-          .filter((rid) => !keepIds.has(rid));
-
+        // A leaf the verification would not vouch for is marked, not dropped:
+        // one operator declining to confirm it is not proof it was spent, and
+        // its chain is the only way to exit it if it is still ours. The upsert
+        // below clears the mark on everything kept.
         await client.query(
-          "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+          "UPDATE brz_tree_leaves SET reservation_id = NULL, is_deleted = TRUE WHERE user_id = $1 AND reservation_id = $2",
           [this.identity, id]
         );
 
@@ -655,13 +648,6 @@ class PostgresTreeStore {
           "DELETE FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
           [this.identity, id]
         );
-
-        if (droppedIds.length > 0) {
-          await client.query(
-            "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)",
-            [this.identity, droppedIds]
-          );
-        }
 
         if (leavesToKeep && leavesToKeep.length > 0) {
           await this._batchUpsertLeaves(client, leavesToKeep, false, null);

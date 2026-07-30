@@ -532,9 +532,10 @@ class NodeTreeStore {
   }
 
   /**
-   * Cancel a reservation. Its leaves are deleted from the pool and the row is
-   * dropped. `leavesToKeep` are re-inserted into the available pool; their
-   * ancestors are already stored (they stayed while the leaves were reserved).
+   * Cancel a reservation. Its leaves are marked rather than dropped, and the row
+   * is deleted. `leavesToKeep` are re-inserted into the available pool, clearing
+   * the mark; their ancestors are already stored (they stayed while the leaves
+   * were reserved).
    * @param {string} id
    * @param {Array} leavesToKeep - TreeNode leaves to return to the available pool
    */
@@ -544,18 +545,16 @@ class NodeTreeStore {
         // Return leavesToKeep to the pool even when the reservation is already
         // gone (e.g. released by stale cleanup): dropping them here would lose
         // the leaves until the next refresh. The deletes no-op in that case.
-        // Only the leaves are re-inserted: a kept leaf's ancestor rows stay put
-        // (they are not touched below); a dropped leaf's are removed with it.
-        const keepIds = new Set((leavesToKeep || []).map((l) => l.id));
-        const droppedIds = this.db
-          .prepare("SELECT id FROM brz_tree_leaves WHERE reservation_id = ?")
-          .all(id)
-          .map((r) => r.id)
-          .filter((rid) => !keepIds.has(rid));
-
-        this.db.prepare("DELETE FROM brz_tree_leaves WHERE reservation_id = ?").run(id);
+        // A leaf the verification would not vouch for is marked, not dropped:
+        // one operator declining to confirm it is not proof it was spent, and
+        // its chain is the only way to exit it if it is still ours. The upsert
+        // below clears the mark on everything kept.
+        this.db
+          .prepare(
+            "UPDATE brz_tree_leaves SET reservation_id = NULL, is_deleted = 1 WHERE reservation_id = ?"
+          )
+          .run(id);
         this.db.prepare("DELETE FROM brz_tree_reservations WHERE id = ?").run(id);
-        this._deleteAncestorsForLeaves(droppedIds);
         this._upsertLeaves(leavesToKeep, false, null);
       })();
     } catch (error) {

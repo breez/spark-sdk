@@ -1007,21 +1007,21 @@ impl TreeStore for SqliteTreeStore {
         // Return leaves_to_keep to the pool even when the reservation is already
         // gone (e.g. released by stale cleanup): dropping them here would lose the
         // leaves until the next refresh. The deletes below no-op in that case.
-        let prior_ids = Self::reserved_leaf_ids(&tx, id)?;
-        let keep_ids: HashSet<String> = leaves_to_keep.iter().map(|l| l.id.to_string()).collect();
-        let dropped_ids: Vec<String> = prior_ids
-            .into_iter()
-            .filter(|pid| !keep_ids.contains(pid))
-            .collect();
-        Self::delete_reserved(&tx, id)?;
+        // A leaf the verification would not vouch for is marked, not dropped:
+        // one operator declining to confirm it is not proof it was spent, and
+        // its chain is the only way to exit it if it is still ours. The upsert
+        // below clears the mark on everything kept.
+        tx.execute(
+            "UPDATE brz_tree_leaves SET reservation_id = NULL, is_deleted = 1
+             WHERE reservation_id = ?1",
+            params![id],
+        )
+        .map_err(|e| generic("release reserved leaves", e))?;
         tx.execute(
             "DELETE FROM brz_tree_reservations WHERE id = ?1",
             params![id],
         )
         .map_err(|e| generic("delete reservation", e))?;
-        // A kept leaf's ancestor rows are untouched here; only a dropped leaf's
-        // chain goes with it. The kept leaf rows are re-inserted below.
-        Self::delete_ancestors_for_leaves(&tx, &dropped_ids)?;
         Self::upsert_leaves(&tx, leaves_to_keep, false, None)?;
         tx.commit().map_err(|e| generic("commit cancel", e))?;
         self.notify();
@@ -1340,6 +1340,7 @@ mod tests {
         test_absent_leaf_is_kept_for_its_exit_chain,
         test_remove_leaves_spares_a_revived_leaf,
         test_kept_leaf_cannot_back_a_payment,
+        test_cancel_keeps_an_unverified_leaf,
         test_deleted_leaves_are_listed_and_removable,
         test_absent_leaf_keeps_shared_ancestor,
         test_incomplete_pedigree_still_spendable,

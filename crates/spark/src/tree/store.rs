@@ -899,13 +899,21 @@ impl InMemoryTreeStore {
             "leaf_lifecycle cancel: reservation={} purpose={:?} prior_leaves={:?} keeping={:?} dropping={:?}",
             id, purpose, prior_ids, keep_ids, dropped_ids
         );
-        // A kept leaf's ancestor chain (owned by its own id) is untouched here;
-        // only a dropped leaf's chain goes with it.
-        for dropped in &dropped_ids {
-            state.ancestors.remove(*dropped);
-        }
-
         let now = SystemTime::now();
+        // A leaf the verification would not vouch for is marked, not dropped.
+        // One operator declining to confirm it is not proof it was spent, and
+        // its chain is the only way to exit it if it is still ours. The purge
+        // decides that later, once every operator agrees.
+        let dropped: HashSet<TreeNodeId> = dropped_ids.into_iter().cloned().collect();
+        if let Some(entry) = removed {
+            for stored in entry.leaves {
+                if dropped.contains(&stored.node.id) {
+                    let mut kept = stored;
+                    kept.deleted = true;
+                    state.leaves.insert(kept.node.id.clone(), kept);
+                }
+            }
+        }
         for leaf in leaves_to_keep {
             state
                 .leaves
@@ -1416,6 +1424,11 @@ mod tests {
     #[async_test_all]
     async fn test_kept_leaf_cannot_back_a_payment() {
         shared_tests::test_kept_leaf_cannot_back_a_payment(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_cancel_keeps_an_unverified_leaf() {
+        shared_tests::test_cancel_keeps_an_unverified_leaf(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
