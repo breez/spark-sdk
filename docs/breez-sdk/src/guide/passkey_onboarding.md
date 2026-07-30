@@ -91,8 +91,8 @@ Most passkey failures normalize to a {{#name PrfProviderError}} variant. Match o
 
 Those rows cover {{#name PasskeyClient.sign_in}}, and
 {{#name PasskeyClient.register}} up to the point the credential is created.
-Once it exists, every failure arrives as the variant below instead, whatever
-caused it: a cancel, a timeout or an unsupported authenticator during the
+Once it exists, a failure from the authenticator arrives as the variant below
+instead: a cancel, a timeout or an unsupported authenticator during the
 derive no longer surfaces as its own `PrfProviderError`.
 
 {{#name PasskeyClient.register}} has one failure of its own that is **not** a

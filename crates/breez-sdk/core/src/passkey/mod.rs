@@ -214,12 +214,6 @@ impl Passkey {
         Ok(client)
     }
 
-    /// Derive the Nostr identity and the wallet seed for `request.label`
-    /// in one PRF ceremony (dual-salt where the platform supports it).
-    /// Primes the identity cache so subsequent [`Self::list_labels`] /
-    /// [`Self::store_label`] need no extra PRF prompts.
-    /// `publish_label = false` skips the Nostr write: used by
-    /// speculative cold-restore.
     /// Resolve a caller-supplied label against the configured default and
     /// validate it. Exposed so a caller can reject a bad label before
     /// driving any ceremony.
@@ -229,6 +223,12 @@ impl Passkey {
         Ok(label)
     }
 
+    /// Derive the Nostr identity and the wallet seed for `request.label`
+    /// in one PRF ceremony (dual-salt where the platform supports it).
+    /// Primes the identity cache so subsequent [`Self::list_labels`] /
+    /// [`Self::store_label`] need no extra PRF prompts.
+    /// `publish_label = false` skips the Nostr write: used by
+    /// speculative cold-restore.
     pub async fn setup_wallet(
         &self,
         request: SetupWalletRequest,
