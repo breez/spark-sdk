@@ -668,9 +668,11 @@ pub trait TreeStore: Send + Sync {
 
     /// Cancels a leaf reservation, replacing its leaves with the given keep-list.
     ///
-    /// All leaves currently attached to this reservation are removed from the store.
-    /// The reservation row is dropped. The supplied `leaves_to_keep` are then upserted
-    /// into the available pool with no reservation.
+    /// Every leaf attached to this reservation is marked rather than removed: one
+    /// the caller cannot vouch for is not one proven spent, and its chain is the
+    /// only way to exit it if it is still ours. The reservation row is dropped,
+    /// and the supplied `leaves_to_keep` are upserted into the available pool with
+    /// no reservation, which clears the mark on them.
     ///
     /// To preserve today's "release everything back to the pool" behavior, callers
     /// pass the original reservation leaves as `leaves_to_keep`. To drop part of the
