@@ -278,18 +278,8 @@ async fn main() -> Result<()> {
         Network::Mainnet => {
             // Check balances and consolidate to sender
             info!("Checking balances...");
-            sender
-                .sdk
-                .sync_wallet(SyncWalletRequest {
-                    include_exit_chains: None,
-                })
-                .await?;
-            receiver
-                .sdk
-                .sync_wallet(SyncWalletRequest {
-                    include_exit_chains: None,
-                })
-                .await?;
+            sender.sdk.sync_wallet(SyncWalletRequest {}).await?;
+            receiver.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
             let sender_balance = sender
                 .sdk
@@ -343,12 +333,7 @@ async fn main() -> Result<()> {
             }
 
             // Now check if sender has minimum balance
-            sender
-                .sdk
-                .sync_wallet(SyncWalletRequest {
-                    include_exit_chains: None,
-                })
-                .await?;
+            sender.sdk.sync_wallet(SyncWalletRequest {}).await?;
             let sender_balance = sender
                 .sdk
                 .get_info(GetInfoRequest {
@@ -405,12 +390,7 @@ async fn main() -> Result<()> {
             );
 
             // Try to get funds back from receiver
-            receiver
-                .sdk
-                .sync_wallet(SyncWalletRequest {
-                    include_exit_chains: None,
-                })
-                .await?;
+            receiver.sdk.sync_wallet(SyncWalletRequest {}).await?;
             let receiver_balance = receiver
                 .sdk
                 .get_info(GetInfoRequest {
@@ -440,12 +420,7 @@ async fn main() -> Result<()> {
             }
 
             // Re-check sender balance after potential return
-            sender
-                .sdk
-                .sync_wallet(SyncWalletRequest {
-                    include_exit_chains: None,
-                })
-                .await?;
+            sender.sdk.sync_wallet(SyncWalletRequest {}).await?;
             let new_sender_balance = sender
                 .sdk
                 .get_info(GetInfoRequest {
@@ -593,12 +568,7 @@ async fn main() -> Result<()> {
     // On mainnet, move all funds back to sender at the end
     if is_mainnet(network) {
         info!("Moving all funds back to sender...");
-        receiver
-            .sdk
-            .sync_wallet(SyncWalletRequest {
-                include_exit_chains: None,
-            })
-            .await?;
+        receiver.sdk.sync_wallet(SyncWalletRequest {}).await?;
         let receiver_final_balance = receiver
             .sdk
             .get_info(GetInfoRequest {
@@ -622,18 +592,8 @@ async fn main() -> Result<()> {
         }
 
         // Print final balances
-        sender
-            .sdk
-            .sync_wallet(SyncWalletRequest {
-                include_exit_chains: None,
-            })
-            .await?;
-        receiver
-            .sdk
-            .sync_wallet(SyncWalletRequest {
-                include_exit_chains: None,
-            })
-            .await?;
+        sender.sdk.sync_wallet(SyncWalletRequest {}).await?;
+        receiver.sdk.sync_wallet(SyncWalletRequest {}).await?;
         let sender_final = sender
             .sdk
             .get_info(GetInfoRequest {
@@ -882,12 +842,7 @@ async fn return_funds_to_sender(
 async fn fund_via_faucet(sdk_instance: &mut BenchSdkInstance, min_balance: u64) -> Result<()> {
     use breez_sdk_itest::RegtestFaucet;
 
-    sdk_instance
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let info = sdk_instance
         .sdk
         .get_info(GetInfoRequest {
@@ -928,12 +883,7 @@ async fn fund_via_faucet(sdk_instance: &mut BenchSdkInstance, min_balance: u64) 
     // Wait for balance to update
     wait_for_balance(&sdk_instance.sdk, info.balance_sats + 1, 20).await?;
 
-    sdk_instance
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let final_info = sdk_instance
         .sdk
         .get_info(GetInfoRequest {

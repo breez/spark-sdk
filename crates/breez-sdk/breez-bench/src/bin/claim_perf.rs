@@ -444,10 +444,7 @@ async fn fund_sdk_via_faucet(
     events: &mut mpsc::Receiver<SdkEvent>,
     amount: u64,
 ) -> Result<()> {
-    sdk.sync_wallet(SyncWalletRequest {
-        include_exit_chains: None,
-    })
-    .await?;
+    sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     // Get deposit address
     let receive = sdk
@@ -470,10 +467,7 @@ async fn fund_sdk_via_faucet(
     let start = Instant::now();
     let timeout = Duration::from_secs(30);
     loop {
-        sdk.sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+        sdk.sync_wallet(SyncWalletRequest {}).await?;
         let info = sdk
             .get_info(GetInfoRequest {
                 ensure_synced: Some(false),

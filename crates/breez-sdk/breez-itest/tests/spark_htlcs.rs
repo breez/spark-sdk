@@ -57,11 +57,7 @@ async fn send_htlc_alice_to_bob(
         "Payment should be pending"
     );
 
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_list_payments_response = bob
         .sdk
         .list_payments(ListPaymentsRequest {
@@ -179,11 +175,7 @@ async fn test_01_htlc_success(
     ));
 
     // Verify Bob's balance increased
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_final_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -248,11 +240,7 @@ async fn test_02_htlc_refund(
 
     info!("Verifying Bob's failed payment...");
 
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     let bob_payments = bob
         .sdk
@@ -285,12 +273,7 @@ async fn test_02_htlc_refund(
 
     info!("Verifying Alice's failed payment...");
 
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let alice_payments = alice
         .sdk
         .list_payments(ListPaymentsRequest {
@@ -429,12 +412,7 @@ async fn test_03_reconcile_stale_pending_payment(
 
     // Step 3: Explicit sync to commit the advanced offset. After this the HTLC is
     // invisible to the offset-based sync (which starts from N+1 onwards).
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     let pending = alice
         .sdk

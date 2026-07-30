@@ -203,10 +203,7 @@ pub async fn build_mainnet_sdk_server_mode_from_mnemonic(
     // Server mode rejects `ensure_synced=true` (no background sync to await);
     // drive the initial sync explicitly so the tree-store hydrate completes
     // before the caller proceeds.
-    sdk.sync_wallet(SyncWalletRequest {
-        include_exit_chains: None,
-    })
-    .await?;
+    sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     Ok(SdkInstance {
         sdk,
@@ -366,17 +363,8 @@ pub async fn snapshot_test_pair(
     bob: &SdkInstance,
     token_id: &str,
 ) -> Result<MainnetTestSnapshot> {
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let alice_info = alice
         .sdk
         .get_info(GetInfoRequest {
@@ -590,12 +578,7 @@ pub async fn ensure_wallet_has_tokens(
     min_required: u128,
     topup_amount: u128,
 ) -> Result<bool> {
-    recipient
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    recipient.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let before = recipient
         .sdk
         .get_info(GetInfoRequest {

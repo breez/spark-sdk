@@ -115,12 +115,7 @@ fn reduce_by_bps(amount: u128, bps: u128) -> u128 {
 /// Alice's `(sats, token)` balances, for the per-test cost breadcrumb. Syncs
 /// first so the read reflects the latest state.
 async fn alice_balances(alice: &SdkInstance, token_id: &str) -> Result<(u64, u128)> {
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let info = alice
         .sdk
         .get_info(GetInfoRequest {
@@ -628,11 +623,7 @@ async fn wait_for_cross_chain_completion(
         }
         // The status update arrives via the background monitor; nudge a sync so
         // the locally-read payment reflects it promptly.
-        let _ = sdk
-            .sync_wallet(SyncWalletRequest {
-                include_exit_chains: None,
-            })
-            .await;
+        let _ = sdk.sync_wallet(SyncWalletRequest {}).await;
         tokio::time::sleep(STATUS_POLL_INTERVAL).await;
     }
 }

@@ -347,10 +347,7 @@ pub async fn build_sdk_with_custom_config_and_backend(
             })
             .await?;
     } else {
-        sdk.sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+        sdk.sync_wallet(SyncWalletRequest {}).await?;
     }
 
     Ok(SdkInstance {
@@ -728,10 +725,8 @@ pub async fn build_sdk_with_tree_store_config(
     // Force an initial full sync. Works in both modes (auto sync on or off)
     // because `sync_wallet` drives the coordinator directly rather than
     // waiting on the auto-sync initial-synced watcher.
-    sdk.sync_wallet(breez_sdk_spark::SyncWalletRequest {
-        include_exit_chains: None,
-    })
-    .await?;
+    sdk.sync_wallet(breez_sdk_spark::SyncWalletRequest {})
+        .await?;
 
     Ok(SdkInstance {
         sdk,
@@ -1004,12 +999,7 @@ pub async fn ensure_funded(sdk_instance: &mut SdkInstance, min_balance: u64) -> 
 }
 
 async fn ensure_funded_inner(sdk_instance: &mut SdkInstance, min_balance: u64) -> Result<()> {
-    sdk_instance
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let info = sdk_instance
         .sdk
         .get_info(GetInfoRequest {
@@ -1045,12 +1035,7 @@ async fn ensure_funded_via_polling_inner(
     sdk_instance: &mut SdkInstance,
     min_balance: u64,
 ) -> Result<()> {
-    sdk_instance
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let info = sdk_instance
         .sdk
         .get_info(GetInfoRequest {
@@ -1129,12 +1114,7 @@ async fn receive_and_fund_inner(
     } else {
         wait_for_balance(&sdk_instance.sdk, Some(initial_balance + 1), None, 200).await?;
     }
-    sdk_instance
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     Ok((deposit_address, txid))
 }
@@ -1303,10 +1283,7 @@ pub async fn build_sdk_with_postgres_server_mode(
     // `ensure_synced=true` is rejected when `background_tasks_enabled` is
     // false; issue an explicit sync_wallet so the initial tree-store hydrate
     // completes before returning.
-    sdk.sync_wallet(SyncWalletRequest {
-        include_exit_chains: None,
-    })
-    .await?;
+    sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     Ok(SdkInstance {
         sdk,
@@ -1353,10 +1330,7 @@ pub async fn build_sdk_with_mysql_server_mode(
     let event_listener = Box::new(ChannelEventListener { tx });
     let _listener_id = sdk.add_event_listener(event_listener).await;
 
-    sdk.sync_wallet(SyncWalletRequest {
-        include_exit_chains: None,
-    })
-    .await?;
+    sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     Ok(SdkInstance {
         sdk,

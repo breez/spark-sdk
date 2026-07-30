@@ -31,7 +31,7 @@ A shorter synchronization interval provides more responsive detection of payment
 
 ## Background tasks enabled
 
-Master switch for all per-instance background tasks. Defaults to `true`, which is the right choice for mobile and single-instance deployments — the SDK runs its periodic sync, real-time sync client, lightning-address recovery, spark private-mode init, leaf and token-output optimizers, the spark-wallet background processor, and the flashnet conversion refunder.
+Master switch for all per-instance background tasks. Defaults to `true`, which is the right choice for mobile and single-instance deployments: the SDK runs its periodic sync, real-time sync client, lightning-address recovery, spark private-mode init, leaf and token-output optimizers, the spark-wallet background processor, the [unilateral exit data](#unilateral-exit-data) collector, and the flashnet conversion refunder.
 
 Set to `false` for multi-tenant server deployments where the SDK is built per request and the host orchestrates sync, claiming, and event delivery (typically via webhooks) explicitly. No background work is started; explicit operations such as {{#name sync_wallet}}, {{#name claim_deposit}}, {{#name list_unclaimed_deposits}}, {{#name refund_deposit}}, and {{#name refund_pending_conversions}} continue to work and are the intended entry points in this mode.
 
@@ -90,9 +90,9 @@ Whether the SDK collects the data a [unilateral exit](./unilateral_exit.md) need
 
 An exit is built from each leaf's chain of pre-signed transactions. Holding that chain locally is what lets an exit be quoted and built when the Spark operators are unreachable, so a leaf is only exitable that way once its chain has been collected. Collection runs after an operation finishes rather than during it, which keeps it off the critical path of a payment. Freshly received funds are therefore briefly not yet exitable, for roughly one round trip to the operators.
 
-Set it to `false` if bandwidth matters more than being able to recover funds without the operators. Collection then happens only when a sync asks for it, by setting {{#name include_exit_chains}} on {{#name sync_wallet}}.
+Set it to `false` if bandwidth matters more than being able to recover funds without the operators. Chains are then only collected when an exit is prepared, which needs the operators reachable at that moment, so a leaf stays un-exitable until one is collected.
 
-The flag has no effect when [{{#name background_tasks_enabled}}](#background-tasks-enabled) is `false`, since nothing runs in the background at all. In [server mode](./server_mode.md), {{#name include_exit_chains}} is the only way to collect this data.
+The flag also governs {{#name sync_wallet}}, which waits for a collection pass before it returns rather than leaving it to the background. That makes a sync the way to run the collection at a moment of your choosing, and it is what keeps the data current in [server mode](./server_mode.md), where nothing runs in the background to collect it. A leaf whose chain the operators will not complete stays un-exitable until a later attempt succeeds, so a successful sync means the collection ran, not that every leaf is now exitable.
 
 ## Optimization configuration
 

@@ -911,9 +911,7 @@ pub struct TokenMetadata {
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SyncWalletRequest)]
-pub struct SyncWalletRequest {
-    pub include_exit_chains: Option<bool>,
-}
+pub struct SyncWalletRequest {}
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SyncWalletResponse)]
 pub struct SyncWalletResponse {}

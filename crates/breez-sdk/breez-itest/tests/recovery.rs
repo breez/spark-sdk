@@ -187,12 +187,7 @@ async fn create_mint_test_token(instance: &SdkInstance) -> Result<TokenMetadata>
     info!("Minted 100,000,000 tokens ({})", token_metadata.identifier);
 
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    instance
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
     Ok(token_metadata)
 }
 
@@ -345,11 +340,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
         .await?;
 
     // Bob claims the HTLC
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     bob.sdk
         .claim_htlc_payment(ClaimHtlcPaymentRequest {
@@ -390,12 +381,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
         .await?;
 
     // Alice claims the HTLC
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     alice
         .sdk
@@ -519,11 +505,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
     wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
 
     // Bob sends tokens back to Alice
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     let prepare = bob
         .sdk
@@ -581,11 +563,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
         wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
 
         // Bob → Alice
-        bob.sdk
-            .sync_wallet(SyncWalletRequest {
-                include_exit_chains: None,
-            })
-            .await?;
+        bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
         let prepare = bob
             .sdk
@@ -661,12 +639,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
     let start = std::time::Instant::now();
 
     loop {
-        alice
-            .sdk
-            .sync_wallet(SyncWalletRequest {
-                include_exit_chains: None,
-            })
-            .await?;
+        alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
         let payments = alice
             .sdk
             .list_payments(ListPaymentsRequest::default())
@@ -702,12 +675,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
 
     // 13. Final sync to ensure all payments are captured
     info!("Final sync...");
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     // Get final balance and payments
     let info = alice
@@ -810,12 +778,7 @@ async fn test_wallet_recovery_from_mnemonic() -> Result<()> {
 
     // 4. Wait for sync
     info!("Waiting for wallet sync...");
-    sdk_instance
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     // 5. Verify balance
     let info = sdk_instance

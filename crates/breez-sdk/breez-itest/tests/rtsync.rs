@@ -190,12 +190,7 @@ async fn test_01_rtsync_lnurl_info_sync(
 
     // Wait for data-sync to propagate payment metadata to Alice2
     wait_for_synced_event(&mut alice2.events, 30).await?;
-    alice2
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice2.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     // Alice2 should now see the payment, including LNURL information
     let alice2_payment = alice2

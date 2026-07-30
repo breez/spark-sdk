@@ -252,11 +252,7 @@ async fn test_client_signing_send_with_denomination_swap() -> Result<()> {
     assert_eq!(received_payment.amount, send_sats);
     assert_eq!(received_payment.status, PaymentStatus::Completed);
 
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_final_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -424,12 +420,7 @@ async fn test_client_signing_token_send() -> Result<()> {
         .mint_issuer_token(MintIssuerTokenRequest { amount: 1_000_000 })
         .await?;
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let token_id = token_metadata.identifier.clone();
 
     let bob_spark_address = bob
@@ -494,11 +485,7 @@ async fn test_client_signing_token_send() -> Result<()> {
     );
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_token_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -547,12 +534,7 @@ async fn test_client_signing_token_publish_twice_is_idempotent() -> Result<()> {
         .mint_issuer_token(MintIssuerTokenRequest { amount: 1_000_000 })
         .await?;
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let token_id = token_metadata.identifier.clone();
 
     let bob_spark_address = bob
@@ -624,11 +606,7 @@ async fn test_client_signing_token_publish_twice_is_idempotent() -> Result<()> {
     );
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_token_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -680,12 +658,7 @@ async fn test_client_signing_token_send_with_consolidation() -> Result<()> {
             .await?;
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let token_id = token_metadata.identifier.clone();
 
     let bob_spark_address = bob
@@ -756,12 +729,7 @@ async fn test_client_signing_token_send_with_consolidation() -> Result<()> {
                 consolidations += 1;
                 assert!(consolidations <= 3, "consolidation did not converge");
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                alice
-                    .sdk
-                    .sync_wallet(SyncWalletRequest {
-                        include_exit_chains: None,
-                    })
-                    .await?;
+                alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
             }
             PublishSignedTransferPackageResponse::PaymentSent { payment } => {
                 assert!(!is_swap, "a real send must not be a swap package");
@@ -782,11 +750,7 @@ async fn test_client_signing_token_send_with_consolidation() -> Result<()> {
     );
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_token_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -833,12 +797,7 @@ async fn test_client_signing_token_send_to_spark_invoice() -> Result<()> {
         .mint_issuer_token(MintIssuerTokenRequest { amount: 1_000_000 })
         .await?;
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let token_id = token_metadata.identifier.clone();
 
     let bob_invoice = bob
@@ -909,11 +868,7 @@ async fn test_client_signing_token_send_to_spark_invoice() -> Result<()> {
     );
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_token_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -958,11 +913,7 @@ async fn test_client_signing_coop_exit() -> Result<()> {
         .payment_request;
     info!("Withdrawal address: {withdrawal_address}");
 
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_initial = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -1059,20 +1010,12 @@ async fn test_client_signing_coop_exit() -> Result<()> {
     // The coop-exit lands on-chain at Bob's address. Verifying Bob actually
     // receives it proves the withdrawal used the right address (a wrong address
     // would never arrive) and that his balance increases.
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let recv_payment =
         wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 180).await?;
     assert_eq!(recv_payment.method, PaymentMethod::Deposit);
 
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_final = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -1197,11 +1140,7 @@ async fn test_client_signing_spark_invoice_send() -> Result<()> {
     assert_eq!(received.payment_type, PaymentType::Receive);
     assert_eq!(received.amount, invoice_sats);
 
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_final_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -1369,12 +1308,7 @@ async fn test_client_signing_token_batch() -> Result<()> {
         .mint_issuer_token(MintIssuerTokenRequest { amount: 1_000_000 })
         .await?;
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let token_id = token_metadata.identifier.clone();
 
     let bob_spark_address = bob
@@ -1472,11 +1406,7 @@ async fn test_client_signing_token_batch() -> Result<()> {
     );
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_token_balance = bob
         .sdk
         .get_info(GetInfoRequest {

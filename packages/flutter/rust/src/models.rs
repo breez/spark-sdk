@@ -1012,9 +1012,7 @@ pub enum _SuccessActionProcessed {
 }
 
 #[frb(mirror(SyncWalletRequest))]
-pub struct _SyncWalletRequest {
-    pub include_exit_chains: Option<bool>,
-}
+pub struct _SyncWalletRequest {}
 
 #[frb(mirror(SyncWalletResponse))]
 pub struct _SyncWalletResponse {}

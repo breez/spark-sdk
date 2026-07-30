@@ -373,11 +373,7 @@ async fn test_stable_balance_auto_conversion() -> Result<()> {
     );
 
     // Verify Bob's token balance decreased
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_final_token_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -714,12 +710,7 @@ async fn test_stable_balance_send_lightning_address() -> Result<()> {
     info!("Waiting for Alice to receive lightning payment...");
     wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 120).await?;
 
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let alice_sats_after = alice
         .sdk
         .get_info(GetInfoRequest {
@@ -758,11 +749,7 @@ async fn test_stable_balance_zz_deactivation() -> Result<()> {
     };
     info!("=== Starting test_stable_balance_zz_deactivation ===");
 
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_info_before = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -798,11 +785,7 @@ async fn test_stable_balance_zz_deactivation() -> Result<()> {
         wait_for_balance(&bob.sdk, Some(bob_sats_before.saturating_add(1)), None, 120).await?;
     info!("Bob sats after deactivation: {bob_sats_after} (was {bob_sats_before})");
 
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_tokens_after = bob
         .sdk
         .get_info(GetInfoRequest {

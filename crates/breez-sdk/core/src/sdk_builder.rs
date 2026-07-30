@@ -875,8 +875,8 @@ fn finalize_spark_wallet_config(
     spark_wallet_config.leaf_auto_optimize_enabled =
         background_services_enabled && config.leaf_optimization_config.auto_enabled;
     // Not gated on background services, unlike the flag above: with them off the
-    // background fetch never runs, but the flag still decides whether a refresh
-    // asks for exit chains, and a refresh is what server mode drives explicitly.
+    // background fetch never runs, but the flag still decides whether an explicit
+    // sync collects, which is the only collection left in that case.
     spark_wallet_config.exit_chain_auto_fetch_enabled = config.exit_chain_auto_fetch_enabled;
     spark_wallet_config.leaf_optimization_options.multiplicity =
         config.leaf_optimization_config.multiplicity;
@@ -1701,11 +1701,9 @@ mod tests {
         let event_emitter = std::sync::Arc::downgrade(&sdk.event_emitter);
         let spark_wallet = std::sync::Arc::downgrade(&sdk.spark_wallet);
 
-        sdk.sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await
-        .expect("sync_wallet should succeed");
+        sdk.sync_wallet(SyncWalletRequest {})
+            .await
+            .expect("sync_wallet should succeed");
 
         sdk.disconnect().await.expect("disconnect should succeed");
         drop(sdk);

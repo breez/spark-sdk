@@ -119,11 +119,7 @@ async fn test_shared_connection_manager_spark_transfer(
         wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
     assert!(received.amount >= 5);
 
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_final = bob
         .sdk
         .get_info(GetInfoRequest {

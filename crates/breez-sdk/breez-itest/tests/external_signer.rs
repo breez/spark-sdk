@@ -73,11 +73,7 @@ async fn test_external_signer_send_receive(
     info!("Bob received payment: {} sats", received_payment.amount);
 
     // Verify Bob's balance increased
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -95,12 +91,7 @@ async fn test_external_signer_send_receive(
     info!("Bob's final balance: {} sats", bob_balance);
 
     // Verify Alice's payment is completed
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let alice_payment = alice
         .sdk
         .get_payment(GetPaymentRequest {

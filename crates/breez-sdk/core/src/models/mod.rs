@@ -603,12 +603,15 @@ pub struct Config {
     pub prefer_spark_over_lightning: bool,
 
     /// Whether the data needed to exit a payment unilaterally, without the Spark
-    /// operators, is collected in the background as funds arrive.
+    /// operators, is collected as funds arrive. Collection runs in the background,
+    /// and a sync waits for a collection pass before returning, so syncing is how
+    /// to make that happen at a moment of your choosing. A leaf the operators
+    /// cannot complete stays un-exitable until a later attempt succeeds.
     ///
     /// Leave this on unless bandwidth matters more than being able to recover funds
-    /// when the operators are unreachable. With it off, collection only happens when
-    /// a sync asks for it (see `SyncWalletRequest`), which is also the only option
-    /// when background services are disabled.
+    /// when the operators are unreachable. With it off, chains are only collected
+    /// when an exit is prepared, which needs the operators reachable at that
+    /// moment: a leaf cannot be exited without them until one is collected.
     ///
     /// Default value is true.
     pub exit_chain_auto_fetch_enabled: bool,
@@ -1277,17 +1280,7 @@ pub struct TokenMetadata {
 /// Request to sync the wallet with the Spark network
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct SyncWalletRequest {
-    /// Whether this sync also resolves the exit chains of leaves still missing one,
-    /// so they can be spent unilaterally without the Spark operators.
-    ///
-    /// Costs one extra round trip per sync that finds missing chains. Leave unset to
-    /// let the background resolver handle it, which is the default and is what most
-    /// apps want. Set it when background services are disabled, since nothing else
-    /// resolves them there.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub include_exit_chains: Option<bool>,
-}
+pub struct SyncWalletRequest {}
 
 /// Response from synchronizing the wallet
 #[derive(Debug, Clone, Serialize)]

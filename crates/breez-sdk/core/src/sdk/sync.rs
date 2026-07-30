@@ -498,8 +498,11 @@ impl BreezSdk {
         self.runtime
             .run_user_sync(self, super::SyncType::Full, true)
             .await?;
-        if request.include_exit_chains.unwrap_or_default() {
-            // After the sync, so the leaves it brought in are resolved too.
+        // Awaited rather than left to the background collection, so a caller
+        // that syncs before going offline knows its funds are exitable by the
+        // time this returns. Runs after the sync, so the leaves it brought in
+        // are collected for too.
+        if self.config.exit_chain_auto_fetch_enabled {
             self.spark_wallet.fetch_missing_exit_chains().await?;
         }
         Ok(SyncWalletResponse {})

@@ -44,12 +44,7 @@ async fn test_server_mode_bitcoin_to_token() -> Result<()> {
     };
     let (alice, bob) = mainnet_alice_bob_server_mode(&mnemonic, &api_key).await?;
 
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let alice_balance = alice
         .sdk
         .get_info(GetInfoRequest {
@@ -71,11 +66,7 @@ async fn test_server_mode_bitcoin_to_token() -> Result<()> {
     // the per-test cost low.
     let target_token_amount = to_btc_min_token.saturating_mul(2);
 
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_token_before = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -215,11 +206,7 @@ async fn test_server_mode_token_to_bitcoin() -> Result<()> {
     let token_id = mainnet_test_token_id();
     let snap = snapshot_test_pair(&alice, &bob, &token_id).await?;
 
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_token_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -255,12 +242,7 @@ async fn test_server_mode_token_to_bitcoin() -> Result<()> {
     )?;
     info!("Invoice sats sized at {invoice_sats} (from pool estimate)");
 
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let alice_sats_before = alice
         .sdk
         .get_info(GetInfoRequest {

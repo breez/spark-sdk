@@ -127,15 +127,9 @@ where
     // Scenario 1: Concurrent sync.
     info!("=== Scenario 1: Concurrent sync ===");
     let (sync_0, sync_1, sync_2) = tokio::join!(
-        instance_0.sdk.sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        }),
-        instance_1.sdk.sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        }),
-        instance_2.sdk.sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
+        instance_0.sdk.sync_wallet(SyncWalletRequest {}),
+        instance_1.sdk.sync_wallet(SyncWalletRequest {}),
+        instance_2.sdk.sync_wallet(SyncWalletRequest {})
     );
     sync_0?;
     sync_1?;
@@ -192,12 +186,8 @@ where
             options: None,
             idempotency_key: None,
         }),
-        instance_1.sdk.sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        }),
-        instance_2.sdk.sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
+        instance_1.sdk.sync_wallet(SyncWalletRequest {}),
+        instance_2.sdk.sync_wallet(SyncWalletRequest {})
     );
 
     send_result?;
@@ -208,15 +198,9 @@ where
     expected_payment_count += 1;
 
     let (_, _, _) = tokio::join!(
-        instance_0.sdk.sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        }),
-        instance_1.sdk.sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        }),
-        instance_2.sdk.sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
+        instance_0.sdk.sync_wallet(SyncWalletRequest {}),
+        instance_1.sdk.sync_wallet(SyncWalletRequest {}),
+        instance_2.sdk.sync_wallet(SyncWalletRequest {})
     );
 
     let payments_0 = instance_0
@@ -312,12 +296,8 @@ where
     // we drive an explicit 3-way sync at the cross-instance read boundary.
     if matches!(mode, RuntimeMode::Server) {
         let (sync_1, sync_2) = tokio::join!(
-            instance_1.sdk.sync_wallet(SyncWalletRequest {
-                include_exit_chains: None,
-            }),
-            instance_2.sdk.sync_wallet(SyncWalletRequest {
-                include_exit_chains: None,
-            })
+            instance_1.sdk.sync_wallet(SyncWalletRequest {}),
+            instance_2.sdk.sync_wallet(SyncWalletRequest {})
         );
         sync_1?;
         sync_2?;
@@ -386,12 +366,8 @@ where
                         options: None,
                         idempotency_key: None,
                     }),
-                    instances[1].sdk.sync_wallet(SyncWalletRequest {
-                        include_exit_chains: None,
-                    }),
-                    instances[2].sdk.sync_wallet(SyncWalletRequest {
-                        include_exit_chains: None,
-                    })
+                    instances[1].sdk.sync_wallet(SyncWalletRequest {}),
+                    instances[2].sdk.sync_wallet(SyncWalletRequest {})
                 );
                 send?;
                 s1?;
@@ -399,17 +375,13 @@ where
             }
             1 => {
                 let (s0, send, s2) = tokio::join!(
-                    instances[0].sdk.sync_wallet(SyncWalletRequest {
-                        include_exit_chains: None,
-                    }),
+                    instances[0].sdk.sync_wallet(SyncWalletRequest {}),
                     instances[1].sdk.send_payment(SendPaymentRequest {
                         prepare_response: prepare,
                         options: None,
                         idempotency_key: None,
                     }),
-                    instances[2].sdk.sync_wallet(SyncWalletRequest {
-                        include_exit_chains: None,
-                    })
+                    instances[2].sdk.sync_wallet(SyncWalletRequest {})
                 );
                 s0?;
                 send?;
@@ -417,12 +389,8 @@ where
             }
             2 => {
                 let (s0, s1, send) = tokio::join!(
-                    instances[0].sdk.sync_wallet(SyncWalletRequest {
-                        include_exit_chains: None,
-                    }),
-                    instances[1].sdk.sync_wallet(SyncWalletRequest {
-                        include_exit_chains: None,
-                    }),
+                    instances[0].sdk.sync_wallet(SyncWalletRequest {}),
+                    instances[1].sdk.sync_wallet(SyncWalletRequest {}),
                     instances[2].sdk.send_payment(SendPaymentRequest {
                         prepare_response: prepare,
                         options: None,
@@ -442,15 +410,9 @@ where
         current_balance -= payment_amt;
 
         let (_, _, _) = tokio::join!(
-            instances[0].sdk.sync_wallet(SyncWalletRequest {
-                include_exit_chains: None,
-            }),
-            instances[1].sdk.sync_wallet(SyncWalletRequest {
-                include_exit_chains: None,
-            }),
-            instances[2].sdk.sync_wallet(SyncWalletRequest {
-                include_exit_chains: None,
-            })
+            instances[0].sdk.sync_wallet(SyncWalletRequest {}),
+            instances[1].sdk.sync_wallet(SyncWalletRequest {}),
+            instances[2].sdk.sync_wallet(SyncWalletRequest {})
         );
 
         info!(
@@ -462,15 +424,9 @@ where
     // Final verification.
     info!("=== Final verification ===");
     let (_, _, _) = tokio::join!(
-        instances[0].sdk.sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        }),
-        instances[1].sdk.sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        }),
-        instances[2].sdk.sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
+        instances[0].sdk.sync_wallet(SyncWalletRequest {}),
+        instances[1].sdk.sync_wallet(SyncWalletRequest {}),
+        instances[2].sdk.sync_wallet(SyncWalletRequest {})
     );
 
     let final_payments_0 = instances[0]
@@ -561,12 +517,7 @@ where
         .await?;
 
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    instance_0
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    instance_0.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     let token_id = token_metadata.identifier.clone();
     info!("Token created: {} ({})", token_metadata.name, token_id);
@@ -614,12 +565,7 @@ where
 
     wait_for_token_balance_increase(&bob.sdk, &token_id, 0, 60).await?;
 
-    instance_0
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    instance_0.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let mut alice_token_balance = get_token_balance(&instance_0.sdk, &token_id).await?;
     let mut bob_token_balance = get_token_balance(&bob.sdk, &token_id).await?;
     assert_eq!(alice_token_balance, 500_000);
@@ -634,15 +580,9 @@ where
     // Phase 1: Concurrent sync verification.
     info!("=== Phase 1: Concurrent sync verification ===");
     let (sync_0, sync_1, sync_2) = tokio::join!(
-        instance_0.sdk.sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        }),
-        instance_1.sdk.sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        }),
-        instance_2.sdk.sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
+        instance_0.sdk.sync_wallet(SyncWalletRequest {}),
+        instance_1.sdk.sync_wallet(SyncWalletRequest {}),
+        instance_2.sdk.sync_wallet(SyncWalletRequest {})
     );
     sync_0?;
     sync_1?;
@@ -720,14 +660,10 @@ where
                         }),
                         instances[syncer_idxs[0]]
                             .sdk
-                            .sync_wallet(SyncWalletRequest {
-                                include_exit_chains: None,
-                            }),
+                            .sync_wallet(SyncWalletRequest {}),
                         instances[syncer_idxs[1]]
                             .sdk
-                            .sync_wallet(SyncWalletRequest {
-                                include_exit_chains: None,
-                            })
+                            .sync_wallet(SyncWalletRequest {})
                     );
                     send?;
                     s1?;
@@ -737,9 +673,7 @@ where
                     let (s0, send, s2) = tokio::join!(
                         instances[syncer_idxs[0]]
                             .sdk
-                            .sync_wallet(SyncWalletRequest {
-                                include_exit_chains: None,
-                            }),
+                            .sync_wallet(SyncWalletRequest {}),
                         instances[1].sdk.send_payment(SendPaymentRequest {
                             prepare_response: prepare,
                             options: None,
@@ -747,9 +681,7 @@ where
                         }),
                         instances[syncer_idxs[1]]
                             .sdk
-                            .sync_wallet(SyncWalletRequest {
-                                include_exit_chains: None,
-                            })
+                            .sync_wallet(SyncWalletRequest {})
                     );
                     s0?;
                     send?;
@@ -759,14 +691,10 @@ where
                     let (s0, s1, send) = tokio::join!(
                         instances[syncer_idxs[0]]
                             .sdk
-                            .sync_wallet(SyncWalletRequest {
-                                include_exit_chains: None,
-                            }),
+                            .sync_wallet(SyncWalletRequest {}),
                         instances[syncer_idxs[1]]
                             .sdk
-                            .sync_wallet(SyncWalletRequest {
-                                include_exit_chains: None,
-                            }),
+                            .sync_wallet(SyncWalletRequest {}),
                         instances[2].sdk.send_payment(SendPaymentRequest {
                             prepare_response: prepare,
                             options: None,
@@ -821,15 +749,9 @@ where
                     options: None,
                     idempotency_key: None,
                 }),
-                instances[0].sdk.sync_wallet(SyncWalletRequest {
-                    include_exit_chains: None,
-                }),
-                instances[1].sdk.sync_wallet(SyncWalletRequest {
-                    include_exit_chains: None,
-                }),
-                instances[2].sdk.sync_wallet(SyncWalletRequest {
-                    include_exit_chains: None,
-                })
+                instances[0].sdk.sync_wallet(SyncWalletRequest {}),
+                instances[1].sdk.sync_wallet(SyncWalletRequest {}),
+                instances[2].sdk.sync_wallet(SyncWalletRequest {})
             );
             send?;
             s0?;
@@ -853,15 +775,9 @@ where
     // Phase 3: Final verification.
     info!("=== Phase 3: Final verification ===");
     let (s0, s1, s2) = tokio::join!(
-        instances[0].sdk.sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        }),
-        instances[1].sdk.sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        }),
-        instances[2].sdk.sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
+        instances[0].sdk.sync_wallet(SyncWalletRequest {}),
+        instances[1].sdk.sync_wallet(SyncWalletRequest {}),
+        instances[2].sdk.sync_wallet(SyncWalletRequest {})
     );
     s0?;
     s1?;
@@ -894,11 +810,7 @@ where
     assert_eq!(ids_1, ids_2);
     assert_eq!(ids_0.len(), expected_token_payment_count);
 
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_final = get_token_balance(&bob.sdk, &token_id).await?;
     assert_eq!(bob_final, bob_token_balance);
 

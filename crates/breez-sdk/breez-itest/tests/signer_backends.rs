@@ -223,11 +223,7 @@ async fn static_deposit_refund(#[case] backend: SignerBackend) -> Result<()> {
     let txid = faucet.fund_address(&address, 25_000).await?;
     info!("[{backend:?}] funded deposit {txid}, awaiting unclaimed event");
 
-    sdk.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    sdk.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let unclaimed = wait_for_unclaimed_event(&mut sdk.events, 180).await?;
     assert!(!unclaimed.is_empty(), "expected an unclaimed deposit");
 

@@ -65,11 +65,7 @@ async fn test_mainnet_teardown_drain_bob_to_alice() -> Result<()> {
         .and_then(|m| u64::try_from(m).ok())
         .unwrap_or(u64::MAX);
 
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let pre_info = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -91,11 +87,7 @@ async fn test_mainnet_teardown_drain_bob_to_alice() -> Result<()> {
         {
             warn!("Teardown: auto-conversion didn't complete in 180s ({e:#}); proceeding anyway");
         }
-        bob.sdk
-            .sync_wallet(SyncWalletRequest {
-                include_exit_chains: None,
-            })
-            .await?;
+        bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     }
 
     let bob_info = bob
@@ -187,11 +179,7 @@ async fn test_mainnet_teardown_drain_bob_to_alice() -> Result<()> {
     // Drain any remaining sats. Unconditional: covers the tokenless case and
     // any residual after the token drain. Runs before the final assertions so a
     // partially-drained Bob is still cleaned up.
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let remaining_sats = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -225,11 +213,7 @@ async fn test_mainnet_teardown_drain_bob_to_alice() -> Result<()> {
 
     // Final assertion: Bob's tokens are fully drained. Deferred to the end so
     // the sat drain above still runs even on partial token cleanup.
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let final_tokens = bob
         .sdk
         .get_info(GetInfoRequest {

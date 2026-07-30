@@ -32,6 +32,7 @@ None of the following per-instance background work is started when {{#name backg
 - **Periodic sync loop** — the SDK does not auto-sync with the Spark network.
 - **Real-time sync client** — no WebSocket subscription to the [real-time sync server](./config.md#real-time-sync-server-url).
 - **Spark wallet background processor** — no operator-event subscription, leaf optimizer, or token-output optimizer.
+- **Unilateral exit data collector** does not run, so the data a [unilateral exit](unilateral_exit.md) needs is not collected in the background. {{#name sync_wallet}} collects it instead; see below.
 - **Lightning-address recovery** — the SDK does not refresh the registered lightning address on startup.
 - **Spark private-mode init** — the [{{#name private_enabled_default}}](./config.md#private-mode-enabled-by-default) preset is **not** applied automatically on first startup; you must opt in once via {{#name update_user_settings}} (see [User settings](user_settings.md)).
 - **Flashnet conversion refunder** — no periodic refund pass for failed token conversions.
@@ -54,7 +55,7 @@ Call {{#name sync_wallet}} **only when an external event tells you the wallet st
 
 The {{#enum SdkEvent::Synced}} event pattern documented in [Listening to events](events.md) is **not available** in server mode — the SDK has no background subscriber to emit it. Treat {{#name sync_wallet}} as the synchronous primitive instead.
 
-If the wallets you run need to be able to [exit unilaterally](unilateral_exit.md) without the Spark operators, set {{#name include_exit_chains}} on the request. The data that makes a leaf exitable is normally collected by a background task, which does not exist here, so this is the only way to collect it in server mode. It costs one extra round trip on syncs that find leaves still missing it, so set it on the syncs that follow incoming funds rather than on every call. See [Unilateral exit data](./config.md#unilateral-exit-data).
+{{#name sync_wallet}} is also what keeps [unilateral exit](unilateral_exit.md) possible here. The data that makes a leaf exitable without the Spark operators is normally collected by a background task, which does not exist in server mode, so the sync collects it instead: any leaf still missing a chain is attempted before the sync returns. Every sync pays a scan of the stored leaves for this, plus a round trip to the operators on the syncs that find leaves needing one. Turn it off with [{{#name exit_chain_auto_fetch_enabled}}](./config.md#unilateral-exit-data) if the wallets you run never need to exit without the operators.
 
 ### Claiming on-chain deposits
 

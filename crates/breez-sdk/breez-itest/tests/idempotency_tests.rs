@@ -30,11 +30,7 @@ async fn test_01_spark_idempotency_key(
     info!("Alice balance: {} sats", alice_balance);
 
     // Get Bob's initial balance
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_initial_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -150,11 +146,7 @@ async fn test_01_spark_idempotency_key(
     );
 
     // Verify Bob's balance increased
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_final_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -203,11 +195,7 @@ async fn test_02_lightning_idempotency_key(
     info!("Alice balance: {} sats", alice_balance);
 
     // Get Bob's initial balance
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_initial_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -329,11 +317,7 @@ async fn test_02_lightning_idempotency_key(
     );
 
     // Verify Bob's balance increased
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_final_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -373,11 +357,7 @@ async fn test_03_bitcoin_idempotency_key(
     ensure_funded(&mut alice, 50_000).await?;
 
     // Record Bob's initial balance
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_initial_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -448,11 +428,7 @@ async fn test_03_bitcoin_idempotency_key(
     );
 
     // Trigger Bob sync and wait for receive + claim
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let recv_payment =
         wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 180).await?;
     assert!(matches!(recv_payment.method, PaymentMethod::Deposit));
@@ -476,11 +452,7 @@ async fn test_03_bitcoin_idempotency_key(
     );
 
     // Verify Bob's balance increased
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_final_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -529,11 +501,7 @@ async fn test_04_spark_htlc_idempotency_key(
     info!("Alice balance: {} sats", alice_balance);
 
     // Get Bob's initial balance
-    bob.sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_initial_balance = bob
         .sdk
         .get_info(GetInfoRequest {

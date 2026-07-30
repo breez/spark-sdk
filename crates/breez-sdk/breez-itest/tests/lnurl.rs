@@ -526,12 +526,7 @@ async fn test_07_lnurl_send_all_payment(#[future] alice_sdk: Result<SdkInstance>
     // Fund Alice with a specific amount for testing
     let funding_amount = 10_000u64;
     receive_and_fund(&mut alice, funding_amount, false).await?;
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     let alice_balance = alice
         .sdk
@@ -601,12 +596,7 @@ async fn test_07_lnurl_send_all_payment(#[future] alice_sdk: Result<SdkInstance>
     info!("Payment completed on Bob's side");
 
     // Verify Alice's balance is now zero
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let alice_final = alice
         .sdk
         .get_info(GetInfoRequest {
@@ -673,12 +663,7 @@ async fn test_08_lnurl_send_all_with_fee_overpayment(
     // Fund Alice with max faucet amount to have room for searching
     let funding_amount = 50_000u64;
     receive_and_fund(&mut alice, funding_amount, false).await?;
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     let alice_balance = alice
         .sdk
@@ -846,12 +831,7 @@ async fn test_08_lnurl_send_all_with_fee_overpayment(
         .await?;
 
         // Sync and verify
-        alice
-            .sdk
-            .sync_wallet(SyncWalletRequest {
-                include_exit_chains: None,
-            })
-            .await?;
+        alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
         let new_balance = alice
             .sdk
             .get_info(GetInfoRequest {
@@ -930,12 +910,7 @@ async fn test_08_lnurl_send_all_with_fee_overpayment(
     info!("Full balance payment completed on Bob's side");
 
     // Verify Alice's balance is zero
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let alice_final = alice
         .sdk
         .get_info(GetInfoRequest {
@@ -1504,12 +1479,7 @@ async fn test_15_client_signing_lnurl_pay_fees_included() -> Result<()> {
     let bob_lightning_address = register_response.lightning_address;
 
     ensure_funded(&mut alice, 10_000).await?;
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let alice_balance = alice
         .sdk
         .get_info(GetInfoRequest {
@@ -1551,12 +1521,7 @@ async fn test_15_client_signing_lnurl_pay_fees_included() -> Result<()> {
     let bob_payment =
         wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
 
-    alice
-        .sdk
-        .sync_wallet(SyncWalletRequest {
-            include_exit_chains: None,
-        })
-        .await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let alice_final = alice
         .sdk
         .get_info(GetInfoRequest {

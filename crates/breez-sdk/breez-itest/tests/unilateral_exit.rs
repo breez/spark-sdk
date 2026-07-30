@@ -1055,7 +1055,9 @@ async fn test_multi_leaf_offline_exit(#[case] backend: SignerBackend) -> Result<
     // Wait for both claimed leaves to finalize to Available and sync into the
     // durable tree store. This needs the operators (the Creating -> Available
     // transition and the leaf download), so it must complete before they stop;
-    // afterwards the exit sources everything it needs from local storage.
+    // afterwards the exit sources everything it needs from local storage. The
+    // sync waits for a collection pass that began after those leaves were
+    // stored, so going offline below cannot race the background collection.
     let balance = wait_for_balance(&sdk.sdk, Some(LEAF_SATS * 2), None, 60).await?;
     assert_eq!(
         balance,
