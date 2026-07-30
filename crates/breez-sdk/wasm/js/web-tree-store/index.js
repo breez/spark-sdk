@@ -804,13 +804,17 @@ class WebTreeStore {
           // rows are dropped alongside it.
           const deletedIds = [];
           for (const row of Array.from(leafMap.values())) {
-            if (row.reservation_id != null || row.added_at >= refreshMs) continue;
+            if (row.reservation_id != null) continue;
+            // A leaf we spent goes whenever its marker is live, as on every
+            // other backend: the row being newer than this refresh does not
+            // make the spend any less ours.
             if (spentIds.has(row.id)) {
               leavesStore.delete(row.id);
               leafMap.delete(row.id);
               deletedIds.push(row.id);
               continue;
             }
+            if (row.added_at >= refreshMs) continue;
             if (!row.is_deleted) {
               const marked = { ...row, is_deleted: true };
               leavesStore.put(marked);

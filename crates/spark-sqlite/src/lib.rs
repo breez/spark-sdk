@@ -1339,6 +1339,7 @@ mod tests {
         test_ancestor_not_returned_as_leaf,
         test_absent_leaf_is_kept_for_its_exit_chain,
         test_remove_leaves_spares_a_revived_leaf,
+        test_kept_leaf_cannot_back_a_payment,
         test_deleted_leaves_are_listed_and_removable,
         test_absent_leaf_keeps_shared_ancestor,
         test_incomplete_pedigree_still_spendable,

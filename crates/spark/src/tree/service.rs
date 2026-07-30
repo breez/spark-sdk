@@ -392,14 +392,18 @@ impl TreeService for SynchronousTreeService {
             else {
                 continue;
             };
-            let agreed = copies.len() == operator_count
+            // Count distinct operators: a paged query can return the same node
+            // twice for one of them, which would otherwise pass for agreement
+            // that another operator never gave.
+            let reporting: HashSet<usize> = copies.iter().map(|(id, _)| *id).collect();
+            let agreed = reporting.len() == operator_count
                 && copies
                     .iter()
                     .all(|(_, node)| leaf_copies_agree(node, &representative));
             if !agreed {
                 warn!(
                     "Leaf {leaf_id} reported by {} of {operator_count} operators, and not identically by all of them; holding it back from payments",
-                    copies.len()
+                    reporting.len()
                 );
                 missing_operator_leaves_map.insert(leaf_id.clone(), representative.clone());
             }
@@ -475,10 +479,20 @@ impl TreeService for SynchronousTreeService {
         // A refresh writes no chains, so an already-stored one is left alone
         // rather than rewritten every minute. Collecting the chains of anything
         // newly reported is what the notification below sets off.
+
+        // Only a spendable leaf goes through the renewal check. The statuses
+        // added for the exit are either mid-exit or already locked by the
+        // operators: renewing one is at best refused, and a node that no longer
+        // carries a refund fails the check outright, which would take the whole
+        // refresh down with it.
+        let (renewable, held): (Vec<TreeNode>, Vec<TreeNode>) = new_leaves
+            .into_iter()
+            .partition(|leaf| leaf.status == TreeNodeStatus::Available);
         let RenewalOutcome {
-            pedigrees,
+            mut pedigrees,
             any_renewal_landed,
-        } = self.check_renew_nodes(bare_pedigrees(new_leaves)).await?;
+        } = self.check_renew_nodes(bare_pedigrees(renewable)).await?;
+        pedigrees.extend(bare_pedigrees(held));
         let renewed_leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
         self.state
             .set_leaves(
@@ -553,7 +567,7 @@ impl TreeService for SynchronousTreeService {
             for leaf in &deleted {
                 if theirs
                     .get(&leaf.id)
-                    .is_some_and(|theirs| refund_timelock_dropped(leaf, theirs))
+                    .is_some_and(|theirs| refund_left_us(&self.identity_pubkey, leaf, theirs))
                 {
                     *agreeing.entry(leaf.id.clone()).or_default() += 1;
                 }
@@ -577,16 +591,28 @@ impl TreeService for SynchronousTreeService {
     }
 }
 
-/// Whether the operators' copy of a leaf carries a refund that replaced ours at a
-/// lower timelock. Only a transfer decrements it, one interval per hop, and it
-/// does so to hand the leaf to its next owner, so a drop is proof the leaf is no
-/// longer ours. A renewal moves the timelock the other way, and anything else,
-/// including a leaf the operators will not report at all, proves nothing and
-/// leaves the leaf exactly where it is.
-fn refund_timelock_dropped(ours: &TreeNode, theirs: &TreeNode) -> bool {
-    // Compare refunds only once the node itself matches. A reported node that
-    // funds a different transaction is not the leaf we are asking about, and its
-    // timelock says nothing about ours.
+/// Whether the operators' copy of a leaf says it has left us: it funds the same
+/// node, it is owned by somebody else, and its refund replaced ours at a lower
+/// timelock.
+///
+/// The owner is what makes this directional. A lower timelock on its own does
+/// not mean the leaf was handed on: a claim re-signs at `enforce_timelock`,
+/// which rounds down to the interval, so a leaf coming back to us can carry a
+/// lower one too (an HTLC refund sits at a 70-block offset and rounds down on
+/// claim). Requiring both means a leaf that returned to us is never mistaken for
+/// one that left, and anything the operators will not talk about proves nothing
+/// and stays exactly where it is.
+fn refund_left_us(identity: &PublicKey, ours: &TreeNode, theirs: &TreeNode) -> bool {
+    // Their copy has to name an owner, and it has to be someone else. An absent
+    // owner is not evidence either way, so it keeps the leaf.
+    let Some(owner) = theirs.owner_identity_public_key else {
+        return false;
+    };
+    if owner == *identity {
+        return false;
+    }
+    // And it has to be the same node: one that funds a different transaction is
+    // not the leaf we asked about, so its timelock says nothing about ours.
     if ours.node_tx != theirs.node_tx {
         return false;
     }
@@ -1637,10 +1663,24 @@ mod tests {
         assert!(!rx.has_changed().unwrap());
     }
 
-    /// A leaf whose refund tx carries `seq`, for comparing two copies of the
-    /// same leaf by their refund timelock.
-    fn leaf_with_refund_timelock(seq: u32) -> TreeNode {
+    fn pubkey_from(byte: u8) -> PublicKey {
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let sk = bitcoin::secp256k1::SecretKey::from_slice(&[byte; 32]).unwrap();
+        PublicKey::from_secret_key(&secp, &sk)
+    }
+
+    fn other_owner() -> PublicKey {
+        pubkey_from(0x22)
+    }
+
+    fn us() -> PublicKey {
+        pubkey_from(0x11)
+    }
+
+    /// A node at `seq`, owned by `owner`.
+    fn leaf_owned_at(owner: PublicKey, seq: u32) -> TreeNode {
         let mut node = create_test_leaves(&[1_000]).remove(0);
+        node.owner_identity_public_key = Some(owner);
         node.refund_tx = Some(Transaction {
             version: Version::non_standard(3),
             lock_time: LockTime::ZERO,
@@ -1657,49 +1697,72 @@ mod tests {
     /// enforces that, so a leaf only one of them vouches for stays put.
     #[test_all]
     fn a_leaf_is_only_proven_when_every_operator_agrees() {
-        let ours = leaf_with_refund_sequence(2000);
-        let lower = leaf_with_refund_sequence(1900);
-        let unchanged = leaf_with_refund_sequence(2000);
+        let ours = leaf_owned_at(us(), 2000);
+        let gone = leaf_owned_at(other_owner(), 1900);
+        let unchanged = leaf_owned_at(other_owner(), 2000);
 
         // Three operators, two of which report the replacement.
-        let agreeing = [&lower, &lower, &unchanged]
+        let agreeing = [&gone, &gone, &unchanged]
             .iter()
-            .filter(|theirs| refund_timelock_dropped(&ours, theirs))
+            .filter(|theirs| refund_left_us(&us(), &ours, theirs))
             .count();
         assert_eq!(agreeing, 2);
         assert_ne!(agreeing, 3, "a leaf one operator still vouches for is kept");
 
-        let all = [&lower, &lower, &lower]
+        let all = [&gone, &gone, &gone]
             .iter()
-            .filter(|theirs| refund_timelock_dropped(&ours, theirs))
+            .filter(|theirs| refund_left_us(&us(), &ours, theirs))
             .count();
         assert_eq!(all, 3, "unanimous replacement is what proves the spend");
     }
 
-    /// A transfer decrements the refund timelock to hand the leaf to its next
-    /// owner, so a lower one on the operators' copy is the proof that it left us.
-    /// A renewal moves it the other way, and an unchanged or absent refund says
-    /// nothing either way.
+    /// A leaf has left us only when somebody else owns it AND its refund
+    /// replaced ours at a lower timelock. The owner is what makes the test
+    /// directional: a claim re-signs through `enforce_timelock`, which rounds
+    /// down to the interval, so a leaf coming back to us carries a lower
+    /// timelock too and must not be mistaken for one that left.
     #[test_all]
-    fn only_a_lower_refund_timelock_proves_the_leaf_left() {
-        let ours = leaf_with_refund_timelock(2000);
+    fn a_leaf_left_only_when_someone_else_owns_it_at_a_lower_timelock() {
+        let ours = leaf_owned_at(us(), 2000);
 
-        assert!(refund_timelock_dropped(
+        assert!(refund_left_us(
+            &us(),
             &ours,
-            &leaf_with_refund_timelock(1900)
-        ));
-        assert!(!refund_timelock_dropped(
-            &ours,
-            &leaf_with_refund_timelock(2000)
-        ));
-        assert!(!refund_timelock_dropped(
-            &ours,
-            &leaf_with_refund_timelock(2100)
+            &leaf_owned_at(other_owner(), 1900)
         ));
 
-        let mut no_refund = leaf_with_refund_timelock(1900);
+        // The HTLC shape that rounds down on a claim back to us: lower, but ours.
+        let ours_htlc = leaf_owned_at(us(), 1970);
+        assert!(
+            !refund_left_us(&us(), &ours_htlc, &leaf_owned_at(us(), 1900)),
+            "a leaf claimed back to us is not a leaf that left"
+        );
+
+        // Someone else owns it, but the refund did not move.
+        assert!(!refund_left_us(
+            &us(),
+            &ours,
+            &leaf_owned_at(other_owner(), 2000)
+        ));
+        // A renewal moves the timelock the other way.
+        assert!(!refund_left_us(
+            &us(),
+            &ours,
+            &leaf_owned_at(other_owner(), 2100)
+        ));
+
+        let mut no_owner = leaf_owned_at(other_owner(), 1900);
+        no_owner.owner_identity_public_key = None;
+        assert!(!refund_left_us(&us(), &ours, &no_owner));
+
+        let mut no_refund = leaf_owned_at(other_owner(), 1900);
         no_refund.refund_tx = None;
-        assert!(!refund_timelock_dropped(&ours, &no_refund));
+        assert!(!refund_left_us(&us(), &ours, &no_refund));
+
+        // A different node entirely says nothing about ours.
+        let mut other_node = leaf_owned_at(other_owner(), 1900);
+        other_node.node_tx.lock_time = bitcoin::absolute::LockTime::from_height(7).unwrap();
+        assert!(!refund_left_us(&us(), &ours, &other_node));
     }
 
     #[test_all]

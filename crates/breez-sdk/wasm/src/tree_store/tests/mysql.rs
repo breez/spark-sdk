@@ -155,6 +155,12 @@ async fn test_remove_leaves_spares_a_revived_leaf() {
 }
 
 #[wasm_bindgen_test]
+async fn test_kept_leaf_cannot_back_a_payment() {
+    let store = create_test_tree_store("mysql_tree_ancestor_deleted").await;
+    breez_sdk_spark::tree_store_tests::test_kept_leaf_cannot_back_a_payment(&store).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_deleted_leaves_are_listed_and_removable() {
     let store = create_test_tree_store("mysql_tree_ancestor_deleted").await;
     breez_sdk_spark::tree_store_tests::test_deleted_leaves_are_listed_and_removable(&store).await;

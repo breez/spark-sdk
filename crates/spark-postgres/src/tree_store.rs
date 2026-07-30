@@ -494,6 +494,9 @@ impl TreeStore for PostgresTreeStore {
         let ids: Vec<String> = leaf_ids.iter().map(ToString::to_string).collect();
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
+        // This walks the same two tables as a refresh, in the opposite order, so
+        // it takes the same lock every other write here takes.
+        self.acquire_write_lock(&tx).await?;
         // Each leaf owns its chain, so its ancestor rows go with it, and in that
         // order so no ancestor row is ever left without its leaf.
         // Only a row still marked and still unreserved goes: the purge read its
@@ -675,16 +678,22 @@ impl TreeStore for PostgresTreeStore {
         // it goes for good and takes its ancestor rows with it, in that order so
         // no ancestor row is ever left without its leaf.
         let spent_vec: Vec<String> = spent_ids.iter().cloned().collect();
+        let dropped = tx
+            .query(
+                "DELETE FROM brz_tree_leaves \
+                 WHERE user_id = $1 AND reservation_id IS NULL AND id = ANY($2) \
+                 RETURNING id",
+                &[&self.identity, &spent_vec],
+            )
+            .await
+            .map_err(map_err)?;
+        // Only the rows that actually went: a spent leaf still held by a
+        // reservation keeps its row, and a row without its chain is the one
+        // thing this store must never produce.
+        let dropped_ids: Vec<String> = dropped.iter().map(|row| row.get("id")).collect();
         tx.execute(
             "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)",
-            &[&self.identity, &spent_vec],
-        )
-        .await
-        .map_err(map_err)?;
-        tx.execute(
-            "DELETE FROM brz_tree_leaves \
-             WHERE user_id = $1 AND reservation_id IS NULL AND id = ANY($2)",
-            &[&self.identity, &spent_vec],
+            &[&self.identity, &dropped_ids],
         )
         .await
         .map_err(map_err)?;
@@ -2165,6 +2174,12 @@ mod tests {
     async fn test_remove_leaves_spares_a_revived_leaf() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_remove_leaves_spares_a_revived_leaf(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_kept_leaf_cannot_back_a_payment() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_kept_leaf_cannot_back_a_payment(&fixture.store).await;
     }
 
     #[tokio::test]
