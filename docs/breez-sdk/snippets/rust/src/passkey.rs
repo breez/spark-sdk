@@ -1,8 +1,8 @@
 use anyhow::Result;
 use breez_sdk_spark::passkey::{
-    ConnectWithPasskeyRequest, DeriveSeedsOutput, DeriveSeedsRequest, DomainAssociation, ErrorKind,
-    CreatePasskeyOutput, PasskeyAvailability, PasskeyClient, PrfProvider, PrfProviderError,
-    RegisterRequest, SignInRequest, SignInResponse, Wallet,
+    ConnectWithPasskeyRequest, CreatePasskeyOutput, DeriveSeedsOutput, DeriveSeedsRequest,
+    DomainAssociation, ErrorKind, PasskeyAvailability, PasskeyClient, PrfProvider,
+    PrfProviderError, RegisterRequest, SignInRequest, SignInResponse, Wallet,
 };
 use breez_sdk_spark::{connect, default_config, ConnectRequest, Network};
 use std::sync::Arc;

@@ -22,9 +22,10 @@ from breez_sdk_spark import (
 
 # ANCHOR: implement-prf-provider
 # Implement the PrfProvider trait for custom logic if no built-in
-# PasskeyProvider ships for your target. Three required methods:
-# derive_seeds for derivation, is_supported for the capability probe;
-# create_passkey for registration is optional.
+# PasskeyProvider ships for your target. Every method is required:
+# derive_seeds for derivation, is_supported for the capability probe,
+# create_passkey for registration, check_domain_association for the
+# advisory RP check.
 class CustomPrfProvider(PrfProvider):
     async def derive_seeds(self, request: DeriveSeedsRequest) -> DeriveSeedsOutput:
         # Return one 32-byte PRF output per salt, in input order.

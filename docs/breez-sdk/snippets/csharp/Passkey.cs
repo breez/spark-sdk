@@ -4,7 +4,8 @@ namespace BreezSdkSnippets
 {
     // ANCHOR: implement-prf-provider
     // Implement PrfProvider for a custom authenticator (hardware key, FIDO2,
-    // file-backed). Only DeriveSeeds and IsSupported are required.
+    // file-backed). Every method is required: interface members are
+    // bodiless, unlike the Rust trait's defaults.
     class CustomPrfProvider : PrfProvider
     {
         public async Task<DeriveSeedsOutput> DeriveSeeds(DeriveSeedsRequest request)

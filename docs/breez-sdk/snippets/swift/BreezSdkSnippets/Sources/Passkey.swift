@@ -3,7 +3,8 @@ import Foundation
 
 // ANCHOR: implement-prf-provider
 // Implement PrfProvider for a custom authenticator (hardware key, FIDO2,
-// file-backed). Only deriveSeeds and isSupported are required.
+// file-backed). Every method is required: Swift conformance has no
+// defaults, unlike the Rust trait.
 class CustomPrfProvider: PrfProvider {
     func deriveSeeds(request: DeriveSeedsRequest) async throws -> DeriveSeedsOutput {
         // Return one 32-byte PRF output per salt, in input order.

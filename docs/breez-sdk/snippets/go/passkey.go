@@ -9,7 +9,8 @@ import (
 
 // ANCHOR: implement-prf-provider
 // Implement the PrfProvider interface for a custom authenticator (hardware
-// key, FIDO2, file-backed). Only DeriveSeeds and IsSupported are required.
+// key, FIDO2, file-backed). Every method is required: satisfying a Go
+// interface has no defaults, unlike the Rust trait.
 type CustomPrfProvider struct{}
 
 func (p *CustomPrfProvider) DeriveSeeds(

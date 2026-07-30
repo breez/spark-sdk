@@ -136,17 +136,14 @@ public class PasskeyProvider(
     }
 
     /**
-     * Register a new passkey with PRF support. One ceremony, no derivation.
+     * Registers with `prf.eval` requested, so an authenticator that
+     * evaluates PRF at create returns the seeds here and the caller needs
+     * no assertion.
      *
      * `user.id` is never host-supplied: the core mints a fresh random 16-byte
      * handle and returns it as [PasskeyCredential.userId]. Pass already-
      * registered IDs in `excludeCredentials` so the platform refuses a
-     * duplicate even after reinstall.
-     */
-    /**
-     * Registers with `prf.eval` requested, so an authenticator that
-     * evaluates PRF at create returns the seeds here and the caller needs
-     * no assertion. Credential Manager reports a credential it has not
+     * duplicate even after reinstall. Credential Manager reports a credential it has not
      * finished indexing as absent, so removing that assertion removes the
      * only step that can trip over it.
      *

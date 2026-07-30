@@ -17,7 +17,8 @@ import {
 
 // ANCHOR: implement-prf-provider
 // Implement PrfProvider for a custom authenticator (hardware key, FIDO2,
-// file-backed). Only deriveSeeds and isSupported are required.
+// file-backed). Every method is required: the generated interface has no
+// defaults, unlike the Rust trait.
 class CustomPrfProvider {
   deriveSeeds = async (
     _request: { salts: string[] }
@@ -32,7 +33,7 @@ class CustomPrfProvider {
   ): Promise<CreatePasskeyOutput> => {
     // Register a credential and return its ID plus attestation.
     //
-    // Return `seeds: null` unless the platform evaluated PRF during the
+    // Return `seeds: null` (the field is nullable) unless the platform evaluated PRF during the
     // create ceremony and gave one output per salt. Seeds returned here
     // must equal what `deriveSeeds` returns for the same salts.
     throw new Error('Implement registration via native passkey API')

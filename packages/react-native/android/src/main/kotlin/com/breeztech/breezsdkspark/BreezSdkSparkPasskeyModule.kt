@@ -233,7 +233,8 @@ class BreezSdkSparkPasskeyModule(
                 val credential = registration.credential
                 // The core's `register` arms the shared grace tracker so the
                 // next `deriveSeeds` call holds out the credential's
-                // PRF-readiness window without the wrapper having to.
+                // PRF-readiness window without the wrapper having to, and
+                // skips arming it when seeds came back inline.
                 val map = Arguments.createMap()
                 map.putString("credentialId", Base64.encodeToString(credential.credentialId, Base64.NO_WRAP))
                 map.putString("userId", Base64.encodeToString(credential.userId, Base64.NO_WRAP))

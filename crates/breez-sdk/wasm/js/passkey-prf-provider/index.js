@@ -511,7 +511,9 @@ export class PasskeyProvider {
      * @param {Uint8Array[]} [excludeCredentials=[]] - Already-registered
      *   IDs; a match makes the authenticator refuse, preventing a
      *   duplicate registration on the same device.
-     * @returns {Promise<{ credentialId: Uint8Array, userId: Uint8Array, aaguid: Uint8Array | null, backupEligible: boolean | null }>}
+     * @param {string[]} [salts=[]] - Salts to evaluate during the create
+     *   ceremony; omit to register without deriving.
+     * @returns {Promise<{ credential: { credentialId: Uint8Array, userId: Uint8Array, aaguid: Uint8Array | null, backupEligible: boolean | null }, seeds: Uint8Array[] | null }>}
      * @private
      */
     async _registerCredential(excludeCredentials = [], salts = []) {

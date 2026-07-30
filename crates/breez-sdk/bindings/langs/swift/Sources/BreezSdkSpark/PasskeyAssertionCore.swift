@@ -559,10 +559,11 @@ public final class PasskeyAssertionCore {
         }
     }
 
-    /// Register a new passkey with PRF support (one platform prompt, no
-    /// seed derivation). `excludeCredentials` lists already-registered IDs
-    /// the platform must refuse as duplicates. The post-create grace
-    /// tracker is armed on success. `userId` is never host-supplied: the
+    /// Register a new passkey with PRF support. `excludeCredentials` lists
+    /// already-registered IDs the platform must refuse as duplicates.
+    /// Evaluating PRF for `salts` in the same ceremony returns the seeds
+    /// inline; the post-create grace tracker is armed only when it did
+    /// not, so a following derive still has its window. `userId` is never host-supplied: the
     /// core mints a fresh random 16-byte value and returns it on
     /// `IosPasskeyCredential.userId`.
     /// Asking the create ceremony to evaluate PRF for `salts` makes
@@ -625,9 +626,13 @@ public final class PasskeyAssertionCore {
             }
         }
 
-        // Arm the post-create grace so the immediate derive doesn't race
-        // the credential's PRF-readiness window (see grace tracker).
-        await graceTracker.arm(after: postCreateGraceTotal)
+        // Arm the post-create grace only when a derive still has to run:
+        // the window exists for that assertion. Arming it on the
+        // inline-seeds path would leave it set for whatever derive came
+        // next, which is a different ceremony entirely.
+        if registration.seeds == nil {
+            await graceTracker.arm(after: postCreateGraceTotal)
+        }
         return registration
     }
 
