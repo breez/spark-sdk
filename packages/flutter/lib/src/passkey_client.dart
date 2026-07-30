@@ -51,8 +51,7 @@ class PasskeyClient {
   PasskeyClient.fromCallbacks({
     required FutureOr<DeriveSeedsOutput> Function(DeriveSeedsRequest) deriveSeeds,
     required FutureOr<bool> Function() isSupported,
-    required FutureOr<CreatePasskeyOutput> Function(List<Uint8List>, List<String>)
-        createPasskey,
+    required FutureOr<CreatePasskeyOutput> Function(List<Uint8List>, List<String>) createPasskey,
     String? breezApiKey,
     PasskeyConfig? config,
   }) : _inner = rust.PasskeyClient(

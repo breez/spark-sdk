@@ -60,10 +60,7 @@ class FilePrfProvider implements PrfProvider {
   Future<bool> isSupported() async => true;
 
   @override
-  Future<CreatePasskeyOutput> createPasskey(
-    List<Uint8List> excludeCredentials,
-    List<String> salts,
-  ) async {
+  Future<CreatePasskeyOutput> createPasskey(List<Uint8List> excludeCredentials, List<String> salts) async {
     throw Exception(
       'File-backed PRF provider does not implement create-credential; '
       'use sign-in by label instead.',

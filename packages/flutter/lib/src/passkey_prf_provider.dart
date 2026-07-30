@@ -81,12 +81,8 @@ abstract class PrfProvider {
   ///
   /// Seeds returned here must equal what [deriveSeeds] returns for the same
   /// salts, or register and sign-in land on different wallets.
-  Future<CreatePasskeyOutput> createPasskey(
-    List<Uint8List> excludeCredentials,
-    List<String> salts,
-  );
+  Future<CreatePasskeyOutput> createPasskey(List<Uint8List> excludeCredentials, List<String> salts);
 }
-
 
 /// Built-in Flutter passkey PRF provider using platform-native APIs
 /// (iOS AuthenticationServices, Android Credential Manager). The
@@ -158,10 +154,7 @@ class PasskeyProvider implements PrfProvider {
   /// is minted fresh per call (never host-supplied) and returned via
   /// [PasskeyCredential.userId]. Throws [PasskeyPrfException] on failure.
   @override
-  Future<CreatePasskeyOutput> createPasskey(
-    List<Uint8List> excludeCredentials,
-    List<String> salts,
-  ) async {
+  Future<CreatePasskeyOutput> createPasskey(List<Uint8List> excludeCredentials, List<String> salts) async {
     final args = <String, Object?>{
       'rpId': _rpId,
       'rpName': _rpName,
