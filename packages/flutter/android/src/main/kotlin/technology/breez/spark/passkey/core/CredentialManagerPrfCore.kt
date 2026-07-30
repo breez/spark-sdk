@@ -96,7 +96,8 @@ private const val CORE_TAG = "PasskeyPrfCore"
  * queryable or taxes every registration. Retrying costs nothing once the
  * credential resolves.
  *
- * Mirrors iOS `PostCreateGraceTracker`; an instance lives inside
+ * Named after iOS's `PostCreateGraceTracker`, which still waits the
+ * window out rather than re-asking; an instance lives inside
  * [CredentialManagerPrfCore] so every consumer that holds onto a single
  * core (e.g. `PasskeyProvider` for UniFFI / KMM consumers) inherits the
  * grace without per-wrapper plumbing.

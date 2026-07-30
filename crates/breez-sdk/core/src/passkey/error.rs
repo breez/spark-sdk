@@ -138,9 +138,12 @@ pub enum PasskeyError {
 }
 
 impl PasskeyError {
-    /// Coarse classification of the failure. Non-PRF variants map to
-    /// `Internal`: they stem from SDK / network state, not the
-    /// authenticator, so surface a generic "try again later".
+    /// Coarse classification of the failure. `CreatedButNotDerived`
+    /// reports the classification of the `PrfProviderError` it wraps, so
+    /// it is indistinguishable here from the same failure before the
+    /// credential existed: match the variant itself to tell them apart.
+    /// The remaining non-Prf variants map to `Internal`, since they stem
+    /// from SDK or network state rather than the authenticator.
     #[must_use]
     pub fn kind(&self) -> ErrorKind {
         match self {
