@@ -64,4 +64,28 @@ class UnilateralExit {
         }
     }
     // ANCHOR_END: custom-cpfp-signer
+
+    suspend fun exportExitState(sdk: BreezSdk): String {
+        // ANCHOR: export-unilateral-exit-state
+        val exported = sdk.exportUnilateralExitState()
+
+        // Keep the state somewhere the wallet's own storage cannot take with it.
+        // Log.v("Breez", "Exit state is ${exported.exitState.length} bytes")
+        // ANCHOR_END: export-unilateral-exit-state
+
+        return exported.exitState
+    }
+
+    suspend fun importExitState(sdk: BreezSdk, exitState: String) {
+        // ANCHOR: import-unilateral-exit-state
+        val imported = sdk.importUnilateralExitState(
+            ImportUnilateralExitStateRequest(exitState)
+        )
+
+        // Log.v(
+        //     "Breez",
+        //     "Imported ${imported.importedLeaves} leaves, skipped ${imported.skippedLeaves}"
+        // )
+        // ANCHOR_END: import-unilateral-exit-state
+    }
 }

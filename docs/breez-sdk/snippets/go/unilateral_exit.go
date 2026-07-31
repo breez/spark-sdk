@@ -61,6 +61,35 @@ func BuildExit(sdk *breez_sdk_spark.BreezSdk, quote breez_sdk_spark.PrepareUnila
 	return nil
 }
 
+func ExportExitState(sdk *breez_sdk_spark.BreezSdk) (string, error) {
+	// ANCHOR: export-unilateral-exit-state
+	exported, err := sdk.ExportUnilateralExitState()
+	if err != nil {
+		return "", err
+	}
+
+	// Keep the state somewhere the wallet's own storage cannot take with it.
+	log.Printf("Exit state is %v bytes", len(exported.ExitState))
+	// ANCHOR_END: export-unilateral-exit-state
+
+	return exported.ExitState, nil
+}
+
+func ImportExitState(sdk *breez_sdk_spark.BreezSdk, exitState string) error {
+	// ANCHOR: import-unilateral-exit-state
+	imported, err := sdk.ImportUnilateralExitState(breez_sdk_spark.ImportUnilateralExitStateRequest{
+		ExitState: exitState,
+	})
+	if err != nil {
+		return err
+	}
+
+	log.Printf("Imported %d leaves, skipped %d", imported.ImportedLeaves, imported.SkippedLeaves)
+	// ANCHOR_END: import-unilateral-exit-state
+
+	return nil
+}
+
 // ANCHOR: custom-cpfp-signer
 type MyCpfpSigner struct{}
 

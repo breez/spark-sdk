@@ -5,6 +5,7 @@ from breez_sdk_spark import (
     CpfpInput,
     CpfpSigner,
     ExitLeafSelection,
+    ImportUnilateralExitStateRequest,
     PrepareUnilateralExitRequest,
     PrepareUnilateralExitResponse,
     UnilateralExitRequest,
@@ -63,6 +64,37 @@ async def build_exit(sdk: BreezSdk, quote: PrepareUnilateralExitResponse):
                     f"{tx.txid}: wait {tx.csv_timelock_blocks} blocks after its parents confirm"
                 )
         # ANCHOR_END: unilateral-exit
+    except Exception as error:
+        logging.error(error)
+        raise
+
+
+async def export_exit_state(sdk: BreezSdk) -> str:
+    try:
+        # ANCHOR: export-unilateral-exit-state
+        exported = await sdk.export_unilateral_exit_state()
+
+        # Keep the state somewhere the wallet's own storage cannot take with it.
+        logging.debug(f"Exit state is {len(exported.exit_state)} bytes")
+        # ANCHOR_END: export-unilateral-exit-state
+        return exported.exit_state
+    except Exception as error:
+        logging.error(error)
+        raise
+
+
+async def import_exit_state(sdk: BreezSdk, exit_state: str):
+    try:
+        # ANCHOR: import-unilateral-exit-state
+        imported = await sdk.import_unilateral_exit_state(
+            request=ImportUnilateralExitStateRequest(exit_state=exit_state)
+        )
+
+        logging.debug(
+            f"Imported {imported.imported_leaves} leaves, "
+            f"skipped {imported.skipped_leaves}"
+        )
+        # ANCHOR_END: import-unilateral-exit-state
     except Exception as error:
         logging.error(error)
         raise

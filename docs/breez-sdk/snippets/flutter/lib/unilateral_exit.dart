@@ -47,6 +47,27 @@ Future<void> buildExit(BreezSdk sdk, PrepareUnilateralExitResponse quote) async 
   // ANCHOR_END: unilateral-exit
 }
 
+Future<String> exportExitState(BreezSdk sdk) async {
+  // ANCHOR: export-unilateral-exit-state
+  ExportUnilateralExitStateResponse exported = await sdk.exportUnilateralExitState();
+
+  // Keep the state somewhere the wallet's own storage cannot take with it.
+  print("Exit state is ${exported.exitState.length} bytes");
+  // ANCHOR_END: export-unilateral-exit-state
+
+  return exported.exitState;
+}
+
+Future<void> importExitState(BreezSdk sdk, String exitState) async {
+  // ANCHOR: import-unilateral-exit-state
+  ImportUnilateralExitStateResponse imported = await sdk.importUnilateralExitState(
+    request: ImportUnilateralExitStateRequest(exitState: exitState),
+  );
+
+  print("Imported ${imported.importedLeaves} leaves, skipped ${imported.skippedLeaves}");
+  // ANCHOR_END: import-unilateral-exit-state
+}
+
 // ANCHOR: custom-cpfp-signer
 Future<void> buildExitWithSigner(BreezSdk sdk, PrepareUnilateralExitResponse quote) async {
   // Flutter cannot pass a foreign CpfpSigner, so it takes a signPsbt callback.

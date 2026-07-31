@@ -46,6 +46,27 @@ func buildExit(sdk: BreezSdk, quote: PrepareUnilateralExitResponse) async throws
     // ANCHOR_END: unilateral-exit
 }
 
+func exportExitState(sdk: BreezSdk) async throws -> String {
+    // ANCHOR: export-unilateral-exit-state
+    let exported = try await sdk.exportUnilateralExitState()
+
+    // Keep the state somewhere the wallet's own storage cannot take with it.
+    print("Exit state is \(exported.exitState.count) bytes")
+    // ANCHOR_END: export-unilateral-exit-state
+
+    return exported.exitState
+}
+
+func importExitState(sdk: BreezSdk, exitState: String) async throws {
+    // ANCHOR: import-unilateral-exit-state
+    let imported = try await sdk.importUnilateralExitState(
+        request: ImportUnilateralExitStateRequest(exitState: exitState)
+    )
+
+    print("Imported \(imported.importedLeaves) leaves, skipped \(imported.skippedLeaves)")
+    // ANCHOR_END: import-unilateral-exit-state
+}
+
 // ANCHOR: custom-cpfp-signer
 class CustomCpfpSigner: CpfpSigner {
     func signPsbt(psbtBytes: Data) async throws -> Data {

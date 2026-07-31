@@ -1169,6 +1169,7 @@ dependencies = [
  "serde_json",
  "spark-mysql",
  "spark-postgres",
+ "spark-sqlite",
  "spark-wallet",
  "thiserror 2.0.17",
  "tokio",
@@ -5087,6 +5088,20 @@ dependencies = [
  "tracing",
  "uuid",
  "webpki-roots 1.0.7",
+]
+
+[[package]]
+name = "spark-sqlite"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "macros 0.1.0",
+ "platform-utils 0.1.0",
+ "rusqlite",
+ "serde_json",
+ "spark-wallet",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

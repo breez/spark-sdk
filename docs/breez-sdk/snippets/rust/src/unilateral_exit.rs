@@ -52,6 +52,32 @@ async fn build_exit(sdk: &BreezSdk, quote: PrepareUnilateralExitResponse) -> Res
     Ok(())
 }
 
+async fn export_exit_state(sdk: &BreezSdk) -> Result<String> {
+    // ANCHOR: export-unilateral-exit-state
+    let exported = sdk.export_unilateral_exit_state().await?;
+
+    // Keep the state somewhere the wallet's own storage cannot take with it.
+    println!("Exit state is {} bytes", exported.exit_state.len());
+    // ANCHOR_END: export-unilateral-exit-state
+
+    Ok(exported.exit_state)
+}
+
+async fn import_exit_state(sdk: &BreezSdk, exit_state: String) -> Result<()> {
+    // ANCHOR: import-unilateral-exit-state
+    let imported = sdk
+        .import_unilateral_exit_state(ImportUnilateralExitStateRequest { exit_state })
+        .await?;
+
+    println!(
+        "Imported {} leaves, skipped {}",
+        imported.imported_leaves, imported.skipped_leaves
+    );
+    // ANCHOR_END: import-unilateral-exit-state
+
+    Ok(())
+}
+
 // ANCHOR: custom-cpfp-signer
 struct MyCpfpSigner;
 

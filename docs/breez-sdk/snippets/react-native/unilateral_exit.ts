@@ -58,6 +58,25 @@ const exampleBuildExit = async (sdk: BreezSdk, quote: PrepareUnilateralExitRespo
   // ANCHOR_END: unilateral-exit
 }
 
+const exampleExportExitState = async (sdk: BreezSdk): Promise<string> => {
+  // ANCHOR: export-unilateral-exit-state
+  const exported = await sdk.exportUnilateralExitState()
+
+  // Keep the state somewhere the wallet's own storage cannot take with it.
+  console.log(`Exit state is ${exported.exitState.length} bytes`)
+  // ANCHOR_END: export-unilateral-exit-state
+
+  return exported.exitState
+}
+
+const exampleImportExitState = async (sdk: BreezSdk, exitState: string) => {
+  // ANCHOR: import-unilateral-exit-state
+  const imported = await sdk.importUnilateralExitState({ exitState })
+
+  console.log(`Imported ${imported.importedLeaves} leaves, skipped ${imported.skippedLeaves}`)
+  // ANCHOR_END: import-unilateral-exit-state
+}
+
 // ANCHOR: custom-cpfp-signer
 class CustomCpfpSigner {
   signPsbt = async (psbtBytes: ArrayBuffer): Promise<ArrayBuffer> => {
