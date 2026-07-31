@@ -125,6 +125,22 @@ pub async fn alice_server_sdk_manual_opt() -> Result<SdkInstance> {
     build_sdk_with_custom_config(path, seed, cfg, Some(dir), true).await
 }
 
+/// Fixture: Alice's SDK with the background leaf optimizer off, so the only
+/// thing changing her leaf set is what the test itself does.
+#[fixture]
+pub async fn alice_sdk_no_auto_opt() -> Result<SdkInstance> {
+    let dir = tempfile::Builder::new()
+        .prefix("breez-sdk-alice-no-auto-opt")
+        .tempdir()?;
+    let path = dir.path().to_string_lossy().to_string();
+    let mut seed = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut seed);
+
+    let mut cfg = default_config(Network::Regtest);
+    cfg.leaf_optimization_config.auto_enabled = false;
+    build_sdk_with_custom_config(path, seed, cfg, Some(dir), true).await
+}
+
 /// Fixture: Alice's SDK with external signer
 #[fixture]
 pub async fn alice_external_signer_sdk() -> Result<SdkInstance> {
