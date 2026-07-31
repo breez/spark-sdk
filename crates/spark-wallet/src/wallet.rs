@@ -413,6 +413,7 @@ impl SparkWallet {
             Arc::clone(&timelock_manager),
             Arc::clone(&spark_signer),
             Arc::clone(&swap_service),
+            None,
         ));
 
         let token_output_service: Arc<dyn TokenOutputService> =
@@ -448,7 +449,7 @@ impl SparkWallet {
             event_manager: Arc::clone(&event_manager),
         });
 
-        let exit_chain_resolver = Arc::new(ExitChainResolver::new(Arc::clone(&tree_service)));
+        let exit_chain_resolver = Arc::new(ExitChainResolver::new(Arc::clone(&tree_service), None));
 
         let leaf_optimizer = Arc::new(LeafOptimizer::new(
             config.leaf_optimization_options.clone(),

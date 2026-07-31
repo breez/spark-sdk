@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use platform_utils::time::SystemTime;
-use platform_utils::tokio::sync::Mutex;
+use platform_utils::tokio::sync::{Mutex, watch};
 use tracing::trace;
 
 use crate::tree::{LeafPedigree, TreeNodeId, TreeService, TreeServiceError, chain_reaches_root};
@@ -46,13 +46,20 @@ pub struct ExitChainResolver {
     /// Leaves the operators would not complete, held off until their retry time.
     /// Deliberately in memory only: a restart is a good moment to try again.
     backoff: Mutex<HashMap<TreeNodeId, Backoff>>,
+    /// Published to once a fetched chain reaches a root, since a leaf that
+    /// could not be exited offline before now can.
+    exit_state_changed: Option<watch::Sender<()>>,
 }
 
 impl ExitChainResolver {
-    pub fn new(tree_service: Arc<dyn TreeService>) -> Self {
+    pub fn new(
+        tree_service: Arc<dyn TreeService>,
+        exit_state_changed: Option<watch::Sender<()>>,
+    ) -> Self {
         Self {
             tree_service,
             backoff: Mutex::new(HashMap::new()),
+            exit_state_changed,
         }
     }
 
@@ -121,6 +128,14 @@ impl ExitChainResolver {
         // exitable and build a set that cannot confirm.
         if !resolved.is_empty() {
             self.tree_service.store_exit_chains(&resolved).await?;
+        }
+        // Only a completed chain is worth announcing: a partial one leaves the
+        // leaf just as un-exitable as before, and comes back byte-identical on
+        // every retry until the operators fill it in.
+        if !resolved.is_empty()
+            && let Some(sender) = &self.exit_state_changed
+        {
+            let _ = sender.send(());
         }
 
         // A candidate the operators left out of their response came back in no
@@ -401,7 +416,7 @@ mod tests {
         mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, vec![root.clone()]))
             .await;
 
-        let resolver = ExitChainResolver::new(mock.clone());
+        let resolver = ExitChainResolver::new(mock.clone(), None);
         resolver.resolve_missing_chains().await.unwrap();
 
         assert_eq!(mock.fetch_calls().await, vec![vec![leaf.id.clone()]]);
@@ -428,7 +443,7 @@ mod tests {
             ids.push(leaf.id);
         }
 
-        let resolver = ExitChainResolver::new(mock.clone());
+        let resolver = ExitChainResolver::new(mock.clone(), None);
         resolver.resolve_missing_chains().await.unwrap();
 
         assert_eq!(
@@ -441,6 +456,65 @@ mod tests {
     }
 
     #[async_test_all]
+    async fn test_storing_a_complete_chain_signals_an_exit_state_change() {
+        let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+        let root = create_test_node_with_parent("root", None, TreeNodeStatus::Available);
+
+        let mock = Arc::new(MockTreeService::default());
+        mock.seed_leaf(leaf.clone(), pedigree(&leaf, Vec::new()))
+            .await;
+        mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, vec![root]))
+            .await;
+
+        let (tx, rx) = watch::channel(());
+        let resolver = ExitChainResolver::new(mock.clone(), Some(tx));
+        resolver.resolve_missing_chains().await.unwrap();
+
+        assert_eq!(mock.stored().await.len(), 1);
+        assert!(rx.has_changed().unwrap());
+    }
+
+    #[async_test_all]
+    async fn test_storing_a_partial_chain_does_not_signal() {
+        let leaf = create_test_node_with_parent("leaf", Some("mid"), TreeNodeStatus::Available);
+        let mid = create_test_node_with_parent("mid", Some("root"), TreeNodeStatus::Available);
+
+        let mock = Arc::new(MockTreeService::default());
+        mock.seed_leaf(leaf.clone(), pedigree(&leaf, Vec::new()))
+            .await;
+        mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, vec![mid]))
+            .await;
+
+        let (tx, rx) = watch::channel(());
+        let resolver = ExitChainResolver::new(mock.clone(), Some(tx));
+        resolver.resolve_missing_chains().await.unwrap();
+
+        // A chain stopping short of a root is not stored at all, so there is
+        // nothing to announce: the leaf is as un-exitable as before.
+        assert!(mock.stored().await.is_empty());
+        assert!(!rx.has_changed().unwrap());
+    }
+
+    #[async_test_all]
+    async fn test_storing_nothing_does_not_signal() {
+        let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+
+        let mock = Arc::new(MockTreeService::default());
+        // No operator response, so the fetch comes back empty and there is
+        // nothing to store.
+        mock.seed_leaf(leaf.clone(), pedigree(&leaf, Vec::new()))
+            .await;
+
+        let (tx, rx) = watch::channel(());
+        let resolver = ExitChainResolver::new(mock.clone(), Some(tx));
+        resolver.resolve_missing_chains().await.unwrap();
+
+        assert_eq!(mock.fetch_calls().await, vec![vec![leaf.id]]);
+        assert!(mock.stored().await.is_empty());
+        assert!(!rx.has_changed().unwrap());
+    }
+
+    #[async_test_all]
     async fn test_complete_stored_chain_is_not_fetched() {
         let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
         let root = create_test_node_with_parent("root", None, TreeNodeStatus::Available);
@@ -449,7 +523,7 @@ mod tests {
         mock.seed_leaf(leaf.clone(), pedigree(&leaf, vec![root]))
             .await;
 
-        let resolver = ExitChainResolver::new(mock.clone());
+        let resolver = ExitChainResolver::new(mock.clone(), None);
         resolver.resolve_missing_chains().await.unwrap();
 
         assert_eq!(mock.fetch_call_count().await, 0);
@@ -470,7 +544,7 @@ mod tests {
         mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, vec![mid]))
             .await;
 
-        let resolver = ExitChainResolver::new(mock.clone());
+        let resolver = ExitChainResolver::new(mock.clone(), None);
         resolver.resolve_missing_chains().await.unwrap();
 
         assert!(mock.stored().await.is_empty());
@@ -486,7 +560,7 @@ mod tests {
         mock.seed_leaf(root_leaf.clone(), pedigree(&root_leaf, Vec::new()))
             .await;
 
-        let resolver = ExitChainResolver::new(mock.clone());
+        let resolver = ExitChainResolver::new(mock.clone(), None);
         resolver.resolve_missing_chains().await.unwrap();
 
         assert_eq!(mock.fetch_call_count().await, 0);
@@ -505,7 +579,7 @@ mod tests {
         mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, Vec::new()))
             .await;
 
-        let resolver = ExitChainResolver::new(mock.clone());
+        let resolver = ExitChainResolver::new(mock.clone(), None);
 
         resolver.resolve_missing_chains().await.unwrap();
         assert_eq!(mock.fetch_call_count().await, 1);
@@ -528,7 +602,7 @@ mod tests {
         // No operator response seeded: the leaf is left out of the reply, exactly
         // as a whole failed fetch leaves out every leaf it was asked about.
 
-        let resolver = ExitChainResolver::new(mock.clone());
+        let resolver = ExitChainResolver::new(mock.clone(), None);
         resolver.resolve_missing_chains().await.unwrap();
         assert_eq!(mock.fetch_call_count().await, 1);
 
@@ -550,7 +624,7 @@ mod tests {
         mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, Vec::new()))
             .await;
 
-        let resolver = ExitChainResolver::new(mock.clone());
+        let resolver = ExitChainResolver::new(mock.clone(), None);
         resolver.resolve_missing_chains().await.unwrap();
         assert_eq!(mock.fetch_call_count().await, 1);
         assert!(resolver.backoff.lock().await.contains_key(&leaf.id));
@@ -573,7 +647,7 @@ mod tests {
         mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, Vec::new()))
             .await;
 
-        let resolver = ExitChainResolver::new(mock.clone());
+        let resolver = ExitChainResolver::new(mock.clone(), None);
         resolver.resolve_missing_chains().await.unwrap();
         let earned = *resolver.backoff.lock().await.get(&leaf.id).unwrap();
 
@@ -599,7 +673,7 @@ mod tests {
         mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, Vec::new()))
             .await;
 
-        let resolver = ExitChainResolver::new(mock.clone());
+        let resolver = ExitChainResolver::new(mock.clone(), None);
         resolver.resolve_missing_chains().await.unwrap();
         assert!(resolver.backoff.lock().await.contains_key(&leaf.id));
 
