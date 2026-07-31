@@ -67,6 +67,23 @@ impl Leaves {
     pub fn balance(&self) -> u64 {
         self.available_balance() + self.missing_operators_balance() + self.swap_reserved_balance()
     }
+
+    /// Ids of every leaf in the set, across all buckets, deduplicated and
+    /// ordered by id.
+    pub fn leaf_ids(&self) -> Vec<TreeNodeId> {
+        let mut ids: Vec<TreeNodeId> = self
+            .available
+            .iter()
+            .chain(&self.not_available)
+            .chain(&self.available_missing_from_operators)
+            .chain(&self.reserved_for_payment)
+            .chain(&self.reserved_for_swap)
+            .map(|leaf| leaf.id.clone())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
 }
 
 /// The two public keys needed to confirm a stored leaf's ownership was already
@@ -923,6 +940,13 @@ pub trait TreeService: Send + Sync {
     /// ```
     async fn insert_leaves(&self, leaves: Vec<TreeNode>)
     -> Result<Vec<TreeNode>, TreeServiceError>;
+
+    /// Stores leaves together with their ancestor chains exactly as given, with
+    /// no timelock renewal and no operator round-trip. A leaf already stored
+    /// keeps its place in the pool, and a chain given for it replaces its stored
+    /// one wholesale, complete or not; an empty chain reads as unknown and
+    /// leaves the stored one alone. Leaves not named are untouched.
+    async fn restore_leaves(&self, leaves: &[LeafPedigree]) -> Result<(), TreeServiceError>;
 
     /// Selects and reserves leaves from the tree that match the specified target amounts.
     ///

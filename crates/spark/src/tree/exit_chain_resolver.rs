@@ -366,6 +366,10 @@ mod tests {
             unimplemented!("not exercised by ExitChainResolver")
         }
 
+        async fn restore_leaves(&self, _leaves: &[LeafPedigree]) -> Result<(), TreeServiceError> {
+            unimplemented!("not exercised by ExitChainResolver")
+        }
+
         async fn select_leaves(
             &self,
             _target_amounts: Option<&TargetAmounts>,

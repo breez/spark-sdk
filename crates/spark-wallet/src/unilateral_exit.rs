@@ -6,7 +6,7 @@ use spark::{
         CpfpInput, ServiceError, UnilateralExitPlan, build_cpfp_child, csv_timelock,
         walk_unilateral_exit_chain,
     },
-    tree::{TreeNode, TreeNodeId, TreeNodeStatus},
+    tree::{LeafPedigree, TreeNode, TreeNodeId, TreeNodeStatus},
     utils::transactions::is_ephemeral_anchor_output,
 };
 use tracing::{debug, trace, warn};
@@ -20,6 +20,26 @@ pub enum ExitLeafSelection {
     Auto,
     /// Exit exactly these leaves, regardless of profitability.
     Specific(Vec<TreeNodeId>),
+}
+
+/// Everything needed to unilaterally exit the wallet's leaves with the
+/// operators unreachable: each leaf paired with its ancestor chain.
+#[derive(Clone, Debug)]
+pub struct ExitStateExport {
+    pub pedigrees: Vec<LeafPedigree>,
+}
+
+/// How a restored exit state landed in the tree store.
+#[derive(Clone, Copy, Debug)]
+pub struct ExitStateImport {
+    /// Leaves written, with or without their chain.
+    pub imported_leaves: usize,
+    /// Leaves dropped because they do not record this wallet as their owner.
+    pub skipped_foreign_leaves: usize,
+    /// Leaves whose incoming exit data was left out: its chain does not link
+    /// the leaf to a root, it contradicts a node the wallet already holds, the
+    /// stored chain already backs an exit, or the leaf was named twice.
+    pub skipped_chains: usize,
 }
 
 /// A prepared unilateral exit: the chain-independent plan plus per-leaf refund

@@ -6885,6 +6885,7 @@ dependencies = [
  "frost-secp256k1-tr",
  "futures",
  "hex",
+ "macros 0.1.0",
  "platform-utils 0.1.0",
  "serde",
  "spark",
@@ -6894,6 +6895,7 @@ dependencies = [
  "tonic-types",
  "tracing",
  "uuid",
+ "wasm-bindgen-test",
 ]
 
 [[package]]

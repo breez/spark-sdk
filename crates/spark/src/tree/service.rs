@@ -159,6 +159,23 @@ impl TreeService for SynchronousTreeService {
         Ok(leaves)
     }
 
+    async fn restore_leaves(&self, leaves: &[LeafPedigree]) -> Result<(), TreeServiceError> {
+        let nodes: Vec<TreeNode> = leaves.iter().map(|p| p.leaf.clone()).collect();
+        self.state.add_leaves(&nodes).await?;
+        // The chains ride in on the backup rather than the leaf lifecycle, so they
+        // go through the ancestor-only write, and only once they still span their
+        // leaf: an import predating a renewal describes a parent it no longer has.
+        let restorable: Vec<LeafPedigree> = leaves
+            .iter()
+            .filter(|p| !p.ancestors.is_empty() && chain_reaches_root(&p.leaf, &p.ancestors))
+            .cloned()
+            .collect();
+        if restorable.is_empty() {
+            return Ok(());
+        }
+        self.state.store_ancestors(&restorable).await
+    }
+
     async fn fetch_pedigrees_from_operators(&self, leaf_ids: &[TreeNodeId]) -> Vec<LeafPedigree> {
         if leaf_ids.is_empty() {
             return Vec::new();
@@ -1056,7 +1073,7 @@ mod tests {
         tree::{
             InMemoryTreeStore, SigningKeyshare, TreeNode, TreeNodeId, TreeNodeStatus,
             select_helper::{find_exact_multiple_match, find_exact_single_match},
-            tests::create_test_node_with_parent,
+            tests::{as_pedigrees, create_test_node_with_parent},
         },
     };
 
@@ -1093,6 +1110,36 @@ mod tests {
                 status: TreeNodeStatus::Available,
             })
             .collect()
+    }
+
+    fn empty_leaves() -> Leaves {
+        Leaves {
+            available: Vec::new(),
+            not_available: Vec::new(),
+            available_missing_from_operators: Vec::new(),
+            reserved_for_payment: Vec::new(),
+            reserved_for_swap: Vec::new(),
+        }
+    }
+
+    #[test_all]
+    fn leaf_ids_unions_every_bucket() {
+        let leaves = create_test_leaves(&[1_000, 2_000, 3_000]);
+
+        let all_available = Leaves {
+            available: leaves.clone(),
+            ..empty_leaves()
+        };
+        let spread = Leaves {
+            available: vec![leaves[2].clone()],
+            not_available: vec![leaves[2].clone()],
+            reserved_for_payment: vec![leaves[0].clone()],
+            reserved_for_swap: vec![leaves[1].clone()],
+            ..empty_leaves()
+        };
+
+        assert_eq!(all_available.leaf_ids().len(), 3);
+        assert_eq!(all_available.leaf_ids(), spread.leaf_ids());
     }
 
     /// A service whose only reachable dependency is `store`, publishing exit
@@ -1308,6 +1355,60 @@ mod tests {
             .collect();
         ids.push(pedigree.leaf.id.to_string());
         ids
+    }
+
+    #[async_test_all]
+    async fn restore_leaves_keeps_the_given_chain_of_every_leaf() {
+        let service = service_over(Arc::new(InMemoryTreeStore::new()), None).await;
+
+        let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+        let mid = create_test_node_with_parent("mid", Some("root"), TreeNodeStatus::Splitted);
+        let leaf_a = create_test_node_with_parent("leaf-a", Some("mid"), TreeNodeStatus::Available);
+        let leaf_b =
+            create_test_node_with_parent("leaf-b", Some("root"), TreeNodeStatus::Available);
+
+        service
+            .restore_leaves(&[LeafPedigree {
+                leaf: leaf_a,
+                ancestors: vec![mid, root.clone()],
+            }])
+            .await
+            .unwrap();
+        service
+            .restore_leaves(&[LeafPedigree {
+                leaf: leaf_b,
+                ancestors: vec![root],
+            }])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            stored_chain(&service, "leaf-a").await,
+            ["root", "mid", "leaf-a"]
+        );
+        assert_eq!(stored_chain(&service, "leaf-b").await, ["root", "leaf-b"]);
+    }
+
+    #[async_test_all]
+    async fn restore_leaves_and_store_exit_chains_do_not_signal() {
+        let (tx, rx) = tokio::sync::watch::channel(());
+        let service = service_over(Arc::new(InMemoryTreeStore::new()), Some(tx)).await;
+
+        let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+        let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+        service
+            .restore_leaves(&as_pedigrees(std::slice::from_ref(&leaf)))
+            .await
+            .unwrap();
+        service
+            .store_exit_chains(&[LeafPedigree {
+                leaf,
+                ancestors: vec![root],
+            }])
+            .await
+            .unwrap();
+
+        assert!(!rx.has_changed().unwrap());
     }
 
     #[test_all]
