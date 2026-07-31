@@ -871,6 +871,23 @@ pub struct UnilateralExitResponse {
     pub transactions: Vec<UnilateralExitTransaction>,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ExportUnilateralExitStateResponse)]
+pub struct ExportUnilateralExitStateResponse {
+    pub exit_state: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ImportUnilateralExitStateRequest)]
+pub struct ImportUnilateralExitStateRequest {
+    pub exit_state: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ImportUnilateralExitStateResponse)]
+pub struct ImportUnilateralExitStateResponse {
+    pub imported_leaves: u32,
+    pub skipped_leaves: u32,
+    pub skipped_chains: u32,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Credentials)]
 pub struct Credentials {
     pub username: String,

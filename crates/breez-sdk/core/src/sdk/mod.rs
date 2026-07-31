@@ -12,6 +12,7 @@ mod runtime;
 mod sync;
 mod sync_coordinator;
 mod unilateral_exit;
+mod unilateral_exit_backup;
 
 pub(crate) use lightning_sender::LightningSender;
 pub(crate) use runtime::{RuntimeEvent, SdkRuntime, runtime_from_config};

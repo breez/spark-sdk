@@ -2677,3 +2677,37 @@ pub struct UnilateralExitResponse {
     /// with shared ancestors appearing once and the sweep last.
     pub transactions: Vec<UnilateralExitTransaction>,
 }
+
+/// Result of `export_unilateral_exit_state`: a self-contained copy of the
+/// wallet's exit state, ready to be stored outside the wallet.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ExportUnilateralExitStateResponse {
+    /// The serialized exit state, to be handed back to
+    /// `import_unilateral_exit_state` unmodified.
+    pub exit_state: String,
+}
+
+/// Request for `import_unilateral_exit_state`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ImportUnilateralExitStateRequest {
+    /// An exit state as returned by `export_unilateral_exit_state`.
+    pub exit_state: String,
+}
+
+/// Result of `import_unilateral_exit_state`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ImportUnilateralExitStateResponse {
+    /// Leaves merged into the wallet's exit state, whether or not their exit
+    /// data was taken with them.
+    pub imported_leaves: u32,
+    /// Leaves left out because the exit state does not record this wallet as
+    /// their owner.
+    pub skipped_leaves: u32,
+    /// Leaves whose imported exit data was left out: it is incomplete, it
+    /// disagrees with what the wallet already holds, or the wallet's own copy
+    /// can already back an exit.
+    pub skipped_chains: u32,
+}

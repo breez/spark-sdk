@@ -298,6 +298,23 @@ pub struct _UnilateralExitResponse {
     pub transactions: Vec<UnilateralExitTransaction>,
 }
 
+#[frb(mirror(ExportUnilateralExitStateResponse))]
+pub struct _ExportUnilateralExitStateResponse {
+    pub exit_state: String,
+}
+
+#[frb(mirror(ImportUnilateralExitStateRequest))]
+pub struct _ImportUnilateralExitStateRequest {
+    pub exit_state: String,
+}
+
+#[frb(mirror(ImportUnilateralExitStateResponse))]
+pub struct _ImportUnilateralExitStateResponse {
+    pub imported_leaves: u32,
+    pub skipped_leaves: u32,
+    pub skipped_chains: u32,
+}
+
 #[frb(mirror(GetInfoRequest))]
 pub struct _GetInfoRequest {
     pub ensure_synced: Option<bool>,
