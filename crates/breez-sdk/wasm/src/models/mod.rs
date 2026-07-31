@@ -86,6 +86,7 @@ pub enum SdkEvent {
     NewDeposits {
         new_deposits: Vec<DepositInfo>,
     },
+    UnilateralExitStateChanged,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::AutoOptimizationEvent)]

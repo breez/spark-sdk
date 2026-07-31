@@ -139,6 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         spark_wallet::WalletEvent::TokenTransaction(transaction) => info!("Token transaction: {}", transaction.hash),
                         spark_wallet::WalletEvent::AutoOptimization(event) => info!("Auto-optimization event: {:?}", event),
                         spark_wallet::WalletEvent::LeavesAdded => debug!("Leaves added"),
+                        spark_wallet::WalletEvent::ExitStateChanged => info!("Exit state changed"),
                     }
                 }
                 else => warn!("Event stream closed."),

@@ -279,6 +279,10 @@ pub struct SparkWallet {
     /// Resolves exit chains on demand. When that happens is the caller's to
     /// decide: this holds no schedule of its own.
     exit_chain_resolver: Arc<ExitChainResolver>,
+    /// Held from construction rather than subscribed when background processing
+    /// starts, so a change published before then is still delivered: a clone of
+    /// this receiver inherits its unseen changes.
+    exit_state_changed_rx: watch::Receiver<()>,
     /// One-shot, single-flight guard for `select_leaves_with_retry`'s call to
     /// `refresh_leaves`. The cell's `get_or_init` blocks concurrent callers
     /// during the in-flight refresh and short-circuits with a single atomic
@@ -405,6 +409,7 @@ impl SparkWallet {
             Arc::clone(&transfer_service),
         ));
 
+        let (exit_state_changed_tx, exit_state_changed_rx) = watch::channel(());
         let tree_service: Arc<dyn TreeService> = Arc::new(SynchronousTreeService::new(
             identity_public_key,
             config.network,
@@ -413,7 +418,7 @@ impl SparkWallet {
             Arc::clone(&timelock_manager),
             Arc::clone(&spark_signer),
             Arc::clone(&swap_service),
-            None,
+            Some(exit_state_changed_tx.clone()),
         ));
 
         let token_output_service: Arc<dyn TokenOutputService> =
@@ -449,7 +454,10 @@ impl SparkWallet {
             event_manager: Arc::clone(&event_manager),
         });
 
-        let exit_chain_resolver = Arc::new(ExitChainResolver::new(Arc::clone(&tree_service), None));
+        let exit_chain_resolver = Arc::new(ExitChainResolver::new(
+            Arc::clone(&tree_service),
+            Some(exit_state_changed_tx),
+        ));
 
         let leaf_optimizer = Arc::new(LeafOptimizer::new(
             config.leaf_optimization_options.clone(),
@@ -489,6 +497,7 @@ impl SparkWallet {
             htlc_service,
             leaf_optimizer,
             exit_chain_resolver,
+            exit_state_changed_rx,
             select_leaves_refresh: tokio::sync::OnceCell::new(),
         })
     }
@@ -1748,6 +1757,7 @@ impl SparkWallet {
                     Arc::clone(&self.htlc_service),
                     Arc::clone(&self.leaf_optimizer),
                     self.config.leaf_auto_optimize_enabled,
+                    self.exit_state_changed_rx.clone(),
                     Arc::clone(&self.token_service),
                     self.config.token_outputs_optimization_options.clone(),
                     self.config.max_concurrent_claims,
@@ -2606,6 +2616,7 @@ struct BackgroundProcessor {
     htlc_service: Arc<HtlcService>,
     leaf_optimizer: Arc<LeafOptimizer>,
     auto_optimize_enabled: bool,
+    exit_state_changed_rx: watch::Receiver<()>,
     token_service: Arc<TokenService>,
     token_outputs_optimization_options: TokenOutputsOptimizationOptions,
     max_concurrent_claims: u32,
@@ -2624,6 +2635,7 @@ impl BackgroundProcessor {
         htlc_service: Arc<HtlcService>,
         leaf_optimizer: Arc<LeafOptimizer>,
         auto_optimize_enabled: bool,
+        exit_state_changed_rx: watch::Receiver<()>,
         token_service: Arc<TokenService>,
         token_outputs_optimization_options: TokenOutputsOptimizationOptions,
         max_concurrent_claims: u32,
@@ -2639,6 +2651,7 @@ impl BackgroundProcessor {
             htlc_service,
             leaf_optimizer,
             auto_optimize_enabled,
+            exit_state_changed_rx,
             token_service,
             token_outputs_optimization_options,
             max_concurrent_claims,
@@ -2681,6 +2694,19 @@ impl BackgroundProcessor {
                     &mut cancellation_token_for_events,
                 )
                 .await;
+            }
+            .instrument(span),
+        );
+
+        let exit_state_rx = self.exit_state_changed_rx.clone();
+        let cloned_self = Arc::clone(self);
+        let cancellation_token_for_exit_state = cancellation_token.clone();
+        let span = tracing::Span::current();
+        tokio::spawn(
+            async move {
+                cloned_self
+                    .forward_exit_state_changes(exit_state_rx, cancellation_token_for_exit_state)
+                    .await;
             }
             .instrument(span),
         );
@@ -2923,6 +2949,29 @@ impl BackgroundProcessor {
         self.event_manager
             .notify_listeners(WalletEvent::StreamDisconnected);
         Ok(())
+    }
+
+    async fn forward_exit_state_changes(
+        &self,
+        mut exit_state_rx: watch::Receiver<()>,
+        mut cancellation_token: watch::Receiver<()>,
+    ) {
+        loop {
+            tokio::select! {
+                changed = exit_state_rx.changed() => {
+                    if changed.is_err() {
+                        info!("Exit state channel closed, stopping exit state forwarding");
+                        break;
+                    }
+                    self.event_manager
+                        .notify_listeners(WalletEvent::ExitStateChanged);
+                }
+                _ = cancellation_token.changed() => {
+                    info!("Stopping exit state forwarding");
+                    break;
+                }
+            }
+        }
     }
 
     async fn run_token_output_optimization(

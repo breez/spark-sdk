@@ -95,6 +95,10 @@ class GettingStarted {
                     // The lightning address has changed
                     val lightningAddress = e.lightningAddress
                 }
+                is SdkEvent.UnilateralExitStateChanged -> {
+                    // The unilateral exit state changed, so a previously exported
+                    // one is now out of date. Export it again.
+                }
                 else -> {
                     // Handle any future event types
                 }

@@ -45,6 +45,9 @@ pub enum WalletEvent {
     /// ones arrived, so a dropped event costs latency and nothing else. Carries
     /// no ids for the same reason.
     LeavesAdded,
+    /// The data a unilateral exit is built from changed, leaving an exit state
+    /// exported earlier out of date.
+    ExitStateChanged,
 }
 
 impl Display for WalletEvent {

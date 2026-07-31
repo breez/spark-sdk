@@ -366,6 +366,13 @@ async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
                 .await;
             false
         }
+        WalletEvent::ExitStateChanged => {
+            info!("Exit state changed");
+            sdk.event_emitter
+                .emit(&SdkEvent::UnilateralExitStateChanged)
+                .await;
+            false
+        }
     }
 }
 

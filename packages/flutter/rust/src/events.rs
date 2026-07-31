@@ -30,6 +30,7 @@ pub enum _SdkEvent {
     NewDeposits {
         new_deposits: Vec<DepositInfo>,
     },
+    UnilateralExitStateChanged,
 }
 
 #[frb(mirror(AutoOptimizationEvent))]

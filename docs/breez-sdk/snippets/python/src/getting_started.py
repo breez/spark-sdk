@@ -99,6 +99,10 @@ class SdkListener(EventListener):
         elif isinstance(event, SdkEvent.LIGHTNING_ADDRESS_CHANGED):
             # The lightning address has changed
             lightning_address = event.lightning_address
+        elif isinstance(event, SdkEvent.UNILATERAL_EXIT_STATE_CHANGED):
+            # The unilateral exit state changed, so a previously exported
+            # one is now out of date. Export it again.
+            pass
         else:
             # Handle any future event types
             pass

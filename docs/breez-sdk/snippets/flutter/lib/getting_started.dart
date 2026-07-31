@@ -150,6 +150,10 @@ class BreezSdkSpark {
           // The lightning address has changed
           final _ = lightningAddress;
           break;
+        case SdkEvent_UnilateralExitStateChanged():
+          // The unilateral exit state changed, so a previously exported
+          // one is now out of date. Export it again.
+          break;
       }
       _eventStreamController.add(sdkEvent);
     }, onError: (e) {
