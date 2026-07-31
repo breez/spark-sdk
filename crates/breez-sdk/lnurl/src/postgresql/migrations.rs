@@ -20,10 +20,9 @@ pub async fn run(pool: &Pool) -> Result<(), PostgresError> {
 
 /// Resumes a database migrated by the previous runner, which tracked applied
 /// migrations in `_sqlx_migrations` keyed by file version instead of by the
-/// ordinal used here. It applied them in ascending version order and stopped at
-/// the first failure, so its successful rows are a prefix of [`migrations`]:
-/// recording that many ordinals picks up where it left off rather than
-/// re-running from migration 1.
+/// ordinal used here. Only the count is read back, so [`migrations`] has to
+/// list them in the order that runner applied them: a count of N means the
+/// first N entries there, and nothing else.
 ///
 /// Returns as soon as [`MIGRATIONS_TABLE`] exists, so this runs at most once per
 /// database and can be deleted outright once every deployment is past the
@@ -86,14 +85,18 @@ async fn adopt_applied_prefix(pool: &Pool) -> Result<(), PostgresError> {
     Ok(())
 }
 
-/// The migrations, ordered by ascending numeric file version, which put every
-/// 14-digit version after every 8-digit one. That is the order the previous
-/// runner applies them in on a fresh database, and therefore the order
-/// [`adopt_applied_prefix`] assumes a partially migrated one stopped along. It
-/// is not necessarily the order a long-lived database saw them in: the runner
-/// applies whatever is missing whenever it is added, so a file added late but
-/// numbered early ran late. Only matters for adoption, since the statements
-/// between any two adjacent versions here are independent of each other.
+/// The migrations, in the order the previous runner actually applied them:
+/// the order their files were added, which is what [`adopt_applied_prefix`]
+/// assumes a partially migrated database stopped along. Every deploy applied
+/// whatever was missing, so a database carries the files that existed when it
+/// last ran, not the numerically-first N of them.
+///
+/// The two differ once: `users_pubkey_index` carries a 14-digit version, which
+/// sorts after the 8-digit ones added over the following weeks, but it shipped
+/// before them and so belongs here ahead of `webhook_secret`. Ordering is not
+/// cosmetic: a prefix that names the wrong migrations leaves later ones with
+/// their prerequisites unapplied, and `drop_unused_user_columns` drops the very
+/// column `webhook_secret` adds.
 ///
 /// Position is the tracked version, so entries are only ever appended.
 #[allow(clippy::too_many_lines)]
@@ -187,6 +190,7 @@ fn migrations() -> Vec<Vec<String>> {
                  ON sender_comments(user_pubkey, updated_at)"
                 .to_string(),
         ],
+        vec!["CREATE INDEX idx_users_pubkey ON users(pubkey)".to_string()],
         vec!["ALTER TABLE users ADD COLUMN webhook_secret TEXT".to_string()],
         vec![
             "CREATE TABLE IF NOT EXISTS settings (
@@ -201,7 +205,6 @@ fn migrations() -> Vec<Vec<String>> {
             "ALTER TABLE users DROP COLUMN nostr_pubkey".to_string(),
             "ALTER TABLE users DROP COLUMN webhook_secret".to_string(),
         ],
-        vec!["CREATE INDEX idx_users_pubkey ON users(pubkey)".to_string()],
         vec![
             // This table specifically tracks zap receipt publishing, not
             // generic payment events.
