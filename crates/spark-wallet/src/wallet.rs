@@ -1567,7 +1567,7 @@ impl SparkWallet {
     }
 
     /// Resolves an [`ExitLeafSelection`] into concrete leaf IDs and the
-    /// profitability filter. `Auto` sweeps every available leaf and keeps only
+    /// profitability filter. `Auto` sweeps every stored leaf and keeps only
     /// profitable ones; `Specific` exits exactly the requested leaves regardless
     /// of profitability.
     async fn resolve_leaf_selection(

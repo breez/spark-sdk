@@ -423,7 +423,7 @@ impl TreeService for SynchronousTreeService {
         // payments behind its rate limiter on large wallets. For remote signers we
         // skip leaves already stored with matching keys (see `VerifiedLeafKeys`),
         // re-checking only new or changed leaves. Local signers derive cheaply, so
-        // they skip the store read and verify every available leaf. Remaining
+        // they skip the store read and verify every reported leaf. Remaining
         // fetches run concurrently, leaving the signer to bound its own
         // concurrency; order is preserved for the zip below.
         let already_verified = if self.spark_signer.is_remote() {
