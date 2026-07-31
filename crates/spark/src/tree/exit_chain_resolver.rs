@@ -87,6 +87,7 @@ impl ExitChainResolver {
             .tree_service
             .fetch_pedigrees_from_operators(&candidates)
             .await;
+        let returned: HashSet<TreeNodeId> = fetched.iter().map(|p| p.leaf.id.clone()).collect();
         let (resolved, unresolved): (Vec<LeafPedigree>, Vec<LeafPedigree>) =
             fetched.into_iter().partition(is_complete);
 
@@ -106,7 +107,21 @@ impl ExitChainResolver {
             self.tree_service.store_exit_chains(&to_store).await?;
         }
 
-        self.record_outcomes(&resolved, &unresolved, now).await;
+        // A candidate the operators left out of their response came back in no
+        // pedigree at all, so it needs its backoff recorded from `candidates`.
+        // Otherwise nothing paces a leaf they never answer about, and a fetch
+        // that fails outright, which yields no pedigrees, would pace nothing.
+        let failed: Vec<TreeNodeId> = unresolved
+            .iter()
+            .map(|pedigree| pedigree.leaf.id.clone())
+            .chain(
+                candidates
+                    .into_iter()
+                    .filter(|leaf_id| !returned.contains(leaf_id)),
+            )
+            .collect();
+
+        self.record_outcomes(&resolved, &failed, now).await;
         Ok(())
     }
 
@@ -124,36 +139,35 @@ impl ExitChainResolver {
             .collect()
     }
 
-    /// Clears the backoff of leaves that resolved and extends it for those that did
-    /// not, so an unresolvable chain is not retried on every pass.
+    /// Clears the backoff of leaves that resolved and extends it for those that
+    /// did not, so a chain the operators cannot complete is not retried on every
+    /// pass.
     async fn record_outcomes(
         &self,
         resolved: &[LeafPedigree],
-        unresolved: &[LeafPedigree],
+        failed: &[TreeNodeId],
         now: SystemTime,
     ) {
         let mut backoff = self.backoff.lock().await;
         for pedigree in resolved {
             backoff.remove(&pedigree.leaf.id);
         }
-        for pedigree in unresolved {
+        for leaf_id in failed {
             // A leaf still inside its delay was only reached by a pass that
             // ignored the backoff. Leaving its schedule alone is what stops the
             // delay growing with how often such a pass is run rather than with
             // how long the leaf has actually been failing.
             if backoff
-                .get(&pedigree.leaf.id)
+                .get(leaf_id)
                 .is_some_and(|entry| now < entry.retry_at)
             {
                 continue;
             }
-            let delay = backoff
-                .get(&pedigree.leaf.id)
-                .map_or(INITIAL_RETRY_DELAY, |entry| {
-                    (entry.delay * 2).min(MAX_RETRY_DELAY)
-                });
+            let delay = backoff.get(leaf_id).map_or(INITIAL_RETRY_DELAY, |entry| {
+                (entry.delay * 2).min(MAX_RETRY_DELAY)
+            });
             backoff.insert(
-                pedigree.leaf.id.clone(),
+                leaf_id.clone(),
                 Backoff {
                     retry_at: now + delay,
                     delay,
@@ -424,6 +438,28 @@ mod tests {
             mock.fetch_call_count().await,
             1,
             "leaf must not be re-requested before its retry delay elapses"
+        );
+    }
+
+    #[async_test_all]
+    async fn test_leaf_the_operators_omit_backs_off() {
+        let leaf = create_test_node_with_parent("leaf", Some("mid"), TreeNodeStatus::Available);
+
+        let mock = Arc::new(MockTreeService::default());
+        mock.seed_leaf(leaf.clone(), pedigree(&leaf, Vec::new()))
+            .await;
+        // No operator response seeded: the leaf is left out of the reply, exactly
+        // as a whole failed fetch leaves out every leaf it was asked about.
+
+        let resolver = ExitChainResolver::new(mock.clone());
+        resolver.resolve_missing_chains().await.unwrap();
+        assert_eq!(mock.fetch_call_count().await, 1);
+
+        resolver.resolve_missing_chains().await.unwrap();
+        assert_eq!(
+            mock.fetch_call_count().await,
+            1,
+            "a leaf absent from the reply must back off like one that came back incomplete"
         );
     }
 
