@@ -212,8 +212,6 @@ impl SqliteTreeStore {
 
     // ---- ancestor persistence ----
 
-    /// Replaces the ancestor rows owned by each pedigree's leaf (see
-    /// `upsert_ancestors`).
     /// Whether the leaf pool still holds `leaf_id`, reserved or not.
     fn leaf_exists(conn: &Connection, leaf_id: &TreeNodeId) -> Result<bool, TreeServiceError> {
         conn.query_row(

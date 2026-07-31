@@ -475,10 +475,8 @@ impl InMemoryTreeStore {
         if nodes.is_empty() {
             return Ok(());
         }
-        // Checked against the leaf pool and this leaf's own previous chain only.
-        // Scanning every leaf's chain for a matching id would make each write cost
-        // the size of the whole wallet, and a node stored under another leaf backs
-        // only that leaf's exit.
+        // Replaced wholesale rather than merged: a chain is one walk, and a node
+        // stored under another leaf backs only that leaf's exit.
         state.ancestors.insert(leaf_id.clone(), nodes.to_vec());
         Ok(())
     }

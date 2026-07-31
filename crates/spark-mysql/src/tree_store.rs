@@ -1918,73 +1918,6 @@ impl MysqlTreeStore {
         Ok(())
     }
 
-    /// Errors if any incoming ancestor conflicts with a stored node on a field
-    /// that must not change (`value`, verifying key): checked against a
-    /// stored leaf of the same id and this leaf's own previous copy, never
-    /// against another leaf's copy, since each leaf's exit chain uses only
-    /// its own rows and a table-wide check would cost every write the whole
-    /// table's size.
-    async fn check_ancestors_compatible(
-        &self,
-        tx: &mut mysql_async::Transaction<'_>,
-        rows: &[(String, &TreeNode)],
-    ) -> Result<(), TreeServiceError> {
-        if rows.is_empty() {
-            return Ok(());
-        }
-        let ids: Vec<String> = rows.iter().map(|(_, node)| node.id.to_string()).collect();
-
-        let placeholders = build_placeholders(ids.len());
-        let leaf_sql = format!(
-            "SELECT id, value, verifying_public_key \
-             FROM brz_tree_leaves WHERE user_id = ? AND id IN ({placeholders})"
-        );
-        let mut leaf_params: Vec<Value> = Vec::with_capacity(ids.len().saturating_add(1));
-        leaf_params.push(Value::from(self.identity.clone()));
-        leaf_params.extend(ids.iter().cloned().map(Value::from));
-        let leaf_rows: Vec<(String, i64, String)> = tx
-            .exec(&leaf_sql, Params::Positional(leaf_params))
-            .await
-            .map_err(map_err)?;
-        let mut by_id: HashMap<String, (i64, String)> = HashMap::new();
-        for (id, value, verifying) in leaf_rows {
-            by_id.insert(id, (value, verifying));
-        }
-
-        // Paired (leaf_id, id) lookup: each incoming ancestor is checked only
-        // against its own leaf's prior copy, using the `(user_id, leaf_id, id)`
-        // primary key rather than a table-wide scan by id.
-        let tuple_placeholders = build_tuple_placeholders(rows.len());
-        let ancestor_sql = format!(
-            "SELECT leaf_id, id, value, verifying_public_key \
-             FROM brz_tree_ancestors WHERE user_id = ? AND (leaf_id, id) IN ({tuple_placeholders})"
-        );
-        let mut ancestor_params: Vec<Value> =
-            Vec::with_capacity(rows.len().saturating_mul(2).saturating_add(1));
-        ancestor_params.push(Value::from(self.identity.clone()));
-        for (leaf_id, node) in rows {
-            ancestor_params.push(Value::from(leaf_id.clone()));
-            ancestor_params.push(Value::from(node.id.to_string()));
-        }
-        let ancestor_rows: Vec<(String, String, i64, String)> = tx
-            .exec(&ancestor_sql, Params::Positional(ancestor_params))
-            .await
-            .map_err(map_err)?;
-        let mut by_leaf_and_id: HashMap<(String, String), (i64, String)> = HashMap::new();
-        for (leaf_id, id, value, verifying) in ancestor_rows {
-            by_leaf_and_id.insert((leaf_id, id), (value, verifying));
-        }
-
-        for (leaf_id, node) in rows {
-            check_node_unchanged(node, by_id.get(&node.id.to_string()))?;
-            check_node_unchanged(
-                node,
-                by_leaf_and_id.get(&(leaf_id.clone(), node.id.to_string())),
-            )?;
-        }
-        Ok(())
-    }
-
     /// Upserts each pedigree's ancestors under its own leaf id. An empty
     /// ancestor list means the chain is unknown, not that the leaf has none, so
     /// it leaves any already-stored chain alone; a non-empty list replaces that
@@ -2014,11 +1947,6 @@ impl MysqlTreeStore {
                 rows.push((leaf_id.clone(), ancestor));
             }
         }
-        // Checked against the rows still in place, before the delete below
-        // removes this batch's own copies, so a real value/key change is
-        // still caught even when a leaf held the only copy of that ancestor.
-        self.check_ancestors_compatible(tx, &rows).await?;
-
         let leaf_ids: Vec<String> = with_ancestors
             .iter()
             .map(|p| p.leaf.id.to_string())
@@ -2292,47 +2220,8 @@ fn build_placeholders(n: usize) -> String {
     s
 }
 
-/// Generates `(?, ?), (?, ?), …` for `n` two-column tuples.
-fn build_tuple_placeholders(n: usize) -> String {
-    let mut s = String::with_capacity(n.saturating_mul(6));
-    for i in 0..n {
-        if i > 0 {
-            s.push_str(", ");
-        }
-        s.push_str("(?, ?)");
-    }
-    s
-}
-
 fn map_err<E: std::fmt::Display>(e: E) -> TreeServiceError {
     TreeServiceError::Generic(e.to_string())
-}
-
-/// Errors if `node`'s immutable fields (`value`, verifying key) differ from
-/// `existing`, a previously stored copy of the same id. A `None` `existing`
-/// means there is nothing to compare against, so it is not an error.
-fn check_node_unchanged(
-    node: &TreeNode,
-    existing: Option<&(i64, String)>,
-) -> Result<(), TreeServiceError> {
-    let Some((value, verifying)) = existing else {
-        return Ok(());
-    };
-    #[allow(clippy::cast_possible_wrap)]
-    let incoming_value = node.value as i64;
-    if *value != incoming_value {
-        return Err(TreeServiceError::Generic(format!(
-            "node {} value changed from {} to {}",
-            node.id, value, node.value
-        )));
-    }
-    if *verifying != node.verifying_public_key.to_string() {
-        return Err(TreeServiceError::Generic(format!(
-            "node {} verifying public key changed",
-            node.id
-        )));
-    }
-    Ok(())
 }
 
 /// Creates a `MysqlTreeStore` instance from a configuration.

@@ -1531,69 +1531,6 @@ impl PostgresTreeStore {
         Ok(())
     }
 
-    /// Errors if any incoming ancestor conflicts with a stored node on a field
-    /// that must not change (`value`, verifying key): checked against a
-    /// stored leaf of the same id and this leaf's own previous copy, never
-    /// against another leaf's copy, since each leaf's exit chain uses only
-    /// its own rows and a table-wide check would cost every write the whole
-    /// table's size.
-    async fn check_ancestors_compatible(
-        &self,
-        tx: &tokio_postgres::Transaction<'_>,
-        rows: &[(String, &TreeNode)],
-    ) -> Result<(), TreeServiceError> {
-        if rows.is_empty() {
-            return Ok(());
-        }
-        let ids: Vec<String> = rows.iter().map(|(_, node)| node.id.to_string()).collect();
-        let leaf_ids: Vec<String> = rows.iter().map(|(leaf_id, _)| leaf_id.clone()).collect();
-
-        let leaf_rows = tx
-            .query(
-                "SELECT id, value, verifying_public_key \
-                 FROM brz_tree_leaves WHERE user_id = $1 AND id = ANY($2)",
-                &[&self.identity, &ids],
-            )
-            .await
-            .map_err(map_err)?;
-        let mut by_id: HashMap<String, (i64, String)> = HashMap::new();
-        for row in leaf_rows {
-            let id: String = row.get(0);
-            by_id.insert(id, (row.get(1), row.get(2)));
-        }
-
-        // Paired (leaf_id, id) lookup: each incoming ancestor is checked only
-        // against its own leaf's prior copy, using the `(user_id, leaf_id, id)`
-        // primary key rather than a table-wide scan by id.
-        let ancestor_rows = tx
-            .query(
-                r"
-                SELECT a.leaf_id, a.id, a.value, a.verifying_public_key
-                FROM UNNEST($2::text[], $3::text[]) AS t(leaf_id, id)
-                JOIN brz_tree_ancestors a
-                  ON a.user_id = $1 AND a.leaf_id = t.leaf_id AND a.id = t.id
-                ",
-                &[&self.identity, &leaf_ids, &ids],
-            )
-            .await
-            .map_err(map_err)?;
-        let mut by_leaf_and_id: HashMap<(String, String), (i64, String)> = HashMap::new();
-        for row in ancestor_rows {
-            let leaf_id: String = row.get(0);
-            let id: String = row.get(1);
-            by_leaf_and_id.insert((leaf_id, id), (row.get(2), row.get(3)));
-        }
-
-        for (leaf_id, node) in rows {
-            check_node_unchanged(node, by_id.get(&node.id.to_string()))?;
-            check_node_unchanged(
-                node,
-                by_leaf_and_id.get(&(leaf_id.clone(), node.id.to_string())),
-            )?;
-        }
-        Ok(())
-    }
-
     /// Upserts each pedigree's ancestors under its own leaf id. An empty
     /// ancestor list means the chain is unknown, not that the leaf has none, so
     /// it leaves any already-stored chain alone; a non-empty list replaces that
@@ -1643,11 +1580,6 @@ impl PostgresTreeStore {
                 rows.push((leaf_id.clone(), ancestor));
             }
         }
-        // Checked against the rows still in place, before the delete below
-        // removes this batch's own copies, so a real value/key change is
-        // still caught even when a leaf held the only copy of that ancestor.
-        self.check_ancestors_compatible(tx, &rows).await?;
-
         let leaf_ids: Vec<String> = with_ancestors
             .iter()
             .map(|p| p.leaf.id.to_string())
@@ -1977,33 +1909,6 @@ impl PostgresTreeStore {
 /// Maps any error to `TreeServiceError`.
 fn map_err<E: std::fmt::Display>(e: E) -> TreeServiceError {
     TreeServiceError::Generic(e.to_string())
-}
-
-/// Errors if `node`'s immutable fields (`value`, verifying key) differ from
-/// `existing`, a previously stored copy of the same id. A `None` `existing`
-/// means there is nothing to compare against, so it is not an error.
-fn check_node_unchanged(
-    node: &TreeNode,
-    existing: Option<&(i64, String)>,
-) -> Result<(), TreeServiceError> {
-    let Some((value, verifying)) = existing else {
-        return Ok(());
-    };
-    #[allow(clippy::cast_possible_wrap)]
-    let incoming_value = node.value as i64;
-    if *value != incoming_value {
-        return Err(TreeServiceError::Generic(format!(
-            "node {} value changed from {} to {}",
-            node.id, value, node.value
-        )));
-    }
-    if *verifying != node.verifying_public_key.to_string() {
-        return Err(TreeServiceError::Generic(format!(
-            "node {} verifying public key changed",
-            node.id
-        )));
-    }
-    Ok(())
 }
 
 /// Creates a `PostgresTreeStore` instance from a configuration.

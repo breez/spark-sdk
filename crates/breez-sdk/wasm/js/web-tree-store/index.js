@@ -1260,8 +1260,8 @@ class WebTreeStore {
     });
   }
 
-  /** Row shape for the leaf pool. Preserves `reservation_id` on an existing row
-   *  (only value + verifying key are immutable; everything else is refreshed). */
+  /** Row shape for the leaf pool. Preserves `reservation_id` from an existing
+   *  row; every other field comes from the operators' latest copy. */
   _leafRow(node, isMissing, existingRow, chainComplete) {
     return {
       id: node.id,
@@ -1353,15 +1353,10 @@ class WebTreeStore {
   }
 
   /**
-   * Checks compatibility for, then replaces, `leafId`'s ancestor rows
-   * wholesale (delete then insert), keeping `ancestorRowsByLeaf` current so a
-   * later step in the same transaction sees this leaf's live rows rather than
-   * a stale snapshot. An empty `nodes` list is a no-op: it means the chain is
-   * unknown, not that the leaf has none.
-   *
-   * The check matches only a stored leaf or this same leaf's own previous
-   * copy, not every leaf's copy of a shared ancestor: matching across leaves
-   * would cost the size of the whole ancestor table on every write.
+   * Replaces `leafId`'s ancestor rows wholesale (delete then insert), keeping
+   * `ancestorRowsByLeaf` current so a later step in the same transaction sees
+   * this leaf's live rows rather than a stale snapshot. An empty `nodes` list
+   * is a no-op: it means the chain is unknown, not that the leaf has none.
    */
   _replaceAncestors(ancestorsStore, ancestorRowsByLeaf, leafId, nodes) {
     if (!nodes || nodes.length === 0) return;
