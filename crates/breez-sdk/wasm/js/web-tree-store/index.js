@@ -21,7 +21,7 @@ const RESERVATION_TIMEOUT_MS = 300 * 1000; // 5 minutes
 /** Spent-leaf markers older than this (relative to a refresh) are pruned. */
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 const STORE_LEAVES = "leaves";
 const STORE_ANCESTORS = "ancestors";
@@ -131,13 +131,14 @@ class WebTreeStore {
           ancestors.createIndex("leaf_id", "leaf_id", { unique: false });
         }
 
-        // v3 denormalized each leaf's chain completeness onto its row, and v4
-        // made that flag indexable. Both upgrades rewrite every leaf row, so
-        // they are mutually exclusive rather than chained: an older wallet
-        // backfills straight to the indexable form. The index is created here
-        // and populated by the rewrites below, since createIndex cannot run
-        // from an async callback.
-        if (event.oldVersion > 0 && event.oldVersion < 4) {
+        // v3 denormalized each leaf's chain completeness onto its row, v4 made
+        // that flag indexable, and v5 changed what it means: a chain has to run
+        // from the leaf's current parent, not merely reach a root. Each upgrade
+        // rewrites every leaf row, so they are mutually exclusive rather than
+        // chained, and an older wallet lands on the current answer in one pass.
+        // The index is created here and populated by the rewrites below, since
+        // createIndex cannot run from an async callback.
+        if (event.oldVersion > 0 && event.oldVersion < 5) {
           const tx = event.target.transaction;
           const leaves = tx.objectStore(STORE_LEAVES);
           if (!leaves.indexNames.contains("chain_complete")) {
@@ -151,12 +152,16 @@ class WebTreeStore {
             // existing wallet does not refetch every chain it already holds.
             const ancestors = tx.objectStore(STORE_ANCESTORS);
             const rootedLeafIds = new Set();
+            const linkedLeafParents = new Set();
             ancestors.openCursor().onsuccess = (cursorEvent) => {
               const cursor = cursorEvent.target.result;
               if (cursor) {
                 if (cursor.value.parent_node_id == null) {
                   rootedLeafIds.add(cursor.value.leaf_id);
                 }
+                linkedLeafParents.add(
+                  `${cursor.value.leaf_id}\u0000${cursor.value.id}`
+                );
                 cursor.continue();
                 return;
               }
@@ -165,7 +170,11 @@ class WebTreeStore {
                 if (!leafCursor) return;
                 const row = leafCursor.value;
                 row.chain_complete =
-                  row.parent_node_id == null || rootedLeafIds.has(row.id)
+                  row.parent_node_id == null ||
+                  (rootedLeafIds.has(row.id) &&
+                    linkedLeafParents.has(
+                      `${row.id}\u0000${row.parent_node_id}`
+                    ))
                     ? 1
                     : 0;
                 leafCursor.update(row);
@@ -173,14 +182,35 @@ class WebTreeStore {
               };
             };
           } else {
-            // v3 wrote booleans, which cannot be index keys.
-            leaves.openCursor().onsuccess = (leafEvent) => {
-              const leafCursor = leafEvent.target.result;
-              if (!leafCursor) return;
-              const row = leafCursor.value;
-              row.chain_complete = row.chain_complete ? 1 : 0;
-              leafCursor.update(row);
-              leafCursor.continue();
+            // v3 stored booleans, which cannot be index keys, and v4 judged
+            // completeness on reaching a root alone. Re-derive both from the
+            // ancestor rows so a leaf reparented before this upgrade is reported
+            // again rather than staying wrongly complete forever.
+            const ancestors = tx.objectStore(STORE_ANCESTORS);
+            const rooted = new Set();
+            const linked = new Set();
+            ancestors.openCursor().onsuccess = (cursorEvent) => {
+              const cursor = cursorEvent.target.result;
+              if (cursor) {
+                const row = cursor.value;
+                if (row.parent_node_id == null) rooted.add(row.leaf_id);
+                linked.add(`${row.leaf_id}\u0000${row.id}`);
+                cursor.continue();
+                return;
+              }
+              leaves.openCursor().onsuccess = (leafEvent) => {
+                const leafCursor = leafEvent.target.result;
+                if (!leafCursor) return;
+                const row = leafCursor.value;
+                row.chain_complete =
+                  row.parent_node_id == null ||
+                  (rooted.has(row.id) &&
+                    linked.has(`${row.id}\u0000${row.parent_node_id}`))
+                    ? 1
+                    : 0;
+                leafCursor.update(row);
+                leafCursor.continue();
+              };
             };
           }
         }
@@ -411,8 +441,8 @@ class WebTreeStore {
   }
 
   /**
-   * Ids of the stored leaves whose exit chain stops short of a root: the leaf
-   * has a parent, but none of its ancestor rows is itself parentless.
+   * Ids of the stored leaves whose chain cannot back an exit: the leaf has a
+   * parent, and its ancestor rows do not run from that parent to a root.
    * @returns {Promise<Array<string>>}
    */
   async leavesMissingExitChains() {
@@ -653,9 +683,12 @@ class WebTreeStore {
               p.ancestors
             );
             // This write only touches ancestor rows, so the leaf's completeness
-            // flag has to be refreshed alongside them.
+            // flag has to be refreshed alongside them. Judged against the stored
+            // leaf, not the fetched one: a renewal may have reparented it while
+            // the chain was in flight, in which case the chain that just arrived
+            // no longer reaches it.
             const chainComplete = this._chainComplete(
-              p.leaf,
+              leafRow.data,
               p.ancestors,
               leafRow
             );
@@ -1255,17 +1288,25 @@ class WebTreeStore {
   }
 
   /**
-   * Whether `node`'s stored chain reaches a root, which is what makes it
-   * exitable without the operators. A leaf that is itself a root needs no
-   * ancestors. An empty incoming chain means "unknown", not "none", so it keeps
-   * whatever the row already claimed.
+   * Whether `node`'s stored chain runs from its current parent to a root, which
+   * is what makes it exitable without the operators. A leaf that is itself a
+   * root needs no ancestors. An empty incoming chain means "unknown", not
+   * "none", so it keeps whatever the row already claimed, unless the leaf has
+   * been reparented since: the chain then describes the parent it had before.
    */
   _chainComplete(node, ancestors, existingRow) {
     if (node.parent_node_id == null) return true;
     if (ancestors && ancestors.length > 0) {
-      return ancestors.some((a) => a.parent_node_id == null);
+      return (
+        ancestors.some((a) => a.id === node.parent_node_id) &&
+        ancestors.some((a) => a.parent_node_id == null)
+      );
     }
-    return existingRow ? !!existingRow.chain_complete : false;
+    if (!existingRow) return false;
+    return (
+      existingRow.parent_node_id === node.parent_node_id &&
+      !!existingRow.chain_complete
+    );
   }
 
   /** Leaf row built from a pedigree, whose ancestors decide the flag. */

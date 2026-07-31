@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::tree::{
     LeafPedigree, LeafSelection, Leaves, LeavesReservation, LeavesReservationId,
     ReservationPurpose, ReserveResult, TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus,
-    TreeServiceError, TreeStore, assemble_exit_chains, select_helper,
+    TreeServiceError, TreeStore, assemble_exit_chains, chain_backs_exit, select_helper,
 };
 
 /// Default maximum number of concurrent reservations allowed.
@@ -498,8 +498,8 @@ impl InMemoryTreeStore {
         })
     }
 
-    /// Leaf ids whose stored chain never reaches a parentless node. A leaf that is
-    /// itself a root is complete with no ancestors at all.
+    /// Leaf ids whose stored chain cannot back an exit, by the same rule the SQL
+    /// stores evaluate in their queries.
     fn process_leaves_missing_exit_chains(state: &LeavesState) -> Vec<TreeNodeId> {
         state
             .leaves
@@ -512,11 +512,8 @@ impl InMemoryTreeStore {
                     .flat_map(|entry| entry.leaves.iter().map(|stored| &stored.node)),
             )
             .filter(|leaf| {
-                leaf.parent_node_id.is_some()
-                    && !state
-                        .ancestors
-                        .get(&leaf.id)
-                        .is_some_and(|chain| chain.iter().any(|n| n.parent_node_id.is_none()))
+                let stored = state.ancestors.get(&leaf.id).map_or(&[][..], Vec::as_slice);
+                !chain_backs_exit(leaf, stored)
             })
             .map(|leaf| leaf.id.clone())
             .collect()
@@ -1301,6 +1298,11 @@ mod tests {
     #[async_test_all]
     async fn test_stored_chain_survives_refresh() {
         shared_tests::test_stored_chain_survives_refresh(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_reparented_leaf_needs_its_chain_again() {
+        shared_tests::test_reparented_leaf_needs_its_chain_again(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]

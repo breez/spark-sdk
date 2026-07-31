@@ -168,6 +168,27 @@ class TreeStoreMigrationManager {
           `INSERT OR IGNORE INTO brz_tree_swap_status (id, last_completed_at) VALUES (1, NULL)`,
         ],
       },
+      {
+        // Backs the slim-candidate selection query, matching the index
+        // `spark-sqlite` creates for the same query.
+        name: "Index the slim leaf-candidate columns",
+        sql: [
+          `CREATE INDEX IF NOT EXISTS brz_idx_tree_leaves_slim
+                        ON brz_tree_leaves (status, is_missing_from_operators, value)
+                        WHERE reservation_id IS NULL`,
+        ],
+      },
+      {
+        // Serves the root half of leavesMissingExitChains, which otherwise
+        // seeks a leaf's ancestor rows and reads each one to find the
+        // parentless node. SQLite indexes IS NULL as an equality, so both
+        // terms bind and the answer comes from the index.
+        name: "Index the root of each leaf's chain",
+        sql: [
+          `CREATE INDEX IF NOT EXISTS brz_idx_tree_ancestors_root
+                        ON brz_tree_ancestors (leaf_id, parent_node_id)`,
+        ],
+      },
     ];
   }
 }

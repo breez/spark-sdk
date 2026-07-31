@@ -889,6 +889,26 @@ fn walk_ancestors(leaf: &TreeNode, nodes: &HashMap<TreeNodeId, TreeNode>) -> Vec
     ancestors
 }
 
+/// Whether `ancestors` is a chain that can back `leaf`'s unilateral exit: it has
+/// to run from the leaf's current parent all the way to a root. A leaf that is
+/// itself a root needs no ancestors.
+///
+/// Reaching a root is not enough on its own. Timelock renewal reparents a leaf
+/// onto a new split node under the same id, so a chain stored before that still
+/// reaches a root while describing a parent the leaf no longer has. Chains are
+/// always stored wholesale from one walk, so finding the first link and the root
+/// is enough to know the chain still spans the leaf.
+///
+/// The SQL stores evaluate this same rule in their queries rather than loading
+/// the chain to call it.
+pub fn chain_backs_exit(leaf: &TreeNode, ancestors: &[TreeNode]) -> bool {
+    let Some(parent_id) = leaf.parent_node_id.as_ref() else {
+        return true;
+    };
+    ancestors.iter().any(|node| &node.id == parent_id)
+        && ancestors.iter().any(|node| node.parent_node_id.is_none())
+}
+
 /// Shapes a batch of exit chains from a node lookup. A store loads its leaves and
 /// their ancestors into `nodes` with a single query, then calls this to pair each
 /// requested leaf with its chain. A leaf id absent from `nodes` is skipped; a chain

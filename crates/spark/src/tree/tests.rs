@@ -651,7 +651,7 @@ pub async fn test_stored_chain_replaces_previous(store: &dyn TreeStore) {
     );
 }
 
-/// Only leaves whose stored chain stops short of a root are reported, so resolving
+/// Only leaves whose stored chain cannot back an exit are reported, so resolving
 /// them never has to walk the whole wallet.
 pub async fn test_leaves_missing_exit_chains(store: &dyn TreeStore) {
     let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
@@ -751,6 +751,74 @@ pub async fn test_stored_chain_survives_refresh(store: &dyn TreeStore) {
         missing_chain_ids(store).await,
         vec!["bare"],
         "a refresh must not discard the chain a leaf already had"
+    );
+}
+
+/// A stored chain only backs an exit if it starts at the leaf's *current* parent.
+/// Timelock renewal reparents a leaf onto a new split node under the same id, and
+/// another device learns that from a leaves-only refresh, which carries no chain.
+/// Finding a rooted ancestor row is not enough: those rows describe the parent the
+/// leaf had before, and the link from the new one is missing.
+pub async fn test_reparented_leaf_needs_its_chain_again(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let old_parent =
+        create_test_node_with_parent("old-parent", Some("root"), TreeNodeStatus::Splitted);
+    let leaf = create_test_node_with_parent("leaf", Some("old-parent"), TreeNodeStatus::Available);
+
+    store
+        .add_leaves(&[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![old_parent, root],
+        }])
+        .await
+        .unwrap();
+    assert!(
+        missing_chain_ids(store).await.is_empty(),
+        "a rooted chain from the leaf's parent is complete"
+    );
+
+    // Renewal moved the leaf under a new split node. The refresh reports the new
+    // parent and no chain, exactly as a leaves-only refresh does.
+    let reparented =
+        create_test_node_with_parent("leaf", Some("new-parent"), TreeNodeStatus::Available);
+    let refresh_start = future_refresh_start(store).await;
+    store
+        .set_leaves(
+            &[LeafPedigree {
+                leaf: reparented,
+                ancestors: Vec::new(),
+            }],
+            &[],
+            refresh_start,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        missing_chain_ids(store).await,
+        vec!["leaf"],
+        "the stored chain no longer reaches the leaf, so it needs collecting again"
+    );
+
+    // A chain fetched before the reparent still lands afterwards, carrying the
+    // operators' older copy of the leaf. Storing it must be judged against the
+    // stored leaf, which has moved on, not against the one that came with it.
+    let stale = create_test_node_with_parent("leaf", Some("old-parent"), TreeNodeStatus::Available);
+    let old_parent_again =
+        create_test_node_with_parent("old-parent", Some("root"), TreeNodeStatus::Splitted);
+    let root_again = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    store
+        .store_ancestors(&[LeafPedigree {
+            leaf: stale,
+            ancestors: vec![old_parent_again, root_again],
+        }])
+        .await
+        .unwrap();
+
+    assert_eq!(
+        missing_chain_ids(store).await,
+        vec!["leaf"],
+        "a chain for the parent the leaf used to have does not make it exitable"
     );
 }
 

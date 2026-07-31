@@ -407,18 +407,27 @@ impl TreeStore for MysqlTreeStore {
 
     async fn leaves_missing_exit_chains(&self) -> Result<Vec<TreeNodeId>, TreeServiceError> {
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        // A LEFT JOIN anti-join plans better on MySQL than a correlated NOT
-        // EXISTS. The join keeps only each leaf's root ancestor row (if any);
-        // an unmatched leaf (`a.leaf_id IS NULL`) has no root in its chain.
+        // One shape across every SQL backend. Two outer joins beat correlated
+        // NOT EXISTS subqueries here: under the OR below, Postgres cannot pull a
+        // NOT EXISTS up into an anti-join and re-runs it per leaf instead. A
+        // chain backs an exit only if it runs from the leaf's current parent
+        // (`link`) to a root (`root`); one stored before a renewal reparented the
+        // leaf still reaches a root while describing a parent it no longer has.
+        // DISTINCT is defensive: a contiguous chain has one root and
+        // `(leaf_id, id)` is unique, so neither join matches twice.
         let ids: Vec<String> = conn
             .exec(
-                r"SELECT l.id
+                r"SELECT DISTINCT l.id
                   FROM brz_tree_leaves l
-                  LEFT JOIN brz_tree_ancestors a
-                    ON a.user_id = l.user_id AND a.leaf_id = l.id AND a.parent_node_id IS NULL
+                  LEFT JOIN brz_tree_ancestors root
+                    ON root.user_id = l.user_id AND root.leaf_id = l.id
+                       AND root.parent_node_id IS NULL
+                  LEFT JOIN brz_tree_ancestors link
+                    ON link.user_id = l.user_id AND link.leaf_id = l.id
+                       AND link.id = l.parent_node_id
                   WHERE l.user_id = ?
                     AND l.parent_node_id IS NOT NULL
-                    AND a.leaf_id IS NULL",
+                    AND (root.leaf_id IS NULL OR link.leaf_id IS NULL)",
                 (self.identity.clone(),),
             )
             .await
@@ -1057,6 +1066,18 @@ impl MysqlTreeStore {
                         signing_public_key = data->>'$.signing_keyshare.public_key'",
                 ),
             ],
+            // Migration 8: serve the root half of leaves_missing_exit_chains,
+            // which otherwise seeks a leaf's ancestor rows and reads each one to
+            // find the parentless node. MySQL has no partial indexes, so
+            // `parent_node_id` sits second: it resolves IS NULL as an equality,
+            // which keeps every term of the lookup an equality. Leading with
+            // `leaf_id` instead would not help, since the clustered primary key
+            // already carries `parent_node_id` once seeked by leaf.
+            vec![Migration::CreateIndex {
+                name: "brz_idx_tree_ancestors_root",
+                table: "brz_tree_ancestors",
+                columns: "(user_id, parent_node_id, leaf_id)",
+            }],
         ]
     }
 
@@ -2546,6 +2567,12 @@ mod tests {
     async fn test_stored_chain_survives_refresh() {
         let fixture = MysqlTreeStoreTestFixture::new().await;
         shared_tests::test_stored_chain_survives_refresh(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reparented_leaf_needs_its_chain_again() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_reparented_leaf_needs_its_chain_again(&fixture.store).await;
     }
 
     #[tokio::test]

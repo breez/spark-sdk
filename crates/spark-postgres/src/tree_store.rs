@@ -331,13 +331,25 @@ impl TreeStore for PostgresTreeStore {
         let rows = client
             .query(
                 r"
-                SELECT l.id FROM brz_tree_leaves l
+                -- One shape across every SQL backend. Two outer joins beat correlated
+                -- NOT EXISTS subqueries here: under the OR below, Postgres cannot pull a
+                -- NOT EXISTS up into an anti-join and re-runs it per leaf instead. A
+                -- chain backs an exit only if it runs from the leaf's current parent
+                -- (`link`) to a root (`root`); one stored before a renewal reparented the
+                -- leaf still reaches a root while describing a parent it no longer has.
+                -- DISTINCT is defensive: a contiguous chain has one root and
+                -- `(leaf_id, id)` is unique, so neither join matches twice.
+                SELECT DISTINCT l.id
+                FROM brz_tree_leaves l
+                LEFT JOIN brz_tree_ancestors root
+                  ON root.user_id = l.user_id AND root.leaf_id = l.id
+                     AND root.parent_node_id IS NULL
+                LEFT JOIN brz_tree_ancestors link
+                  ON link.user_id = l.user_id AND link.leaf_id = l.id
+                     AND link.id = l.parent_node_id
                 WHERE l.user_id = $1
                   AND l.parent_node_id IS NOT NULL
-                  AND NOT EXISTS (
-                    SELECT 1 FROM brz_tree_ancestors a
-                    WHERE a.user_id = $1 AND a.leaf_id = l.id AND a.parent_node_id IS NULL
-                  )
+                  AND (root.leaf_id IS NULL OR link.leaf_id IS NULL)
                 ",
                 &[&self.identity],
             )
@@ -1350,6 +1362,16 @@ impl PostgresTreeStore {
                     signing_public_key = data->'signing_keyshare'->>'public_key'"
                     .to_string(),
             ],
+            // Migration 6: serve the root half of leaves_missing_exit_chains,
+            // which otherwise seeks a leaf's ancestor rows and reads each one to
+            // find the parentless node. Partial, so it holds one entry per leaf
+            // whose chain reaches a root and can answer index-only.
+            vec![
+                "CREATE INDEX IF NOT EXISTS brz_idx_tree_ancestors_root \
+                 ON brz_tree_ancestors (user_id, leaf_id) \
+                 WHERE parent_node_id IS NULL"
+                    .to_string(),
+            ],
         ]
     }
 
@@ -2184,6 +2206,12 @@ mod tests {
     async fn test_stored_chain_survives_refresh() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_stored_chain_survives_refresh(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reparented_leaf_needs_its_chain_again() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_reparented_leaf_needs_its_chain_again(&fixture.store).await;
     }
 
     #[tokio::test]

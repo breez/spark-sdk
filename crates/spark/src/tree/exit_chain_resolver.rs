@@ -14,20 +14,15 @@ use platform_utils::time::SystemTime;
 use platform_utils::tokio::sync::Mutex;
 use tracing::trace;
 
-use crate::tree::{LeafPedigree, TreeNodeId, TreeService, TreeServiceError};
+use crate::tree::{LeafPedigree, TreeNodeId, TreeService, TreeServiceError, chain_backs_exit};
 
 /// Delay before a leaf whose chain the operators did not complete is tried again.
 /// Doubles per consecutive failure up to [`MAX_RETRY_DELAY`].
 const INITIAL_RETRY_DELAY: Duration = Duration::from_secs(30);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(30 * 60);
 
-/// Whether a stored chain reaches a root, which is what makes the leaf exitable
-/// without the operators. A leaf that is itself a root needs no ancestors.
 fn is_complete(pedigree: &LeafPedigree) -> bool {
-    match pedigree.ancestors.last() {
-        Some(topmost) => topmost.parent_node_id.is_none(),
-        None => pedigree.leaf.parent_node_id.is_none(),
-    }
+    chain_backs_exit(&pedigree.leaf, &pedigree.ancestors)
 }
 
 #[derive(Clone, Copy)]
@@ -428,7 +423,11 @@ mod tests {
             backoff.get_mut(&leaf.id).unwrap().retry_at =
                 SystemTime::now() - Duration::from_secs(1);
         }
-        mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, vec![root]))
+        // This time the operators complete the chain: the same parent, now with
+        // a root above it.
+        let mid_rooted =
+            create_test_node_with_parent("mid", Some("root"), TreeNodeStatus::Splitted);
+        mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, vec![mid_rooted, root]))
             .await;
 
         resolver.resolve_missing_chains().await.unwrap();

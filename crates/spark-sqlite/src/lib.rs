@@ -104,6 +104,12 @@ const TREE_MIGRATIONS: &[&str] = &[
         last_completed_at INTEGER
     );
     INSERT INTO brz_tree_swap_status (id, last_completed_at) VALUES (1, NULL);",
+    // v2: serve the root half of leaves_missing_exit_chains, which otherwise
+    // seeks a leaf's ancestor rows and reads each one to find the parentless
+    // node. SQLite indexes IS NULL as an equality, so both terms bind and the
+    // answer comes from the index without touching the row.
+    "CREATE INDEX IF NOT EXISTS brz_idx_tree_ancestors_root
+        ON brz_tree_ancestors (leaf_id, parent_node_id);",
 ];
 
 /// Applies pending migrations, tracking the version in its own table rather than
@@ -658,70 +664,47 @@ impl TreeStore for SqliteTreeStore {
             return Ok(Vec::new());
         }
         let conn = self.get_connection()?;
+        // One query loads each requested leaf's own row plus its ancestor rows,
+        // both tagged by the owning leaf id (a leaf's own row is tagged with its
+        // own id), so the two cannot be read at different points in time.
+        // Grouping by that tag below keeps each leaf's node set separate, so a
+        // node id shared by several leaves cannot cross-contaminate another
+        // leaf's chain with a status or parent it doesn't itself hold.
         let id_strings: Vec<String> = leaf_ids.iter().map(ToString::to_string).collect();
         let placeholders = vec!["?"; id_strings.len()].join(",");
+        let sql = format!(
+            "SELECT leaf_id, data FROM brz_tree_ancestors WHERE leaf_id IN ({placeholders})
+             UNION ALL
+             SELECT id, data FROM brz_tree_leaves WHERE id IN ({placeholders})"
+        );
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| generic("prepare get_exit_chains", e))?;
+        let rows = stmt
+            .query_map(
+                params_from_iter(id_strings.iter().chain(id_strings.iter())),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .map_err(|e| generic("query get_exit_chains", e))?;
 
-        let mut leaves_by_id: HashMap<TreeNodeId, TreeNode> =
-            HashMap::with_capacity(id_strings.len());
-        {
-            let leaves_sql =
-                format!("SELECT id, data FROM brz_tree_leaves WHERE id IN ({placeholders})");
-            let mut stmt = conn
-                .prepare(&leaves_sql)
-                .map_err(|e| generic("prepare get_exit_chains leaves", e))?;
-            let rows = stmt
-                .query_map(params_from_iter(id_strings.iter()), |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })
-                .map_err(|e| generic("query get_exit_chains leaves", e))?;
-            for row in rows {
-                let (id, data) = row.map_err(|e| generic("read get_exit_chains leaf row", e))?;
-                let id = TreeNodeId::from_str(&id).map_err(TreeServiceError::Generic)?;
-                leaves_by_id.insert(id, Self::row_to_node(&data)?);
-            }
+        let mut by_leaf: HashMap<TreeNodeId, HashMap<TreeNodeId, TreeNode>> = HashMap::new();
+        for row in rows {
+            let (leaf_id, data) = row.map_err(|e| generic("read get_exit_chains row", e))?;
+            let leaf_id = TreeNodeId::from_str(&leaf_id).map_err(TreeServiceError::Generic)?;
+            let node = Self::row_to_node(&data)?;
+            by_leaf
+                .entry(leaf_id)
+                .or_default()
+                .insert(node.id.clone(), node);
         }
 
-        // Only the requested leaves' own ancestor rows, keyed by owning leaf, so
-        // a node id shared with another leaf's chain cannot cross-contaminate.
-        let mut ancestors_by_leaf: HashMap<TreeNodeId, Vec<TreeNode>> = HashMap::new();
-        {
-            let ancestors_sql = format!(
-                "SELECT leaf_id, data FROM brz_tree_ancestors WHERE leaf_id IN ({placeholders})"
-            );
-            let mut stmt = conn
-                .prepare(&ancestors_sql)
-                .map_err(|e| generic("prepare get_exit_chains ancestors", e))?;
-            let rows = stmt
-                .query_map(params_from_iter(id_strings.iter()), |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })
-                .map_err(|e| generic("query get_exit_chains ancestors", e))?;
-            for row in rows {
-                let (leaf_id, data) =
-                    row.map_err(|e| generic("read get_exit_chains ancestor row", e))?;
-                let leaf_id = TreeNodeId::from_str(&leaf_id).map_err(TreeServiceError::Generic)?;
-                ancestors_by_leaf
-                    .entry(leaf_id)
-                    .or_default()
-                    .push(Self::row_to_node(&data)?);
-            }
-        }
-
-        let mut pedigrees = Vec::with_capacity(leaf_ids.len());
-        for leaf_id in leaf_ids {
-            let Some(leaf) = leaves_by_id.get(leaf_id) else {
-                continue;
-            };
-            let mut nodes: HashMap<TreeNodeId, TreeNode> = ancestors_by_leaf
-                .get(leaf_id)
-                .into_iter()
-                .flatten()
-                .map(|n| (n.id.clone(), n.clone()))
-                .collect();
-            nodes.insert(leaf.id.clone(), leaf.clone());
-            pedigrees.extend(assemble_exit_chains(&nodes, std::slice::from_ref(leaf_id)));
-        }
-        Ok(pedigrees)
+        Ok(leaf_ids
+            .iter()
+            .filter_map(|id| {
+                let nodes = by_leaf.get(id)?;
+                assemble_exit_chains(nodes, std::slice::from_ref(id)).pop()
+            })
+            .collect())
     }
 
     async fn store_ancestors(&self, pedigrees: &[LeafPedigree]) -> Result<(), TreeServiceError> {
@@ -750,12 +733,22 @@ impl TreeStore for SqliteTreeStore {
         let conn = self.get_connection()?;
         let mut stmt = conn
             .prepare(
-                "SELECT l.id FROM brz_tree_leaves l
+                // One shape across every SQL backend. Two outer joins beat correlated
+                // NOT EXISTS subqueries here: under the OR below, Postgres cannot pull a
+                // NOT EXISTS up into an anti-join and re-runs it per leaf instead. A
+                // chain backs an exit only if it runs from the leaf's current parent
+                // (`link`) to a root (`root`); one stored before a renewal reparented the
+                // leaf still reaches a root while describing a parent it no longer has.
+                // DISTINCT is defensive: a contiguous chain has one root and
+                // `(leaf_id, id)` is unique, so neither join matches twice.
+                "SELECT DISTINCT l.id
+                 FROM brz_tree_leaves l
+                 LEFT JOIN brz_tree_ancestors root
+                   ON root.leaf_id = l.id AND root.parent_node_id IS NULL
+                 LEFT JOIN brz_tree_ancestors link
+                   ON link.leaf_id = l.id AND link.id = l.parent_node_id
                  WHERE l.parent_node_id IS NOT NULL
-                   AND NOT EXISTS (
-                     SELECT 1 FROM brz_tree_ancestors a
-                     WHERE a.leaf_id = l.id AND a.parent_node_id IS NULL
-                   )",
+                   AND (root.leaf_id IS NULL OR link.leaf_id IS NULL)",
             )
             .map_err(|e| generic("prepare leaves_missing_exit_chains", e))?;
         let ids = stmt
@@ -1317,6 +1310,7 @@ mod tests {
         test_store_ancestors_for_absent_leaf,
         test_leaves_missing_exit_chains,
         test_stored_chain_survives_refresh,
+        test_reparented_leaf_needs_its_chain_again,
         // add / get leaves
         test_new,
         test_add_leaves,

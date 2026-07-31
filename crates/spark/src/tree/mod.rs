@@ -16,7 +16,7 @@ pub use select_helper::{
     select_leaves_by_minimum_amount, select_leaves_by_target_amounts, with_reserved_leaves,
 };
 use serde::{Deserialize, Serialize};
-pub use service::{SynchronousTreeService, assemble_exit_chains};
+pub use service::{SynchronousTreeService, assemble_exit_chains, chain_backs_exit};
 pub use store::{
     DEFAULT_MAX_CONCURRENT_RESERVATIONS, DEFAULT_RESERVATION_TIMEOUT, InMemoryTreeStore,
 };
@@ -516,9 +516,10 @@ pub trait TreeStore: Send + Sync {
     /// never be collected.
     async fn store_ancestors(&self, pedigrees: &[LeafPedigree]) -> Result<(), TreeServiceError>;
 
-    /// Ids of the stored leaves whose exit chain stops short of a root, so it
-    /// cannot back a unilateral exit. A leaf that is itself a root needs no
-    /// ancestors and is never reported.
+    /// Ids of the stored leaves whose chain cannot back a unilateral exit,
+    /// meaning it does not run from the leaf's current parent to a root. See
+    /// [`chain_backs_exit`], which is the same rule in Rust. A leaf that is
+    /// itself a root needs no ancestors and is never reported.
     ///
     /// Returns ids only, but assume it costs the size of the wallet: the SQL
     /// backends derive the answer by joining every stored leaf against its
@@ -828,7 +829,7 @@ pub trait TreeService: Send + Sync {
     /// chain resolved after its leaf was stored completes it in place.
     async fn store_exit_chains(&self, pedigrees: &[LeafPedigree]) -> Result<(), TreeServiceError>;
 
-    /// Ids of the stored leaves whose exit chain stops short of a root.
+    /// Ids of the stored leaves whose chain cannot back a unilateral exit.
     async fn leaves_missing_exit_chains(&self) -> Result<Vec<TreeNodeId>, TreeServiceError>;
 
     /// Pairs each leaf id with its ancestor chain, fetched from the operators in

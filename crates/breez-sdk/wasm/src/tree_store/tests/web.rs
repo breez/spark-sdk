@@ -550,3 +550,9 @@ async fn test_stored_chain_survives_refresh() {
     let store = create_test_tree_store("wtree_test_stored_chain_survives_refresh").await;
     breez_sdk_spark::tree_store_tests::test_stored_chain_survives_refresh(&store).await;
 }
+
+#[wasm_bindgen_test]
+async fn test_reparented_leaf_needs_its_chain_again() {
+    let store = create_test_tree_store("wtree_test_reparented_leaf_needs_its_chain_again").await;
+    breez_sdk_spark::tree_store_tests::test_reparented_leaf_needs_its_chain_again(&store).await;
+}

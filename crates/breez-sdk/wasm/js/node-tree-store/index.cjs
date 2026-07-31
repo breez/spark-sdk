@@ -208,20 +208,30 @@ class NodeTreeStore {
   }
 
   /**
-   * Ids of the stored leaves whose exit chain stops short of a root: the leaf
-   * has a parent, but none of its ancestor rows is itself parentless.
+   * Ids of the stored leaves whose chain cannot back an exit: the leaf has a
+   * parent, and its ancestor rows do not run from that parent to a root.
    * @returns {Promise<Array<string>>}
    */
   async leavesMissingExitChains() {
     try {
       const rows = this.db
         .prepare(
-          `SELECT l.id FROM brz_tree_leaves l
+          // One shape across every SQL backend. Two outer joins beat correlated
+          // NOT EXISTS subqueries here: under the OR below, Postgres cannot pull a
+          // NOT EXISTS up into an anti-join and re-runs it per leaf instead. A chain
+          // backs an exit only if it runs from the leaf's current parent (`link`) to
+          // a root (`root`); one stored before a renewal reparented the leaf still
+          // reaches a root while describing a parent it no longer has.
+          // DISTINCT is defensive: a contiguous chain has one root and
+          // `(leaf_id, id)` is unique, so neither join matches twice.
+          `SELECT DISTINCT l.id
+           FROM brz_tree_leaves l
+           LEFT JOIN brz_tree_ancestors root
+             ON root.leaf_id = l.id AND root.parent_node_id IS NULL
+           LEFT JOIN brz_tree_ancestors link
+             ON link.leaf_id = l.id AND link.id = l.parent_node_id
            WHERE l.parent_node_id IS NOT NULL
-             AND NOT EXISTS (
-               SELECT 1 FROM brz_tree_ancestors a
-               WHERE a.leaf_id = l.id AND a.parent_node_id IS NULL
-             )`
+             AND (root.leaf_id IS NULL OR link.leaf_id IS NULL)`
         )
         .all();
       return rows.map((r) => r.id);
@@ -244,30 +254,25 @@ class NodeTreeStore {
   async getExitChains(leafIds) {
     try {
       if (!leafIds || leafIds.length === 0) return [];
-      // Each requested leaf's own ancestor rows (scoped by leaf_id) plus the
-      // leaves themselves, walked one chain at a time so a node id stored under
-      // another leaf can never cross-contaminate this one.
+      // One query, as in every other SQL backend, so the leaf rows and the
+      // ancestor rows cannot come from two points in time. Both halves are
+      // tagged by the owning leaf id, so a node id stored under another leaf
+      // can never cross-contaminate this one.
       const placeholders = leafIds.map(() => "?").join(",");
-      const leafRows = this.db
-        .prepare(`SELECT data FROM brz_tree_leaves WHERE id IN (${placeholders})`)
-        .all(...leafIds);
-      const ancestorRows = this.db
+      const rows = this.db
         .prepare(
-          `SELECT leaf_id, data FROM brz_tree_ancestors WHERE leaf_id IN (${placeholders})`
+          `SELECT leaf_id, data FROM brz_tree_ancestors WHERE leaf_id IN (${placeholders})
+           UNION ALL
+           SELECT id AS leaf_id, data FROM brz_tree_leaves WHERE id IN (${placeholders})`
         )
-        .all(...leafIds);
+        .all(...leafIds, ...leafIds);
 
-      const leavesById = new Map();
-      for (const r of leafRows) {
-        const node = JSON.parse(r.data);
-        leavesById.set(node.id, node);
-      }
-      const ancestorsByLeaf = new Map();
-      for (const r of ancestorRows) {
-        let nodes = ancestorsByLeaf.get(r.leaf_id);
+      const byLeaf = new Map();
+      for (const r of rows) {
+        let nodes = byLeaf.get(r.leaf_id);
         if (!nodes) {
           nodes = new Map();
-          ancestorsByLeaf.set(r.leaf_id, nodes);
+          byLeaf.set(r.leaf_id, nodes);
         }
         const node = JSON.parse(r.data);
         nodes.set(node.id, node);
@@ -275,10 +280,8 @@ class NodeTreeStore {
 
       const result = [];
       for (const id of leafIds) {
-        const leaf = leavesById.get(id);
-        if (!leaf) continue;
-        const nodes = ancestorsByLeaf.get(id) || new Map();
-        nodes.set(leaf.id, leaf);
+        const nodes = byLeaf.get(id);
+        if (!nodes) continue;
         const pedigree = assembleExitChain(nodes, id);
         if (pedigree) result.push(pedigree);
       }

@@ -328,23 +328,32 @@ class MysqlTreeStore {
   }
 
   /**
-   * Ids of the stored leaves whose exit chain stops short of a root: the leaf
-   * has a parent, but none of its ancestor rows is itself parentless.
+   * Ids of the stored leaves whose chain cannot back an exit: the leaf has a
+   * parent, and its ancestor rows do not run from that parent to a root.
    * @returns {Promise<Array<string>>}
    */
   async leavesMissingExitChains() {
     try {
-      // A LEFT JOIN anti-join plans better on MySQL than a correlated NOT
-      // EXISTS. The join keeps only each leaf's root ancestor row (if any);
-      // an unmatched leaf (`a.leaf_id IS NULL`) has no root in its chain.
+      // One shape across every SQL backend. Two outer joins beat correlated
+      // NOT EXISTS subqueries here: under the OR below, Postgres cannot pull a
+      // NOT EXISTS up into an anti-join and re-runs it per leaf instead. A chain
+      // backs an exit only if it runs from the leaf's current parent (`link`) to
+      // a root (`root`); one stored before a renewal reparented the leaf still
+      // reaches a root while describing a parent it no longer has.
+      // DISTINCT is defensive: a contiguous chain has one root and
+      // `(leaf_id, id)` is unique, so neither join matches twice.
       const [rows] = await this.pool.query(
-        `SELECT l.id
+        `SELECT DISTINCT l.id
          FROM brz_tree_leaves l
-         LEFT JOIN brz_tree_ancestors a
-           ON a.user_id = l.user_id AND a.leaf_id = l.id AND a.parent_node_id IS NULL
+         LEFT JOIN brz_tree_ancestors root
+           ON root.user_id = l.user_id AND root.leaf_id = l.id
+              AND root.parent_node_id IS NULL
+         LEFT JOIN brz_tree_ancestors link
+           ON link.user_id = l.user_id AND link.leaf_id = l.id
+              AND link.id = l.parent_node_id
          WHERE l.user_id = ?
            AND l.parent_node_id IS NOT NULL
-           AND a.leaf_id IS NULL`,
+           AND (root.leaf_id IS NULL OR link.leaf_id IS NULL)`,
         [this.identity]
       );
       return rows.map((r) => r.id);
