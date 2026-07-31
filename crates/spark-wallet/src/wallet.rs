@@ -1494,7 +1494,9 @@ impl SparkWallet {
         }
         // An exit is planned entirely from stored chains, so resolve the missing
         // ones here rather than relying on whatever the caller has scheduled.
-        if let Err(e) = self.exit_chain_resolver.resolve_missing_chains().await {
+        // Backoff is ignored: a leaf still inside its retry delay would otherwise
+        // be left un-exitable with no later pass before the exit is planned.
+        if let Err(e) = self.exit_chain_resolver.resolve_all_missing_chains().await {
             warn!(
                 "unilateral exit: resolving exit chains failed, planning from local state: {e:?}"
             );

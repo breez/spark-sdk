@@ -51,6 +51,20 @@ impl ExitChainResolver {
     /// Leaves the operators recently failed to complete stay backed off, so calling
     /// this in a loop does not turn into a retry storm.
     pub async fn resolve_missing_chains(&self) -> Result<(), TreeServiceError> {
+        self.resolve(true).await
+    }
+
+    /// Resolves what is missing, once, asking about every leaf whatever its
+    /// backoff. Trades a possibly redundant round trip for the guarantee that
+    /// nothing stays unresolved merely because it is inside a retry delay.
+    ///
+    /// A leaf already inside its delay keeps the schedule it had, so however
+    /// often this runs it cannot re-pace [`Self::resolve_missing_chains`].
+    pub async fn resolve_all_missing_chains(&self) -> Result<(), TreeServiceError> {
+        self.resolve(false).await
+    }
+
+    async fn resolve(&self, honor_backoff: bool) -> Result<(), TreeServiceError> {
         let missing = self.tree_service.leaves_missing_exit_chains().await?;
         self.retain_backoff(&missing.iter().cloned().collect())
             .await;
@@ -59,7 +73,11 @@ impl ExitChainResolver {
         }
 
         let now = SystemTime::now();
-        let candidates = self.due_leaves(missing, now).await;
+        let candidates = if honor_backoff {
+            self.due_leaves(missing, now).await
+        } else {
+            missing
+        };
         if candidates.is_empty() {
             return Ok(());
         }
@@ -119,6 +137,16 @@ impl ExitChainResolver {
             backoff.remove(&pedigree.leaf.id);
         }
         for pedigree in unresolved {
+            // A leaf still inside its delay was only reached by a pass that
+            // ignored the backoff. Leaving its schedule alone is what stops the
+            // delay growing with how often such a pass is run rather than with
+            // how long the leaf has actually been failing.
+            if backoff
+                .get(&pedigree.leaf.id)
+                .is_some_and(|entry| now < entry.retry_at)
+            {
+                continue;
+            }
             let delay = backoff
                 .get(&pedigree.leaf.id)
                 .map_or(INITIAL_RETRY_DELAY, |entry| {
@@ -397,6 +425,58 @@ mod tests {
             1,
             "leaf must not be re-requested before its retry delay elapses"
         );
+    }
+
+    #[async_test_all]
+    async fn test_resolving_all_ignores_backoff() {
+        let leaf = create_test_node_with_parent("leaf", Some("mid"), TreeNodeStatus::Available);
+        let mid =
+            create_test_node_with_parent("mid", Some("missing-root"), TreeNodeStatus::Splitted);
+
+        let mock = Arc::new(MockTreeService::default());
+        mock.seed_leaf(leaf.clone(), pedigree(&leaf, Vec::new()))
+            .await;
+        mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, vec![mid]))
+            .await;
+
+        let resolver = ExitChainResolver::new(mock.clone());
+        resolver.resolve_missing_chains().await.unwrap();
+        assert_eq!(mock.fetch_call_count().await, 1);
+        assert!(resolver.backoff.lock().await.contains_key(&leaf.id));
+
+        resolver.resolve_all_missing_chains().await.unwrap();
+        assert_eq!(
+            mock.fetch_call_count().await,
+            2,
+            "the exit path asks again inside the retry delay"
+        );
+    }
+
+    #[async_test_all]
+    async fn test_resolving_all_does_not_escalate_a_live_backoff() {
+        let leaf = create_test_node_with_parent("leaf", Some("mid"), TreeNodeStatus::Available);
+        let mid =
+            create_test_node_with_parent("mid", Some("missing-root"), TreeNodeStatus::Splitted);
+
+        let mock = Arc::new(MockTreeService::default());
+        mock.seed_leaf(leaf.clone(), pedigree(&leaf, Vec::new()))
+            .await;
+        mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, vec![mid]))
+            .await;
+
+        let resolver = ExitChainResolver::new(mock.clone());
+        resolver.resolve_missing_chains().await.unwrap();
+        let earned = *resolver.backoff.lock().await.get(&leaf.id).unwrap();
+
+        // However many times the exit path runs, the delay the periodic path
+        // will honour must not grow: it tracks how long the leaf has been
+        // failing, not how often someone asked about it.
+        for _ in 0..4 {
+            resolver.resolve_all_missing_chains().await.unwrap();
+        }
+        let after = *resolver.backoff.lock().await.get(&leaf.id).unwrap();
+        assert_eq!(after.delay, earned.delay, "delay must not grow per pass");
+        assert_eq!(after.retry_at, earned.retry_at, "retry must not slide out");
     }
 
     #[async_test_all]
