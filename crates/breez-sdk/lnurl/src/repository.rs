@@ -186,9 +186,7 @@ pub struct WebhookPayloadData {
 }
 
 /// Tests for the domain-attribution repository methods, generic over the
-/// `LnurlRepository` implementation. Assertions look up domains by name rather
-/// than by count, so they tolerate a shared test database with rows from other
-/// tests.
+/// `LnurlRepository` implementation.
 #[cfg(test)]
 pub mod shared_tests {
     use super::{LnurlRepository, LnurlRepositoryError};

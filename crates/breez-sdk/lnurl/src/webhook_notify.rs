@@ -261,19 +261,19 @@ mod postgres_tests {
 
     #[tokio::test]
     async fn enqueue_webhooks_creates_delivery() {
-        let db = test_db("enqueue_creates_delivery").await;
+        let (_pg, db) = test_db().await;
         shared_tests::enqueue_webhooks_creates_delivery(&db).await;
     }
 
     #[tokio::test]
     async fn enqueue_webhooks_skips_invoice_without_domain() {
-        let db = test_db("enqueue_skips_without_domain").await;
+        let (_pg, db) = test_db().await;
         shared_tests::enqueue_webhooks_skips_invoice_without_domain(&db).await;
     }
 
     #[tokio::test]
     async fn enqueue_webhooks_is_idempotent() {
-        let db = test_db("enqueue_is_idempotent").await;
+        let (_pg, db) = test_db().await;
         shared_tests::enqueue_webhooks_is_idempotent(&db).await;
     }
 }

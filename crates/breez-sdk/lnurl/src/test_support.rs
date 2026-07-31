@@ -1,71 +1,43 @@
 //! Shared fixtures for the postgres-backed tests.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use spark_postgres::deadpool_postgres::Pool;
+use spark_postgres::{PostgresStorageConfig, create_pool};
+use testcontainers::ContainerAsync;
+use testcontainers::runners::AsyncRunner;
+use testcontainers_modules::postgres::Postgres;
 
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use sqlx::{Connection, Executor, PgConnection, PgPool};
-
-/// Connection string to the throwaway postgres instance the tests run against.
-/// The tests create and drop schemas in it, so it must not point at real data.
-const URL_ENV: &str = "LNURL_TEST_POSTGRES_URL";
-
-static SCHEMA_COUNTER: AtomicU32 = AtomicU32::new(0);
-
-/// A migrated pool confined to its own freshly created schema, so tests sharing
-/// one postgres instance never see each other's rows. `label` only has to be
-/// recognizable in a failure message: uniqueness comes from a counter.
-///
-/// Panics when `LNURL_TEST_POSTGRES_URL` is unset. Skipping instead would leave
-/// the whole repository suite passing without ever touching a database.
-pub async fn test_pool(label: &str) -> PgPool {
-    let url = std::env::var(URL_ENV).unwrap_or_else(|_| {
-        panic!(
-            "{URL_ENV} is not set. Point it at a disposable postgres instance, \
-             e.g. LNURL_TEST_POSTGRES_URL=postgres://postgres:postgres@localhost/lnurl_test"
-        )
-    });
-
-    let n = SCHEMA_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let mut schema = format!("t{n}_{label}");
-    // Postgres truncates identifiers past 63 bytes, which would silently merge
-    // two schemas whose names share a long prefix.
-    schema.truncate(63);
-
-    let mut admin = PgConnection::connect(&url)
-        .await
-        .expect("connect to test postgres");
-    admin
-        .execute(format!("DROP SCHEMA IF EXISTS \"{schema}\" CASCADE").as_str())
-        .await
-        .expect("drop stale test schema");
-    admin
-        .execute(format!("CREATE SCHEMA \"{schema}\"").as_str())
-        .await
-        .expect("create test schema");
-    admin.close().await.expect("close admin connection");
-
-    let options: PgConnectOptions = url.parse().expect("parse postgres url");
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .after_connect(move |conn, _| {
-            let schema = schema.clone();
-            Box::pin(async move {
-                conn.execute(format!("SET search_path TO \"{schema}\"").as_str())
-                    .await?;
-                Ok(())
-            })
-        })
-        .connect_with(options)
-        .await
-        .expect("connect test pool");
-
+/// A pool over a throwaway postgres, migrated and empty of rows. The container
+/// is returned with it and stops as soon as it is dropped, so a test has to
+/// hold on to it for as long as it uses the pool.
+pub async fn test_pool() -> (ContainerAsync<Postgres>, Pool) {
+    let (container, pool) = empty_test_pool().await;
     crate::postgresql::run_migrations(&pool)
         .await
         .expect("run migrations");
-    pool
+    (container, pool)
+}
+
+/// A pool over a throwaway postgres with no schema applied.
+pub async fn empty_test_pool() -> (ContainerAsync<Postgres>, Pool) {
+    let container = Postgres::default()
+        .start()
+        .await
+        .expect("start postgres container");
+    let port = container
+        .get_host_port_ipv4(5432)
+        .await
+        .expect("get container port");
+
+    let pool = create_pool(&PostgresStorageConfig::with_defaults(format!(
+        "host=127.0.0.1 port={port} user=postgres password=postgres dbname=postgres"
+    )))
+    .expect("create test pool");
+
+    (container, pool)
 }
 
 /// A repository over a pool from [`test_pool`].
-pub async fn test_db(label: &str) -> crate::postgresql::LnurlRepository {
-    crate::postgresql::LnurlRepository::new(test_pool(label).await)
+pub async fn test_db() -> (ContainerAsync<Postgres>, crate::postgresql::LnurlRepository) {
+    let (container, pool) = test_pool().await;
+    (container, crate::postgresql::LnurlRepository::new(pool))
 }

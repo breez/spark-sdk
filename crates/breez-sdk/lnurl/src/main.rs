@@ -24,8 +24,8 @@ use spark::session_store::InMemorySessionStore;
 use spark::ssp::{ServiceProvider, SparkWalletWebhookEventType};
 use spark::token::InMemoryTokenOutputStore;
 use spark::tree::InMemoryTreeStore;
+use spark_postgres::{PostgresStorageConfig, create_pool};
 use spark_wallet::{DefaultSigner, Network, SparkSignerAdapter, SparkWalletConfig};
-use sqlx::PgPool;
 use std::collections::HashSet;
 use std::str::FromStr;
 use std::{path::PathBuf, sync::Arc};
@@ -55,6 +55,14 @@ mod zap;
 fn default_user_agent() -> String {
     concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")).to_string()
 }
+
+/// How long establishing a new database connection may take.
+const DB_CONNECT_TIMEOUT_SECS: u64 = 10;
+
+/// How long a request may wait for a pooled connection before giving up. Longer
+/// than the connect timeout so a request queued behind a saturated pool still
+/// gets a chance at a freshly opened connection.
+const DB_POOL_WAIT_TIMEOUT_SECS: u64 = 30;
 
 #[derive(Clone, Parser, Debug, Serialize, Deserialize)]
 #[command(version, about, long_about = None)]
@@ -184,9 +192,21 @@ async fn main() -> Result<(), anyhow::Error> {
         ));
     }
 
-    let pool = PgPool::connect(&args.db_url)
-        .await
-        .map_err(|e| anyhow!("failed to create connection pool: {:?}", e))?;
+    let mut pool_config = PostgresStorageConfig::with_defaults(args.db_url.clone());
+    // deadpool defaults both timeouts to "wait forever", which turns an
+    // unreachable database into a hung process rather than a failed request.
+    pool_config.create_timeout_secs = Some(DB_CONNECT_TIMEOUT_SECS);
+    pool_config.wait_timeout_secs = Some(DB_POOL_WAIT_TIMEOUT_SECS);
+    let pool = create_pool(&pool_config)
+        .map_err(|e| anyhow!("failed to create connection pool: {e:?}"))?;
+
+    // The pool connects lazily, so an unreachable database or bad credentials
+    // would otherwise only surface once requests start arriving.
+    drop(
+        pool.get()
+            .await
+            .map_err(|e| anyhow!("failed to connect to the database: {e:?}"))?,
+    );
 
     if args.auto_migrate {
         debug!("running database migrations");
@@ -343,7 +363,7 @@ where
         .map(|ca_cert_str| {
             let raw_ca = BASE64_STANDARD
                 .decode(ca_cert_str.trim())
-                .map_err(|e| anyhow!("failed to decode base64 ca_cert: {:?}", e))?;
+                .map_err(|e| anyhow!("failed to decode base64 ca_cert: {e:?}"))?;
             let (_, ca_cert) = X509Certificate::from_der(&raw_ca)
                 .map_err(|e| anyhow!("failed to parse ca certificate: {e:?}"))?;
             Ok::<_, anyhow::Error>(ca_cert.as_raw().to_vec())
@@ -381,7 +401,7 @@ where
         .nsec
         .map(|nsec| {
             let keys = nostr::Keys::from_str(&nsec)
-                .map_err(|e| anyhow!("failed to parse nsec key: {:?}", e))?;
+                .map_err(|e| anyhow!("failed to parse nsec key: {e:?}"))?;
             Ok::<_, anyhow::Error>(keys)
         })
         .transpose()?;

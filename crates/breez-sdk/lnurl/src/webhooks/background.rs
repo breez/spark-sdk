@@ -321,7 +321,10 @@ mod tests {
 
     use axum::Router;
     use axum::routing::post;
-    use sqlx::{PgPool, Row};
+    use spark_postgres::deadpool_postgres::Pool;
+    use spark_postgres::tokio_postgres::Row;
+    use testcontainers::ContainerAsync;
+    use testcontainers_modules::postgres::Postgres;
     use tokio::sync::{RwLock, Semaphore};
 
     use super::*;
@@ -333,10 +336,14 @@ mod tests {
     const TEST_DOMAIN: &str = "test.example.com";
     const TEST_SECRET: &str = "test_webhook_secret";
 
-    async fn setup_test_db(label: &str) -> (crate::postgresql::LnurlRepository, PgPool) {
-        let pool = crate::test_support::test_pool(label).await;
+    async fn setup_test_db() -> (
+        ContainerAsync<Postgres>,
+        crate::postgresql::LnurlRepository,
+        Pool,
+    ) {
+        let (container, pool) = crate::test_support::test_pool().await;
         let db = crate::postgresql::LnurlRepository::new(pool.clone());
-        (db, pool)
+        (container, db, pool)
     }
 
     async fn insert_delivery(db: &impl WebhookRepository, identifier: &str, domain: &str) {
@@ -348,30 +355,32 @@ mod tests {
         db.insert_webhook_deliveries(&[delivery]).await.unwrap();
     }
 
-    async fn insert_domain_webhook(pool: &PgPool, domain: &str, url: &str, secret: &str) {
-        sqlx::query(
-            "INSERT INTO domain_webhooks (domain, url, webhook_secret)
-             VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
-        )
-        .bind(domain)
-        .bind(url)
-        .bind(secret)
-        .execute(pool)
-        .await
-        .unwrap();
+    async fn insert_domain_webhook(pool: &Pool, domain: &str, url: &str, secret: &str) {
+        pool.get()
+            .await
+            .unwrap()
+            .execute(
+                "INSERT INTO domain_webhooks (domain, url, webhook_secret)
+                 VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+                &[&domain, &url, &secret],
+            )
+            .await
+            .unwrap();
     }
 
-    async fn get_delivery_by_identifier(pool: &PgPool, identifier: &str) -> sqlx::postgres::PgRow {
-        sqlx::query(
-            "SELECT id, identifier, domain, url, payload, created_at, succeeded_at,
-                    retry_count, next_retry_at, claimed_at,
-                    last_error_status_code, last_error_body
-             FROM webhook_deliveries WHERE identifier = $1",
-        )
-        .bind(identifier)
-        .fetch_one(pool)
-        .await
-        .unwrap()
+    async fn get_delivery_by_identifier(pool: &Pool, identifier: &str) -> Row {
+        pool.get()
+            .await
+            .unwrap()
+            .query_one(
+                "SELECT id, identifier, domain, url, payload, created_at, succeeded_at,
+                        retry_count, next_retry_at, claimed_at,
+                        last_error_status_code, last_error_body
+                 FROM webhook_deliveries WHERE identifier = $1",
+                &[&identifier],
+            )
+            .await
+            .unwrap()
     }
 
     fn new_semaphores() -> DomainSemaphores {
@@ -409,7 +418,7 @@ mod tests {
 
     #[tokio::test]
     async fn successful_delivery_marks_succeeded() {
-        let (db, pool) = setup_test_db("bg_successful_delivery").await;
+        let (_pg, db, pool) = setup_test_db().await;
 
         let router = Router::new().route("/hook", post(|| async { axum::http::StatusCode::OK }));
         let base_url = start_mock_server(router).await;
@@ -441,7 +450,7 @@ mod tests {
 
     #[tokio::test]
     async fn server_error_causes_retry() {
-        let (db, pool) = setup_test_db("bg_server_error_retry").await;
+        let (_pg, db, pool) = setup_test_db().await;
 
         let router = Router::new().route(
             "/hook",
@@ -484,7 +493,7 @@ mod tests {
 
     #[tokio::test]
     async fn connection_error_causes_retry() {
-        let (db, pool) = setup_test_db("bg_connection_error_retry").await;
+        let (_pg, db, pool) = setup_test_db().await;
 
         // Port 1 — nothing is listening there.
         let url = "http://127.0.0.1:1/hook";
@@ -518,7 +527,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_delivery_is_retried_and_succeeds() {
-        let (db, pool) = setup_test_db("bg_retried_and_succeeds").await;
+        let (_pg, db, pool) = setup_test_db().await;
 
         let counter = Arc::new(AtomicUsize::new(0));
 
@@ -561,14 +570,15 @@ mod tests {
 
         // Manually make the delivery eligible for retry by setting next_retry_at to now.
         let id: i64 = row.try_get("id").unwrap();
-        sqlx::query(
-            "UPDATE webhook_deliveries SET next_retry_at = $1, claimed_at = NULL WHERE id = $2",
-        )
-        .bind(now_millis())
-        .bind(id)
-        .execute(&pool)
-        .await
-        .unwrap();
+        pool.get()
+            .await
+            .unwrap()
+            .execute(
+                "UPDATE webhook_deliveries SET next_retry_at = $1, claimed_at = NULL WHERE id = $2",
+                &[&now_millis(), &id],
+            )
+            .await
+            .unwrap();
 
         // Second attempt — should succeed.
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
@@ -584,7 +594,7 @@ mod tests {
 
     #[tokio::test]
     async fn error_body_is_truncated() {
-        let (db, pool) = setup_test_db("bg_error_body_truncated").await;
+        let (_pg, db, pool) = setup_test_db().await;
 
         let long_body: String = "x".repeat(1000);
         let router = Router::new().route(
@@ -644,7 +654,7 @@ mod tests {
 
     #[tokio::test]
     async fn slow_server_does_not_block_fast_server() {
-        let (db, pool) = setup_test_db("bg_slow_does_not_block_fast").await;
+        let (_pg, db, pool) = setup_test_db().await;
 
         let slow_domain = "slow.example.com";
         let fast_domain = "fast.example.com";
@@ -716,7 +726,7 @@ mod tests {
 
     #[tokio::test]
     async fn per_domain_throttling_unclaims_excess() {
-        let (db, pool) = setup_test_db("bg_throttling_unclaims").await;
+        let (_pg, db, pool) = setup_test_db().await;
 
         let router = Router::new().route("/hook", post(|| async { axum::http::StatusCode::OK }));
         let base_url = start_mock_server(router).await;
@@ -751,7 +761,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_config_deletes_unattempted_delivery() {
-        let (db, pool) = setup_test_db("bg_no_config_deletes").await;
+        let (_pg, db, pool) = setup_test_db().await;
 
         insert_delivery(&db, "no_config_1", "unknown.example.com").await;
 
@@ -762,24 +772,34 @@ mod tests {
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM webhook_deliveries WHERE identifier = $1")
-                .bind("no_config_1")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let count: i64 = pool
+            .get()
+            .await
+            .unwrap()
+            .query_one(
+                "SELECT COUNT(*) FROM webhook_deliveries WHERE identifier = $1",
+                &[&"no_config_1"],
+            )
+            .await
+            .unwrap()
+            .get(0);
         assert_eq!(count, 0, "unattempted delivery should be deleted");
     }
 
     #[tokio::test]
     async fn no_config_parks_previously_attempted_delivery() {
-        let (db, pool) = setup_test_db("bg_no_config_parks").await;
+        let (_pg, db, pool) = setup_test_db().await;
 
         // Insert a delivery that looks like it was previously attempted (url is set).
         insert_delivery(&db, "parked_1", TEST_DOMAIN).await;
-        sqlx::query("UPDATE webhook_deliveries SET url = 'http://old.example.com/hook' WHERE identifier = $1")
-            .bind("parked_1")
-            .execute(&pool)
+        pool.get()
+            .await
+            .unwrap()
+            .execute(
+                "UPDATE webhook_deliveries SET url = 'http://old.example.com/hook'
+                 WHERE identifier = $1",
+                &[&"parked_1"],
+            )
             .await
             .unwrap();
 
@@ -803,7 +823,7 @@ mod tests {
         use axum::body::Bytes;
         use axum::http::HeaderMap;
 
-        let (db, pool) = setup_test_db("bg_signature_header").await;
+        let (_pg, db, pool) = setup_test_db().await;
 
         let received_sig = Arc::new(tokio::sync::Mutex::new(String::new()));
         let received_body = Arc::new(tokio::sync::Mutex::new(String::new()));
