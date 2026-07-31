@@ -1651,7 +1651,21 @@ impl SparkWallet {
     /// Reads out the wallet's whole unilateral exit state: every stored leaf
     /// with its ancestor chain.
     pub async fn export_exit_state(&self) -> Result<ExitStateExport, SparkWalletError> {
-        let leaf_ids = self.tree_service.list_leaves().await?.leaf_ids();
+        let mut leaf_ids = self.tree_service.list_leaves().await?.leaf_ids();
+        // The leaves kept only for their chain are in no bucket, so they are
+        // asked for separately. They are the ones an export exists for: no
+        // operator reports them any more, which leaves the stored chain as the
+        // only way to get the funds back, and an export without them would look
+        // complete while omitting exactly what cannot be recovered any other way.
+        leaf_ids.extend(
+            self.tree_service
+                .list_leaves_kept_for_exit()
+                .await?
+                .into_iter()
+                .map(|leaf| leaf.id),
+        );
+        leaf_ids.sort();
+        leaf_ids.dedup();
         let pedigrees = self.tree_service.load_exit_chains(&leaf_ids).await?;
         debug!(
             leaves = leaf_ids.len(),
@@ -4096,6 +4110,44 @@ mod tests {
         );
         let export = wallet.export_exit_state().await.unwrap();
         assert_eq!(chain_ids(&export.pedigrees), vec![vec!["leaf".to_string()]]);
+    }
+
+    /// A leaf no operator reports any more is in no bucket, so nothing that
+    /// walks the buckets sees it. It is also the one leaf whose stored chain is
+    /// the only way to get the funds back, so an export that missed it would
+    /// look complete while leaving out precisely what cannot be recovered any
+    /// other way.
+    #[macros::async_test_all]
+    async fn export_exit_state_includes_a_leaf_kept_only_for_its_chain() {
+        let store = Arc::new(InMemoryTreeStore::new());
+        let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
+        let owner = wallet.get_identity_public_key();
+
+        let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+        let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+        seed_pedigrees(
+            store.as_ref(),
+            &[pedigree_owned_by(owner, leaf, vec![root])],
+        )
+        .await;
+
+        // A refresh no operator answered for marks the leaf, taking it out of
+        // the balance and out of every bucket. Its start comes from the store's
+        // own clock, and sits ahead of it, so the leaf just added counts as
+        // older than the refresh whatever clock the store runs on.
+        let refresh_start = store.now().await.unwrap() + Duration::from_secs(10);
+        store.set_leaves(&[], &[], refresh_start).await.unwrap();
+        assert!(
+            store.get_leaves().await.unwrap().leaf_ids().is_empty(),
+            "the leaf is in no bucket once it is kept only for its chain"
+        );
+
+        let export = wallet.export_exit_state().await.unwrap();
+        assert_eq!(
+            chain_ids(&export.pedigrees),
+            vec![vec!["root".to_string(), "leaf".to_string()]],
+            "the export carries the kept leaf and its whole chain"
+        );
     }
 
     #[macros::async_test_all]
