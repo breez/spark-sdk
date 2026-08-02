@@ -199,7 +199,7 @@ impl From<&TargetAmounts> for WasmTargetAmounts {
 
 #[async_trait]
 impl TreeStore for WasmTreeStore {
-    async fn add_leaves(&self, leaves: &[LeafPedigree]) -> Result<(), TreeServiceError> {
+    async fn add_leaves(&self, leaves: &[TreeNode]) -> Result<(), TreeServiceError> {
         let leaves_js = serde_wasm_bindgen::to_value(leaves)
             .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
         let promise = self
@@ -345,8 +345,8 @@ impl TreeStore for WasmTreeStore {
 
     async fn set_leaves(
         &self,
-        leaves: &[LeafPedigree],
-        missing_operators_leaves: &[LeafPedigree],
+        leaves: &[TreeNode],
+        missing_operators_leaves: &[TreeNode],
         refresh_started_at: platform_utils::time::SystemTime,
     ) -> Result<(), TreeServiceError> {
         let leaves_js = serde_wasm_bindgen::to_value(leaves)
@@ -391,7 +391,7 @@ impl TreeStore for WasmTreeStore {
     async fn finalize_reservation(
         &self,
         id: &LeavesReservationId,
-        new_leaves: Option<&[LeafPedigree]>,
+        new_leaves: Option<&[TreeNode]>,
     ) -> Result<(), TreeServiceError> {
         let new_leaves_js = match new_leaves {
             Some(leaves) => serde_wasm_bindgen::to_value(leaves)
@@ -472,8 +472,8 @@ impl TreeStore for WasmTreeStore {
     async fn update_reservation(
         &self,
         reservation_id: &LeavesReservationId,
-        reserved_leaves: &[LeafPedigree],
-        change_leaves: &[LeafPedigree],
+        reserved_leaves: &[TreeNode],
+        change_leaves: &[TreeNode],
     ) -> Result<LeavesReservation, TreeServiceError> {
         let reserved_js = serde_wasm_bindgen::to_value(reserved_leaves)
             .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
@@ -587,19 +587,19 @@ type LeafSelection =
     | { type: 'insufficientFunds' };
 
 export interface TreeStore {
-    addLeaves: (leaves: LeafPedigree[]) => Promise<void>;
+    addLeaves: (leaves: TreeNode[]) => Promise<void>;
     storeAncestors: (pedigrees: LeafPedigree[]) => Promise<void>;
     leavesMissingExitChains: () => Promise<string[]>;
     getLeaves: () => Promise<Leaves>;
     getExitChains: (leafIds: string[]) => Promise<LeafPedigree[]>;
     getAvailableBalance: () => Promise<bigint>;
     getVerifiedLeafKeys: () => Promise<[string, string, string][]>;
-    setLeaves: (leaves: LeafPedigree[], missingLeaves: LeafPedigree[], refreshStartedAtMs: number) => Promise<void>;
+    setLeaves: (leaves: TreeNode[], missingLeaves: TreeNode[], refreshStartedAtMs: number) => Promise<void>;
     cancelReservation: (id: string, leavesToKeep: TreeNode[]) => Promise<void>;
-    finalizeReservation: (id: string, newLeaves: LeafPedigree[] | null) => Promise<void>;
+    finalizeReservation: (id: string, newLeaves: TreeNode[] | null) => Promise<void>;
     tryReserveLeaves: (targetAmounts: TargetAmounts | null, exactOnly: boolean, purpose: string) => Promise<ReserveResult>;
     now: () => Promise<number>;
-    updateReservation: (reservationId: string, reservedLeaves: LeafPedigree[], changeLeaves: LeafPedigree[]) => Promise<LeavesReservation>;
+    updateReservation: (reservationId: string, reservedLeaves: TreeNode[], changeLeaves: TreeNode[]) => Promise<LeavesReservation>;
     tryReserveLeavesByIds: (leafIds: string[], purpose: string) => Promise<LeavesReservation>;
     trySelectLeaves: (targetAmounts: TargetAmounts | null) => Promise<LeafSelection>;
 }"#;

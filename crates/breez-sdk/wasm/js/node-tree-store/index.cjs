@@ -163,12 +163,9 @@ class NodeTreeStore {
       if (!leaves || leaves.length === 0) {
         return;
       }
-      const leafNodes = leaves.map((p) => p.leaf);
+      const leafNodes = leaves;
       this.db.transaction(() => {
         this._removeSpent(leafNodes.map((l) => l.id));
-        for (const pedigree of leaves) {
-          this._upsertAncestors(pedigree.leaf.id, pedigree.ancestors);
-        }
         this._upsertLeaves(leafNodes, false, null);
       })();
     } catch (error) {
@@ -209,29 +206,23 @@ class NodeTreeStore {
 
   /**
    * Ids of the stored leaves whose chain cannot back an exit: the leaf has a
-   * parent, and its ancestor rows do not run from that parent to a root.
+   * parent, and no ancestor row of its own holds that parent.
    * @returns {Promise<Array<string>>}
    */
   async leavesMissingExitChains() {
     try {
       const rows = this.db
         .prepare(
-          // One shape across every SQL backend. Two outer joins beat correlated
-          // NOT EXISTS subqueries here: under the OR below, Postgres cannot pull a
-          // NOT EXISTS up into an anti-join and re-runs it per leaf instead. A chain
-          // backs an exit only if it runs from the leaf's current parent (`link`) to
-          // a root (`root`); one stored before a renewal reparented the leaf still
-          // reaches a root while describing a parent it no longer has.
-          // DISTINCT is defensive: a contiguous chain has one root and
-          // `(leaf_id, id)` is unique, so neither join matches twice.
-          `SELECT DISTINCT l.id
+          // A stored chain runs from its leaf's parent to a root, so a leaf
+          // whose chain holds the parent it has now is exitable. The join binds
+          // both primary key columns, making it one index probe per leaf. A leaf
+          // that is itself a root needs no chain.
+          `SELECT l.id
            FROM brz_tree_leaves l
-           LEFT JOIN brz_tree_ancestors root
-             ON root.leaf_id = l.id AND root.parent_node_id IS NULL
            LEFT JOIN brz_tree_ancestors link
              ON link.leaf_id = l.id AND link.id = l.parent_node_id
            WHERE l.parent_node_id IS NOT NULL
-             AND (root.leaf_id IS NULL OR link.leaf_id IS NULL)`
+             AND link.leaf_id IS NULL`
         )
         .all();
       return rows.map((r) => r.id);
@@ -445,18 +436,12 @@ class NodeTreeStore {
           .all(refreshMs)
           .map((r) => r.id);
 
-        // A chain is only ever removed with its leaf, so writing one for a leaf
-        // skipped as spent below would leave it behind for good.
-        for (const pedigree of leaves.concat(missingLeaves || [])) {
-          if (spentIds.has(pedigree.leaf.id)) continue;
-          this._upsertAncestors(pedigree.leaf.id, pedigree.ancestors);
-        }
-        this._upsertLeaves(leaves.map((p) => p.leaf), false, spentIds);
-        this._upsertLeaves(missingLeaves.map((p) => p.leaf), true, spentIds);
+        this._upsertLeaves(leaves, false, spentIds);
+        this._upsertLeaves(missingLeaves, true, spentIds);
 
         const survivingIds = new Set();
-        for (const pedigree of leaves.concat(missingLeaves)) {
-          if (!spentIds.has(pedigree.leaf.id)) survivingIds.add(pedigree.leaf.id);
+        for (const leaf of leaves.concat(missingLeaves)) {
+          if (!spentIds.has(leaf.id)) survivingIds.add(leaf.id);
         }
         const goneIds = deletedIds.filter((id) => !survivingIds.has(id));
         if (goneIds.length > 0) {
@@ -546,10 +531,7 @@ class NodeTreeStore {
         }
 
         if (newLeaves && newLeaves.length > 0) {
-          for (const pedigree of newLeaves) {
-            this._upsertAncestors(pedigree.leaf.id, pedigree.ancestors);
-          }
-          this._upsertLeaves(newLeaves.map((p) => p.leaf), false, null);
+          this._upsertLeaves(newLeaves, false, null);
         }
 
         // Record the swap only when it produced change: the setLeaves guard uses
@@ -751,17 +733,11 @@ class NodeTreeStore {
             .run(...oldLeafIds);
         }
 
-        for (const pedigree of changeLeaves) {
-          this._upsertAncestors(pedigree.leaf.id, pedigree.ancestors);
-        }
-        for (const pedigree of reservedLeaves) {
-          this._upsertAncestors(pedigree.leaf.id, pedigree.ancestors);
-        }
-        this._upsertLeaves(changeLeaves.map((p) => p.leaf), false, null);
-        this._upsertLeaves(reservedLeaves.map((p) => p.leaf), false, null);
+        this._upsertLeaves(changeLeaves, false, null);
+        this._upsertLeaves(reservedLeaves, false, null);
         this._setReservationId(
           reservationId,
-          reservedLeaves.map((p) => p.leaf.id)
+          reservedLeaves.map((l) => l.id)
         );
 
         this.db
@@ -772,7 +748,7 @@ class NodeTreeStore {
 
         // Return value must be plain TreeNodes: the Rust side deserializes
         // Vec<TreeNode>.
-        return { id: reservationId, leaves: reservedLeaves.map((p) => p.leaf) };
+        return { id: reservationId, leaves: reservedLeaves };
       })();
     } catch (error) {
       if (error instanceof TreeStoreError) throw error;

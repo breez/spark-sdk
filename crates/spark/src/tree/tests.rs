@@ -68,16 +68,12 @@ pub fn create_test_node_with_parent(
     node
 }
 
-/// Wraps leaves as pedigrees with no ancestors, for pool tests that do not
-/// exercise the ancestor chain.
-pub fn as_pedigrees(leaves: &[TreeNode]) -> Vec<LeafPedigree> {
-    leaves
-        .iter()
-        .map(|leaf| LeafPedigree {
-            leaf: leaf.clone(),
-            ancestors: Vec::new(),
-        })
-        .collect()
+/// Puts each pedigree's leaf in the pool and then writes its chain: the two
+/// calls a caller makes now that `store_ancestors` is the only ancestor writer.
+async fn add_with_chains(store: &dyn TreeStore, pedigrees: &[LeafPedigree]) {
+    let leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
+    store.add_leaves(&leaves).await.unwrap();
+    store.store_ancestors(pedigrees).await.unwrap();
 }
 
 /// Root-to-leaf ids of a stored leaf's exit chain; empty when the leaf is not
@@ -110,10 +106,7 @@ async fn exit_chain(store: &dyn TreeStore, leaf_id: &TreeNodeId) -> Option<LeafP
 /// returned.
 pub async fn test_upsert_and_get_leaf(store: &dyn TreeStore) {
     let node = create_test_tree_node("node-a", 1_000);
-    store
-        .add_leaves(&as_pedigrees(std::slice::from_ref(&node)))
-        .await
-        .unwrap();
+    store.add_leaves(std::slice::from_ref(&node)).await.unwrap();
 
     let missing = TreeNodeId::from_str("no-such-node").unwrap();
     let pedigrees = store
@@ -132,13 +125,14 @@ pub async fn test_get_exit_chain_missing_ancestor(store: &dyn TreeStore) {
     let mid = create_test_node_with_parent("mid", Some("root"), TreeNodeStatus::Splitted);
     let leaf = create_test_node_with_parent("leaf", Some("mid"), TreeNodeStatus::Available);
     // The root is intentionally left out of the ancestors.
-    store
-        .add_leaves(&[LeafPedigree {
+    add_with_chains(
+        store,
+        &[LeafPedigree {
             leaf: leaf.clone(),
             ancestors: vec![mid],
-        }])
-        .await
-        .unwrap();
+        }],
+    )
+    .await;
 
     let pedigree = exit_chain(store, &leaf.id).await.unwrap();
     let ids: Vec<String> = pedigree
@@ -161,8 +155,9 @@ pub async fn test_get_exit_chains(store: &dyn TreeStore) {
     let leaf_b = create_test_node_with_parent("leaf-b", Some("mid-b"), TreeNodeStatus::Available);
     // leaf-c's parent is not stored, so its chain comes back empty (partial).
     let leaf_c = create_test_node_with_parent("leaf-c", Some("gone"), TreeNodeStatus::Available);
-    store
-        .add_leaves(&[
+    add_with_chains(
+        store,
+        &[
             LeafPedigree {
                 leaf: leaf_a.clone(),
                 ancestors: vec![mid_a, root.clone()],
@@ -175,9 +170,9 @@ pub async fn test_get_exit_chains(store: &dyn TreeStore) {
                 leaf: leaf_c.clone(),
                 ancestors: vec![],
             },
-        ])
-        .await
-        .unwrap();
+        ],
+    )
+    .await;
 
     let missing = TreeNodeId::from_str("not-stored").unwrap();
     let pedigrees = store
@@ -213,24 +208,26 @@ pub async fn test_incomplete_pedigree_still_spendable(store: &dyn TreeStore) {
     let leaf = create_test_node_with_parent("leaf", Some("mid"), TreeNodeStatus::Available);
 
     // Stored without the root: the chain cannot reach it, but the leaf still counts.
-    store
-        .add_leaves(&[LeafPedigree {
+    add_with_chains(
+        store,
+        &[LeafPedigree {
             leaf: leaf.clone(),
             ancestors: vec![mid.clone()],
-        }])
-        .await
-        .unwrap();
+        }],
+    )
+    .await;
     assert_eq!(store.get_available_balance().await.unwrap(), leaf.value);
     assert_eq!(get_available(store).await.len(), 1);
 
     // Completing the chain keeps it spendable and makes the exit chain whole.
-    store
-        .add_leaves(&[LeafPedigree {
+    add_with_chains(
+        store,
+        &[LeafPedigree {
             leaf: leaf.clone(),
             ancestors: vec![mid, root],
-        }])
-        .await
-        .unwrap();
+        }],
+    )
+    .await;
     assert_eq!(store.get_available_balance().await.unwrap(), leaf.value);
     assert_eq!(
         exit_chain_ids(store, &leaf.id).await,
@@ -238,12 +235,13 @@ pub async fn test_incomplete_pedigree_still_spendable(store: &dyn TreeStore) {
     );
 }
 
-/// A swap output persisted through `update_reservation` carries its ancestors, so
-/// both the reserved and the change leaf keep a reconstructable exit chain.
+/// Chains stored for swap outputs after `update_reservation` put them in the
+/// pool survive, so both the reserved and the change leaf keep a reconstructable
+/// exit chain. The update itself writes no chains.
 pub async fn test_exit_chain_after_swap_update(store: &dyn TreeStore) {
     let original = create_test_tree_node("original", 1_000);
     store
-        .add_leaves(&as_pedigrees(std::slice::from_ref(&original)))
+        .add_leaves(std::slice::from_ref(&original))
         .await
         .unwrap();
     let reservation = reserve_leaves(store, None, false, ReservationPurpose::Swap)
@@ -259,15 +257,22 @@ pub async fn test_exit_chain_after_swap_update(store: &dyn TreeStore) {
     store
         .update_reservation(
             &reservation.id,
-            &[LeafPedigree {
+            std::slice::from_ref(&reserved_leaf),
+            std::slice::from_ref(&change_leaf),
+        )
+        .await
+        .unwrap();
+    store
+        .store_ancestors(&[
+            LeafPedigree {
                 leaf: reserved_leaf.clone(),
                 ancestors: vec![reserved_root],
-            }],
-            &[LeafPedigree {
+            },
+            LeafPedigree {
                 leaf: change_leaf.clone(),
                 ancestors: vec![change_root],
-            }],
-        )
+            },
+        ])
         .await
         .unwrap();
 
@@ -287,13 +292,14 @@ pub async fn test_exit_chain_after_swap_update(store: &dyn TreeStore) {
 pub async fn test_exit_chain_after_cancel_reparent(store: &dyn TreeStore) {
     let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
     let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
-    store
-        .add_leaves(&[LeafPedigree {
+    add_with_chains(
+        store,
+        &[LeafPedigree {
             leaf: leaf.clone(),
             ancestors: vec![root],
-        }])
-        .await
-        .unwrap();
+        }],
+    )
+    .await;
     let reservation = reserve_leaves(store, None, false, ReservationPurpose::Payment)
         .await
         .unwrap();
@@ -303,13 +309,14 @@ pub async fn test_exit_chain_after_cancel_reparent(store: &dyn TreeStore) {
     let new_root = create_test_node_with_parent("new_root", None, TreeNodeStatus::Splitted);
     let mut reparented = leaf.clone();
     reparented.parent_node_id = Some(TreeNodeId::from_str("new_root").unwrap());
-    store
-        .add_leaves(&[LeafPedigree {
+    add_with_chains(
+        store,
+        &[LeafPedigree {
             leaf: reparented.clone(),
             ancestors: vec![new_root],
-        }])
-        .await
-        .unwrap();
+        }],
+    )
+    .await;
 
     // Cancel returns only the leaf; its new chain is already in the store.
     store
@@ -328,25 +335,27 @@ pub async fn test_exit_chain_after_cancel_reparent(store: &dyn TreeStore) {
 pub async fn test_node_update_in_place(store: &dyn TreeStore) {
     let ancestor = create_test_node_with_parent("root", None, TreeNodeStatus::Available);
     let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
-    store
-        .add_leaves(&[LeafPedigree {
+    add_with_chains(
+        store,
+        &[LeafPedigree {
             leaf: leaf.clone(),
             ancestors: vec![ancestor.clone()],
-        }])
-        .await
-        .unwrap();
+        }],
+    )
+    .await;
 
     // Re-store the ancestor with a new status and a new parent, both applied.
     let mut updated = ancestor.clone();
     updated.status = TreeNodeStatus::OnChain;
     updated.parent_node_id = Some(TreeNodeId::from_str("new-parent").unwrap());
-    store
-        .add_leaves(&[LeafPedigree {
+    add_with_chains(
+        store,
+        &[LeafPedigree {
             leaf: leaf.clone(),
             ancestors: vec![updated],
-        }])
-        .await
-        .unwrap();
+        }],
+    )
+    .await;
 
     let pedigree = exit_chain(store, &leaf.id).await.unwrap();
     let stored = &pedigree.ancestors[0];
@@ -367,13 +376,14 @@ pub async fn test_leaf_reparented_by_renewal(store: &dyn TreeStore) {
     let root = create_test_node_with_parent("root", None, TreeNodeStatus::Available);
     let old_mid = create_test_node_with_parent("old-mid", Some("root"), TreeNodeStatus::Splitted);
     let leaf = create_test_node_with_parent("leaf", Some("old-mid"), TreeNodeStatus::Available);
-    store
-        .add_leaves(&[LeafPedigree {
+    add_with_chains(
+        store,
+        &[LeafPedigree {
             leaf: leaf.clone(),
             ancestors: vec![old_mid, root.clone()],
-        }])
-        .await
-        .unwrap();
+        }],
+    )
+    .await;
 
     assert_eq!(
         exit_chain_ids(store, &leaf.id).await,
@@ -384,13 +394,14 @@ pub async fn test_leaf_reparented_by_renewal(store: &dyn TreeStore) {
     let new_mid = create_test_node_with_parent("new-mid", Some("root"), TreeNodeStatus::Splitted);
     let mut renewed = leaf.clone();
     renewed.parent_node_id = Some(TreeNodeId::from_str("new-mid").unwrap());
-    store
-        .add_leaves(&[LeafPedigree {
+    add_with_chains(
+        store,
+        &[LeafPedigree {
             leaf: renewed,
             ancestors: vec![new_mid, root],
-        }])
-        .await
-        .unwrap();
+        }],
+    )
+    .await;
 
     assert_eq!(
         exit_chain_ids(store, &leaf.id).await,
@@ -403,13 +414,14 @@ pub async fn test_leaf_reparented_by_renewal(store: &dyn TreeStore) {
 pub async fn test_ancestor_not_returned_as_leaf(store: &dyn TreeStore) {
     let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
     let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
-    store
-        .add_leaves(&[LeafPedigree {
+    add_with_chains(
+        store,
+        &[LeafPedigree {
             leaf: leaf.clone(),
             ancestors: vec![root.clone()],
-        }])
-        .await
-        .unwrap();
+        }],
+    )
+    .await;
 
     let available = get_available(store).await;
     assert_eq!(available.len(), 1);
@@ -422,10 +434,7 @@ pub async fn test_ancestor_not_returned_as_leaf(store: &dyn TreeStore) {
 pub async fn test_store_ancestors_backfills_chain(store: &dyn TreeStore) {
     let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
     let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
-    store
-        .add_leaves(&as_pedigrees(std::slice::from_ref(&leaf)))
-        .await
-        .unwrap();
+    store.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
     assert_eq!(exit_chain_ids(store, &leaf.id).await, vec!["leaf"]);
 
     store
@@ -442,6 +451,51 @@ pub async fn test_store_ancestors_backfills_chain(store: &dyn TreeStore) {
     assert_eq!(available[0].id.to_string(), "leaf");
 }
 
+/// A stored chain outlives the refreshes that keep reporting its leaf, and is
+/// dropped only when the leaf itself leaves the pool. Refreshes carry leaves
+/// alone, so a chain the resolver wrote must not be collateral damage.
+pub async fn test_stored_chain_survives_refresh_and_dies_with_its_leaf(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let kept = create_test_node_with_parent("kept", Some("root"), TreeNodeStatus::Available);
+    let dropped = create_test_node_with_parent("dropped", Some("root"), TreeNodeStatus::Available);
+    add_with_chains(
+        store,
+        &[
+            LeafPedigree {
+                leaf: kept.clone(),
+                ancestors: vec![root.clone()],
+            },
+            LeafPedigree {
+                leaf: dropped.clone(),
+                ancestors: vec![root],
+            },
+        ],
+    )
+    .await;
+
+    // A refresh reporting both leaves keeps both chains: it writes none itself.
+    let refresh_start = future_refresh_start(store).await;
+    store
+        .set_leaves(&[kept.clone(), dropped.clone()], &[], refresh_start)
+        .await
+        .unwrap();
+    assert_eq!(exit_chain_ids(store, &kept.id).await, vec!["root", "kept"]);
+    assert_eq!(
+        exit_chain_ids(store, &dropped.id).await,
+        vec!["root", "dropped"]
+    );
+
+    // A refresh that stops reporting `dropped` takes its chain with it, and
+    // leaves the surviving leaf's chain intact.
+    let refresh_start = future_refresh_start(store).await;
+    store
+        .set_leaves(std::slice::from_ref(&kept), &[], refresh_start)
+        .await
+        .unwrap();
+    assert_eq!(exit_chain_ids(store, &kept.id).await, vec!["root", "kept"]);
+    assert!(exit_chain(store, &dropped.id).await.is_none());
+}
+
 /// A leaf spent between its chain being resolved and stored stays spent: storing
 /// ancestors must not return it to the pool the way `add_leaves` would.
 pub async fn test_store_ancestors_does_not_revive_spent_leaf(store: &dyn TreeStore) {
@@ -451,10 +505,7 @@ pub async fn test_store_ancestors_does_not_revive_spent_leaf(store: &dyn TreeSto
         leaf: leaf.clone(),
         ancestors: vec![root],
     };
-    store
-        .add_leaves(std::slice::from_ref(&pedigree))
-        .await
-        .unwrap();
+    add_with_chains(store, std::slice::from_ref(&pedigree)).await;
 
     let reservation = reserve_leaves(store, None, false, ReservationPurpose::Payment)
         .await
@@ -499,13 +550,14 @@ pub async fn test_store_ancestors_for_absent_leaf(store: &dyn TreeStore) {
     // Nothing was written for the missing leaf. A chain is only ever removed with
     // its leaf, so one stored for a leaf that is already gone would never be
     // collected; adding the leaf afterwards would surface it.
-    store
-        .add_leaves(&[LeafPedigree {
+    add_with_chains(
+        store,
+        &[LeafPedigree {
             leaf: leaf.clone(),
             ancestors: Vec::new(),
-        }])
-        .await
-        .unwrap();
+        }],
+    )
+    .await;
     assert!(
         exit_chain(store, &leaf.id)
             .await
@@ -520,13 +572,14 @@ pub async fn test_store_ancestors_for_absent_leaf(store: &dyn TreeStore) {
 pub async fn test_unshared_ancestor_deleted_with_leaf(store: &dyn TreeStore) {
     let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
     let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
-    store
-        .add_leaves(&[LeafPedigree {
+    add_with_chains(
+        store,
+        &[LeafPedigree {
             leaf: leaf.clone(),
             ancestors: vec![root.clone()],
-        }])
-        .await
-        .unwrap();
+        }],
+    )
+    .await;
 
     // A refresh in the future drops the pre-existing leaf, taking its ancestors.
     let refresh_start = future_refresh_start(store).await;
@@ -536,10 +589,7 @@ pub async fn test_unshared_ancestor_deleted_with_leaf(store: &dyn TreeStore) {
 
     // Re-adding the leaf alone brings back no ancestors: the root went with it,
     // so the walk up from the leaf has nothing to link to.
-    store
-        .add_leaves(&as_pedigrees(std::slice::from_ref(&leaf)))
-        .await
-        .unwrap();
+    store.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
     assert_eq!(exit_chain_ids(store, &leaf.id).await, vec!["leaf"]);
 }
 
@@ -549,8 +599,9 @@ pub async fn test_shared_ancestor_survives_leaf_deletion(store: &dyn TreeStore) 
     let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
     let leaf_a = create_test_node_with_parent("leaf-a", Some("root"), TreeNodeStatus::Available);
     let leaf_b = create_test_node_with_parent("leaf-b", Some("root"), TreeNodeStatus::Available);
-    store
-        .add_leaves(&[
+    add_with_chains(
+        store,
+        &[
             LeafPedigree {
                 leaf: leaf_a.clone(),
                 ancestors: vec![root.clone()],
@@ -559,21 +610,14 @@ pub async fn test_shared_ancestor_survives_leaf_deletion(store: &dyn TreeStore) 
                 leaf: leaf_b.clone(),
                 ancestors: vec![root.clone()],
             },
-        ])
-        .await
-        .unwrap();
+        ],
+    )
+    .await;
 
     // A refresh that keeps only leaf-b drops leaf-a and its copy of the root.
     let refresh_start = future_refresh_start(store).await;
     store
-        .set_leaves(
-            &[LeafPedigree {
-                leaf: leaf_b.clone(),
-                ancestors: vec![root.clone()],
-            }],
-            &[],
-            refresh_start,
-        )
+        .set_leaves(std::slice::from_ref(&leaf_b), &[], refresh_start)
         .await
         .unwrap();
 
@@ -589,28 +633,22 @@ pub async fn test_shared_ancestor_survives_leaf_deletion(store: &dyn TreeStore) 
 pub async fn test_empty_pedigree_keeps_stored_chain(store: &dyn TreeStore) {
     let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
     let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
-    store
-        .add_leaves(&[LeafPedigree {
+    add_with_chains(
+        store,
+        &[LeafPedigree {
             leaf: leaf.clone(),
             ancestors: vec![root],
-        }])
-        .await
-        .unwrap();
+        }],
+    )
+    .await;
     assert_eq!(exit_chain_ids(store, &leaf.id).await, vec!["root", "leaf"]);
 
-    store
-        .add_leaves(&as_pedigrees(std::slice::from_ref(&leaf)))
-        .await
-        .unwrap();
+    store.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
     assert_eq!(exit_chain_ids(store, &leaf.id).await, vec!["root", "leaf"]);
 
     let refresh_start = future_refresh_start(store).await;
     store
-        .set_leaves(
-            &as_pedigrees(std::slice::from_ref(&leaf)),
-            &[],
-            refresh_start,
-        )
+        .set_leaves(std::slice::from_ref(&leaf), &[], refresh_start)
         .await
         .unwrap();
     assert_eq!(exit_chain_ids(store, &leaf.id).await, vec!["root", "leaf"]);
@@ -622,13 +660,14 @@ pub async fn test_stored_chain_replaces_previous(store: &dyn TreeStore) {
     let old_root = create_test_node_with_parent("old-root", None, TreeNodeStatus::Splitted);
     let mut leaf =
         create_test_node_with_parent("leaf", Some("old-root"), TreeNodeStatus::Available);
-    store
-        .add_leaves(&[LeafPedigree {
+    add_with_chains(
+        store,
+        &[LeafPedigree {
             leaf: leaf.clone(),
             ancestors: vec![old_root],
-        }])
-        .await
-        .unwrap();
+        }],
+    )
+    .await;
     assert_eq!(
         exit_chain_ids(store, &leaf.id).await,
         vec!["old-root", "leaf"]
@@ -637,13 +676,14 @@ pub async fn test_stored_chain_replaces_previous(store: &dyn TreeStore) {
     let new_root = create_test_node_with_parent("new-root", None, TreeNodeStatus::Splitted);
     let split = create_test_node_with_parent("split", Some("new-root"), TreeNodeStatus::Splitted);
     leaf.parent_node_id = Some(TreeNodeId::from_str("split").unwrap());
-    store
-        .add_leaves(&[LeafPedigree {
+    add_with_chains(
+        store,
+        &[LeafPedigree {
             leaf: leaf.clone(),
             ancestors: vec![split, new_root],
-        }])
-        .await
-        .unwrap();
+        }],
+    )
+    .await;
 
     assert_eq!(
         exit_chain_ids(store, &leaf.id).await,
@@ -658,46 +698,45 @@ pub async fn test_leaves_missing_exit_chains(store: &dyn TreeStore) {
     let mid = create_test_node_with_parent("mid", Some("root"), TreeNodeStatus::Splitted);
     let complete =
         create_test_node_with_parent("complete", Some("root"), TreeNodeStatus::Available);
-    let partial = create_test_node_with_parent("partial", Some("mid"), TreeNodeStatus::Available);
+    let deep = create_test_node_with_parent("deep", Some("mid"), TreeNodeStatus::Available);
     let bare = create_test_node_with_parent("bare", Some("root"), TreeNodeStatus::Available);
     let root_leaf = create_test_node_with_parent("root-leaf", None, TreeNodeStatus::Available);
 
-    store
-        .add_leaves(&[
+    add_with_chains(
+        store,
+        &[
             LeafPedigree {
                 leaf: complete,
                 ancestors: vec![root.clone()],
             },
             LeafPedigree {
-                leaf: partial.clone(),
-                ancestors: vec![mid.clone()],
+                leaf: deep.clone(),
+                ancestors: vec![mid.clone(), root.clone()],
             },
             LeafPedigree {
-                leaf: bare,
+                leaf: bare.clone(),
                 ancestors: Vec::new(),
             },
             LeafPedigree {
                 leaf: root_leaf,
                 ancestors: Vec::new(),
             },
-        ])
-        .await
-        .unwrap();
+        ],
+    )
+    .await;
 
-    // `partial` stops at `mid`, which still has a parent; `bare` has no chain at
-    // all. A leaf that is its own root is complete with no ancestors.
-    let mut missing = missing_chain_ids(store).await;
-    missing.sort();
-    assert_eq!(missing, vec!["bare", "partial"]);
+    // Only `bare` has no chain. A leaf that is its own root needs none, and a
+    // chain is reported once it holds the leaf's parent, at any depth.
+    assert_eq!(missing_chain_ids(store).await, vec!["bare"]);
 
     store
         .store_ancestors(&[LeafPedigree {
-            leaf: partial,
-            ancestors: vec![mid, root],
+            leaf: bare,
+            ancestors: vec![root],
         }])
         .await
         .unwrap();
-    assert_eq!(missing_chain_ids(store).await, vec!["bare"]);
+    assert!(missing_chain_ids(store).await.is_empty());
 }
 
 /// A refresh reports leaves without their chains, so it must leave the chains
@@ -710,8 +749,9 @@ pub async fn test_stored_chain_survives_refresh(store: &dyn TreeStore) {
         create_test_node_with_parent("complete", Some("root"), TreeNodeStatus::Available);
     let bare = create_test_node_with_parent("bare", Some("root"), TreeNodeStatus::Available);
 
-    store
-        .add_leaves(&[
+    add_with_chains(
+        store,
+        &[
             LeafPedigree {
                 leaf: complete.clone(),
                 ancestors: vec![root],
@@ -720,9 +760,9 @@ pub async fn test_stored_chain_survives_refresh(store: &dyn TreeStore) {
                 leaf: bare.clone(),
                 ancestors: Vec::new(),
             },
-        ])
-        .await
-        .unwrap();
+        ],
+    )
+    .await;
     assert_eq!(missing_chain_ids(store).await, vec!["bare"]);
 
     // A refresh only rebuilds rows older than its start, and the leaves were
@@ -730,20 +770,7 @@ pub async fn test_stored_chain_survives_refresh(store: &dyn TreeStore) {
     // own clock. Otherwise the rebuild never happens and this passes vacuously.
     let refresh_start = future_refresh_start(store).await;
     store
-        .set_leaves(
-            &[
-                LeafPedigree {
-                    leaf: complete,
-                    ancestors: Vec::new(),
-                },
-                LeafPedigree {
-                    leaf: bare,
-                    ancestors: Vec::new(),
-                },
-            ],
-            &[],
-            refresh_start,
-        )
+        .set_leaves(&[complete, bare], &[], refresh_start)
         .await
         .unwrap();
 
@@ -754,24 +781,24 @@ pub async fn test_stored_chain_survives_refresh(store: &dyn TreeStore) {
     );
 }
 
-/// A stored chain only backs an exit if it starts at the leaf's *current* parent.
+/// A stored chain only backs an exit if it holds the leaf's *current* parent.
 /// Timelock renewal reparents a leaf onto a new split node under the same id, and
 /// another device learns that from a leaves-only refresh, which carries no chain.
-/// Finding a rooted ancestor row is not enough: those rows describe the parent the
-/// leaf had before, and the link from the new one is missing.
+/// The rows left behind describe the parent the leaf had before.
 pub async fn test_reparented_leaf_needs_its_chain_again(store: &dyn TreeStore) {
     let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
     let old_parent =
         create_test_node_with_parent("old-parent", Some("root"), TreeNodeStatus::Splitted);
     let leaf = create_test_node_with_parent("leaf", Some("old-parent"), TreeNodeStatus::Available);
 
-    store
-        .add_leaves(&[LeafPedigree {
+    add_with_chains(
+        store,
+        &[LeafPedigree {
             leaf: leaf.clone(),
             ancestors: vec![old_parent, root],
-        }])
-        .await
-        .unwrap();
+        }],
+    )
+    .await;
     assert!(
         missing_chain_ids(store).await.is_empty(),
         "a rooted chain from the leaf's parent is complete"
@@ -783,14 +810,7 @@ pub async fn test_reparented_leaf_needs_its_chain_again(store: &dyn TreeStore) {
         create_test_node_with_parent("leaf", Some("new-parent"), TreeNodeStatus::Available);
     let refresh_start = future_refresh_start(store).await;
     store
-        .set_leaves(
-            &[LeafPedigree {
-                leaf: reparented,
-                ancestors: Vec::new(),
-            }],
-            &[],
-            refresh_start,
-        )
+        .set_leaves(&[reparented], &[], refresh_start)
         .await
         .unwrap();
 
@@ -909,11 +929,7 @@ pub async fn test_get_verified_leaf_keys(store: &dyn TreeStore) {
     not_available.status = TreeNodeStatus::TransferLocked;
 
     store
-        .add_leaves(&as_pedigrees(&[
-            available.clone(),
-            reserved.clone(),
-            not_available.clone(),
-        ]))
+        .add_leaves(&[available.clone(), reserved.clone(), not_available.clone()])
         .await
         .unwrap();
     store
@@ -951,7 +967,7 @@ pub async fn test_add_leaves(store: &dyn TreeStore) {
         create_test_tree_node("node2", 200),
     ];
 
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     let stored = get_available(store).await;
     assert_eq!(stored.len(), 2);
@@ -971,10 +987,10 @@ pub async fn test_add_leaves_duplicate_ids(store: &dyn TreeStore) {
     let leaf1 = create_test_tree_node("node1", 100);
     let leaf2 = create_test_tree_node("node1", 200); // Same id, different value
 
-    store.add_leaves(&as_pedigrees(&[leaf1])).await.unwrap();
+    store.add_leaves(&[leaf1]).await.unwrap();
     // The operators are the source of truth: the later report wins, and the id
     // is updated in place rather than stored twice.
-    store.add_leaves(&as_pedigrees(&[leaf2])).await.unwrap();
+    store.add_leaves(&[leaf2]).await.unwrap();
 
     let stored = get_available(store).await;
     assert_eq!(stored.len(), 1);
@@ -983,7 +999,7 @@ pub async fn test_add_leaves_duplicate_ids(store: &dyn TreeStore) {
 
 pub async fn test_set_leaves(store: &dyn TreeStore) {
     let initial = vec![create_test_tree_node("node1", 100)];
-    store.add_leaves(&as_pedigrees(&initial)).await.unwrap();
+    store.add_leaves(&initial).await.unwrap();
 
     let refresh_start = future_refresh_start(store).await;
     let new_leaves = vec![
@@ -991,7 +1007,7 @@ pub async fn test_set_leaves(store: &dyn TreeStore) {
         create_test_tree_node("node3", 300),
     ];
     store
-        .set_leaves(&as_pedigrees(&new_leaves), &[], refresh_start)
+        .set_leaves(&new_leaves, &[], refresh_start)
         .await
         .unwrap();
 
@@ -1060,7 +1076,7 @@ pub async fn test_set_leaves_with_reservations(store: &dyn TreeStore) {
         create_test_tree_node("node2", 200),
         create_test_tree_node("node3", 300),
     ];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Reserve some leaves
     let _reservation = reserve_leaves(
@@ -1085,8 +1101,8 @@ pub async fn test_set_leaves_with_reservations(store: &dyn TreeStore) {
     ];
     store
         .set_leaves(
-            &as_pedigrees(&new_leaves),
-            &as_pedigrees(std::slice::from_ref(&non_existing_operator_leaf)),
+            &new_leaves,
+            std::slice::from_ref(&non_existing_operator_leaf),
             refresh_start,
         )
         .await
@@ -1107,7 +1123,7 @@ pub async fn test_set_leaves_preserves_reservations_for_in_flight_swaps(store: &
         create_test_tree_node("node1", 100),
         create_test_tree_node("node2", 200),
     ];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Reserve leaves (simulating start of a swap)
     let _reservation = reserve_leaves(
@@ -1124,7 +1140,7 @@ pub async fn test_set_leaves_preserves_reservations_for_in_flight_swaps(store: &
     // Set new leaves that don't include the reserved ones
     let new_leaves = vec![create_test_tree_node("node3", 300)];
     store
-        .set_leaves(&as_pedigrees(&new_leaves), &[], refresh_start)
+        .set_leaves(&new_leaves, &[], refresh_start)
         .await
         .unwrap();
 
@@ -1148,7 +1164,7 @@ pub async fn test_reserve_leaves(store: &dyn TreeStore) {
         create_test_tree_node("node1", 100),
         create_test_tree_node("node2", 200),
     ];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     let reservation = reserve_leaves(
         store,
@@ -1175,7 +1191,7 @@ pub async fn test_reserve_leaves_by_ids(store: &dyn TreeStore) {
         create_test_tree_node("node2", 200),
         create_test_tree_node("node3", 300),
     ];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     let ids = vec![leaves[0].id.clone(), leaves[2].id.clone()];
     let reservation = store
@@ -1196,7 +1212,7 @@ pub async fn test_reserve_leaves_by_ids(store: &dyn TreeStore) {
 
 pub async fn test_reserve_leaves_by_ids_not_available(store: &dyn TreeStore) {
     let leaves = vec![create_test_tree_node("node1", 100)];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     let ids = vec![leaves[0].id.clone()];
     store
@@ -1232,7 +1248,7 @@ pub async fn test_reserve_leaves_by_ids_not_available(store: &dyn TreeStore) {
 
     // Duplicate ids must be rejected, not double-counted.
     let available = vec![create_test_tree_node("node2", 200)];
-    store.add_leaves(&as_pedigrees(&available)).await.unwrap();
+    store.add_leaves(&available).await.unwrap();
     let duplicates = vec![available[0].id.clone(), available[0].id.clone()];
     assert!(matches!(
         store
@@ -1248,7 +1264,7 @@ pub async fn test_reserve_leaves_by_ids_preserves_order(store: &dyn TreeStore) {
         create_test_tree_node("node2", 200),
         create_test_tree_node("node3", 300),
     ];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // The per-leaf signing data in a signed package is positional, so the
     // reservation must return leaves in the requested order.
@@ -1271,7 +1287,7 @@ pub async fn test_try_select_leaves(store: &dyn TreeStore) {
         create_test_tree_node("node1", 100),
         create_test_tree_node("node2", 200),
     ];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     let selection = store
         .try_select_leaves(Some(&TargetAmounts::new_amount_and_fee(100, None)))
@@ -1307,7 +1323,7 @@ pub async fn test_cancel_reservation(store: &dyn TreeStore) {
         create_test_tree_node("node1", 100),
         create_test_tree_node("node2", 200),
     ];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     let reservation = reserve_leaves(
         store,
@@ -1335,7 +1351,7 @@ pub async fn test_cancel_reservation_drops_unkept_leaves(store: &dyn TreeStore) 
         create_test_tree_node("node1", 100),
         create_test_tree_node("node2", 200),
     ];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     let reservation = reserve_leaves(
         store,
@@ -1369,7 +1385,7 @@ pub async fn test_cancel_reservation_drops_all_when_keep_empty(store: &dyn TreeS
         create_test_tree_node("node1", 100),
         create_test_tree_node("node2", 200),
     ];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     let reservation = reserve_leaves(
         store,
@@ -1417,7 +1433,7 @@ pub async fn test_finalize_reservation(store: &dyn TreeStore) {
         create_test_tree_node("node1", 100),
         create_test_tree_node("node2", 200),
     ];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     let reservation = reserve_leaves(
         store,
@@ -1455,7 +1471,7 @@ pub async fn test_multiple_reservations(store: &dyn TreeStore) {
         create_test_tree_node("node2", 200),
         create_test_tree_node("node3", 300),
     ];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Create multiple reservations
     let reservation1 = reserve_leaves(
@@ -1498,10 +1514,7 @@ pub async fn test_multiple_reservations(store: &dyn TreeStore) {
 
 pub async fn test_reservation_ids_are_unique(store: &dyn TreeStore) {
     let leaf = create_test_tree_node("node1", 100);
-    store
-        .add_leaves(&as_pedigrees(std::slice::from_ref(&leaf)))
-        .await
-        .unwrap();
+    store.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
 
     let r1 = reserve_leaves(
         store,
@@ -1526,10 +1539,7 @@ pub async fn test_reservation_ids_are_unique(store: &dyn TreeStore) {
 
 pub async fn test_non_reservable_leaves(store: &dyn TreeStore) {
     let leaf = create_test_tree_node("node1", 100);
-    store
-        .add_leaves(&as_pedigrees(std::slice::from_ref(&leaf)))
-        .await
-        .unwrap();
+    store.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
 
     reserve_leaves(
         store,
@@ -1564,7 +1574,7 @@ pub async fn test_swap_reservation_included_in_balance(store: &dyn TreeStore) {
         create_test_tree_node("node2", 200),
         create_test_tree_node("node3", 300),
     ];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Reserve some leaves for swap
     let _reservation = reserve_leaves(
@@ -1589,7 +1599,7 @@ pub async fn test_payment_reservation_excluded_from_balance(store: &dyn TreeStor
         create_test_tree_node("node2", 200),
         create_test_tree_node("node3", 300),
     ];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Reserve some leaves for payment
     let _reservation = reserve_leaves(
@@ -1613,7 +1623,7 @@ pub async fn test_try_reserve_success(store: &dyn TreeStore) {
         create_test_tree_node("node1", 100),
         create_test_tree_node("node2", 200),
     ];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     let result = store
         .try_reserve_leaves(
@@ -1632,7 +1642,7 @@ pub async fn test_try_reserve_success(store: &dyn TreeStore) {
 
 pub async fn test_try_reserve_insufficient_funds(store: &dyn TreeStore) {
     let leaves = vec![create_test_tree_node("node1", 100)];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     let result = store
         .try_reserve_leaves(
@@ -1649,7 +1659,7 @@ pub async fn test_try_reserve_insufficient_funds(store: &dyn TreeStore) {
 pub async fn test_try_reserve_wait_for_pending(store: &dyn TreeStore) {
     // Add a single 1000 sat leaf
     let leaves = vec![create_test_tree_node("node1", 1000)];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Reserve with target 100 - store will reserve 1000 and auto-track pending=900
     let r1 = store
@@ -1700,7 +1710,7 @@ pub async fn test_try_reserve_min_amount_with_leaves_above_individual_target(
         create_test_tree_node("node3", 1024),
         create_test_tree_node("node4", 1024),
     ];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     let result = store
         .try_reserve_leaves(
@@ -1733,7 +1743,7 @@ pub async fn test_try_reserve_min_amount_exact_denominations_above_individual(
         create_test_tree_node("node2", 1024),
         create_test_tree_node("node3", 1024),
     ];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     let result = store
         .try_reserve_leaves(
@@ -1757,7 +1767,7 @@ pub async fn test_try_reserve_min_amount_exact_denominations_above_individual(
 pub async fn test_try_reserve_fail_immediately_when_insufficient(store: &dyn TreeStore) {
     // Add 100 sat leaf
     let leaves = vec![create_test_tree_node("node1", 100)];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Reserve it for 50 sats - pending will be 50
     let r1 = store
@@ -1787,7 +1797,7 @@ pub async fn test_balance_change_notification(store: &dyn TreeStore) {
 
     // Add leaves
     let leaves = vec![create_test_tree_node("node1", 100)];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Wait for notification with timeout
     let result =
@@ -1801,7 +1811,7 @@ pub async fn test_balance_change_notification(store: &dyn TreeStore) {
 
 pub async fn test_pending_cleared_on_cancel(store: &dyn TreeStore) {
     let leaves = vec![create_test_tree_node("node1", 1000)];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Reserve with target 100 - auto-tracks pending=900
     let r1 = store
@@ -1838,7 +1848,7 @@ pub async fn test_pending_cleared_on_cancel(store: &dyn TreeStore) {
 
 pub async fn test_pending_cleared_on_finalize(store: &dyn TreeStore) {
     let leaves = vec![create_test_tree_node("node1", 1000)];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Reserve with target 100 - auto-tracks pending=900
     let r1 = store
@@ -1858,7 +1868,7 @@ pub async fn test_pending_cleared_on_finalize(store: &dyn TreeStore) {
     // Finalize with new leaves (the change from swap)
     let change_leaf = create_test_tree_node("node2", 900);
     store
-        .finalize_reservation(&reservation_id, Some(&as_pedigrees(&[change_leaf])))
+        .finalize_reservation(&reservation_id, Some(&[change_leaf]))
         .await
         .unwrap();
 
@@ -1880,7 +1890,7 @@ pub async fn test_notification_after_swap_with_exact_amount(store: &dyn TreeStor
 
     // Add a single 1000 sat leaf
     let leaves = vec![create_test_tree_node("node1", 1000)];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Consume the initial notification
     let _ =
@@ -1912,7 +1922,7 @@ pub async fn test_notification_after_swap_with_exact_amount(store: &dyn TreeStor
     store
         .update_reservation(
             &reservation_id,
-            &as_pedigrees(std::slice::from_ref(&swap_result_leaf)),
+            std::slice::from_ref(&swap_result_leaf),
             &[],
         )
         .await
@@ -1934,7 +1944,7 @@ pub async fn test_notification_on_pending_balance_change(store: &dyn TreeStore) 
 
     // Add a single 1000 sat leaf
     let leaves = vec![create_test_tree_node("node1", 1000)];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Consume initial notification
     let _ =
@@ -1982,7 +1992,7 @@ pub async fn test_spent_leaves_not_restored_by_set_leaves(store: &dyn TreeStore)
         create_test_tree_node("node1", 100),
         create_test_tree_node("node2", 200),
     ];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Reserve node1 for payment
     let reservation = reserve_leaves(
@@ -2014,7 +2024,7 @@ pub async fn test_spent_leaves_not_restored_by_set_leaves(store: &dyn TreeStore)
         create_test_tree_node("node3", 300),
     ];
     store
-        .set_leaves(&as_pedigrees(&stale_leaves), &[], refresh_start)
+        .set_leaves(&stale_leaves, &[], refresh_start)
         .await
         .unwrap();
 
@@ -2038,10 +2048,7 @@ pub async fn test_set_leaves_skips_chains_of_spent_leaves(store: &dyn TreeStore)
     // walk, so a stray row stored under it would not be observable below.
     let mut leaf = create_test_node_with_parent("node1", Some("root"), TreeNodeStatus::Available);
     leaf.value = 100;
-    store
-        .add_leaves(&as_pedigrees(&[leaf.clone()]))
-        .await
-        .unwrap();
+    store.add_leaves(&[leaf.clone()]).await.unwrap();
 
     let reservation = reserve_leaves(
         store,
@@ -2056,30 +2063,32 @@ pub async fn test_set_leaves_skips_chains_of_spent_leaves(store: &dyn TreeStore)
         .await
         .unwrap();
 
-    // A refresh that started before the spend still reports the leaf, now with
-    // a chain. The leaf is suppressed, so its chain must be too.
+    // A refresh that started before the spend still reports the leaf, and the
+    // resolver may still be holding a chain for it. The leaf is suppressed, so
+    // its chain must be too.
     let refresh_start = past_refresh_start(store).await;
     store
-        .set_leaves(
-            &[LeafPedigree {
-                leaf: leaf.clone(),
-                ancestors: vec![root],
-            }],
-            &[],
-            refresh_start,
-        )
+        .set_leaves(&[leaf.clone()], &[], refresh_start)
+        .await
+        .unwrap();
+    store
+        .store_ancestors(&[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![root],
+        }])
         .await
         .unwrap();
 
     assert!(get_available(store).await.is_empty());
     // Re-adding the leaf would surface any chain stored for it above.
-    store
-        .add_leaves(&[LeafPedigree {
+    add_with_chains(
+        store,
+        &[LeafPedigree {
             leaf: leaf.clone(),
             ancestors: Vec::new(),
-        }])
-        .await
-        .unwrap();
+        }],
+    )
+    .await;
     assert!(
         exit_chain(store, &leaf.id)
             .await
@@ -2092,7 +2101,7 @@ pub async fn test_set_leaves_skips_chains_of_spent_leaves(store: &dyn TreeStore)
 
 pub async fn test_spent_ids_cleaned_up_when_no_longer_in_refresh(store: &dyn TreeStore) {
     let leaves = vec![create_test_tree_node("node1", 100)];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Reserve and finalize node1
     let reservation = reserve_leaves(
@@ -2112,7 +2121,7 @@ pub async fn test_spent_ids_cleaned_up_when_no_longer_in_refresh(store: &dyn Tre
     let refresh_start = past_refresh_start(store).await;
     let stale_leaves = vec![create_test_tree_node("node1", 100)];
     store
-        .set_leaves(&as_pedigrees(&stale_leaves), &[], refresh_start)
+        .set_leaves(&stale_leaves, &[], refresh_start)
         .await
         .unwrap();
     // node1 should be filtered out because it's a recent spend
@@ -2122,7 +2131,7 @@ pub async fn test_spent_ids_cleaned_up_when_no_longer_in_refresh(store: &dyn Tre
     let refresh_start2 = future_refresh_start(store).await;
     let fresh_leaves = vec![create_test_tree_node("node2", 200)];
     store
-        .set_leaves(&as_pedigrees(&fresh_leaves), &[], refresh_start2)
+        .set_leaves(&fresh_leaves, &[], refresh_start2)
         .await
         .unwrap();
 
@@ -2134,7 +2143,7 @@ pub async fn test_spent_ids_cleaned_up_when_no_longer_in_refresh(store: &dyn Tre
 pub async fn test_add_leaves_not_deleted_by_set_leaves(store: &dyn TreeStore) {
     // Add initial leaves
     let initial = vec![create_test_tree_node("node1", 100)];
-    store.add_leaves(&as_pedigrees(&initial)).await.unwrap();
+    store.add_leaves(&initial).await.unwrap();
 
     // Refresh starts at T1
     let refresh_start = store.now().await.unwrap();
@@ -2144,12 +2153,12 @@ pub async fn test_add_leaves_not_deleted_by_set_leaves(store: &dyn TreeStore) {
 
     // While refresh is in progress, a new leaf arrives
     let new_leaf = create_test_tree_node("node2", 200);
-    store.add_leaves(&as_pedigrees(&[new_leaf])).await.unwrap();
+    store.add_leaves(&[new_leaf]).await.unwrap();
 
     // Refresh completes with stale data (doesn't include node2)
     let stale_refresh_data = vec![create_test_tree_node("node1", 100)];
     store
-        .set_leaves(&as_pedigrees(&stale_refresh_data), &[], refresh_start)
+        .set_leaves(&stale_refresh_data, &[], refresh_start)
         .await
         .unwrap();
 
@@ -2169,7 +2178,7 @@ pub async fn test_old_leaves_deleted_by_set_leaves(store: &dyn TreeStore) {
         create_test_tree_node("node1", 100),
         create_test_tree_node("node2", 200),
     ];
-    store.add_leaves(&as_pedigrees(&initial)).await.unwrap();
+    store.add_leaves(&initial).await.unwrap();
 
     // Use a future refresh_start so existing leaves are considered "old"
     let refresh_start = future_refresh_start(store).await;
@@ -2177,7 +2186,7 @@ pub async fn test_old_leaves_deleted_by_set_leaves(store: &dyn TreeStore) {
     // Refresh completes without node2
     let refresh_data = vec![create_test_tree_node("node1", 100)];
     store
-        .set_leaves(&as_pedigrees(&refresh_data), &[], refresh_start)
+        .set_leaves(&refresh_data, &[], refresh_start)
         .await
         .unwrap();
 
@@ -2194,7 +2203,7 @@ pub async fn test_old_leaves_deleted_by_set_leaves(store: &dyn TreeStore) {
 pub async fn test_change_leaves_from_swap_protected(store: &dyn TreeStore) {
     // Add initial leaf
     let initial = vec![create_test_tree_node("node1", 1000)];
-    store.add_leaves(&as_pedigrees(&initial)).await.unwrap();
+    store.add_leaves(&initial).await.unwrap();
 
     // Reserve the leaf
     let reservation = reserve_leaves(
@@ -2218,8 +2227,8 @@ pub async fn test_change_leaves_from_swap_protected(store: &dyn TreeStore) {
     store
         .update_reservation(
             &reservation.id,
-            &as_pedigrees(std::slice::from_ref(&reserved_leaf)),
-            &as_pedigrees(std::slice::from_ref(&change_leaf)),
+            std::slice::from_ref(&reserved_leaf),
+            std::slice::from_ref(&change_leaf),
         )
         .await
         .unwrap();
@@ -2227,7 +2236,7 @@ pub async fn test_change_leaves_from_swap_protected(store: &dyn TreeStore) {
     // Refresh completes with stale data
     let stale_refresh_data = vec![create_test_tree_node("node1", 1000)];
     store
-        .set_leaves(&as_pedigrees(&stale_refresh_data), &[], refresh_start)
+        .set_leaves(&stale_refresh_data, &[], refresh_start)
         .await
         .unwrap();
 
@@ -2242,7 +2251,7 @@ pub async fn test_change_leaves_from_swap_protected(store: &dyn TreeStore) {
 pub async fn test_finalize_with_new_leaves_protected(store: &dyn TreeStore) {
     // Add initial leaf
     let initial = vec![create_test_tree_node("node1", 1000)];
-    store.add_leaves(&as_pedigrees(&initial)).await.unwrap();
+    store.add_leaves(&initial).await.unwrap();
 
     // Reserve the leaf
     let reservation = reserve_leaves(
@@ -2263,14 +2272,14 @@ pub async fn test_finalize_with_new_leaves_protected(store: &dyn TreeStore) {
     // Payment completes and adds change via finalize_reservation
     let change_leaf = create_test_tree_node("change", 900);
     store
-        .finalize_reservation(&reservation.id, Some(&as_pedigrees(&[change_leaf])))
+        .finalize_reservation(&reservation.id, Some(&[change_leaf]))
         .await
         .unwrap();
 
     // Refresh completes with stale data
     let stale_refresh_data = vec![create_test_tree_node("node1", 1000)];
     store
-        .set_leaves(&as_pedigrees(&stale_refresh_data), &[], refresh_start)
+        .set_leaves(&stale_refresh_data, &[], refresh_start)
         .await
         .unwrap();
 
@@ -2289,7 +2298,7 @@ pub async fn test_finalize_with_new_leaves_protected(store: &dyn TreeStore) {
 pub async fn test_add_leaves_clears_spent_status(store: &dyn TreeStore) {
     // Add initial leaf
     let leaves = vec![create_test_tree_node("node1", 100)];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Reserve and finalize node1 (marks it as spent)
     let reservation = reserve_leaves(
@@ -2310,10 +2319,7 @@ pub async fn test_add_leaves_clears_spent_status(store: &dyn TreeStore) {
 
     // Add the leaf back via add_leaves (simulating receiving it back)
     let returning_leaf = create_test_tree_node("node1", 100);
-    store
-        .add_leaves(&as_pedigrees(&[returning_leaf]))
-        .await
-        .unwrap();
+    store.add_leaves(&[returning_leaf]).await.unwrap();
 
     // Verify node1 IS now in the pool (spent status was cleared)
     let available = get_available(store).await;
@@ -2329,7 +2335,7 @@ pub async fn test_add_leaves_clears_spent_status(store: &dyn TreeStore) {
 
     // New leaf should also be added
     let new_leaf = create_test_tree_node("node2", 200);
-    store.add_leaves(&as_pedigrees(&[new_leaf])).await.unwrap();
+    store.add_leaves(&[new_leaf]).await.unwrap();
     assert_eq!(get_available(store).await.len(), 2);
 }
 
@@ -2339,7 +2345,7 @@ pub async fn test_set_leaves_skipped_during_active_swap(store: &dyn TreeStore) {
         create_test_tree_node("node1", 100),
         create_test_tree_node("node2", 200),
     ];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Reserve leaves for a swap (not payment)
     let _reservation = reserve_leaves(
@@ -2359,7 +2365,7 @@ pub async fn test_set_leaves_skipped_during_active_swap(store: &dyn TreeStore) {
     // Try to set new leaves (should be skipped due to active swap)
     let new_leaves = vec![create_test_tree_node("node3", 300)];
     store
-        .set_leaves(&as_pedigrees(&new_leaves), &[], refresh_start)
+        .set_leaves(&new_leaves, &[], refresh_start)
         .await
         .unwrap();
 
@@ -2375,7 +2381,7 @@ pub async fn test_set_leaves_skipped_during_active_swap(store: &dyn TreeStore) {
 pub async fn test_set_leaves_skipped_after_swap_completes_during_refresh(store: &dyn TreeStore) {
     // Add initial leaves
     let leaves = vec![create_test_tree_node("node1", 1000)];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Reserve leaves for a swap
     let reservation = reserve_leaves(
@@ -2396,7 +2402,7 @@ pub async fn test_set_leaves_skipped_after_swap_completes_during_refresh(store: 
     // Swap completes at T1
     let new_leaves_from_swap = vec![create_test_tree_node("swap_result", 500)];
     store
-        .finalize_reservation(&reservation.id, Some(&as_pedigrees(&new_leaves_from_swap)))
+        .finalize_reservation(&reservation.id, Some(&new_leaves_from_swap))
         .await
         .unwrap();
 
@@ -2408,7 +2414,7 @@ pub async fn test_set_leaves_skipped_after_swap_completes_during_refresh(store: 
     // At T2, set_leaves with stale data
     let stale_refresh_data = vec![create_test_tree_node("node1", 1000)];
     store
-        .set_leaves(&as_pedigrees(&stale_refresh_data), &[], refresh_start)
+        .set_leaves(&stale_refresh_data, &[], refresh_start)
         .await
         .unwrap();
 
@@ -2427,7 +2433,7 @@ pub async fn test_set_leaves_skipped_after_swap_completes_during_refresh(store: 
 pub async fn test_set_leaves_proceeds_after_swap_when_refresh_starts_later(store: &dyn TreeStore) {
     // Add initial leaves
     let leaves = vec![create_test_tree_node("node1", 1000)];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Reserve leaves for a swap
     let reservation = reserve_leaves(
@@ -2442,7 +2448,7 @@ pub async fn test_set_leaves_proceeds_after_swap_when_refresh_starts_later(store
     // Swap completes first
     let new_leaves_from_swap = vec![create_test_tree_node("swap_result", 500)];
     store
-        .finalize_reservation(&reservation.id, Some(&as_pedigrees(&new_leaves_from_swap)))
+        .finalize_reservation(&reservation.id, Some(&new_leaves_from_swap))
         .await
         .unwrap();
 
@@ -2458,7 +2464,7 @@ pub async fn test_set_leaves_proceeds_after_swap_when_refresh_starts_later(store
         create_test_tree_node("new_deposit", 200),
     ];
     store
-        .set_leaves(&as_pedigrees(&fresh_refresh_data), &[], refresh_start)
+        .set_leaves(&fresh_refresh_data, &[], refresh_start)
         .await
         .unwrap();
 
@@ -2480,7 +2486,7 @@ pub async fn test_payment_reservation_does_not_block_set_leaves(store: &dyn Tree
         create_test_tree_node("node1", 100),
         create_test_tree_node("node2", 200),
     ];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Reserve leaves for PAYMENT (not swap)
     let _reservation = reserve_leaves(
@@ -2500,7 +2506,7 @@ pub async fn test_payment_reservation_does_not_block_set_leaves(store: &dyn Tree
         create_test_tree_node("node3", 300),
     ];
     store
-        .set_leaves(&as_pedigrees(&new_leaves), &[], refresh_start)
+        .set_leaves(&new_leaves, &[], refresh_start)
         .await
         .unwrap();
 
@@ -2514,7 +2520,7 @@ pub async fn test_payment_reservation_does_not_block_set_leaves(store: &dyn Tree
 
 pub async fn test_update_reservation_basic(store: &dyn TreeStore) {
     let leaves = vec![create_test_tree_node("node1", 1000)];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Reserve node1 for payment
     let reservation = reserve_leaves(
@@ -2532,8 +2538,8 @@ pub async fn test_update_reservation_basic(store: &dyn TreeStore) {
     let updated = store
         .update_reservation(
             &reservation.id,
-            &as_pedigrees(std::slice::from_ref(&swap_output)),
-            &as_pedigrees(std::slice::from_ref(&change)),
+            std::slice::from_ref(&swap_output),
+            std::slice::from_ref(&change),
         )
         .await
         .unwrap();
@@ -2558,14 +2564,14 @@ pub async fn test_update_reservation_nonexistent(store: &dyn TreeStore) {
     let leaf = create_test_tree_node("node1", 100);
     let fake_id = "nonexistent".to_string();
     let result = store
-        .update_reservation(&fake_id, &as_pedigrees(std::slice::from_ref(&leaf)), &[])
+        .update_reservation(&fake_id, std::slice::from_ref(&leaf), &[])
         .await;
     assert!(result.is_err());
 }
 
 pub async fn test_update_reservation_clears_pending(store: &dyn TreeStore) {
     let leaves = vec![create_test_tree_node("node1", 1000)];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Reserve 100 from a 1000-sat leaf (pending=900)
     let r1 = store
@@ -2601,8 +2607,8 @@ pub async fn test_update_reservation_clears_pending(store: &dyn TreeStore) {
     store
         .update_reservation(
             &reservation_id,
-            &as_pedigrees(std::slice::from_ref(&reserved_leaf)),
-            &as_pedigrees(std::slice::from_ref(&change_leaf)),
+            std::slice::from_ref(&reserved_leaf),
+            std::slice::from_ref(&change_leaf),
         )
         .await
         .unwrap();
@@ -2625,7 +2631,7 @@ pub async fn test_update_reservation_clears_pending(store: &dyn TreeStore) {
 
 pub async fn test_update_reservation_preserves_purpose(store: &dyn TreeStore) {
     let leaves = vec![create_test_tree_node("node1", 1000)];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Reserve for Swap purpose
     let reservation = reserve_leaves(
@@ -2643,8 +2649,8 @@ pub async fn test_update_reservation_preserves_purpose(store: &dyn TreeStore) {
     store
         .update_reservation(
             &reservation.id,
-            &as_pedigrees(std::slice::from_ref(&swap_output)),
-            &as_pedigrees(std::slice::from_ref(&change)),
+            std::slice::from_ref(&swap_output),
+            std::slice::from_ref(&change),
         )
         .await
         .unwrap();
@@ -2673,7 +2679,7 @@ pub async fn test_get_leaves_not_available(store: &dyn TreeStore) {
     let available_leaf = create_test_tree_node("avail", 200);
 
     store
-        .add_leaves(&as_pedigrees(&[locked_leaf, available_leaf]))
+        .add_leaves(&[locked_leaf, available_leaf])
         .await
         .unwrap();
 
@@ -2693,7 +2699,7 @@ pub async fn test_get_leaves_not_available(store: &dyn TreeStore) {
 pub async fn test_get_leaves_missing_operators_filters_spent(store: &dyn TreeStore) {
     // Add node1 and reserve+finalize it (mark as spent)
     let leaves = vec![create_test_tree_node("node1", 100)];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     let reservation = reserve_leaves(
         store,
@@ -2715,7 +2721,7 @@ pub async fn test_get_leaves_missing_operators_filters_spent(store: &dyn TreeSto
         create_test_tree_node("node3", 300), // new
     ];
     store
-        .set_leaves(&as_pedigrees(&[]), &as_pedigrees(&missing), refresh_start)
+        .set_leaves(&[], &missing, refresh_start)
         .await
         .unwrap();
 
@@ -2739,7 +2745,7 @@ pub async fn test_missing_operators_replaced_on_set_leaves(store: &dyn TreeStore
     let refresh_start1 = future_refresh_start(store).await;
     let missing1 = vec![create_test_tree_node("missing1", 100)];
     store
-        .set_leaves(&as_pedigrees(&[]), &as_pedigrees(&missing1), refresh_start1)
+        .set_leaves(&[], &missing1, refresh_start1)
         .await
         .unwrap();
 
@@ -2756,7 +2762,7 @@ pub async fn test_missing_operators_replaced_on_set_leaves(store: &dyn TreeStore
     let refresh_start2 = future_refresh_start(store).await;
     let missing2 = vec![create_test_tree_node("missing2", 200)];
     store
-        .set_leaves(&as_pedigrees(&[]), &as_pedigrees(&missing2), refresh_start2)
+        .set_leaves(&[], &missing2, refresh_start2)
         .await
         .unwrap();
 
@@ -2782,19 +2788,12 @@ pub async fn test_add_leaves_clears_missing_from_operators(store: &dyn TreeStore
 
     let refresh_start = future_refresh_start(store).await;
     store
-        .set_leaves(
-            &[],
-            &as_pedigrees(std::slice::from_ref(&leaf)),
-            refresh_start,
-        )
+        .set_leaves(&[], std::slice::from_ref(&leaf), refresh_start)
         .await
         .unwrap();
     assert_eq!(get_all(store).await.balance(), 49_901);
 
-    store
-        .add_leaves(&as_pedigrees(std::slice::from_ref(&leaf)))
-        .await
-        .unwrap();
+    store.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
 
     let all = get_all(store).await;
     assert_eq!(
@@ -2821,8 +2820,8 @@ pub async fn test_missing_from_operators_leaves_are_not_selectable(store: &dyn T
     let refresh_start = future_refresh_start(store).await;
     store
         .set_leaves(
-            &as_pedigrees(std::slice::from_ref(&available)),
-            &as_pedigrees(std::slice::from_ref(&missing)),
+            std::slice::from_ref(&available),
+            std::slice::from_ref(&missing),
             refresh_start,
         )
         .await
@@ -2874,11 +2873,7 @@ pub async fn test_missing_from_operators_leaf_not_available(store: &dyn TreeStor
 
     let refresh_start = future_refresh_start(store).await;
     store
-        .set_leaves(
-            &[],
-            &as_pedigrees(std::slice::from_ref(&leaf)),
-            refresh_start,
-        )
+        .set_leaves(&[], std::slice::from_ref(&leaf), refresh_start)
         .await
         .unwrap();
 
@@ -2896,7 +2891,7 @@ pub async fn test_reserve_with_none_target_reserves_all(store: &dyn TreeStore) {
         create_test_tree_node("node2", 200),
         create_test_tree_node("node3", 300),
     ];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Reserve with None target -> should reserve all leaves
     let reservation = reserve_leaves(store, None, false, ReservationPurpose::Payment)
@@ -2915,10 +2910,7 @@ pub async fn test_reserve_skips_non_available_leaves(store: &dyn TreeStore) {
     node2.status = TreeNodeStatus::TransferLocked;
     let node3 = create_test_tree_node("node3", 300);
 
-    store
-        .add_leaves(&as_pedigrees(&[node1, node2, node3]))
-        .await
-        .unwrap();
+    store.add_leaves(&[node1, node2, node3]).await.unwrap();
 
     // Reserve 400 exact -> should pick node1(100) + node3(300)
     let reservation = reserve_leaves(
@@ -2945,22 +2937,22 @@ pub async fn test_reserve_skips_non_available_leaves(store: &dyn TreeStore) {
 
 pub async fn test_add_leaves_empty_slice(store: &dyn TreeStore) {
     // Adding empty slice should succeed with no state change
-    store.add_leaves(&as_pedigrees(&[])).await.unwrap();
+    store.add_leaves(&[]).await.unwrap();
     assert_available_count(store, 0).await;
 
     // Add a real leaf, then add empty slice again
     let leaf = create_test_tree_node("node1", 100);
-    store.add_leaves(&as_pedigrees(&[leaf])).await.unwrap();
+    store.add_leaves(&[leaf]).await.unwrap();
     assert_available_count(store, 1).await;
 
-    store.add_leaves(&as_pedigrees(&[])).await.unwrap();
+    store.add_leaves(&[]).await.unwrap();
     assert_available_count(store, 1).await;
 }
 
 pub async fn test_full_payment_cycle(store: &dyn TreeStore) {
     // Add node1(1000)
     let leaves = vec![create_test_tree_node("node1", 1000)];
-    store.add_leaves(&as_pedigrees(&leaves)).await.unwrap();
+    store.add_leaves(&leaves).await.unwrap();
 
     // Reserve 400 (non-exact, gets 1000)
     let reservation1 = reserve_leaves(
@@ -2976,7 +2968,7 @@ pub async fn test_full_payment_cycle(store: &dyn TreeStore) {
     // Finalize with change=[change(600)]
     let change_leaf = create_test_tree_node("change", 600);
     store
-        .finalize_reservation(&reservation1.id, Some(&as_pedigrees(&[change_leaf])))
+        .finalize_reservation(&reservation1.id, Some(&[change_leaf]))
         .await
         .unwrap();
 
@@ -3017,7 +3009,7 @@ pub async fn test_set_leaves_replaces_fully(store: &dyn TreeStore) {
         create_test_tree_node("node2", 200),
     ];
     store
-        .set_leaves(&as_pedigrees(&initial), &[], refresh_start1)
+        .set_leaves(&initial, &[], refresh_start1)
         .await
         .unwrap();
     assert_available_count(store, 2).await;
@@ -3026,7 +3018,7 @@ pub async fn test_set_leaves_replaces_fully(store: &dyn TreeStore) {
     let refresh_start2 = future_refresh_start(store).await;
     let replacement = vec![create_test_tree_node("node3", 300)];
     store
-        .set_leaves(&as_pedigrees(&replacement), &[], refresh_start2)
+        .set_leaves(&replacement, &[], refresh_start2)
         .await
         .unwrap();
 

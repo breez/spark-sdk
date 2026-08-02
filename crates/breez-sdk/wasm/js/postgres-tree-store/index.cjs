@@ -227,15 +227,12 @@ class PostgresTreeStore {
         return;
       }
 
-      const leafNodes = leaves.map((p) => p.leaf);
+      const leafNodes = leaves;
       await this._withWriteTransaction(async (client) => {
         // Remove these leaves from spent_leaves table
         const leafIds = leafNodes.map((l) => l.id);
         await this._batchRemoveSpentLeaves(client, leafIds);
 
-        for (const pedigree of leaves) {
-          await this._batchUpsertAncestors(client, pedigree.leaf.id, pedigree.ancestors);
-        }
         // Batch upsert all leaves
         await this._batchUpsertLeaves(client, leafNodes, false, null);
       });
@@ -291,31 +288,24 @@ class PostgresTreeStore {
 
   /**
    * Ids of the stored leaves whose chain cannot back an exit: the leaf has a
-   * parent, and its ancestor rows do not run from that parent to a root.
+   * parent, and no ancestor row of its own holds that parent.
    * @returns {Promise<Array<string>>}
    */
   async leavesMissingExitChains() {
     try {
       const result = await this.pool.query(
-        // One shape across every SQL backend. Two outer joins beat correlated
-        // NOT EXISTS subqueries here: under the OR below, Postgres cannot pull a
-        // NOT EXISTS up into an anti-join and re-runs it per leaf instead. A chain
-        // backs an exit only if it runs from the leaf's current parent (`link`) to
-        // a root (`root`); one stored before a renewal reparented the leaf still
-        // reaches a root while describing a parent it no longer has.
-        // DISTINCT is defensive: a contiguous chain has one root and
-        // `(leaf_id, id)` is unique, so neither join matches twice.
-        `SELECT DISTINCT l.id
+        // A stored chain runs from its leaf's parent to a root, so a leaf whose
+        // chain holds the parent it has now is exitable. The join binds all three
+        // primary key columns, making it one index probe per leaf. A leaf that is
+        // itself a root needs no chain.
+        `SELECT l.id
          FROM brz_tree_leaves l
-         LEFT JOIN brz_tree_ancestors root
-           ON root.user_id = l.user_id AND root.leaf_id = l.id
-              AND root.parent_node_id IS NULL
          LEFT JOIN brz_tree_ancestors link
            ON link.user_id = l.user_id AND link.leaf_id = l.id
               AND link.id = l.parent_node_id
          WHERE l.user_id = $1
            AND l.parent_node_id IS NOT NULL
-           AND (root.leaf_id IS NULL OR link.leaf_id IS NULL)`,
+           AND link.leaf_id IS NULL`,
         [this.identity]
       );
       return result.rows.map((r) => r.id);
@@ -550,22 +540,16 @@ class PostgresTreeStore {
           [this.identity, refreshTimestamp]
         );
 
-        // A chain is only ever removed with its leaf, so writing one for a leaf
-        // skipped as spent below would leave it behind for good.
-        for (const pedigree of leaves.concat(missingLeaves || [])) {
-          if (spentIds.has(pedigree.leaf.id)) continue;
-          await this._batchUpsertAncestors(client, pedigree.leaf.id, pedigree.ancestors);
-        }
         // Upsert all leaves (filtering spent)
-        await this._batchUpsertLeaves(client, leaves.map((p) => p.leaf), false, spentIds);
-        await this._batchUpsertLeaves(client, missingLeaves.map((p) => p.leaf), true, spentIds);
+        await this._batchUpsertLeaves(client, leaves, false, spentIds);
+        await this._batchUpsertLeaves(client, missingLeaves, true, spentIds);
 
         // A leaf reported again in this same refresh is re-inserted above, so its
         // ancestor rows must survive: only ids that do NOT reappear (truly gone,
         // e.g. spent) get their ancestor rows dropped alongside them.
         const survivingIds = new Set();
-        for (const pedigree of leaves.concat(missingLeaves || [])) {
-          if (!spentIds.has(pedigree.leaf.id)) survivingIds.add(pedigree.leaf.id);
+        for (const leaf of leaves.concat(missingLeaves || [])) {
+          if (!spentIds.has(leaf.id)) survivingIds.add(leaf.id);
         }
         const goneIds = deleted.rows.map((r) => r.id).filter((id) => !survivingIds.has(id));
         if (goneIds.length > 0) {
@@ -692,10 +676,7 @@ class PostgresTreeStore {
 
         // Add new leaves if provided
         if (newLeaves && newLeaves.length > 0) {
-          for (const pedigree of newLeaves) {
-            await this._batchUpsertAncestors(client, pedigree.leaf.id, pedigree.ancestors);
-          }
-          await this._batchUpsertLeaves(client, newLeaves.map((p) => p.leaf), false, null);
+          await this._batchUpsertLeaves(client, newLeaves, false, null);
         }
 
         // If swap with new leaves, update last_completed_at. UPSERT so a tenant
@@ -1007,18 +988,14 @@ class PostgresTreeStore {
           );
         }
 
-        // The swap outputs carry their ancestors so they stay offline-exitable.
-        for (const pedigree of changeLeaves.concat(reservedLeaves)) {
-          await this._batchUpsertAncestors(client, pedigree.leaf.id, pedigree.ancestors);
-        }
         // Upsert change leaves to available pool
-        await this._batchUpsertLeaves(client, changeLeaves.map((p) => p.leaf), false, null);
+        await this._batchUpsertLeaves(client, changeLeaves, false, null);
 
         // Upsert reserved leaves
-        await this._batchUpsertLeaves(client, reservedLeaves.map((p) => p.leaf), false, null);
+        await this._batchUpsertLeaves(client, reservedLeaves, false, null);
 
         // Set reservation_id on reserved leaves
-        const reservedLeafIds = reservedLeaves.map((p) => p.leaf.id);
+        const reservedLeafIds = reservedLeaves.map((l) => l.id);
         await this._batchSetReservationId(client, reservationId, reservedLeafIds);
 
         // Clear pending change amount
@@ -1031,7 +1008,7 @@ class PostgresTreeStore {
         // Vec<TreeNode>.
         return {
           id: reservationId,
-          leaves: reservedLeaves.map((p) => p.leaf),
+          leaves: reservedLeaves,
         };
       });
     } catch (error) {

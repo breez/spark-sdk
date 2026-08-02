@@ -178,17 +178,6 @@ class TreeStoreMigrationManager {
                         WHERE reservation_id IS NULL`,
         ],
       },
-      {
-        // Serves the root half of leavesMissingExitChains, which otherwise
-        // seeks a leaf's ancestor rows and reads each one to find the
-        // parentless node. SQLite indexes IS NULL as an equality, so both
-        // terms bind and the answer comes from the index.
-        name: "Index the root of each leaf's chain",
-        sql: [
-          `CREATE INDEX IF NOT EXISTS brz_idx_tree_ancestors_root
-                        ON brz_tree_ancestors (leaf_id, parent_node_id)`,
-        ],
-      },
     ];
   }
 }

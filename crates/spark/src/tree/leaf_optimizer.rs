@@ -8,8 +8,8 @@ use tracing::{debug, error, info, trace, warn};
 use crate::{
     services::Swap,
     tree::{
-        LeafPedigree, ReservationPurpose, SelectLeavesOptions, TargetAmounts, TreeNode,
-        TreeService, TreeServiceError,
+        ReservationPurpose, SelectLeavesOptions, TargetAmounts, TreeNode, TreeService,
+        TreeServiceError,
     },
 };
 
@@ -540,16 +540,9 @@ impl LeafOptimizer {
                 // The swap outputs go on without their chains: resolving them
                 // here would spend a round trip on leaves a later round may
                 // swap away again.
-                let pedigrees: Vec<LeafPedigree> = new_leaves
-                    .iter()
-                    .map(|leaf| LeafPedigree {
-                        leaf: leaf.clone(),
-                        ancestors: Vec::new(),
-                    })
-                    .collect();
                 if let Err(e) = self
                     .tree_service
-                    .finalize_reservation(swap_reservation.id, Some(&pedigrees))
+                    .finalize_reservation(swap_reservation.id, Some(&new_leaves))
                     .await
                 {
                     error!(

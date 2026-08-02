@@ -36,10 +36,6 @@ struct StoredLeaf {
 }
 
 impl StoredLeaf {
-    fn from_pedigree(pedigree: &LeafPedigree, added_at: SystemTime) -> Self {
-        Self::from_node(&pedigree.leaf, added_at)
-    }
-
     fn from_node(node: &TreeNode, added_at: SystemTime) -> Self {
         Self {
             node: node.clone(),
@@ -48,9 +44,9 @@ impl StoredLeaf {
         }
     }
 
-    fn from_pedigree_missing(pedigree: &LeafPedigree, added_at: SystemTime) -> Self {
+    fn from_node_missing(node: &TreeNode, added_at: SystemTime) -> Self {
         Self {
-            node: pedigree.leaf.clone(),
+            node: node.clone(),
             added_at,
             missing_from_operators: true,
         }
@@ -120,7 +116,7 @@ impl LeavesState {
 /// Commands sent to the store processor.
 enum StoreCommand {
     AddLeaves {
-        leaves: Vec<LeafPedigree>,
+        leaves: Vec<TreeNode>,
         response_tx: oneshot::Sender<Result<(), TreeServiceError>>,
     },
     StoreAncestors {
@@ -138,8 +134,8 @@ enum StoreCommand {
         response_tx: oneshot::Sender<Result<Vec<TreeNodeId>, TreeServiceError>>,
     },
     SetLeaves {
-        leaves: Vec<LeafPedigree>,
-        missing_operators_leaves: Vec<LeafPedigree>,
+        leaves: Vec<TreeNode>,
+        missing_operators_leaves: Vec<TreeNode>,
         refresh_started_at: SystemTime,
         response_tx: oneshot::Sender<Result<(), TreeServiceError>>,
     },
@@ -157,13 +153,13 @@ enum StoreCommand {
     },
     FinalizeReservation {
         id: LeavesReservationId,
-        new_leaves: Option<Vec<LeafPedigree>>,
+        new_leaves: Option<Vec<TreeNode>>,
         response_tx: oneshot::Sender<Result<(), TreeServiceError>>,
     },
     UpdateReservation {
         reservation_id: LeavesReservationId,
-        reserved_leaves: Vec<LeafPedigree>,
-        change_leaves: Vec<LeafPedigree>,
+        reserved_leaves: Vec<TreeNode>,
+        change_leaves: Vec<TreeNode>,
         response_tx: oneshot::Sender<Result<LeavesReservation, TreeServiceError>>,
     },
     ReserveLeavesByIds {
@@ -392,12 +388,10 @@ impl InMemoryTreeStore {
 
     fn process_add_leaves(
         state: &mut LeavesState,
-        leaves: &[LeafPedigree],
+        leaves: &[TreeNode],
     ) -> Result<(), TreeServiceError> {
         let now = SystemTime::now();
-        for pedigree in leaves {
-            Self::upsert_ancestors(state, &pedigree.leaf.id, &pedigree.ancestors)?;
-            let leaf = &pedigree.leaf;
+        for leaf in leaves {
             let mut updated_in_reservation: Option<LeavesReservationId> = None;
             for (res_id, entry) in &mut state.leaves_reservations {
                 if let Some(stored) = entry.leaves.iter_mut().find(|s| s.node.id == leaf.id) {
@@ -420,7 +414,7 @@ impl InMemoryTreeStore {
             );
             state
                 .leaves
-                .insert(leaf.id.clone(), StoredLeaf::from_pedigree(pedigree, now));
+                .insert(leaf.id.clone(), StoredLeaf::from_node(leaf, now));
         }
         Ok(())
     }
@@ -543,8 +537,8 @@ impl InMemoryTreeStore {
 
     fn process_set_leaves(
         state: &mut LeavesState,
-        leaves: &[LeafPedigree],
-        missing_operators_leaves: &[LeafPedigree],
+        leaves: &[TreeNode],
+        missing_operators_leaves: &[TreeNode],
         refresh_started_at: SystemTime,
     ) -> Result<(), TreeServiceError> {
         let has_active_swap = state
@@ -591,12 +585,8 @@ impl InMemoryTreeStore {
         let old_leaf_ids: Vec<TreeNodeId> = old_leaves.keys().cloned().collect();
 
         let now = SystemTime::now();
-        for pedigree in leaves {
-            let leaf = &pedigree.leaf;
-            // A chain is only ever removed with its leaf, so writing one for a
-            // leaf skipped as spent would leave it behind for good.
+        for leaf in leaves {
             if !state.spent_leaf_ids.contains_key(&leaf.id) {
-                Self::upsert_ancestors(state, &pedigree.leaf.id, &pedigree.ancestors)?;
                 let was_present = old_leaves.contains_key(&leaf.id);
                 if !was_present {
                     info!(
@@ -606,7 +596,7 @@ impl InMemoryTreeStore {
                 }
                 state
                     .leaves
-                    .insert(leaf.id.clone(), StoredLeaf::from_pedigree(pedigree, now));
+                    .insert(leaf.id.clone(), StoredLeaf::from_node(leaf, now));
             } else {
                 trace!(
                     "leaf_lifecycle set_leaves: skipped leaf={} (in spent_leaf_ids)",
@@ -617,14 +607,11 @@ impl InMemoryTreeStore {
         // Applied after the available leaves so that a leaf the coordinator
         // reports in both lists ends up flagged missing, matching the upsert
         // order of the SQL stores.
-        for pedigree in missing_operators_leaves {
-            let leaf = &pedigree.leaf;
+        for leaf in missing_operators_leaves {
             if !state.spent_leaf_ids.contains_key(&leaf.id) {
-                Self::upsert_ancestors(state, &pedigree.leaf.id, &pedigree.ancestors)?;
-                state.leaves.insert(
-                    leaf.id.clone(),
-                    StoredLeaf::from_pedigree_missing(pedigree, now),
-                );
+                state
+                    .leaves
+                    .insert(leaf.id.clone(), StoredLeaf::from_node_missing(leaf, now));
             }
         }
 
@@ -649,9 +636,9 @@ impl InMemoryTreeStore {
             }
         }
 
-        // A pre-refresh leaf that reappeared (fresh, missing-operators, or
-        // preserved) keeps its ancestor chain, already upserted above; only an
-        // id still absent from the pool afterward is truly gone.
+        // A chain is only ever removed with its leaf: a leaf still in the pool
+        // keeps whatever `store_ancestors` wrote for it, and only an id absent
+        // from the pool afterward has its chain dropped.
         for id in &old_leaf_ids {
             if !state.leaves.contains_key(id) {
                 state.ancestors.remove(id);
@@ -850,7 +837,7 @@ impl InMemoryTreeStore {
     fn process_finalize_reservation(
         state: &mut LeavesState,
         id: &LeavesReservationId,
-        new_leaves: Option<&[LeafPedigree]>,
+        new_leaves: Option<&[TreeNode]>,
     ) -> Result<(), TreeServiceError> {
         let removed = state.leaves_reservations.remove(id);
         if let Some(entry) = &removed {
@@ -873,16 +860,14 @@ impl InMemoryTreeStore {
 
         if let Some(resulting_leaves) = new_leaves {
             let now = SystemTime::now();
-            for pedigree in resulting_leaves {
-                Self::upsert_ancestors(state, &pedigree.leaf.id, &pedigree.ancestors)?;
-                let leaf = &pedigree.leaf;
+            for leaf in resulting_leaves {
                 trace!(
                     "leaf_lifecycle finalize: adding new leaf={} value={} reservation={}",
                     leaf.id, leaf.value, id
                 );
                 state
                     .leaves
-                    .insert(leaf.id.clone(), StoredLeaf::from_pedigree(pedigree, now));
+                    .insert(leaf.id.clone(), StoredLeaf::from_node(leaf, now));
             }
         }
         trace!("Finalized leaves reservation: {}", id);
@@ -896,8 +881,8 @@ impl InMemoryTreeStore {
     fn process_update_reservation(
         state: &mut LeavesState,
         reservation_id: &LeavesReservationId,
-        reserved_leaves: &[LeafPedigree],
-        change_leaves: &[LeafPedigree],
+        reserved_leaves: &[TreeNode],
+        change_leaves: &[TreeNode],
     ) -> Result<LeavesReservation, TreeServiceError> {
         // Remove the existing reservation to get the permit
         let old_entry = state
@@ -914,25 +899,22 @@ impl InMemoryTreeStore {
         }
 
         let now = SystemTime::now();
-        for pedigree in change_leaves {
-            Self::upsert_ancestors(state, &pedigree.leaf.id, &pedigree.ancestors)?;
+        for leaf in change_leaves {
             trace!(
                 "leaf_lifecycle update_reservation: adding change leaf={} value={} reservation={}",
-                pedigree.leaf.id, pedigree.leaf.value, reservation_id
+                leaf.id, leaf.value, reservation_id
             );
-            state.leaves.insert(
-                pedigree.leaf.id.clone(),
-                StoredLeaf::from_pedigree(pedigree, now),
-            );
+            state
+                .leaves
+                .insert(leaf.id.clone(), StoredLeaf::from_node(leaf, now));
         }
 
         // Re-insert the reservation with updated leaves but same permit
         // Pending change is cleared since the swap completed
-        let mut reserved: Vec<StoredLeaf> = Vec::with_capacity(reserved_leaves.len());
-        for pedigree in reserved_leaves {
-            Self::upsert_ancestors(state, &pedigree.leaf.id, &pedigree.ancestors)?;
-            reserved.push(StoredLeaf::from_pedigree(pedigree, now));
-        }
+        let reserved: Vec<StoredLeaf> = reserved_leaves
+            .iter()
+            .map(|leaf| StoredLeaf::from_node(leaf, now))
+            .collect();
         state.leaves_reservations.insert(
             reservation_id.clone(),
             ReservationEntry {
@@ -1049,7 +1031,7 @@ impl Default for InMemoryTreeStore {
 
 #[macros::async_trait]
 impl TreeStore for InMemoryTreeStore {
-    async fn add_leaves(&self, leaves: &[LeafPedigree]) -> Result<(), TreeServiceError> {
+    async fn add_leaves(&self, leaves: &[TreeNode]) -> Result<(), TreeServiceError> {
         let leaves = leaves.to_vec();
         self.send_command(|tx| StoreCommand::AddLeaves {
             leaves,
@@ -1091,8 +1073,8 @@ impl TreeStore for InMemoryTreeStore {
 
     async fn set_leaves(
         &self,
-        leaves: &[LeafPedigree],
-        missing_operators_leaves: &[LeafPedigree],
+        leaves: &[TreeNode],
+        missing_operators_leaves: &[TreeNode],
         refresh_started_at: SystemTime,
     ) -> Result<(), TreeServiceError> {
         let leaves = leaves.to_vec();
@@ -1124,10 +1106,10 @@ impl TreeStore for InMemoryTreeStore {
     async fn finalize_reservation(
         &self,
         id: &LeavesReservationId,
-        new_leaves: Option<&[LeafPedigree]>,
+        new_leaves: Option<&[TreeNode]>,
     ) -> Result<(), TreeServiceError> {
         let id = id.clone();
-        let new_leaves = new_leaves.map(<[LeafPedigree]>::to_vec);
+        let new_leaves = new_leaves.map(<[TreeNode]>::to_vec);
         self.send_command(|tx| StoreCommand::FinalizeReservation {
             id,
             new_leaves,
@@ -1221,8 +1203,8 @@ impl TreeStore for InMemoryTreeStore {
     async fn update_reservation(
         &self,
         reservation_id: &LeavesReservationId,
-        reserved_leaves: &[LeafPedigree],
-        change_leaves: &[LeafPedigree],
+        reserved_leaves: &[TreeNode],
+        change_leaves: &[TreeNode],
     ) -> Result<LeavesReservation, TreeServiceError> {
         let reservation_id = reservation_id.clone();
         let reserved_leaves = reserved_leaves.to_vec();

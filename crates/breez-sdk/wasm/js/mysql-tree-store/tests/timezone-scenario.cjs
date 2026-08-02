@@ -48,16 +48,11 @@ async function main() {
   try {
     const leafA = buildLeaf("leaf-100", 100);
     const leafB = buildLeaf("leaf-200", 200);
-    // setLeaves takes pedigrees (a leaf plus its ancestor chain); these leaves
-    // are roots, so their chains are empty.
-    const pedigrees = [
-      { leaf: leafA, ancestors: [] },
-      { leaf: leafB, ancestors: [] },
-    ];
+    const leaves = [leafA, leafB];
 
     // 1. Populate the tree under a future refresh window so neither leaf
     //    is treated as aged out.
-    await store.setLeaves(pedigrees, [], Date.now() + 10_000);
+    await store.setLeaves(leaves, [], Date.now() + 10_000);
 
     // 2. Reserve leaf-100 by exact amount.
     const reserve = await store.tryReserveLeaves(
@@ -84,7 +79,7 @@ async function main() {
     //    marker (timestamp ≈ now) is newer than the refresh start, so
     //    leaf-100 must not be re-added. This is the comparison that was
     //    silently inverted on positive-offset hosts before the fix.
-    await store.setLeaves(pedigrees, [], Date.now() - 60_000);
+    await store.setLeaves(leaves, [], Date.now() - 60_000);
 
     const result = await store.getLeaves();
     if (result.available.length !== 1) {

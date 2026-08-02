@@ -62,9 +62,9 @@ use spark::{
     },
     tree::{
         AutoOptimizationEvent, AutoOptimizationEventHandler, ExitChainResolver, InMemoryTreeStore,
-        LeafOptimizer, LeafPedigree, LeafSelection, OptimizationError, OptimizationOutcome,
-        ReservationPurpose, SelectLeavesOptions, SynchronousTreeService, TargetAmounts, TreeNode,
-        TreeNodeId, TreeService, TreeStore, select_leaves_by_target_amounts, with_reserved_leaves,
+        LeafOptimizer, LeafSelection, OptimizationError, OptimizationOutcome, ReservationPurpose,
+        SelectLeavesOptions, SynchronousTreeService, TargetAmounts, TreeNode, TreeNodeId,
+        TreeService, TreeStore, select_leaves_by_target_amounts, with_reserved_leaves,
     },
     utils::paging::{PagingFilter, PagingResult},
 };

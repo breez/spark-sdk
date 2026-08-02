@@ -502,12 +502,18 @@ pub struct LeafPedigree {
 /// transactional consistency.
 #[macros::async_trait]
 pub trait TreeStore: Send + Sync {
-    /// Adds leaves to the pool together with their ancestors. Re-adding an
-    /// existing id overwrites the stored node: the operators are the source of
-    /// truth for every field, including `value` and the verifying key.
-    async fn add_leaves(&self, leaves: &[LeafPedigree]) -> Result<(), TreeServiceError>;
+    /// Adds leaves to the pool. Re-adding an existing id overwrites the stored
+    /// node: the operators are the source of truth for every field, including
+    /// `value` and the verifying key. Chains are written by
+    /// [`Self::store_ancestors`].
+    async fn add_leaves(&self, leaves: &[TreeNode]) -> Result<(), TreeServiceError>;
 
     /// Stores the ancestors of `pedigrees`, leaving the leaf pool untouched.
+    ///
+    /// Each chain must run from its leaf's current parent to a root. A store takes
+    /// a stored chain to be one that backs an exit and only looks for the parent,
+    /// so a partial chain written here reads as exitable and produces a set of
+    /// transactions that cannot confirm.
     ///
     /// Unlike [`Self::add_leaves`], this neither inserts a leaf nor clears its spent
     /// marker, so a leaf spent since its pedigree was resolved stays spent, and a
@@ -516,23 +522,20 @@ pub trait TreeStore: Send + Sync {
     /// never be collected.
     async fn store_ancestors(&self, pedigrees: &[LeafPedigree]) -> Result<(), TreeServiceError>;
 
-    /// Ids of the stored leaves whose chain cannot back a unilateral exit,
-    /// meaning it does not run from the leaf's current parent to a root. See
-    /// [`chain_backs_exit`], which is the same rule in Rust. A leaf that is
-    /// itself a root needs no ancestors and is never reported.
+    /// Ids of the stored leaves that have no chain reaching their current parent,
+    /// which is what [`Self::store_ancestors`] guarantees a stored chain does. See
+    /// [`chain_backs_exit`], the same rule in Rust. A leaf that is itself a root
+    /// needs no ancestors and is never reported.
     ///
-    /// Returns ids only, but assume it costs the size of the wallet: the SQL
-    /// backends derive the answer by joining every stored leaf against its
-    /// ancestors. A backend that keeps the answer denormalized can do better.
+    /// Returns ids only, but costs one lookup per stored leaf.
     async fn leaves_missing_exit_chains(&self) -> Result<Vec<TreeNodeId>, TreeServiceError>;
 
     /// Reconstructs the exit chains for many leaves at once, each as a
     /// [`LeafPedigree`] (the leaf plus its ancestors, nearest first), by walking
-    /// `parent_node_id` up from each leaf. A leaf absent from the store is skipped;
-    /// a gap or cycle stops that walk and the partial chain is returned rather than
-    /// erroring: it may still be enough to exit, and a caller checks completeness
-    /// (the root has no parent) itself. Backends resolve the whole batch in a single
-    /// query rather than one round-trip per leaf.
+    /// `parent_node_id` up from each leaf. A leaf absent from the store is skipped,
+    /// and a gap or cycle stops that walk and returns what it reached rather than
+    /// erroring. Backends resolve the whole batch in a single query rather than one
+    /// round-trip per leaf.
     async fn get_exit_chains(
         &self,
         leaf_ids: &[TreeNodeId],
@@ -593,15 +596,15 @@ pub trait TreeStore: Send + Sync {
         Ok(verified_leaf_keys_from_leaves(&self.get_leaves().await?))
     }
 
-    /// Replaces the leaf pool with `leaves` (and their ancestors), removing any
-    /// prior leaf not in the set. A leaf added after `refresh_started_at` is kept
-    /// even when absent, so a leaf added mid-refresh (e.g. from a payment) is not
-    /// lost. `missing_operators_leaves` carry their ancestors too, so a leaf the
-    /// operators no longer report stays offline-exitable.
+    /// Replaces the leaf pool with `leaves`, removing any prior leaf not in the
+    /// set. A leaf added after `refresh_started_at` is kept even when absent, so
+    /// a leaf added mid-refresh (e.g. from a payment) is not lost. A removed
+    /// leaf's chain is removed with it; a surviving leaf keeps the chain
+    /// [`Self::store_ancestors`] wrote for it.
     async fn set_leaves(
         &self,
-        leaves: &[LeafPedigree],
-        missing_operators_leaves: &[LeafPedigree],
+        leaves: &[TreeNode],
+        missing_operators_leaves: &[TreeNode],
         refresh_started_at: platform_utils::time::SystemTime,
     ) -> Result<(), TreeServiceError>;
 
@@ -663,7 +666,7 @@ pub trait TreeStore: Send + Sync {
     async fn finalize_reservation(
         &self,
         id: &LeavesReservationId,
-        new_leaves: Option<&[LeafPedigree]>,
+        new_leaves: Option<&[TreeNode]>,
     ) -> Result<(), TreeServiceError>;
 
     /// Attempts to reserve leaves. Returns `ReserveResult` indicating:
@@ -739,8 +742,8 @@ pub trait TreeStore: Send + Sync {
     async fn update_reservation(
         &self,
         reservation_id: &LeavesReservationId,
-        reserved_leaves: &[LeafPedigree],
-        change_leaves: &[LeafPedigree],
+        reserved_leaves: &[TreeNode],
+        change_leaves: &[TreeNode],
     ) -> Result<LeavesReservation, TreeServiceError>;
 }
 
@@ -1051,6 +1054,6 @@ pub trait TreeService: Send + Sync {
     async fn finalize_reservation(
         &self,
         id: LeavesReservationId,
-        new_leaves: Option<&[LeafPedigree]>,
+        new_leaves: Option<&[TreeNode]>,
     ) -> Result<(), TreeServiceError>;
 }

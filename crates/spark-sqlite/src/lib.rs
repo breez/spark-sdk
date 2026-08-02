@@ -104,12 +104,6 @@ const TREE_MIGRATIONS: &[&str] = &[
         last_completed_at INTEGER
     );
     INSERT INTO brz_tree_swap_status (id, last_completed_at) VALUES (1, NULL);",
-    // v2: serve the root half of leaves_missing_exit_chains, which otherwise
-    // seeks a leaf's ancestor rows and reads each one to find the parentless
-    // node. SQLite indexes IS NULL as an equality, so both terms bind and the
-    // answer comes from the index without touching the row.
-    "CREATE INDEX IF NOT EXISTS brz_idx_tree_ancestors_root
-        ON brz_tree_ancestors (leaf_id, parent_node_id);",
 ];
 
 /// Applies pending migrations, tracking the version in its own table rather than
@@ -221,23 +215,6 @@ impl SqliteTreeStore {
         )
         .map(|exists| exists != 0)
         .map_err(|e| generic("check leaf exists", e))
-    }
-
-    /// Writes each pedigree's chain, skipping any id in `skip_ids`. A chain is
-    /// only ever removed with its leaf, so writing one for a leaf the caller is
-    /// about to skip as spent would leave it behind for good.
-    fn upsert_pedigree_ancestors(
-        conn: &Connection,
-        pedigrees: &[LeafPedigree],
-        skip_ids: Option<&HashSet<String>>,
-    ) -> Result<(), TreeServiceError> {
-        for pedigree in pedigrees {
-            if skip_ids.is_some_and(|skip| skip.contains(&pedigree.leaf.id.to_string())) {
-                continue;
-            }
-            Self::upsert_ancestors(conn, &pedigree.leaf.id, &pedigree.ancestors)?;
-        }
-        Ok(())
     }
 
     /// Replaces `leaf_id`'s stored ancestor chain with `nodes`. An empty `nodes`
@@ -731,22 +708,16 @@ impl TreeStore for SqliteTreeStore {
         let conn = self.get_connection()?;
         let mut stmt = conn
             .prepare(
-                // One shape across every SQL backend. Two outer joins beat correlated
-                // NOT EXISTS subqueries here: under the OR below, Postgres cannot pull a
-                // NOT EXISTS up into an anti-join and re-runs it per leaf instead. A
-                // chain backs an exit only if it runs from the leaf's current parent
-                // (`link`) to a root (`root`); one stored before a renewal reparented the
-                // leaf still reaches a root while describing a parent it no longer has.
-                // DISTINCT is defensive: a contiguous chain has one root and
-                // `(leaf_id, id)` is unique, so neither join matches twice.
-                "SELECT DISTINCT l.id
+                // A stored chain runs from its leaf's parent to a root, so a leaf
+                // whose chain holds the parent it has now is exitable. The join
+                // binds both primary key columns, making it one index probe per
+                // leaf. A leaf that is itself a root needs no chain.
+                "SELECT l.id
                  FROM brz_tree_leaves l
-                 LEFT JOIN brz_tree_ancestors root
-                   ON root.leaf_id = l.id AND root.parent_node_id IS NULL
                  LEFT JOIN brz_tree_ancestors link
                    ON link.leaf_id = l.id AND link.id = l.parent_node_id
                  WHERE l.parent_node_id IS NOT NULL
-                   AND (root.leaf_id IS NULL OR link.leaf_id IS NULL)",
+                   AND link.leaf_id IS NULL",
             )
             .map_err(|e| generic("prepare leaves_missing_exit_chains", e))?;
         let ids = stmt
@@ -761,7 +732,7 @@ impl TreeStore for SqliteTreeStore {
 
     // ---- pool + reservations ----
 
-    async fn add_leaves(&self, leaves: &[LeafPedigree]) -> Result<(), TreeServiceError> {
+    async fn add_leaves(&self, leaves: &[TreeNode]) -> Result<(), TreeServiceError> {
         if leaves.is_empty() {
             return Ok(());
         }
@@ -769,11 +740,10 @@ impl TreeStore for SqliteTreeStore {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| generic("begin add_leaves", e))?;
-        let ids: Vec<String> = leaves.iter().map(|p| p.leaf.id.to_string()).collect();
+        let ids: Vec<String> = leaves.iter().map(|l| l.id.to_string()).collect();
         // Receiving a leaf back clears any prior spent marker.
         Self::remove_spent(&tx, &ids)?;
-        Self::upsert_pedigree_ancestors(&tx, leaves, None)?;
-        Self::upsert_leaves(&tx, leaves.iter().map(|p| &p.leaf), false, None)?;
+        Self::upsert_leaves(&tx, leaves.iter(), false, None)?;
         tx.commit().map_err(|e| generic("commit add_leaves", e))?;
         self.notify();
         Ok(())
@@ -894,8 +864,8 @@ impl TreeStore for SqliteTreeStore {
 
     async fn set_leaves(
         &self,
-        leaves: &[LeafPedigree],
-        missing_operators_leaves: &[LeafPedigree],
+        leaves: &[TreeNode],
+        missing_operators_leaves: &[TreeNode],
         refresh_started_at: SystemTime,
     ) -> Result<(), TreeServiceError> {
         let refresh_ms = system_time_to_millis(refresh_started_at);
@@ -933,15 +903,8 @@ impl TreeStore for SqliteTreeStore {
         )
         .map_err(|e| generic("delete old leaves", e))?;
 
-        Self::upsert_pedigree_ancestors(&tx, leaves, Some(&spent))?;
-        Self::upsert_pedigree_ancestors(&tx, missing_operators_leaves, Some(&spent))?;
-        Self::upsert_leaves(&tx, leaves.iter().map(|p| &p.leaf), false, Some(&spent))?;
-        Self::upsert_leaves(
-            &tx,
-            missing_operators_leaves.iter().map(|p| &p.leaf),
-            true,
-            Some(&spent),
-        )?;
+        Self::upsert_leaves(&tx, leaves.iter(), false, Some(&spent))?;
+        Self::upsert_leaves(&tx, missing_operators_leaves.iter(), true, Some(&spent))?;
         Self::delete_orphaned_ancestors(&tx, &dropped_candidates)?;
 
         tx.commit().map_err(|e| generic("commit set_leaves", e))?;
@@ -985,7 +948,7 @@ impl TreeStore for SqliteTreeStore {
     async fn finalize_reservation(
         &self,
         id: &LeavesReservationId,
-        new_leaves: Option<&[LeafPedigree]>,
+        new_leaves: Option<&[TreeNode]>,
     ) -> Result<(), TreeServiceError> {
         let mut conn = self.get_connection()?;
         let tx = conn
@@ -1002,8 +965,7 @@ impl TreeStore for SqliteTreeStore {
         )
         .map_err(|e| generic("delete reservation", e))?;
         if let Some(new_leaves) = new_leaves {
-            Self::upsert_pedigree_ancestors(&tx, new_leaves, None)?;
-            Self::upsert_leaves(&tx, new_leaves.iter().map(|p| &p.leaf), false, None)?;
+            Self::upsert_leaves(&tx, new_leaves.iter(), false, None)?;
             if is_swap {
                 Self::mark_swap_completed(&tx)?;
             }
@@ -1180,8 +1142,8 @@ impl TreeStore for SqliteTreeStore {
     async fn update_reservation(
         &self,
         reservation_id: &LeavesReservationId,
-        reserved_leaves: &[LeafPedigree],
-        change_leaves: &[LeafPedigree],
+        reserved_leaves: &[TreeNode],
+        change_leaves: &[TreeNode],
     ) -> Result<LeavesReservation, TreeServiceError> {
         let mut conn = self.get_connection()?;
         let tx = conn
@@ -1197,13 +1159,9 @@ impl TreeStore for SqliteTreeStore {
         Self::delete_reserved(&tx, reservation_id)?;
         // The pre-swap reserved leaves are consumed; their chains go with them.
         Self::delete_ancestors_for_leaves(&tx, &old)?;
-        Self::upsert_pedigree_ancestors(&tx, change_leaves, None)?;
-        Self::upsert_pedigree_ancestors(&tx, reserved_leaves, None)?;
-        Self::upsert_leaves(&tx, change_leaves.iter().map(|p| &p.leaf), false, None)?;
-        Self::upsert_leaves(&tx, reserved_leaves.iter().map(|p| &p.leaf), false, None)?;
-        let reserved_nodes: Vec<TreeNode> =
-            reserved_leaves.iter().map(|p| p.leaf.clone()).collect();
-        Self::set_reservation_id(&tx, reservation_id, &reserved_nodes)?;
+        Self::upsert_leaves(&tx, change_leaves.iter(), false, None)?;
+        Self::upsert_leaves(&tx, reserved_leaves.iter(), false, None)?;
+        Self::set_reservation_id(&tx, reservation_id, reserved_leaves)?;
         tx.execute(
             "UPDATE brz_tree_reservations SET pending_change_amount = 0 WHERE id = ?1",
             params![reservation_id],
@@ -1213,7 +1171,7 @@ impl TreeStore for SqliteTreeStore {
             .map_err(|e| generic("commit update reservation", e))?;
         self.notify();
         Ok(LeavesReservation::new(
-            reserved_nodes,
+            reserved_leaves.to_vec(),
             reservation_id.clone(),
         ))
     }
@@ -1304,6 +1262,7 @@ mod tests {
         test_empty_pedigree_keeps_stored_chain,
         test_stored_chain_replaces_previous,
         test_store_ancestors_backfills_chain,
+        test_stored_chain_survives_refresh_and_dies_with_its_leaf,
         test_store_ancestors_does_not_revive_spent_leaf,
         test_store_ancestors_for_absent_leaf,
         test_leaves_missing_exit_chains,
@@ -1396,8 +1355,9 @@ mod tests {
         let root = shared::create_test_node_with_parent("root", None, TreeNodeStatus::Available);
         let leaf =
             shared::create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+        store.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
         store
-            .add_leaves(&[LeafPedigree {
+            .store_ancestors(&[LeafPedigree {
                 leaf: leaf.clone(),
                 ancestors: vec![root.clone()],
             }])
@@ -1439,13 +1399,7 @@ mod tests {
         // The tree store opens the same file and runs its own migrations.
         let store = SqliteTreeStore::new(&path_str).unwrap();
         let leaf = shared::create_test_node_with_parent("leaf", None, TreeNodeStatus::Available);
-        store
-            .add_leaves(&[LeafPedigree {
-                leaf: leaf.clone(),
-                ancestors: vec![],
-            }])
-            .await
-            .unwrap();
+        store.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
         assert_eq!(
             store
                 .get_exit_chains(std::slice::from_ref(&leaf.id))

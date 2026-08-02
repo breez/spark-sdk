@@ -185,16 +185,9 @@ impl SparkWallet {
             }
         };
 
-        let pedigrees: Vec<LeafPedigree> = claimed
-            .into_iter()
-            .map(|leaf| LeafPedigree {
-                leaf,
-                ancestors: Vec::new(),
-            })
-            .collect();
         if let Err(e) = self
             .tree_service
-            .finalize_reservation(reservation.id.clone(), Some(&pedigrees))
+            .finalize_reservation(reservation.id.clone(), Some(&claimed))
             .await
         {
             error!("Failed to finalize reservation: {e:?}");

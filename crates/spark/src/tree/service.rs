@@ -96,7 +96,7 @@ impl TreeService for SynchronousTreeService {
     async fn finalize_reservation(
         &self,
         id: LeavesReservationId,
-        new_leaves: Option<&[LeafPedigree]>,
+        new_leaves: Option<&[TreeNode]>,
     ) -> Result<(), TreeServiceError> {
         self.state.finalize_reservation(&id, new_leaves).await
     }
@@ -107,19 +107,11 @@ impl TreeService for SynchronousTreeService {
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
         // The leaves go in without a chain; a renewal resolves the one parent it
         // needs and returns the reparented leaf with the chain it rebuilt.
-        let pedigrees = self
-            .check_renew_nodes(
-                leaves
-                    .into_iter()
-                    .map(|leaf| LeafPedigree {
-                        leaf,
-                        ancestors: Vec::new(),
-                    })
-                    .collect(),
-            )
-            .await?;
-        self.state.add_leaves(&pedigrees).await?;
-        Ok(pedigrees.into_iter().map(|p| p.leaf).collect())
+        let pedigrees = self.check_renew_nodes(bare_pedigrees(leaves)).await?;
+        let leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
+        self.state.add_leaves(&leaves).await?;
+        self.store_renewed_chains(&pedigrees).await;
+        Ok(leaves)
     }
 
     async fn fetch_pedigrees_from_operators(&self, leaf_ids: &[TreeNodeId]) -> Vec<LeafPedigree> {
@@ -408,23 +400,19 @@ impl TreeService for SynchronousTreeService {
             .filter(|leaf_id| !ignored_leaves_map.contains_key(&leaf_id.id))
             .cloned()
             .collect::<Vec<_>>();
-        // The leaves carry no chains, so an already-stored chain is left alone
-        // rather than rewritten on every refresh. Collecting the chains of
-        // anything newly reported is the caller's to schedule.
-        let bare = |leaves: Vec<TreeNode>| -> Vec<LeafPedigree> {
-            leaves
-                .into_iter()
-                .map(|leaf| LeafPedigree {
-                    leaf,
-                    ancestors: Vec::new(),
-                })
-                .collect()
-        };
-        let missing_operator_pedigrees = bare(missing_operator_leaves);
-        let pedigrees = self.check_renew_nodes(bare(new_leaves)).await?;
+        // A refresh writes no chains, so an already-stored one is left alone
+        // rather than rewritten every minute. Collecting the chains of anything
+        // newly reported is the caller's to schedule.
+        let pedigrees = self.check_renew_nodes(bare_pedigrees(new_leaves)).await?;
+        let renewed_leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
         self.state
-            .set_leaves(&pedigrees, &missing_operator_pedigrees, refresh_started_at)
+            .set_leaves(
+                &renewed_leaves,
+                &missing_operator_leaves,
+                refresh_started_at,
+            )
             .await?;
+        self.store_renewed_chains(&pedigrees).await;
         Ok(())
     }
 
@@ -563,12 +551,16 @@ impl SynchronousTreeService {
                 .into_iter()
                 .partition(|p| reserved_ids.contains(&p.leaf.id));
 
+        let reserved_nodes: Vec<TreeNode> =
+            reserved_pedigrees.iter().map(|p| p.leaf.clone()).collect();
+        let change_nodes: Vec<TreeNode> = change_pedigrees.iter().map(|p| p.leaf.clone()).collect();
+
         // Update the existing reservation with the selected leaves.
         // Change leaves are added to the pool atomically, preventing
         // race conditions where another request could grab them.
         let update_result = self
             .state
-            .update_reservation(&reservation.id, &reserved_pedigrees, &change_pedigrees)
+            .update_reservation(&reservation.id, &reserved_nodes, &change_nodes)
             .await;
 
         match update_result {
@@ -578,22 +570,26 @@ impl SynchronousTreeService {
                     final_reservation.id,
                     final_reservation.sum()
                 );
+                // The swap outputs are in the pool now, so a chain a renewal
+                // rebuilt for one of them can be stored against it.
+                let renewed: Vec<LeafPedigree> = reserved_pedigrees
+                    .into_iter()
+                    .chain(change_pedigrees)
+                    .collect();
+                self.store_renewed_chains(&renewed).await;
                 Ok(final_reservation)
             }
             Err(e) => {
                 // Update failed - finalize the reservation to release the permit.
                 // We use finalize (not cancel) because the OLD leaves were
                 // consumed by the swap and no longer exist.
-                // Preserve the new swap output in the pool, with whatever chain a
-                // renewal rebuilt for it.
+                // Preserve the new swap output in the pool.
                 error!("Failed to update reservation after swap: {e:?}, finalizing");
-                let pedigrees: Vec<LeafPedigree> = reserved_pedigrees
-                    .into_iter()
-                    .chain(change_pedigrees)
-                    .collect();
+                let leaves: Vec<TreeNode> =
+                    reserved_nodes.into_iter().chain(change_nodes).collect();
                 if let Err(finalize_err) = self
                     .state
-                    .finalize_reservation(&reservation.id, Some(&pedigrees))
+                    .finalize_reservation(&reservation.id, Some(&leaves))
                     .await
                 {
                     error!("Failed to finalize reservation after update error: {finalize_err:?}");
@@ -755,6 +751,29 @@ impl SynchronousTreeService {
             .map_err(|e| TreeServiceError::Generic(format!("Failed to check time lock: {e:?}")))
     }
 
+    /// Stores the chains a renewal rebuilt. Renewal reparents the leaf, so its
+    /// stored chain no longer starts at its parent and has to be replaced; every
+    /// other chain is written by the exit chain resolver. Call after the leaves
+    /// are in the pool: a chain is only kept for a leaf the store holds.
+    ///
+    /// Best-effort, and deliberately not fallible to the caller: the leaves are
+    /// already committed by then, so failing here would report a completed
+    /// operation as failed. A chain left unwritten is reported by
+    /// `leaves_missing_exit_chains` and re-resolved in the background.
+    async fn store_renewed_chains(&self, pedigrees: &[LeafPedigree]) {
+        let renewed: Vec<LeafPedigree> = pedigrees
+            .iter()
+            .filter(|p| !p.ancestors.is_empty())
+            .cloned()
+            .collect();
+        if renewed.is_empty() {
+            return;
+        }
+        if let Err(e) = self.state.store_ancestors(&renewed).await {
+            warn!("Failed to store renewed exit chains: {e:?}");
+        }
+    }
+
     async fn renew_leaves_timelocks(
         &self,
         leaves: Vec<TreeNode>,
@@ -820,9 +839,10 @@ impl SynchronousTreeService {
         };
 
         // Persist so a later cancel or finalize returns the (possibly renewed) leaves
-        // with a complete chain from local state.
-        self.state.add_leaves(&renewed).await?;
-        let new_leaves = renewed.into_iter().map(|p| p.leaf).collect();
+        // from local state.
+        let new_leaves: Vec<TreeNode> = renewed.iter().map(|p| p.leaf.clone()).collect();
+        self.state.add_leaves(&new_leaves).await?;
+        self.store_renewed_chains(&renewed).await;
         Ok(LeavesReservation::new(new_leaves, id))
     }
 
@@ -861,15 +881,20 @@ impl SynchronousTreeService {
         // The swap outputs go on without their chains: resolving them here would
         // spend a round trip on leaves this operation is about to send back out.
         // Renewal fetches the one parent it needs for an expiring timelock.
-        let pedigrees = claimed_nodes
-            .into_iter()
-            .map(|leaf| LeafPedigree {
-                leaf,
-                ancestors: Vec::new(),
-            })
-            .collect();
-        self.check_renew_nodes(pedigrees).await
+        self.check_renew_nodes(bare_pedigrees(claimed_nodes)).await
     }
+}
+
+/// Leaves as chainless pedigrees, the input shape renewal takes: it fills in the
+/// chain only for a leaf it reparents.
+fn bare_pedigrees(leaves: Vec<TreeNode>) -> Vec<LeafPedigree> {
+    leaves
+        .into_iter()
+        .map(|leaf| LeafPedigree {
+            leaf,
+            ancestors: Vec::new(),
+        })
+        .collect()
 }
 
 /// A leaf's ancestors, child first, walking `parent_node_id` through `nodes` and
@@ -889,31 +914,25 @@ fn walk_ancestors(leaf: &TreeNode, nodes: &HashMap<TreeNodeId, TreeNode>) -> Vec
     ancestors
 }
 
-/// Whether `ancestors` is a chain that can back `leaf`'s unilateral exit: it has
-/// to run from the leaf's current parent all the way to a root. A leaf that is
-/// itself a root needs no ancestors.
+/// Whether `ancestors` is a chain that can back `leaf`'s unilateral exit. A leaf
+/// that is itself a root needs no ancestors.
 ///
-/// Reaching a root is not enough on its own. Timelock renewal reparents a leaf
-/// onto a new split node under the same id, so a chain stored before that still
-/// reaches a root while describing a parent the leaf no longer has. Chains are
-/// always stored wholesale from one walk, so finding the first link and the root
-/// is enough to know the chain still spans the leaf.
-///
-/// The SQL stores evaluate this same rule in their queries rather than loading
-/// the chain to call it.
+/// Only the leaf's current parent is looked for. A stored chain always runs from
+/// some parent to a root, so containing the parent the leaf has now means it
+/// spans the whole path. Timelock renewal reparents a leaf onto a new split node
+/// under the same id, and this is what catches the chain it left behind.
 pub fn chain_backs_exit(leaf: &TreeNode, ancestors: &[TreeNode]) -> bool {
     let Some(parent_id) = leaf.parent_node_id.as_ref() else {
         return true;
     };
     ancestors.iter().any(|node| &node.id == parent_id)
-        && ancestors.iter().any(|node| node.parent_node_id.is_none())
 }
 
 /// Shapes a batch of exit chains from a node lookup. A store loads its leaves and
 /// their ancestors into `nodes` with a single query, then calls this to pair each
-/// requested leaf with its chain. A leaf id absent from `nodes` is skipped; a chain
-/// that hits a gap comes back partial (the exit can still use as much as is present,
-/// and completeness is checkable from the root having no parent).
+/// requested leaf with its chain. A leaf id absent from `nodes` is skipped, and a
+/// chain that hits a gap comes back with what it reached; [`chain_backs_exit`] is
+/// what decides whether that is enough.
 pub fn assemble_exit_chains(
     nodes: &HashMap<TreeNodeId, TreeNode>,
     leaf_ids: &[TreeNodeId],

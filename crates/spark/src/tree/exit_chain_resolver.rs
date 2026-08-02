@@ -91,20 +91,11 @@ impl ExitChainResolver {
         let (resolved, unresolved): (Vec<LeafPedigree>, Vec<LeafPedigree>) =
             fetched.into_iter().partition(is_complete);
 
-        // A partial chain cannot back an exit on its own, but it is progress and
-        // costs nothing to keep, so store whatever came back.
-        let to_store: Vec<LeafPedigree> = resolved
-            .iter()
-            .cloned()
-            .chain(
-                unresolved
-                    .iter()
-                    .filter(|pedigree| !pedigree.ancestors.is_empty())
-                    .cloned(),
-            )
-            .collect();
-        if !to_store.is_empty() {
-            self.tree_service.store_exit_chains(&to_store).await?;
+        // Only a chain that spans the leaf is stored. The stores take a stored
+        // chain as one that backs an exit, so a partial one would read as
+        // exitable and build a set that cannot confirm.
+        if !resolved.is_empty() {
+            self.tree_service.store_exit_chains(&resolved).await?;
         }
 
         // A candidate the operators left out of their response came back in no
@@ -295,7 +286,15 @@ mod tests {
             &self,
             pedigrees: &[LeafPedigree],
         ) -> Result<(), TreeServiceError> {
-            self.state.lock().await.stored.extend_from_slice(pedigrees);
+            let mut state = self.state.lock().await;
+            state.stored.extend_from_slice(pedigrees);
+            // A stored chain is what stops a leaf being reported missing, so
+            // without this the resolver would keep refetching the same leaf.
+            for pedigree in pedigrees {
+                state
+                    .stored_chains
+                    .insert(pedigree.leaf.id.clone(), pedigree.clone());
+            }
             Ok(())
         }
 
@@ -356,7 +355,7 @@ mod tests {
         async fn finalize_reservation(
             &self,
             _id: LeavesReservationId,
-            _new_leaves: Option<&[LeafPedigree]>,
+            _new_leaves: Option<&[TreeNode]>,
         ) -> Result<(), TreeServiceError> {
             unimplemented!("not exercised by ExitChainResolver")
         }
@@ -418,14 +417,13 @@ mod tests {
     #[async_test_all]
     async fn test_repeated_failure_backs_off() {
         let leaf = create_test_node_with_parent("leaf", Some("mid"), TreeNodeStatus::Available);
-        let mid =
-            create_test_node_with_parent("mid", Some("missing-root"), TreeNodeStatus::Splitted);
 
         let mock = Arc::new(MockTreeService::default());
         mock.seed_leaf(leaf.clone(), pedigree(&leaf, Vec::new()))
             .await;
-        // The operators still can't complete the chain, so this leaf must back off.
-        mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, vec![mid]))
+        // The operators return the leaf but none of its ancestry, so the chain
+        // still does not reach its parent and the leaf must back off.
+        mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, Vec::new()))
             .await;
 
         let resolver = ExitChainResolver::new(mock.clone());
@@ -466,13 +464,11 @@ mod tests {
     #[async_test_all]
     async fn test_resolving_all_ignores_backoff() {
         let leaf = create_test_node_with_parent("leaf", Some("mid"), TreeNodeStatus::Available);
-        let mid =
-            create_test_node_with_parent("mid", Some("missing-root"), TreeNodeStatus::Splitted);
 
         let mock = Arc::new(MockTreeService::default());
         mock.seed_leaf(leaf.clone(), pedigree(&leaf, Vec::new()))
             .await;
-        mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, vec![mid]))
+        mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, Vec::new()))
             .await;
 
         let resolver = ExitChainResolver::new(mock.clone());
@@ -491,13 +487,11 @@ mod tests {
     #[async_test_all]
     async fn test_resolving_all_does_not_escalate_a_live_backoff() {
         let leaf = create_test_node_with_parent("leaf", Some("mid"), TreeNodeStatus::Available);
-        let mid =
-            create_test_node_with_parent("mid", Some("missing-root"), TreeNodeStatus::Splitted);
 
         let mock = Arc::new(MockTreeService::default());
         mock.seed_leaf(leaf.clone(), pedigree(&leaf, Vec::new()))
             .await;
-        mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, vec![mid]))
+        mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, Vec::new()))
             .await;
 
         let resolver = ExitChainResolver::new(mock.clone());
@@ -518,14 +512,12 @@ mod tests {
     #[async_test_all]
     async fn test_success_clears_earlier_backoff() {
         let leaf = create_test_node_with_parent("leaf", Some("mid"), TreeNodeStatus::Available);
-        let mid =
-            create_test_node_with_parent("mid", Some("missing-root"), TreeNodeStatus::Splitted);
         let root = create_test_node_with_parent("root", None, TreeNodeStatus::Available);
 
         let mock = Arc::new(MockTreeService::default());
         mock.seed_leaf(leaf.clone(), pedigree(&leaf, Vec::new()))
             .await;
-        mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, vec![mid]))
+        mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, Vec::new()))
             .await;
 
         let resolver = ExitChainResolver::new(mock.clone());
@@ -539,8 +531,7 @@ mod tests {
             backoff.get_mut(&leaf.id).unwrap().retry_at =
                 SystemTime::now() - Duration::from_secs(1);
         }
-        // This time the operators complete the chain: the same parent, now with
-        // a root above it.
+        // This time the operators return the chain, so it reaches the parent.
         let mid_rooted =
             create_test_node_with_parent("mid", Some("root"), TreeNodeStatus::Splitted);
         mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, vec![mid_rooted, root]))

@@ -439,6 +439,15 @@ async fn test_store_ancestors_backfills_chain() {
 }
 
 #[wasm_bindgen_test]
+async fn test_stored_chain_survives_refresh_and_dies_with_its_leaf() {
+    let store = create_test_tree_store().await;
+    breez_sdk_spark::tree_store_tests::test_stored_chain_survives_refresh_and_dies_with_its_leaf(
+        &store,
+    )
+    .await;
+}
+
+#[wasm_bindgen_test]
 async fn test_store_ancestors_does_not_revive_spent_leaf() {
     let store = create_test_tree_store().await;
     breez_sdk_spark::tree_store_tests::test_store_ancestors_does_not_revive_spent_leaf(&store)
