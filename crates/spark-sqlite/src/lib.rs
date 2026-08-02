@@ -206,15 +206,25 @@ impl SqliteTreeStore {
 
     // ---- ancestor persistence ----
 
-    /// Whether the leaf pool still holds `leaf_id`, reserved or not.
-    fn leaf_exists(conn: &Connection, leaf_id: &TreeNodeId) -> Result<bool, TreeServiceError> {
-        conn.query_row(
-            "SELECT EXISTS (SELECT 1 FROM brz_tree_leaves WHERE id = ?1)",
-            params![leaf_id.to_string()],
-            |row| row.get::<_, i64>(0),
-        )
-        .map(|exists| exists != 0)
-        .map_err(|e| generic("check leaf exists", e))
+    /// Ids among `pedigrees` whose leaf the pool still holds, reserved or not.
+    fn existing_leaf_ids(
+        conn: &Connection,
+        pedigrees: &[LeafPedigree],
+    ) -> Result<HashSet<String>, TreeServiceError> {
+        let ids: Vec<String> = pedigrees
+            .iter()
+            .map(|pedigree| pedigree.leaf.id.to_string())
+            .collect();
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let sql = format!("SELECT id FROM brz_tree_leaves WHERE id IN ({placeholders})");
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| generic("prepare existing leaf ids", e))?;
+        let rows = stmt
+            .query_map(params_from_iter(ids.iter()), |row| row.get::<_, String>(0))
+            .map_err(|e| generic("query existing leaf ids", e))?;
+        rows.collect::<Result<HashSet<String>, _>>()
+            .map_err(|e| generic("read existing leaf id", e))
     }
 
     /// Replaces `leaf_id`'s stored ancestor chain with `nodes`. An empty `nodes`
@@ -690,11 +700,12 @@ impl TreeStore for SqliteTreeStore {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| generic("begin store_ancestors", e))?;
+        // The leaf can be spent between its chain being resolved and this write,
+        // and a chain is only ever removed with its leaf. Writing one for a leaf
+        // that is already gone would leave it behind for good.
+        let stored = Self::existing_leaf_ids(&tx, pedigrees)?;
         for pedigree in pedigrees {
-            // The leaf can be spent between its chain being resolved and this write,
-            // and a chain is only ever removed with its leaf. Writing one for a leaf
-            // that is already gone would leave it behind for good.
-            if !Self::leaf_exists(&tx, &pedigree.leaf.id)? {
+            if !stored.contains(&pedigree.leaf.id.to_string()) {
                 continue;
             }
             Self::upsert_ancestors(&tx, &pedigree.leaf.id, &pedigree.ancestors)?;

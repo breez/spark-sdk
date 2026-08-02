@@ -184,15 +184,22 @@ class NodeTreeStore {
       if (!pedigrees || pedigrees.length === 0) {
         return;
       }
-      // A leaf can be spent between its chain being resolved and this write, and a
-      // chain is only ever removed with its leaf. Writing one for a leaf that is
-      // already gone would leave it behind for good.
-      const leafExists = this.db.prepare(
-        "SELECT 1 FROM brz_tree_leaves WHERE id = ?"
-      );
+      const leafIds = pedigrees.map((p) => p.leaf.id);
+      const placeholders = leafIds.map(() => "?").join(",");
       this.db.transaction(() => {
+        // A leaf can be spent between its chain being resolved and this write, and a
+        // chain is only ever removed with its leaf. Writing one for a leaf that is
+        // already gone would leave it behind for good.
+        const storedLeafIds = new Set(
+          this.db
+            .prepare(
+              `SELECT id FROM brz_tree_leaves WHERE id IN (${placeholders})`
+            )
+            .all(...leafIds)
+            .map((row) => row.id)
+        );
         for (const pedigree of pedigrees) {
-          if (!leafExists.get(pedigree.leaf.id)) {
+          if (!storedLeafIds.has(pedigree.leaf.id)) {
             continue;
           }
           this._upsertAncestors(pedigree.leaf.id, pedigree.ancestors);

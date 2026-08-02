@@ -228,7 +228,7 @@ class PostgresTreeStore {
       }
 
       const leafNodes = leaves;
-      await this._withWriteTransaction(async (client) => {
+      await this._withTransaction(async (client) => {
         // Remove these leaves from spent_leaves table
         const leafIds = leafNodes.map((l) => l.id);
         await this._batchRemoveSpentLeaves(client, leafIds);
@@ -266,16 +266,10 @@ class PostgresTreeStore {
         );
         const storedLeafIds = new Set(stored.rows.map((row) => row.id));
 
-        for (const pedigree of pedigrees) {
-          if (!storedLeafIds.has(pedigree.leaf.id)) {
-            continue;
-          }
-          await this._batchUpsertAncestors(
-            client,
-            pedigree.leaf.id,
-            pedigree.ancestors
-          );
-        }
+        await this._batchUpsertAncestors(
+          client,
+          pedigrees.filter((p) => storedLeafIds.has(p.leaf.id))
+        );
       });
     } catch (error) {
       if (error instanceof TreeStoreError) throw error;
@@ -583,7 +577,7 @@ class PostgresTreeStore {
    */
   async cancelReservation(id, leavesToKeep) {
     try {
-      await this._withWriteTransaction(async (client) => {
+      await this._withTransaction(async (client) => {
         // Return leavesToKeep to the pool even when the reservation is already
         // gone (e.g. released by stale cleanup): dropping them here would lose
         // the leaves until the next refresh. The deletes no-op in that case.
@@ -956,7 +950,7 @@ class PostgresTreeStore {
    */
   async updateReservation(reservationId, reservedLeaves, changeLeaves) {
     try {
-      return await this._withWriteTransaction(async (client) => {
+      return await this._withTransaction(async (client) => {
         // Check if reservation exists
         const res = await client.query(
           "SELECT id FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
@@ -1265,33 +1259,59 @@ class PostgresTreeStore {
   }
 
   /**
-   * Replaces `leafId`'s ancestor rows wholesale (delete then insert). An empty
-   * `nodes` list is a no-op: it means the chain is unknown, not that the leaf
-   * has none, so a stored chain must survive being re-added without one.
+   * Replaces the ancestor rows of every pedigree wholesale (delete then
+   * insert), in two statements however many leaves there are. A pedigree
+   * carrying no ancestors is skipped: an empty list means the chain is unknown,
+   * not that the leaf has none, so a stored chain must survive being re-added
+   * without one.
    */
-  async _batchUpsertAncestors(client, leafId, nodes) {
-    if (!nodes || nodes.length === 0) return;
+  async _batchUpsertAncestors(client, pedigrees) {
+    const withAncestors = (pedigrees || []).filter(
+      (p) => p.ancestors && p.ancestors.length > 0
+    );
+    if (withAncestors.length === 0) return;
 
     await client.query(
-      "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = $2",
-      [this.identity, leafId]
+      "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)",
+      [this.identity, withAncestors.map((p) => p.leaf.id)]
     );
 
-    const ids = nodes.map((n) => n.id);
-    const parents = nodes.map((n) => n.parent_node_id ?? null);
-    const statuses = nodes.map((n) => n.status);
-    const dataValues = nodes.map((n) => JSON.stringify(n));
-    const values = nodes.map((n) => n.value);
-    const verifyings = nodes.map((n) => n.verifying_public_key);
+    const leafIds = [];
+    const ids = [];
+    const parents = [];
+    const statuses = [];
+    const dataValues = [];
+    const values = [];
+    const verifyings = [];
+    for (const pedigree of withAncestors) {
+      for (const node of pedigree.ancestors) {
+        leafIds.push(pedigree.leaf.id);
+        ids.push(node.id);
+        parents.push(node.parent_node_id ?? null);
+        statuses.push(node.status);
+        dataValues.push(JSON.stringify(node));
+        values.push(node.value);
+        verifyings.push(node.verifying_public_key);
+      }
+    }
 
     await client.query(
       `INSERT INTO brz_tree_ancestors
            (user_id, leaf_id, id, parent_node_id, status, data, value, verifying_public_key)
-       SELECT $5, $6, id, parent_node_id, status, data::jsonb, value, verifying
-       FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[],
+       SELECT $1, leaf_id, id, parent_node_id, status, data::jsonb, value, verifying
+       FROM UNNEST($2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
                    $7::bigint[], $8::text[])
-           AS t(id, parent_node_id, status, data, value, verifying)`,
-      [ids, parents, statuses, dataValues, this.identity, leafId, values, verifyings]
+           AS t(leaf_id, id, parent_node_id, status, data, value, verifying)`,
+      [
+        this.identity,
+        leafIds,
+        ids,
+        parents,
+        statuses,
+        dataValues,
+        values,
+        verifyings,
+      ]
     );
   }
 

@@ -219,8 +219,9 @@ class WebTreeStore {
   // ===== Transaction runner =====
 
   /**
-   * Runs one transaction. `reads` is a list of `{ name, store, key?, index? }`:
-   * with a key it is a `get`, without it a `getAll`; `index` reads through that
+   * Runs one transaction. `reads` is a list of `{ name, store, key?, index?,
+   * all? }`: with a key it is a `get`, without it a `getAll`, and `all` with a
+   * key reads every record under that key; `index` reads through that
    * index on `store` instead of the store directly. All reads are issued up
    * front; once the last completes, `compute(results, tx)` runs synchronously
    * in that read's success handler and may issue writes on `tx`. Its return
@@ -302,6 +303,10 @@ class WebTreeStore {
           if (r.keysOnly) {
             // Primary keys of the matching records, without reading a value.
             req = source.getAllKeys(r.key);
+          } else if (r.all) {
+            // Every record under `key`, rather than the single first match a
+            // bare `get` returns. An index key matches many records.
+            req = source.getAll(r.key);
           } else {
             req = "key" in r ? source.get(r.key) : source.getAll();
           }
@@ -591,21 +596,45 @@ class WebTreeStore {
     try {
       if (!pedigrees || pedigrees.length === 0) return;
 
+      // Scoped to the pedigrees' own rows: reading the two stores whole would
+      // deserialize every leaf and ancestor row the wallet holds to write a
+      // handful of chains.
+      const reads = [];
+      for (const p of pedigrees) {
+        reads.push({
+          name: `leaf:${p.leaf.id}`,
+          store: STORE_LEAVES,
+          key: p.leaf.id,
+        });
+        reads.push({
+          name: `ancestors:${p.leaf.id}`,
+          store: STORE_ANCESTORS,
+          index: "leaf_id",
+          key: p.leaf.id,
+          all: true,
+        });
+      }
+
       await this._txRun(
         [STORE_LEAVES, STORE_ANCESTORS],
         "readwrite",
-        [
-          { name: "leaves", store: STORE_LEAVES },
-          { name: "ancestors", store: STORE_ANCESTORS },
-        ],
+        reads,
         (res, tx) => {
           const ancestorsStore = tx.objectStore(STORE_ANCESTORS);
           const leavesStore = tx.objectStore(STORE_LEAVES);
-          const ancestorRowsByLeaf = this._ancestorRowsByLeaf(res.ancestors);
+          const ancestorRowsByLeaf = this._ancestorRowsByLeaf(
+            pedigrees.flatMap((p) => res[`ancestors:${p.leaf.id}`] || [])
+          );
           // A leaf can be spent between its chain being resolved and this write,
           // and a chain is only ever removed with its leaf. Writing one for a leaf
           // that is already gone would leave it behind for good.
-          const leafRowsById = new Map(res.leaves.map((row) => [row.id, row]));
+          const leafRowsById = new Map();
+          for (const p of pedigrees) {
+            const row = res[`leaf:${p.leaf.id}`];
+            if (row) {
+              leafRowsById.set(row.id, row);
+            }
+          }
 
           for (const p of pedigrees) {
             const leafRow = leafRowsById.get(p.leaf.id);

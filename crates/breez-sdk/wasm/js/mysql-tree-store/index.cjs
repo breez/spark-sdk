@@ -268,7 +268,7 @@ class MysqlTreeStore {
       }
 
       const leafNodes = leaves;
-      await this._withWriteTransaction(async (conn) => {
+      await this._withTransaction(async (conn) => {
         const leafIds = leafNodes.map((l) => l.id);
         await this._batchRemoveSpentLeaves(conn, leafIds);
         await this._batchUpsertLeaves(conn, leafNodes, false, null);
@@ -304,16 +304,10 @@ class MysqlTreeStore {
         );
         const storedLeafIds = new Set(storedRows.map((row) => row.id));
 
-        for (const pedigree of pedigrees) {
-          if (!storedLeafIds.has(pedigree.leaf.id)) {
-            continue;
-          }
-          await this._batchUpsertAncestors(
-            conn,
-            pedigree.leaf.id,
-            pedigree.ancestors
-          );
-        }
+        await this._batchUpsertAncestors(
+          conn,
+          pedigrees.filter((p) => storedLeafIds.has(p.leaf.id))
+        );
       });
     } catch (error) {
       if (error instanceof TreeStoreError) throw error;
@@ -594,7 +588,7 @@ class MysqlTreeStore {
 
   async cancelReservation(id, leavesToKeep) {
     try {
-      await this._withWriteTransaction(async (conn) => {
+      await this._withTransaction(async (conn) => {
         // Return leavesToKeep to the pool even when the reservation is already
         // gone (e.g. released by stale cleanup): dropping them here would lose
         // the leaves until the next refresh. The deletes no-op in that case.
@@ -916,7 +910,7 @@ class MysqlTreeStore {
 
   async updateReservation(reservationId, reservedLeaves, changeLeaves) {
     try {
-      return await this._withWriteTransaction(async (conn) => {
+      return await this._withTransaction(async (conn) => {
         const [existsRows] = await conn.query(
           "SELECT id FROM brz_tree_reservations WHERE user_id = ? AND id = ?",
           [this.identity, reservationId]
@@ -1218,34 +1212,45 @@ class MysqlTreeStore {
   }
 
   /**
-   * Replaces `leafId`'s ancestor rows wholesale (delete then insert). An empty
-   * `nodes` list is a no-op: it means the chain is unknown, not that the leaf
-   * has none, so a stored chain must survive being re-added without one.
+   * Replaces the ancestor rows of every pedigree wholesale (delete then
+   * insert), in two statements however many leaves there are. A pedigree
+   * carrying no ancestors is skipped: an empty list means the chain is unknown,
+   * not that the leaf has none, so a stored chain must survive being re-added
+   * without one.
    */
-  async _batchUpsertAncestors(conn, leafId, nodes) {
-    if (!nodes || nodes.length === 0) return;
+  async _batchUpsertAncestors(conn, pedigrees) {
+    const withAncestors = (pedigrees || []).filter(
+      (p) => p.ancestors && p.ancestors.length > 0
+    );
+    if (withAncestors.length === 0) return;
 
+    const leafIds = withAncestors.map((p) => p.leaf.id);
     await conn.query(
-      "DELETE FROM brz_tree_ancestors WHERE user_id = ? AND leaf_id = ?",
-      [this.identity, leafId]
+      `DELETE FROM brz_tree_ancestors
+       WHERE user_id = ? AND leaf_id IN (${buildPlaceholders(leafIds.length)})`,
+      [this.identity, ...leafIds]
     );
 
-    const valueClauses = new Array(nodes.length)
+    const params = [];
+    let rowCount = 0;
+    for (const pedigree of withAncestors) {
+      for (const node of pedigree.ancestors) {
+        params.push(
+          this.identity,
+          pedigree.leaf.id,
+          node.id,
+          node.parent_node_id ?? null,
+          node.status,
+          JSON.stringify(node),
+          node.value,
+          node.verifying_public_key
+        );
+        rowCount += 1;
+      }
+    }
+    const valueClauses = new Array(rowCount)
       .fill("(?, ?, ?, ?, ?, ?, ?, ?)")
       .join(", ");
-    const params = [];
-    for (const node of nodes) {
-      params.push(
-        this.identity,
-        leafId,
-        node.id,
-        node.parent_node_id ?? null,
-        node.status,
-        JSON.stringify(node),
-        node.value,
-        node.verifying_public_key
-      );
-    }
 
     await conn.query(
       `INSERT INTO brz_tree_ancestors
