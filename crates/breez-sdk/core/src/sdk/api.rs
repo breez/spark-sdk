@@ -324,12 +324,6 @@ impl BreezSdk {
             OptimizationMode::SingleRound => Some(1),
         };
         let result = self.spark_wallet.optimize_leaves(max_rounds).await;
-        // A manual run emits no event, so it wakes the downloader itself. Fired
-        // before the error is propagated: a run that was cancelled or failed
-        // partway still finalized the rounds before it, leaving swap outputs
-        // with no chain, and consolidating is done precisely to make more of
-        // the balance exitable.
-        self.exit_chain_trigger.trigger();
         Ok(OptimizeLeavesResponse {
             outcome: result?.into(),
         })

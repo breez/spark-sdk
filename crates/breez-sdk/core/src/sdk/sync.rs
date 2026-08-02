@@ -143,7 +143,7 @@ impl BreezSdk {
             let wallet_synced = if sync_type.contains(SyncType::Wallet) {
                 debug!("sync_wallet_internal: Starting Wallet sync");
                 let wallet_start = Instant::now();
-                let synced = match self.spark_wallet.sync().await {
+                match self.spark_wallet.sync().await {
                     Ok(()) => {
                         debug!(
                             "sync_wallet_internal: Wallet sync completed in {:?}",
@@ -158,13 +158,7 @@ impl BreezSdk {
                         );
                         false
                     }
-                };
-                // Fired either way: the wallet sync refreshes leaves before it
-                // touches tokens or claims, so a later step failing still
-                // leaves newly reported leaves needing a chain. Nothing else
-                // catches those, since a refresh answers to no operation.
-                self.exit_chain_trigger.trigger();
-                synced
+                }
             } else {
                 trace!("sync_wallet_internal: Skipping Wallet sync");
                 false

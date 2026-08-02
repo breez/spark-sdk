@@ -38,6 +38,13 @@ pub enum WalletEvent {
     TokenTransaction(TokenTransaction),
     /// Auto-optimization lifecycle event.
     AutoOptimization(AutoOptimizationEvent),
+    /// The leaf pool gained leaves, which may need exit chains collected.
+    ///
+    /// A hint rather than a guarantee: the channel drops events when a listener
+    /// lags, and collection reads which leaves lack a chain rather than which
+    /// ones arrived, so a dropped event costs latency and nothing else. Carries
+    /// no ids for the same reason.
+    LeavesAdded,
 }
 
 impl Display for WalletEvent {

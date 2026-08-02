@@ -2716,8 +2716,26 @@ impl BackgroundProcessor {
     async fn process_events(&self, mut event_stream: broadcast::Receiver<SparkEvent>) {
         use broadcast::error::RecvError;
 
+        // Multiplexed onto this loop rather than given a task of its own: both
+        // are notifications this processor turns into wallet events, and this
+        // loop already outlives the reconnects the server stream goes through.
+        let mut leaves_added = self.tree_service.subscribe_leaves_added();
+
         loop {
-            match event_stream.recv().await {
+            tokio::select! {
+                received = leaves_added.recv() => match received {
+                    // Lagging means notifications were missed, and one raised
+                    // now covers them: each says only that the pool grew.
+                    Ok(()) | Err(RecvError::Lagged(_)) => {
+                        self.event_manager
+                            .notify_listeners(WalletEvent::LeavesAdded);
+                    }
+                    Err(RecvError::Closed) => {
+                        info!("Leaves-added stream closed, stopping event processing");
+                        break;
+                    }
+                },
+                received = event_stream.recv() => match received {
                 Ok(event) => {
                     debug!("Received event: {event}");
                     trace!("Received event: {event:?}");
@@ -2748,6 +2766,7 @@ impl BackgroundProcessor {
                     info!("Event stream closed, stopping event processing");
                     break;
                 }
+                },
             }
         }
     }

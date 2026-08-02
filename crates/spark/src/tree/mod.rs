@@ -11,7 +11,7 @@ pub mod tests;
 pub use error::TreeServiceError;
 pub use exit_chain_resolver::ExitChainResolver;
 pub use leaf_optimizer::*;
-use platform_utils::tokio::sync::watch;
+use platform_utils::tokio::sync::{broadcast, watch};
 pub use select_helper::{
     select_leaves_by_minimum_amount, select_leaves_by_target_amounts, with_reserved_leaves,
 };
@@ -754,6 +754,15 @@ pub enum LeafSelection {
 
 #[macros::async_trait]
 pub trait TreeService: Send + Sync {
+    /// Notifies each time leaves reach the pool, for the work that has to follow
+    /// them there: an exit chain to collect, a consolidation to consider.
+    ///
+    /// A prompt to go and look, not a record of what arrived. It carries no ids,
+    /// and a listener that lags misses notifications, so what follows one has to
+    /// read the pool for itself. A refresh cannot tell which of the leaves the
+    /// operators reported are new and notifies for any of them.
+    fn subscribe_leaves_added(&self) -> broadcast::Receiver<()>;
+
     /// Returns the total balance of all available leaves in the tree.
     ///
     /// This method calculates the sum of all leaf values that have a status of

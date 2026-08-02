@@ -15,7 +15,7 @@ use rustyline::highlight::Highlighter;
 use rustyline::hint::HistoryHinter;
 use rustyline::{Completer, Editor, Helper, Hinter, Validator};
 use spark_wallet::{DefaultSigner, Network, SparkWalletConfig};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::command::Command;
@@ -138,6 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         spark_wallet::WalletEvent::TransferClaimStarting(transfer) => info!("Transfer claim starting: {}", transfer.id),
                         spark_wallet::WalletEvent::TokenTransaction(transaction) => info!("Token transaction: {}", transaction.hash),
                         spark_wallet::WalletEvent::AutoOptimization(event) => info!("Auto-optimization event: {:?}", event),
+                        spark_wallet::WalletEvent::LeavesAdded => debug!("Leaves added"),
                     }
                 }
                 else => warn!("Event stream closed."),

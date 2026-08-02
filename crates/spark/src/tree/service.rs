@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use bitcoin::secp256k1::PublicKey;
 use platform_utils::tokio;
+use platform_utils::tokio::sync::broadcast;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::tree::{
@@ -42,10 +43,20 @@ pub struct SynchronousTreeService {
     timelock_manager: Arc<TimelockManager>,
     spark_signer: Arc<dyn SparkSigner>,
     swap_service: Arc<Swap>,
+    leaves_added: broadcast::Sender<()>,
 }
+
+/// Notifications buffered per listener before it starts missing them. Each one
+/// says only that the pool grew, so a listener that falls behind loses nothing
+/// a single later notification does not tell it just as well.
+const LEAVES_ADDED_CAPACITY: usize = 16;
 
 #[macros::async_trait]
 impl TreeService for SynchronousTreeService {
+    fn subscribe_leaves_added(&self) -> broadcast::Receiver<()> {
+        self.leaves_added.subscribe()
+    }
+
     async fn list_leaves(&self) -> Result<Leaves, TreeServiceError> {
         self.state.get_leaves().await
     }
@@ -98,7 +109,12 @@ impl TreeService for SynchronousTreeService {
         id: LeavesReservationId,
         new_leaves: Option<&[TreeNode]>,
     ) -> Result<(), TreeServiceError> {
-        self.state.finalize_reservation(&id, new_leaves).await
+        self.state.finalize_reservation(&id, new_leaves).await?;
+        // A swap's change, which the reservation being finalized paid for.
+        if new_leaves.is_some_and(|leaves| !leaves.is_empty()) {
+            self.notify_leaves_added();
+        }
+        Ok(())
     }
 
     async fn insert_leaves(
@@ -111,6 +127,9 @@ impl TreeService for SynchronousTreeService {
         let leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
         self.state.add_leaves(&leaves).await?;
         self.store_renewed_chains(&pedigrees).await;
+        if !leaves.is_empty() {
+            self.notify_leaves_added();
+        }
         Ok(leaves)
     }
 
@@ -413,6 +432,11 @@ impl TreeService for SynchronousTreeService {
             )
             .await?;
         self.store_renewed_chains(&pedigrees).await;
+        // Which of the reported leaves the store already held is the store's to
+        // know, so anything reported at all is announced.
+        if !renewed_leaves.is_empty() {
+            self.notify_leaves_added();
+        }
         Ok(())
     }
 
@@ -440,7 +464,14 @@ impl SynchronousTreeService {
             timelock_manager,
             spark_signer,
             swap_service,
+            leaves_added: broadcast::channel(LEAVES_ADDED_CAPACITY).0,
         }
+    }
+
+    /// Announces leaves reaching the pool. Errors when nobody is listening,
+    /// which is the usual case and not a failure.
+    fn notify_leaves_added(&self) {
+        let _ = self.leaves_added.send(());
     }
 
     /// Checks if the reservation already matches the target amounts without needing a swap.
@@ -577,6 +608,9 @@ impl SynchronousTreeService {
                     .chain(change_pedigrees)
                     .collect();
                 self.store_renewed_chains(&renewed).await;
+                if !change_nodes.is_empty() {
+                    self.notify_leaves_added();
+                }
                 Ok(final_reservation)
             }
             Err(e) => {
@@ -843,6 +877,12 @@ impl SynchronousTreeService {
         let new_leaves: Vec<TreeNode> = renewed.iter().map(|p| p.leaf.clone()).collect();
         self.state.add_leaves(&new_leaves).await?;
         self.store_renewed_chains(&renewed).await;
+        // Renewal reparents rather than adds, and rebuilds the chain itself. The
+        // rebuild is best-effort though, so a listener is given the chance to
+        // notice one that did not make it.
+        if !new_leaves.is_empty() {
+            self.notify_leaves_added();
+        }
         Ok(LeavesReservation::new(new_leaves, id))
     }
 

@@ -246,6 +246,10 @@ mod tests {
 
     #[macros::async_trait]
     impl TreeService for MockTreeService {
+        fn subscribe_leaves_added(&self) -> platform_utils::tokio::sync::broadcast::Receiver<()> {
+            unimplemented!("not exercised by ExitChainResolver")
+        }
+
         async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
             unimplemented!("not exercised by ExitChainResolver")
         }

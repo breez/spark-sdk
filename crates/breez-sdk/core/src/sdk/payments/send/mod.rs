@@ -30,27 +30,7 @@ pub(in crate::sdk) enum PublishOutcome {
     Replayed(Vec<Payment>),
 }
 
-/// Publishes a signed package and wakes the exit chain downloader for whatever
-/// leaves it left behind. Every publish path converges here, so this is where
-/// the wake-up belongs rather than in any one caller's tail.
 pub(in crate::sdk) async fn publish_signed_package(
-    sdk: &BreezSdk,
-    signed_package: &SignedTransferPackage,
-) -> Result<PublishOutcome, SdkError> {
-    let outcome = publish_signed_package_inner(sdk, signed_package).await?;
-    // A swap persists its outputs whether or not the send it belongs to is ever
-    // resubmitted, so an abandoned flow would otherwise leave its change without
-    // a chain. Only a replay published nothing.
-    if matches!(
-        outcome,
-        PublishOutcome::Sent(_) | PublishOutcome::SwapCompleted
-    ) {
-        sdk.exit_chain_trigger.trigger();
-    }
-    Ok(outcome)
-}
-
-async fn publish_signed_package_inner(
     sdk: &BreezSdk,
     signed_package: &SignedTransferPackage,
 ) -> Result<PublishOutcome, SdkError> {
@@ -367,8 +347,6 @@ pub(in crate::sdk) async fn orchestrate_send(
             .emit(&SdkEvent::from_payment(response.payment.clone()))
             .await;
     }
-    // A send leaves change behind, which needs a chain of its own.
-    sdk.exit_chain_trigger.trigger();
     res
 }
 

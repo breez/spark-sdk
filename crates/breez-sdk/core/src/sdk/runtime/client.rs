@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use platform_utils::time::{Duration, SystemTime};
 use platform_utils::tokio;
-use spark_wallet::{AutoOptimizationEvent, SparkWallet, WalletEvent, WalletTransfer};
+use spark_wallet::{SparkWallet, WalletEvent, WalletTransfer};
 use tokio::{
     select,
     sync::{broadcast, watch},
@@ -288,8 +288,14 @@ async fn on_sync_request(
 
 async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
     match event {
-        WalletEvent::DepositConfirmed(_) => {
+        WalletEvent::LeavesAdded => {
+            // The single wake-up for exit chain collection: the wallet raises
+            // this wherever leaves enter the pool, so no operation here has to
+            // remember to.
             sdk.exit_chain_trigger.trigger();
+            false
+        }
+        WalletEvent::DepositConfirmed(_) => {
             info!("Deposit confirmed");
             false
         }
@@ -306,8 +312,6 @@ async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
             false
         }
         WalletEvent::TransferClaimed(transfer) => {
-            // Claimed funds are new leaves with no chain yet.
-            sdk.exit_chain_trigger.trigger();
             info!("Transfer claimed");
             // Drop any unclaimed-deposit record for this outpoint independently
             // of payment ingestion, so conversion failures do not leave it stale.
@@ -355,24 +359,6 @@ async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
         }
         WalletEvent::AutoOptimization(event) => {
             info!("AutoOptimization event: {:?}", event);
-            // Rounds that already completed leave new leaves behind even when
-            // the run as a whole did not finish, so every end state wakes the
-            // downloader. Matched exhaustively so a new end state has to decide.
-            let ended = match event {
-                AutoOptimizationEvent::Completed
-                | AutoOptimizationEvent::Cancelled
-                | AutoOptimizationEvent::Failed { .. } => true,
-                // Skipped runs no round at all, and the other two are progress.
-                AutoOptimizationEvent::Skipped
-                | AutoOptimizationEvent::Started { .. }
-                | AutoOptimizationEvent::RoundCompleted { .. } => false,
-            };
-            if ended {
-                sdk.exit_chain_trigger.trigger();
-            }
-            // Only the background auto-optimizer reaches this branch;
-            // manually-triggered optimize_leaves calls return their result
-            // directly and never produce wallet-level optimization events.
             sdk.event_emitter
                 .emit(&SdkEvent::AutoOptimization {
                     optimization_event: event.into(),
