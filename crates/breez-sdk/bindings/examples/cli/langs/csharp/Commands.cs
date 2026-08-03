@@ -572,7 +572,8 @@ public static class Commands
                     description: description ?? "",
                     amountSats: amountSats,
                     expirySecs: ParseOptionalUint(expirySecsStr),
-                    paymentHash: paymentHash
+                    paymentHash: paymentHash,
+                    receiverIdentityPublicKey: null
                 );
                 break;
 

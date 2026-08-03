@@ -1056,6 +1056,7 @@ async fn test_client_signing_lightning_send() -> Result<()> {
                 amount_sats: Some(invoice_sats),
                 expiry_secs: None,
                 payment_hash: None,
+                receiver_identity_public_key: None,
             },
         })
         .await?
@@ -1181,6 +1182,7 @@ async fn test_client_signing_lightning_send_fees_included() -> Result<()> {
                 amount_sats: None,
                 expiry_secs: None,
                 payment_hash: None,
+                receiver_identity_public_key: None,
             },
         })
         .await?

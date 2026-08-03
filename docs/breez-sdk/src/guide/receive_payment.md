@@ -11,6 +11,8 @@ Once the SDK is initialized, you can directly begin receiving payments. The SDK 
 
 When receiving via Lightning, we can generate a BOLT11 invoice to be paid. Setting the invoice amount fixes the amount the sender should pay.
 
+To create an invoice for another Spark wallet, set {{#name receiver_identity_public_key}} to that wallet's identity public key. Creating the invoice does not require the receiving wallet's mnemonic.
+
 **Note:** the payment may fallback to a direct Spark payment (if the payer's client supports this).
 
 {{#tabs receive_payment:receive-payment-lightning-bolt11}}

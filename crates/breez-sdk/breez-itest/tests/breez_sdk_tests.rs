@@ -293,6 +293,7 @@ async fn test_03_lightning_invoice_payment(
                 amount_sats: invoice_amount_sats,
                 expiry_secs: None,
                 payment_hash: None,
+                receiver_identity_public_key: None,
             },
         })
         .await?
@@ -534,6 +535,84 @@ async fn test_03_lightning_invoice_payment(
     Ok(())
 }
 
+/// Test 4: A wallet can create a Lightning invoice for another Spark identity.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_04_lightning_invoice_for_external_recipient(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    let mut alice = alice_sdk.await?;
+    let mut bob = bob_sdk.await?;
+    let invoice_amount_sats = 2_000u64;
+
+    ensure_funded(&mut bob, 50_000).await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_initial_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    let alice_identity_pubkey = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .identity_pubkey;
+
+    let invoice = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::Bolt11Invoice {
+                description: "Invoice for an external recipient".to_string(),
+                amount_sats: Some(invoice_amount_sats),
+                expiry_secs: None,
+                payment_hash: None,
+                receiver_identity_public_key: Some(alice_identity_pubkey),
+            },
+        })
+        .await?
+        .payment_request;
+
+    let prepared = bob
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: PaymentRequest::Input { input: invoice },
+            amount: None,
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+    bob.sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepared,
+            options: Some(SendPaymentOptions::Bolt11Invoice {
+                prefer_spark: false,
+                completion_timeout_secs: Some(10),
+            }),
+            idempotency_key: None,
+        })
+        .await?;
+
+    let received =
+        wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 60).await?;
+    wait_for_balance(
+        &alice.sdk,
+        Some(alice_initial_balance + invoice_amount_sats),
+        None,
+        20,
+    )
+    .await?;
+
+    assert_eq!(received.amount, invoice_amount_sats as u128);
+    assert_eq!(received.method, PaymentMethod::Lightning);
+    Ok(())
+}
+
 /// Test 5: Lightning invoice with prefer_spark true should use spark fee path
 #[rstest]
 #[test_log::test(tokio::test)]
@@ -559,6 +638,7 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
                 amount_sats: Some(invoice_amount_sats),
                 expiry_secs: None,
                 payment_hash: None,
+                receiver_identity_public_key: None,
             },
         })
         .await?
@@ -657,6 +737,7 @@ async fn test_06_lightning_timeout_and_wait(
                 amount_sats: None,
                 expiry_secs: None,
                 payment_hash: None,
+                receiver_identity_public_key: None,
             },
         })
         .await?
@@ -905,6 +986,7 @@ async fn test_08_lightning_invoice_expiry_secs(
                 amount_sats: Some(invoice_amount_sats),
                 expiry_secs: Some(custom_expiry_secs),
                 payment_hash: None,
+                receiver_identity_public_key: None,
             },
         })
         .await?;
@@ -1062,6 +1144,7 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
                 amount_sats: None,
                 expiry_secs: None,
                 payment_hash: None,
+                receiver_identity_public_key: None,
             },
         })
         .await?
@@ -1356,6 +1439,7 @@ async fn test_10_lightning_completion_timeout_resolves_to_completed(
                 amount_sats: Some(invoice_amount_sats),
                 expiry_secs: None,
                 payment_hash: None,
+                receiver_identity_public_key: None,
             },
         })
         .await?

@@ -716,6 +716,7 @@ pub(crate) async fn execute_command(
                         amount_sats: amount.map(TryInto::try_into).transpose()?,
                         expiry_secs,
                         payment_hash,
+                        receiver_identity_public_key: None,
                     }
                 }
             };

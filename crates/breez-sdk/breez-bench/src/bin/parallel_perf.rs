@@ -253,6 +253,7 @@ async fn main() -> Result<()> {
                     amount_sats: Some(amount),
                     expiry_secs: Some(3600),
                     payment_hash: None,
+                    receiver_identity_public_key: None,
                 },
             })
             .await?

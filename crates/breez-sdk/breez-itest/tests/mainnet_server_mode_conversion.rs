@@ -259,6 +259,7 @@ async fn test_server_mode_token_to_bitcoin() -> Result<()> {
                 amount_sats: Some(invoice_sats),
                 expiry_secs: None,
                 payment_hash: None,
+                receiver_identity_public_key: None,
             },
         })
         .await?

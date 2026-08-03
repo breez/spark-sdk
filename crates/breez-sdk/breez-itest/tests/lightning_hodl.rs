@@ -16,13 +16,20 @@ async fn test_01_lightning_hodl_success(
     let mut alice = alice_sdk.await?;
     let mut bob = bob_sdk.await?;
 
-    ensure_funded(&mut alice, 60_000).await?;
+    ensure_funded(&mut bob, 60_000).await?;
 
-    // Bob generates a preimage/hash pair and creates a HODL invoice
+    // Bob generates a preimage/hash pair and creates a HODL invoice for Alice.
     let (preimage, payment_hash) = generate_preimage_hash_pair();
     info!("Generated payment_hash: {payment_hash}");
+    let alice_identity_pubkey = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .identity_pubkey;
 
-    let bob_invoice = bob
+    let invoice = bob
         .sdk
         .receive_payment(ReceivePaymentRequest {
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
@@ -30,20 +37,19 @@ async fn test_01_lightning_hodl_success(
                 amount_sats: Some(10_000),
                 expiry_secs: None,
                 payment_hash: Some(payment_hash.clone()),
+                receiver_identity_public_key: Some(alice_identity_pubkey),
             },
         })
         .await?
         .payment_request;
 
-    info!("Bob's HODL invoice: {bob_invoice}");
+    info!("HODL invoice for Alice: {invoice}");
 
-    // Alice prepares and sends — use short timeout so it returns while still pending
-    let prepare = alice
+    // Bob prepares and sends. Use a short timeout so it returns while still pending.
+    let prepare = bob
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Input {
-                input: bob_invoice.clone(),
-            },
+            payment_request: PaymentRequest::Input { input: invoice },
             amount: None,
             token_identifier: None,
             conversion_options: None,
@@ -51,9 +57,9 @@ async fn test_01_lightning_hodl_success(
         })
         .await?;
 
-    info!("Sending 10_000 sats from Alice to Bob via Lightning HODL...");
+    info!("Sending 10_000 sats from Bob to Alice via Lightning HODL...");
 
-    let send_resp = alice
+    let send_resp = bob
         .sdk
         .send_payment(SendPaymentRequest {
             prepare_response: prepare,
@@ -65,16 +71,16 @@ async fn test_01_lightning_hodl_success(
         })
         .await?;
 
-    info!("Alice send payment status: {:?}", send_resp.payment.status);
+    info!("Bob send payment status: {:?}", send_resp.payment.status);
     assert!(
         matches!(send_resp.payment.status, PaymentStatus::Pending),
         "Payment should be pending (HODL invoice not yet claimed)"
     );
 
-    // Bob syncs and verifies the pending HODL receive
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    // Alice syncs and verifies the pending HODL receive.
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
-    let bob_pending = bob
+    let alice_pending = alice
         .sdk
         .list_payments(ListPaymentsRequest {
             status_filter: Some(vec![PaymentStatus::Pending]),
@@ -86,17 +92,17 @@ async fn test_01_lightning_hodl_success(
         })
         .await?;
 
-    let bob_pending_payment = bob_pending
+    let alice_pending_payment = alice_pending
         .payments
         .first()
-        .ok_or(anyhow::anyhow!("No pending HODL payment found for Bob"))?;
+        .ok_or(anyhow::anyhow!("No pending HODL payment found for Alice"))?;
 
-    info!("Verifying Bob's pending HODL payment...");
-    assert_eq!(bob_pending_payment.status, PaymentStatus::Pending);
-    assert_eq!(bob_pending_payment.payment_type, PaymentType::Receive);
-    assert_eq!(bob_pending_payment.amount, 10_000);
+    info!("Verifying Alice's pending HODL payment...");
+    assert_eq!(alice_pending_payment.status, PaymentStatus::Pending);
+    assert_eq!(alice_pending_payment.payment_type, PaymentType::Receive);
+    assert_eq!(alice_pending_payment.amount, 10_000);
     assert!(matches!(
-        &bob_pending_payment.details,
+        &alice_pending_payment.details,
         Some(PaymentDetails::Lightning {
             htlc_details: details, ..
         })
@@ -105,21 +111,22 @@ async fn test_01_lightning_hodl_success(
             && details.status == SparkHtlcStatus::WaitingForPreimage
     ));
 
-    // Bob claims the HODL payment with the preimage
-    info!("Bob claiming HODL payment with preimage...");
-    bob.sdk
+    // Alice claims the HODL payment with the preimage.
+    info!("Alice claiming HODL payment with preimage...");
+    alice
+        .sdk
         .claim_htlc_payment(ClaimHtlcPaymentRequest {
             preimage: preimage.clone(),
         })
         .await?;
 
-    // Wait for Bob's payment succeeded event
-    info!("Waiting for Bob to receive payment succeeded event...");
+    // Wait for Alice's payment succeeded event.
+    info!("Waiting for Alice to receive payment succeeded event...");
     let received_payment =
-        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
+        wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 60).await?;
 
     // Verify the completed payment details
-    let bob_completed = bob
+    let alice_completed = alice
         .sdk
         .get_payment(GetPaymentRequest {
             payment_id: received_payment.id,
@@ -127,11 +134,11 @@ async fn test_01_lightning_hodl_success(
         .await?
         .payment;
 
-    assert_eq!(bob_completed.status, PaymentStatus::Completed);
-    assert_eq!(bob_completed.payment_type, PaymentType::Receive);
-    assert_eq!(bob_completed.amount, 10_000);
+    assert_eq!(alice_completed.status, PaymentStatus::Completed);
+    assert_eq!(alice_completed.payment_type, PaymentType::Receive);
+    assert_eq!(alice_completed.amount, 10_000);
     assert!(matches!(
-        &bob_completed.details,
+        &alice_completed.details,
         Some(PaymentDetails::Lightning {
             htlc_details: details, ..
         })
@@ -140,18 +147,18 @@ async fn test_01_lightning_hodl_success(
             && details.status == SparkHtlcStatus::PreimageShared
     ));
 
-    // Wait for Alice's payment succeeded event
-    info!("Waiting for Alice's send payment to complete...");
-    let alice_completed_payment =
-        wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 60).await?;
+    // Wait for Bob's payment succeeded event.
+    info!("Waiting for Bob's send payment to complete...");
+    let bob_completed_payment =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Send, 60).await?;
 
-    assert_eq!(alice_completed_payment.status, PaymentStatus::Completed);
-    assert_eq!(alice_completed_payment.payment_type, PaymentType::Send);
-    assert_eq!(alice_completed_payment.amount, 10_000);
+    assert_eq!(bob_completed_payment.status, PaymentStatus::Completed);
+    assert_eq!(bob_completed_payment.payment_type, PaymentType::Send);
+    assert_eq!(bob_completed_payment.amount, 10_000);
 
-    // Verify Bob's balance increased
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    let bob_final_balance = bob
+    // Verify Alice's balance increased.
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_final_balance = alice
         .sdk
         .get_info(GetInfoRequest {
             ensure_synced: Some(false),
@@ -159,7 +166,7 @@ async fn test_01_lightning_hodl_success(
         .await?
         .balance_sats;
 
-    assert_eq!(bob_final_balance, 10_000);
+    assert_eq!(alice_final_balance, 10_000);
 
     info!("=== Test test_01_lightning_hodl_success PASSED ===");
     Ok(())

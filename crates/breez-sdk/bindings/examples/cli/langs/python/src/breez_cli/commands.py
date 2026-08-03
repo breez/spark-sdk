@@ -298,6 +298,7 @@ async def _handle_receive(sdk, _token_issuer, _session, args):
             amount_sats=args.amount,
             expiry_secs=args.expiry_secs,
             payment_hash=payment_hash,
+            receiver_identity_public_key=None,
         )
     else:
         print(f"Invalid payment method: {method}")
