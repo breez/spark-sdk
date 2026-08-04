@@ -9,6 +9,7 @@ const TIMELOCK_MASK: u32 = 0x0000_FFFF;
 const INITIAL_TIME_LOCK: u16 = 2000;
 const TIME_LOCK_INTERVAL: u16 = 100;
 const DIRECT_TIME_LOCK_OFFSET: u16 = 50;
+const MAX_TIME_LOCK: u16 = INITIAL_TIME_LOCK + DIRECT_TIME_LOCK_OFFSET;
 const DIRECT_HTLC_TIME_LOCK_OFFSET: u16 = 85;
 const HTLC_TIME_LOCK_OFFSET: u16 = 70;
 
@@ -27,13 +28,22 @@ pub fn initial_zero_timelock_sequence() -> (Sequence, Sequence) {
     (to_sequence(0, 0), to_sequence(DIRECT_TIME_LOCK_OFFSET, 0))
 }
 
-pub fn current_sequence(current_sequence: Sequence) -> (Sequence, Sequence) {
-    let timelock = current_sequence.to_consensus_u32() as u16;
+fn checked_timelock(sequence: Sequence) -> Option<u16> {
+    if !sequence.is_height_locked() {
+        return None;
+    }
+    let timelock = (sequence.to_consensus_u32() & TIMELOCK_MASK) as u16;
+    (timelock <= MAX_TIME_LOCK).then_some(timelock)
+}
+
+pub fn current_sequence(current_sequence: Sequence) -> Option<(Sequence, Sequence)> {
+    let timelock = checked_timelock(current_sequence)?;
+    let direct_timelock = timelock.checked_add(DIRECT_TIME_LOCK_OFFSET)?;
     let spark_sequence_flag = spark_sequence_flag(current_sequence);
-    (
+    Some((
         current_sequence,
-        to_sequence(timelock + DIRECT_TIME_LOCK_OFFSET, spark_sequence_flag),
-    )
+        to_sequence(direct_timelock, spark_sequence_flag),
+    ))
 }
 
 /// Enforces timelock alignment to `TIME_LOCK_INTERVAL` (100 blocks) by rounding down.
@@ -45,22 +55,14 @@ pub fn current_sequence(current_sequence: Sequence) -> (Sequence, Sequence) {
 /// - 1950 -> 1900
 /// - 1900 -> 1900 (already aligned)
 /// - 1899 -> 1800
-pub fn enforce_timelock(sequence: Sequence) -> Sequence {
-    let current_sequence_num = sequence.to_consensus_u32();
-
-    // Extract lower 16 bits (timelock value)
-    let timelock = (current_sequence_num & TIMELOCK_MASK) as u16;
+pub fn enforce_timelock(sequence: Sequence) -> Option<Sequence> {
+    let timelock = checked_timelock(sequence)?;
 
     // Round down to nearest TIME_LOCK_INTERVAL
-    let remainder = timelock % TIME_LOCK_INTERVAL;
-    let enforced_timelock = if remainder != 0 {
-        timelock - remainder
-    } else {
-        timelock
-    };
+    let enforced_timelock = timelock - (timelock % TIME_LOCK_INTERVAL);
 
     let spark_flag = spark_sequence_flag(sequence);
-    to_sequence(enforced_timelock, spark_flag)
+    Some(to_sequence(enforced_timelock, spark_flag))
 }
 
 /// Calculates the next pair of sequence numbers for transaction timelocks.
@@ -142,11 +144,7 @@ fn to_sequence(blocks: u16, spark_sequence_flag: u32) -> Sequence {
 
 fn check_next_timelock(current_sequence: Sequence) -> Option<u16> {
     trace!("Current sequence: {current_sequence:?}");
-    let current_sequence_num = current_sequence.to_consensus_u32();
-
-    // Extract only the lower 16 bits (timelock value)
-    // Upper bits including SPARK_SEQUENCE_FLAG are ignored for timelock calculation
-    let timelock = (current_sequence_num & TIMELOCK_MASK) as u16;
+    let timelock = checked_timelock(current_sequence)?;
 
     timelock.checked_sub(TIME_LOCK_INTERVAL).or_else(|| {
         trace!(
@@ -308,10 +306,47 @@ mod tests {
     }
 
     #[test_all]
+    fn rejects_out_of_range_timelock() {
+        assert!(enforce_timelock(Sequence::from_consensus(0xFFFF)).is_none());
+        assert!(current_sequence(Sequence::from_consensus(0xFFFF)).is_none());
+    }
+
+    #[test_all]
+    fn accepts_max_protocol_timelock() {
+        let sequence = Sequence::from_consensus(u32::from(MAX_TIME_LOCK));
+        assert!(enforce_timelock(sequence).is_some());
+    }
+
+    #[test_all]
+    fn rejects_timelock_above_protocol_max() {
+        let sequence = Sequence::from_consensus(u32::from(MAX_TIME_LOCK) + 1);
+        assert!(enforce_timelock(sequence).is_none());
+    }
+
+    #[test_all]
+    fn rejects_time_based_sequence() {
+        let sequence = Sequence::from_consensus(u32::from(INITIAL_TIME_LOCK) | (1 << 22));
+        assert!(enforce_timelock(sequence).is_none());
+    }
+
+    #[test_all]
+    fn rejects_disabled_relative_locktime() {
+        let sequence = Sequence::from_consensus(u32::from(INITIAL_TIME_LOCK) | (1 << 31));
+        assert!(enforce_timelock(sequence).is_none());
+    }
+
+    #[test_all]
+    fn accepts_spark_flagged_sequence() {
+        let sequence = Sequence::from_consensus(u32::from(INITIAL_TIME_LOCK) | SPARK_SEQUENCE_FLAG);
+        assert!(enforce_timelock(sequence).is_some());
+        assert!(current_sequence(sequence).is_some());
+    }
+
+    #[test_all]
     fn test_enforce_timelock_rounds_down() {
         // 1950 should round down to 1900
         let sequence = Sequence::from_consensus(1950 | SPARK_SEQUENCE_FLAG);
-        let enforced = enforce_timelock(sequence);
+        let enforced = enforce_timelock(sequence).unwrap();
 
         let LockTime::Blocks(height) = enforced.to_relative_lock_time().unwrap() else {
             panic!("Expected block height locktime");
@@ -329,7 +364,7 @@ mod tests {
     fn test_enforce_timelock_already_aligned() {
         // 1900 should stay 1900
         let sequence = Sequence::from_consensus(1900 | SPARK_SEQUENCE_FLAG);
-        let enforced = enforce_timelock(sequence);
+        let enforced = enforce_timelock(sequence).unwrap();
 
         let LockTime::Blocks(height) = enforced.to_relative_lock_time().unwrap() else {
             panic!("Expected block height locktime");
@@ -341,7 +376,7 @@ mod tests {
     fn test_enforce_timelock_edge_case() {
         // 99 should round down to 0
         let sequence = Sequence::from_consensus(99 | SPARK_SEQUENCE_FLAG);
-        let enforced = enforce_timelock(sequence);
+        let enforced = enforce_timelock(sequence).unwrap();
 
         let LockTime::Blocks(height) = enforced.to_relative_lock_time().unwrap() else {
             panic!("Expected block height locktime");

@@ -954,7 +954,15 @@ impl TransferService {
                 .clone()
                 .ok_or_else(|| ServiceError::Generic("No refund tx".to_string()))?;
             let old_sequence = refund_tx.input[0].sequence;
-            let (cpfp_sequence, direct_sequence) = current_sequence(enforce_timelock(old_sequence));
+            let (cpfp_sequence, direct_sequence) = enforce_timelock(old_sequence)
+                .and_then(current_sequence)
+                .ok_or_else(|| {
+                    ServiceError::ValidationError(format!(
+                        "leaf {} refund tx has an invalid timelock sequence {:#x}",
+                        leaf.node.id,
+                        old_sequence.to_consensus_u32()
+                    ))
+                })?;
             let RefundTransactions {
                 cpfp_tx: cpfp_refund_tx,
                 direct_tx: direct_refund_tx,
