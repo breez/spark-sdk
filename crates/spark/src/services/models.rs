@@ -12,7 +12,7 @@ use frost_secp256k1_tr::{
     Identifier,
     round1::{NonceCommitment, SigningCommitments},
 };
-use platform_utils::time::{Duration, SystemTime, UNIX_EPOCH};
+use platform_utils::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 use uuid::Uuid;
@@ -31,6 +31,7 @@ use crate::token::{TokenMetadata, TokenOutput, TokenOutputWithPrevOut};
 use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId, TreeNodeStatus};
 use crate::utils::byte_padding::BytePadding;
 use crate::utils::frost::sign_frost_batch;
+use crate::utils::time::{prost_timestamp_to_secs, prost_timestamp_to_web_time};
 
 use super::ServiceError;
 
@@ -520,11 +521,22 @@ impl TryFrom<operator_rpc::spark::Transfer> for Transfer {
             .map(|leaf| leaf.try_into())
             .collect::<Result<Vec<_>, _>>()?;
 
-        let expiry_time = transfer.expiry_time.map(|ts| ts.seconds as u64);
+        let expiry_time = transfer
+            .expiry_time
+            .map(|ts| {
+                prost_timestamp_to_secs(&ts).ok_or_else(|| {
+                    ServiceError::ValidationError("invalid transfer expiry_time".to_string())
+                })
+            })
+            .transpose()?;
 
-        let created_time = transfer.created_time.map(|ts| ts.seconds as u64);
+        let created_time = transfer
+            .created_time
+            .and_then(|ts| prost_timestamp_to_secs(&ts));
 
-        let updated_time = transfer.updated_time.map(|ts| ts.seconds as u64);
+        let updated_time = transfer
+            .updated_time
+            .and_then(|ts| prost_timestamp_to_secs(&ts));
 
         let spark_invoice = if transfer.spark_invoice.is_empty() {
             None
@@ -1113,14 +1125,14 @@ impl TryFrom<(operator_rpc::spark_token::TokenTransaction, Network)> for TokenTr
         // client_created_timestamp will always be filled for V2 transactions and V1 transactions will be discontinued soon
         let created_timestamp = token_transaction
             .client_created_timestamp
-            .map(|ts| {
-                UNIX_EPOCH
-                    + std::time::Duration::from_secs(ts.seconds as u64)
-                    + std::time::Duration::from_nanos(ts.nanos as u64)
-            })
             .ok_or(ServiceError::Generic(
                 "Missing client created timestamp. Could this be a V1 transaction?".to_string(),
-            ))?;
+            ))
+            .and_then(|ts| {
+                prost_timestamp_to_web_time(&ts).ok_or_else(|| {
+                    ServiceError::ValidationError("invalid client created timestamp".to_string())
+                })
+            })?;
 
         let invoice_attachments = token_transaction
             .invoice_attachments
@@ -1178,14 +1190,14 @@ impl
         // client_created_timestamp will always be filled for V2 transactions and V1 transactions will be discontinued soon
         let created_timestamp = token_transaction
             .client_created_timestamp
-            .map(|ts| {
-                UNIX_EPOCH
-                    + Duration::from_secs(ts.seconds as u64)
-                    + Duration::from_nanos(ts.nanos as u64)
-            })
             .ok_or(ServiceError::Generic(
                 "Missing client created timestamp. Could this be a V1 transaction?".to_string(),
-            ))?;
+            ))
+            .and_then(|ts| {
+                prost_timestamp_to_web_time(&ts).ok_or_else(|| {
+                    ServiceError::ValidationError("invalid client created timestamp".to_string())
+                })
+            })?;
 
         let invoice_attachments = token_transaction
             .invoice_attachments
@@ -1521,9 +1533,9 @@ impl TryFrom<operator_rpc::spark::PreimageRequestWithTransfer> for PreimageReque
             .ok_or(ServiceError::Generic("Missing transfer".to_string()))?
             .expiry_time
             .ok_or(ServiceError::Generic("Missing expiry time".to_string()))?;
-        let expiry_time = UNIX_EPOCH
-            + Duration::from_secs(expiry_time.seconds as u64)
-            + Duration::from_nanos(expiry_time.nanos as u64);
+        let expiry_time = prost_timestamp_to_web_time(&expiry_time).ok_or_else(|| {
+            ServiceError::ValidationError("invalid preimage request expiry time".to_string())
+        })?;
         Ok(PreimageRequestWithTransfer {
             payment_hash: sha256::Hash::from_slice(&request.payment_hash).map_err(|_| {
                 ServiceError::InvalidPaymentHash(hex::encode(request.payment_hash.clone()))
@@ -1533,12 +1545,14 @@ impl TryFrom<operator_rpc::spark::PreimageRequestWithTransfer> for PreimageReque
             status: request.status().into(),
             created_time: request
                 .created_time
-                .map(|ts| {
-                    UNIX_EPOCH
-                        + Duration::from_secs(ts.seconds as u64)
-                        + Duration::from_nanos(ts.nanos as u64)
-                })
-                .ok_or(ServiceError::Generic("Missing created time".to_string()))?,
+                .ok_or(ServiceError::Generic("Missing created time".to_string()))
+                .and_then(|ts| {
+                    prost_timestamp_to_web_time(&ts).ok_or_else(|| {
+                        ServiceError::ValidationError(
+                            "invalid preimage request created time".to_string(),
+                        )
+                    })
+                })?,
             expiry_time,
             transfer: request.transfer.map(|t| t.try_into()).transpose()?,
             preimage: request
