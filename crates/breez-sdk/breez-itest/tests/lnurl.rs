@@ -1690,3 +1690,210 @@ async fn test_16_client_signing_lnurl_pay_publish_twice() -> Result<()> {
     info!("=== Test test_16_client_signing_lnurl_pay_publish_twice PASSED ===");
     Ok(())
 }
+
+// ---------------------
+// Zap (NIP-57) helpers
+// ---------------------
+
+/// The `nostrPubkey` an address advertises in its LNURL-pay response.
+async fn user_nostr_pubkey(lnurl: &LnurlFixture, username: &str) -> Result<String> {
+    let url = format!("{}/lnurlp/{username}", lnurl.http_url());
+    let response = DefaultHttpClient::default()
+        .get(url, None)
+        .await
+        .map_err(|e| anyhow::anyhow!("lnurl-pay request failed: {e:?}"))?;
+    anyhow::ensure!(
+        response.is_success(),
+        "lnurl-pay request failed: {}",
+        response.status
+    );
+
+    let json: serde_json::Value = response.json()?;
+    anyhow::ensure!(
+        json["allowsNostr"].as_bool() == Some(true),
+        "address does not advertise zap support: {json}"
+    );
+    json["nostrPubkey"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("no nostrPubkey in {json}"))
+}
+
+/// A zap request carrying the tags the server requires: exactly one recipient
+/// and somewhere to publish the receipt.
+fn signed_zap_request(recipient: nostr::PublicKey) -> Result<nostr::Event> {
+    use nostr::{EventBuilder, Keys, Kind, Tag, TagStandard};
+
+    let tags = vec![
+        Tag::public_key(recipient),
+        Tag::from_standardized_without_cell(TagStandard::Relays(vec![
+            "wss://relay.example".parse()?,
+        ])),
+    ];
+    Ok(EventBuilder::new(Kind::ZapRequest, "")
+        .tags(tags)
+        .sign_with_keys(&Keys::generate())?)
+}
+
+/// Ask for an invoice quoting `zap_request`, returning the response body
+/// alongside the status so callers can assert on a rejection.
+async fn request_zap_invoice(
+    lnurl: &LnurlFixture,
+    username: &str,
+    amount_msat: u64,
+    zap_request: &nostr::Event,
+) -> Result<(u16, serde_json::Value)> {
+    use nostr::JsonUtil;
+
+    let mut url = reqwest::Url::parse(&format!("{}/lnurlp/{username}/invoice", lnurl.http_url()))?;
+    url.query_pairs_mut()
+        .append_pair("amount", &amount_msat.to_string())
+        .append_pair("nostr", &zap_request.as_json());
+
+    let response = DefaultHttpClient::default()
+        .get(url.to_string(), None)
+        .await
+        .map_err(|e| anyhow::anyhow!("invoice request failed: {e:?}"))?;
+    let status = response.status;
+    Ok((status, response.json().unwrap_or(serde_json::Value::Null)))
+}
+
+/// Every address advertises its own receipt-signing key.
+///
+/// NIP-57 validates a zap receipt against the `nostrPubkey` the recipient's own
+/// address advertises, so one key shared across the service would make every
+/// address's receipts interchangeable.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_17_lnurl_pay_advertises_a_per_user_nostr_pubkey() -> Result<()> {
+    info!("=== Starting test_17_lnurl_pay_advertises_a_per_user_nostr_pubkey ===");
+
+    let lnurl = Arc::new(setup_lnurl().await);
+    let bob = build_sdk_for_lnurl(Arc::clone(&lnurl), "breez-sdk-bob-zapkey").await?;
+    let carol = build_sdk_for_lnurl(Arc::clone(&lnurl), "breez-sdk-carol-zapkey").await?;
+
+    for (instance, username) in [(&bob, "bobzapkey"), (&carol, "carolzapkey")] {
+        instance
+            .sdk
+            .register_lightning_address(RegisterLightningAddressRequest {
+                username: username.to_string(),
+                description: Some("zap key test".to_string()),
+            })
+            .await?;
+    }
+
+    let bob_key = user_nostr_pubkey(&lnurl, "bobzapkey").await?;
+    let carol_key = user_nostr_pubkey(&lnurl, "carolzapkey").await?;
+
+    assert_ne!(
+        bob_key, carol_key,
+        "two addresses advertising one key make their zap receipts interchangeable"
+    );
+    assert_eq!(
+        bob_key,
+        user_nostr_pubkey(&lnurl, "bobzapkey").await?,
+        "the advertised key must be stable, or receipts stop validating"
+    );
+
+    info!("=== Test test_17_lnurl_pay_advertises_a_per_user_nostr_pubkey PASSED ===");
+    Ok(())
+}
+
+/// A well-formed zap request is accepted, and quoting the same one again gets
+/// its own invoice: wallets retry the callback, and NIP-57 places no limit on
+/// how many invoices or receipts a request may produce.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_18_a_zap_request_can_be_requoted() -> Result<()> {
+    info!("=== Starting test_18_a_zap_request_can_be_requoted ===");
+
+    let bob = setup_bob().await?;
+    let username = "bobzaprequote";
+    let amount_msat = 5_000_000;
+
+    bob.sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: username.to_string(),
+            description: Some("zap requote test".to_string()),
+        })
+        .await?;
+
+    let lnurl = Arc::clone(bob.lnurl_fixture.as_ref().unwrap());
+    let zap_request = signed_zap_request(nostr::Keys::generate().public_key)?;
+
+    let (status, first) = request_zap_invoice(&lnurl, username, amount_msat, &zap_request).await?;
+    assert_eq!(status, 200, "a valid zap request was rejected: {first}");
+    let first_invoice = first["pr"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("no invoice in {first}"))?;
+
+    let (status, second) = request_zap_invoice(&lnurl, username, amount_msat, &zap_request).await?;
+    assert_eq!(
+        status, 200,
+        "a zap request must stay quotable, or wallet retries break: {second}"
+    );
+    let second_invoice = second["pr"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("no invoice in {second}"))?;
+    assert_ne!(
+        first_invoice, second_invoice,
+        "the retry should get its own invoice"
+    );
+
+    info!("=== Test test_18_a_zap_request_can_be_requoted PASSED ===");
+    Ok(())
+}
+
+/// A zap request naming one user as its recipient, quoted on a second user's
+/// address, cannot produce a receipt that validates for the first.
+///
+/// Quoting it is still allowed: the `p` tag is the recipient's own nostr
+/// identity, which this server never holds, so it has nothing to compare
+/// against. What the quote yields is a receipt signed with the key of the
+/// address that was actually paid, and NIP-57 validates a receipt against the
+/// key the *recipient's* address advertises. The two differ, so the receipt is
+/// discarded for the recipient.
+///
+/// The fixture cannot publish receipts (it registers no webhook domain, so no
+/// payment is ever reported), so this covers the quote and the keys that decide
+/// the outcome, not the broadcast.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_19_a_zap_request_quoted_on_another_address_cannot_validate() -> Result<()> {
+    info!("=== Starting test_19_a_zap_request_quoted_on_another_address_cannot_validate ===");
+
+    let lnurl = Arc::new(setup_lnurl().await);
+    let recipient = build_sdk_for_lnurl(Arc::clone(&lnurl), "breez-sdk-zap-recipient").await?;
+    let other = build_sdk_for_lnurl(Arc::clone(&lnurl), "breez-sdk-zap-other").await?;
+
+    for (instance, username) in [(&recipient, "zaprecipient"), (&other, "zapother")] {
+        instance
+            .sdk
+            .register_lightning_address(RegisterLightningAddressRequest {
+                username: username.to_string(),
+                description: Some("zap binding test".to_string()),
+            })
+            .await?;
+    }
+
+    // A request naming the recipient's nostr identity, as one copied from a
+    // relay would.
+    let recipient_identity = nostr::Keys::generate().public_key;
+    let zap_request = signed_zap_request(recipient_identity)?;
+
+    let (status, body) = request_zap_invoice(&lnurl, "zapother", 5_000_000, &zap_request).await?;
+    assert_eq!(
+        status, 200,
+        "quoting another user's zap request is not itself refused: {body}"
+    );
+
+    let signs_the_receipt = user_nostr_pubkey(&lnurl, "zapother").await?;
+    let validated_against = user_nostr_pubkey(&lnurl, "zaprecipient").await?;
+    assert_ne!(
+        signs_the_receipt, validated_against,
+        "the receipt would be signed with the key NIP-57 checks for the recipient"
+    );
+
+    info!("=== Test test_19_a_zap_request_quoted_on_another_address_cannot_validate PASSED ===");
+    Ok(())
+}

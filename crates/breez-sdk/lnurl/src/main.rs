@@ -414,6 +414,7 @@ where
         args.webhook_delivery_ttl_days,
         webhook_config_cache,
     );
+    repository::start_claim_cleanup_processor(repository.clone());
 
     // Get or create a shared webhook secret persisted in the database.
     // All instances share the same secret so webhooks verify correctly

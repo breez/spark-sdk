@@ -9,6 +9,9 @@ pub enum LnurlRepositoryError {
     NameTaken,
     #[error("source user does not own this username")]
     SourceNotOwner,
+    /// The signed statement authorizing this request has already been acted on.
+    #[error("statement already used")]
+    StatementAlreadyUsed,
     #[error("database error: {0}")]
     General(anyhow::Error),
 }
@@ -52,6 +55,38 @@ pub struct DomainConfig {
     pub jwt: Option<String>,
 }
 
+/// How often expired signed-message claims are pruned.
+const CLAIM_CLEANUP_INTERVAL: std::time::Duration = std::time::Duration::from_hours(1);
+
+/// Start the background pruner for expired signed-message claims.
+///
+/// A claim only needs to outlive the window in which its message's timestamp is
+/// still accepted.
+pub fn start_claim_cleanup_processor<DB>(db: DB)
+where
+    DB: LnurlRepository + Send + Sync + 'static,
+{
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(CLAIM_CLEANUP_INTERVAL);
+        loop {
+            interval.tick().await;
+            match db.delete_expired_signed_messages(crate::time::now()).await {
+                Ok(0) => {}
+                Ok(count) => tracing::debug!("pruned {count} expired signed-message claims"),
+                Err(e) => tracing::error!("failed to prune signed-message claims: {e}"),
+            }
+        }
+    });
+}
+
+/// The statement an action records as acted on, so the signature that
+/// authorized it cannot authorize a second one.
+pub struct StatementClaim<'a> {
+    pub hash: &'a [u8],
+    /// When the row may be pruned.
+    pub expires_at: i64,
+}
+
 #[async_trait::async_trait]
 pub trait LnurlRepository {
     /// Delete `pubkey`'s row in `domain`, but only while it still holds `name`.
@@ -83,6 +118,11 @@ pub trait LnurlRepository {
     /// to `to_pubkey`, replacing any existing row for `to_pubkey`.
     /// Returns [`LnurlRepositoryError::SourceNotOwner`] if `from_pubkey` does not
     /// currently own `username` in `domain`.
+    ///
+    /// Claims `claim` in the same transaction and returns
+    /// [`LnurlRepositoryError::StatementAlreadyUsed`] if it was already claimed.
+    /// A transfer that fails leaves no claim behind, so the statement stays
+    /// actionable.
     async fn transfer_username(
         &self,
         domain: &str,
@@ -90,7 +130,24 @@ pub trait LnurlRepository {
         to_pubkey: &str,
         username: &str,
         description: &str,
+        claim: StatementClaim<'_>,
     ) -> Result<(), LnurlRepositoryError>;
+
+    /// Claim `statement_hash` for `route`, returning whether this call claimed
+    /// it. `false` means it was already claimed and must not be acted on again.
+    /// `expires_at` is when the row may be pruned.
+    ///
+    /// The first caller to claim a statement wins, and the stored route is never
+    /// overwritten.
+    async fn claim_signed_message(
+        &self,
+        statement_hash: &[u8],
+        route: &str,
+        expires_at: i64,
+    ) -> Result<bool, LnurlRepositoryError>;
+
+    /// Delete claimed statements whose `expires_at` has passed.
+    async fn delete_expired_signed_messages(&self, now: i64) -> Result<u64, LnurlRepositoryError>;
 
     async fn upsert_zap(&self, zap: &Zap) -> Result<(), LnurlRepositoryError>;
     async fn insert_lnurl_sender_comment(
@@ -191,7 +248,7 @@ pub struct WebhookPayloadData {
 /// tests.
 #[cfg(test)]
 pub mod shared_tests {
-    use super::{LnurlRepository, LnurlRepositoryError};
+    use super::{LnurlRepository, LnurlRepositoryError, StatementClaim};
     use crate::user::User;
 
     /// Upserting a name already owned by a different pubkey returns `NameTaken`
@@ -273,6 +330,252 @@ pub mod shared_tests {
                 .unwrap()
                 .is_none(),
             "deleting the held name must remove the row"
+        );
+    }
+
+    /// A claimed statement is refused whichever route presents it next, so one
+    /// signature is never acted on twice.
+    pub async fn a_statement_is_claimable_once<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let statement = b"claim-twice-statement";
+
+        assert!(
+            db.claim_signed_message(statement, "register", 9_000)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !db.claim_signed_message(statement, "unregister", 9_000)
+                .await
+                .unwrap(),
+            "another route must not be able to claim it"
+        );
+        assert!(
+            !db.claim_signed_message(statement, "register", 9_000)
+                .await
+                .unwrap(),
+            "the route holding the claim must not be able to claim it again"
+        );
+    }
+
+    /// Pruning drops claims whose expiry has passed and keeps the rest.
+    pub async fn pruning_removes_only_expired_claims<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let expired = b"prune-expired";
+        let live = b"prune-live";
+        let unbounded = b"prune-unbounded";
+
+        db.claim_signed_message(expired, "register", 1_000)
+            .await
+            .unwrap();
+        db.claim_signed_message(live, "register", 9_000)
+            .await
+            .unwrap();
+        db.claim_signed_message(unbounded, "transfer", i64::MAX)
+            .await
+            .unwrap();
+
+        db.delete_expired_signed_messages(5_000).await.unwrap();
+
+        assert!(
+            db.claim_signed_message(expired, "unregister", 9_000)
+                .await
+                .unwrap(),
+            "an expired claim must be gone"
+        );
+        assert!(
+            !db.claim_signed_message(live, "unregister", 9_000)
+                .await
+                .unwrap(),
+            "a claim inside its window must survive"
+        );
+
+        // Far past any expiry a timestamped message can carry, so only a claim
+        // meant to outlive every window survives this.
+        db.delete_expired_signed_messages(i64::MAX - 1)
+            .await
+            .unwrap();
+        assert!(
+            !db.claim_signed_message(unbounded, "transfer", i64::MAX)
+                .await
+                .unwrap(),
+            "a claim nothing bounds in time must never be pruned"
+        );
+    }
+
+    /// The statement a transfer pair authorizes, standing in for what the route
+    /// hashes: the source, the target and the username, and no domain.
+    fn transfer_statement(from: &str, to: &str, username: &str) -> Vec<u8> {
+        format!("transfer:{from}-{to}-{username}").into_bytes()
+    }
+
+    /// A transfer claim over `statement`, which nothing bounds in time.
+    fn transfer_claim(statement: &[u8]) -> StatementClaim<'_> {
+        StatementClaim {
+            hash: statement,
+            expires_at: i64::MAX,
+        }
+    }
+
+    /// A transfer runs once: presenting the same source, target and username
+    /// again is refused, since nothing bounds the pair that authorized it in
+    /// time.
+    pub async fn a_transfer_runs_once<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let seed = |pubkey: &str, name: &str| User {
+            domain: "transfer-once.com".into(),
+            pubkey: pubkey.into(),
+            name: name.into(),
+            description: String::new(),
+        };
+        db.upsert_user(&seed("aaaa", "amy")).await.unwrap();
+
+        let there = transfer_statement("aaaa", "bbbb", "amy");
+        let back = transfer_statement("bbbb", "aaaa", "amy");
+
+        db.transfer_username(
+            "transfer-once.com",
+            "aaaa",
+            "bbbb",
+            "amy",
+            "amy",
+            transfer_claim(&there),
+        )
+        .await
+        .unwrap();
+
+        // Hand the name back, so only the claim stands between the pair and a
+        // second run.
+        db.transfer_username(
+            "transfer-once.com",
+            "bbbb",
+            "aaaa",
+            "amy",
+            "amy",
+            transfer_claim(&back),
+        )
+        .await
+        .unwrap();
+
+        let replayed = db
+            .transfer_username(
+                "transfer-once.com",
+                "aaaa",
+                "bbbb",
+                "amy",
+                "amy",
+                transfer_claim(&there),
+            )
+            .await;
+        assert!(
+            matches!(replayed, Err(LnurlRepositoryError::StatementAlreadyUsed)),
+            "expected StatementAlreadyUsed, got {replayed:?}"
+        );
+        assert_eq!(
+            db.get_user_by_name("transfer-once.com", "amy")
+                .await
+                .unwrap()
+                .unwrap()
+                .pubkey,
+            "aaaa",
+            "the refused transfer must not have moved the name"
+        );
+    }
+
+    /// A transfer that fails leaves no claim, so the same pair can be presented
+    /// again once the source holds the name.
+    pub async fn a_failed_transfer_stays_retryable<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let domain = "transfer-retry.com";
+        let statement = transfer_statement("cccc", "dddd", "cara");
+        let failed = db
+            .transfer_username(
+                domain,
+                "cccc",
+                "dddd",
+                "cara",
+                "cara",
+                transfer_claim(&statement),
+            )
+            .await;
+        assert!(
+            matches!(failed, Err(LnurlRepositoryError::SourceNotOwner)),
+            "expected SourceNotOwner, got {failed:?}"
+        );
+
+        db.upsert_user(&User {
+            domain: domain.into(),
+            pubkey: "cccc".into(),
+            name: "cara".into(),
+            description: String::new(),
+        })
+        .await
+        .unwrap();
+
+        db.transfer_username(
+            domain,
+            "cccc",
+            "dddd",
+            "cara",
+            "cara",
+            transfer_claim(&statement),
+        )
+        .await
+        .expect("a transfer that never happened must stay retryable");
+    }
+
+    /// One pair authorizes one transfer wherever it is submitted. The signed
+    /// message names no domain, so a source holding the name on several of them
+    /// does not get a transfer on each.
+    pub async fn a_transfer_pair_is_spendable_once_across_domains<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        for domain in ["spend-a.com", "spend-b.com"] {
+            db.upsert_user(&User {
+                domain: domain.into(),
+                pubkey: "hhhh".into(),
+                name: "holly".into(),
+                description: String::new(),
+            })
+            .await
+            .unwrap();
+        }
+
+        let statement = transfer_statement("hhhh", "iiii", "holly");
+        db.transfer_username(
+            "spend-a.com",
+            "hhhh",
+            "iiii",
+            "holly",
+            "holly",
+            transfer_claim(&statement),
+        )
+        .await
+        .expect("the first transfer must succeed");
+
+        assert!(
+            matches!(
+                db.transfer_username(
+                    "spend-b.com",
+                    "hhhh",
+                    "iiii",
+                    "holly",
+                    "holly",
+                    transfer_claim(&statement),
+                )
+                .await,
+                Err(super::LnurlRepositoryError::StatementAlreadyUsed)
+            ),
+            "the same pair must not transfer the name on a second domain"
         );
     }
 

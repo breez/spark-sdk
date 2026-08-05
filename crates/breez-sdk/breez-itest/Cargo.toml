@@ -48,6 +48,8 @@ bitcoin = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 hex.workspace = true
+# Builds signed kind-9734 zap requests for the LNURL zap tests.
+nostr.workspace = true
 macros.workspace = true
 tempfile = "3"
 testcontainers.workspace = true
