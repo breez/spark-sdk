@@ -22,12 +22,17 @@ pub struct Session {
     pub expiration: u64,
 }
 
+/// Sessions within this margin of expiry are treated as already invalid, so a
+/// token that would die mid-call is refreshed up front instead of failing the
+/// call it authenticates.
+const EXPIRY_MARGIN_SECS: u64 = 30;
+
 impl Session {
     pub fn is_valid(&self) -> bool {
         let Ok(duration) = SystemTime::now().duration_since(UNIX_EPOCH) else {
             return false;
         };
-        self.expiration > duration.as_secs()
+        self.expiration > duration.as_secs().saturating_add(EXPIRY_MARGIN_SECS)
     }
 }
 
@@ -73,6 +78,41 @@ impl SessionStore for InMemorySessionStore {
             .await
             .insert(*service_identity_key, session);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod session_validity_tests {
+    use super::*;
+    use macros::test_all;
+
+    fn now_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    fn session(expiration: u64) -> Session {
+        Session {
+            token: "token".to_string(),
+            expiration,
+        }
+    }
+
+    #[test_all]
+    fn expired_session_is_invalid() {
+        assert!(!session(now_secs().saturating_sub(10)).is_valid());
+    }
+
+    #[test_all]
+    fn session_expiring_within_margin_is_invalid() {
+        assert!(!session(now_secs() + EXPIRY_MARGIN_SECS / 2).is_valid());
+    }
+
+    #[test_all]
+    fn session_outliving_margin_is_valid() {
+        assert!(session(now_secs() + EXPIRY_MARGIN_SECS + 60).is_valid());
     }
 }
 
