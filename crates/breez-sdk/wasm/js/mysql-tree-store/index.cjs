@@ -46,10 +46,11 @@ const SPENT_MARKER_CLEANUP_THRESHOLD_MS = 5 * 60 * 1000;
 /**
  * Leaves per INSERT when upserting a refreshed leaf set.
  *
- * Required for correctness, not just memory: this statement binds 6
- * placeholders per leaf, and the MySQL protocol caps a prepared statement at
- * 65535. A wallet holding six figures of leaves would otherwise exceed both
- * that cap and max_allowed_packet.
+ * A wallet can hold six figures of leaves, each serializing to a JSON blob
+ * carrying up to five transactions. The upsert goes through conn.query(),
+ * which interpolates its placeholders client-side, so the whole set would
+ * otherwise be built in memory as one statement and sent as one packet,
+ * against max_allowed_packet.
  */
 const LEAF_UPSERT_CHUNK_SIZE = 1000;
 

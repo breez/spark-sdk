@@ -224,11 +224,13 @@ pub async fn test_set_leaves(store: &dyn TreeStore) {
 /// Exercises a leaf set large enough to span many upsert chunks, so a dropped,
 /// duplicated or mis-ordered chunk shows up as a wrong count.
 pub async fn test_set_leaves_across_chunk_boundary(store: &dyn TreeStore) {
-    // Must exceed 10922 leaves: the MySQL backends bind 6 placeholders per leaf
-    // against a 65535 protocol cap, so an unchunked upsert fails outright there
-    // ("Prepared statement contains too many placeholders") rather than merely
-    // using too much memory. Deliberately not a multiple of the chunk size, so
-    // the final chunk is partial.
+    // Must exceed 10922 leaves: the Rust MySQL store prepares its upsert and
+    // binds 6 placeholders per leaf against the protocol's 65535 cap, so an
+    // unchunked write fails outright there ("Prepared statement contains too
+    // many placeholders") rather than merely using too much memory. The JS
+    // MySQL store interpolates client-side instead, so it is bounded by
+    // max_allowed_packet rather than that cap. Deliberately not a multiple of
+    // the chunk size, so the final chunk is partial.
     const LEAF_COUNT: usize = 12_345;
 
     let leaves: Vec<TreeNode> = (0..LEAF_COUNT)
