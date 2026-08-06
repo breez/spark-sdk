@@ -1203,6 +1203,26 @@ impl PostgresTreeStore {
         let mut missing_flags: Vec<bool> = Vec::with_capacity(chunk_len);
         let mut data_values: Vec<serde_json::Value> = Vec::with_capacity(chunk_len);
 
+        // Prepared once for the whole loop: passing the SQL as a string would
+        // make tokio-postgres re-prepare it per chunk, doubling the round trips
+        // taken while holding the write lock.
+        let stmt = tx
+            .prepare(
+                r"
+                INSERT INTO brz_tree_leaves (user_id, id, status, is_missing_from_operators, data, added_at)
+                SELECT $5, id, status, missing, data, NOW()
+                FROM UNNEST($1::text[], $2::text[], $3::bool[], $4::jsonb[])
+                    AS t(id, status, missing, data)
+                ON CONFLICT (user_id, id) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    is_missing_from_operators = EXCLUDED.is_missing_from_operators,
+                    data = EXCLUDED.data,
+                    added_at = NOW()
+                ",
+            )
+            .await
+            .map_err(map_err)?;
+
         // All chunks run inside the caller's transaction, and `NOW()` is the
         // transaction timestamp, so every row still lands atomically with one
         // shared `added_at`.
@@ -1220,17 +1240,7 @@ impl PostgresTreeStore {
             }
 
             tx.execute(
-                r"
-                INSERT INTO brz_tree_leaves (user_id, id, status, is_missing_from_operators, data, added_at)
-                SELECT $5, id, status, missing, data, NOW()
-                FROM UNNEST($1::text[], $2::text[], $3::bool[], $4::jsonb[])
-                    AS t(id, status, missing, data)
-                ON CONFLICT (user_id, id) DO UPDATE SET
-                    status = EXCLUDED.status,
-                    is_missing_from_operators = EXCLUDED.is_missing_from_operators,
-                    data = EXCLUDED.data,
-                    added_at = NOW()
-                ",
+                &stmt,
                 &[
                     &ids,
                     &statuses,

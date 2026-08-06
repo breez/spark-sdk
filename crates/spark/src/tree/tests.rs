@@ -249,10 +249,26 @@ pub async fn test_set_leaves_across_chunk_boundary(store: &dyn TreeStore) {
     );
     assert_eq!(store.get_available_balance().await.unwrap(), expected_total);
 
-    // Re-running must upsert in place rather than duplicate across chunks.
-    let refresh_start = future_refresh_start(store).await;
-    store.set_leaves(&leaves, &[], refresh_start).await.unwrap();
-    assert_eq!(get_available(store).await.len(), LEAF_COUNT);
+    // Re-run with new values to exercise the conflict path in every chunk. The
+    // refresh start must be in the past: a future one deletes the rows just
+    // written, leaving the second pass to insert into an empty table.
+    let updated: Vec<TreeNode> = (0..LEAF_COUNT)
+        .map(|i| create_test_tree_node(&format!("chunked{i}"), 1_000 + i as u64))
+        .collect();
+    let refresh_start = past_refresh_start(store).await;
+    store
+        .set_leaves(&updated, &[], refresh_start)
+        .await
+        .unwrap();
+
+    let stored = get_available(store).await;
+    assert_eq!(stored.len(), LEAF_COUNT);
+    let updated_total: u64 = updated.iter().map(|l| l.value).sum();
+    assert_eq!(
+        stored.iter().map(|l| l.value).sum::<u64>(),
+        updated_total,
+        "every chunk must update in place, not skip its conflicting rows"
+    );
 }
 
 pub async fn test_set_leaves_with_reservations(store: &dyn TreeStore) {
