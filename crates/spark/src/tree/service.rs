@@ -231,8 +231,18 @@ impl TreeService for SynchronousTreeService {
 
         // For each operator's leaves, compare against coordinator in the same way as before
         for (operator_id, operator_leaves) in operators.into_iter().zip(operator_leaves_vec) {
+            // Paging over a set the operator is concurrently mutating can return the
+            // same leaf on more than one page, so keep the first occurrence.
+            let mut operator_leaves_by_id: HashMap<&TreeNodeId, &TreeNode> =
+                HashMap::with_capacity(operator_leaves.len());
+            for operator_leaf in &operator_leaves {
+                operator_leaves_by_id
+                    .entry(&operator_leaf.id)
+                    .or_insert(operator_leaf);
+            }
+
             for leaf in &coordinator_leaves {
-                match operator_leaves.iter().find(|l| l.id == leaf.id) {
+                match operator_leaves_by_id.get(&leaf.id).copied() {
                     Some(operator_leaf) => {
                         // TODO: move this logic to TreeNode method
                         if operator_leaf.status != leaf.status
