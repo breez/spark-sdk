@@ -213,3 +213,39 @@ async fn test_non_static_deposit_then_coop_withdraw() -> Result<()> {
     info!("=== Test test_non_static_deposit_then_coop_withdraw PASSED ===");
     Ok(())
 }
+
+/// Listing static deposit addresses validates each one the operators return:
+/// the address against the aggregate verifying key, and the proof of possession
+/// against the wallet's own signing key. Rotated addresses go through the same
+/// checks, so the listing covers them too.
+#[rstest]
+#[tokio::test]
+#[test_log::test]
+async fn test_list_static_deposit_addresses_after_rotation() -> Result<()> {
+    info!("=== Starting test_list_static_deposit_addresses_after_rotation ===");
+
+    let (wallet, _listener) = create_regtest_wallet().await?;
+
+    let first = wallet.generate_static_deposit_address().await?;
+    let rotated = wallet.rotate_static_deposit_address().await?;
+    assert_ne!(first, rotated, "Rotation should yield a new address");
+    info!("Static deposit addresses: first {first}, rotated {rotated}");
+
+    let listed = wallet.list_static_deposit_addresses(None).await?.items;
+    info!(
+        "Listed {} static deposit addresses: {listed:?}",
+        listed.len()
+    );
+
+    assert!(
+        listed.contains(&rotated),
+        "The current static deposit address should be listed"
+    );
+    assert!(
+        listed.contains(&first),
+        "The rotated-away static deposit address should be listed"
+    );
+
+    info!("=== Test test_list_static_deposit_addresses_after_rotation PASSED ===");
+    Ok(())
+}

@@ -835,20 +835,15 @@ impl SparkWallet {
     }
 
     pub async fn generate_static_deposit_address(&self) -> Result<Address, SparkWalletError> {
-        let signing_public_key = self.spark_signer.get_static_deposit_public_key(0).await?;
         let address = self
             .deposit_service
-            .generate_static_deposit_address(signing_public_key)
+            .generate_static_deposit_address()
             .await?;
         Ok(address.address)
     }
 
     pub async fn rotate_static_deposit_address(&self) -> Result<Address, SparkWalletError> {
-        let signing_public_key = self.spark_signer.get_static_deposit_public_key(0).await?;
-        let new_address = self
-            .deposit_service
-            .rotate_static_deposit_address(signing_public_key)
-            .await?;
+        let new_address = self.deposit_service.rotate_static_deposit_address().await?;
         Ok(new_address.address)
     }
 
