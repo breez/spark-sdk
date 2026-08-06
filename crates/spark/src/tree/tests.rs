@@ -221,6 +221,40 @@ pub async fn test_set_leaves(store: &dyn TreeStore) {
     assert!(!stored.iter().any(|l| l.id.to_string() == "node1"));
 }
 
+/// Exercises a leaf set large enough to span many upsert chunks, so a dropped,
+/// duplicated or mis-ordered chunk shows up as a wrong count.
+pub async fn test_set_leaves_across_chunk_boundary(store: &dyn TreeStore) {
+    // Must exceed 10922 leaves: the MySQL backends bind 6 placeholders per leaf
+    // against a 65535 protocol cap, so an unchunked upsert fails outright there
+    // ("Prepared statement contains too many placeholders") rather than merely
+    // using too much memory. Deliberately not a multiple of the chunk size, so
+    // the final chunk is partial.
+    const LEAF_COUNT: usize = 12_345;
+
+    let leaves: Vec<TreeNode> = (0..LEAF_COUNT)
+        .map(|i| create_test_tree_node(&format!("chunked{i}"), 100 + i as u64))
+        .collect();
+
+    let refresh_start = future_refresh_start(store).await;
+    store.set_leaves(&leaves, &[], refresh_start).await.unwrap();
+
+    let stored = get_available(store).await;
+    assert_eq!(stored.len(), LEAF_COUNT);
+
+    let expected_total: u64 = leaves.iter().map(|l| l.value).sum();
+    assert_eq!(
+        stored.iter().map(|l| l.value).sum::<u64>(),
+        expected_total,
+        "every leaf must round-trip with its own value"
+    );
+    assert_eq!(store.get_available_balance().await.unwrap(), expected_total);
+
+    // Re-running must upsert in place rather than duplicate across chunks.
+    let refresh_start = future_refresh_start(store).await;
+    store.set_leaves(&leaves, &[], refresh_start).await.unwrap();
+    assert_eq!(get_available(store).await.len(), LEAF_COUNT);
+}
+
 pub async fn test_set_leaves_with_reservations(store: &dyn TreeStore) {
     let leaves = vec![
         create_test_tree_node("node1", 100),

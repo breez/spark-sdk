@@ -41,6 +41,16 @@ const RESERVATION_TIMEOUT_SECS = 300; // 5 minutes
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
+ * Leaves per INSERT when upserting a refreshed leaf set.
+ *
+ * A wallet can hold six figures of leaves, each serializing to a JSON blob
+ * carrying up to five transactions. Building that as a single statement
+ * materializes the whole set at once, which is the largest allocation in a
+ * refresh and lands at its very end.
+ */
+const LEAF_UPSERT_CHUNK_SIZE = 1000;
+
+/**
  * Slim projection: only (id, value) for leaves the selection might use.
  * Includes all leaves with value <= $2 (covers exact-match + the small-leaf
  * accumulators for the minimum-amount path) plus the single smallest leaf
@@ -1019,23 +1029,29 @@ class PostgresTreeStore {
 
     if (filtered.length === 0) return;
 
-    const ids = filtered.map((l) => l.id);
-    const statuses = filtered.map((l) => l.status);
-    const missingFlags = filtered.map(() => isMissingFromOperators);
-    const dataValues = filtered.map((l) => JSON.stringify(l));
+    // All chunks run inside the caller's transaction, and NOW() is the
+    // transaction timestamp, so every row still lands atomically with one
+    // shared added_at.
+    for (let i = 0; i < filtered.length; i += LEAF_UPSERT_CHUNK_SIZE) {
+      const chunk = filtered.slice(i, i + LEAF_UPSERT_CHUNK_SIZE);
+      const ids = chunk.map((l) => l.id);
+      const statuses = chunk.map((l) => l.status);
+      const missingFlags = chunk.map(() => isMissingFromOperators);
+      const dataValues = chunk.map((l) => JSON.stringify(l));
 
-    await client.query(
-      `INSERT INTO brz_tree_leaves (user_id, id, status, is_missing_from_operators, data, added_at)
-       SELECT $5, id, status, missing, data::jsonb, NOW()
-       FROM UNNEST($1::text[], $2::text[], $3::bool[], $4::text[])
-           AS t(id, status, missing, data)
-       ON CONFLICT (user_id, id) DO UPDATE SET
-         status = EXCLUDED.status,
-         is_missing_from_operators = EXCLUDED.is_missing_from_operators,
-         data = EXCLUDED.data,
-         added_at = NOW()`,
-      [ids, statuses, missingFlags, dataValues, this.identity]
-    );
+      await client.query(
+        `INSERT INTO brz_tree_leaves (user_id, id, status, is_missing_from_operators, data, added_at)
+         SELECT $5, id, status, missing, data::jsonb, NOW()
+         FROM UNNEST($1::text[], $2::text[], $3::bool[], $4::text[])
+             AS t(id, status, missing, data)
+         ON CONFLICT (user_id, id) DO UPDATE SET
+           status = EXCLUDED.status,
+           is_missing_from_operators = EXCLUDED.is_missing_from_operators,
+           data = EXCLUDED.data,
+           added_at = NOW()`,
+        [ids, statuses, missingFlags, dataValues, this.identity]
+      );
+    }
   }
 
   /**
