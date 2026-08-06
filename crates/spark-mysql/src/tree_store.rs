@@ -137,6 +137,14 @@ const RESERVATION_TIMEOUT_SECS: i64 = 300; // 5 minutes
 /// deployments where another instance may still be processing a refresh.
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS: i64 = 5 * 60 * 1000;
 
+/// Leaves per `INSERT` when upserting a refreshed leaf set.
+///
+/// Required for correctness, not just memory: this statement binds 6
+/// placeholders per leaf, and the `MySQL` protocol caps a prepared statement at
+/// 65535. A wallet holding six figures of leaves would otherwise exceed both
+/// that cap and `max_allowed_packet`.
+const LEAF_UPSERT_CHUNK_SIZE: usize = 1_000;
+
 /// Slim projection of selection candidates: id + value only.
 /// Includes all leaves with value <= the max target (covers exact-match +
 /// minimum-amount accumulators) plus the smallest leaf with a larger value
@@ -1525,37 +1533,44 @@ impl MysqlTreeStore {
             return Ok(());
         }
 
-        // Build VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6)), … with user_id as the first column.
-        let mut sql = String::from(
-            "INSERT INTO brz_tree_leaves (user_id, id, status, is_missing_from_operators, data, value, added_at) VALUES ",
-        );
-        let mut params: Vec<Value> = Vec::with_capacity(filtered.len() * 6);
-        for (i, leaf) in filtered.iter().enumerate() {
-            if i > 0 {
-                sql.push_str(", ");
+        // All chunks run inside the caller's transaction, so the full set still
+        // lands atomically. `UTC_TIMESTAMP(6)` is re-evaluated per statement, so
+        // `added_at` can differ by microseconds between chunks; every value is
+        // still after the caller's `refresh_started_at`, which is all the
+        // timestamp-based deletion in `set_leaves` depends on.
+        for chunk in filtered.chunks(LEAF_UPSERT_CHUNK_SIZE) {
+            // Build VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6)), … with user_id as the first column.
+            let mut sql = String::from(
+                "INSERT INTO brz_tree_leaves (user_id, id, status, is_missing_from_operators, data, value, added_at) VALUES ",
+            );
+            let mut params: Vec<Value> = Vec::with_capacity(chunk.len() * 6);
+            for (i, leaf) in chunk.iter().enumerate() {
+                if i > 0 {
+                    sql.push_str(", ");
+                }
+                sql.push_str("(?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6))");
+                #[allow(clippy::cast_possible_wrap)]
+                let value_i64 = leaf.value as i64;
+                params.push(Value::from(self.identity.clone()));
+                params.push(Value::from(leaf.id.to_string()));
+                params.push(Value::from(leaf.status.to_string()));
+                params.push(Value::from(is_missing_from_operators));
+                params.push(Value::from(Self::serialize_node(leaf)?));
+                params.push(Value::from(value_i64));
             }
-            sql.push_str("(?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6))");
-            #[allow(clippy::cast_possible_wrap)]
-            let value_i64 = leaf.value as i64;
-            params.push(Value::from(self.identity.clone()));
-            params.push(Value::from(leaf.id.to_string()));
-            params.push(Value::from(leaf.status.to_string()));
-            params.push(Value::from(is_missing_from_operators));
-            params.push(Value::from(Self::serialize_node(leaf)?));
-            params.push(Value::from(value_i64));
-        }
-        sql.push_str(
-            " ON DUPLICATE KEY UPDATE
-                status = VALUES(status),
-                is_missing_from_operators = VALUES(is_missing_from_operators),
-                data = VALUES(data),
-                value = VALUES(value),
-                added_at = UTC_TIMESTAMP(6)",
-        );
+            sql.push_str(
+                " ON DUPLICATE KEY UPDATE
+                    status = VALUES(status),
+                    is_missing_from_operators = VALUES(is_missing_from_operators),
+                    data = VALUES(data),
+                    value = VALUES(value),
+                    added_at = UTC_TIMESTAMP(6)",
+            );
 
-        tx.exec_drop(&sql, Params::Positional(params))
-            .await
-            .map_err(map_err)?;
+            tx.exec_drop(&sql, Params::Positional(params))
+                .await
+                .map_err(map_err)?;
+        }
 
         Ok(())
     }
@@ -2252,6 +2267,12 @@ mod tests {
     async fn test_set_leaves_replaces_fully() {
         let fixture = MysqlTreeStoreTestFixture::new().await;
         shared_tests::test_set_leaves_replaces_fully(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_set_leaves_across_chunk_boundary() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_set_leaves_across_chunk_boundary(&fixture.store).await;
     }
 
     #[tokio::test]

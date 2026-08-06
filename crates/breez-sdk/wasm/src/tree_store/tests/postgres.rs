@@ -78,6 +78,12 @@ async fn test_set_leaves() {
 }
 
 #[wasm_bindgen_test]
+async fn test_set_leaves_across_chunk_boundary() {
+    let store = create_test_tree_store("pg_tree_set_leaves_chunked").await;
+    breez_sdk_spark::tree_store_tests::test_set_leaves_across_chunk_boundary(&store).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_set_leaves_with_reservations() {
     let store = create_test_tree_store("pg_tree_set_leaves_res").await;
     breez_sdk_spark::tree_store_tests::test_set_leaves_with_reservations(&store).await;

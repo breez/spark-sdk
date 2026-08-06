@@ -128,6 +128,14 @@ const RESERVATION_TIMEOUT_SECS: f64 = 300.0; // 5 minutes
 
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS: i64 = 5 * 60 * 1000; // 5 minutes
 
+/// Leaves per `INSERT` when upserting a refreshed leaf set.
+///
+/// A wallet can hold six figures of leaves, and each one serializes to a JSON
+/// blob carrying up to five transactions. Building that as a single statement
+/// materializes the whole set as `serde_json::Value` plus its encoded form,
+/// which is the largest allocation in a refresh and lands at its very end.
+const LEAF_UPSERT_CHUNK_SIZE: usize = 1_000;
+
 /// Slim projection of selection candidates: id + value only.
 /// Includes all leaves with value <= `$2` (covers exact-match +
 /// minimum-amount accumulators) plus the smallest leaf with value >
@@ -1189,40 +1197,61 @@ impl PostgresTreeStore {
             return Ok(());
         }
 
-        let mut ids: Vec<String> = Vec::with_capacity(filtered.len());
-        let mut statuses: Vec<String> = Vec::with_capacity(filtered.len());
-        let mut missing_flags: Vec<bool> = Vec::with_capacity(filtered.len());
-        let mut data_values: Vec<serde_json::Value> = Vec::with_capacity(filtered.len());
+        let chunk_len = filtered.len().min(LEAF_UPSERT_CHUNK_SIZE);
+        let mut ids: Vec<String> = Vec::with_capacity(chunk_len);
+        let mut statuses: Vec<String> = Vec::with_capacity(chunk_len);
+        let mut missing_flags: Vec<bool> = Vec::with_capacity(chunk_len);
+        let mut data_values: Vec<serde_json::Value> = Vec::with_capacity(chunk_len);
 
-        for leaf in filtered {
-            ids.push(leaf.id.to_string());
-            statuses.push(leaf.status.to_string());
-            missing_flags.push(is_missing_from_operators);
-            data_values.push(Self::serialize_node(leaf)?);
+        // Prepared once for the whole loop: passing the SQL as a string would
+        // make tokio-postgres re-prepare it per chunk, doubling the round trips
+        // taken while holding the write lock.
+        let stmt = tx
+            .prepare(
+                r"
+                INSERT INTO brz_tree_leaves (user_id, id, status, is_missing_from_operators, data, added_at)
+                SELECT $5, id, status, missing, data, NOW()
+                FROM UNNEST($1::text[], $2::text[], $3::bool[], $4::jsonb[])
+                    AS t(id, status, missing, data)
+                ON CONFLICT (user_id, id) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    is_missing_from_operators = EXCLUDED.is_missing_from_operators,
+                    data = EXCLUDED.data,
+                    added_at = NOW()
+                ",
+            )
+            .await
+            .map_err(map_err)?;
+
+        // All chunks run inside the caller's transaction, and `NOW()` is the
+        // transaction timestamp, so every row still lands atomically with one
+        // shared `added_at`.
+        for chunk in filtered.chunks(LEAF_UPSERT_CHUNK_SIZE) {
+            ids.clear();
+            statuses.clear();
+            missing_flags.clear();
+            data_values.clear();
+
+            for leaf in chunk {
+                ids.push(leaf.id.to_string());
+                statuses.push(leaf.status.to_string());
+                missing_flags.push(is_missing_from_operators);
+                data_values.push(Self::serialize_node(leaf)?);
+            }
+
+            tx.execute(
+                &stmt,
+                &[
+                    &ids,
+                    &statuses,
+                    &missing_flags,
+                    &data_values,
+                    &self.identity,
+                ],
+            )
+            .await
+            .map_err(map_err)?;
         }
-
-        tx.execute(
-            r"
-            INSERT INTO brz_tree_leaves (user_id, id, status, is_missing_from_operators, data, added_at)
-            SELECT $5, id, status, missing, data, NOW()
-            FROM UNNEST($1::text[], $2::text[], $3::bool[], $4::jsonb[])
-                AS t(id, status, missing, data)
-            ON CONFLICT (user_id, id) DO UPDATE SET
-                status = EXCLUDED.status,
-                is_missing_from_operators = EXCLUDED.is_missing_from_operators,
-                data = EXCLUDED.data,
-                added_at = NOW()
-            ",
-            &[
-                &ids,
-                &statuses,
-                &missing_flags,
-                &data_values,
-                &self.identity,
-            ],
-        )
-        .await
-        .map_err(map_err)?;
 
         Ok(())
     }
@@ -1798,6 +1827,12 @@ mod tests {
     async fn test_notification_on_pending_balance_change() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_notification_on_pending_balance_change(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_set_leaves_across_chunk_boundary() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_set_leaves_across_chunk_boundary(&fixture.store).await;
     }
 
     #[tokio::test]

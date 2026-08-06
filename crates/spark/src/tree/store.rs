@@ -1087,6 +1087,11 @@ mod tests {
     }
 
     #[async_test_all]
+    async fn test_set_leaves_across_chunk_boundary() {
+        shared_tests::test_set_leaves_across_chunk_boundary(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
     async fn test_set_leaves_with_reservations() {
         shared_tests::test_set_leaves_with_reservations(&InMemoryTreeStore::new()).await;
     }
