@@ -626,21 +626,21 @@ impl SparkRpcClient {
         .await
     }
 
-    /// Invokes a single unary or stream-opening RPC, retrying it once if the
-    /// operator rejects it with `Unauthenticated`. The retry force-refreshes the
-    /// session (re-minting the token, bypassing any cached one) so a
-    /// stale-but-unexpired cached token self-heals instead of failing the call.
+    /// Invokes a single unary or stream-opening RPC, retrying it once if
+    /// building the interceptor fails (the session handshake runs there, and
+    /// its challenge can expire before it is verified) or if the operator
+    /// rejects the call with `Unauthenticated`. The retry force-refreshes the
+    /// session (re-minting the token, bypassing any cached one) so a transient
+    /// handshake failure or a stale-but-unexpired cached token self-heals
+    /// instead of failing the call.
     ///
     /// `call` receives a freshly built [`HeaderInterceptor`] and must build its
     /// gRPC client from it, then issue exactly one request. It is invoked at most
     /// twice. For streaming RPCs only the stream open is covered; an auth failure
     /// surfacing while the stream is polled is not retried here.
     ///
-    /// Concurrent refreshes for the same operator are not coalesced: several
-    /// in-flight calls rejected at once each re-authenticate independently. This
-    /// only happens when a token is server-rejected (rare, and self-correcting as
-    /// each stores a fresh valid token), so the redundant round-trips do not
-    /// justify a single-flight lock on the auth hot path.
+    /// Concurrent refreshes for the same operator are not coalesced: in-flight
+    /// calls that fail auth at once each re-authenticate independently.
     async fn call_with_auth_retry<T, F, Fut>(&self, call: F) -> Result<T>
     where
         F: Fn(HeaderInterceptor) -> Fut,
@@ -648,7 +648,20 @@ impl SparkRpcClient {
     {
         let mut refreshed = false;
         loop {
-            let interceptor = self.build_interceptor(refreshed).await?;
+            let interceptor = match self.build_interceptor(refreshed).await {
+                Ok(interceptor) => interceptor,
+                Err(err) => {
+                    if !refreshed {
+                        debug!(
+                            "Operator authentication failed, retrying with a forced session \
+                             refresh: {err:?}"
+                        );
+                        refreshed = true;
+                        continue;
+                    }
+                    return Err(err);
+                }
+            };
             match call(interceptor).await {
                 Ok(response) => return Ok(response.into_inner()),
                 Err(err) => {
@@ -720,5 +733,174 @@ impl Interceptor for HeaderInterceptor {
             req.metadata_mut().insert(key, value.clone());
         }
         Ok(req)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use macros::async_test_all;
+
+    use super::*;
+    use crate::header_provider::HeaderProviderError;
+    use crate::operator::rpc::transport::grpc_client::GrpcClient;
+
+    /// Fails its first `fail_first` header requests (counting `headers` and
+    /// `headers_refresh` together), then serves empty headers. Counts refresh
+    /// calls separately so tests can assert the force-refresh path ran.
+    #[derive(Default)]
+    struct FlakyProvider {
+        fail_first: usize,
+        attempts: AtomicUsize,
+        refresh_calls: AtomicUsize,
+    }
+
+    impl FlakyProvider {
+        fn new(fail_first: usize) -> Self {
+            Self {
+                fail_first,
+                ..Default::default()
+            }
+        }
+
+        fn respond(&self) -> std::result::Result<HashMap<String, String>, HeaderProviderError> {
+            if self.attempts.fetch_add(1, Ordering::SeqCst) < self.fail_first {
+                Err(HeaderProviderError::Generic("handshake failed".to_string()))
+            } else {
+                Ok(HashMap::new())
+            }
+        }
+    }
+
+    #[macros::async_trait]
+    impl HeaderProvider for FlakyProvider {
+        async fn headers(
+            &self,
+        ) -> std::result::Result<HashMap<String, String>, HeaderProviderError> {
+            self.respond()
+        }
+
+        async fn headers_refresh(
+            &self,
+        ) -> std::result::Result<HashMap<String, String>, HeaderProviderError> {
+            self.refresh_calls.fetch_add(1, Ordering::SeqCst);
+            self.respond()
+        }
+    }
+
+    /// The transport is lazy and the test closures never touch the network,
+    /// so the URL only has to parse.
+    fn test_client(provider: Arc<FlakyProvider>) -> SparkRpcClient {
+        let transport = GrpcClient::new("http://127.0.0.1:1".to_string(), None, None)
+            .expect("transport")
+            .into_inner();
+        SparkRpcClient::new(transport, provider, 0)
+    }
+
+    fn unauthenticated() -> OperatorRpcError {
+        OperatorRpcError::Connection(Box::new(Status::unauthenticated("token rejected")))
+    }
+
+    #[async_test_all]
+    async fn handshake_failure_is_retried_with_forced_refresh() {
+        let provider = Arc::new(FlakyProvider::new(1));
+        let client = test_client(provider.clone());
+        let calls = AtomicUsize::new(0);
+
+        let result = client
+            .call_with_auth_retry(|_| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async { Ok(tonic::Response::new(7u32)) }
+            })
+            .await;
+
+        assert_eq!(result.unwrap(), 7);
+        assert_eq!(provider.attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(provider.refresh_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[async_test_all]
+    async fn handshake_failure_on_retry_returns_error() {
+        let provider = Arc::new(FlakyProvider::new(2));
+        let client = test_client(provider.clone());
+        let calls = AtomicUsize::new(0);
+
+        let result = client
+            .call_with_auth_retry(|_| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async { Ok(tonic::Response::new(())) }
+            })
+            .await;
+
+        assert!(matches!(result, Err(OperatorRpcError::Authentication(_))));
+        assert_eq!(provider.attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[async_test_all]
+    async fn unauthenticated_call_is_retried_with_forced_refresh() {
+        let provider = Arc::new(FlakyProvider::new(0));
+        let client = test_client(provider.clone());
+        let calls = AtomicUsize::new(0);
+
+        let result = client
+            .call_with_auth_retry(|_| {
+                let attempt = calls.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if attempt == 0 {
+                        Err(unauthenticated())
+                    } else {
+                        Ok(tonic::Response::new(7u32))
+                    }
+                }
+            })
+            .await;
+
+        assert_eq!(result.unwrap(), 7);
+        assert_eq!(provider.refresh_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[async_test_all]
+    async fn unauthenticated_call_is_retried_only_once() {
+        let provider = Arc::new(FlakyProvider::new(0));
+        let client = test_client(provider.clone());
+        let calls = AtomicUsize::new(0);
+
+        let result: Result<()> = client
+            .call_with_auth_retry(|_| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async { Err(unauthenticated()) }
+            })
+            .await;
+
+        assert!(matches!(result, Err(OperatorRpcError::Connection(_))));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(provider.refresh_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[async_test_all]
+    async fn non_auth_call_error_is_not_retried() {
+        let provider = Arc::new(FlakyProvider::new(0));
+        let client = test_client(provider.clone());
+        let calls = AtomicUsize::new(0);
+
+        let result: Result<()> = client
+            .call_with_auth_retry(|_| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async {
+                    Err(OperatorRpcError::Connection(Box::new(
+                        Status::failed_precondition("transfer expired"),
+                    )))
+                }
+            })
+            .await;
+
+        assert!(matches!(result, Err(OperatorRpcError::Connection(_))));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(provider.refresh_calls.load(Ordering::SeqCst), 0);
     }
 }
