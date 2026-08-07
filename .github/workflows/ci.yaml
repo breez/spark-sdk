@@ -96,7 +96,7 @@ jobs:
       # where the package is nested under `expo/` instead of hoisted.
       - name: Verify config-plugins is resolved through expo
         run: |
-          if grep -rnE "(require\(|from )['\"]@expo/config-plugins['\"]" plugin/build; then
+          if grep -rnE "(require\(|from )['\"]@expo/config-plugins(/|['\"])" plugin/build; then
             echo "::error::plugin/build must resolve config-plugins via 'expo/config-plugins'"
             exit 1
           fi
