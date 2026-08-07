@@ -1,8 +1,10 @@
+// `@expo/config-plugins` is nested under `expo/` from SDK 56 onward and is not
+// resolvable from this package. `expo/config-plugins` re-exports it.
 import {
   type ConfigPlugin,
   withPlugins,
   createRunOncePlugin,
-} from '@expo/config-plugins';
+} from 'expo/config-plugins';
 import { withBinaryArtifacts } from './withBinaryArtifacts';
 import { withBreezSdkAndroid } from './withAndroid';
 import { withBreezSdkIOS } from './withIOS';
