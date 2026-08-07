@@ -23,7 +23,7 @@ use tonic::metadata::Ascii;
 use tonic::metadata::MetadataValue;
 use tonic::service::Interceptor;
 use tonic::service::interceptor::InterceptedService;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, trace};
 
 #[derive(Clone, Default)]
 pub struct QueryNodesPaginatedRequest {
@@ -52,6 +52,11 @@ pub struct SparkRpcClient {
     operator_id: usize,
 }
 
+// Requests carrying per-leaf signing jobs (`StartTransferRequest` and the
+// messages wrapping it, `ClaimPackage`) log at `trace`, not `debug`: rendering
+// one is unbounded in leaf count and reaches ~700KB for a 64-leaf swap, past
+// the per-entry size limit of log backends such as GCP Cloud Logging. The
+// SDK's default filter enables `spark=debug`, so `debug` would ship them on.
 impl SparkRpcClient {
     pub fn new(
         channel: Transport,
@@ -101,7 +106,7 @@ impl SparkRpcClient {
         &self,
         req: FinalizeDepositTreeCreationRequest,
     ) -> Result<FinalizeDepositTreeCreationResponse> {
-        debug!(
+        trace!(
             "Calling finalize_deposit_tree_creation with request: {:?}",
             req
         );
@@ -118,7 +123,7 @@ impl SparkRpcClient {
         &self,
         req: StartTransferRequest,
     ) -> Result<StartTransferResponse> {
-        debug!("Calling start_transfer with request: {:?}", req);
+        trace!("Calling start_transfer with request: {:?}", req);
         self.call_with_auth_retry(|interceptor| {
             let mut client = self.spark_service_client(interceptor);
             let req = req.clone();
@@ -129,7 +134,7 @@ impl SparkRpcClient {
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn claim_transfer(&self, req: ClaimTransferRequest) -> Result<ClaimTransferResponse> {
-        debug!("Calling claim_transfer with request: {:?}", req);
+        trace!("Calling claim_transfer with request: {:?}", req);
         self.call_with_auth_retry(|interceptor| {
             let mut client = self.spark_service_client(interceptor);
             let req = req.clone();
@@ -197,7 +202,7 @@ impl SparkRpcClient {
         &self,
         req: CooperativeExitRequest,
     ) -> Result<CooperativeExitResponse> {
-        debug!("Calling cooperative_exit_v2 with request: {:?}", req);
+        trace!("Calling cooperative_exit_v2 with request: {:?}", req);
         self.call_with_auth_retry(|interceptor| {
             let mut client = self.spark_service_client(interceptor);
             let req = req.clone();
@@ -245,7 +250,7 @@ impl SparkRpcClient {
         &self,
         req: InitiateSwapPrimaryTransferRequest,
     ) -> Result<InitiateSwapPrimaryTransferResponse> {
-        debug!(
+        trace!(
             "Calling initiate_swap_primary_transfer with request: {:?}",
             req
         );
