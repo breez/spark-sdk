@@ -363,10 +363,6 @@ impl TransferService {
             spark_invoice: spark_invoice.unwrap_or_default(),
             ..Default::default()
         };
-        trace!(
-            "About to send start_transfer_request: {:?}",
-            start_transfer_request
-        );
         let transfer = self
             .operator_pool
             .get_coordinator()
