@@ -1,4 +1,4 @@
-import { type ConfigPlugin, withGradleProperties } from '@expo/config-plugins';
+import { type ConfigPlugin, withGradleProperties } from 'expo/config-plugins';
 
 /**
  * Add required configurations to gradle.properties

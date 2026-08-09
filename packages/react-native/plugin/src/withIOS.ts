@@ -1,4 +1,4 @@
-import { type ConfigPlugin, withEntitlementsPlist } from '@expo/config-plugins';
+import { type ConfigPlugin, withEntitlementsPlist } from 'expo/config-plugins';
 
 type WithIOSOptions = {
   enablePasskey: boolean;
