@@ -25,6 +25,11 @@ use tonic::service::Interceptor;
 use tonic::service::interceptor::InterceptedService;
 use tracing::{debug, instrument, trace};
 
+/// Transfer pages embed full leaf data, so a page of leaf-heavy transfers can
+/// exceed tonic's 4 MiB decode default and permanently wedge payment syncing.
+/// 20 MiB matches the limit used by the Spark JS SDK.
+const MAX_DECODING_MESSAGE_SIZE: usize = 20 * 1024 * 1024;
+
 #[derive(Clone, Default)]
 pub struct QueryNodesPaginatedRequest {
     pub include_parents: bool,
@@ -688,6 +693,7 @@ impl SparkRpcClient {
         interceptor: HeaderInterceptor,
     ) -> SparkServiceClient<InterceptedService<Transport, HeaderInterceptor>> {
         SparkServiceClient::with_interceptor(self.transport.clone(), interceptor)
+            .max_decoding_message_size(MAX_DECODING_MESSAGE_SIZE)
     }
 
     fn spark_token_service_client(
@@ -695,6 +701,7 @@ impl SparkRpcClient {
         interceptor: HeaderInterceptor,
     ) -> SparkTokenServiceClient<InterceptedService<Transport, HeaderInterceptor>> {
         SparkTokenServiceClient::with_interceptor(self.transport.clone(), interceptor)
+            .max_decoding_message_size(MAX_DECODING_MESSAGE_SIZE)
     }
 
     async fn build_interceptor(&self, force_refresh: bool) -> Result<HeaderInterceptor> {
