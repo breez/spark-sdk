@@ -1,8 +1,6 @@
 import AuthenticationServices
 import Foundation
-#if canImport(PasskeyPRFHelperObjC)
 import PasskeyPRFHelperObjC
-#endif
 import Security
 
 /// iOS / macOS platform-specific options for [`PasskeyProvider`].

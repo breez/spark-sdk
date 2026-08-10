@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 #
-# Typecheck the Flutter and React Native iOS sources the way CocoaPods
-# builds them: one pod module per plugin, with PasskeyPRFHelper.h reachable only
-# through the pod's umbrella header. `swift build` on the SPM package does not
-# cover this, because there PasskeyPRFHelperObjC is a real module.
+# Typecheck the Flutter and React Native iOS sources against an ObjC-only
+# umbrella header, the shape CocoaPods produces for a mixed ObjC/Swift pod.
+# `swift build` on the SPM package does not cover this, because there
+# PasskeyPRFHelperObjC is a real module rather than an umbrella import.
+#
+# The umbrella here is written by this script, not read from the podspecs, so
+# this does not detect a podspec that starts publishing other headers. Keeping
+# the podspecs' umbrella ObjC-only is enforced separately, by the RN post-ubrn
+# patch and its `--check` job.
 #
 # Requires macOS with Xcode. Skips cleanly elsewhere so `make check` still runs.
 
@@ -27,12 +32,17 @@ fi
 IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 
 # Flutter.framework ships inside the Flutter SDK. subosito/flutter-action sets
-# FLUTTER_ROOT; locally, derive it from whichever flutter is on PATH.
+# FLUTTER_ROOT; otherwise ask flutter itself. Deriving the root from the binary's
+# path on PATH breaks under version managers (asdf, mise, fvm, fenv), which put a
+# wrapper script there rather than the SDK's own bin/flutter.
 if [[ -z "${FLUTTER_ROOT:-}" ]]; then
-  if command -v flutter >/dev/null 2>&1; then
-    FLUTTER_ROOT="$(cd "$(dirname "$(readlink -f "$(command -v flutter)" 2>/dev/null || command -v flutter)")/.." && pwd)"
-  else
+  if ! command -v flutter >/dev/null 2>&1; then
     echo "check-ios-cocoapods: FAIL - flutter not found and FLUTTER_ROOT unset" >&2
+    exit 1
+  fi
+  FLUTTER_ROOT="$(flutter --version --machine | sed -n 's/.*"flutterRoot": *"\([^"]*\)".*/\1/p')"
+  if [[ -z "$FLUTTER_ROOT" ]]; then
+    echo "check-ios-cocoapods: FAIL - could not read flutterRoot from 'flutter --version --machine'" >&2
     exit 1
   fi
 fi
@@ -49,15 +59,24 @@ trap 'rm -rf "$WORK"' EXIT
 
 fail=0
 
-# Stage a plugin's iOS sources into a scratch pod and typecheck them as one module.
+# Stage a package's iOS sources into a scratch pod and typecheck them as one module.
 #   $1 pod module name, $2 staging subdir, $3 source dir relative to REPO_ROOT,
-#   $4 ObjC header relative to REPO_ROOT
+#   $4 ObjC header relative to REPO_ROOT, $5.. extra swiftc flags
 #
-# Every .swift in the source dir is compiled, so Swift added to either plugin is
+# Every .swift in the source dir is compiled, so Swift added to either package is
 # covered without editing this script. The header goes into the umbrella rather
 # than the compile list, reproducing the header-visibility path CocoaPods builds.
+# Extra flags are per-pod on purpose: giving one package the other's frameworks
+# would let a wrong import typecheck here and fail in a real build.
+#
+# Both pods get a plain `module`, though CocoaPods emits `framework module` for
+# the Flutter pod under use_frameworks!. A framework module resolves its umbrella
+# inside a .framework bundle, which this flat staging dir is not, and the two
+# forms are equivalent for the header visibility being checked here.
 check_pod() {
   local module="$1" subdir="$2" src_dir="$3" header="$4"
+  shift 4
+  local extra_flags=("$@")
   local dir="${WORK}/${subdir}"
   mkdir -p "$dir"
 
@@ -81,7 +100,7 @@ check_pod() {
     return
   fi
 
-  printf '#import "PasskeyPRFHelper.h"\n' >"${dir}/umbrella.h"
+  printf '#import "%s"\n' "$(basename "$header")" >"${dir}/umbrella.h"
   cat >"${dir}/module.modulemap" <<EOF
 module ${module} {
   umbrella header "umbrella.h"
@@ -94,9 +113,8 @@ EOF
   if ! (cd "$dir" && swiftc \
     -target "$DEPLOYMENT_TARGET" \
     -sdk "$IOS_SDK" \
-    -F "$FLUTTER_FW" \
     -I . \
-    -I "${WORK}/ReactStub" \
+    ${extra_flags[@]+"${extra_flags[@]}"} \
     -module-name "$module" \
     -import-underlying-module \
     -suppress-warnings \
@@ -120,11 +138,13 @@ printf 'module React { header "React.h" export * }\n' >"${WORK}/ReactStub/module
 
 check_pod breez_sdk_spark_flutter flutter \
   packages/flutter/ios/Classes \
-  packages/flutter/ios/Classes/PasskeyPRFHelper.h
+  packages/flutter/ios/Classes/PasskeyPRFHelper.h \
+  -F "$FLUTTER_FW"
 
 check_pod BreezSdkSparkReactNative react-native \
   packages/react-native/ios \
-  packages/react-native/ios/PasskeyPRFHelper.h
+  packages/react-native/ios/PasskeyPRFHelper.h \
+  -I "${WORK}/ReactStub"
 
 if [[ "$fail" -ne 0 ]]; then
   echo "check-ios-cocoapods: FAILED" >&2

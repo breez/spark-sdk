@@ -20,6 +20,12 @@
  *        - register BreezSdkSparkPasskeyModule alongside the generated
  *          UniFFI TurboModule so React Native can find it at runtime
  *
+ *   3. BreezSdkSparkReactNative.podspec
+ *        - narrow `public_header_files` to the ObjC PRF helper. The pod
+ *          gained Swift with the passkey provider, so CocoaPods now builds
+ *          an ObjC module from the umbrella header, and the generated C++
+ *          and ObjC++ headers cannot be parsed as ObjC
+ *
  * The PasskeyProvider class is exposed via a subpath export
  * (`@breeztech/breez-sdk-spark-react-native/passkey-prf-provider`) declared
  * in package.json `exports`, so no edit to the generated `src/index.tsx`
@@ -204,8 +210,18 @@ patchFile(
   'BreezSdkSparkReactNative.podspec',
   'public_header_files (keep C++ out of the ObjC umbrella)',
   (content, label, relPath) => {
-    if (content.includes('s.public_header_files')) {
+    const declaration = '  s.public_header_files = "ios/PasskeyPRFHelper.h"';
+    if (content.includes(declaration)) {
       return content;
+    }
+    // Any other value silently re-widens the umbrella, so refuse to inject a
+    // second, conflicting assignment.
+    if (/^\s*s\.public_header_files\s*=/m.test(content)) {
+      throw new Error(
+        `podspec already declares s.public_header_files with an unexpected ` +
+          `value. The pod contains Swift, so its umbrella must stay ObjC-only. ` +
+          `Reconcile by hand before regenerating.`
+      );
     }
     const anchor = '  s.vendored_frameworks = "build/RnBreezSdkSpark.xcframework"';
     requireAnchor(content, anchor, label, relPath);
@@ -215,7 +231,7 @@ patchFile(
       '  # C++ or reaches it transitively (BreezSdkSparkReactNative.h imports the',
       '  # ObjC++ codegen spec under RCT_NEW_ARCH_ENABLED), so only the helper the',
       '  # Swift sources need is public.',
-      '  s.public_header_files = "ios/PasskeyPRFHelper.h"',
+      declaration,
       anchor,
     ].join('\n');
     return content.replace(anchor, injected);
