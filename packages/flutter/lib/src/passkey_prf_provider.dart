@@ -169,7 +169,8 @@ class PasskeyProvider implements PrfProvider {
       final result = await _channel.invokeMethod<Map<Object?, Object?>>('createPasskey', args);
       final map = result!;
       final credentialId = base64Decode(map['credentialId'] as String);
-      final userId = base64Decode(map['userId'] as String);
+      final userIdB64 = map['userId'] as String?;
+      final userId = userIdB64 == null ? null : base64Decode(userIdB64);
       final aaguidB64 = map['aaguid'] as String?;
       final aaguid = aaguidB64 == null ? null : base64Decode(aaguidB64);
       final backupEligible = map['backupEligible'] as bool?;

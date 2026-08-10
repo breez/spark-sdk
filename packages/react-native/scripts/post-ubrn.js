@@ -196,6 +196,32 @@ patchFile(
   }
 );
 
+// ---------------------------------------------------------------------------
+// 3. BreezSdkSparkReactNative.podspec
+// ---------------------------------------------------------------------------
+
+patchFile(
+  'BreezSdkSparkReactNative.podspec',
+  'public_header_files (keep C++ out of the ObjC umbrella)',
+  (content, label, relPath) => {
+    if (content.includes('s.public_header_files')) {
+      return content;
+    }
+    const anchor = '  s.vendored_frameworks = "build/RnBreezSdkSpark.xcframework"';
+    requireAnchor(content, anchor, label, relPath);
+    const injected = [
+      '  # The pod contains Swift, so CocoaPods builds an ObjC module from the umbrella',
+      '  # header, which is parsed as ObjC and not ObjC++. Every other header here is',
+      '  # C++ or reaches it transitively (BreezSdkSparkReactNative.h imports the',
+      '  # ObjC++ codegen spec under RCT_NEW_ARCH_ENABLED), so only the helper the',
+      '  # Swift sources need is public.',
+      '  s.public_header_files = "ios/PasskeyPRFHelper.h"',
+      anchor,
+    ].join('\n');
+    return content.replace(anchor, injected);
+  }
+);
+
 if (errors.length > 0) {
   console.error('');
   console.error(`[post-ubrn] ${errors.length} patch(es) failed:`);

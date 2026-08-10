@@ -1,6 +1,11 @@
 import AuthenticationServices
 import Foundation
+// PasskeyPRFHelperObjC is a module only under SPM. The Flutter and React
+// Native podspecs compile PasskeyPRFHelper.h/.m into the same pod as this
+// file, where the helper arrives via the pod's umbrella header instead.
+#if canImport(PasskeyPRFHelperObjC)
 import PasskeyPRFHelperObjC
+#endif
 import Security
 #if canImport(UIKit)
 import UIKit

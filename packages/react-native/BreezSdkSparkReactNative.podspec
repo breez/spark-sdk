@@ -16,6 +16,12 @@ Pod::Spec.new do |s|
   s.source       = { :git => "https://github.com/breez/spark-sdk.git", :tag => "#{s.version}" }
 
   s.source_files = "ios/*.{h,m,mm,swift}", "ios/generated/**/*.{h}", "cpp/**/*.{hpp,cpp,c,h}", "cpp/generated/**/*.{hpp,cpp,c,h}"
+  # The pod contains Swift, so CocoaPods builds an ObjC module from the umbrella
+  # header, which is parsed as ObjC and not ObjC++. Every other header here is
+  # C++ or reaches it transitively (BreezSdkSparkReactNative.h imports the
+  # ObjC++ codegen spec under RCT_NEW_ARCH_ENABLED), so only the helper the
+  # Swift sources need is public.
+  s.public_header_files = "ios/PasskeyPRFHelper.h"
   s.vendored_frameworks = "build/RnBreezSdkSpark.xcframework"
   s.dependency    "uniffi-bindgen-react-native", "0.29.3-1"
 
