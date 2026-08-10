@@ -3,7 +3,7 @@ use std::{collections::HashSet, str::FromStr, sync::Arc};
 use bitcoin::{
     Address, Amount, OutPoint, Transaction, TxOut, Txid, Witness,
     address::NetworkUnchecked,
-    consensus::serialize,
+    consensus::{deserialize, serialize},
     hashes::{Hash, sha256},
     params::Params,
     secp256k1::{Message, PublicKey, ecdsa::Signature, schnorr},
@@ -754,8 +754,8 @@ impl DepositService {
         // that we aggregated locally; the package flow aggregates server-side,
         // so we re-derive the same security guarantees here:
         //  1) the verifying key we used really is the tree's verifying key,
-        //  2) each returned transaction carries a valid Schnorr signature
-        //     under that key for the sighashes we computed.
+        //  2) each returned transaction that carries a signature carries a valid
+        //     Schnorr one under that key for the sighashes we computed.
         let returned_verifying_key = PublicKey::from_slice(&root_node.verifying_public_key)
             .map_err(|_| ServiceError::InvalidVerifyingKey)?;
         if &returned_verifying_key != verifying_public_key {
@@ -773,12 +773,25 @@ impl DepositService {
             cpfp_refund_sighash.as_byte_array(),
             verifying_public_key,
         )?;
-        verify_finalized_taproot_signature(
-            &self.bitcoin_service,
-            &root_node.direct_from_cpfp_refund_tx,
-            direct_from_cpfp_refund_sighash.as_byte_array(),
-            verifying_public_key,
-        )?;
+        // Operators re-encode `direct_*` transactions without witness data at the
+        // public gRPC boundary, and clear the field outright when that fails, so
+        // this one can arrive with no signature to check. See
+        // github.com/buildonspark/spark/commit/64272c0d1. A malformed non-empty
+        // transaction is still rejected by the conversion below.
+        let direct_from_cpfp_refund_is_signed =
+            deserialize::<Transaction>(&root_node.direct_from_cpfp_refund_tx).is_ok_and(|tx| {
+                tx.input
+                    .first()
+                    .is_some_and(|input| !input.witness.is_empty())
+            });
+        if direct_from_cpfp_refund_is_signed {
+            verify_finalized_taproot_signature(
+                &self.bitcoin_service,
+                &root_node.direct_from_cpfp_refund_tx,
+                direct_from_cpfp_refund_sighash.as_byte_array(),
+                verifying_public_key,
+            )?;
+        }
 
         Ok(vec![root_node.try_into()?])
     }
