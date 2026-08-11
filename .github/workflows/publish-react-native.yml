@@ -110,6 +110,8 @@ jobs:
           name: bindings-react-native
           path: |
             packages/react-native/app.plugin.js
+            packages/react-native/passkey-prf-provider.js
+            packages/react-native/passkey-prf-provider.d.ts
             packages/react-native/ubrn.config.yaml
             packages/react-native/android/build.gradle
             packages/react-native/android/generated
