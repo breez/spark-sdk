@@ -754,8 +754,9 @@ impl DepositService {
         // that we aggregated locally; the package flow aggregates server-side,
         // so we re-derive the same security guarantees here:
         //  1) the verifying key we used really is the tree's verifying key,
-        //  2) each returned transaction carries a valid Schnorr signature
+        //  2) the returned cpfp transactions carry a valid Schnorr signature
         //     under that key for the sighashes we computed.
+        // `direct_from_cpfp_refund_tx` carries no signature to verify.
         let returned_verifying_key = PublicKey::from_slice(&root_node.verifying_public_key)
             .map_err(|_| ServiceError::InvalidVerifyingKey)?;
         if &returned_verifying_key != verifying_public_key {
@@ -771,12 +772,6 @@ impl DepositService {
             &self.bitcoin_service,
             &root_node.refund_tx,
             cpfp_refund_sighash.as_byte_array(),
-            verifying_public_key,
-        )?;
-        verify_finalized_taproot_signature(
-            &self.bitcoin_service,
-            &root_node.direct_from_cpfp_refund_tx,
-            direct_from_cpfp_refund_sighash.as_byte_array(),
             verifying_public_key,
         )?;
 

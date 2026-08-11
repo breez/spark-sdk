@@ -14,6 +14,10 @@ bitcoind:
     rpcuser: rpcuser
     rpcpassword: rpcpassword
     zmqpubrawblock: tcp://127.0.0.1:28332
+    # Tests confirm a deposit with a single block. The operator default is 3,
+    # which no test mines up to, so a non-static deposit would never be marked
+    # available.
+    non_static_confirmation_threshold: 1
 token:
   disconnect_lrc20_node: true
 database:

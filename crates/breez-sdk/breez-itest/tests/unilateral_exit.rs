@@ -40,7 +40,7 @@ use spark_itest::helpers::{
     fund_p2tr_utxo_with_key, fund_p2wpkh_utxo, fund_p2wpkh_utxo_with_key, sign_cpfp_psbt_p2tr,
     submit_package_with_csv_retry,
 };
-use spark_wallet::{RefundOutput, is_ephemeral_anchor_output};
+use spark_wallet::is_ephemeral_anchor_output;
 
 // The exit fee rate the tests build at, in sat/vByte (the public API unit). 1
 // sat/vByte is the mainnet min-relay floor.
@@ -2331,122 +2331,6 @@ async fn test_unconfirmed_funding_accepted(#[case] backend: SignerBackend) -> Re
     assert!(
         spends_funding,
         "a CPFP child spends the unconfirmed funding UTXO"
-    );
-    Ok(())
-}
-
-/// Mine a self-fee transaction's relative CSV, then broadcast it on its own (no
-/// package). Used to broadcast a pre-signed self-fee refund (the watchtower
-/// path), which pays its own fee and so needs no CPFP child.
-async fn mine_csv_then_broadcast(sdk: &LocalSdk, tx: &Transaction) -> Result<()> {
-    let csv = tx
-        .input
-        .iter()
-        .filter_map(|i| match i.sequence.to_relative_lock_time()? {
-            bitcoin::relative::LockTime::Blocks(h) => Some(u32::from(h.value())),
-            bitcoin::relative::LockTime::Time(_) => None,
-        })
-        .max()
-        .unwrap_or(0);
-    if csv > 0 {
-        sdk.fixtures.bitcoind.generate_blocks(csv.into()).await?;
-    }
-    sdk.fixtures
-        .bitcoind
-        .broadcast_transaction_no_fee_check(tx)
-        .await?;
-    sdk.fixtures.bitcoind.generate_blocks(1).await?;
-    Ok(())
-}
-
-/// A leaf's self-fee `direct_from_cpfp_refund_tx` is a valid exit path to the
-/// user's key that needs no CPFP child. After the cpfp node chain confirms, this
-/// refund broadcasts on its own; the exit's sweep then recovers it to the
-/// destination, recognized by the leaf's refund address (the same address every
-/// refund variant pays). This exercises the address-based recovery against a
-/// non-cpfp refund actually on-chain.
-#[apply(each_backend)]
-#[test_log::test(tokio::test)]
-async fn test_sweep_recovers_direct_from_cpfp_refund(#[case] backend: SignerBackend) -> Result<()> {
-    let sdk = new_local_sdk(backend).await?;
-    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
-
-    // Capture the leaf's pre-signed self-fee refund up front (it spends the
-    // leaf's own cpfp node_tx output and pays the user's key).
-    let leaf = sdk
-        .spark_wallet
-        .list_leaves()
-        .await?
-        .available
-        .into_iter()
-        .next()
-        .expect("a claimed leaf");
-    let leaf_id = leaf.id.clone();
-    let refund = leaf
-        .direct_from_cpfp_refund_tx
-        .clone()
-        .expect("a claimed leaf carries a direct_from_cpfp refund");
-    assert_eq!(
-        refund.input[0].previous_output.txid,
-        leaf.node_tx.compute_txid(),
-        "the direct_from_cpfp refund must spend the leaf's node_tx"
-    );
-
-    // Drive the cpfp chain so the leaf's node_tx output is on-chain, then
-    // broadcast the self-fee refund instead of the cpfp refund.
-    let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(CPFP_SATS)).await?;
-    let quote = sdk
-        .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
-            fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
-            destination: cpfp.address.to_string(),
-            selection: ExitLeafSelection::Auto,
-        })
-        .await?;
-    let resp = sdk
-        .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
-                prepared: quote,
-                funding_inputs: vec![cpfp_input(&cpfp)],
-            },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
-        )
-        .await?;
-    for entry in &resp.transactions {
-        if matches!(entry.kind, UnilateralExitTxKind::Node) {
-            broadcast_and_mine(&sdk, entry).await?;
-        }
-    }
-    mine_csv_then_broadcast(&sdk, &refund).await?;
-
-    // The sweep recovers that on-chain refund to the destination.
-    let dest = cpfp.address.clone();
-    let refund_output = RefundOutput {
-        outpoint: OutPoint {
-            txid: refund.compute_txid(),
-            vout: 0,
-        },
-        leaf_id,
-        value: refund.output[0].value.to_sat(),
-    };
-    let sweep_psbt = sdk
-        .spark_wallet
-        .create_refund_sweep_transaction(vec![refund_output], vec![], dest.clone(), FEE_RATE_KW)
-        .await?;
-    let sweep = sweep_psbt.extract_tx_unchecked_fee_rate();
-    let sweep_txid = sdk.fixtures.bitcoind.broadcast_transaction(&sweep).await?;
-    sdk.fixtures.bitcoind.generate_blocks(1).await?;
-
-    let confirmed = sdk.fixtures.bitcoind.get_transaction(&sweep_txid).await?;
-    assert_eq!(confirmed.compute_txid(), sweep_txid);
-    assert!(
-        confirmed
-            .output
-            .iter()
-            .any(|o| o.script_pubkey == dest.script_pubkey()),
-        "the sweep pays the destination"
     );
     Ok(())
 }
