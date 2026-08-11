@@ -1,6 +1,6 @@
 use std::{collections::HashMap, str::FromStr as _, sync::Arc};
 
-use tracing::{info, trace};
+use tracing::{error, info, trace};
 
 use crate::{
     Network,
@@ -150,20 +150,35 @@ impl TimelockManager {
         };
 
         let mut renew_futures = Vec::new();
+        let mut renewing_nodes = Vec::new();
         for node in &renewable_nodes {
             let parent_node = get_parent_node(node)?;
+            renewing_nodes.push(node.clone());
             renew_futures.push(self.renew(RenewType::Node { parent_node }, node));
         }
         for node in &renewable_refunds {
             let parent_node = get_parent_node(node)?;
+            renewing_nodes.push(node.clone());
             renew_futures.push(self.renew(RenewType::Refund { parent_node }, node));
         }
         for node in &renewable_zero_timelock_nodes {
+            renewing_nodes.push(node.clone());
             renew_futures.push(self.renew(RenewType::ZeroTimelock, node));
         }
 
-        let renewed_nodes = futures::future::try_join_all(renew_futures).await?;
-        ready_nodes.extend(renewed_nodes);
+        let renew_results = futures::future::join_all(renew_futures).await;
+        for (node, result) in renewing_nodes.into_iter().zip(renew_results) {
+            match result {
+                Ok(renewed) => ready_nodes.push(renewed),
+                Err(e) => {
+                    error!(
+                        "Timelock renewal failed for leaf {}, keeping it unrenewed for the next pass: {e:?}",
+                        node.id
+                    );
+                    ready_nodes.push(node);
+                }
+            }
+        }
 
         Ok(ready_nodes)
     }

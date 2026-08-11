@@ -19,6 +19,7 @@ use crate::utils::refund::{SignRefundsParams, SignedRefundTransactions, sign_ref
 use crate::utils::tagged_hasher::TaggedHasher;
 use crate::utils::time::web_time_to_prost_timestamp;
 
+use bitcoin::Sequence;
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::Identifier;
@@ -28,7 +29,7 @@ use tracing::{debug, error, trace, warn};
 
 use crate::{
     bitcoin::sighash_from_tx,
-    core::{current_sequence, enforce_timelock},
+    core::{checked_timelock, current_sequence, enforce_timelock},
     signer::{
         ClaimLeafInput, OperatorRecipient, PrepareClaimRequest, PrepareTransferRequest,
         PreparedTransfer, SparkSigner, TransferLeafInput,
@@ -940,6 +941,17 @@ impl TransferService {
                 .await?;
             let verifying_key = leaf.node.verifying_public_key;
             let node_tx = &leaf.node.node_tx;
+            // A node tx with no inputs cannot be claimed, so this one fails the
+            // leaf. An out-of-range timelock still can be, so it only warns.
+            let node_sequence = node_timelock(node_tx, &leaf.node.id)?;
+            if checked_timelock(node_sequence).is_none() {
+                warn!(
+                    "Proceeding with the claim despite leaf {} node tx timelock {:#x}",
+                    leaf.node.id,
+                    node_sequence.to_consensus_u32()
+                );
+            }
+            let node_tx_out = first_output(node_tx, &leaf.node.id, "node tx")?;
 
             // Build the claim refund transactions at the current (enforced)
             // timelock. The receiver receives the funds, so it is also the
@@ -949,22 +961,55 @@ impl TransferService {
                 .refund_tx
                 .clone()
                 .ok_or_else(|| ServiceError::Generic("No refund tx".to_string()))?;
-            let old_sequence = refund_tx.input[0].sequence;
-            let (cpfp_sequence, direct_sequence) = current_sequence(enforce_timelock(old_sequence));
+            let old_sequence = refund_tx
+                .input
+                .first()
+                .map(|input| input.sequence)
+                .ok_or_else(|| {
+                    ServiceError::ValidationError(format!(
+                        "leaf {} refund tx has no inputs",
+                        leaf.node.id
+                    ))
+                })?;
+            // This sequence is carried into the refund txs signed below, so an
+            // out-of-range one leaves the leaf with a much longer wait before it
+            // can be exited unilaterally. Claiming still beats leaving the funds
+            // unclaimed, so it only warns.
+            if checked_timelock(old_sequence).is_none() {
+                warn!(
+                    "Proceeding with the claim despite leaf {} refund tx timelock {:#x}",
+                    leaf.node.id,
+                    old_sequence.to_consensus_u32()
+                );
+            }
+            let (cpfp_sequence, direct_sequence) = current_sequence(enforce_timelock(old_sequence))
+                .ok_or_else(|| {
+                    ServiceError::ValidationError(format!(
+                        "leaf {} refund tx timelock {:#x} leaves no room for the direct offset",
+                        leaf.node.id,
+                        old_sequence.to_consensus_u32()
+                    ))
+                })?;
+            // `create_refund_txs` reads the first output of both txs it is given,
+            // so both have to be checked before the call, not after it.
+            let direct_tx = leaf.node.direct_refund_tx();
+            if let Some(direct_tx) = direct_tx {
+                first_output(direct_tx, &leaf.node.id, "direct tx")?;
+            }
             let RefundTransactions {
                 cpfp_tx: cpfp_refund_tx,
                 direct_tx: direct_refund_tx,
                 direct_from_cpfp_tx: direct_from_cpfp_refund_tx,
             } = create_refund_txs(
                 node_tx,
-                leaf.node.direct_refund_tx(),
+                direct_tx,
                 cpfp_sequence,
                 direct_sequence,
                 &signing_public_key,
                 self.network,
             );
 
-            let cpfp_sighash = sighash_from_tx(&cpfp_refund_tx, 0, &node_tx.output[0])?;
+            let cpfp_sighash = sighash_from_tx(&cpfp_refund_tx, 0, node_tx_out)?;
             let cpfp = build_refund_signing_job(
                 &leaf.node.id,
                 &verifying_key,
@@ -979,7 +1024,8 @@ impl TransferService {
             let direct = if let (Some(direct_tx), Some(direct_refund_tx)) =
                 (leaf.node.direct_tx.as_ref(), direct_refund_tx)
             {
-                let sighash = sighash_from_tx(&direct_refund_tx, 0, &direct_tx.output[0])?;
+                let direct_tx_out = first_output(direct_tx, &leaf.node.id, "direct tx")?;
+                let sighash = sighash_from_tx(&direct_refund_tx, 0, direct_tx_out)?;
                 Some(build_refund_signing_job(
                     &leaf.node.id,
                     &verifying_key,
@@ -995,7 +1041,7 @@ impl TransferService {
             };
 
             let direct_from_cpfp = if let Some(dfc_refund_tx) = direct_from_cpfp_refund_tx {
-                let sighash = sighash_from_tx(&dfc_refund_tx, 0, &node_tx.output[0])?;
+                let sighash = sighash_from_tx(&dfc_refund_tx, 0, node_tx_out)?;
                 Some(build_refund_signing_job(
                     &leaf.node.id,
                     &verifying_key,
@@ -1276,9 +1322,87 @@ impl TransferService {
     }
 }
 
+fn first_output<'a>(
+    tx: &'a bitcoin::Transaction,
+    node_id: &TreeNodeId,
+    what: &str,
+) -> Result<&'a bitcoin::TxOut, ServiceError> {
+    tx.output.first().ok_or_else(|| {
+        ServiceError::ValidationError(format!("leaf {node_id} {what} has no outputs"))
+    })
+}
+
+/// Reads the node tx timelock sequence, erroring when the tx has no inputs.
+///
+/// The claim reads the same sequence through `is_zero_timelock`, which indexes
+/// `input[0]` and so panics on an input-less tx rather than claiming it.
+fn node_timelock(
+    node_tx: &bitcoin::Transaction,
+    node_id: &TreeNodeId,
+) -> Result<Sequence, ServiceError> {
+    node_tx
+        .input
+        .first()
+        .map(|input| input.sequence)
+        .ok_or_else(|| {
+            ServiceError::ValidationError(format!("leaf {node_id} node tx has no inputs"))
+        })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ClaimLocks, TransferId};
+    use super::{ClaimLocks, TransferId, node_timelock};
+    use crate::tree::TreeNodeId;
+    use bitcoin::{
+        Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness,
+        absolute::LockTime, transaction::Version,
+    };
+
+    fn node_tx_with_sequence(sequence: Option<Sequence>) -> Transaction {
+        Transaction {
+            version: Version::non_standard(3),
+            lock_time: LockTime::ZERO,
+            input: sequence
+                .map(|sequence| TxIn {
+                    previous_output: OutPoint::null(),
+                    script_sig: ScriptBuf::new(),
+                    sequence,
+                    witness: Witness::new(),
+                })
+                .into_iter()
+                .collect(),
+            output: vec![TxOut {
+                value: Amount::from_sat(1000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        }
+    }
+
+    #[test]
+    fn reads_the_node_tx_timelock() {
+        let tx = node_tx_with_sequence(Some(Sequence::from_consensus(2000)));
+        assert_eq!(
+            node_timelock(&tx, &TreeNodeId::generate()).unwrap(),
+            Sequence::from_consensus(2000)
+        );
+    }
+
+    /// An out-of-range timelock is only warned about, so it must still be read
+    /// back rather than failing the leaf.
+    #[test]
+    fn reads_a_node_tx_timelock_above_the_protocol_max() {
+        let tx = node_tx_with_sequence(Some(Sequence::from_consensus(0xFFFF)));
+        assert_eq!(
+            node_timelock(&tx, &TreeNodeId::generate()).unwrap(),
+            Sequence::from_consensus(0xFFFF)
+        );
+    }
+
+    #[test]
+    fn rejects_a_node_tx_without_inputs() {
+        let tx = node_tx_with_sequence(None);
+        assert!(node_timelock(&tx, &TreeNodeId::generate()).is_err());
+    }
 
     #[test]
     fn claim_lock_serializes_claims_for_the_same_transfer() {
