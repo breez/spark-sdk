@@ -80,7 +80,7 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
                 let registered = registration.credential
                 result([
                     "credentialId": registered.credentialId.base64EncodedString(),
-                    "userId": registered.userId.base64EncodedString(),
+                    "userId": registered.userId?.base64EncodedString() as Any?,
                     "aaguid": registered.aaguid?.base64EncodedString() as Any?,
                     "backupEligible": registered.backupEligible as Any?,
                     // Null unless the authenticator evaluated PRF during the

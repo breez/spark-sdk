@@ -55,6 +55,25 @@ jobs:
       - name: Verify CredentialManagerPrfCore copies are in sync
         run: cargo xtask sync-passkey-core --check
 
+  ios-cocoapods-compile:
+    name: iOS CocoaPods compile
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Only Flutter.xcframework is needed, so this job skips setup-build.
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.41.3
+
+      - name: Fetch Flutter iOS artifacts
+        run: flutter precache --ios
+
+      - name: Typecheck Flutter & React Native iOS sources as CocoaPods builds them
+        run: ./scripts/check-ios-cocoapods.sh
+
   rn-post-ubrn-check:
     name: RN post-ubrn sync
     runs-on: ubuntu-latest

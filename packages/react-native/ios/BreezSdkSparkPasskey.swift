@@ -112,7 +112,7 @@ class BreezSdkSparkPasskey: NSObject {
                 // side then skips the assertion entirely.
                 resolve([
                     "credentialId": registered.credentialId.base64EncodedString(),
-                    "userId": registered.userId.base64EncodedString(),
+                    "userId": registered.userId?.base64EncodedString() as Any?,
                     "aaguid": registered.aaguid?.base64EncodedString() as Any?,
                     "backupEligible": registered.backupEligible as Any?,
                     "seeds": registration.seeds?.map { $0.base64EncodedString() } as Any?,

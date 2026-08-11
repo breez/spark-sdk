@@ -237,7 +237,7 @@ export class PasskeyProvider {
     try {
       const result: {
         credentialId: string;
-        userId: string;
+        userId: string | null;
         aaguid: string | null;
         backupEligible: boolean | null;
         seeds: string[] | null;
@@ -253,7 +253,7 @@ export class PasskeyProvider {
       return {
         credential: {
           credentialId: base64ToUint8Array(result.credentialId),
-          userId: base64ToUint8Array(result.userId),
+          userId: result.userId ? base64ToUint8Array(result.userId) : null,
           aaguid: result.aaguid ? base64ToUint8Array(result.aaguid) : null,
           backupEligible: result.backupEligible,
         },
