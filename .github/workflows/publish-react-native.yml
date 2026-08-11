@@ -111,9 +111,17 @@ jobs:
           path: |
             packages/react-native/app.plugin.js
             packages/react-native/ubrn.config.yaml
+            packages/react-native/android/build.gradle
             packages/react-native/android/generated
             packages/react-native/android/CMakeLists.txt
             packages/react-native/android/proguard-rules.pro
+            packages/react-native/android/src/main/java
+            packages/react-native/android/src/main/kotlin
+            packages/react-native/ios/BreezSdkSparkPasskey.m
+            packages/react-native/ios/BreezSdkSparkPasskey.swift
+            packages/react-native/ios/PasskeyAssertionCore.swift
+            packages/react-native/ios/PasskeyPRFHelper.h
+            packages/react-native/ios/PasskeyPRFHelper.m
             packages/react-native/cpp
             packages/react-native/lib
             packages/react-native/plugin/build
