@@ -37,6 +37,8 @@
     "cpp",
     "*.podspec",
     "app.plugin.js",
+    "passkey-prf-provider.js",
+    "passkey-prf-provider.d.ts",
     "react-native.config.js",
     "swift",
     "scripts",
