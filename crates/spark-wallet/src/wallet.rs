@@ -573,13 +573,15 @@ impl SparkWallet {
                         PreimageRequestStatus::WaitingForPreimage
                     },
                     created_time: UNIX_EPOCH
-                        + Duration::from_secs(
+                        .checked_add(Duration::from_secs(
                             lightning_payment.transfer.created_time.unwrap_or_default(),
-                        ),
+                        ))
+                        .unwrap_or(UNIX_EPOCH),
                     expiry_time: UNIX_EPOCH
-                        + Duration::from_secs(
+                        .checked_add(Duration::from_secs(
                             lightning_payment.transfer.expiry_time.unwrap_or_default(),
-                        ),
+                        ))
+                        .unwrap_or(UNIX_EPOCH),
                     preimage,
                 };
                 WalletTransfer::from_transfer(
@@ -1006,7 +1008,7 @@ impl SparkWallet {
             status: PreimageRequestStatus::WaitingForPreimage,
             created_time: transfer
                 .created_time
-                .map(|t| UNIX_EPOCH + Duration::from_secs(t))
+                .and_then(|t| UNIX_EPOCH.checked_add(Duration::from_secs(t)))
                 .unwrap_or(SystemTime::now()),
             expiry_time,
             preimage: None,

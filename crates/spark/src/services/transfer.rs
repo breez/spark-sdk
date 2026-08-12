@@ -9,7 +9,8 @@ use crate::operator::rpc::spark::transfer_filter::Participant;
 use crate::operator::rpc::spark::{HashVariant, StartTransferRequest, TransferFilter};
 use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
 use crate::services::models::{
-    LeafKeyTweak, Transfer, map_signing_nonce_commitments, split_signing_commitments_by_variant,
+    LeafKeyTweak, Transfer, convert_page, map_signing_nonce_commitments,
+    split_signing_commitments_by_variant,
 };
 use crate::services::{TransferId, TransferObserver, TransferStatus};
 use crate::signer::EncryptedSecret;
@@ -1148,11 +1149,7 @@ impl TransferService {
             .await?;
 
         Ok(PagingResult {
-            items: resp
-                .transfers
-                .into_iter()
-                .map(|t| t.try_into())
-                .collect::<Result<Vec<Transfer>, _>>()?,
+            items: convert_page(resp.transfers, "transfer")?,
             next: paging.next_from_offset(resp.offset),
         })
     }
@@ -1204,11 +1201,7 @@ impl TransferService {
             .await?;
 
         Ok(PagingResult {
-            items: resp
-                .transfers
-                .into_iter()
-                .map(|t| t.try_into())
-                .collect::<Result<Vec<Transfer>, _>>()?,
+            items: convert_page(resp.transfers, "transfer")?,
             next: paging.next_from_offset(resp.offset),
         })
     }
@@ -1259,11 +1252,7 @@ impl TransferService {
             .await?;
 
         Ok(PagingResult {
-            items: resp
-                .transfers
-                .into_iter()
-                .map(|t| t.try_into())
-                .collect::<Result<Vec<Transfer>, _>>()?,
+            items: convert_page(resp.transfers, "transfer")?,
             next: paging.next_from_offset(resp.offset),
         })
     }

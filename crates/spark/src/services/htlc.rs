@@ -8,6 +8,7 @@ use platform_utils::time::SystemTime;
 use crate::address::SparkAddress;
 use crate::operator::rpc as operator_rpc;
 use crate::operator::rpc::spark::ProvidePreimageRequest;
+use crate::services::models::convert_page;
 use crate::services::{Preimage, Transfer, TransferId, TransferObserver};
 use crate::tree::TreeNode;
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
@@ -188,11 +189,7 @@ impl HtlcService {
             .await?;
 
         Ok(PagingResult {
-            items: response
-                .preimage_requests
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<PreimageRequestWithTransfer>, _>>()?,
+            items: convert_page(response.preimage_requests, "preimage request")?,
             next: paging.next_from_offset(response.offset),
         })
     }

@@ -115,14 +115,14 @@ impl WalletTransfer {
             total_value_sat: value.total_value,
             expiry_time: value
                 .expiry_time
-                .map(|t| UNIX_EPOCH + Duration::from_secs(t)),
+                .and_then(|t| UNIX_EPOCH.checked_add(Duration::from_secs(t))),
             leaves: value.leaves.into_iter().map(Into::into).collect(),
             created_at: value
                 .created_time
-                .map(|t| UNIX_EPOCH + Duration::from_secs(t)),
+                .and_then(|t| UNIX_EPOCH.checked_add(Duration::from_secs(t))),
             updated_at: value
                 .updated_time
-                .map(|t| UNIX_EPOCH + Duration::from_secs(t)),
+                .and_then(|t| UNIX_EPOCH.checked_add(Duration::from_secs(t))),
             transfer_type: value.transfer_type,
             direction,
             user_request: ssp_transfer.and_then(|t| t.user_request),
