@@ -131,6 +131,15 @@ impl OrchestraClient {
     /// the processing order id. Send the deposit with
     /// [`Self::transfer_to_deposit`] first. The idempotency key is derived from
     /// the quote id, so retries are safe.
+    ///
+    /// Accepted after the quote expires, which is what lets a failed submit be
+    /// retried later, though the rate is requoted at that point.
+    ///
+    /// The response carries the `read_token` that authorises reading the order,
+    /// and this is the only call that returns one. Orchestra detects the deposit
+    /// on the address whether or not this is called, so a failure costs the
+    /// ability to observe the order rather than the deposit itself, and
+    /// resubmitting is how that ability is regained.
     pub async fn submit_spark(
         &self,
         request: SubmitRequestSpark,
@@ -212,27 +221,6 @@ impl OrchestraClient {
         self.get_with_read_token(
             "v1/orchestration/status",
             Some(Query { id: order_id }),
-            true,
-            read_token,
-        )
-        .await
-    }
-
-    /// Look up an order by the originating quote id (useful before `/submit`
-    /// returns or when the order id is not yet known).
-    pub async fn status_by_quote_id(
-        &self,
-        quote_id: &str,
-        read_token: Option<&str>,
-    ) -> Result<StatusResponse, FlashnetError> {
-        #[derive(serde::Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Query<'a> {
-            quote_id: &'a str,
-        }
-        self.get_with_read_token(
-            "v1/orchestration/status",
-            Some(Query { quote_id }),
             true,
             read_token,
         )

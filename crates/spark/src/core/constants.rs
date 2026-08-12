@@ -147,7 +147,7 @@ fn to_sequence(blocks: u16, spark_sequence_flag: u32) -> Sequence {
 }
 
 fn check_next_timelock(current_sequence: Sequence) -> Option<u16> {
-    trace!("Current sequence: {current_sequence:?}");   
+    trace!("Current sequence: {current_sequence:?}");
     let timelock = checked_timelock(current_sequence).unwrap_or_else(|| {
         warn!(
             "Deriving the next sequence from an unexpected timelock {:#x}",
