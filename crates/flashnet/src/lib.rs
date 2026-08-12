@@ -8,6 +8,7 @@ pub mod orchestra;
 pub use amm::api::{BTC_ASSET_ADDRESS, FlashnetClient};
 pub use amm::models::*;
 pub use amm::pool_selection::select_best_pool;
+pub use amm::pool_validation::PoolValidationError;
 pub use cache::CacheStore;
 pub use config::*;
 pub use error::FlashnetError;

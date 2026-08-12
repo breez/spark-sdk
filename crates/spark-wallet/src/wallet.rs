@@ -1241,9 +1241,11 @@ impl SparkWallet {
         Ok(self.ssp_client.list_wallet_webhooks().await?)
     }
 
-    /// Signs a message with the identity key using ECDSA and returns the signature.
+    /// Signs `message` with the identity key, ECDSA over `SHA256(message)`.
     ///
-    /// If exposing this, consider adding a prefix to prevent mistakenly signing messages.
+    /// No domain separation is applied, so every message signed with this key
+    /// shares one signature space. Keep your message space from colliding with
+    /// anything else signed under it, and never sign a counterparty's message.
     pub async fn sign_message(&self, message: &str) -> Result<Signature, SparkWalletError> {
         Ok(self.spark_signer.sign_message(message.as_bytes()).await?)
     }

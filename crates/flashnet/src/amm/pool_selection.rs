@@ -1,7 +1,7 @@
 use super::models::{CurveType, Pool};
 use crate::error::FlashnetError;
 use spark::Network;
-use tracing::debug;
+use tracing::{debug, warn};
 
 struct PoolScore {
     pool: Pool,
@@ -25,17 +25,32 @@ const STABILITY_WEIGHT_BPS: u64 = 2_000;
 /// - Price Stability: 20% (lower 24h volatility)
 ///
 /// Returns the pool with the highest score, or an error if no pool can satisfy the request.
+#[allow(clippy::too_many_arguments)]
 pub fn select_best_pool(
     pools: &[Pool],
     asset_in_address: &str,
+    asset_out_address: &str,
     amount_out: u128,
     max_slippage_bps: u32,
     integrator_fee_bps: u32,
     network: Network,
 ) -> Result<Pool, FlashnetError> {
     // Calculate amount_in for each pool, filter out those that error
+    let mut rejected = 0usize;
     let viable_pools: Vec<(Pool, u128)> = pools
         .iter()
+        .filter(|pool| {
+            // Drop rather than fail: one pool advertising unusable numbers must
+            // not deny the whole conversion when a healthy pool is available.
+            match pool.validate_for_swap(asset_in_address, asset_out_address, network) {
+                Ok(()) => true,
+                Err(e) => {
+                    warn!("Skipping pool {}: {e}", pool.lp_public_key);
+                    rejected = rejected.saturating_add(1);
+                    false
+                }
+            }
+        })
         .filter_map(|pool| {
             pool.calculate_amount_in(
                 asset_in_address,
@@ -50,8 +65,14 @@ pub fn select_best_pool(
         .collect();
 
     if viable_pools.is_empty() {
+        // Separate causes: a listing every pool of which fails validation is a
+        // data problem, and reporting it as an absence of liquidity hides that.
         return Err(FlashnetError::Generic(
-            "No pool can provide the requested output amount".to_string(),
+            if rejected > 0 && rejected == pools.len() {
+                format!("All {rejected} pools failed validation")
+            } else {
+                "No pool can provide the requested output amount".to_string()
+            },
         ));
     }
 
@@ -247,6 +268,8 @@ mod tests {
     // - Balanced scoring across multiple factors
     // - Price stability scoring
 
+    const TEST_TOKEN: &str = "test_token";
+
     #[allow(clippy::too_many_arguments)]
     fn create_test_pool_with_reserves(
         pubkey: &str,
@@ -280,6 +303,9 @@ mod tests {
             graduation_threshold_amount: None,
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
+            current_tick: None,
+            tick_spacing: None,
+            total_liquidity: None,
         }
     }
 
@@ -310,6 +336,9 @@ mod tests {
             graduation_threshold_amount: None,
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
+            current_tick: None,
+            tick_spacing: None,
+            total_liquidity: None,
         };
 
         let score = score_pool(&pool, 1_000, 1_000, 1_000, Some(1_000_000));
@@ -348,6 +377,9 @@ mod tests {
             graduation_threshold_amount: None,
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
+            current_tick: None,
+            tick_spacing: None,
+            total_liquidity: None,
         };
 
         // Pool requires 1_500 when min is 1_000 and max is 2_000
@@ -383,6 +415,9 @@ mod tests {
             graduation_threshold_amount: None,
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
+            current_tick: None,
+            tick_spacing: None,
+            total_liquidity: None,
         };
 
         let score = score_pool(&pool, 1_000, 1_000, 2_000, None);
@@ -400,6 +435,7 @@ mod tests {
         let result = select_best_pool(
             &all_pools,
             crate::BTC_ASSET_ADDRESS,
+            TEST_TOKEN,
             1_000,
             50,
             0,
@@ -432,6 +468,7 @@ mod tests {
         let result = select_best_pool(
             &all_pools,
             crate::BTC_ASSET_ADDRESS,
+            TEST_TOKEN,
             1_000,
             50,
             0,
@@ -472,6 +509,7 @@ mod tests {
         let result = select_best_pool(
             &all_pools,
             crate::BTC_ASSET_ADDRESS,
+            TEST_TOKEN,
             1_000,
             50,
             0,
@@ -512,6 +550,7 @@ mod tests {
         let result = select_best_pool(
             &all_pools,
             crate::BTC_ASSET_ADDRESS,
+            TEST_TOKEN,
             1_000,
             50,
             0,
@@ -565,6 +604,7 @@ mod tests {
         let result = select_best_pool(
             &all_pools,
             crate::BTC_ASSET_ADDRESS,
+            TEST_TOKEN,
             10_000,
             50,
             0,
@@ -608,6 +648,7 @@ mod tests {
         let result = select_best_pool(
             &all_pools,
             crate::BTC_ASSET_ADDRESS,
+            TEST_TOKEN,
             50_000_000,
             50,
             0,
@@ -649,6 +690,7 @@ mod tests {
         let result = select_best_pool(
             &all_pools,
             crate::BTC_ASSET_ADDRESS,
+            TEST_TOKEN,
             1_000_000_000,
             50,
             0,
@@ -694,6 +736,7 @@ mod tests {
         let result = select_best_pool(
             &all_pools,
             crate::BTC_ASSET_ADDRESS,
+            TEST_TOKEN,
             1_000,
             50,
             0,
@@ -736,6 +779,7 @@ mod tests {
         let result = select_best_pool(
             &all_pools,
             crate::BTC_ASSET_ADDRESS,
+            TEST_TOKEN,
             1_000,
             50,
             integrator_fee_bps,
@@ -767,6 +811,7 @@ mod tests {
         let result_without = select_best_pool(
             &all_pools,
             crate::BTC_ASSET_ADDRESS,
+            TEST_TOKEN,
             10_000,
             50,
             0,
@@ -777,6 +822,7 @@ mod tests {
         let result_with = select_best_pool(
             &all_pools,
             crate::BTC_ASSET_ADDRESS,
+            TEST_TOKEN,
             10_000,
             50,
             100, // 1% integrator fee
@@ -791,5 +837,74 @@ mod tests {
             result_without.unwrap().lp_public_key,
             result_with.unwrap().lp_public_key
         );
+    }
+
+    const HEALTHY_KEY: &str = "02894808873b896e21d29856a6d7bb346fb13c019739adb9bf0b6a8b7e28da53da";
+    const BAD_KEY: &str = "0202e9c857e89901e7211897cc0e69be843f865de845f60589614a693f3c966cef";
+
+    fn healthy_pool() -> Pool {
+        create_test_pool_with_reserves(HEALTHY_KEY, 50, 30, 1_000_000, 1_000_000, None, None, None)
+    }
+
+    fn select(pools: &[Pool]) -> Result<Pool, FlashnetError> {
+        select_best_pool(
+            pools,
+            crate::BTC_ASSET_ADDRESS,
+            TEST_TOKEN,
+            1_000,
+            50,
+            0,
+            Network::Mainnet,
+        )
+    }
+
+    #[test]
+    fn an_invalid_pool_is_dropped_and_a_healthy_one_still_wins() {
+        // A NaN price would otherwise take the maximum stability score, and a
+        // zero amount_in would take the maximum fee-efficiency score.
+        let mut bad =
+            create_test_pool_with_reserves(BAD_KEY, 0, 0, 1_000_000, 1_000_000, None, None, None);
+        bad.current_price_a_in_b = Some(f64::NAN);
+        bad.price_change_percent_24h = Some(f64::NAN);
+
+        let selected = select(&[bad, healthy_pool()]).unwrap();
+
+        assert_eq!(selected.lp_public_key.to_string(), HEALTHY_KEY);
+    }
+
+    #[test]
+    fn a_pool_that_does_not_trade_the_pair_is_dropped() {
+        let mut wrong_pair =
+            create_test_pool_with_reserves(BAD_KEY, 0, 0, 1_000_000, 1_000_000, None, None, None);
+        wrong_pair.asset_b_address = "some_other_token".to_string();
+
+        let selected = select(&[wrong_pair, healthy_pool()]).unwrap();
+
+        assert_eq!(selected.lp_public_key.to_string(), HEALTHY_KEY);
+    }
+
+    #[test]
+    fn selection_fails_when_every_pool_is_invalid() {
+        let mut bad =
+            create_test_pool_with_reserves(BAD_KEY, 0, 0, 1_000_000, 1_000_000, None, None, None);
+        bad.host_fee_bps = u32::MAX;
+
+        // Named apart from a liquidity shortfall: a listing that fails
+        // validation outright is a data problem, and reporting it as an absence
+        // of liquidity hides that.
+        let err = select(&[bad]).unwrap_err().to_string();
+        assert!(err.contains("failed validation"), "{err}");
+    }
+
+    #[test]
+    fn a_shortfall_of_liquidity_is_not_reported_as_invalid_data() {
+        // Valid pools that simply cannot cover the request keep the original
+        // message, and an empty listing is a shortfall rather than "All 0".
+        let thin = create_test_pool_with_reserves(HEALTHY_KEY, 0, 0, 1, 1, None, None, None);
+        let err = select(&[thin]).unwrap_err().to_string();
+        assert!(err.contains("No pool can provide"), "{err}");
+
+        let err = select(&[]).unwrap_err().to_string();
+        assert!(err.contains("No pool can provide"), "{err}");
     }
 }

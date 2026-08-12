@@ -60,6 +60,12 @@ impl CacheStore {
         cache.insert(key.to_string(), CacheItem { data, expiration });
         Ok(())
     }
+
+    /// Drops a key ahead of its expiration, so a rejected access token is not
+    /// replayed until its TTL runs out.
+    pub async fn remove(&self, key: &str) {
+        self.cache.lock().await.remove(key);
+    }
 }
 
 #[cfg(test)]
@@ -120,5 +126,23 @@ mod tests {
         // Get the updated value from the cache
         let cached_value: Option<String> = cache_store.get(key).await.unwrap();
         assert_eq!(cached_value, Some(value2.to_string()));
+    }
+
+    #[macros::async_test_all]
+    async fn test_cache_store_remove() {
+        let cache_store = CacheStore::default();
+        let key = "remove_key";
+        cache_store.set(key, &"value", 60_000).await.unwrap();
+
+        cache_store.remove(key).await;
+
+        let cached_value: Option<String> = cache_store.get(key).await.unwrap();
+        assert_eq!(cached_value, None);
+    }
+
+    #[macros::async_test_all]
+    async fn test_cache_store_remove_nonexistent_key() {
+        let cache_store = CacheStore::default();
+        cache_store.remove("never_set").await;
     }
 }

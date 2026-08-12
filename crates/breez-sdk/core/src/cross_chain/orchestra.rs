@@ -1429,6 +1429,7 @@ mod tests {
             fee: None,
             purpose: None,
             amount_adjustment: None,
+            degradation: None,
         };
         let resp = status_response(OrderStatus::Completed, Some("999000"));
         assert!(apply_terminal_status(&amm_info, &resp).is_none());

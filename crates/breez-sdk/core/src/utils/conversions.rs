@@ -495,6 +495,7 @@ mod tests {
             fee: Some(fee),
             purpose: None,
             amount_adjustment: None,
+            degradation: None,
         }
     }
 
@@ -506,6 +507,7 @@ mod tests {
             fee: Some(10),
             purpose: None,
             amount_adjustment: Some(adjustment),
+            degradation: None,
         }
     }
 

@@ -1131,6 +1131,13 @@ pub enum _AmountAdjustmentReason {
     IncreasedToAvoidDust,
 }
 
+#[frb(mirror(SwapDegradation))]
+pub enum _SwapDegradation {
+    BelowMinimum,
+    UnexpectedAsset,
+    MissingInfo,
+}
+
 #[frb(mirror(PaymentDetails))]
 pub enum _PaymentDetails {
     Spark {
@@ -1713,6 +1720,7 @@ pub enum _ConversionInfo {
         fee: Option<u128>,
         purpose: Option<ConversionPurpose>,
         amount_adjustment: Option<AmountAdjustmentReason>,
+        degradation: Option<SwapDegradation>,
     },
     Boltz {
         chain: String,

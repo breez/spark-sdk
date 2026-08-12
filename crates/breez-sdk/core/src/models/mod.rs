@@ -6,7 +6,7 @@ pub use payment_observer::*;
 pub use crate::token_conversion::{
     AmountAdjustmentReason, ConversionEstimate, ConversionInfo, ConversionOptions,
     ConversionPurpose, ConversionStatus, ConversionType, FetchConversionLimitsRequest,
-    FetchConversionLimitsResponse,
+    FetchConversionLimitsResponse, SwapDegradation,
 };
 
 use core::fmt;
@@ -1190,8 +1190,8 @@ pub struct BuyBitcoinResponse {
 pub struct RefundPendingConversionsResponse {
     /// Conversions successfully refunded this pass.
     pub refunded: u32,
-    /// Conversions intentionally deferred (eligible but held back by a
-    /// safety window). The next pass will retry them.
+    /// Conversions not clawed back this pass: held back by a safety window, or
+    /// found to have executed after all. Only the former are retried.
     pub skipped: u32,
     /// Conversions whose clawback did not complete this pass (rejected or
     /// errored; funds not returned). The next pass will retry them.

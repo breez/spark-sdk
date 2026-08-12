@@ -127,18 +127,10 @@ impl OrchestraClient {
             .await
     }
 
-    /// Transfer the quoted `amount_in` to `deposit_address` via the Spark
-    /// wallet, then submit the resulting tx hash to Orchestra. Mirrors the
-    /// AMM client's `execute_swap` shape: the caller supplies the prepared
-    /// quote and Orchestra returns a processing order id.
-    ///
-    /// * `quote_id` / `deposit_address` / `amount_in` come from the
-    ///   [`QuoteResponse`] returned by [`Self::quote`].
-    ///
-    /// Submit an already-sent deposit tx hash for an existing quote.
-    ///
-    /// Requires auth and an idempotency key. The key is derived
-    /// deterministically from the quote id so retries are safe.
+    /// Submit an already-sent deposit tx hash for an existing quote, returning
+    /// the processing order id. Send the deposit with
+    /// [`Self::transfer_to_deposit`] first. The idempotency key is derived from
+    /// the quote id, so retries are safe.
     pub async fn submit_spark(
         &self,
         request: SubmitRequestSpark,

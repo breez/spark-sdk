@@ -1813,6 +1813,13 @@ pub enum AmountAdjustmentReason {
     IncreasedToAvoidDust,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SwapDegradation)]
+pub enum SwapDegradation {
+    BelowMinimum,
+    UnexpectedAsset,
+    MissingInfo,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionStatus)]
 pub enum ConversionStatus {
     Pending,
@@ -1834,6 +1841,8 @@ pub enum ConversionInfo {
         purpose: Option<ConversionPurpose>,
         #[serde(default)]
         amount_adjustment: Option<AmountAdjustmentReason>,
+        #[serde(default)]
+        degradation: Option<SwapDegradation>,
     },
     Orchestra {
         chain: String,
