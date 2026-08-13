@@ -1183,3 +1183,67 @@ mod validate_received_invoice_tests {
         assert!(validate_received_spark_address(None, false, pubkey(0x11)).is_ok());
     }
 }
+
+#[cfg(test)]
+mod get_invoice_amount_sats_tests {
+    use super::{ServiceError, get_invoice_amount_sats};
+    use bitcoin::hashes::{Hash, sha256};
+    use bitcoin::secp256k1::{Secp256k1, SecretKey};
+    use lightning_invoice::{Bolt11Invoice, Currency, InvoiceBuilder, PaymentSecret};
+
+    fn invoice(amount_msat: Option<u64>) -> Bolt11Invoice {
+        let secp = Secp256k1::new();
+        let key = SecretKey::from_slice(&[0x11; 32]).unwrap();
+        let sign = |m: &_| secp.sign_ecdsa_recoverable(m, &key);
+        let builder = InvoiceBuilder::new(Currency::Bitcoin)
+            .description("test".to_string())
+            .payment_hash(sha256::Hash::from_byte_array([0x33; 32]))
+            .payment_secret(PaymentSecret([0x22; 32]))
+            .duration_since_epoch(std::time::Duration::from_secs(1_700_000_000))
+            .min_final_cltv_expiry_delta(144);
+        match amount_msat {
+            Some(amt) => builder
+                .amount_milli_satoshis(amt)
+                .build_signed(sign)
+                .unwrap(),
+            None => builder.build_signed(sign).unwrap(),
+        }
+    }
+
+    #[test]
+    fn rounds_a_sub_sat_remainder_up() {
+        assert_eq!(
+            get_invoice_amount_sats(&invoice(Some(1_500)), None).unwrap(),
+            2
+        );
+        assert_eq!(get_invoice_amount_sats(&invoice(Some(1)), None).unwrap(), 1);
+        assert_eq!(
+            get_invoice_amount_sats(&invoice(Some(2_000)), None).unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn accepts_the_rounded_up_invoice_amount() {
+        assert_eq!(
+            get_invoice_amount_sats(&invoice(Some(1_500)), Some(2)).unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn rejects_an_amount_below_the_rounded_up_invoice_amount() {
+        assert!(matches!(
+            get_invoice_amount_sats(&invoice(Some(1_500)), Some(1)),
+            Err(ServiceError::ValidationError(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_an_amountless_invoice_without_an_amount() {
+        assert!(matches!(
+            get_invoice_amount_sats(&invoice(None), None),
+            Err(ServiceError::ValidationError(_))
+        ));
+    }
+}

@@ -121,6 +121,10 @@ pub(super) async fn prepare(
     .await
 }
 
+fn invoice_amount_sats(amount_msat: u64) -> u64 {
+    amount_msat.div_ceil(1000)
+}
+
 /// Sats-denominated Bolt11 prepare: `request.amount` (or the invoice's `amount_msat`)
 /// is in sats. Fetches the lightning fee for the user's amount, validates the
 /// receiver covers fees for `FeesIncluded` amountless invoices, and attaches a
@@ -138,7 +142,7 @@ async fn prepare_sats_denominated(
         .amount
         .or(invoice
             .amount_msat
-            .map(|msat| u128::from(msat).saturating_div(1000)))
+            .map(|msat| u128::from(invoice_amount_sats(msat))))
         .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
 
     // For FeesIncluded, estimate fee for user's full amount
@@ -226,12 +230,13 @@ async fn prepare_token_denominated(
     let total_u64: u64 = estimated_sats.try_into()?;
     // For fixed-amount invoices, the converted sats must cover invoice amount + fees.
     // For amountless invoices (send-all), just check fees are covered.
-    let min_required = if let Some(amount_msat) = invoice.amount_msat {
-        (amount_msat / 1000).saturating_add(lightning_fee_sats)
-    } else {
-        lightning_fee_sats
+    let insufficient = match invoice.amount_msat {
+        Some(amount_msat) => {
+            total_u64 < invoice_amount_sats(amount_msat).saturating_add(lightning_fee_sats)
+        }
+        None => total_u64 <= lightning_fee_sats,
     };
-    if total_u64 <= min_required {
+    if insufficient {
         return Err(SdkError::InvalidInput(
             "Token conversion amount too small to cover invoice amount and fees".to_string(),
         ));
@@ -254,12 +259,29 @@ async fn prepare_token_denominated(
 #[cfg(test)]
 mod tests {
     use super::super::test_helpers::*;
-    use super::validate_request;
+    use super::{invoice_amount_sats, validate_request};
     use crate::{ConversionOptions, ConversionType, error::SdkError};
     use macros::test_all;
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    // ---- Invoice msat to sats ----
+
+    #[test_all]
+    fn test_invoice_amount_sats_rounds_sub_sat_remainder_up() {
+        assert_eq!(invoice_amount_sats(1_500), 2);
+        assert_eq!(invoice_amount_sats(1_001), 2);
+        assert_eq!(invoice_amount_sats(1), 1);
+        assert_eq!(invoice_amount_sats(999), 1);
+    }
+
+    #[test_all]
+    fn test_invoice_amount_sats_keeps_whole_sats() {
+        assert_eq!(invoice_amount_sats(0), 0);
+        assert_eq!(invoice_amount_sats(1_000), 1);
+        assert_eq!(invoice_amount_sats(1_000_000), 1_000);
+    }
 
     // ---- Token identifier requires ToBitcoin conversion ----
 
