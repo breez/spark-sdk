@@ -527,6 +527,8 @@ impl TreeStore for PostgresTreeStore {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
 
+        self.acquire_write_lock(&tx).await?;
+
         let reservation = tx
             .query_opt(
                 "SELECT id FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
@@ -949,6 +951,8 @@ impl TreeStore for PostgresTreeStore {
     ) -> Result<LeavesReservation, TreeServiceError> {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
+
+        self.acquire_write_lock(&tx).await?;
 
         let reservation = tx
             .query_opt(
@@ -2547,6 +2551,128 @@ mod tests {
                 .iter()
                 .any(|l| l.id.to_string() == "locked_leaf"),
             "Spent leaf should not be Available"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cancel_reservation_blocked_by_write_lock() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        let leaf = create_test_tree_node("locked_leaf", 100);
+        fixture
+            .store
+            .add_leaves(std::slice::from_ref(&leaf))
+            .await
+            .unwrap();
+        let reservation = reserve_leaves(
+            &fixture.store,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+
+        let lock_key = fixture.store.lock_key;
+        let mut holder = fixture.store.pool.get().await.unwrap();
+        let holder_tx = holder.transaction().await.unwrap();
+        holder_tx
+            .execute("SELECT pg_advisory_xact_lock($1)", &[&lock_key])
+            .await
+            .unwrap();
+
+        let store = Arc::new(fixture.store);
+        let store_for_task = store.clone();
+        let res_id = reservation.id.clone();
+        let leaves_to_keep = reservation.leaves.clone();
+        let cancel_task = tokio::spawn(async move {
+            store_for_task
+                .cancel_reservation(&res_id, &leaves_to_keep)
+                .await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(
+            !cancel_task.is_finished(),
+            "cancel_reservation completed while advisory lock was held — \
+             the lock is not being acquired"
+        );
+
+        holder_tx.commit().await.unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), cancel_task)
+            .await
+            .expect("cancel_reservation did not complete after lock released")
+            .unwrap()
+            .unwrap();
+
+        let leaves = store.get_leaves().await.unwrap();
+        assert!(
+            leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "locked_leaf"),
+            "Cancelled leaf should be Available again"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_reservation_blocked_by_write_lock() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        let leaf = create_test_tree_node("locked_leaf", 100);
+        fixture
+            .store
+            .add_leaves(std::slice::from_ref(&leaf))
+            .await
+            .unwrap();
+        let reservation = reserve_leaves(
+            &fixture.store,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Swap,
+        )
+        .await
+        .unwrap();
+
+        let lock_key = fixture.store.lock_key;
+        let mut holder = fixture.store.pool.get().await.unwrap();
+        let holder_tx = holder.transaction().await.unwrap();
+        holder_tx
+            .execute("SELECT pg_advisory_xact_lock($1)", &[&lock_key])
+            .await
+            .unwrap();
+
+        let store = Arc::new(fixture.store);
+        let store_for_task = store.clone();
+        let res_id = reservation.id.clone();
+        let swap_output = create_test_tree_node("swap_output", 100);
+        let update_task = tokio::spawn(async move {
+            store_for_task
+                .update_reservation(&res_id, std::slice::from_ref(&swap_output), &[])
+                .await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(
+            !update_task.is_finished(),
+            "update_reservation completed while advisory lock was held — \
+             the lock is not being acquired"
+        );
+
+        holder_tx.commit().await.unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), update_task)
+            .await
+            .expect("update_reservation did not complete after lock released")
+            .unwrap()
+            .unwrap();
+
+        let leaves = store.get_leaves().await.unwrap();
+        assert!(
+            leaves
+                .reserved_for_swap
+                .iter()
+                .any(|l| l.id.to_string() == "swap_output"),
+            "Swap output should be reserved"
         );
     }
 

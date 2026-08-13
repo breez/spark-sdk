@@ -534,10 +534,13 @@ impl TreeStore for MysqlTreeStore {
         id: &LeavesReservationId,
         leaves_to_keep: &[TreeNode],
     ) -> Result<(), TreeServiceError> {
-        // Scoped to a single `reservation_id`; row-level FK + MVCC suffice.
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        self.cancel_reservation_inner(&mut conn, id, leaves_to_keep)
-            .await?;
+        self.acquire_write_lock(&mut conn).await?;
+        let result = self
+            .cancel_reservation_inner(&mut conn, id, leaves_to_keep)
+            .await;
+        self.release_write_lock_quiet(&mut conn).await;
+        result?;
         self.notify_balance_change();
         Ok(())
     }
@@ -697,11 +700,13 @@ impl TreeStore for MysqlTreeStore {
         reserved_leaves: &[TreeNode],
         change_leaves: &[TreeNode],
     ) -> Result<LeavesReservation, TreeServiceError> {
-        // Scoped to a single `reservation_id`; row-level FK + MVCC suffice.
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        let reservation = self
+        self.acquire_write_lock(&mut conn).await?;
+        let result = self
             .update_reservation_inner(&mut conn, reservation_id, reserved_leaves, change_leaves)
-            .await?;
+            .await;
+        self.release_write_lock_quiet(&mut conn).await;
+        let reservation = result?;
         trace!(
             "Updated reservation {}: reserved {} leaves, added {} change leaves",
             reservation_id,
@@ -2542,6 +2547,142 @@ mod tests {
                 .iter()
                 .any(|l| l.id.to_string() == "locked_leaf"),
             "Spent leaf should not be Available"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cancel_reservation_blocked_by_write_lock() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        let leaf = create_test_tree_node("locked_leaf", 100);
+        fixture
+            .store
+            .add_leaves(std::slice::from_ref(&leaf))
+            .await
+            .unwrap();
+        let reservation = reserve_leaves(
+            &fixture.store,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+
+        let lock_name = fixture.store.lock_name.clone();
+        let mut holder = fixture.store.pool.get_conn().await.unwrap();
+        let acquired: Option<i64> = holder
+            .exec_first(
+                "SELECT GET_LOCK(?, ?)",
+                (lock_name.as_str(), WRITE_LOCK_TIMEOUT_SECS),
+            )
+            .await
+            .unwrap();
+        assert_eq!(acquired, Some(1), "holder failed to acquire the lock");
+
+        let store = Arc::new(fixture.store);
+        let store_for_task = store.clone();
+        let res_id = reservation.id.clone();
+        let leaves_to_keep = reservation.leaves.clone();
+        let cancel_task = tokio::spawn(async move {
+            store_for_task
+                .cancel_reservation(&res_id, &leaves_to_keep)
+                .await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(
+            !cancel_task.is_finished(),
+            "cancel_reservation completed while named lock was held — \
+             the lock is not being acquired"
+        );
+
+        holder
+            .exec_drop("SELECT RELEASE_LOCK(?)", (lock_name.as_str(),))
+            .await
+            .unwrap();
+        drop(holder);
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), cancel_task)
+            .await
+            .expect("cancel_reservation did not complete after lock released")
+            .unwrap()
+            .unwrap();
+
+        let leaves = store.get_leaves().await.unwrap();
+        assert!(
+            leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "locked_leaf"),
+            "Cancelled leaf should be Available again"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_reservation_blocked_by_write_lock() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        let leaf = create_test_tree_node("locked_leaf", 100);
+        fixture
+            .store
+            .add_leaves(std::slice::from_ref(&leaf))
+            .await
+            .unwrap();
+        let reservation = reserve_leaves(
+            &fixture.store,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Swap,
+        )
+        .await
+        .unwrap();
+
+        let lock_name = fixture.store.lock_name.clone();
+        let mut holder = fixture.store.pool.get_conn().await.unwrap();
+        let acquired: Option<i64> = holder
+            .exec_first(
+                "SELECT GET_LOCK(?, ?)",
+                (lock_name.as_str(), WRITE_LOCK_TIMEOUT_SECS),
+            )
+            .await
+            .unwrap();
+        assert_eq!(acquired, Some(1), "holder failed to acquire the lock");
+
+        let store = Arc::new(fixture.store);
+        let store_for_task = store.clone();
+        let res_id = reservation.id.clone();
+        let swap_output = create_test_tree_node("swap_output", 100);
+        let update_task = tokio::spawn(async move {
+            store_for_task
+                .update_reservation(&res_id, std::slice::from_ref(&swap_output), &[])
+                .await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(
+            !update_task.is_finished(),
+            "update_reservation completed while named lock was held — \
+             the lock is not being acquired"
+        );
+
+        holder
+            .exec_drop("SELECT RELEASE_LOCK(?)", (lock_name.as_str(),))
+            .await
+            .unwrap();
+        drop(holder);
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), update_task)
+            .await
+            .expect("update_reservation did not complete after lock released")
+            .unwrap()
+            .unwrap();
+
+        let leaves = store.get_leaves().await.unwrap();
+        assert!(
+            leaves
+                .reserved_for_swap
+                .iter()
+                .any(|l| l.id.to_string() == "swap_output"),
+            "Swap output should be reserved"
         );
     }
 

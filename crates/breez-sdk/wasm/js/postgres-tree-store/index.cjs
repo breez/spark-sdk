@@ -143,9 +143,8 @@ class PostgresTreeStore {
   }
 
   /**
-   * Run a function inside a transaction with the advisory lock. Reserved for
-   * operations whose correctness depends on serializing the available-leaf set
-   * (`tryReserveLeaves`, `setLeaves`).
+   * Run a function inside a transaction with the advisory lock. Used by every
+   * operation that mutates the leaf set or its reservations.
    * @param {function(import('pg').PoolClient): Promise<T>} fn
    * @returns {Promise<T>}
    * @template T
@@ -171,9 +170,8 @@ class PostgresTreeStore {
 
   /**
    * Run a function inside a transaction without the advisory lock. Used by
-   * operations scoped to a single reservation_id (`addLeaves`,
-   * `cancelReservation`, `updateReservation`) where MVCC + row-level locks
-   * suffice and the global lock would only add contention.
+   * `addLeaves` and by read-only queries (`trySelectLeaves`), where MVCC +
+   * row-level locks suffice and the global lock would only add contention.
    * @param {function(import('pg').PoolClient): Promise<T>} fn
    * @returns {Promise<T>}
    * @template T
@@ -426,7 +424,7 @@ class PostgresTreeStore {
    */
   async cancelReservation(id, leavesToKeep) {
     try {
-      await this._withTransaction(async (client) => {
+      await this._withWriteTransaction(async (client) => {
         const res = await client.query(
           "SELECT id FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
           [this.identity, id]
@@ -779,7 +777,7 @@ class PostgresTreeStore {
    */
   async updateReservation(reservationId, reservedLeaves, changeLeaves) {
     try {
-      return await this._withTransaction(async (client) => {
+      return await this._withWriteTransaction(async (client) => {
         // Check if reservation exists
         const res = await client.query(
           "SELECT id FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",

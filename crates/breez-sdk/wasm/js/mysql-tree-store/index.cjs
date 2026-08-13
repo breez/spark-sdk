@@ -172,8 +172,8 @@ class MysqlTreeStore {
 
   /**
    * Run a function inside a transaction, holding the named write lock for the
-   * duration. Reserved for operations whose correctness depends on serializing
-   * the available-leaf set (`tryReserveLeaves`, `setLeaves`).
+   * duration. Used by every operation that mutates the leaf set or its
+   * reservations.
    * @param {function(import('mysql2/promise').PoolConnection): Promise<T>} fn
    * @returns {Promise<T>}
    * @template T
@@ -213,9 +213,8 @@ class MysqlTreeStore {
 
   /**
    * Run a function inside a transaction without the advisory lock. Used by
-   * operations scoped to a single reservation_id (`addLeaves`,
-   * `cancelReservation`, `updateReservation`) where row-level FK + InnoDB MVCC
-   * suffice and the global lock would only add contention.
+   * `addLeaves` and by read-only queries (`trySelectLeaves`), where row-level
+   * FK + InnoDB MVCC suffice and the global lock would only add contention.
    * @param {function(import('mysql2/promise').PoolConnection): Promise<T>} fn
    * @returns {Promise<T>}
    * @template T
@@ -426,7 +425,7 @@ class MysqlTreeStore {
 
   async cancelReservation(id, leavesToKeep) {
     try {
-      await this._withTransaction(async (conn) => {
+      await this._withWriteTransaction(async (conn) => {
         const [existsRows] = await conn.query(
           "SELECT id FROM brz_tree_reservations WHERE user_id = ? AND id = ?",
           [this.identity, id]
@@ -725,7 +724,7 @@ class MysqlTreeStore {
 
   async updateReservation(reservationId, reservedLeaves, changeLeaves) {
     try {
-      return await this._withTransaction(async (conn) => {
+      return await this._withWriteTransaction(async (conn) => {
         const [existsRows] = await conn.query(
           "SELECT id FROM brz_tree_reservations WHERE user_id = ? AND id = ?",
           [this.identity, reservationId]
