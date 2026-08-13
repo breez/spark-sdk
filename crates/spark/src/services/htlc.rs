@@ -161,15 +161,7 @@ impl HtlcService {
         filter: QueryHtlcFilter,
         paging: PagingFilter,
     ) -> Result<PagingResult<PreimageRequestWithTransfer>, ServiceError> {
-        let payment_hashes = filter
-            .payment_hashes
-            .iter()
-            .map(|h| {
-                hex::decode(h)
-                    .map_err(|_| ServiceError::InvalidPaymentHash(h.to_string()))
-                    .unwrap()
-            })
-            .collect();
+        let payment_hashes = decode_payment_hashes(&filter.payment_hashes)?;
 
         let response = self
             .operator_pool
@@ -210,5 +202,43 @@ impl HtlcService {
             }
         };
         Ok(transactions)
+    }
+}
+
+fn decode_payment_hashes(payment_hashes: &[String]) -> Result<Vec<Vec<u8>>, ServiceError> {
+    payment_hashes
+        .iter()
+        .map(|h| hex::decode(h).map_err(|_| ServiceError::InvalidPaymentHash(h.clone())))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_payment_hashes;
+    use crate::services::ServiceError;
+
+    #[test]
+    fn decodes_hex_payment_hashes() {
+        let hash = "a".repeat(64);
+        assert_eq!(
+            decode_payment_hashes(std::slice::from_ref(&hash)).unwrap(),
+            vec![hex::decode(&hash).unwrap()]
+        );
+    }
+
+    #[test]
+    fn rejects_a_non_hex_payment_hash() {
+        assert!(matches!(
+            decode_payment_hashes(&["zz".to_string()]),
+            Err(ServiceError::InvalidPaymentHash(h)) if h == "zz"
+        ));
+    }
+
+    #[test]
+    fn rejects_an_odd_length_payment_hash() {
+        assert!(matches!(
+            decode_payment_hashes(&["abc".to_string()]),
+            Err(ServiceError::InvalidPaymentHash(_))
+        ));
     }
 }
