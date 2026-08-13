@@ -55,6 +55,20 @@ const signPackage = async (
       })
       break
     }
+    case UnsignedTransferPackage_Tags.TokenBatch: {
+      const { prepareTokenTransaction, totals, isSwap } = unsigned.inner
+      if (isSwap) {
+        console.log('Approve combining token outputs before the batch is sent')
+      } else {
+        for (const total of totals) {
+          console.log(`Approve sending ${total.amount} of token ${total.tokenIdentifier}`)
+        }
+      }
+      signature = new TransferSignature.Token({
+        signed: await signer.prepareTokenTransaction(prepareTokenTransaction)
+      })
+      break
+    }
   }
 
   const signedPackage = { unsigned, signature }
@@ -89,6 +103,10 @@ const sendWithClientSigning = async (
     if (publishResponse.tag === PublishSignedTransferPackageResponse_Tags.SwapCompleted) {
       // The wallet's funds were re-shaped first: build the payment again
       continue
+    }
+    // Only a batch package pays several recipients at once
+    if (publishResponse.tag === PublishSignedTransferPackageResponse_Tags.PaymentsSent) {
+      throw new Error('unexpected batch response for a single payment')
     }
     return publishResponse.inner.payment
   }

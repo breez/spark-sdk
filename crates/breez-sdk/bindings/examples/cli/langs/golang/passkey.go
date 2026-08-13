@@ -106,8 +106,8 @@ func (f *FilePrfProvider) IsSupported() (bool, error) {
 	return true, nil
 }
 
-func (f *FilePrfProvider) CreatePasskey(excludeCredentials [][]byte) (breez_sdk_spark.PasskeyCredential, error) {
-	return breez_sdk_spark.PasskeyCredential{}, fmt.Errorf(
+func (f *FilePrfProvider) CreatePasskey(excludeCredentials [][]byte, salts []string) (breez_sdk_spark.CreatePasskeyOutput, error) {
+	return breez_sdk_spark.CreatePasskeyOutput{}, fmt.Errorf(
 		"file-backed PRF provider does not implement create-credential; " +
 			"use sign-in by label instead")
 }
@@ -138,8 +138,8 @@ func (p *notYetSupportedProvider) IsSupported() (bool, error) {
 	return false, p.notYet()
 }
 
-func (p *notYetSupportedProvider) CreatePasskey(_ [][]byte) (breez_sdk_spark.PasskeyCredential, error) {
-	return breez_sdk_spark.PasskeyCredential{}, p.notYet()
+func (p *notYetSupportedProvider) CreatePasskey(_ [][]byte, _ []string) (breez_sdk_spark.CreatePasskeyOutput, error) {
+	return breez_sdk_spark.CreatePasskeyOutput{}, p.notYet()
 }
 
 func (p *notYetSupportedProvider) CheckDomainAssociation() (breez_sdk_spark.DomainAssociation, error) {

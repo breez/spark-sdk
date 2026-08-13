@@ -1,4 +1,4 @@
-import { type ConfigPlugin, withDangerousMod } from '@expo/config-plugins';
+import { type ConfigPlugin, withDangerousMod } from 'expo/config-plugins';
 import * as path from 'path';
 import * as fs from 'fs';
 import { execSync } from 'child_process';

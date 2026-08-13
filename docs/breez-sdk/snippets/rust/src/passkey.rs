@@ -1,8 +1,8 @@
 use anyhow::Result;
 use breez_sdk_spark::passkey::{
-    ConnectWithPasskeyRequest, DeriveSeedsOutput, DeriveSeedsRequest, DomainAssociation, ErrorKind,
-    PasskeyAvailability, PasskeyClient, PasskeyCredential, PrfProvider, PrfProviderError,
-    RegisterRequest, SignInRequest, SignInResponse, Wallet,
+    ConnectWithPasskeyRequest, CreatePasskeyOutput, DeriveSeedsOutput, DeriveSeedsRequest,
+    DomainAssociation, ErrorKind, PasskeyAvailability, PasskeyClient, PrfProvider,
+    PrfProviderError, RegisterRequest, SignInRequest, SignInResponse, Wallet,
 };
 use breez_sdk_spark::{connect, default_config, ConnectRequest, Network};
 use std::sync::Arc;
@@ -29,8 +29,13 @@ impl PrfProvider for CustomPrfProvider {
     async fn create_passkey(
         &self,
         _exclude_credentials: Vec<Vec<u8>>,
-    ) -> Result<PasskeyCredential, PrfProviderError> {
+        _salts: Vec<String>,
+    ) -> Result<CreatePasskeyOutput, PrfProviderError> {
         // Register a credential and return its ID plus attestation.
+        //
+        // Return `seeds: None` unless the platform evaluated PRF during the
+        // create ceremony and gave one output per salt. Seeds returned here
+        // must equal what `derive_seeds` returns for the same salts.
         todo!("Implement registration via WebAuthn create() / native API")
     }
 

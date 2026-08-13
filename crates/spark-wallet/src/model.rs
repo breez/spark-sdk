@@ -5,6 +5,7 @@ use platform_utils::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use spark::{
     Network,
+    address::SparkAddress,
     operator::rpc::spark::{
         InvoiceResponse, InvoiceStatus, WalletSetting,
         invoice_response::TransferType as InvoiceTransferType,
@@ -114,14 +115,14 @@ impl WalletTransfer {
             total_value_sat: value.total_value,
             expiry_time: value
                 .expiry_time
-                .map(|t| UNIX_EPOCH + Duration::from_secs(t)),
+                .and_then(|t| UNIX_EPOCH.checked_add(Duration::from_secs(t))),
             leaves: value.leaves.into_iter().map(Into::into).collect(),
             created_at: value
                 .created_time
-                .map(|t| UNIX_EPOCH + Duration::from_secs(t)),
+                .and_then(|t| UNIX_EPOCH.checked_add(Duration::from_secs(t))),
             updated_at: value
                 .updated_time
-                .map(|t| UNIX_EPOCH + Duration::from_secs(t)),
+                .and_then(|t| UNIX_EPOCH.checked_add(Duration::from_secs(t))),
             transfer_type: value.transfer_type,
             direction,
             user_request: ssp_transfer.and_then(|t| t.user_request),
@@ -307,6 +308,25 @@ pub struct ListTokenTransactionsRequest {
 pub struct ListTransfersRequest {
     pub paging: Option<PagingFilter>,
     pub transfer_ids: Vec<TransferId>,
+}
+
+/// Who a token transfer pays: a Spark address directly, or a Spark invoice the
+/// wallet resolves into the same.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Debug)]
+pub enum TokenRecipient {
+    Address {
+        token_id: String,
+        /// Amount in the token's base units.
+        amount: u128,
+        receiver_address: SparkAddress,
+    },
+    Invoice {
+        invoice: String,
+        /// Amount in the token's base units. Required when the invoice encodes no
+        /// amount, ignored when it does.
+        amount: Option<u128>,
+    },
 }
 
 #[derive(Clone, Debug)]

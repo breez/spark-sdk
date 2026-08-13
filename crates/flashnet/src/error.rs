@@ -32,6 +32,27 @@ pub enum FlashnetError {
     #[error("Wallet: {0}")]
     Wallet(#[from] spark_wallet::SparkWalletError),
 
+    /// Success was claimed but the response carries no usable amount or
+    /// outbound transfer id.
+    #[error("Invalid swap response: {reason}")]
+    InvalidSwapResponse { reason: String },
+
+    /// The delivered amount is below the floor carried in the signed intent.
+    #[error("Swap delivered {amount_out}, below the signed minimum {min_amount_out}")]
+    SlippageViolation {
+        amount_out: u128,
+        min_amount_out: u128,
+    },
+
+    /// An authentication challenge in a format the client does not recognise.
+    /// The identity key applies no domain separation, so the format check is
+    /// what keeps a challenge distinct from anything else signed with it.
+    #[error("Invalid authentication challenge: {reason}")]
+    InvalidChallenge { reason: String },
+    /// An accepted swap delivered an asset other than the one signed for.
+    #[error("Swap delivered asset {delivered}, expected {expected}")]
+    UnexpectedAsset { delivered: String, expected: String },
+
     #[error("Generic: {0}")]
     Generic(String),
 }

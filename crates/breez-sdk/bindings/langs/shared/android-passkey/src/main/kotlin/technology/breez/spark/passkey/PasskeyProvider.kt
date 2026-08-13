@@ -1,6 +1,7 @@
 package technology.breez.spark.passkey
 
 import android.app.Activity
+import breez_sdk_spark.CreatePasskeyOutput
 import breez_sdk_spark.DeriveSeedsOutput
 import breez_sdk_spark.DeriveSeedsRequest
 import breez_sdk_spark.DomainAssociation
@@ -135,17 +136,32 @@ public class PasskeyProvider(
     }
 
     /**
-     * Register a new passkey with PRF support. One ceremony, no derivation.
+     * Registers with `prf.eval` requested, so an authenticator that
+     * evaluates PRF at create returns the seeds here and the caller needs
+     * no assertion.
      *
      * `user.id` is never host-supplied: the core mints a fresh random 16-byte
      * handle and returns it as [PasskeyCredential.userId]. Pass already-
      * registered IDs in `excludeCredentials` so the platform refuses a
-     * duplicate even after reinstall.
+     * duplicate even after reinstall. Credential Manager reports a credential it has not
+     * finished indexing as absent, so removing that assertion removes the
+     * only step that can trip over it.
+     *
+     * `seeds` stays null on authenticators that report PRF support without
+     * evaluating, which is every pre-eval-at-create implementation. The
+     * caller then derives as it always has.
      */
-    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): PasskeyCredential {
+    override suspend fun createPasskey(
+        excludeCredentials: List<ByteArray>,
+        salts: List<String>,
+    ): CreatePasskeyOutput {
         try {
-            val c = core.register(excludeCredentials)
-            return PasskeyCredential(c.credentialId, c.userId, c.aaguid, c.backupEligible)
+            val registration = core.register(excludeCredentials, salts)
+            val c = registration.credential
+            return CreatePasskeyOutput(
+                PasskeyCredential(c.credentialId, c.userId, c.aaguid, c.backupEligible),
+                registration.seeds,
+            )
         } catch (e: CredentialManagerPrfCoreException) {
             throw e.toPrfProviderException()
         }

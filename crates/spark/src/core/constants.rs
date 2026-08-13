@@ -2,13 +2,14 @@ use bitcoin::{
     Sequence,
     relative::{Height, LockTime},
 };
-use tracing::trace;
+use tracing::{trace, warn};
 
 const SPARK_SEQUENCE_FLAG: u32 = 1 << 30;
 const TIMELOCK_MASK: u32 = 0x0000_FFFF;
 const INITIAL_TIME_LOCK: u16 = 2000;
 const TIME_LOCK_INTERVAL: u16 = 100;
 const DIRECT_TIME_LOCK_OFFSET: u16 = 50;
+const MAX_TIME_LOCK: u16 = INITIAL_TIME_LOCK + DIRECT_TIME_LOCK_OFFSET;
 const DIRECT_HTLC_TIME_LOCK_OFFSET: u16 = 85;
 const HTLC_TIME_LOCK_OFFSET: u16 = 70;
 
@@ -27,13 +28,26 @@ pub fn initial_zero_timelock_sequence() -> (Sequence, Sequence) {
     (to_sequence(0, 0), to_sequence(DIRECT_TIME_LOCK_OFFSET, 0))
 }
 
-pub fn current_sequence(current_sequence: Sequence) -> (Sequence, Sequence) {
-    let timelock = current_sequence.to_consensus_u32() as u16;
+/// Reads the block-height timelock out of an untrusted sequence. `None` for a
+/// disabled or time-based lock, or a value above `MAX_TIME_LOCK`.
+pub(crate) fn checked_timelock(sequence: Sequence) -> Option<u16> {
+    if !sequence.is_height_locked() {
+        return None;
+    }
+    let timelock = (sequence.to_consensus_u32() & TIMELOCK_MASK) as u16;
+    (timelock <= MAX_TIME_LOCK).then_some(timelock)
+}
+
+/// `None` when the direct offset does not fit the 16-bit timelock field. Left
+/// unchecked the addition wraps in release builds and panics in debug ones.
+pub fn current_sequence(current_sequence: Sequence) -> Option<(Sequence, Sequence)> {
+    let timelock = (current_sequence.to_consensus_u32() & TIMELOCK_MASK) as u16;
+    let direct_timelock = timelock.checked_add(DIRECT_TIME_LOCK_OFFSET)?;
     let spark_sequence_flag = spark_sequence_flag(current_sequence);
-    (
+    Some((
         current_sequence,
-        to_sequence(timelock + DIRECT_TIME_LOCK_OFFSET, spark_sequence_flag),
-    )
+        to_sequence(direct_timelock, spark_sequence_flag),
+    ))
 }
 
 /// Enforces timelock alignment to `TIME_LOCK_INTERVAL` (100 blocks) by rounding down.
@@ -46,18 +60,10 @@ pub fn current_sequence(current_sequence: Sequence) -> (Sequence, Sequence) {
 /// - 1900 -> 1900 (already aligned)
 /// - 1899 -> 1800
 pub fn enforce_timelock(sequence: Sequence) -> Sequence {
-    let current_sequence_num = sequence.to_consensus_u32();
-
-    // Extract lower 16 bits (timelock value)
-    let timelock = (current_sequence_num & TIMELOCK_MASK) as u16;
+    let timelock = (sequence.to_consensus_u32() & TIMELOCK_MASK) as u16;
 
     // Round down to nearest TIME_LOCK_INTERVAL
-    let remainder = timelock % TIME_LOCK_INTERVAL;
-    let enforced_timelock = if remainder != 0 {
-        timelock - remainder
-    } else {
-        timelock
-    };
+    let enforced_timelock = timelock - (timelock % TIME_LOCK_INTERVAL);
 
     let spark_flag = spark_sequence_flag(sequence);
     to_sequence(enforced_timelock, spark_flag)
@@ -142,11 +148,13 @@ fn to_sequence(blocks: u16, spark_sequence_flag: u32) -> Sequence {
 
 fn check_next_timelock(current_sequence: Sequence) -> Option<u16> {
     trace!("Current sequence: {current_sequence:?}");
-    let current_sequence_num = current_sequence.to_consensus_u32();
-
-    // Extract only the lower 16 bits (timelock value)
-    // Upper bits including SPARK_SEQUENCE_FLAG are ignored for timelock calculation
-    let timelock = (current_sequence_num & TIMELOCK_MASK) as u16;
+    let timelock = checked_timelock(current_sequence).unwrap_or_else(|| {
+        warn!(
+            "Deriving the next sequence from an unexpected timelock {:#x}",
+            current_sequence.to_consensus_u32()
+        );
+        (current_sequence.to_consensus_u32() & TIMELOCK_MASK) as u16
+    });
 
     timelock.checked_sub(TIME_LOCK_INTERVAL).or_else(|| {
         trace!(
@@ -305,6 +313,89 @@ mod tests {
 
         let next = next_sequence(cpfp_sequence);
         assert!(next.is_none());
+    }
+
+    /// The claim path applies `enforce_timelock` before `current_sequence`, so a
+    /// sequence of 0xFFFF reaches the direct offset as 65500. Left unchecked the
+    /// addition wrapped to 14 in release builds and panicked in debug ones.
+    #[test_all]
+    fn rejects_a_timelock_whose_direct_offset_would_wrap() {
+        let sequence = Sequence::from_consensus(0xFFFF);
+        assert!(current_sequence(enforce_timelock(sequence)).is_none());
+    }
+
+    #[test_all]
+    fn accepts_a_timelock_at_the_representable_boundary() {
+        let sequence = Sequence::from_consensus(u32::from(u16::MAX - DIRECT_TIME_LOCK_OFFSET));
+        assert!(current_sequence(sequence).is_some());
+    }
+
+    #[test_all]
+    fn rejects_a_timelock_one_past_the_representable_boundary() {
+        let sequence = Sequence::from_consensus(u32::from(u16::MAX - DIRECT_TIME_LOCK_OFFSET) + 1);
+        assert!(current_sequence(sequence).is_none());
+    }
+
+    /// A timelock above the protocol maximum is reported by the sanity check, not
+    /// rejected here: the arithmetic still has to produce a usable pair so the
+    /// claim can proceed.
+    #[test_all]
+    fn accepts_a_timelock_above_the_protocol_max() {
+        let sequence = Sequence::from_consensus(u32::from(MAX_TIME_LOCK) + 1);
+        assert!(current_sequence(sequence).is_some());
+        assert!(checked_timelock(sequence).is_none());
+    }
+
+    #[test_all]
+    fn accepts_a_spark_flagged_sequence() {
+        let sequence = Sequence::from_consensus(u32::from(INITIAL_TIME_LOCK) | SPARK_SEQUENCE_FLAG);
+        assert!(current_sequence(sequence).is_some());
+        assert!(checked_timelock(sequence).is_some());
+    }
+
+    #[test_all]
+    fn accepts_a_zero_timelock() {
+        assert_eq!(checked_timelock(Sequence::from_consensus(0)), Some(0));
+    }
+
+    /// `check_next_timelock` warns on anything `checked_timelock` rejects, so
+    /// every sequence the protocol itself produces has to pass. Otherwise a
+    /// healthy wallet logs a warning on each renewal.
+    #[test_all]
+    fn every_protocol_sequence_passes_the_timelock_check() {
+        let (mut cpfp, direct) = initial_timelock_sequence();
+        assert!(checked_timelock(cpfp).is_some());
+        assert!(checked_timelock(direct).is_some());
+
+        while let Some((next_cpfp, next_direct)) = next_sequence(cpfp) {
+            assert!(checked_timelock(next_cpfp).is_some(), "cpfp {next_cpfp}");
+            assert!(
+                checked_timelock(next_direct).is_some(),
+                "direct {next_direct}"
+            );
+            // The HTLC ladder branches off the same sequence at wider offsets.
+            let (htlc_cpfp, htlc_direct) = next_lightning_htlc_sequence(cpfp).unwrap();
+            assert!(checked_timelock(htlc_cpfp).is_some(), "htlc {htlc_cpfp}");
+            assert!(
+                checked_timelock(htlc_direct).is_some(),
+                "htlc direct {htlc_direct}"
+            );
+            cpfp = next_cpfp;
+        }
+    }
+
+    #[test_all]
+    fn rejects_a_time_based_timelock() {
+        let sequence = Sequence::from_consensus(u32::from(INITIAL_TIME_LOCK) | (1 << 22));
+        assert!(checked_timelock(sequence).is_none());
+    }
+
+    /// `is_zero_timelock` truncates with `as u16` and so cannot see the disable
+    /// bit: a sequence with no relative locktime at all reads as a zero timelock
+    /// and silently drops the direct refund tx from the claim.
+    #[test_all]
+    fn rejects_a_disabled_sequence_that_reads_as_a_zero_timelock() {
+        assert!(checked_timelock(Sequence::from_consensus(1 << 31)).is_none());
     }
 
     #[test_all]

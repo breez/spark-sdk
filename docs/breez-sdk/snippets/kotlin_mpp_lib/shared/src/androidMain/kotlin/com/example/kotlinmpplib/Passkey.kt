@@ -6,8 +6,8 @@ import technology.breez.spark.passkey.PasskeyClient
 import technology.breez.spark.passkey.PasskeyProvider
 
 // ANCHOR: implement-prf-provider
-// Implement PrfProvider for a custom authenticator. Only deriveSeeds and
-// isSupported are required.
+// Implement PrfProvider for a custom authenticator. Every method is
+// required: the generated interface has no defaults, unlike the Rust trait.
 class CustomPrfProvider : PrfProvider {
     override suspend fun deriveSeeds(request: DeriveSeedsRequest): DeriveSeedsOutput {
         // Return one 32-byte PRF output per salt, in input order.
@@ -18,8 +18,15 @@ class CustomPrfProvider : PrfProvider {
         TODO("Check platform passkey availability")
     }
 
-    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): PasskeyCredential {
+    override suspend fun createPasskey(
+        excludeCredentials: List<ByteArray>,
+        salts: List<String>,
+    ): CreatePasskeyOutput {
         // Register a credential and return its ID plus attestation.
+        //
+        // Return `seeds = null` unless the platform evaluated PRF during the
+        // create ceremony and gave one output per salt. Seeds returned here
+        // must equal what `deriveSeeds` returns for the same salts.
         TODO("Implement registration via native passkey API")
     }
 

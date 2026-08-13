@@ -1,5 +1,12 @@
 dkg:
   min_available_keys: 100
+knobs:
+  # Static knobs apply because the entrypoint runs the operator with `-local`.
+  static_values:
+    # A full-size round (1000 keys) costs minutes of CPU when several clusters
+    # run at once. Tests get their keyshares from the committed seed, so this
+    # only bounds the cost of a replenishment round after a pool drains.
+    spark.so.dkg.batch_size: 300
 bitcoind:
   regtest:
     network: regtest
@@ -7,6 +14,10 @@ bitcoind:
     rpcuser: rpcuser
     rpcpassword: rpcpassword
     zmqpubrawblock: tcp://127.0.0.1:28332
+    # Tests confirm a deposit with a single block. The operator default is 3,
+    # which no test mines up to, so a non-static deposit would never be marked
+    # available.
+    non_static_confirmation_threshold: 1
 token:
   disconnect_lrc20_node: true
 database:

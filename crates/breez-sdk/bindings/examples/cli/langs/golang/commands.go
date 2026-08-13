@@ -54,6 +54,7 @@ var CommandNames = []string{
 	"get-user-settings",
 	"set-user-settings",
 	"get-spark-status",
+	"pay-batch",
 }
 
 // BuildCommandRegistry returns a map of command name → Command.
@@ -88,6 +89,7 @@ func BuildCommandRegistry() map[string]Command {
 		"get-user-settings":                    {Name: "get-user-settings", Description: "Get user settings", Run: handleGetUserSettings},
 		"set-user-settings":                    {Name: "set-user-settings", Description: "Update user settings", Run: handleSetUserSettings},
 		"get-spark-status":                     {Name: "get-spark-status", Description: "Get Spark network service status", Run: handleGetSparkStatus},
+		"pay-batch":                            {Name: "pay-batch", Description: "Pay several recipients with one token transaction", Run: handlePayBatch},
 	}
 }
 
@@ -554,6 +556,95 @@ func handlePay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []stri
 		return err
 	}
 	printValue(result)
+	return nil
+}
+
+// --- pay-batch ---
+
+func parseBatchRecipient(s string) (breez_sdk_spark.BatchRecipient, error) {
+	parts := strings.Split(s, ":")
+	if len(parts) > 3 {
+		return breez_sdk_spark.BatchRecipient{}, fmt.Errorf("invalid recipient '%s'. Expected 'payment_request[:amount[:token_identifier]]'", s)
+	}
+
+	paymentRequest := parts[0]
+	if paymentRequest == "" {
+		return breez_sdk_spark.BatchRecipient{}, fmt.Errorf("missing payment request in '%s'", s)
+	}
+
+	recipient := breez_sdk_spark.BatchRecipient{
+		PaymentRequest: paymentRequest,
+	}
+
+	if len(parts) > 1 && parts[1] != "" {
+		amount, ok := new(big.Int).SetString(parts[1], 10)
+		if !ok {
+			return breez_sdk_spark.BatchRecipient{}, fmt.Errorf("invalid amount '%s': must be a valid number", parts[1])
+		}
+		recipient.Amount = &amount
+	}
+
+	if len(parts) > 2 && parts[2] != "" {
+		tokenId := parts[2]
+		recipient.TokenIdentifier = &tokenId
+	}
+
+	return recipient, nil
+}
+
+func handlePayBatch(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []string) error {
+	fs := flag.NewFlagSet("pay-batch", flag.ContinueOnError)
+	var recipientArgs stringSliceFlag
+	fs.Var(&recipientArgs, "r", "Recipient: payment_request[:amount[:token_identifier]] (repeatable)")
+	fs.Var(&recipientArgs, "recipient", "Recipient: payment_request[:amount[:token_identifier]]")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if len(recipientArgs) == 0 {
+		fmt.Println("Usage: pay-batch -r <recipient> [-r <recipient> ...]")
+		fmt.Println("  Each recipient: payment_request[:amount[:token_identifier]]")
+		return nil
+	}
+
+	var recipients []breez_sdk_spark.BatchRecipient
+	for _, raw := range recipientArgs {
+		r, err := parseBatchRecipient(raw)
+		if err != nil {
+			return err
+		}
+		recipients = append(recipients, r)
+	}
+
+	prepareResponse, err := sdk.PrepareSendBatch(breez_sdk_spark.PrepareSendBatchRequest{
+		Recipients: recipients,
+	})
+	if err = liftError(err); err != nil {
+		return err
+	}
+
+	for _, total := range prepareResponse.Totals {
+		asset := "sats"
+		if total.TokenIdentifier != nil {
+			asset = *total.TokenIdentifier
+		}
+		fmt.Printf("Sending %v base units of %s\n", total.Amount, asset)
+	}
+	line, err := readlineWithDefault(rl, "Do you want to continue (y/n): ", "y")
+	if err != nil {
+		return err
+	}
+	if strings.ToLower(strings.TrimSpace(line)) != "y" {
+		return fmt.Errorf("payment cancelled")
+	}
+
+	response, err := sdk.SendBatch(breez_sdk_spark.SendBatchRequest{
+		PrepareResponse: prepareResponse,
+	})
+	if err = liftError(err); err != nil {
+		return err
+	}
+	printValue(response.Payments)
 	return nil
 }
 

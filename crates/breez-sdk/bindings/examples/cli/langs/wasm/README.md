@@ -86,7 +86,7 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 
 **Wallet**: `get-info`, `sync`, `get-payment`, `list-payments`, `recommended-fees`
 
-**Payments**: `receive`, `pay`, `lnurl-pay`, `lnurl-withdraw`, `lnurl-auth`, `claim-htlc-payment`
+**Payments**: `receive`, `pay`, `pay-batch`, `lnurl-pay`, `lnurl-withdraw`, `lnurl-auth`, `claim-htlc-payment`
 
 **On-chain**: `claim-deposit`, `refund-deposit`, `list-unclaimed-deposits`, `buy-bitcoin`
 

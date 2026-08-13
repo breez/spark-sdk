@@ -41,7 +41,11 @@ Browsers and native authenticators expose different error semantics, so the reco
 | Path | OS prompts |
 |---|---|
 | Returning user | **1** (one assertion derives master + label) |
-| New user | **2** (1 create, 1 assertion) |
+| New user | **1** (the create ceremony derives master + label) |
+
+A new user costs **2** (1 create, 1 assertion) on authenticators that
+report PRF support without evaluating it during creation, where the SDK
+falls back to a follow-up assertion.
 
 **Web:** where the browser supports immediate mediation ({{#name PasskeyClient.supports_immediate_mediation}}), a single "Use Passkey" button; otherwise "Create a new passkey" and "Sign in with a passkey" as separate actions. {{#name PasskeyClient.connect_with_passkey}} is not surfaced on the WASM target.
 

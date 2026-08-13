@@ -82,6 +82,12 @@ spark-itest-pg:
 spark-itest-mysql:
 	USE_MYSQL_BACKEND=true cargo xtask itest
 
+# Regenerate the signing keyshares every local operator cluster is seeded with
+# (crates/spark-itest/keyshares/). Run after bumping the pinned operator version
+# and commit the result; see crates/spark-itest/keyshares/README.md.
+capture-itest-keyshares:
+	cargo xtask capture-itest-keyshares
+
 # Cross-version signer compatibility tests: links the previous SDK release
 # (git tag pinned in spark-compat-itest's Cargo.toml) next to the current
 # build and continues flows across versions. Requires Docker.

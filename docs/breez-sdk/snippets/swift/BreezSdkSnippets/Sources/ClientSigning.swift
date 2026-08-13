@@ -36,6 +36,19 @@ func signPackage(signer: ExternalSparkSigner, unsigned: UnsignedTransferPackage)
         signature = TransferSignature.token(
             signed: try await signer.prepareTokenTransaction(request: prepareTokenTransaction)
         )
+    case let .tokenBatch(prepareTokenTransaction, _, totals, isSwap):
+        if isSwap {
+            print("Approve combining token outputs before the batch is sent")
+        } else {
+            for total in totals {
+                // Unset would mean sats, which a batch cannot send yet
+                let tokenId = total.tokenIdentifier ?? ""
+                print("Approve sending \(total.amount) of token \(tokenId)")
+            }
+        }
+        signature = TransferSignature.token(
+            signed: try await signer.prepareTokenTransaction(request: prepareTokenTransaction)
+        )
     }
 
     let signedPackage = SignedTransferPackage(
@@ -76,6 +89,9 @@ func sendWithClientSigning(sdk: BreezSdk, signer: ExternalSparkSigner) async thr
             continue
         case let .paymentSent(payment):
             return payment
+        // Only a batch package pays several recipients at once
+        case .paymentsSent:
+            throw SdkError.InvalidInput("unexpected batch response for a single payment")
         }
     }
     // ANCHOR_END: client-signing-send

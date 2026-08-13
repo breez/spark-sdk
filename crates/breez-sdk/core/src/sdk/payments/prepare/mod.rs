@@ -1,3 +1,4 @@
+pub(in crate::sdk::payments) mod batch;
 mod bitcoin_address;
 mod bolt11;
 pub(in crate::sdk::payments) mod cross_chain;

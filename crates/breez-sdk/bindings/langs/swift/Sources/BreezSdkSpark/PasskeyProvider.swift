@@ -147,15 +147,29 @@ public class PasskeyProvider: PrfProvider {
     /// 16-byte handle and returns it as `PasskeyCredential.userId`. Pass
     /// already-registered IDs in `excludeCredentials` so the platform
     /// refuses a duplicate even after reinstall.
+    ///
+    /// `seeds` stays nil on authenticators that report PRF support without
+    /// evaluating, and on a partial result: Apple Passwords is known to
+    /// drop the second output on assertions, and a partial derive is no
+    /// derive at all. The caller then derives as it always has.
     @discardableResult
-    public func createPasskey(excludeCredentials: [Data]) async throws -> PasskeyCredential {
+    public func createPasskey(
+        excludeCredentials: [Data],
+        salts: [String]
+    ) async throws -> CreatePasskeyOutput {
         do {
-            let credential = try await core.register(excludeCredentials: excludeCredentials)
-            return PasskeyCredential(
-                credentialId: credential.credentialId,
-                userId: credential.userId,
-                aaguid: credential.aaguid,
-                backupEligible: credential.backupEligible
+            let registration = try await core.register(
+                excludeCredentials: excludeCredentials,
+                salts: salts
+            )
+            return CreatePasskeyOutput(
+                credential: PasskeyCredential(
+                    credentialId: registration.credential.credentialId,
+                    userId: registration.credential.userId,
+                    aaguid: registration.credential.aaguid,
+                    backupEligible: registration.credential.backupEligible
+                ),
+                seeds: registration.seeds
             )
         } catch let err as PasskeyAssertionError {
             throw Self.toPrfProviderError(err)

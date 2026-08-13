@@ -23,11 +23,11 @@ use tokio::{
     select,
     sync::{broadcast, watch},
 };
-use tracing::{Instrument, debug, error, info};
+use tracing::{Instrument, debug, error, info, warn};
 
 use crate::error::SdkError;
 use crate::persist::{ConversionFilter, StorageListPaymentsRequest, StoragePaymentDetailsFilter};
-use crate::{ConversionInfo, ConversionStatus, PaymentDetails, Storage};
+use crate::{ConversionInfo, ConversionStatus, Payment, PaymentDetails, PaymentStatus, Storage};
 
 use super::{
     CrossChainFeeMode, CrossChainPrepared, CrossChainProvider, CrossChainProviderContext,
@@ -137,13 +137,16 @@ impl OrchestraService {
     ) {
         let storage = Arc::clone(&self.storage);
         let client = Arc::clone(&self.client);
+        let spark_wallet = Arc::clone(&self.spark_wallet);
         let mut trigger_receiver = monitor_trigger.subscribe();
         let span = tracing::Span::current();
 
         tokio::spawn(
             async move {
                 loop {
-                    if let Err(e) = Self::poll_in_flight_orders(&storage, &client).await {
+                    if let Err(e) =
+                        Self::poll_in_flight_orders(&storage, &client, &spark_wallet).await
+                    {
                         error!("Orchestra monitor poll failed: {e:?}");
                     }
 
@@ -163,6 +166,60 @@ impl OrchestraService {
         );
     }
 
+    /// Submits a deposit that was transferred but never acknowledged, and
+    /// returns the order id and read token it yields.
+    ///
+    /// Idempotent on the quote id, so a repeat cannot open a second order.
+    async fn submit_pending_deposit(
+        client: &Arc<OrchestraClient>,
+        spark_wallet: &Arc<SparkWallet>,
+        payment: &Payment,
+        quote_id: &str,
+    ) -> Option<(String, Option<String>)> {
+        let (spark_tx_hash, needs_source_address) = deposit_submit_identity(payment)?;
+        let source_spark_address = if needs_source_address {
+            let address = spark_wallet
+                .get_spark_address()
+                .and_then(|a| a.to_address_string().map_err(Into::into));
+            match address {
+                Ok(address) => Some(address),
+                Err(e) => {
+                    warn!(
+                        "Orchestra: no source address to resubmit {}: {e}",
+                        payment.id
+                    );
+                    return None;
+                }
+            }
+        } else {
+            None
+        };
+
+        match client
+            .submit_spark(flashnet::orchestra::SubmitRequestSpark {
+                quote_id: quote_id.to_string(),
+                spark_tx_hash,
+                source_spark_address,
+            })
+            .await
+        {
+            Ok(response) => {
+                info!(
+                    "Orchestra: recovered order {} for payment {}",
+                    response.order_id, payment.id
+                );
+                Some((response.order_id, response.read_token))
+            }
+            Err(e) => {
+                debug!(
+                    "Orchestra: resubmit for payment {} still failing: {e}",
+                    payment.id
+                );
+                None
+            }
+        }
+    }
+
     /// Polls Orchestra for status updates on in-flight cross-chain orders.
     ///
     /// Queries storage for payments with `ConversionFilter::OrchestraPending`,
@@ -173,6 +230,7 @@ impl OrchestraService {
     async fn poll_in_flight_orders(
         storage: &Arc<dyn Storage>,
         client: &Arc<OrchestraClient>,
+        spark_wallet: &Arc<SparkWallet>,
     ) -> Result<(), SdkError> {
         debug!("Orchestra monitor: polling for in-flight orders");
         let pending = storage
@@ -228,29 +286,99 @@ impl OrchestraService {
                 continue;
             };
 
-            let lookup_id = if order_id.is_empty() {
-                quote_id
-            } else {
-                order_id
-            };
             debug!(
                 "Orchestra monitor: checking payment {} (order={order_id}, quote={quote_id}, dest={chain}/{asset})",
                 payment.id
             );
 
-            // Prefer order_id, fall back to quote_id if order_id is empty
-            // (can happen if /submit failed but we still want to track).
-            let rt = read_token.as_deref();
-            let status_response = if order_id.is_empty() {
-                client.status_by_quote_id(quote_id, rt).await
+            // A failed transfer never reached the deposit address, so there is
+            // no order to find. The pending filter reads the conversion's
+            // status, not the payment's, so nothing else clears this row.
+            if payment.status == PaymentStatus::Failed {
+                if let Some(metadata) = with_status(conversion_info, ConversionStatus::Failed)
+                    && let Err(e) = storage
+                        .insert_payment_metadata(
+                            payment.id.clone(),
+                            crate::PaymentMetadata {
+                                conversion_info: Some(metadata),
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                {
+                    warn!("Failed to mark {} conversion failed: {e}", payment.id);
+                }
+                continue;
+            }
+
+            // Only the read token from submit can read the status, and it
+            // expires. Submit is idempotent, including after expiry.
+            let recovered = if order_id.is_empty() || read_token.is_none() {
+                let Some((id, token)) =
+                    Self::submit_pending_deposit(client, spark_wallet, payment, quote_id).await
+                else {
+                    continue;
+                };
+                let Some(updated) = with_submitted_order(conversion_info, id.clone(), token) else {
+                    continue;
+                };
+                let metadata = crate::PaymentMetadata {
+                    conversion_info: Some(updated.clone()),
+                    ..Default::default()
+                };
+                if let Err(e) = storage
+                    .insert_payment_metadata(payment.id.clone(), metadata)
+                    .await
+                {
+                    warn!(
+                        "Failed to record Orchestra order {id} for payment {}: {e}",
+                        payment.id
+                    );
+                }
+                Some(updated)
             } else {
-                client.status_by_id(order_id, rt).await
+                None
             };
+
+            // Everything below reads the conversion as it now stands, not the
+            // pre-submit one it was loaded as.
+            let conversion_info = recovered.as_ref().unwrap_or(conversion_info);
+            let ConversionInfo::Orchestra {
+                order_id,
+                read_token,
+                ..
+            } = conversion_info
+            else {
+                continue;
+            };
+            if order_id.is_empty() {
+                continue;
+            }
+            let status_response = client.status_by_id(order_id, read_token.as_deref()).await;
 
             let status_response = match status_response {
                 Ok(r) => r,
                 Err(e) => {
-                    debug!("Orchestra monitor: status query failed for {lookup_id}: {e}");
+                    debug!("Orchestra monitor: status query failed for {order_id}: {e}");
+                    // Dropped so the next pass reacquires one. The order id
+                    // outlives the token, so it stays.
+                    if is_invalid_read_token(&e)
+                        && let Some(stale) = without_read_token(conversion_info)
+                    {
+                        let metadata = crate::PaymentMetadata {
+                            conversion_info: Some(stale),
+                            ..Default::default()
+                        };
+                        if let Err(e) = storage
+                            .insert_payment_metadata(payment.id.clone(), metadata)
+                            .await
+                        {
+                            warn!(
+                                "Failed to drop the stale read token for {}: {e}",
+                                payment.id
+                            );
+                        }
+                    }
                     continue;
                 }
             };
@@ -649,7 +777,6 @@ impl CrossChainService for OrchestraService {
                 source_spark_address,
             })
             .await;
-        debug!("Orchestra: submit response: {:?}", submit_res);
 
         // Step 3: Persist ConversionInfo::Orchestra metadata.
         let (status, order_id, read_token) = match &submit_res {
@@ -658,9 +785,11 @@ impl CrossChainService for OrchestraService {
                 response.order_id.clone(),
                 response.read_token.clone(),
             ),
-            Err(e) => {
-                error!("Orchestra /submit failed after deposit transfer {spark_tx_hash}: {e}");
-                (ConversionStatus::RefundNeeded, String::new(), None)
+            Err(_) => {
+                // Orchestra detects the deposit on the address, so the order
+                // proceeds without this call. What is lost is the read token
+                // that authorises reading it, which the monitor reacquires.
+                (ConversionStatus::Pending, String::new(), None)
             }
         };
 
@@ -701,14 +830,17 @@ impl CrossChainService for OrchestraService {
             error!(
                 "Failed to persist or cache Orchestra metadata for payment {spark_tx_hash}: {e:?}"
             );
-            spark_tx_hash
+            spark_tx_hash.clone()
         });
 
         self.trigger_monitor();
 
-        // Surface a submit error before kicking off polling.
-        let submit_response = submit_res?;
-        let order_id = submit_response.order_id;
+        match &submit_res {
+            Ok(r) => debug!("Orchestra: submit accepted, response: {r:?}"),
+            Err(e) => warn!(
+                "Orchestra: submit failed for payment {payment_id} (deposit {spark_tx_hash}), leaving the order to the monitor: {e}"
+            ),
+        }
 
         // Poll the outbound Spark transfer until it settles to terminal status.
         let schedule = PollSchedule {
@@ -739,7 +871,7 @@ impl CrossChainService for OrchestraService {
                 // `ConversionInfo` attached) so callers see the send as
                 // submitted rather than failed.
                 debug!(
-                    "Orchestra: payment row not yet visible (order {order_id}): {e}; returning fallback payment built from the deposit transfer"
+                    "Orchestra: payment row for {payment_id} not yet visible: {e}; returning fallback payment built from the deposit transfer"
                 );
                 let payment = crate::utils::conversions::payment_from_asset_transfer(
                     asset_transfer,
@@ -824,6 +956,92 @@ fn route_passes_filters(
     let family_ok = family_filter.is_none_or(|f| f.matches_chain(&side.chain, contract));
     let contract_ok = contract_filter.is_none_or(|wanted| contract == Some(wanted));
     family_ok && contract_ok
+}
+
+/// The deposit a submit names, and whether Orchestra needs the sender address
+/// to verify it.
+///
+/// A token deposit is named by its transaction hash, which is not the payment
+/// id: that carries the output index too, and the server knows neither it nor
+/// the sender, since a token transfer names its own. Returns `None` for a
+/// payment that is neither.
+fn deposit_submit_identity(payment: &Payment) -> Option<(String, bool)> {
+    match &payment.details {
+        Some(PaymentDetails::Spark { .. }) => Some((payment.id.clone(), true)),
+        Some(PaymentDetails::Token { tx_hash, .. }) => Some((tx_hash.clone(), false)),
+        _ => None,
+    }
+}
+
+/// Whether a status read was refused because its read token is not usable.
+///
+/// `/status` answers 403 `invalid_read_token` when the token is malformed,
+/// expired, or bound to another order or key.
+fn is_invalid_read_token(err: &FlashnetError) -> bool {
+    matches!(
+        err,
+        FlashnetError::Network {
+            code: Some(403),
+            ..
+        }
+    )
+}
+
+/// The same conversion with its read token dropped, leaving the order id.
+///
+/// Returns `None` for a conversion that is not an Orchestra one.
+fn without_read_token(info: &ConversionInfo) -> Option<ConversionInfo> {
+    let ConversionInfo::Orchestra { .. } = info else {
+        return None;
+    };
+    let mut updated = info.clone();
+    if let ConversionInfo::Orchestra { read_token, .. } = &mut updated {
+        *read_token = None;
+    }
+    Some(updated)
+}
+
+/// The same conversion, carrying a different status.
+///
+/// Returns `None` for a conversion that is not an Orchestra one.
+fn with_status(info: &ConversionInfo, status: ConversionStatus) -> Option<ConversionInfo> {
+    let ConversionInfo::Orchestra { .. } = info else {
+        return None;
+    };
+    let mut updated = info.clone();
+    *updated.status_mut() = status;
+    Some(updated)
+}
+
+/// The same conversion, now carrying the order it was submitted under, and no
+/// longer marked refundable.
+///
+/// Returns `None` for a conversion that is not an Orchestra one.
+fn with_submitted_order(
+    info: &ConversionInfo,
+    order_id: String,
+    read_token: Option<String>,
+) -> Option<ConversionInfo> {
+    let ConversionInfo::Orchestra { .. } = info else {
+        return None;
+    };
+    let mut updated = info.clone();
+    if let ConversionInfo::Orchestra {
+        order_id: id,
+        read_token: token,
+        status,
+        ..
+    } = &mut updated
+    {
+        *id = order_id;
+        *token = read_token;
+        // A row marked refundable before this path existed is in flight once
+        // its order is recovered, and the deposit was never refundable anyway.
+        if *status == ConversionStatus::RefundNeeded {
+            *status = ConversionStatus::Pending;
+        }
+    }
+    Some(updated)
 }
 
 /// Returns the updated [`PaymentMetadata`] for an Orchestra order that has
@@ -1351,6 +1569,215 @@ mod tests {
 
     // ---- apply_terminal_status ----
 
+    #[test_all]
+    fn a_spark_deposit_is_named_by_the_payment_id() {
+        let payment = dummy_payment(
+            crate::PaymentMethod::Spark,
+            PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: None,
+                conversion_info: None,
+            },
+        );
+        assert_eq!(
+            deposit_submit_identity(&payment),
+            Some(("p1".to_string(), true))
+        );
+    }
+
+    #[test_all]
+    fn a_token_deposit_is_named_by_its_transaction_hash() {
+        // Not the payment id, which carries the output index: the server keyed
+        // the deposit on the hash alone.
+        let mut payment = dummy_payment(
+            crate::PaymentMethod::Token,
+            PaymentDetails::Token {
+                metadata: crate::TokenMetadata {
+                    identifier: "token123".to_string(),
+                    issuer_public_key: "02abcdef".to_string(),
+                    name: "Test Token".to_string(),
+                    ticker: "TTK".to_string(),
+                    decimals: 6,
+                    max_supply: 0,
+                    is_freezable: false,
+                },
+                tx_hash: "abc123".to_string(),
+                tx_type: crate::TokenTransactionType::Transfer,
+                invoice_details: None,
+                conversion_info: None,
+            },
+        );
+        payment.id = "abc123:0".to_string();
+        assert_eq!(
+            deposit_submit_identity(&payment),
+            Some(("abc123".to_string(), false))
+        );
+    }
+
+    #[test_all]
+    fn a_recovered_order_replaces_the_empty_one() {
+        let info = orchestra_info("", "q1");
+        let updated =
+            with_submitted_order(&info, "ord9".to_string(), Some("rt_new".to_string())).unwrap();
+        let ConversionInfo::Orchestra {
+            order_id,
+            read_token,
+            quote_id,
+            estimated_out,
+            status,
+            ..
+        } = updated
+        else {
+            panic!("not an Orchestra conversion");
+        };
+        assert_eq!(order_id, "ord9");
+        assert_eq!(read_token.as_deref(), Some("rt_new"));
+        // Everything else is carried, not rebuilt.
+        assert_eq!(quote_id, "q1");
+        assert_eq!(estimated_out, 1_000_000);
+        assert_eq!(status, ConversionStatus::Pending);
+    }
+
+    #[test_all]
+    fn a_recovered_order_survives_the_terminal_update() {
+        // The terminal update rebuilds the conversion from what it is handed,
+        // so handing it the pre-submit one writes the empty order id back over
+        // the recovered one.
+        let info = orchestra_info("", "q1");
+        let recovered =
+            with_submitted_order(&info, "ord9".to_string(), Some("rt".to_string())).unwrap();
+        let resp = status_response(OrderStatus::Completed, Some("969311"));
+
+        let metadata = apply_terminal_status(&recovered, &resp).expect("terminal");
+        let Some(ConversionInfo::Orchestra {
+            order_id,
+            read_token,
+            delivered_amount,
+            status,
+            ..
+        }) = metadata.conversion_info
+        else {
+            panic!("not an Orchestra conversion");
+        };
+        assert_eq!(order_id, "ord9");
+        assert_eq!(read_token.as_deref(), Some("rt"));
+        assert_eq!(delivered_amount, Some(969_311));
+        assert_eq!(status, ConversionStatus::Completed);
+    }
+
+    #[test_all]
+    fn a_stale_credential_is_dropped_but_the_order_kept() {
+        // Only the token lapses across an expiry, and a fresh one is minted
+        // against the same order.
+        let mut info = orchestra_info("ord9", "q1");
+        if let ConversionInfo::Orchestra { read_token, .. } = &mut info {
+            *read_token = Some("expired".to_string());
+        }
+
+        let updated = without_read_token(&info).unwrap();
+        let ConversionInfo::Orchestra {
+            order_id,
+            read_token,
+            ..
+        } = updated
+        else {
+            panic!("not an Orchestra conversion");
+        };
+        assert_eq!(order_id, "ord9");
+        assert!(read_token.is_none());
+    }
+
+    #[test_all]
+    fn only_a_rejected_token_drops_the_token() {
+        // A transport failure or a 5xx says nothing about the token, and
+        // discarding it there would resubmit on every unrelated blip.
+        assert!(is_invalid_read_token(&FlashnetError::Network {
+            reason: "Read-token is malformed, expired, or not bound to this order and key."
+                .to_string(),
+            code: Some(403),
+        }));
+        for code in [400, 401, 404, 429, 500, 503] {
+            assert!(
+                !is_invalid_read_token(&FlashnetError::Network {
+                    reason: "no".to_string(),
+                    code: Some(code),
+                }),
+                "{code} should not drop the token"
+            );
+        }
+        assert!(!is_invalid_read_token(&FlashnetError::Generic(
+            "boom".to_string()
+        )));
+    }
+
+    #[test_all]
+    fn a_failed_payment_leaves_the_pending_set() {
+        // The pending filter reads the conversion's status, not the payment's,
+        // so only a terminal conversion takes the row out of the set.
+        let info = orchestra_info("", "q1");
+        let updated = with_status(&info, ConversionStatus::Failed).unwrap();
+        assert_eq!(*updated.status(), ConversionStatus::Failed);
+
+        let amm = ConversionInfo::Amm {
+            degradation: None,
+            pool_id: "pool".to_string(),
+            conversion_id: "conv".to_string(),
+            status: ConversionStatus::Pending,
+            fee: None,
+            purpose: None,
+            amount_adjustment: None,
+        };
+        assert!(with_status(&amm, ConversionStatus::Failed).is_none());
+    }
+
+    #[test_all]
+    fn a_row_marked_refundable_stops_being_so_once_recovered() {
+        // Rows stranded before this path existed are the ones it is for, and
+        // they carry RefundNeeded. Once the order is recovered they are in
+        // flight, and the deposit was never refundable by the client anyway.
+        let mut info = orchestra_info("", "q1");
+        if let ConversionInfo::Orchestra { status, .. } = &mut info {
+            *status = ConversionStatus::RefundNeeded;
+        }
+
+        let updated =
+            with_submitted_order(&info, "ord9".to_string(), Some("rt".to_string())).unwrap();
+        let ConversionInfo::Orchestra {
+            status, order_id, ..
+        } = updated
+        else {
+            panic!("not an Orchestra conversion");
+        };
+        assert_eq!(status, ConversionStatus::Pending);
+        assert_eq!(order_id, "ord9");
+    }
+
+    #[test_all]
+    fn a_submit_without_a_read_token_clears_the_stale_one() {
+        // The field is the credential for reading the order, so carrying an old
+        // value forward would authorise nothing and hide that.
+        let info = orchestra_info("", "q1");
+        let updated = with_submitted_order(&info, "ord9".to_string(), None).unwrap();
+        let ConversionInfo::Orchestra { read_token, .. } = updated else {
+            panic!("not an Orchestra conversion");
+        };
+        assert!(read_token.is_none());
+    }
+
+    #[test_all]
+    fn a_non_orchestra_conversion_is_not_given_an_order() {
+        let info = ConversionInfo::Amm {
+            degradation: None,
+            pool_id: "pool".to_string(),
+            conversion_id: "conv".to_string(),
+            status: ConversionStatus::Pending,
+            fee: None,
+            purpose: None,
+            amount_adjustment: None,
+        };
+        assert!(with_submitted_order(&info, "ord9".to_string(), None).is_none());
+    }
+
     fn orchestra_info(order_id: &str, quote_id: &str) -> ConversionInfo {
         ConversionInfo::Orchestra {
             order_id: order_id.to_string(),
@@ -1429,6 +1856,7 @@ mod tests {
             fee: None,
             purpose: None,
             amount_adjustment: None,
+            degradation: None,
         };
         let resp = status_response(OrderStatus::Completed, Some("999000"));
         assert!(apply_terminal_status(&amm_info, &resp).is_none());

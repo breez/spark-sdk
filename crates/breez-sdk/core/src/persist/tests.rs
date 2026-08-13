@@ -638,7 +638,10 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         conversion_details: None,
     };
 
-    // Test 13: Successful conversion payment
+    // Test 13: Successful conversion payment. Carries a degradation, which a
+    // completed conversion can: the swap ran and the input is spent, it just
+    // did not deliver what was signed for. Every other fixture leaves the field
+    // unset, so this is what exercises it on the wire.
     let successful_sent_conversion_payment_metadata = PaymentMetadata {
         parent_payment_id: Some("after_conversion_pmt124".to_string()),
         conversion_info: Some(crate::ConversionInfo::Amm {
@@ -648,6 +651,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             fee: Some(21),
             purpose: None,
             amount_adjustment: None,
+            degradation: Some(crate::SwapDegradation::BelowMinimum),
         }),
         ..Default::default()
     };
@@ -716,6 +720,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             fee: None,
             purpose: None,
             amount_adjustment: None,
+            degradation: None,
         }),
         ..Default::default()
     };
@@ -746,6 +751,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             fee: None,
             purpose: None,
             amount_adjustment: None,
+            degradation: None,
         }),
         ..Default::default()
     };
@@ -1928,6 +1934,7 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
             fee: None,
             purpose: None,
             amount_adjustment: None,
+            degradation: None,
         }),
         ..Default::default()
     };
@@ -1965,6 +1972,7 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
             fee: Some(100),
             purpose: None,
             amount_adjustment: None,
+            degradation: None,
         }),
         ..Default::default()
     };
@@ -1992,6 +2000,7 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
             fee: None,
             purpose: None,
             amount_adjustment: None,
+            degradation: None,
         }),
         ..Default::default()
     };
@@ -3022,6 +3031,7 @@ pub async fn test_payment_metadata_merge(storage: Box<dyn Storage>) {
             fee: Some(100),
             purpose: None,
             amount_adjustment: None,
+            degradation: None,
         }),
         ..Default::default()
     };

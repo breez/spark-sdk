@@ -118,18 +118,37 @@ pub enum PasskeyError {
     #[error("Invalid salt: {0}")]
     InvalidSalt(String),
 
+    /// Registration created the credential, then the derive that
+    /// followed it failed. The passkey exists on the device: recover by
+    /// signing in pinned to `credential_id`. Registering again would
+    /// leave this one behind, owning a wallet nothing points to.
+    ///
+    /// Only wraps a [`PrfProviderError`], so hosts unwrap once and keep
+    /// the arms they already have. Failures that are not the
+    /// authenticator's (mnemonic, key derivation, invalid PRF output)
+    /// propagate as their own variant, unwrapped.
+    #[error("Passkey created but derivation failed: {source}")]
+    CreatedButNotDerived {
+        credential_id: Vec<u8>,
+        source: PrfProviderError,
+    },
+
     #[error("Passkey error: {0}")]
     Generic(String),
 }
 
 impl PasskeyError {
-    /// Coarse classification of the failure. Non-PRF variants map to
-    /// `Internal`: they stem from SDK / network state, not the
-    /// authenticator, so surface a generic "try again later".
+    /// Coarse classification of the failure. `CreatedButNotDerived`
+    /// reports the classification of the `PrfProviderError` it wraps, so
+    /// it is indistinguishable here from the same failure before the
+    /// credential existed: match the variant itself to tell them apart.
+    /// The remaining non-Prf variants map to `Internal`, since they stem
+    /// from SDK or network state rather than the authenticator.
     #[must_use]
     pub fn kind(&self) -> ErrorKind {
         match self {
             Self::Prf(inner) => inner.kind(),
+            Self::CreatedButNotDerived { source, .. } => source.kind(),
             _ => ErrorKind::Internal,
         }
     }

@@ -804,7 +804,7 @@ async fn resolve_storage(
 }
 
 /// Resolves the chain service: caller-supplied override → REST config → network
-/// default (Esplora on mainnet, mempool.space on regtest).
+/// default (mempool.space on mainnet, a hosted mempool instance on regtest).
 fn resolve_chain_service(
     supplied: Option<Arc<dyn BitcoinChainService>>,
     rest_config: Option<RestChainServiceConfig>,
@@ -828,12 +828,12 @@ fn resolve_chain_service(
     let inner_client: Arc<dyn platform_utils::HttpClient> = context.http_client.clone();
     match network {
         Network::Mainnet => Arc::new(RestClientChainService::new(
-            "https://blockstream.info/api".to_string(),
+            "https://mempool.space/api".to_string(),
             network,
             5,
             inner_client,
             None,
-            ChainApiType::Esplora,
+            ChainApiType::MempoolSpace,
         )),
         Network::Regtest => Arc::new(RestClientChainService::new(
             "https://regtest-mempool.us-west-2.sparkinfra.net/api".to_string(),

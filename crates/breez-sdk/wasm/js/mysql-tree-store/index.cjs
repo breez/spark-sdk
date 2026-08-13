@@ -44,6 +44,17 @@ const RESERVATION_TIMEOUT_SECS = 300;
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS = 5 * 60 * 1000;
 
 /**
+ * Leaves per INSERT when upserting a refreshed leaf set.
+ *
+ * A wallet can hold six figures of leaves, each serializing to a JSON blob
+ * carrying up to five transactions. The upsert goes through conn.query(),
+ * which interpolates its placeholders client-side, so the whole set would
+ * otherwise be built in memory as one statement and sent as one packet,
+ * against max_allowed_packet.
+ */
+const LEAF_UPSERT_CHUNK_SIZE = 1000;
+
+/**
  * Slim projection: only (id, value) for leaves the selection might use.
  * Includes all leaves with value <= the max target (covers exact-match + the
  * small-leaf accumulators for the minimum-amount path) plus the single
@@ -958,32 +969,40 @@ class MysqlTreeStore {
 
     if (filtered.length === 0) return;
 
-    const valueClauses = new Array(filtered.length)
-      .fill("(?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6))")
-      .join(", ");
-    const params = [];
-    for (const leaf of filtered) {
-      params.push(
-        this.identity,
-        leaf.id,
-        leaf.status,
-        isMissingFromOperators ? 1 : 0,
-        JSON.stringify(leaf),
-        leaf.value
+    // All chunks run inside the caller's transaction, so the full set still
+    // lands atomically. UTC_TIMESTAMP(6) is re-evaluated per statement, so
+    // added_at can differ by microseconds between chunks; every value is still
+    // after the caller's refreshStartedAt, which is all the timestamp-based
+    // deletion in setLeaves depends on.
+    for (let i = 0; i < filtered.length; i += LEAF_UPSERT_CHUNK_SIZE) {
+      const chunk = filtered.slice(i, i + LEAF_UPSERT_CHUNK_SIZE);
+      const valueClauses = new Array(chunk.length)
+        .fill("(?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6))")
+        .join(", ");
+      const params = [];
+      for (const leaf of chunk) {
+        params.push(
+          this.identity,
+          leaf.id,
+          leaf.status,
+          isMissingFromOperators ? 1 : 0,
+          JSON.stringify(leaf),
+          leaf.value
+        );
+      }
+
+      await conn.query(
+        `INSERT INTO brz_tree_leaves (user_id, id, status, is_missing_from_operators, data, value, added_at)
+         VALUES ${valueClauses}
+         ON DUPLICATE KEY UPDATE
+           status = VALUES(status),
+           is_missing_from_operators = VALUES(is_missing_from_operators),
+           data = VALUES(data),
+           value = VALUES(value),
+           added_at = UTC_TIMESTAMP(6)`,
+        params
       );
     }
-
-    await conn.query(
-      `INSERT INTO brz_tree_leaves (user_id, id, status, is_missing_from_operators, data, value, added_at)
-       VALUES ${valueClauses}
-       ON DUPLICATE KEY UPDATE
-         status = VALUES(status),
-         is_missing_from_operators = VALUES(is_missing_from_operators),
-         data = VALUES(data),
-         value = VALUES(value),
-         added_at = UTC_TIMESTAMP(6)`,
-      params
-    );
   }
 
   async _batchSetReservationId(conn, reservationId, leafIds) {

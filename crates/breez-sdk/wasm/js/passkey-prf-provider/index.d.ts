@@ -4,11 +4,18 @@ import type {
     PasskeyProviderOptions,
     PrfProvider,
     PasskeyCredential,
+    CreatePasskeyOutput,
     DeriveSeedsResult,
     DeriveSeedOptions
 } from '../breez_sdk_spark_wasm.js';
 
-export type { PasskeyCredential, DeriveSeedsResult, DeriveSeedOptions, PasskeyProviderOptions };
+export type {
+    PasskeyCredential,
+    CreatePasskeyOutput,
+    DeriveSeedsResult,
+    DeriveSeedOptions,
+    PasskeyProviderOptions
+};
 
 /**
  * Outcome of a domain-association check: whether `rpId` is a valid
@@ -135,7 +142,7 @@ export declare class PasskeyProvider {
      *   `excludeCredentials` already exists on the device.
      * @throws If the user cancels or PRF is not supported.
      */
-    createPasskey(excludeCredentials?: Uint8Array[]): Promise<PasskeyCredential>;
+    createPasskey(excludeCredentials?: Uint8Array[], salts?: string[]): Promise<CreatePasskeyOutput>;
 
     /**
      * Check if a PRF-capable passkey is available on this device.

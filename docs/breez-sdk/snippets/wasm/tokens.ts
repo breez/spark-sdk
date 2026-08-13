@@ -1,4 +1,4 @@
-import type { BreezSdk, ConversionOptions } from '@breeztech/breez-sdk-spark'
+import type { BreezSdk, ConversionOptions, BatchRecipient } from '@breeztech/breez-sdk-spark'
 
 const exampleFetchTokenBalances = async (sdk: BreezSdk) => {
   // ANCHOR: fetch-token-balances
@@ -99,6 +99,42 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   const payment = sendResponse.payment
   console.log(`Payment: ${JSON.stringify(payment)}`)
   // ANCHOR_END: send-token-payment
+}
+
+const exampleSendBatch = async (sdk: BreezSdk) => {
+  // ANCHOR: send-batch
+  // Each recipient is a Spark address or a Spark invoice. An invoice that
+  // names its own token and amount needs neither here.
+  const recipients: BatchRecipient[] = [
+    {
+      paymentRequest: '<spark address>',
+      amount: BigInt(1_000),
+      tokenIdentifier: '<token identifier>'
+    },
+    {
+      paymentRequest: '<spark invoice>',
+      amount: undefined,
+      tokenIdentifier: undefined
+    }
+  ]
+
+  const prepareResponse = await sdk.prepareSendBatch({ recipients })
+
+  // Show what the batch debits, one entry per token
+  for (const total of prepareResponse.totals) {
+    // Unset would mean sats, which a batch cannot send yet
+    console.log(`Token ID: ${total.tokenIdentifier}`)
+    console.log(`Total: ${total.amount} token base units`)
+  }
+
+  // If the totals are acceptable, send the batch
+  const sendResponse = await sdk.sendBatch({ prepareResponse })
+
+  // One payment per recipient, in the order they were requested
+  for (const payment of sendResponse.payments) {
+    console.log(`Payment: ${JSON.stringify(payment)}`)
+  }
+  // ANCHOR_END: send-batch
 }
 
 const exampleFetchConversionLimits = async (sdk: BreezSdk) => {

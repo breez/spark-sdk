@@ -31,11 +31,21 @@ unsafe impl Sync for WasmTokenStore {}
 
 fn js_error_to_token_error(js_error: JsValue) -> TokenOutputServiceError {
     let error_message = get_detailed_js_error(&js_error);
-    if error_message.contains("InsufficientFunds") {
-        TokenOutputServiceError::InsufficientFunds
-    } else {
-        TokenOutputServiceError::Generic(error_message)
+    match error_message.split_once("InsufficientFunds") {
+        Some((_, rest)) => TokenOutputServiceError::InsufficientFunds {
+            token_identifier: insufficient_funds_token(rest),
+        },
+        None => TokenOutputServiceError::Generic(error_message),
     }
+}
+
+/// The token a JS store named after its `InsufficientFunds` marker
+/// (`InsufficientFunds: <token>`), if it named one.
+fn insufficient_funds_token(rest: &str) -> Option<String> {
+    rest.trim_start()
+        .strip_prefix(':')
+        .and_then(|t| t.split_whitespace().next())
+        .map(ToString::to_string)
 }
 
 fn get_detailed_js_error(js_error: &JsValue) -> String {
@@ -198,14 +208,14 @@ impl TryFrom<WasmTokenOutputWithPrevOut> for TokenOutputWithPrevOut {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WasmTokenOutputs {
-    metadata: WasmTokenMetadata,
+    metadata: Vec<WasmTokenMetadata>,
     outputs: Vec<WasmTokenOutputWithPrevOut>,
 }
 
 impl From<&TokenOutputs> for WasmTokenOutputs {
     fn from(to: &TokenOutputs) -> Self {
         Self {
-            metadata: (&to.metadata).into(),
+            metadata: to.metadata.iter().map(Into::into).collect(),
             outputs: to.outputs.iter().map(Into::into).collect(),
         }
     }
@@ -214,7 +224,7 @@ impl From<&TokenOutputs> for WasmTokenOutputs {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WasmTokenOutputsDeser {
-    metadata: WasmTokenMetadata,
+    metadata: Vec<WasmTokenMetadata>,
     outputs: Vec<WasmTokenOutputWithPrevOut>,
 }
 
@@ -223,7 +233,11 @@ impl TryFrom<WasmTokenOutputsDeser> for TokenOutputs {
 
     fn try_from(w: WasmTokenOutputsDeser) -> Result<Self, Self::Error> {
         Ok(Self {
-            metadata: w.metadata.try_into()?,
+            metadata: w
+                .metadata
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
             outputs: w
                 .outputs
                 .into_iter()
@@ -315,10 +329,10 @@ impl TokenOutputStore for WasmTokenStore {
     #[allow(clippy::cast_possible_truncation)]
     async fn set_tokens_outputs(
         &self,
-        token_outputs: &[TokenOutputs],
+        token_outputs: &TokenOutputs,
         refresh_started_at: SystemTime,
     ) -> Result<(), TokenOutputServiceError> {
-        let wasm_outputs: Vec<WasmTokenOutputs> = token_outputs.iter().map(Into::into).collect();
+        let wasm_outputs: WasmTokenOutputs = token_outputs.into();
         let js_value = serde_wasm_bindgen::to_value(&wasm_outputs)
             .map_err(|e| TokenOutputServiceError::Generic(e.to_string()))?;
         // Convert SystemTime to milliseconds since epoch for JS
@@ -436,18 +450,13 @@ impl TokenOutputStore for WasmTokenStore {
     async fn update_token_outputs(
         &self,
         outputs_to_remove: &[(String, u32)],
-        outputs_to_add: Option<&TokenOutputs>,
+        outputs_to_add: &TokenOutputs,
     ) -> Result<(), TokenOutputServiceError> {
         let remove_js = serde_wasm_bindgen::to_value(&outputs_to_remove.to_vec())
             .map_err(|e| TokenOutputServiceError::Generic(e.to_string()))?;
-        let add_js = match outputs_to_add {
-            Some(to) => {
-                let wasm_outputs: WasmTokenOutputs = to.into();
-                serde_wasm_bindgen::to_value(&wasm_outputs)
-                    .map_err(|e| TokenOutputServiceError::Generic(e.to_string()))?
-            }
-            None => JsValue::NULL,
-        };
+        let wasm_outputs: WasmTokenOutputs = outputs_to_add.into();
+        let add_js = serde_wasm_bindgen::to_value(&wasm_outputs)
+            .map_err(|e| TokenOutputServiceError::Generic(e.to_string()))?;
         let promise = self
             .token_store
             .update_token_outputs(remove_js, add_js)
@@ -461,21 +470,26 @@ impl TokenOutputStore for WasmTokenStore {
     #[allow(clippy::cast_possible_truncation)]
     async fn reserve_token_outputs(
         &self,
-        token_identifier: &str,
-        target: ReservationTarget,
+        targets: &[(String, ReservationTarget)],
         purpose: TokenReservationPurpose,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
-        let wasm_target = match target {
-            ReservationTarget::MinTotalValue(v) => WasmReservationTarget::MinTotalValue {
-                value: v.to_string(),
-            },
-            ReservationTarget::MaxOutputCount(c) => {
-                WasmReservationTarget::MaxOutputCount { value: c as u32 }
-            }
-        };
-        let target_js = serde_wasm_bindgen::to_value(&wasm_target)
+        let wasm_targets = targets
+            .iter()
+            .map(|(token_id, target)| {
+                let wasm_target = match target {
+                    ReservationTarget::MinTotalValue(v) => WasmReservationTarget::MinTotalValue {
+                        value: v.to_string(),
+                    },
+                    ReservationTarget::MaxOutputCount(c) => {
+                        WasmReservationTarget::MaxOutputCount { value: *c as u32 }
+                    }
+                };
+                (token_id.clone(), wasm_target)
+            })
+            .collect::<Vec<_>>();
+        let targets_js = serde_wasm_bindgen::to_value(&wasm_targets)
             .map_err(|e| TokenOutputServiceError::Generic(e.to_string()))?;
 
         let purpose_str = match purpose {
@@ -505,8 +519,7 @@ impl TokenOutputStore for WasmTokenStore {
         let promise = self
             .token_store
             .reserve_token_outputs(
-                token_identifier.to_string(),
-                target_js,
+                targets_js,
                 purpose_str.to_string(),
                 preferred_js,
                 strategy_js,
@@ -522,20 +535,25 @@ impl TokenOutputStore for WasmTokenStore {
 
     async fn select_token_outputs(
         &self,
-        token_identifier: &str,
-        target: ReservationTarget,
+        targets: &[(String, ReservationTarget)],
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputs, TokenOutputServiceError> {
-        let wasm_target = match target {
-            ReservationTarget::MinTotalValue(v) => WasmReservationTarget::MinTotalValue {
-                value: v.to_string(),
-            },
-            ReservationTarget::MaxOutputCount(c) => {
-                WasmReservationTarget::MaxOutputCount { value: c as u32 }
-            }
-        };
-        let target_js = serde_wasm_bindgen::to_value(&wasm_target)
+        let wasm_targets = targets
+            .iter()
+            .map(|(token_id, target)| {
+                let wasm_target = match target {
+                    ReservationTarget::MinTotalValue(v) => WasmReservationTarget::MinTotalValue {
+                        value: v.to_string(),
+                    },
+                    ReservationTarget::MaxOutputCount(c) => {
+                        WasmReservationTarget::MaxOutputCount { value: *c as u32 }
+                    }
+                };
+                (token_id.clone(), wasm_target)
+            })
+            .collect::<Vec<_>>();
+        let targets_js = serde_wasm_bindgen::to_value(&wasm_targets)
             .map_err(|e| TokenOutputServiceError::Generic(e.to_string()))?;
 
         let preferred_js = match preferred_outputs {
@@ -559,12 +577,7 @@ impl TokenOutputStore for WasmTokenStore {
 
         let promise = self
             .token_store
-            .select_token_outputs(
-                token_identifier.to_string(),
-                target_js,
-                preferred_js,
-                strategy_js,
-            )
+            .select_token_outputs(targets_js, preferred_js, strategy_js)
             .map_err(js_error_to_token_error)?;
         let result = JsFuture::from(promise)
             .await
@@ -576,7 +589,6 @@ impl TokenOutputStore for WasmTokenStore {
 
     async fn reserve_token_outputs_by_outpoints(
         &self,
-        token_identifier: &str,
         outpoints: &[(String, u32)],
         purpose: TokenReservationPurpose,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
@@ -597,11 +609,7 @@ impl TokenOutputStore for WasmTokenStore {
 
         let promise = self
             .token_store
-            .reserve_token_outputs_by_outpoints(
-                token_identifier.to_string(),
-                outpoints_js,
-                purpose_str.to_string(),
-            )
+            .reserve_token_outputs_by_outpoints(outpoints_js, purpose_str.to_string())
             .map_err(js_error_to_token_error)?;
         let result = JsFuture::from(promise)
             .await
@@ -689,7 +697,7 @@ interface WasmTokenOutputWithPrevOut {
 }
 
 interface WasmTokenOutputs {
-    metadata: WasmTokenMetadata;
+    metadata: WasmTokenMetadata[];
     outputs: WasmTokenOutputWithPrevOut[];
 }
 
@@ -719,26 +727,23 @@ type WasmReservationTarget =
     | { type: 'maxOutputCount'; value: number };
 
 export interface TokenStore {
-    setTokensOutputs: (tokenOutputs: WasmTokenOutputs[], refreshStartedAtMs: number) => Promise<void>;
+    setTokensOutputs: (tokenOutputs: WasmTokenOutputs, refreshStartedAtMs: number) => Promise<void>;
     listTokensOutputs: () => Promise<WasmTokenOutputsPerStatus[]>;
     getTokenBalances: () => Promise<WasmTokenBalance[]>;
     getTokenOutputs: (filter: WasmGetTokenOutputsFilter) => Promise<WasmTokenOutputsPerStatus>;
-    updateTokenOutputs: (outputsToRemove: [string, number][], outputsToAdd: WasmTokenOutputs | null) => Promise<void>;
+    updateTokenOutputs: (outputsToRemove: [string, number][], outputsToAdd: WasmTokenOutputs) => Promise<void>;
     reserveTokenOutputs: (
-        tokenIdentifier: string,
-        target: WasmReservationTarget,
+        targets: [string, WasmReservationTarget][],
         purpose: string,
         preferredOutputs: WasmTokenOutputWithPrevOut[] | null,
         selectionStrategy: string | null
     ) => Promise<WasmTokenOutputsReservation>;
     selectTokenOutputs: (
-        tokenIdentifier: string,
-        target: WasmReservationTarget,
+        targets: [string, WasmReservationTarget][],
         preferredOutputs: WasmTokenOutputWithPrevOut[] | null,
         selectionStrategy: string | null
     ) => Promise<WasmTokenOutputs>;
     reserveTokenOutputsByOutpoints: (
-        tokenIdentifier: string,
         outpoints: { prevTxHash: string; prevTxVout: number }[],
         purpose: string
     ) => Promise<WasmTokenOutputsReservation>;
@@ -778,8 +783,7 @@ extern "C" {
     #[wasm_bindgen(structural, method, js_name = reserveTokenOutputs, catch)]
     pub fn reserve_token_outputs(
         this: &TokenStoreJs,
-        token_identifier: String,
-        target: JsValue,
+        targets: JsValue,
         purpose: String,
         preferred_outputs: JsValue,
         selection_strategy: JsValue,
@@ -788,8 +792,7 @@ extern "C" {
     #[wasm_bindgen(structural, method, js_name = selectTokenOutputs, catch)]
     pub fn select_token_outputs(
         this: &TokenStoreJs,
-        token_identifier: String,
-        target: JsValue,
+        targets: JsValue,
         preferred_outputs: JsValue,
         selection_strategy: JsValue,
     ) -> Result<Promise, JsValue>;
@@ -797,7 +800,6 @@ extern "C" {
     #[wasm_bindgen(structural, method, js_name = reserveTokenOutputsByOutpoints, catch)]
     pub fn reserve_token_outputs_by_outpoints(
         this: &TokenStoreJs,
-        token_identifier: String,
         outpoints: JsValue,
         purpose: String,
     ) -> Result<Promise, JsValue>;

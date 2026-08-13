@@ -75,14 +75,6 @@ pub struct EstimateResponse {
     pub fee_asset: String,
     #[serde(default)]
     pub route: Vec<String>,
-    #[serde(default)]
-    pub target_amount_out: Option<String>,
-    #[serde(default)]
-    pub required_amount_in: Option<String>,
-    #[serde(default)]
-    pub max_accepted_amount_in: Option<String>,
-    #[serde(default)]
-    pub input_buffer_bps: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -144,6 +136,12 @@ pub struct AppFeeResult {
     pub recipient_amount: Option<String>,
 }
 
+/// A quote for a cross-chain send, and the address to deposit against it.
+///
+/// The `exact_out` and price-lock fields the API also returns are not modelled.
+/// Quotes are requested as `exact_in`, which carries the integrator fee that
+/// `exact_out` does not, and no price lock is asked for, so the server leaves
+/// both groups unset. Unmodelled fields are ignored on deserialization.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuoteResponse {
@@ -168,19 +166,6 @@ pub struct QuoteResponse {
     pub zeroconf_enabled: Option<bool>,
     #[serde(default)]
     pub amount_mode: Option<AmountMode>,
-    // exact_out only
-    #[serde(default)]
-    pub target_amount_out: Option<String>,
-    #[serde(default)]
-    pub required_amount_in: Option<String>,
-    #[serde(default)]
-    pub max_accepted_amount_in: Option<String>,
-    #[serde(default)]
-    pub input_buffer_bps: Option<u32>,
-    #[serde(default)]
-    pub price_lock_mode: Option<String>,
-    #[serde(default)]
-    pub locked_min_amount_out: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -199,7 +184,7 @@ pub struct SubmitRequestSpark {
     pub source_spark_address: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmitResponse {
     pub order_id: String,
@@ -208,6 +193,19 @@ pub struct SubmitResponse {
     /// querying the order status. Binds (partnerId, apiKeyId, orderId).
     #[serde(default)]
     pub read_token: Option<String>,
+}
+
+impl std::fmt::Debug for SubmitResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SubmitResponse")
+            .field("order_id", &self.order_id)
+            .field("status", &self.status)
+            .field(
+                "read_token",
+                &self.read_token.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -285,4 +283,22 @@ pub struct Stage {
     pub status: String,
     #[serde(default)]
     pub completed_at: Option<String>,
+}
+
+#[cfg(test)]
+mod submit_response_tests {
+    use super::*;
+
+    #[test]
+    fn debug_redacts_the_read_token() {
+        let response = SubmitResponse {
+            order_id: "ord_1".to_string(),
+            status: OrderStatus::Completed,
+            read_token: Some("eyJ2IjoxLCJwIjoicGFyXzAxOWQ4NmIy".to_string()),
+        };
+        let rendered = format!("{response:?}");
+        assert!(!rendered.contains("eyJ2"), "token leaked: {rendered}");
+        assert!(rendered.contains("<redacted>"), "{rendered}");
+        assert!(rendered.contains("ord_1"), "{rendered}");
+    }
 }

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use bitcoin::hashes::{Hash, sha256};
 use platform_utils::{ContentType, HttpClient, add_content_type_header};
-use spark_wallet::{SparkAddress, SparkWallet, TransferId, TransferTokenOutput};
+use spark_wallet::{SparkAddress, SparkWallet, TokenRecipient, TransferId};
 use tokio::sync::OnceCell;
 use tracing::debug;
 
@@ -127,18 +127,19 @@ impl OrchestraClient {
             .await
     }
 
-    /// Transfer the quoted `amount_in` to `deposit_address` via the Spark
-    /// wallet, then submit the resulting tx hash to Orchestra. Mirrors the
-    /// AMM client's `execute_swap` shape: the caller supplies the prepared
-    /// quote and Orchestra returns a processing order id.
+    /// Submit an already-sent deposit tx hash for an existing quote, returning
+    /// the processing order id. Send the deposit with
+    /// [`Self::transfer_to_deposit`] first. The idempotency key is derived from
+    /// the quote id, so retries are safe.
     ///
-    /// * `quote_id` / `deposit_address` / `amount_in` come from the
-    ///   [`QuoteResponse`] returned by [`Self::quote`].
+    /// Accepted after the quote expires, which is what lets a failed submit be
+    /// retried later, though the rate is requoted at that point.
     ///
-    /// Submit an already-sent deposit tx hash for an existing quote.
-    ///
-    /// Requires auth and an idempotency key. The key is derived
-    /// deterministically from the quote id so retries are safe.
+    /// The response carries the `read_token` that authorises reading the order,
+    /// and this is the only call that returns one. Orchestra detects the deposit
+    /// on the address whether or not this is called, so a failure costs the
+    /// ability to observe the order rather than the deposit itself, and
+    /// resubmitting is how that ability is regained.
     pub async fn submit_spark(
         &self,
         request: SubmitRequestSpark,
@@ -190,11 +191,10 @@ impl OrchestraClient {
                 let token_tx = self
                     .spark_wallet
                     .transfer_tokens(
-                        vec![TransferTokenOutput {
+                        vec![TokenRecipient::Address {
                             token_id: token_identifier.to_string(),
                             amount: amount_in,
                             receiver_address,
-                            spark_invoice: None,
                         }],
                         None,
                         None,
@@ -221,27 +221,6 @@ impl OrchestraClient {
         self.get_with_read_token(
             "v1/orchestration/status",
             Some(Query { id: order_id }),
-            true,
-            read_token,
-        )
-        .await
-    }
-
-    /// Look up an order by the originating quote id (useful before `/submit`
-    /// returns or when the order id is not yet known).
-    pub async fn status_by_quote_id(
-        &self,
-        quote_id: &str,
-        read_token: Option<&str>,
-    ) -> Result<StatusResponse, FlashnetError> {
-        #[derive(serde::Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Query<'a> {
-            quote_id: &'a str,
-        }
-        self.get_with_read_token(
-            "v1/orchestration/status",
-            Some(Query { quote_id }),
             true,
             read_token,
         )

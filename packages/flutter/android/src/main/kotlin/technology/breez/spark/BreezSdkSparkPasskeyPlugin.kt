@@ -212,25 +212,33 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
             (call.argument<List<String>>("excludeCredentials") ?: emptyList()).map {
                 Base64.decode(it, Base64.NO_WRAP)
             }
+        val salts: List<String> = call.argument<List<String>>("salts") ?: emptyList()
 
         scope.launch {
             try {
-                val credential = CredentialManagerPrfCore(
+                val registration = CredentialManagerPrfCore(
                     rpId = rpId,
                     rpName = rpName,
                     userName = userName,
                     userDisplayName = userDisplayName,
                     activityProvider = { currentActivity },
                     graceTracker = graceTracker,
-                ).register(excludeIds)
+                ).register(excludeIds, salts)
+                val credential = registration.credential
                 // The core's `register` arms the shared grace tracker so the
                 // next `deriveSeeds` call holds out the credential's
-                // PRF-readiness window without the wrapper having to.
+                // PRF-readiness window without the wrapper having to, and
+                // skips arming it when seeds came back inline.
                 result.success(mapOf(
                     "credentialId" to Base64.encodeToString(credential.credentialId, Base64.NO_WRAP),
                     "userId" to Base64.encodeToString(credential.userId, Base64.NO_WRAP),
                     "aaguid" to credential.aaguid?.let { Base64.encodeToString(it, Base64.NO_WRAP) },
                     "backupEligible" to credential.backupEligible,
+                    // Null unless the authenticator evaluated PRF during the
+                    // create ceremony and returned one output per salt.
+                    "seeds" to registration.seeds?.map {
+                        Base64.encodeToString(it, Base64.NO_WRAP)
+                    },
                 ))
             } catch (e: CredentialManagerPrfCoreException) {
                 result.error(e.errorCode, e.message ?: e.defaultMessage, null)

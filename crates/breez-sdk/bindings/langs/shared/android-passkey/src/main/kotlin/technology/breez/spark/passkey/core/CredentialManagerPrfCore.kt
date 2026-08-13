@@ -82,13 +82,22 @@ private const val CORE_TAG = "PasskeyPrfCore"
 // =====================================================================
 
 /**
- * A newly-registered passkey is briefly not ready for the immediate
- * post-create assertion: Credential Manager can drop `prf.second` from a
- * dual-salt assertion (forcing a second single-salt prompt) or surface
- * the credential as not yet discoverable in the picker. Holding the next
- * derive up to [DEFAULT_DURATION_MS] lets the OS finish indexing.
+ * A newly-registered passkey is briefly not discoverable, so the
+ * immediate post-create assertion can miss a credential that exists.
+ * [arm] opens a window in which the next derive re-asks instead of
+ * trusting that first miss.
  *
- * Mirrors iOS `PostCreateGraceTracker`; an instance lives inside
+ * Scoped to that case only: the retry catches `NoCredentialException`,
+ * so a dropped `prf.second` is not covered and still falls through to
+ * the single-salt recover in [CredentialManagerPrfCore.deriveSeeds].
+ *
+ * The window is a ceiling, not a wait: indexing takes as long as the
+ * device takes, so a fixed sleep either returns before the credential is
+ * queryable or taxes every registration. Retrying costs nothing once the
+ * credential resolves.
+ *
+ * Named after iOS's `PostCreateGraceTracker`, which still waits the
+ * window out rather than re-asking; an instance lives inside
  * [CredentialManagerPrfCore] so every consumer that holds onto a single
  * core (e.g. `PasskeyProvider` for UniFFI / KMM consumers) inherits the
  * grace without per-wrapper plumbing.
@@ -103,19 +112,22 @@ public class PostCreateGraceTracker {
         }
     }
 
-    public suspend fun consume() {
-        val waitMs = mutex.withLock {
-            val remaining = deadlineMs - System.currentTimeMillis()
-            deadlineMs = 0L
-            if (remaining > 0L) remaining else 0L
-        }
-        if (waitMs > 0L) {
-            delay(waitMs)
-        }
+    /**
+     * Absolute time until which a post-create assertion may re-ask, or 0
+     * when no registration preceded this derive. Clears the window, so a
+     * later derive is not covered by it.
+     */
+    public suspend fun consumeDeadline(): Long = mutex.withLock {
+        val deadline = deadlineMs
+        deadlineMs = 0L
+        deadline
     }
 
     public companion object {
-        public const val DEFAULT_DURATION_MS: Long = 800L
+        public const val DEFAULT_DURATION_MS: Long = 5_000L
+
+        /** Gap between re-asks; each miss is a fast local no-UI failure. */
+        public const val RETRY_INTERVAL_MS: Long = 100L
     }
 }
 
@@ -221,9 +233,10 @@ public class CredentialManagerPrfCore(
         allowCredentials: List<ByteArray> = emptyList(),
         preferImmediatelyAvailableCredentials: Boolean = true,
     ): PrfDerivation = withContext(Dispatchers.Main) {
-        // Wait out the post-create grace so an immediate derive doesn't
-        // race the credential's PRF-readiness window (see grace tracker).
-        graceTracker.consume()
+        // Re-ask, rather than sleep, while a just-created credential is
+        // still being indexed (see grace tracker). 0 when no register
+        // preceded this call, which disables the retry entirely.
+        val indexRetryUntilMs = graceTracker.consumeDeadline()
         // Pinned to the first asserted credential after the first chunk so
         // every salt in this call derives from one passkey.
         var allow = allowCredentials
@@ -236,7 +249,12 @@ public class CredentialManagerPrfCore(
         // it, so every chunk resolves to the same credential.
         suspend fun assertChunk(chunk: List<String>): Pair<List<ByteArray>, ByteArray?> =
             try {
-                assertPrf(chunk, allow, preferImmediatelyAvailableCredentials)
+                assertPrfAwaitingIndex(
+                    chunk,
+                    allow,
+                    preferImmediatelyAvailableCredentials,
+                    indexRetryUntilMs,
+                )
             } catch (e: NoCredentialException) {
                 if (!autoRegister) {
                     throw CredentialManagerPrfCoreException(
@@ -444,6 +462,66 @@ public class CredentialManagerPrfCore(
     // ------------------------------------------------------------------
 
     /**
+     * PRF outputs carried on a registration response, or null when the
+     * authenticator reported support without evaluating (`prf.enabled`
+     * with no `results`), which is the pre-eval-at-create behavior.
+     */
+    private fun readRegistrationPrfResults(responseJson: JSONObject): List<ByteArray>? {
+        // Never throw: the passkey exists by now, so a decode failure that
+        // escapes fails the whole registration, and the caller's natural
+        // recovery is to register again and strand this one. Null falls
+        // back to the assertion path, which derives from the same passkey.
+        val results = responseJson
+            .optJSONObject("clientExtensionResults")
+            ?.optJSONObject("prf")
+            ?.optJSONObject("results")
+            ?: return null
+        // Never throw: the passkey exists by now, so a decode failure that
+        // escapes fails the whole registration, and the caller's natural
+        // recovery is to register again and strand this one. Null falls
+        // back to the assertion path, which derives from the same passkey.
+        val first = results.optString("first").takeIf { it.isNotEmpty() } ?: return null
+        val out = ArrayList<ByteArray>(2)
+        out.add(decodeBase64UrlOrNull(first, "registration prf.first") ?: return null)
+        results.optString("second").takeIf { it.isNotEmpty() }?.let {
+            out.add(decodeBase64UrlOrNull(it, "registration prf.second") ?: return null)
+        }
+        return out
+    }
+
+    /**
+     * [assertPrf], re-asking until [retryUntilMs] while Credential Manager
+     * still reports no credential. A passkey that exists but is not yet
+     * queryable is indistinguishable from an absent one (both raise
+     * `NoCredentialException`), so asking again is the only way to tell
+     * them apart, and the caller has just created one.
+     *
+     * Only retries under [preferImmediatelyAvailableCredentials], where a
+     * miss is a fast local failure with no UI. Without it a miss means the
+     * user saw and dismissed a picker, which must not be re-shown.
+     */
+    private suspend fun assertPrfAwaitingIndex(
+        salts: List<String>,
+        allowCredentials: List<ByteArray>,
+        preferImmediatelyAvailableCredentials: Boolean,
+        retryUntilMs: Long,
+    ): Pair<List<ByteArray>, ByteArray?> {
+        while (true) {
+            try {
+                return assertPrf(salts, allowCredentials, preferImmediatelyAvailableCredentials)
+            } catch (e: NoCredentialException) {
+                if (!preferImmediatelyAvailableCredentials
+                    || System.currentTimeMillis() >= retryUntilMs
+                ) {
+                    throw e
+                }
+                Log.d(CORE_TAG, "Credential not indexed yet, re-asking")
+                delay(PostCreateGraceTracker.RETRY_INTERVAL_MS)
+            }
+        }
+    }
+
+    /**
      * Run one assertion ceremony for [salts] (1 or 2): build the WebAuthn
      * request (cross-device hybrid suppressed unless
      * [preferImmediatelyAvailableCredentials] is false), evaluate PRF, and
@@ -451,6 +529,7 @@ public class CredentialManagerPrfCore(
      * the asserted credential ID. A dropped `results.second` yields a
      * single-element list.
      */
+
     private suspend fun assertPrf(
         salts: List<String>,
         allowCredentials: List<ByteArray>,
@@ -537,7 +616,8 @@ public class CredentialManagerPrfCore(
      */
     public suspend fun register(
         excludeCredentials: List<ByteArray> = emptyList(),
-    ): PasskeyCredential = withContext(Dispatchers.Main) {
+        salts: List<String> = emptyList(),
+    ): PasskeyRegistration = withContext(Dispatchers.Main) {
         val startedAtMs = System.currentTimeMillis()
         try {
             val activity = activityProvider()
@@ -580,7 +660,25 @@ public class CredentialManagerPrfCore(
                     put("userVerification", "required")
                 })
                 put("extensions", JSONObject().apply {
-                    put("prf", JSONObject())
+                    // Ask the create ceremony to evaluate PRF as well as
+                    // report support. An authenticator that answers turns
+                    // registration into a single ceremony, so no assertion
+                    // has to race the credential becoming resolvable. One
+                    // that ignores it returns `enabled` only, and the
+                    // caller falls back to `deriveSeeds`.
+                    put("prf", JSONObject().apply {
+                        if (salts.isNotEmpty()) {
+                            put("eval", JSONObject().apply {
+                                put("first", encodeBase64Url(salts[0].toByteArray(Charsets.UTF_8)))
+                                if (salts.size > 1) {
+                                    put(
+                                        "second",
+                                        encodeBase64Url(salts[1].toByteArray(Charsets.UTF_8)),
+                                    )
+                                }
+                            })
+                        }
+                    })
                 })
             }.toString()
 
@@ -610,10 +708,22 @@ public class CredentialManagerPrfCore(
                     backupEligible = meta.second
                 }
             }
-            // Arm the post-create grace so the immediate derive doesn't
-            // race the credential's PRF-readiness window (see grace tracker).
-            graceTracker.arm(postCreateGraceMs)
-            PasskeyCredential(credentialId, userIdBytes, aaguid, backupEligible)
+            // Only usable as a complete set: a dropped `prf.eval.second`
+            // yields one output where the caller asked for two, and a
+            // partial derive is no derive at all.
+            val seeds = readRegistrationPrfResults(responseJson)
+                ?.takeIf { it.size == salts.size }
+            // Arm the post-create grace only when a derive still has to
+            // run: the window exists for that assertion. Arming it on the
+            // inline-seeds path would leave it set for whatever derive
+            // came next, which is a different ceremony entirely.
+            if (seeds == null) {
+                graceTracker.arm(postCreateGraceMs)
+            }
+            PasskeyRegistration(
+                PasskeyCredential(credentialId, userIdBytes, aaguid, backupEligible),
+                seeds,
+            )
         } catch (e: CredentialManagerPrfCoreException) {
             throw e
         } catch (e: Exception) {
@@ -808,6 +918,17 @@ public class CredentialManagerPrfCore(
 public data class PrfDerivation(
     public val seeds: List<ByteArray>,
     public val credentialId: ByteArray?,
+)
+
+/**
+ * A created credential, plus the PRF outputs when the authenticator
+ * evaluated them during the create ceremony. `seeds` null means it did
+ * not (or returned fewer than asked for), so the caller derives through
+ * [CredentialManagerPrfCore.deriveSeeds].
+ */
+public data class PasskeyRegistration(
+    public val credential: PasskeyCredential,
+    public val seeds: List<ByteArray>?,
 )
 
 /**

@@ -27,6 +27,7 @@ public static class CommandNames
         "list-payments",
         "receive",
         "pay",
+        "pay-batch",
         "lnurl-pay",
         "lnurl-withdraw",
         "lnurl-auth",
@@ -100,6 +101,12 @@ public static class Commands
                 Name = "pay",
                 Description = "Pay the given payment request",
                 Run = HandlePay
+            },
+            ["pay-batch"] = new()
+            {
+                Name = "pay-batch",
+                Description = "Pay several recipients with one token transaction",
+                Run = HandlePayBatch
             },
             ["lnurl-pay"] = new()
             {
@@ -283,6 +290,19 @@ public static class Commands
     private static bool HasFlag(string[] args, params string[] names)
     {
         return args.Any(a => names.Contains(a));
+    }
+
+    private static string[] GetAllFlags(string[] args, params string[] names)
+    {
+        var values = new List<string>();
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (names.Contains(args[i]))
+            {
+                values.Add(args[i + 1]);
+            }
+        }
+        return values.ToArray();
     }
 
     /// <summary>
@@ -684,6 +704,83 @@ public static class Commands
         ));
 
         Serialization.PrintValue(result);
+    }
+
+    // --- pay-batch ---
+
+    private static async Task HandlePayBatch(BreezSdk sdk, Func<string, string?> readline, string[] args)
+    {
+        var recipientStrs = GetAllFlags(args, "-r", "--recipient");
+        if (recipientStrs.Length == 0)
+        {
+            Console.WriteLine("Usage: pay-batch -r <recipient> [-r <recipient> ...]");
+            Console.WriteLine("  recipient format: payment_request[:amount[:token_identifier]]");
+            return;
+        }
+
+        var recipients = new List<BatchRecipient>();
+        foreach (var s in recipientStrs)
+        {
+            var parts = s.Split(':', 4);
+            var paymentRequest = parts[0];
+            if (string.IsNullOrEmpty(paymentRequest))
+            {
+                Console.Error.WriteLine($"Missing payment request in '{s}'");
+                return;
+            }
+
+            BigInteger? amount = null;
+            if (parts.Length > 1 && !string.IsNullOrEmpty(parts[1]))
+            {
+                if (!BigInteger.TryParse(parts[1], out var parsed))
+                {
+                    Console.Error.WriteLine($"Invalid amount '{parts[1]}': must be a valid number");
+                    return;
+                }
+                amount = parsed;
+            }
+
+            string? tokenIdentifier = null;
+            if (parts.Length > 2 && !string.IsNullOrEmpty(parts[2]))
+            {
+                tokenIdentifier = parts[2];
+            }
+
+            if (parts.Length > 3)
+            {
+                Console.Error.WriteLine($"Invalid recipient '{s}'. Expected 'payment_request[:amount[:token_identifier]]'");
+                return;
+            }
+
+            recipients.Add(new BatchRecipient(
+                paymentRequest: paymentRequest,
+                amount: amount,
+                tokenIdentifier: tokenIdentifier
+            ));
+        }
+
+        var prepareResponse = await sdk.PrepareSendBatch(
+            request: new PrepareSendBatchRequest(recipients: recipients.ToArray())
+        );
+
+        foreach (var total in prepareResponse.totals)
+        {
+            var asset = total.tokenIdentifier ?? "sats";
+            Console.WriteLine($"Sending {total.amount} base units of {asset}");
+        }
+
+        var line = readline("Do you want to continue (y/n) [y]: ");
+        if (line != null && line.Trim().ToLower() != "" && line.Trim().ToLower() != "y")
+        {
+            Console.WriteLine("Payment cancelled");
+            return;
+        }
+
+        var response = await sdk.SendBatch(
+            request: new SendBatchRequest(prepareResponse: prepareResponse)
+        );
+
+        Serialization.PrintValue(response.payments);
     }
 
     // --- lnurl-pay ---
@@ -1240,6 +1337,7 @@ public static class Commands
 
         await sdk.UpdateUserSettings(new UpdateUserSettingsRequest(
             sparkPrivateModeEnabled: sparkPrivateMode,
+            stableBalanceActiveLabel: null,
             sparkMasterIdentityPublicKey: sparkMasterIdentityPublicKey
         ));
         Console.WriteLine("User settings updated");

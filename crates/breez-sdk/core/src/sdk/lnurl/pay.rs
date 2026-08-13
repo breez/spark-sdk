@@ -479,13 +479,21 @@ pub(super) async fn publish_signed_package(
         }
     };
 
-    let (res, fresh_send) = match send::publish_signed_package_inner(sdk, &signed_package).await? {
-        send::PublishOutcome::SwapCompleted => {
-            return Ok(PublishSignedLnurlPayResponse::SwapCompleted);
-        }
-        send::PublishOutcome::Sent(res) => (res, true),
-        send::PublishOutcome::Replayed(res) => (res, false),
-    };
+    let (payments, fresh_send) =
+        match send::publish_signed_package_inner(sdk, &signed_package).await? {
+            send::PublishOutcome::SwapCompleted => {
+                return Ok(PublishSignedLnurlPayResponse::SwapCompleted);
+            }
+            send::PublishOutcome::Sent(payments) => (payments, true),
+            send::PublishOutcome::Replayed(payments) => (payments, false),
+        };
+    // An LNURL pay package is a lightning transfer, which pays a single payee.
+    let [payment] = <[_; 1]>::try_from(payments).map_err(|payments: Vec<_>| {
+        SdkError::Generic(format!(
+            "LNURL pay package produced {} payments, expected one",
+            payments.len()
+        ))
+    })?;
     let Some(context) = context else {
         return Err(SdkError::Generic(
             "swap package unexpectedly produced a payment".to_string(),
@@ -493,7 +501,7 @@ pub(super) async fn publish_signed_package(
     };
     let response = finalize_lnurl_pay(
         sdk,
-        res.payment,
+        payment,
         context.pay_request,
         context.comment,
         context.success_action,

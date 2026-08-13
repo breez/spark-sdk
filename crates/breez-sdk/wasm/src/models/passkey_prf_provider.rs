@@ -5,7 +5,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, js_sys::Promise};
 
 use breez_sdk_spark::passkey::{
-    DeriveSeedsOutput, DeriveSeedsRequest, PasskeyCredential, PrfProviderError,
+    CreatePasskeyOutput, DeriveSeedsOutput, DeriveSeedsRequest, PasskeyCredential, PrfProviderError,
 };
 
 pub(crate) fn js_error_to_prf_provider_error(js_error: JsValue) -> PrfProviderError {
@@ -161,7 +161,8 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
     async fn create_passkey(
         &self,
         exclude_credentials: Vec<Vec<u8>>,
-    ) -> Result<PasskeyCredential, PrfProviderError> {
+        salts: Vec<String>,
+    ) -> Result<CreatePasskeyOutput, PrfProviderError> {
         // Custom providers may not implement explicit creation; fall
         // back to the trait default (`PrfNotSupported`).
         if !self.js_has_method("createPasskey", &self.supports_create) {
@@ -169,15 +170,39 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
         }
 
         let js_exclude = build_exclude_credentials(&exclude_credentials);
+        let js_salts = js_sys::Array::new();
+        for salt in &salts {
+            js_salts.push(&JsValue::from_str(salt));
+        }
         let result_promise = self
             .inner
-            .create_passkey(js_exclude)
+            .create_passkey(js_exclude, js_salts.into())
             .map_err(js_error_to_prf_provider_error)?;
         let result = JsFuture::from(result_promise)
             .await
             .map_err(js_error_to_prf_provider_error)?;
 
-        parse_passkey_credential(&result)
+        let credential_raw = js_sys::Reflect::get(&result, &JsValue::from_str("credential"))
+            .map_err(js_error_to_prf_provider_error)?;
+        // Only a complete set is usable; anything else falls back to the
+        // assertion path rather than half-deriving.
+        let seeds_raw = js_sys::Reflect::get(&result, &JsValue::from_str("seeds"))
+            .map_err(js_error_to_prf_provider_error)?;
+        let seeds = if seeds_raw.is_undefined() || seeds_raw.is_null() {
+            None
+        } else {
+            let array = js_sys::Array::from(&seeds_raw);
+            let collected: Vec<Vec<u8>> = array
+                .iter()
+                .map(|v| js_sys::Uint8Array::new(&v).to_vec())
+                .collect();
+            (collected.len() == salts.len()).then_some(collected)
+        };
+
+        Ok(CreatePasskeyOutput {
+            credential: parse_passkey_credential(&credential_raw)?,
+            seeds,
+        })
     }
 }
 
@@ -295,10 +320,14 @@ export interface PrfProvider {
      * `excludeCredentials` lists already-registered IDs; a match raises
      * `PasskeyAlreadyExistsError`.
      *
+     * Evaluating PRF for `salts` in the same ceremony returns the seeds on
+     * `seeds`, and the caller then needs no assertion. Return `seeds: null`
+     * when the authenticator evaluated none, or fewer than one per salt.
+     *
      * @throws `PasskeyAlreadyExistsError` when an entry in
      *   `excludeCredentials` matches a credential already on the device.
      */
-    createPasskey?(excludeCredentials: Uint8Array[]): Promise<PasskeyCredential>;
+    createPasskey?(excludeCredentials: Uint8Array[], salts: string[]): Promise<CreatePasskeyOutput>;
 
     /**
      * Whether this provider can produce PRF outputs on the current
@@ -369,6 +398,7 @@ extern "C" {
     pub fn create_passkey(
         this: &PrfProvider,
         exclude_credentials: JsValue,
+        salts: JsValue,
     ) -> Result<Promise, JsValue>;
 
     // Optional method. Custom providers may omit it (then treated as

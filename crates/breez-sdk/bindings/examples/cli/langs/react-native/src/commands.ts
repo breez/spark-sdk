@@ -2,7 +2,7 @@
  * Command registry and all command handlers for the Breez SDK React Native CLI.
  *
  * Mirrors ALL commands from the Rust CLI:
- *   get-info, get-payment, sync, list-payments, receive, pay, lnurl-pay,
+ *   get-info, get-payment, sync, list-payments, receive, pay, pay-batch, lnurl-pay,
  *   lnurl-withdraw, lnurl-auth, claim-htlc-payment, claim-deposit, parse,
  *   refund-deposit, list-unclaimed-deposits, buy-bitcoin,
  *   check-lightning-address-available, get-lightning-address,
@@ -38,6 +38,7 @@ import {
   CrossChainProvider,
 } from '@breeztech/breez-sdk-spark-react-native'
 import type {
+  BatchRecipient,
   BreezSdkInterface,
   TokenIssuerInterface,
   CrossChainRoutePair,
@@ -156,6 +157,7 @@ export const COMMAND_NAMES = [
   'list-payments',
   'receive',
   'pay',
+  'pay-batch',
   'lnurl-pay',
   'lnurl-withdraw',
   'lnurl-auth',
@@ -199,6 +201,7 @@ export function buildCommandRegistry(): Map<string, CommandDef> {
     { name: 'list-payments', description: 'List payments', run: handleListPayments },
     { name: 'receive', description: 'Receive a payment', run: handleReceive },
     { name: 'pay', description: 'Pay the given payment request', run: handlePay },
+    { name: 'pay-batch', description: 'Pay several recipients with one token transaction', run: handlePayBatch },
     { name: 'lnurl-pay', description: 'Pay using LNURL', run: handleLnurlPay },
     { name: 'lnurl-withdraw', description: 'Withdraw using LNURL', run: handleLnurlWithdraw },
     { name: 'lnurl-auth', description: 'Authenticate using LNURL', run: handleLnurlAuth },
@@ -686,6 +689,67 @@ async function handlePay(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterf
   })
 
   lines.push(formatValue(sendResponse))
+  return lines.join('\n')
+}
+
+// --- pay-batch ---
+
+function parseBatchRecipient(s: string): BatchRecipient {
+  const parts = s.split(':')
+  const paymentRequest = parts[0]
+  if (!paymentRequest) {
+    throw new Error(`Missing payment request in '${s}'`)
+  }
+  const amountStr = parts.length > 1 ? parts[1] : undefined
+  let amount: bigint | undefined
+  if (amountStr !== undefined && amountStr !== '') {
+    const parsed = Number(amountStr)
+    if (isNaN(parsed)) {
+      throw new Error(`Invalid amount '${amountStr}': must be a valid number`)
+    }
+    amount = BigInt(amountStr)
+  }
+  const tokenId = parts.length > 2 ? parts[2] : undefined
+  const tokenIdentifier = tokenId !== undefined && tokenId !== '' ? tokenId : undefined
+  if (parts.length > 3) {
+    throw new Error(
+      `Invalid recipient '${s}'. Expected 'payment_request[:amount[:token_identifier]]'`
+    )
+  }
+  return { paymentRequest, amount, tokenIdentifier }
+}
+
+function parseRepeatedFlag(args: string[], ...flags: string[]): string[] {
+  const values: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    if (flags.includes(args[i]) && i + 1 < args.length) {
+      values.push(args[i + 1])
+      i++
+    }
+  }
+  return values
+}
+
+async function handlePayBatch(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
+  const recipientArgs = parseRepeatedFlag(args, '-r', '--recipient')
+  if (recipientArgs.length === 0) {
+    return 'Usage: pay-batch -r <recipient> [-r <recipient> ...]\n' +
+      'Each recipient: payment_request[:amount[:token_identifier]]'
+  }
+
+  const recipients: BatchRecipient[] = recipientArgs.map(parseBatchRecipient)
+
+  const prepareResponse = await sdk.prepareSendBatch({ recipients })
+
+  const lines: string[] = []
+  for (const total of prepareResponse.totals) {
+    const asset = total.tokenIdentifier ?? 'sats'
+    lines.push(`Sending ${total.amount} base units of ${asset}`)
+  }
+
+  const response = await sdk.sendBatch({ prepareResponse })
+
+  lines.push(formatValue(response.payments))
   return lines.join('\n')
 }
 

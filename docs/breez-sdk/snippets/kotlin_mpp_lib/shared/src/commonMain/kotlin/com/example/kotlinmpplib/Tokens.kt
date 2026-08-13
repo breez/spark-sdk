@@ -135,6 +135,51 @@ class Tokens {
         // ANCHOR_END: send-token-payment
     }
 
+    suspend fun sendBatch(sdk: BreezSdk) {
+        // ANCHOR: send-batch
+        try {
+            // Each recipient is a Spark address or a Spark invoice. An invoice that
+            // names its own token and amount needs neither here.
+            val recipients = listOf(
+                BatchRecipient(
+                    paymentRequest = "<spark address>",
+                    // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer)
+                    amount = BigInteger.fromLong(1_000L),
+                    // Android (BigInteger from java.math)
+                    // amount = BigInteger.valueOf(1_000L),
+                    tokenIdentifier = "<token identifier>"
+                ),
+                BatchRecipient(
+                    paymentRequest = "<spark invoice>",
+                    amount = null,
+                    tokenIdentifier = null
+                )
+            )
+
+            val prepareResponse =
+                sdk.prepareSendBatch(PrepareSendBatchRequest(recipients = recipients))
+
+            // Show what the batch debits, one entry per token
+            for (total in prepareResponse.totals) {
+                // Unset would mean sats, which a batch cannot send yet
+                println("Token ID: ${total.tokenIdentifier}")
+                println("Total: ${total.amount} token base units")
+            }
+
+            // If the totals are acceptable, send the batch
+            val sendResponse =
+                sdk.sendBatch(SendBatchRequest(prepareResponse = prepareResponse))
+
+            // One payment per recipient, in the order they were requested
+            for (payment in sendResponse.payments) {
+                println("Payment: $payment")
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: send-batch
+    }
+
     suspend fun fetchConversionLimits(sdk: BreezSdk) {
         // ANCHOR: fetch-conversion-limits
         try {

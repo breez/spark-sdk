@@ -300,7 +300,7 @@ impl TokenOutputStore for MysqlTokenStore {
     #[allow(clippy::too_many_lines, clippy::cast_possible_wrap)]
     async fn set_tokens_outputs(
         &self,
-        token_outputs: &[TokenOutputs],
+        token_outputs: &TokenOutputs,
         refresh_started_at: SystemTime,
     ) -> Result<(), TokenOutputServiceError> {
         let refresh_timestamp: DateTime<Utc> = refresh_started_at.into();
@@ -496,7 +496,7 @@ impl TokenOutputStore for MysqlTokenStore {
     async fn update_token_outputs(
         &self,
         outputs_to_remove: &[(String, u32)],
-        outputs_to_add: Option<&TokenOutputs>,
+        outputs_to_add: &TokenOutputs,
     ) -> Result<(), TokenOutputServiceError> {
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
         // Serialize against the other token-store mutators (refresh, reservation, finalization),
@@ -509,39 +509,26 @@ impl TokenOutputStore for MysqlTokenStore {
         result
     }
 
-    #[allow(clippy::too_many_lines)]
     async fn reserve_token_outputs(
         &self,
-        token_identifier: &str,
-        target: ReservationTarget,
+        targets: &[(String, ReservationTarget)],
         purpose: TokenReservationPurpose,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
-        match target {
-            ReservationTarget::MinTotalValue(amount) => {
-                if amount == 0 {
-                    return Err(TokenOutputServiceError::Generic(
-                        "Amount to reserve must be greater than zero".to_string(),
-                    ));
-                }
-            }
-            ReservationTarget::MaxOutputCount(count) => {
-                if count == 0 {
-                    return Err(TokenOutputServiceError::Generic(
-                        "Count to reserve must be greater than zero".to_string(),
-                    ));
-                }
-            }
+        if targets.is_empty() {
+            return Err(TokenOutputServiceError::Generic(
+                "No reservation targets provided".to_string(),
+            ));
         }
+        validate_targets(targets)?;
 
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
         self.acquire_write_lock(&mut conn).await?;
         let result = self
             .reserve_token_outputs_inner(
                 &mut conn,
-                token_identifier,
-                target,
+                targets,
                 purpose,
                 preferred_outputs,
                 selection_strategy,
@@ -553,82 +540,29 @@ impl TokenOutputStore for MysqlTokenStore {
 
     async fn select_token_outputs(
         &self,
-        token_identifier: &str,
-        target: ReservationTarget,
+        targets: &[(String, ReservationTarget)],
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputs, TokenOutputServiceError> {
-        match target {
-            ReservationTarget::MinTotalValue(amount) => {
-                if amount == 0 {
-                    return Err(TokenOutputServiceError::Generic(
-                        "Amount to reserve must be greater than zero".to_string(),
-                    ));
-                }
-            }
-            ReservationTarget::MaxOutputCount(count) => {
-                if count == 0 {
-                    return Err(TokenOutputServiceError::Generic(
-                        "Count to reserve must be greater than zero".to_string(),
-                    ));
-                }
-            }
+        if targets.is_empty() {
+            return Err(TokenOutputServiceError::Generic(
+                "No selection targets provided".to_string(),
+            ));
         }
+        validate_targets(targets)?;
 
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-
-        let metadata_row: Option<Row> = conn
-            .exec_first(
-                "SELECT * FROM brz_token_metadata WHERE user_id = ? AND identifier = ?",
-                (self.identity.clone(), token_identifier),
-            )
-            .await
-            .map_err(map_err)?;
-        let metadata_row = metadata_row.ok_or_else(|| {
-            TokenOutputServiceError::Generic(format!(
-                "Token outputs not found for identifier: {token_identifier}"
-            ))
-        })?;
-        let metadata = Self::metadata_from_row(&metadata_row)?;
-
-        let rows: Vec<Row> = conn
-            .exec(
-                r"SELECT o.owner_public_key, o.revocation_commitment,
-                         o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
-                         o.token_public_key, o.token_amount, o.prev_tx_hash, o.prev_tx_vout,
-                         o.token_identifier
-                  FROM brz_token_outputs o
-                  WHERE o.user_id = ? AND o.token_identifier = ? AND o.reservation_id IS NULL",
-                (self.identity.clone(), token_identifier),
-            )
-            .await
-            .map_err(map_err)?;
-
-        let mut outputs: Vec<TokenOutputWithPrevOut> = rows
-            .iter()
-            .map(Self::output_from_row)
-            .collect::<Result<Vec<_>, _>>()?;
-
-        if let Some(ref preferred) = preferred_outputs {
-            let preferred_outpoints: HashSet<(&str, u32)> = preferred
-                .iter()
-                .map(|p| (p.prev_tx_hash.as_str(), p.prev_tx_vout))
-                .collect();
-            outputs.retain(|o| {
-                preferred_outpoints.contains(&(o.prev_tx_hash.as_str(), o.prev_tx_vout))
-            });
-        }
-
-        let selected_outputs = select_token_outputs_from(outputs, target, selection_strategy)?;
-        Ok(TokenOutputs {
-            metadata,
-            outputs: selected_outputs,
-        })
+        self.select_for_targets(
+            &mut conn,
+            targets,
+            preferred_outputs.as_deref(),
+            selection_strategy,
+        )
+        .await
     }
 
     async fn reserve_token_outputs_by_outpoints(
         &self,
-        token_identifier: &str,
         outpoints: &[(String, u32)],
         purpose: TokenReservationPurpose,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
@@ -641,12 +575,7 @@ impl TokenOutputStore for MysqlTokenStore {
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
         self.acquire_write_lock(&mut conn).await?;
         let result = self
-            .reserve_token_outputs_by_outpoints_inner(
-                &mut conn,
-                token_identifier,
-                outpoints,
-                purpose,
-            )
+            .reserve_token_outputs_by_outpoints_inner(&mut conn, outpoints, purpose)
             .await;
         self.release_write_lock_quiet(&mut conn).await;
         result
@@ -916,7 +845,7 @@ impl MysqlTokenStore {
     async fn set_tokens_outputs_inner(
         &self,
         conn: &mut Conn,
-        token_outputs: &[TokenOutputs],
+        token_outputs: &TokenOutputs,
         refresh_timestamp: DateTime<Utc>,
     ) -> Result<(), TokenOutputServiceError> {
         let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
@@ -973,12 +902,9 @@ impl MysqlTokenStore {
         .map_err(map_err)?;
 
         let incoming_outpoints: HashSet<(String, i32)> = token_outputs
+            .outputs
             .iter()
-            .flat_map(|to| {
-                to.outputs
-                    .iter()
-                    .map(|o| (o.prev_tx_hash.clone(), o.prev_tx_vout as i32))
-            })
+            .map(|o| (o.prev_tx_hash.clone(), o.prev_tx_vout as i32))
             .collect();
 
         let reserved_pairs: Vec<(String, String, i32)> = tx
@@ -1109,56 +1035,114 @@ impl MysqlTokenStore {
         .await
         .map_err(map_err)?;
 
-        for to in token_outputs {
-            self.upsert_metadata(&mut tx, &to.metadata).await?;
-
-            for output in &to.outputs {
-                let outpoint = (output.prev_tx_hash.clone(), output.prev_tx_vout as i32);
-                if reserved_outpoints.contains(&outpoint) || spent_outpoints.contains(&outpoint) {
-                    continue;
-                }
-                self.insert_single_output(&mut tx, &to.metadata.identifier, output)
-                    .await?;
+        // Outputs name their own token, so metadata is upserted per token seen here.
+        let mut upserted_tokens: HashSet<&str> = HashSet::new();
+        for output in &token_outputs.outputs {
+            let token_identifier = &output.output.token_identifier;
+            let Some(metadata) = token_outputs.metadata_for(token_identifier) else {
+                warn!("Skipping outputs of token {token_identifier}: no metadata provided");
+                continue;
+            };
+            if upserted_tokens.insert(token_identifier.as_str()) {
+                self.upsert_metadata(&mut tx, metadata).await?;
             }
+
+            let outpoint = (output.prev_tx_hash.clone(), output.prev_tx_vout as i32);
+            if reserved_outpoints.contains(&outpoint) || spent_outpoints.contains(&outpoint) {
+                continue;
+            }
+            self.insert_single_output(&mut tx, token_identifier, output)
+                .await?;
         }
 
         tx.commit().await.map_err(map_err)?;
 
-        trace!("Updated {} token outputs in MySQL", token_outputs.len());
+        trace!(
+            "Updated {} token outputs in MySQL",
+            token_outputs.outputs.len()
+        );
         Ok(())
     }
 
-    #[allow(
-        clippy::too_many_lines,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_wrap
-    )]
-    async fn reserve_token_outputs_inner(
+    /// Selects, but does not reserve, outputs covering every target.
+    ///
+    /// Runs on whatever `Queryable` the caller passes so a reservation can drive
+    /// the selection for all its targets inside a single transaction.
+    async fn select_for_targets<Q: Queryable>(
         &self,
-        conn: &mut Conn,
-        token_identifier: &str,
-        target: ReservationTarget,
-        purpose: TokenReservationPurpose,
-        preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+        queryable: &mut Q,
+        targets: &[(String, ReservationTarget)],
+        preferred_outputs: Option<&[TokenOutputWithPrevOut]>,
         selection_strategy: Option<SelectionStrategy>,
-    ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
-        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
+    ) -> Result<TokenOutputs, TokenOutputServiceError> {
+        let preferred_outpoints: Option<HashSet<(String, u32)>> =
+            preferred_outputs.map(|preferred| preferred.iter().map(outpoint_of).collect());
 
-        let metadata_row: Option<Row> = tx
+        let mut metadata: Vec<TokenMetadata> = Vec::with_capacity(targets.len());
+        let mut selected: Vec<TokenOutputWithPrevOut> = Vec::new();
+        // Guards against handing the same output to two targets of the same token.
+        let mut taken: HashSet<(String, u32)> = HashSet::new();
+
+        for (token_identifier, target) in targets {
+            let token_metadata = self.load_metadata(queryable, token_identifier).await?;
+            let mut candidates = self
+                .load_available_outputs(queryable, token_identifier)
+                .await?;
+
+            if let Some(ref preferred) = preferred_outpoints {
+                candidates.retain(|o| preferred.contains(&outpoint_of(o)));
+            }
+            candidates.retain(|o| !taken.contains(&outpoint_of(o)));
+
+            let chosen = select_token_outputs_from(
+                token_identifier,
+                candidates,
+                *target,
+                selection_strategy,
+            )?;
+            taken.extend(chosen.iter().map(outpoint_of));
+            selected.extend(chosen);
+
+            if !metadata
+                .iter()
+                .any(|m| m.identifier == token_metadata.identifier)
+            {
+                metadata.push(token_metadata);
+            }
+        }
+
+        Ok(TokenOutputs {
+            metadata,
+            outputs: selected,
+        })
+    }
+
+    async fn load_metadata<Q: Queryable>(
+        &self,
+        queryable: &mut Q,
+        token_identifier: &str,
+    ) -> Result<TokenMetadata, TokenOutputServiceError> {
+        let row: Option<Row> = queryable
             .exec_first(
                 "SELECT * FROM brz_token_metadata WHERE user_id = ? AND identifier = ?",
                 (self.identity.clone(), token_identifier),
             )
             .await
             .map_err(map_err)?;
-        let metadata_row = metadata_row.ok_or_else(|| {
+        let row = row.ok_or_else(|| {
             TokenOutputServiceError::Generic(format!(
                 "Token outputs not found for identifier: {token_identifier}"
             ))
         })?;
-        let metadata = Self::metadata_from_row(&metadata_row)?;
+        Self::metadata_from_row(&row)
+    }
 
-        let rows: Vec<Row> = tx
+    async fn load_available_outputs<Q: Queryable>(
+        &self,
+        queryable: &mut Q,
+        token_identifier: &str,
+    ) -> Result<Vec<TokenOutputWithPrevOut>, TokenOutputServiceError> {
+        let rows: Vec<Row> = queryable
             .exec(
                 r"SELECT o.owner_public_key, o.revocation_commitment,
                          o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
@@ -1171,144 +1155,63 @@ impl MysqlTokenStore {
             .await
             .map_err(map_err)?;
 
-        let mut outputs: Vec<TokenOutputWithPrevOut> = rows
-            .iter()
-            .map(Self::output_from_row)
-            .collect::<Result<Vec<_>, _>>()?;
+        rows.iter().map(Self::output_from_row).collect()
+    }
 
-        if let Some(ref preferred) = preferred_outputs {
-            let preferred_outpoints: HashSet<(&str, u32)> = preferred
-                .iter()
-                .map(|p| (p.prev_tx_hash.as_str(), p.prev_tx_vout))
-                .collect();
-            outputs.retain(|o| {
-                preferred_outpoints.contains(&(o.prev_tx_hash.as_str(), o.prev_tx_vout))
-            });
-        }
+    /// Selection for every target and the reservation that claims the result share
+    /// one transaction, so a reservation spanning several tokens is all-or-nothing.
+    #[allow(clippy::cast_possible_wrap)]
+    async fn reserve_token_outputs_inner(
+        &self,
+        conn: &mut Conn,
+        targets: &[(String, ReservationTarget)],
+        purpose: TokenReservationPurpose,
+        preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+        selection_strategy: Option<SelectionStrategy>,
+    ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
+        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
 
-        if let ReservationTarget::MinTotalValue(amount) = target
-            && outputs.iter().map(|o| o.output.token_amount).sum::<u128>() < amount
-        {
-            return Err(TokenOutputServiceError::InsufficientFunds);
-        }
+        let token_outputs = self
+            .select_for_targets(
+                &mut tx,
+                targets,
+                preferred_outputs.as_deref(),
+                selection_strategy,
+            )
+            .await?;
 
-        let selected_outputs = if let ReservationTarget::MinTotalValue(amount) = target
-            && let Some(output) = outputs.iter().find(|o| o.output.token_amount == amount)
-        {
-            vec![output.clone()]
-        } else {
-            match selection_strategy {
-                None | Some(SelectionStrategy::SmallestFirst) => {
-                    outputs.sort_by_key(|o| o.output.token_amount);
-                }
-                Some(SelectionStrategy::LargestFirst) => {
-                    outputs.sort_by_key(|o| std::cmp::Reverse(o.output.token_amount));
-                }
-            }
-
-            match target {
-                ReservationTarget::MinTotalValue(amount) => {
-                    let mut selected = Vec::new();
-                    let mut remaining = amount;
-                    for output in outputs {
-                        if remaining == 0 {
-                            break;
-                        }
-                        selected.push(output.clone());
-                        remaining = remaining.saturating_sub(output.output.token_amount);
-                    }
-                    if remaining > 0 {
-                        return Err(TokenOutputServiceError::InsufficientFunds);
-                    }
-                    selected
-                }
-                ReservationTarget::MaxOutputCount(count) => {
-                    outputs.truncate(count);
-                    outputs
-                }
-            }
-        };
-
-        let reservation_id = Uuid::now_v7().to_string();
-        let purpose_str = match purpose {
-            TokenReservationPurpose::Payment => "Payment",
-            TokenReservationPurpose::Swap => "Swap",
-        };
-
-        tx.exec_drop(
-            "INSERT INTO brz_token_reservations (user_id, id, purpose, created_at) VALUES (?, ?, ?, UTC_TIMESTAMP(6))",
-            (self.identity.clone(), &reservation_id, purpose_str),
-        )
-        .await
-        .map_err(map_err)?;
-
-        if !selected_outputs.is_empty() {
-            let pair_placeholders = vec!["(?, ?)"; selected_outputs.len()].join(", ");
-            let sql = format!(
-                "UPDATE brz_token_outputs SET reservation_id = ? WHERE user_id = ? \
-                   AND (prev_tx_hash, prev_tx_vout) IN ({pair_placeholders})"
-            );
-            let mut params: Vec<Value> =
-                Vec::with_capacity(selected_outputs.len().saturating_mul(2).saturating_add(2));
-            params.push(Value::from(reservation_id.clone()));
-            params.push(Value::from(self.identity.clone()));
-            for o in &selected_outputs {
-                params.push(Value::from(o.prev_tx_hash.clone()));
-                params.push(Value::from(o.prev_tx_vout as i32));
-            }
-            tx.exec_drop(&sql, Params::Positional(params))
-                .await
-                .map_err(map_err)?;
-        }
+        let reservation_id = self
+            .claim_outputs(&mut tx, &token_outputs.outputs, purpose)
+            .await?;
 
         tx.commit().await.map_err(map_err)?;
 
-        Ok(TokenOutputsReservation::new(
-            reservation_id,
-            TokenOutputs {
-                metadata,
-                outputs: selected_outputs,
-            },
-        ))
+        Ok(TokenOutputsReservation::new(reservation_id, token_outputs))
     }
 
     #[allow(clippy::cast_possible_wrap)]
     async fn reserve_token_outputs_by_outpoints_inner(
         &self,
         conn: &mut Conn,
-        token_identifier: &str,
         outpoints: &[(String, u32)],
         purpose: TokenReservationPurpose,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
         let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
 
-        let metadata_row: Option<Row> = tx
-            .exec_first(
-                "SELECT * FROM brz_token_metadata WHERE user_id = ? AND identifier = ?",
-                (self.identity.clone(), token_identifier),
-            )
-            .await
-            .map_err(map_err)?;
-        let metadata_row = metadata_row.ok_or_else(|| {
-            TokenOutputServiceError::Generic(format!(
-                "Token outputs not found for identifier: {token_identifier}"
-            ))
-        })?;
-        let metadata = Self::metadata_from_row(&metadata_row)?;
-
+        // The outpoints carry no token identifier, so they are looked up across every
+        // token the tenant holds.
         let pair_placeholders = vec!["(?, ?)"; outpoints.len()].join(", ");
         let select_sql = format!(
             "SELECT o.owner_public_key, o.revocation_commitment, o.withdraw_bond_sats, \
                     o.withdraw_relative_block_locktime, o.token_public_key, o.token_amount, \
                     o.prev_tx_hash, o.prev_tx_vout, o.token_identifier \
              FROM brz_token_outputs o \
-             WHERE o.user_id = ? AND o.token_identifier = ? AND o.reservation_id IS NULL \
+             WHERE o.user_id = ? AND o.reservation_id IS NULL \
                AND (o.prev_tx_hash, o.prev_tx_vout) IN ({pair_placeholders})"
         );
         let mut select_params: Vec<Value> =
-            Vec::with_capacity(outpoints.len().saturating_mul(2).saturating_add(2));
+            Vec::with_capacity(outpoints.len().saturating_mul(2).saturating_add(1));
         select_params.push(Value::from(self.identity.clone()));
-        select_params.push(Value::from(token_identifier));
         for (h, v) in outpoints {
             select_params.push(Value::from(h.clone()));
             select_params.push(Value::from(*v as i32));
@@ -1326,9 +1229,47 @@ impl MysqlTokenStore {
         let distinct: HashSet<(&str, u32)> =
             outpoints.iter().map(|(h, v)| (h.as_str(), *v)).collect();
         if selected_outputs.len() != distinct.len() {
-            return Err(TokenOutputServiceError::InsufficientFunds);
+            return Err(TokenOutputServiceError::InsufficientFunds {
+                token_identifier: None,
+            });
         }
 
+        let mut token_identifiers: Vec<&str> = selected_outputs
+            .iter()
+            .map(|o| o.output.token_identifier.as_str())
+            .collect();
+        token_identifiers.sort_unstable();
+        token_identifiers.dedup();
+
+        let mut metadata = Vec::with_capacity(token_identifiers.len());
+        for token_identifier in token_identifiers {
+            metadata.push(self.load_metadata(&mut tx, token_identifier).await?);
+        }
+
+        let reservation_id = self
+            .claim_outputs(&mut tx, &selected_outputs, purpose)
+            .await?;
+
+        tx.commit().await.map_err(map_err)?;
+
+        Ok(TokenOutputsReservation::new(
+            reservation_id,
+            TokenOutputs {
+                metadata,
+                outputs: selected_outputs,
+            },
+        ))
+    }
+
+    /// Opens a reservation and points every given output at it. The caller's
+    /// transaction is what makes the two steps atomic.
+    #[allow(clippy::cast_possible_wrap)]
+    async fn claim_outputs(
+        &self,
+        tx: &mut mysql_async::Transaction<'_>,
+        outputs: &[TokenOutputWithPrevOut],
+        purpose: TokenReservationPurpose,
+    ) -> Result<TokenOutputsReservationId, TokenOutputServiceError> {
         let reservation_id = Uuid::now_v7().to_string();
         let purpose_str = match purpose {
             TokenReservationPurpose::Payment => "Payment",
@@ -1342,32 +1283,26 @@ impl MysqlTokenStore {
         .await
         .map_err(map_err)?;
 
-        let update_placeholders = vec!["(?, ?)"; selected_outputs.len()].join(", ");
-        let update_sql = format!(
-            "UPDATE brz_token_outputs SET reservation_id = ? WHERE user_id = ? \
-               AND (prev_tx_hash, prev_tx_vout) IN ({update_placeholders})"
-        );
-        let mut update_params: Vec<Value> =
-            Vec::with_capacity(selected_outputs.len().saturating_mul(2).saturating_add(2));
-        update_params.push(Value::from(reservation_id.clone()));
-        update_params.push(Value::from(self.identity.clone()));
-        for o in &selected_outputs {
-            update_params.push(Value::from(o.prev_tx_hash.clone()));
-            update_params.push(Value::from(o.prev_tx_vout as i32));
+        if !outputs.is_empty() {
+            let pair_placeholders = vec!["(?, ?)"; outputs.len()].join(", ");
+            let sql = format!(
+                "UPDATE brz_token_outputs SET reservation_id = ? WHERE user_id = ? \
+                   AND (prev_tx_hash, prev_tx_vout) IN ({pair_placeholders})"
+            );
+            let mut params: Vec<Value> =
+                Vec::with_capacity(outputs.len().saturating_mul(2).saturating_add(2));
+            params.push(Value::from(reservation_id.clone()));
+            params.push(Value::from(self.identity.clone()));
+            for o in outputs {
+                params.push(Value::from(o.prev_tx_hash.clone()));
+                params.push(Value::from(o.prev_tx_vout as i32));
+            }
+            tx.exec_drop(&sql, Params::Positional(params))
+                .await
+                .map_err(map_err)?;
         }
-        tx.exec_drop(&update_sql, Params::Positional(update_params))
-            .await
-            .map_err(map_err)?;
 
-        tx.commit().await.map_err(map_err)?;
-
-        Ok(TokenOutputsReservation::new(
-            reservation_id,
-            TokenOutputs {
-                metadata,
-                outputs: selected_outputs,
-            },
-        ))
+        Ok(reservation_id)
     }
 
     async fn cancel_reservation_inner(
@@ -1400,7 +1335,7 @@ impl MysqlTokenStore {
         &self,
         conn: &mut Conn,
         outputs_to_remove: &[(String, u32)],
-        outputs_to_add: Option<&TokenOutputs>,
+        outputs_to_add: &TokenOutputs,
     ) -> Result<(), TokenOutputServiceError> {
         let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
 
@@ -1430,39 +1365,45 @@ impl MysqlTokenStore {
             }
         }
 
-        // 2. Insert new outputs.
-        if let Some(token_outputs) = outputs_to_add {
-            self.upsert_metadata(&mut tx, &token_outputs.metadata)
+        // 2. Insert new outputs. Each output names its own token, so only the ones
+        // whose token comes with metadata can be stored.
+        let mut insertable: Vec<&TokenOutputWithPrevOut> =
+            Vec::with_capacity(outputs_to_add.outputs.len());
+        let mut upserted_tokens: HashSet<&str> = HashSet::new();
+        for output in &outputs_to_add.outputs {
+            let token_identifier = &output.output.token_identifier;
+            let Some(metadata) = outputs_to_add.metadata_for(token_identifier) else {
+                warn!("Skipping outputs of token {token_identifier}: no metadata provided");
+                continue;
+            };
+            if upserted_tokens.insert(token_identifier.as_str()) {
+                self.upsert_metadata(&mut tx, metadata).await?;
+            }
+            insertable.push(output);
+        }
+
+        // Clear spent status for outputs being (re-)added.
+        if !insertable.is_empty() {
+            let pair_placeholders = vec!["(?, ?)"; insertable.len()].join(", ");
+            let sql = format!(
+                "DELETE FROM brz_token_spent_outputs \
+                 WHERE user_id = ? AND (prev_tx_hash, prev_tx_vout) IN ({pair_placeholders})"
+            );
+            let mut params: Vec<Value> =
+                Vec::with_capacity(insertable.len().saturating_mul(2).saturating_add(1));
+            params.push(Value::from(self.identity.clone()));
+            for output in &insertable {
+                params.push(Value::from(output.prev_tx_hash.clone()));
+                params.push(Value::from(output.prev_tx_vout as i32));
+            }
+            tx.exec_drop(&sql, Params::Positional(params))
+                .await
+                .map_err(map_err)?;
+        }
+
+        for output in insertable {
+            self.insert_single_output(&mut tx, &output.output.token_identifier, output)
                 .await?;
-
-            // Clear spent status for outputs being (re-)added.
-            if !token_outputs.outputs.is_empty() {
-                let pair_placeholders = vec!["(?, ?)"; token_outputs.outputs.len()].join(", ");
-                let sql = format!(
-                    "DELETE FROM brz_token_spent_outputs \
-                     WHERE user_id = ? AND (prev_tx_hash, prev_tx_vout) IN ({pair_placeholders})"
-                );
-                let mut params: Vec<Value> = Vec::with_capacity(
-                    token_outputs
-                        .outputs
-                        .len()
-                        .saturating_mul(2)
-                        .saturating_add(1),
-                );
-                params.push(Value::from(self.identity.clone()));
-                for output in &token_outputs.outputs {
-                    params.push(Value::from(output.prev_tx_hash.clone()));
-                    params.push(Value::from(output.prev_tx_vout as i32));
-                }
-                tx.exec_drop(&sql, Params::Positional(params))
-                    .await
-                    .map_err(map_err)?;
-            }
-
-            for output in &token_outputs.outputs {
-                self.insert_single_output(&mut tx, &token_outputs.metadata.identifier, output)
-                    .await?;
-            }
         }
 
         tx.commit().await.map_err(map_err)?;
@@ -1797,6 +1738,31 @@ impl MysqlTokenStore {
     }
 }
 
+fn validate_targets(
+    targets: &[(String, ReservationTarget)],
+) -> Result<(), TokenOutputServiceError> {
+    for (_, target) in targets {
+        match target {
+            ReservationTarget::MinTotalValue(0) => {
+                return Err(TokenOutputServiceError::Generic(
+                    "Amount to reserve must be greater than zero".to_string(),
+                ));
+            }
+            ReservationTarget::MaxOutputCount(0) => {
+                return Err(TokenOutputServiceError::Generic(
+                    "Count to reserve must be greater than zero".to_string(),
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn outpoint_of(output: &TokenOutputWithPrevOut) -> (String, u32) {
+    (output.prev_tx_hash.clone(), output.prev_tx_vout)
+}
+
 fn build_placeholders(n: usize) -> String {
     let mut s = String::with_capacity(n.saturating_mul(3));
     for i in 0..n {
@@ -2042,6 +2008,51 @@ mod tests {
     async fn test_reserve_token_outputs_by_outpoints() {
         let fixture = MysqlTokenStoreTestFixture::new().await;
         shared_tests::test_reserve_token_outputs_by_outpoints(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_multi_token_reservation_rolls_back_on_shortfall() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_multi_token_reservation_rolls_back_on_shortfall(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_multi_token_reservation_rolls_back_on_first_token() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_multi_token_reservation_rolls_back_on_first_token(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_multi_token_reservation_rolls_back_on_unknown_token() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_multi_token_reservation_rolls_back_on_unknown_token(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_multi_token_reservation_cancel_restores_every_token() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_multi_token_reservation_cancel_restores_every_token(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_multi_token_reservation_finalize_spends_every_token() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_multi_token_reservation_finalize_spends_every_token(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_by_outpoints_rolls_back_on_missing() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_by_outpoints_rolls_back_on_missing(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_by_outpoints_spans_tokens() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_by_outpoints_spans_tokens(&fixture.store).await;
     }
 
     #[tokio::test]
@@ -2294,7 +2305,7 @@ mod tests {
         fixture
             .store
             .set_tokens_outputs(
-                &[token_outputs],
+                &token_outputs,
                 shared_tests::future_refresh_start(&fixture.store).await,
             )
             .await
@@ -2302,8 +2313,7 @@ mod tests {
         let reservation = fixture
             .store
             .reserve_token_outputs(
-                "token-1",
-                ReservationTarget::MinTotalValue(100),
+                &[("token-1".to_string(), ReservationTarget::MinTotalValue(100))],
                 TokenReservationPurpose::Payment,
                 None,
                 None,
@@ -2359,7 +2369,7 @@ mod tests {
         fixture
             .store
             .set_tokens_outputs(
-                std::slice::from_ref(&token1),
+                &token1,
                 shared_tests::future_refresh_start(&fixture.store).await,
             )
             .await
@@ -2368,8 +2378,7 @@ mod tests {
         let reservation = fixture
             .store
             .reserve_token_outputs(
-                "token-1",
-                ReservationTarget::MinTotalValue(100),
+                &[("token-1".to_string(), ReservationTarget::MinTotalValue(100))],
                 TokenReservationPurpose::Swap,
                 None,
                 None,
@@ -2402,7 +2411,7 @@ mod tests {
         fixture
             .store
             .set_tokens_outputs(
-                std::slice::from_ref(&token1_refresh),
+                &token1_refresh,
                 shared_tests::future_refresh_start(&fixture.store).await,
             )
             .await
@@ -2500,19 +2509,18 @@ mod tests {
         let a_token1 = shared_tests::create_token_outputs(1, vec![100, 200]);
         let b_token1 = shared_tests::create_token_outputs(1, vec![500, 1_000, 2_000]);
         let b_only_token2 = shared_tests::create_token_outputs(2, vec![777]);
+        // B holds two tokens; a single multi-token set carries both.
+        let b_tokens = TokenOutputs {
+            metadata: [b_token1.metadata, b_only_token2.metadata].concat(),
+            outputs: [b_token1.outputs, b_only_token2.outputs].concat(),
+        };
 
-        fx.a.set_tokens_outputs(
-            std::slice::from_ref(&a_token1),
-            shared_tests::future_refresh_start(&fx.a).await,
-        )
-        .await
-        .unwrap();
-        fx.b.set_tokens_outputs(
-            &[b_token1, b_only_token2],
-            shared_tests::future_refresh_start(&fx.b).await,
-        )
-        .await
-        .unwrap();
+        fx.a.set_tokens_outputs(&a_token1, shared_tests::future_refresh_start(&fx.a).await)
+            .await
+            .unwrap();
+        fx.b.set_tokens_outputs(&b_tokens, shared_tests::future_refresh_start(&fx.b).await)
+            .await
+            .unwrap();
 
         let listed_a = fx.a.list_tokens_outputs().await.unwrap();
         let listed_b = fx.b.list_tokens_outputs().await.unwrap();
@@ -2555,8 +2563,7 @@ mod tests {
 
         let res_a =
             fx.a.reserve_token_outputs(
-                "token-1",
-                ReservationTarget::MinTotalValue(100),
+                &[("token-1".to_string(), ReservationTarget::MinTotalValue(100))],
                 TokenReservationPurpose::Payment,
                 None,
                 None,
@@ -2578,8 +2585,7 @@ mod tests {
 
         let res_a_t2 =
             fx.a.reserve_token_outputs(
-                "token-2",
-                ReservationTarget::MinTotalValue(100),
+                &[("token-2".to_string(), ReservationTarget::MinTotalValue(100))],
                 TokenReservationPurpose::Payment,
                 None,
                 None,
@@ -2602,8 +2608,7 @@ mod tests {
         // swap-status row is per tenant.
         let res_b_swap =
             fx.b.reserve_token_outputs(
-                "token-1",
-                ReservationTarget::MinTotalValue(500),
+                &[("token-1".to_string(), ReservationTarget::MinTotalValue(500))],
                 TokenReservationPurpose::Swap,
                 None,
                 None,
@@ -2622,9 +2627,7 @@ mod tests {
         // with B's existing entry — both tenants must end up with their own
         // row.
         let a_token2 = shared_tests::create_token_outputs(2, vec![999]);
-        fx.a.update_token_outputs(&[], Some(&a_token2))
-            .await
-            .unwrap();
+        fx.a.update_token_outputs(&[], &a_token2).await.unwrap();
 
         let bal_a = fx.a.get_token_balances().await.unwrap();
         let bal_a_t2 = bal_a

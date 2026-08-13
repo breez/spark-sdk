@@ -41,6 +41,18 @@ Future<SignedTransferPackage> signPackage(
     signature = TransferSignature.token(
         signed: await signer
             .prepareTokenTransaction(unsigned.prepareTokenTransaction));
+  } else if (unsigned is UnsignedTransferPackage_TokenBatch) {
+    if (unsigned.isSwap) {
+      print("Approve combining token outputs before the batch is sent");
+    } else {
+      for (final total in unsigned.totals) {
+        print("Approve sending ${total.amount} of token"
+            " ${total.tokenIdentifier}");
+      }
+    }
+    signature = TransferSignature.token(
+        signed: await signer
+            .prepareTokenTransaction(unsigned.prepareTokenTransaction));
   } else {
     throw Exception("Unknown transfer package variant");
   }
@@ -79,6 +91,10 @@ Future<Payment> sendWithClientSigning(BreezSdk sdk, PackageSigner signer) async 
     }
     if (result is PublishSignedTransferPackageResponse_PaymentSent) {
       return result.payment;
+    }
+    // Only a batch package pays several recipients at once
+    if (result is PublishSignedTransferPackageResponse_PaymentsSent) {
+      throw Exception("unexpected batch response for a single payment");
     }
   }
   // ANCHOR_END: client-signing-send

@@ -7,6 +7,7 @@ use axum::{
 };
 use axum_extra::extract::Host;
 use bitcoin::{
+    bech32,
     hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256},
     secp256k1::{PublicKey, XOnlyPublicKey, ecdsa::Signature},
 };
@@ -29,15 +30,17 @@ use crate::{
     invoice_paid::{create_invoice, handle_invoice_paid},
     repository::LnurlSenderComment,
     time::{now_millis, now_u64},
-    zap::Zap,
+    zap::{Zap, derive_user_nostr_keys},
 };
 use crate::{
-    repository::{LnurlRepository, LnurlRepositoryError},
+    repository::{LnurlRepository, LnurlRepositoryError, StatementClaim},
     state::State,
     user::{USERNAME_VALIDATION_REGEX, User},
 };
 
 const ACCEPTABLE_TIME_DIFF_SECS: u64 = 600;
+/// LUD-17 scheme prefixes an `lnurl` tag may carry in place of http(s).
+const LNURL_SCHEME_PREFIXES: [&str; 4] = ["lnurlp://", "lnurlw://", "lnurlc://", "keyauth://"];
 const DEFAULT_METADATA_OFFSET: u32 = 0;
 const DEFAULT_METADATA_LIMIT: u32 = 100;
 /// Maximum size (bytes) of a nostr event JSON (zap request or zap receipt).
@@ -138,18 +141,32 @@ where
     ) -> Result<Json<RegisterLnurlPayResponse>, (StatusCode, Json<Value>)> {
         let username = sanitize_username(&payload.username);
         validate_username(&username)?;
-        let pubkey = validate(
+        let (pubkey, signed) = validate_any(
             &pubkey,
             &payload.signature,
-            &username,
+            std::slice::from_ref(&username),
             payload.timestamp,
             &state,
         )
         .await?;
         validate_description(&payload.description)?;
+        // Resolved before the claim, so a request naming a host this server
+        // does not serve is refused without spending the statement.
+        let domain = sanitize_domain(&state, &host).await?;
+        // Register and the legacy unregister candidate sign identical bytes, so
+        // this claim is what a register signature replayed to unregister runs
+        // into. It outlives that candidate: it also stops a replay resurrecting
+        // an address the pubkey has since unregistered.
+        claim_statement(
+            &state,
+            SignedRoute::Register,
+            &statement_hash(&pubkey, &signed),
+            claim_expiry(payload.timestamp),
+        )
+        .await?;
 
         let user = User {
-            domain: sanitize_domain(&state, &host).await?,
+            domain,
             pubkey: pubkey.to_string(),
             name: username,
             description: payload.description,
@@ -211,6 +228,10 @@ where
 
         let domain = sanitize_domain(&state, &host).await?;
 
+        // Claimed in the same transaction as the transfer, so a transfer that
+        // rolls back leaves the statement actionable. The statement names the
+        // source, the target and the username, and no domain, so one pair
+        // authorizes one transfer wherever it is submitted.
         if let Err(e) = state
             .db
             .transfer_username(
@@ -219,6 +240,10 @@ where
                 &to_pk.to_string(),
                 &username,
                 &payload.description,
+                StatementClaim {
+                    hash: &statement_hash(&from_pk, &message),
+                    expires_at: claim_expiry_unbounded(),
+                },
             )
             .await
         {
@@ -237,6 +262,13 @@ where
                     (
                         StatusCode::CONFLICT,
                         Json(Value::String("name already taken".into())),
+                    )
+                }
+                LnurlRepositoryError::StatementAlreadyUsed => {
+                    trace!("transfer of '{username}' from {from_pk} to {to_pk} already performed");
+                    (
+                        StatusCode::CONFLICT,
+                        Json(Value::String("signature has already been used".into())),
                     )
                 }
                 LnurlRepositoryError::General(err) => {
@@ -265,7 +297,7 @@ where
     ) -> Result<(), (StatusCode, Json<Value>)> {
         let username = sanitize_username(&payload.username);
         let messages = unregister_candidate_messages(&username);
-        let pubkey = validate_any(
+        let (pubkey, signed) = validate_any(
             &pubkey,
             &payload.signature,
             &messages,
@@ -273,7 +305,20 @@ where
             &state,
         )
         .await?;
+        // Resolved before the claim, so a request naming a host this server
+        // does not serve is refused without spending the statement.
         let domain = sanitize_domain(&state, &host).await?;
+        // Rejects a register signature replayed here: register claims the same
+        // bare statement, so this finds it already claimed. It outlives that
+        // candidate: it also stops a captured unregister running again after the
+        // name is re-registered.
+        claim_statement(
+            &state,
+            SignedRoute::Unregister,
+            &statement_hash(&pubkey, &signed),
+            claim_expiry(payload.timestamp),
+        )
+        .await?;
 
         let registered = state
             .db
@@ -418,18 +463,8 @@ where
             return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         };
 
-        let (allows_nostr, nostr_pubkey) = if let Some(nostr_keys) = state.nostr_keys.as_ref() {
-            let xonly_pubkey = nostr_keys.public_key.xonly().map_err(|e| {
-                error!(
-                    "invalid nostr pubkey in server keys, could not parse: {:?}",
-                    e
-                );
-                lnurl_error("internal server error")
-            })?;
-            (Some(true), Some(xonly_pubkey))
-        } else {
-            (None, None)
-        };
+        let nostr_pubkey = user_nostr_pubkey(state.nostr_keys.as_ref(), &user.pubkey)?;
+        let allows_nostr = nostr_pubkey.is_some().then_some(true);
         Ok(Json(PayResponse {
             callback: format!(
                 "{}://{}/lnurlp/{}/invoice",
@@ -484,35 +519,32 @@ where
 
         validate_amount_bounds(amount_msat, state.min_sendable, state.max_sendable)?;
 
-        let nostr_pubkey = state
-            .nostr_keys
-            .as_ref()
-            .map(|nostr_keys| {
-                nostr_keys.public_key.xonly().map_err(|e| {
-                    error!(
-                        "invalid nostr pubkey in server keys, could not parse: {:?}",
-                        e
-                    );
-                    lnurl_error("internal server error")
-                })
-            })
-            .transpose()?;
+        let zap_request = match &params.nostr {
+            Some(event) => {
+                let Some(receipt_pubkey) =
+                    user_nostr_pubkey(state.nostr_keys.as_ref(), &user.pubkey)?
+                else {
+                    trace!("nostr zap not supported");
+                    return Err(lnurl_error("nostr zap not supported"));
+                };
 
-        let desc_hash = if let Some(event) = &params.nostr {
-            if nostr_pubkey.is_none() {
-                trace!("nostr zap not supported");
-                return Err(lnurl_error("nostr zap not supported"));
+                if event.len() > MAX_NOSTR_EVENT_SIZE {
+                    return Err(lnurl_error("nostr event too large"));
+                }
+
+                let event = Event::from_json(event).map_err(|e| {
+                    trace!("invalid nostr event, could not parse: {}", e);
+                    lnurl_error("invalid nostr event")
+                })?;
+                validate_nostr_zap_request(amount_msat, &event, receipt_pubkey)?;
+                log_lnurl_tag_mismatch(&event, &domain, &user.name);
+
+                Some(event)
             }
+            None => None,
+        };
 
-            if event.len() > MAX_NOSTR_EVENT_SIZE {
-                return Err(lnurl_error("nostr event too large"));
-            }
-
-            let event = Event::from_json(event).map_err(|e| {
-                trace!("invalid nostr event, could not parse: {}", e);
-                lnurl_error("invalid nostr event")
-            })?;
-            validate_nostr_zap_request(amount_msat, &event)?;
+        let desc_hash = if let Some(event) = &zap_request {
             sha256::Hash::hash(event.as_json().as_bytes())
         } else {
             let metadata = get_metadata(&user.domain, &user);
@@ -566,10 +598,12 @@ where
         })?;
 
         // save to zap event to db
-        if let Some(zap_request) = params.nostr {
+        if let Some(event) = zap_request {
             let zap = Zap {
                 payment_hash: payment_hash.clone(),
-                zap_request,
+                // Canonical form, matching the description hash the invoice
+                // commits to and the receipt's description tag.
+                zap_request: event.as_json(),
                 zap_event: None,
                 user_pubkey: user.pubkey.clone(),
                 invoice_expiry,
@@ -841,6 +875,7 @@ where
 fn validate_nostr_zap_request(
     amount_msat: u64,
     event: &Event,
+    receipt_pubkey: XOnlyPublicKey,
 ) -> Result<(), (StatusCode, Json<Value>)> {
     if event.kind != Kind::ZapRequest {
         trace!("nostr event is incorrect kind");
@@ -911,9 +946,139 @@ fn validate_nostr_zap_request(
     // 7. If there is an 'a' tag, it MUST be a valid event coordinate
     // NOTE: Assuming the tag is well-formed and contains the necessary fields, because it's standard.
 
-    // 8. There MUST be 0 or 1 P tags. If there is one, it MUST be equal to the zap receipt's pubkey.
-    // TODO: Implement this check.
+    // 8. There MUST be 0 or 1 P tags. If there is one, it MUST be equal to the
+    // zap receipt's pubkey, which is the key this user's receipts are signed
+    // with. A sender holds it already, having read it from the LNURL-pay
+    // response, so setting it pins the key they expect to see sign the receipt.
+    let mut uppercase_p_tags = event.tags.iter().filter(|t| {
+        t.single_letter_tag()
+            .is_some_and(|t| t.is_uppercase() && t.character == Alphabet::P)
+    });
+    if let Some(tag) = uppercase_p_tags.next() {
+        if uppercase_p_tags.next().is_some() {
+            trace!("invalid nostr event, multiple 'P' tags");
+            return Err(lnurl_error("invalid nostr event"));
+        }
+
+        let pinned_signer = tag
+            .content()
+            .and_then(|content| nostr::PublicKey::parse(content).ok())
+            .and_then(|pubkey| pubkey.xonly().ok());
+        if pinned_signer != Some(receipt_pubkey) {
+            trace!("invalid nostr event, 'P' tag is not the receipt signer");
+            return Err(lnurl_error("invalid nostr event"));
+        }
+    }
+
     Ok(())
+}
+
+/// The `nostrPubkey` an address advertises. NIP-57 validates a receipt against
+/// this, so it must be the key the publisher signs that address's receipts
+/// with. `None` when the service runs without a nostr key, which is also how it
+/// reports that it supports no zaps.
+fn user_nostr_pubkey(
+    nostr_keys: Option<&nostr::Keys>,
+    owner_pubkey: &str,
+) -> Result<Option<XOnlyPublicKey>, (StatusCode, Json<Value>)> {
+    let Some(nostr_keys) = nostr_keys else {
+        return Ok(None);
+    };
+
+    let xonly_pubkey = derive_user_nostr_keys(nostr_keys, owner_pubkey)
+        .map_err(|e| {
+            error!("could not derive the receipt signing key: {e}");
+            lnurl_error("internal server error")
+        })?
+        .public_key
+        .xonly()
+        .map_err(|e| {
+            error!("derived nostr pubkey could not be parsed: {:?}", e);
+            lnurl_error("internal server error")
+        })?;
+    Ok(Some(xonly_pubkey))
+}
+
+/// Warn when a zap request names an lnurl other than the address being paid,
+/// which NIP-57 expects to match.
+///
+/// Logged rather than rejected while the shape of real traffic is measured:
+/// senders emit bech32, bare lightning addresses and plain URLs, and a
+/// deployment serving several domains may see legitimate cross-domain values.
+fn log_lnurl_tag_mismatch(event: &Event, domain: &str, username: &str) {
+    let Some(tag) = event.tags.iter().find_map(|t| {
+        if let Some(TagStandard::Lnurl(lnurl)) = t.as_standardized() {
+            Some(lnurl.clone())
+        } else {
+            None
+        }
+    }) else {
+        return;
+    };
+
+    match decode_lnurl_tag(&tag) {
+        Some(decoded) if lnurl_targets_address(&decoded, domain, username) => {}
+        Some(decoded) => warn!(
+            "zap request lnurl tag names {}, but the invoice is for {username}@{domain}",
+            for_log(&decoded)
+        ),
+        None => warn!(
+            "zap request lnurl tag could not be decoded: {}",
+            for_log(&tag)
+        ),
+    }
+}
+
+/// Bound a sender-supplied value before it reaches the log. A tag carries
+/// whatever fits in a zap request, which is `MAX_NOSTR_EVENT_SIZE` bytes.
+fn for_log(value: &str) -> String {
+    /// Longer than any real lnurl, which runs to a couple of hundred
+    /// characters in its bech32 form.
+    const MAX_LOGGED_CHARS: usize = 256;
+
+    let mut logged: String = value.chars().take(MAX_LOGGED_CHARS).collect();
+    if logged.chars().count() < value.chars().count() {
+        logged.push_str("... (truncated)");
+    }
+    logged
+}
+
+/// Resolve an `lnurl` tag to the http(s) URL it stands for. Accepts the bech32
+/// form the spec describes plus the bare lightning address and plain URL forms
+/// senders also emit.
+fn decode_lnurl_tag(tag: &str) -> Option<String> {
+    if let Ok((hrp, data)) = bech32::decode(tag)
+        && hrp.to_lowercase() == "lnurl"
+    {
+        return String::from_utf8(data).ok();
+    }
+
+    if let Some((name, domain)) = tag.split_once('@')
+        && !name.is_empty()
+        && !domain.is_empty()
+        && !domain.contains('/')
+    {
+        return Some(format!("https://{domain}/.well-known/lnurlp/{name}"));
+    }
+
+    tag.contains("://").then(|| tag.to_string())
+}
+
+/// Whether an lnurl-pay URL addresses `username` at `domain`, across the LUD-16
+/// well-known path and the shorter path this service also serves.
+fn lnurl_targets_address(lnurl: &str, domain: &str, username: &str) -> bool {
+    let rest = LNURL_SCHEME_PREFIXES
+        .iter()
+        .find_map(|prefix| lnurl.strip_prefix(prefix))
+        .or_else(|| lnurl.split_once("://").map(|(_, rest)| rest))
+        .unwrap_or(lnurl)
+        .trim_end_matches('/')
+        .to_lowercase();
+
+    let domain = domain.to_lowercase();
+    let username = sanitize_username(username);
+    rest == format!("{domain}/.well-known/lnurlp/{username}")
+        || rest == format!("{domain}/lnurlp/{username}")
 }
 
 fn validate_username(username: &str) -> Result<(), (StatusCode, Json<Value>)> {
@@ -1017,18 +1182,21 @@ async fn validate<DB>(
     timestamp: u64,
     state: &State<DB>,
 ) -> Result<PublicKey, (StatusCode, Json<Value>)> {
-    validate_any(pubkey, signature, &[message.to_string()], timestamp, state).await
+    validate_any(pubkey, signature, &[message.to_string()], timestamp, state)
+        .await
+        .map(|(pubkey, _)| pubkey)
 }
 
 /// The messages an unregister signature may cover, most-preferred first.
 ///
 /// The `unregister:` prefix domain-separates deletion from the other signed
 /// messages, so a signature captured from another route cannot authorize one.
-/// The bare form is `register`'s and stays interchangeable with it, which keeps
-/// a captured register request replayable as a deletion.
+/// The bare form is `register`'s and stays interchangeable with it, so what
+/// stops a captured register request deleting the address is register having
+/// claimed that statement first.
 ///
 /// TODO: Remove the bare candidate after all clients have migrated to the
-/// prefix, and flip `register_signature_authorizes_unregister_until_the_legacy_form_is_dropped`.
+/// prefix, and flip `register_signature_still_verifies_against_the_legacy_message`.
 fn unregister_candidate_messages(username: &str) -> Vec<String> {
     vec![format!("unregister:{username}"), username.to_string()]
 }
@@ -1068,25 +1236,118 @@ fn unregister_action(signed_name: &str, registered: Option<&User>) -> Unregister
     }
 }
 
-/// Verify `signature` against each candidate message, accepting the first match.
+/// A route that claims the statements it acts on, so the same signature is
+/// never acted on twice.
+///
+/// Transfers claim inside their own transaction, so they name their route
+/// there rather than here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SignedRoute {
+    Register,
+    Unregister,
+}
+
+impl SignedRoute {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Register => "register",
+            Self::Unregister => "unregister",
+        }
+    }
+}
+
+/// Identify the statement a signature authorized, for the claim record.
+///
+/// Hashes what was authorized rather than the signature bytes: ECDSA
+/// signatures are malleable, so keying on them would let a reshaped signature
+/// re-authorize a statement that was already claimed.
+fn statement_hash(pubkey: &PublicKey, signed_message: &str) -> [u8; 32] {
+    let mut engine = sha256::Hash::engine();
+    engine.input(pubkey.to_string().as_bytes());
+    // Separator: the pubkey is fixed-width hex, but the boundary is still worth
+    // marking so no pubkey/message split can be read two ways.
+    engine.input(b"\x00");
+    engine.input(signed_message.as_bytes());
+    sha256::Hash::from_engine(engine).to_byte_array()
+}
+
+/// Claim the statement a verified signature authorized, rejecting a replay.
+///
+/// A statement is claimable once, whichever route presents it and whichever
+/// host the request was addressed to. Claims before the route acts, so a replay
+/// cannot slip in alongside the request it copies.
+///
+/// A client that has to retry re-signs, which produces a fresh timestamp and so
+/// a statement of its own. Resending identical bytes is rejected.
+async fn claim_statement<DB>(
+    state: &State<DB>,
+    route: SignedRoute,
+    hash: &[u8; 32],
+    expires_at: i64,
+) -> Result<(), (StatusCode, Json<Value>)>
+where
+    DB: LnurlRepository,
+{
+    let claimed = state
+        .db
+        .claim_signed_message(hash, route.as_str(), expires_at)
+        .await
+        .map_err(|e| {
+            error!("failed to claim signed message: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(Value::String("internal server error".into())),
+            )
+        })?;
+
+    if claimed {
+        return Ok(());
+    }
+
+    trace!("signature already used, rejecting on '{}'", route.as_str());
+    Err((
+        StatusCode::CONFLICT,
+        Json(Value::String("signature has already been used".into())),
+    ))
+}
+
+/// When a claim over a message nothing bounds in time may be pruned: never.
+/// Dropping it would put the statement back in play, since no other check
+/// refuses it later.
+fn claim_expiry_unbounded() -> i64 {
+    i64::MAX
+}
+
+/// When a claim over a timestamped message may be pruned. Past this point
+/// [`parse_signed_request`] rejects the timestamp on its own.
+fn claim_expiry(timestamp: u64) -> i64 {
+    // Saturating: an unrepresentable expiry only retains the claim longer, and
+    // `parse_signed_request` has already bounded the timestamp to now anyway.
+    i64::try_from(timestamp.saturating_add(ACCEPTABLE_TIME_DIFF_SECS)).unwrap_or(i64::MAX)
+}
+
+/// Verify `signature` against each candidate message, accepting the first
+/// match. Returns the verified pubkey and the exact bytes it covered, which
+/// identify the statement for [`claim_statement`].
 async fn validate_any<DB>(
     pubkey: &str,
     signature: &str,
     messages: &[String],
     timestamp: u64,
     state: &State<DB>,
-) -> Result<PublicKey, (StatusCode, Json<Value>)> {
+) -> Result<(PublicKey, String), (StatusCode, Json<Value>)> {
     // Hoisted out of the loop below: parsing does not depend on the message.
     let (pubkey, signature) = parse_signed_request(pubkey, signature, timestamp)?;
 
     for message in messages {
+        let signed = format!("{message}-{timestamp}");
         if state
             .wallet
-            .verify_message(&format!("{message}-{timestamp}"), &signature, &pubkey)
+            .verify_message(&signed, &signature, &pubkey)
             .await
             .is_ok()
         {
-            return Ok(pubkey);
+            return Ok((pubkey, signed));
         }
     }
 
@@ -1100,12 +1361,16 @@ async fn validate_any<DB>(
 /// Verify a transfer-route signature over the canonical message
 /// `"transfer:{username}-{to_pubkey}"`. Used symmetrically on both ends: the
 /// current owner A and the new owner B sign the exact same bytes, and the
-/// route calls this once per signature. No timestamp — replay can only
-/// re-execute the same A → B → username transfer, which the server-side
-/// atomic delete bounds to the case where A still owns the name. The
-/// `"transfer:"` prefix domain-separates from `validate()`'s
-/// `"{message}-{timestamp}"` format so a captured register signature cannot
-/// be replayed as a transfer.
+/// route calls this once per signature.
+///
+/// Nothing bounds the message in time, so a replay can only re-execute the same
+/// A to B transfer of the same username. `transfer_username` claims the
+/// statement it acts on and refuses one already claimed, which bounds that to
+/// zero further executions.
+///
+/// The `"transfer:"` prefix domain-separates from `validate()`'s
+/// `"{message}-{timestamp}"` format so a captured register signature cannot be
+/// replayed as a transfer.
 async fn verify_transfer_signature<DB>(
     pubkey: &str,
     signature: &str,
@@ -1235,10 +1500,14 @@ mod tests {
 
     // -- Mock repository -------------------------------------------------------
 
+    /// Claimed statement hash to the route that claimed it.
+    type ClaimedMessages = std::sync::Arc<Mutex<HashMap<Vec<u8>, String>>>;
+
     #[derive(Clone, Default)]
     struct MockRepository {
         invoices: std::sync::Arc<Mutex<HashMap<String, Invoice>>>,
         pending_zap_receipts: std::sync::Arc<Mutex<HashMap<String, PendingZapReceipt>>>,
+        claimed_messages: ClaimedMessages,
     }
 
     #[async_trait::async_trait]
@@ -1250,6 +1519,27 @@ mod tests {
             _: &str,
         ) -> Result<bool, LnurlRepositoryError> {
             Ok(true)
+        }
+        async fn claim_signed_message(
+            &self,
+            statement_hash: &[u8],
+            route: &str,
+            _: i64,
+        ) -> Result<bool, LnurlRepositoryError> {
+            let mut claimed = self.claimed_messages.lock().unwrap();
+            match claimed.entry(statement_hash.to_vec()) {
+                std::collections::hash_map::Entry::Occupied(_) => Ok(false),
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(route.to_string());
+                    Ok(true)
+                }
+            }
+        }
+        async fn delete_expired_signed_messages(
+            &self,
+            _: i64,
+        ) -> Result<u64, LnurlRepositoryError> {
+            Ok(0)
         }
         async fn get_user_by_name(
             &self,
@@ -1275,6 +1565,7 @@ mod tests {
             _: &str,
             _: &str,
             _: &str,
+            _: StatementClaim<'_>,
         ) -> Result<(), LnurlRepositoryError> {
             Ok(())
         }
@@ -2226,11 +2517,14 @@ mod tests {
     }
 
     #[test]
-    fn register_signature_authorizes_unregister_until_the_legacy_form_is_dropped() {
+    fn register_signature_still_verifies_against_the_legacy_message() {
         let (secret_key, public_key) = transfer_key(0x11);
         let signature = sign(&secret_key, &format!("alice-{TEST_TIMESTAMP}"));
 
-        // Register's format is still accepted while clients migrate. Flip this to
+        // Register's format keeps verifying while clients migrate. What stops it
+        // deleting the address is the claim register takes on the same
+        // statement, covered by
+        // `register_and_legacy_unregister_claim_one_statement`. Flip this to
         // assert!(!...) when the legacy candidate is removed.
         assert!(authorizes_unregister(
             &public_key,
@@ -2238,6 +2532,44 @@ mod tests {
             "alice",
             TEST_TIMESTAMP
         ));
+    }
+
+    #[test]
+    fn register_and_legacy_unregister_claim_one_statement() {
+        let (_, public_key) = transfer_key(0x11);
+
+        // Register signs "{username}-{timestamp}". The legacy unregister
+        // candidate reproduces those exact bytes, so a register signature
+        // replayed to unregister lands on the statement register already
+        // claimed, and a claimed statement is refused.
+        let registered = statement_hash(&public_key, &format!("alice-{TEST_TIMESTAMP}"));
+        let mut candidates = unregister_candidate_messages("alice")
+            .into_iter()
+            .map(|message| statement_hash(&public_key, &format!("{message}-{TEST_TIMESTAMP}")));
+
+        assert!(candidates.any(|hash| hash == registered));
+    }
+
+    #[test]
+    fn prefixed_unregister_claims_a_different_statement_than_register() {
+        let (_, public_key) = transfer_key(0x11);
+
+        assert_ne!(
+            statement_hash(&public_key, &format!("alice-{TEST_TIMESTAMP}")),
+            statement_hash(&public_key, &format!("unregister:alice-{TEST_TIMESTAMP}"))
+        );
+    }
+
+    #[test]
+    fn a_statement_is_bound_to_the_pubkey_that_signed_it() {
+        let (_, first) = transfer_key(0x11);
+        let (_, second) = transfer_key(0x22);
+        let signed = format!("alice-{TEST_TIMESTAMP}");
+
+        assert_ne!(
+            statement_hash(&first, &signed),
+            statement_hash(&second, &signed)
+        );
     }
 
     #[test]
@@ -2285,5 +2617,200 @@ mod tests {
     fn username_cannot_forge_the_unregister_prefix() {
         // The prefix only separates because ':' is outside the username charset.
         assert!(validate_username("unregister:alice").is_err());
+    }
+
+    // -- Zap request validation ------------------------------------------------
+
+    fn zap_request(tags: Vec<nostr::Tag>, keys: &nostr::Keys) -> Event {
+        nostr::EventBuilder::new(nostr::Kind::ZapRequest, "")
+            .tags(tags)
+            .sign_with_keys(keys)
+            .unwrap()
+    }
+
+    /// The tags every zap request needs to get past the earlier rules.
+    fn base_tags() -> Vec<nostr::Tag> {
+        vec![
+            nostr::Tag::public_key(nostr::Keys::generate().public_key),
+            nostr::Tag::from_standardized_without_cell(TagStandard::Relays(vec![
+                "wss://relay.example".parse().unwrap(),
+            ])),
+        ]
+    }
+
+    fn uppercase_p_tag(pubkey: nostr::PublicKey) -> nostr::Tag {
+        nostr::Tag::from_standardized_without_cell(TagStandard::PublicKey {
+            public_key: pubkey,
+            relay_url: None,
+            alias: None,
+            uppercase: true,
+        })
+    }
+
+    /// The key the request would be receipted with, as a sender reads it from
+    /// the LNURL-pay response.
+    fn receipt_signer() -> (nostr::Keys, XOnlyPublicKey) {
+        let keys = nostr::Keys::generate();
+        let xonly = keys.public_key.xonly().unwrap();
+        (keys, xonly)
+    }
+
+    #[test]
+    fn zap_request_without_a_p_tag_is_accepted() {
+        let (_, signer) = receipt_signer();
+        let event = zap_request(base_tags(), &nostr::Keys::generate());
+        assert!(validate_nostr_zap_request(1000, &event, signer).is_ok());
+    }
+
+    #[test]
+    fn zap_request_with_a_stale_created_at_is_accepted() {
+        // NIP-57 sets no timestamp tolerance, and a sender's clock is not ours
+        // to police; a request is held to one receipt instead.
+        let (_, signer) = receipt_signer();
+        let event = nostr::EventBuilder::new(nostr::Kind::ZapRequest, "")
+            .tags(base_tags())
+            .custom_created_at(nostr::Timestamp::from(1_600_000_000))
+            .sign_with_keys(&nostr::Keys::generate())
+            .unwrap();
+        assert!(validate_nostr_zap_request(1000, &event, signer).is_ok());
+    }
+
+    /// Rule 8: a `P` tag pins the key the sender expects to sign the receipt,
+    /// so it has to be this user's, not the sender's own.
+    #[test]
+    fn zap_request_p_tag_must_be_the_receipt_signer() {
+        let (signer_keys, signer) = receipt_signer();
+        let sender = nostr::Keys::generate();
+
+        let mut tags = base_tags();
+        tags.push(uppercase_p_tag(signer_keys.public_key));
+        assert!(validate_nostr_zap_request(1000, &zap_request(tags, &sender), signer).is_ok());
+
+        let mut tags = base_tags();
+        tags.push(uppercase_p_tag(sender.public_key));
+        assert!(
+            validate_nostr_zap_request(1000, &zap_request(tags, &sender), signer).is_err(),
+            "a 'P' tag pinning any key but the receipt signer must be rejected"
+        );
+    }
+
+    #[test]
+    fn zap_request_with_multiple_p_tags_is_rejected() {
+        let (signer_keys, signer) = receipt_signer();
+        let sender = nostr::Keys::generate();
+        let mut tags = base_tags();
+        tags.push(uppercase_p_tag(signer_keys.public_key));
+        tags.push(uppercase_p_tag(signer_keys.public_key));
+        assert!(validate_nostr_zap_request(1000, &zap_request(tags, &sender), signer).is_err());
+    }
+
+    // -- Advertised nostr pubkey ----------------------------------------------
+
+    /// The key an address advertises must be the one its receipts are signed
+    /// with, which is the whole of NIP-57 Appendix F. Signing here mirrors
+    /// `publish_zap_receipt`, so advertising the server key, or deriving from
+    /// the wrong field, fails this.
+    #[test]
+    fn an_address_advertises_the_key_its_receipts_are_signed_with() {
+        let server = nostr::Keys::generate();
+        let owner = "02a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+        let other_owner = "03f0e1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5e4f30211203f4e5d6c7b8a9";
+
+        let request = zap_request(base_tags(), &nostr::Keys::generate());
+        let receipt =
+            nostr::EventBuilder::zap_receipt("lnbc1", Some("preimage".to_string()), &request)
+                .sign_with_keys(&crate::zap::derive_user_nostr_keys(&server, owner).unwrap())
+                .unwrap();
+
+        let advertised = user_nostr_pubkey(Some(&server), owner).unwrap();
+        assert_eq!(
+            advertised,
+            Some(receipt.pubkey.xonly().unwrap()),
+            "the advertised key does not verify this address's own receipts"
+        );
+        assert_ne!(
+            user_nostr_pubkey(Some(&server), other_owner).unwrap(),
+            advertised,
+            "two owners advertising one key makes their receipts interchangeable"
+        );
+    }
+
+    #[test]
+    fn no_nostr_key_advertises_no_zap_support() {
+        assert_eq!(user_nostr_pubkey(None, "02ab").unwrap(), None);
+    }
+
+    // -- lnurl tag ------------------------------------------------------------
+
+    #[test]
+    fn a_logged_tag_is_bounded() {
+        let real = "lnurl1dp68gurn8ghj7cmpddjjucmpwd5z7tnhv4kxctttdehhwm30d3h82unvwqhkyetyw35k6etkd93x2uch9e86k";
+        assert_eq!(for_log(real), real, "a real lnurl must not be truncated");
+
+        let huge = "a".repeat(32_000);
+        let logged = for_log(&huge);
+        assert!(
+            logged.chars().count() < 300,
+            "logged {} chars",
+            logged.chars().count()
+        );
+        assert!(logged.ends_with("... (truncated)"));
+    }
+
+    #[test]
+    fn lnurl_tag_decodes_every_shape_senders_emit() {
+        // bech32, the only form NIP-57 describes, in both cases.
+        let bech32_lower = "lnurl1dp68gurn8ghj7cmpddjjucmpwd5z7tnhv4kxctttdehhwm30d3h82unvwqhkyetyw35k6etkd93x2uch9e86k";
+        assert_eq!(
+            decode_lnurl_tag(bech32_lower),
+            decode_lnurl_tag(&bech32_lower.to_uppercase()),
+            "bech32 is case insensitive, so both spellings must resolve alike"
+        );
+        assert!(
+            decode_lnurl_tag(bech32_lower).is_some_and(|decoded| decoded.starts_with("https://")),
+            "expected an http(s) url, got {:?}",
+            decode_lnurl_tag(bech32_lower)
+        );
+
+        // A bare lightning address, which senders emit despite the spec.
+        assert_eq!(
+            decode_lnurl_tag("alice@example.com").as_deref(),
+            Some("https://example.com/.well-known/lnurlp/alice")
+        );
+
+        // A plain url, likewise.
+        assert_eq!(
+            decode_lnurl_tag("https://example.com/.well-known/lnurlp/alice").as_deref(),
+            Some("https://example.com/.well-known/lnurlp/alice")
+        );
+
+        assert_eq!(decode_lnurl_tag("not an lnurl"), None);
+    }
+
+    #[test]
+    fn lnurl_tag_matches_only_the_address_being_paid() {
+        for lnurl in [
+            "https://example.com/.well-known/lnurlp/alice",
+            "https://example.com/lnurlp/alice",
+            "https://example.com/lnurlp/alice/",
+            "lnurlp://example.com/lnurlp/alice",
+            "https://EXAMPLE.com/lnurlp/Alice",
+        ] {
+            assert!(
+                lnurl_targets_address(lnurl, "example.com", "alice"),
+                "{lnurl} should address alice@example.com"
+            );
+        }
+
+        for lnurl in [
+            "https://example.com/.well-known/lnurlp/bob",
+            "https://other.com/.well-known/lnurlp/alice",
+            "https://example.com/lnurlp/alice/extra",
+        ] {
+            assert!(
+                !lnurl_targets_address(lnurl, "example.com", "alice"),
+                "{lnurl} should not address alice@example.com"
+            );
+        }
     }
 }

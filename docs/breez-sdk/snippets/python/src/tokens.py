@@ -7,10 +7,13 @@ from breez_sdk_spark import (
     GetTokensMetadataRequest,
     PaymentRequest,
     PrepareSendPaymentRequest,
+    PrepareSendBatchRequest,
     ReceivePaymentMethod,
     ReceivePaymentRequest,
     SendPaymentMethod,
     SendPaymentRequest,
+    SendBatchRequest,
+    BatchRecipient,
     ConversionOptions,
     ConversionType,
 )
@@ -129,6 +132,48 @@ async def send_token_payment(sdk: BreezSdk):
         logging.error(error)
         raise
     # ANCHOR_END: send-token-payment
+
+
+async def send_batch(sdk: BreezSdk):
+    # ANCHOR: send-batch
+    try:
+        # Each recipient is a Spark address or a Spark invoice. An invoice that
+        # names its own token and amount needs neither here.
+        recipients = [
+            BatchRecipient(
+                payment_request="<spark address>",
+                amount=1_000,
+                token_identifier="<token identifier>",
+            ),
+            BatchRecipient(
+                payment_request="<spark invoice>",
+                amount=None,
+                token_identifier=None,
+            ),
+        ]
+
+        prepare_response = await sdk.prepare_send_batch(
+            request=PrepareSendBatchRequest(recipients=recipients)
+        )
+
+        # Show what the batch debits, one entry per token
+        for total in prepare_response.totals:
+            # Unset would mean sats, which a batch cannot send yet
+            print(f"Token ID: {total.token_identifier}")
+            print(f"Total: {total.amount} token base units")
+
+        # If the totals are acceptable, send the batch
+        send_response = await sdk.send_batch(
+            request=SendBatchRequest(prepare_response=prepare_response)
+        )
+
+        # One payment per recipient, in the order they were requested
+        for payment in send_response.payments:
+            print(f"Payment: {payment}")
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: send-batch
 
 
 async def fetch_conversion_limits(sdk: BreezSdk):

@@ -6,9 +6,10 @@ use breez_sdk_itest::{
     ensure_funded, wait_for_payment_succeeded_event,
 };
 use breez_sdk_spark::{
-    BuildTransferPackageOptions, BuildUnsignedTransferPackageRequest, CreateIssuerTokenRequest,
-    FeePolicy, GetInfoRequest, LeafOptimizationConfig, MintIssuerTokenRequest, Network,
-    OnchainConfirmationSpeed, Payment, PaymentMethod, PaymentRequest, PaymentStatus, PaymentType,
+    BatchRecipient, BuildTransferPackageOptions, BuildUnsignedBatchPackageRequest,
+    BuildUnsignedTransferPackageRequest, CreateIssuerTokenRequest, FeePolicy, GetInfoRequest,
+    LeafOptimizationConfig, MintIssuerTokenRequest, Network, OnchainConfirmationSpeed, Payment,
+    PaymentMethod, PaymentRequest, PaymentStatus, PaymentType, PrepareSendBatchRequest,
     PrepareSendPaymentRequest, PublishSignedTransferPackageRequest,
     PublishSignedTransferPackageResponse, ReceivePaymentMethod, ReceivePaymentRequest,
     SendPaymentMethod, SignedTransferPackage, SyncWalletRequest, TransferSignature,
@@ -105,7 +106,7 @@ async fn client_sign_transfer_send(
             } => TransferSignature::Transfer {
                 signed: signer.prepare_transfer(prepare_transfer.clone()).await?,
             },
-            UnsignedTransferPackage::Token { .. } => {
+            UnsignedTransferPackage::Token { .. } | UnsignedTransferPackage::TokenBatch { .. } => {
                 panic!("unexpected token package for a transfer send")
             }
         };
@@ -120,6 +121,9 @@ async fn client_sign_transfer_send(
             })
             .await?
         {
+            PublishSignedTransferPackageResponse::PaymentsSent { .. } => {
+                panic!("unexpected batch response for a single-recipient send")
+            }
             PublishSignedTransferPackageResponse::SwapCompleted => continue,
             PublishSignedTransferPackageResponse::PaymentSent { payment } => return Ok(payment),
         }
@@ -201,7 +205,7 @@ async fn test_client_signing_send_with_denomination_swap() -> Result<()> {
                     .prepare_transfer(prepare_transfer.clone())
                     .await?,
             },
-            UnsignedTransferPackage::Token { .. } => {
+            UnsignedTransferPackage::Token { .. } | UnsignedTransferPackage::TokenBatch { .. } => {
                 panic!("unexpected token package for a sats send")
             }
         };
@@ -215,6 +219,9 @@ async fn test_client_signing_send_with_denomination_swap() -> Result<()> {
             .publish_signed_transfer_package(PublishSignedTransferPackageRequest { signed_package })
             .await?
         {
+            PublishSignedTransferPackageResponse::PaymentsSent { .. } => {
+                panic!("unexpected batch response for a single-recipient send")
+            }
             PublishSignedTransferPackageResponse::SwapCompleted => {
                 info!("client-signing iteration {iterations}: swap required");
                 saw_swap = true;
@@ -714,6 +721,9 @@ async fn test_client_signing_token_send_with_consolidation() -> Result<()> {
             .await?;
 
         match response {
+            PublishSignedTransferPackageResponse::PaymentsSent { .. } => {
+                panic!("unexpected batch response for a single-recipient send")
+            }
             PublishSignedTransferPackageResponse::SwapCompleted => {
                 assert!(is_swap, "SwapCompleted must come from a swap package");
                 consolidations += 1;
@@ -954,7 +964,7 @@ async fn test_client_signing_coop_exit() -> Result<()> {
                     .prepare_transfer(prepare_transfer.clone())
                     .await?,
             },
-            UnsignedTransferPackage::Token { .. } => {
+            UnsignedTransferPackage::Token { .. } | UnsignedTransferPackage::TokenBatch { .. } => {
                 panic!("unexpected token package for a coop-exit")
             }
         };
@@ -968,6 +978,9 @@ async fn test_client_signing_coop_exit() -> Result<()> {
             .publish_signed_transfer_package(PublishSignedTransferPackageRequest { signed_package })
             .await?
         {
+            PublishSignedTransferPackageResponse::PaymentsSent { .. } => {
+                panic!("unexpected batch response for a single-recipient send")
+            }
             PublishSignedTransferPackageResponse::SwapCompleted => {
                 info!("coop-exit iteration {iterations}: swap required");
                 continue;
@@ -1224,7 +1237,7 @@ async fn test_client_signing_lightning_send_fees_included() -> Result<()> {
                     .prepare_transfer(prepare_transfer.clone())
                     .await?,
             },
-            UnsignedTransferPackage::Token { .. } => {
+            UnsignedTransferPackage::Token { .. } | UnsignedTransferPackage::TokenBatch { .. } => {
                 panic!("unexpected token package for a sats send")
             }
         };
@@ -1239,6 +1252,9 @@ async fn test_client_signing_lightning_send_fees_included() -> Result<()> {
             })
             .await?
         {
+            PublishSignedTransferPackageResponse::PaymentsSent { .. } => {
+                panic!("unexpected batch response for a single-recipient send")
+            }
             PublishSignedTransferPackageResponse::SwapCompleted => continue,
             PublishSignedTransferPackageResponse::PaymentSent { payment } => {
                 assert!(
@@ -1262,5 +1278,148 @@ async fn test_client_signing_lightning_send_fees_included() -> Result<()> {
     );
 
     info!("=== Test test_client_signing_lightning_send_fees_included PASSED ===");
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_client_signing_token_batch() -> Result<()> {
+    info!("=== Starting test_client_signing_token_batch ===");
+
+    let alice_mnemonic = random_mnemonic()?;
+    let alice = build_alice_manual_opt(alice_mnemonic.clone()).await?;
+    let bob = build_bob().await?;
+
+    let client_signer =
+        default_external_signers(alice_mnemonic, None, Network::Regtest, None)?.spark_signer;
+
+    let issuer = alice.sdk.get_token_issuer();
+    let token_metadata = issuer
+        .create_issuer_token(CreateIssuerTokenRequest {
+            name: "client-signing batch".to_string(),
+            ticker: "CSB".to_string(),
+            decimals: 0,
+            is_freezable: false,
+            max_supply: 1_000_000,
+        })
+        .await?;
+    issuer
+        .mint_issuer_token(MintIssuerTokenRequest { amount: 1_000_000 })
+        .await?;
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let token_id = token_metadata.identifier.clone();
+
+    let bob_spark_address = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+    let bob_invoice = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkInvoice {
+                amount: Some(40),
+                token_identifier: Some(token_id.clone()),
+                expiry_time: None,
+                description: None,
+                sender_public_key: None,
+            },
+        })
+        .await?
+        .payment_request;
+
+    let prepare_response = alice
+        .sdk
+        .prepare_send_batch(PrepareSendBatchRequest {
+            recipients: vec![
+                BatchRecipient {
+                    payment_request: bob_spark_address,
+                    amount: Some(60),
+                    token_identifier: Some(token_id.clone()),
+                },
+                BatchRecipient {
+                    payment_request: bob_invoice,
+                    amount: None,
+                    token_identifier: None,
+                },
+            ],
+        })
+        .await?;
+
+    let unsigned = alice
+        .sdk
+        .build_unsigned_batch_package(BuildUnsignedBatchPackageRequest { prepare_response })
+        .await?;
+
+    let UnsignedTransferPackage::TokenBatch {
+        prepare_token_transaction,
+        totals,
+        is_swap,
+        ..
+    } = &unsigned
+    else {
+        panic!("expected a TokenBatch unsigned package for a batch send");
+    };
+    assert!(!is_swap, "a funded wallet needs no consolidation here");
+    assert_eq!(totals.len(), 1, "one token, so one total");
+    assert_eq!(totals[0].amount, 100, "the batch debits both recipients");
+
+    let signed = client_signer
+        .prepare_token_transaction(prepare_token_transaction.clone())
+        .await?;
+    let signature = TransferSignature::Token { signed };
+    let signed_package = SignedTransferPackage {
+        unsigned,
+        signature,
+    };
+
+    let PublishSignedTransferPackageResponse::PaymentsSent { payments } = alice
+        .sdk
+        .publish_signed_transfer_package(PublishSignedTransferPackageRequest {
+            signed_package: signed_package.clone(),
+        })
+        .await?
+    else {
+        panic!("expected PaymentsSent for a batch package");
+    };
+    assert_eq!(payments.len(), 2, "one payment per recipient");
+    assert_eq!(payments[0].amount, 60, "payments in recipient order");
+    assert_eq!(payments[1].amount, 40);
+
+    // Publishing the same package again must replay the batch rather than spend
+    // the outputs a second time.
+    let PublishSignedTransferPackageResponse::PaymentsSent { payments: replayed } = alice
+        .sdk
+        .publish_signed_transfer_package(PublishSignedTransferPackageRequest { signed_package })
+        .await?
+    else {
+        panic!("expected PaymentsSent when replaying a batch package");
+    };
+    assert_eq!(
+        replayed.iter().map(|p| p.id.clone()).collect::<Vec<_>>(),
+        payments.iter().map(|p| p.id.clone()).collect::<Vec<_>>(),
+        "a replay returns the same payments, in the same order"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let bob_token_balance = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .token_balances
+        .get(&token_id)
+        .map(|b| b.balance)
+        .unwrap_or(0);
+    assert_eq!(
+        bob_token_balance, 100,
+        "Bob receives both outputs exactly once"
+    );
+
+    info!("=== Test test_client_signing_token_batch PASSED ===");
     Ok(())
 }

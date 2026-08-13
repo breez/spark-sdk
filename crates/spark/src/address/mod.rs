@@ -1,6 +1,6 @@
 pub mod error;
 
-use std::{fmt::Debug, str::FromStr, time::Duration};
+use std::{fmt::Debug, str::FromStr};
 
 use crate::{
     operator::rpc::spark::{
@@ -186,11 +186,14 @@ impl TryFrom<(ProtoSparkInvoiceFields, Network)> for SparkInvoiceFields {
             })?),
             version: proto.version,
             sender_public_key,
-            expiry_time: proto.expiry_time.map(|t| {
-                UNIX_EPOCH
-                    + Duration::from_secs(t.seconds as u64)
-                    + Duration::from_nanos(t.nanos as u64)
-            }),
+            expiry_time: proto
+                .expiry_time
+                .map(|t| {
+                    crate::utils::time::prost_timestamp_to_web_time(&t).ok_or_else(|| {
+                        AddressError::InvalidPaymentIntent("Invalid expiry time".to_string())
+                    })
+                })
+                .transpose()?,
             payment_type,
             memo: proto.memo,
         })

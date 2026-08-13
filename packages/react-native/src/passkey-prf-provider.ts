@@ -60,6 +60,21 @@ export interface PasskeyCredential {
 }
 
 /**
+ * Result of {@link PasskeyProvider.createPasskey}: the new credential, plus
+ * the PRF outputs when the authenticator evaluated them during the create
+ * ceremony. `seeds` null means it did not, so the caller derives through
+ * {@link PasskeyProvider.deriveSeeds}.
+ *
+ * Seeds returned here must equal what `deriveSeeds` returns for the same
+ * salts: the wallet is derived from them either way, so a mismatch means
+ * register and sign-in land on different wallets.
+ */
+export interface CreatePasskeyOutput {
+  credential: PasskeyCredential;
+  seeds: Uint8Array[] | null;
+}
+
+/**
  * Result of {@link PasskeyProvider.checkDomainAssociation}. Switch on `kind`
  * to handle each outcome.
  */
@@ -199,13 +214,20 @@ export class PasskeyProvider {
   }
 
   /**
-   * Register a new PRF-capable passkey (one prompt, no seed derivation): use
-   * it to split credential creation from derivation in multi-step onboarding.
-   * `excludeCredentials` blocks re-registering a device that already holds a
-   * credential, surfaced as a `credentialAlreadyExists` failure. The returned
-   * user handle is minted fresh per call (never host-supplied).
+   * Register a new PRF-capable passkey. `excludeCredentials` blocks
+   * re-registering a device that already holds a credential, surfaced as a
+   * `credentialAlreadyExists` failure. The returned user handle is minted
+   * fresh per call (never host-supplied).
+   *
+   * Asking the create ceremony to evaluate PRF for `salts` removes the
+   * assertion that would otherwise follow it. `seeds` is null when the
+   * authenticator reported PRF support without evaluating, or returned
+   * fewer outputs than salts; the caller then derives as before.
    */
-  async createPasskey(excludeCredentials: Uint8Array[] = []): Promise<PasskeyCredential> {
+  async createPasskey(
+    excludeCredentials: Uint8Array[] = [],
+    salts: string[] = []
+  ): Promise<CreatePasskeyOutput> {
     if (!BreezSdkSparkPasskey) {
       throw passkeyModuleUnavailableError('createPasskey');
     }
@@ -215,22 +237,29 @@ export class PasskeyProvider {
     try {
       const result: {
         credentialId: string;
-        userId: string;
+        userId: string | null;
         aaguid: string | null;
         backupEligible: boolean | null;
+        seeds: string[] | null;
       } = await BreezSdkSparkPasskey.createPasskey(
         this.rpId,
         this.rpName,
         this.userName,
         this.userDisplayName,
-        excludeBase64
+        excludeBase64,
+        salts
       );
 
       return {
-        credentialId: base64ToUint8Array(result.credentialId),
-        userId: base64ToUint8Array(result.userId),
-        aaguid: result.aaguid ? base64ToUint8Array(result.aaguid) : null,
-        backupEligible: result.backupEligible,
+        credential: {
+          credentialId: base64ToUint8Array(result.credentialId),
+          userId: result.userId ? base64ToUint8Array(result.userId) : null,
+          aaguid: result.aaguid ? base64ToUint8Array(result.aaguid) : null,
+          backupEligible: result.backupEligible,
+        },
+        // Null unless the authenticator evaluated PRF during the create
+        // ceremony and returned one output per salt.
+        seeds: result.seeds ? result.seeds.map(base64ToUint8Array) : null,
       };
     } catch (err) {
       throw mapNativeError(err);

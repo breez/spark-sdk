@@ -75,6 +75,32 @@ pub(crate) enum ConversionAmount {
     AmountIn(u128),
 }
 
+/// How an executed swap departed from the terms the client signed.
+///
+/// The input is spent either way, so the conversion completes rather than being
+/// refunded. This records that it did not deliver what was signed for.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SwapDegradation {
+    /// Delivered less than the minimum the intent signed.
+    BelowMinimum,
+    /// Delivered an asset other than the one the intent named.
+    UnexpectedAsset,
+    /// Accepted without naming the amount, the asset, or the transfer carrying
+    /// it.
+    MissingInfo,
+}
+
+impl From<flashnet::SwapDegradation> for SwapDegradation {
+    fn from(d: flashnet::SwapDegradation) -> Self {
+        match d {
+            flashnet::SwapDegradation::BelowMinimum => Self::BelowMinimum,
+            flashnet::SwapDegradation::UnexpectedAsset => Self::UnexpectedAsset,
+            flashnet::SwapDegradation::MissingInfo => Self::MissingInfo,
+        }
+    }
+}
+
 /// The reason why a conversion amount was adjusted from the originally requested value.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -160,6 +186,10 @@ pub enum ConversionInfo {
         /// The reason the conversion amount was adjusted, if applicable.
         #[serde(default)]
         amount_adjustment: Option<AmountAdjustmentReason>,
+        /// How the swap departed from the signed terms, if it did. Set on a
+        /// conversion that completed without delivering what was signed for.
+        #[serde(default)]
+        degradation: Option<SwapDegradation>,
     },
     /// Orchestra cross-chain conversion via the Flashnet orchestration API.
     #[serde(rename = "orchestra")]
@@ -334,6 +364,29 @@ impl ConversionInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_degradation_keeps_its_meaning_across_the_boundary() {
+        // A hand-written mapping: swapping two arms would silently relabel a
+        // short delivery as a malformed response, which reads as a server bug
+        // rather than a shortfall.
+        for (from, want) in [
+            (
+                flashnet::SwapDegradation::BelowMinimum,
+                SwapDegradation::BelowMinimum,
+            ),
+            (
+                flashnet::SwapDegradation::UnexpectedAsset,
+                SwapDegradation::UnexpectedAsset,
+            ),
+            (
+                flashnet::SwapDegradation::MissingInfo,
+                SwapDegradation::MissingInfo,
+            ),
+        ] {
+            assert_eq!(SwapDegradation::from(from), want, "{from:?} was relabelled");
+        }
+    }
 
     #[test]
     fn boltz_conversion_info_roundtrip() {
@@ -551,6 +604,17 @@ pub(crate) struct TokenConversionPool {
     pub(crate) asset_in_address: String,
     pub(crate) asset_out_address: String,
     pub(crate) pool: Pool,
+}
+
+/// A priced conversion, together with the pool it was priced against.
+pub(crate) struct ResolvedConversion {
+    pub(crate) conversion_pool: TokenConversionPool,
+    /// The floor the swap intent will carry. For a requested output it is that
+    /// request, scaled by any rise of the input above the one it derived,
+    /// rather than the simulated output, which may be higher and would fail for
+    /// no reason. For a supplied input it is the simulated output less slippage.
+    pub(crate) min_amount_out: u128,
+    pub(crate) estimate: ConversionEstimate,
 }
 
 pub(crate) struct TokenConversionResponse {

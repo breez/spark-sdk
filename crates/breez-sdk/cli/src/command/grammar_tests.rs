@@ -261,6 +261,39 @@ fn pay() {
 }
 
 #[test]
+fn pay_batch() {
+    let Command::PayBatch { recipients } = parse_ok(
+        "pay-batch -r addr1 --recipient addr2:1000 -r addr3:2000:tok1 -r invoice1:: -r addr4:",
+    ) else {
+        panic!("expected PayBatch");
+    };
+    assert_eq!(recipients.len(), 5);
+
+    assert_eq!(recipients[0].payment_request, "addr1");
+    assert!(recipients[0].amount.is_none());
+    assert!(recipients[0].token_identifier.is_none());
+
+    assert_eq!(recipients[1].payment_request, "addr2");
+    assert_eq!(recipients[1].amount, Some(1000));
+    assert!(recipients[1].token_identifier.is_none());
+
+    assert_eq!(recipients[2].payment_request, "addr3");
+    assert_eq!(recipients[2].amount, Some(2000));
+    assert_eq!(recipients[2].token_identifier.as_deref(), Some("tok1"));
+
+    // Empty amount and token fields are absent, not parse errors.
+    assert_eq!(recipients[3].payment_request, "invoice1");
+    assert!(recipients[3].amount.is_none());
+    assert!(recipients[3].token_identifier.is_none());
+    assert!(recipients[4].amount.is_none());
+
+    parse_err("pay-batch");
+    assert!(parse_err("pay-batch -r ''").contains("Missing payment request"));
+    assert!(parse_err("pay-batch -r addr1:notanumber").contains("Invalid amount"));
+    assert!(parse_err("pay-batch -r addr1:1000:tok1:extra").contains("Invalid recipient"));
+}
+
+#[test]
 fn lnurl_pay() {
     let Command::LnurlPay {
         lnurl,
