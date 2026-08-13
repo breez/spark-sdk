@@ -396,21 +396,7 @@ impl StableBalance {
     async fn process_per_receive(&self, payment_id: String) -> PerReceiveResult {
         match self.per_receive_convert(&payment_id).await {
             Ok(converted) => {
-                if converted
-                    && let Err(e) = self
-                        .core
-                        .storage
-                        .insert_payment_metadata(
-                            payment_id.clone(),
-                            PaymentMetadata {
-                                conversion_status: Some(ConversionStatus::Completed),
-                                ..Default::default()
-                            },
-                        )
-                        .await
-                {
-                    warn!("Failed to persist Completed status for {payment_id}: {e:?}");
-                }
+                self.settle_conversion_status(&payment_id).await;
                 PerReceiveResult::Done { converted }
             }
             Err(e) => {
@@ -418,6 +404,7 @@ impl StableBalance {
                     info!(
                         "Per-receive conversion for {payment_id}: already handled by another instance"
                     );
+                    self.settle_conversion_status(&payment_id).await;
                     return PerReceiveResult::Done { converted: false };
                 }
 
@@ -429,6 +416,31 @@ impl StableBalance {
                 );
                 PerReceiveResult::Retry
             }
+        }
+    }
+
+    /// Marks the payment's conversion as no longer in flight.
+    ///
+    /// Must run even when nothing converted: `Pending` is written when the task
+    /// is queued, and a task that skips the conversion still leaves the queue, so
+    /// the timeout sweep never reaches it. A stranded `Pending` is then reported
+    /// by `list_payments` for the life of the local database (#1052). Writes
+    /// `Completed` rather than clearing, since `insert_payment_metadata`
+    /// coalesces `None` onto the stored value.
+    async fn settle_conversion_status(&self, payment_id: &str) {
+        if let Err(e) = self
+            .core
+            .storage
+            .insert_payment_metadata(
+                payment_id.to_string(),
+                PaymentMetadata {
+                    conversion_status: Some(ConversionStatus::Completed),
+                    ..Default::default()
+                },
+            )
+            .await
+        {
+            warn!("Failed to persist Completed status for {payment_id}: {e:?}");
         }
     }
 
