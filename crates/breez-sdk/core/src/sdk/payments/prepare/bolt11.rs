@@ -59,6 +59,17 @@ fn validate_request(
         ));
     }
 
+    if let Some(amount_msat) = invoice_details.amount_msat
+        && let Some(amount) = request.amount
+    {
+        let invoice_amount_sats = u128::from(amount_msat.div_ceil(1000));
+        if amount != invoice_amount_sats {
+            return Err(SdkError::InvalidInput(format!(
+                "Requested amount ({amount} sats) does not match invoice amount ({invoice_amount_sats} sats)"
+            )));
+        }
+    }
+
     // Conversion from Bitcoin is not supported for Bolt11 invoices
     if matches!(
         &request.conversion_options,
@@ -414,6 +425,85 @@ mod tests {
         } else {
             panic!("Expected InvalidInput error");
         }
+    }
+
+    // ---- Sats amount + fixed-amount invoice ----
+
+    #[test_all]
+    fn test_validate_bolt11_mismatched_amount_to_fixed_amount_invoice_rejected() {
+        let mut invoice = create_test_bolt11_invoice();
+        invoice.amount_msat = Some(1_000);
+        let request = create_bitcoin_amount_request(5);
+        let result = validate_request(&invoice, &request);
+        assert!(
+            result.is_err(),
+            "Should reject an amount that differs from the fixed invoice amount"
+        );
+        if let Err(SdkError::InvalidInput(msg)) = result {
+            assert!(
+                msg.contains("5 sats") && msg.contains("1 sats"),
+                "Error should report both amounts (got: {msg})"
+            );
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+    }
+
+    #[test_all]
+    fn test_validate_bolt11_amount_below_fixed_amount_invoice_rejected() {
+        let mut invoice = create_test_bolt11_invoice();
+        invoice.amount_msat = Some(1_000_000);
+        let request = create_bitcoin_amount_request(999);
+        assert!(
+            validate_request(&invoice, &request).is_err(),
+            "Should reject an amount below the fixed invoice amount"
+        );
+    }
+
+    #[test_all]
+    fn test_validate_bolt11_matching_amount_to_fixed_amount_invoice_ok() {
+        let mut invoice = create_test_bolt11_invoice();
+        invoice.amount_msat = Some(1_000_000);
+        let request = create_bitcoin_amount_request(1000);
+        assert!(
+            validate_request(&invoice, &request).is_ok(),
+            "Should accept an amount equal to the fixed invoice amount"
+        );
+    }
+
+    #[test_all]
+    fn test_validate_bolt11_sub_sat_invoice_amount_rounds_up() {
+        let mut invoice = create_test_bolt11_invoice();
+        invoice.amount_msat = Some(1_500);
+        assert!(
+            validate_request(&invoice, &create_bitcoin_amount_request(2)).is_ok(),
+            "Should accept the rounded-up sats amount of a sub-sat invoice"
+        );
+        assert!(
+            validate_request(&invoice, &create_bitcoin_amount_request(1)).is_err(),
+            "Should reject the rounded-down sats amount of a sub-sat invoice"
+        );
+    }
+
+    #[test_all]
+    fn test_validate_bolt11_amount_omitted_for_fixed_amount_invoice_ok() {
+        let mut invoice = create_test_bolt11_invoice();
+        invoice.amount_msat = Some(1_000_000);
+        let request = create_test_request();
+        assert!(
+            validate_request(&invoice, &request).is_ok(),
+            "Should accept an omitted amount for a fixed-amount invoice"
+        );
+    }
+
+    #[test_all]
+    fn test_validate_bolt11_amount_with_amountless_invoice_ok() {
+        let invoice = create_test_bolt11_invoice();
+        let request = create_bitcoin_amount_request(5);
+        assert!(
+            validate_request(&invoice, &request).is_ok(),
+            "Should accept an amount for an amountless invoice"
+        );
     }
 
     #[test_all]
