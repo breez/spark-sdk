@@ -1,8 +1,8 @@
 use breez_sdk_common::input;
 
 use crate::{
-    ConversionEstimate, ConversionOptions, ConversionType, CrossChainFeeMode, CrossChainRoutePair,
-    FeePolicy, SendPaymentMethod,
+    ConversionEstimate, ConversionOptions, ConversionType, CrossChainFeeMode,
+    CrossChainRouteFilter, CrossChainRoutePair, FeePolicy, SendPaymentMethod,
     cross_chain::{
         DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS, DEFAULT_TARGET_OVERPAY_BPS, MAX_CROSS_CHAIN_SLIPPAGE_BPS,
         MAX_TARGET_OVERPAY_BPS, MIN_CROSS_CHAIN_SLIPPAGE_BPS, MIN_TARGET_OVERPAY_BPS, SourceAsset,
@@ -61,6 +61,82 @@ fn validate_address_family_against_route(
         )));
     }
     Ok(())
+}
+
+/// Rejects a recipient that is a token contract.
+///
+/// A TRC20/ERC20 `transfer` to a token's own contract credits the contract's
+/// balance, and these contracts expose no way to spend it, so the funds are
+/// unrecoverable. Providers screen for this server-side but coverage varies
+/// by chain, and by then the Spark leg has already settled.
+///
+/// `known_contracts` is best-effort: it holds the contracts the route listing
+/// surfaced, so an unlisted one still reaches the provider.
+fn validate_recipient_not_contract_address(
+    address: &str,
+    address_family: input::CrossChainAddressFamily,
+    known_contracts: &[(String, String, String)],
+) -> Result<(), SdkError> {
+    let matched = known_contracts
+        .iter()
+        .find(|(contract, ..)| address_family.addresses_equal(contract, address));
+
+    if let Some((_, asset, chain)) = matched {
+        return Err(SdkError::InvalidInput(format!(
+            "Recipient address is the {asset} token contract on {chain}. \
+             Funds sent to a token contract cannot be recovered. \
+             Use the wallet address of the recipient instead."
+        )));
+    }
+    Ok(())
+}
+
+/// Token contracts to screen the recipient against, as
+/// `(contract_address, asset, chain)`, drawn from the route listing plus the
+/// selected route itself.
+///
+/// Both providers scope a `Send` listing to the recipient's address family,
+/// so every contract here is comparable to the recipient. Contracts on chains
+/// other than the selected route's stay in: pasting another chain's contract
+/// is just as unrecoverable, and only an address whose private key is known
+/// can be a legitimate recipient, so no wallet address can collide with one.
+///
+/// A listing that can't be fetched yields whatever the selected route
+/// contributes rather than an error: this feeds a best-effort guard, and a
+/// provider being briefly unreachable must not block a valid send.
+async fn known_token_contracts(
+    sdk: &BreezSdk,
+    address: &str,
+    address_family: input::CrossChainAddressFamily,
+    route: &CrossChainRoutePair,
+) -> Vec<(String, String, String)> {
+    let filter = CrossChainRouteFilter::Send {
+        address_details: crate::common::models::CrossChainAddressDetails {
+            address: address.to_string(),
+            address_family: address_family.into(),
+            // Left unset so the listing isn't narrowed to a single asset: a
+            // paste of some *other* token's contract has to match too.
+            contract_address: None,
+            chain_id: None,
+            amount: None,
+        },
+    };
+
+    let mut listed = match sdk.get_cross_chain_routes(&filter).await {
+        Ok(routes) => routes,
+        Err(e) => {
+            tracing::warn!(
+                "Cross-chain: contract-address guard falling back to the selected route: {e}"
+            );
+            Vec::new()
+        }
+    };
+    listed.push(route.clone());
+
+    listed
+        .into_iter()
+        .filter_map(|r| r.contract_address.map(|c| (c, r.asset, r.chain)))
+        .collect()
 }
 
 /// Pre-resolution validation for cross-chain sends. Shared checks
@@ -267,6 +343,9 @@ pub(crate) async fn prepare(
         SdkError::InvalidInput("Address is not a recognized cross-chain address".to_string())
     })?;
     validate_address_family_against_route(address_family, route)?;
+
+    let known_contracts = known_token_contracts(sdk, address, address_family, route).await;
+    validate_recipient_not_contract_address(address, address_family, &known_contracts)?;
 
     let provider_slippage_bps = resolve_slippage_bps(
         max_slippage_bps,
@@ -1108,6 +1187,122 @@ mod tests {
         assert!(
             validate_address_family_against_route(input::CrossChainAddressFamily::Solana, &route)
                 .is_ok()
+        );
+    }
+
+    // ---- validate_recipient_not_contract_address ----
+
+    const USDT_TRON: &str = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
+    const USDC_ARBITRUM: &str = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
+
+    const USDC_BASE: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+
+    fn contracts(triples: &[(&str, &str, &str)]) -> Vec<(String, String, String)> {
+        triples
+            .iter()
+            .map(|(c, a, ch)| ((*c).to_string(), (*a).to_string(), (*ch).to_string()))
+            .collect()
+    }
+
+    #[test_all]
+    fn contract_check_rejects_the_routes_own_contract() {
+        let err = validate_recipient_not_contract_address(
+            USDT_TRON,
+            input::CrossChainAddressFamily::Tron,
+            &contracts(&[(USDT_TRON, "USDT", "tron")]),
+        )
+        .unwrap_err();
+        let SdkError::InvalidInput(msg) = err else {
+            panic!("expected InvalidInput, got {err:?}");
+        };
+        assert!(msg.contains("USDT") && msg.contains("tron"));
+    }
+
+    #[test_all]
+    fn contract_check_rejects_another_assets_contract_on_the_same_chain() {
+        // Recipient is the USDT contract while the selected route is USDC, so
+        // comparing against the route alone would let this through.
+        let err = validate_recipient_not_contract_address(
+            USDT_TRON,
+            input::CrossChainAddressFamily::Tron,
+            &contracts(&[
+                ("TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8", "USDC", "tron"),
+                (USDT_TRON, "USDT", "tron"),
+            ]),
+        )
+        .unwrap_err();
+        let SdkError::InvalidInput(msg) = err else {
+            panic!("expected InvalidInput, got {err:?}");
+        };
+        assert!(msg.contains("USDT"));
+    }
+
+    #[test_all]
+    fn contract_check_rejects_a_contract_from_another_chain() {
+        // Selected route is Base, recipient is Arbitrum's USDC contract. Just
+        // as unrecoverable, and the message names the chain the contract is on.
+        let err = validate_recipient_not_contract_address(
+            USDC_ARBITRUM,
+            input::CrossChainAddressFamily::Evm,
+            &contracts(&[
+                (USDC_BASE, "USDC", "base"),
+                (USDC_ARBITRUM, "USDC", "arbitrum"),
+            ]),
+        )
+        .unwrap_err();
+        let SdkError::InvalidInput(msg) = err else {
+            panic!("expected InvalidInput, got {err:?}");
+        };
+        assert!(msg.contains("arbitrum"), "{msg}");
+    }
+
+    #[test_all]
+    fn contract_check_is_case_insensitive_for_evm() {
+        assert!(
+            validate_recipient_not_contract_address(
+                &USDC_ARBITRUM.to_lowercase(),
+                input::CrossChainAddressFamily::Evm,
+                &contracts(&[(USDC_ARBITRUM, "USDC", "arbitrum")]),
+            )
+            .is_err()
+        );
+    }
+
+    #[test_all]
+    fn contract_check_is_case_sensitive_for_base58() {
+        // Base58 case carries information, so a case-folded string is a
+        // different address, not the contract.
+        assert!(
+            validate_recipient_not_contract_address(
+                &USDT_TRON.to_lowercase(),
+                input::CrossChainAddressFamily::Tron,
+                &contracts(&[(USDT_TRON, "USDT", "tron")]),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test_all]
+    fn contract_check_allows_a_wallet_address() {
+        assert!(
+            validate_recipient_not_contract_address(
+                "0x9d9089eE0D37EF0815336de64FbBCB8a99da8344",
+                input::CrossChainAddressFamily::Evm,
+                &contracts(&[(USDC_ARBITRUM, "USDC", "arbitrum")]),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test_all]
+    fn contract_check_is_a_no_op_without_known_contracts() {
+        assert!(
+            validate_recipient_not_contract_address(
+                USDT_TRON,
+                input::CrossChainAddressFamily::Tron,
+                &[],
+            )
+            .is_ok()
         );
     }
 
