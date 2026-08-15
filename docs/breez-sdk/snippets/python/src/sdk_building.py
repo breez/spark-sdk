@@ -244,6 +244,7 @@ async def server_mode_request_handler(sdk: BreezSdk):
         amount_sats=5_000,
         expiry_secs=3600,
         payment_hash=None,
+        receiver_identity_public_key=None,
     )
     response = await sdk.receive_payment(
         request=ReceivePaymentRequest(payment_method=payment_method)

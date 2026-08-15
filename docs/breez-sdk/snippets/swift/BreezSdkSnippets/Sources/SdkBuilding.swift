@@ -214,7 +214,8 @@ func serverModeRequestHandler(sdk: BreezSdk) async throws -> String {
                 description: "<invoice description>",
                 amountSats: 5_000,
                 expirySecs: 3600,
-                paymentHash: nil
+                paymentHash: nil,
+                receiverIdentityPublicKey: nil
             )
         ))
 
