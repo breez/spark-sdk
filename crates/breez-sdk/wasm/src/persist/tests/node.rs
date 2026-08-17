@@ -68,6 +68,13 @@ async fn test_deposit_refunds() {
 }
 
 #[wasm_bindgen_test]
+async fn test_instant_claim_status() {
+    let storage = create_test_storage("instant_claim_status").await;
+
+    breez_sdk_spark::storage_tests::test_instant_claim_status(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_payment_type_filtering() {
     let storage = create_test_storage("payment_type_filtering").await;
 

@@ -21,6 +21,16 @@ More information can be found in the [Claiming on-chain deposits](./onchain_clai
 
 {{#tabs config:max-deposit-claim-fee}}
 
+## Max instant deposit claim fee
+
+By default a deposit is only claimed once it reaches enough confirmations. Setting {{#name max_instant_deposit_claim_fee_bps}} opts into instant (0-conf) claims: the Spark Service Provider fronts the credited amount before confirmation and takes a spread, and this value caps that spread in basis points of the deposit value (100 bps = 1%).
+
+It is unset by default, so no instant claim is attempted. The spread combines a flat amount and the on-chain fee of the provider's claim with a percentage of the deposit, so it is proportionally larger on small deposits and when on-chain fees are high, and those fall through to the normal claim once mature. A single ceiling therefore enables instant claims on larger deposits while keeping small ones (and high-fee periods) from overpaying for speed.
+
+More information can be found in the [Claiming on-chain deposits](./onchain_claims.md#instant-0-conf-claims) page.
+
+{{#tabs config:max-instant-deposit-claim-fee}}
+
 ## Synchronization interval
 
 The SDK performs regular background synchronization to check for payment status updates. You can configure how often this synchronization occurs.

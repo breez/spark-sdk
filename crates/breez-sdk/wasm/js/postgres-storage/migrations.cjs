@@ -518,6 +518,12 @@ class PostgresMigrationManager {
              ON brz_cross_chain_swaps(user_id, provider, is_terminal)`,
         ],
       },
+      {
+        name: "Add instant claim status to brz_unclaimed_deposits",
+        sql: [
+          `ALTER TABLE brz_unclaimed_deposits ADD COLUMN instant_claim_status JSONB`,
+        ],
+      },
     ];
   }
 }

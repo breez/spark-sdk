@@ -64,6 +64,20 @@ Future<void> handleFeeExceeded(BreezSdk sdk, DepositInfo deposit) async {
   // ANCHOR_END: handle-fee-exceeded
 }
 
+Future<void> instantClaim(BreezSdk sdk, DepositInfo deposit) async {
+  // ANCHOR: instant-claim
+  // Claim a not-yet-mature deposit instantly (0-conf). Cap it at 4% (400 bps)
+  // of the deposit value.
+  final claimRequest = ClaimDepositRequest(
+    txid: deposit.txid,
+    vout: deposit.vout,
+    maxFee: null,
+    maxInstantFeeBps: 400,
+  );
+  await sdk.claimDeposit(request: claimRequest);
+  // ANCHOR_END: instant-claim
+}
+
 Future<void> refundDeposit(BreezSdk sdk) async {
   // ANCHOR: refund-deposit
   String txid = "your_deposit_txid";

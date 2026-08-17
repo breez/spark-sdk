@@ -562,6 +562,12 @@ class MysqlMigrationManager {
           )`,
         ],
       },
+      {
+        name: "Add instant claim status to brz_unclaimed_deposits",
+        sql: [
+          `ALTER TABLE brz_unclaimed_deposits ADD COLUMN instant_claim_status JSON NULL`,
+        ],
+      },
     ];
   }
 }

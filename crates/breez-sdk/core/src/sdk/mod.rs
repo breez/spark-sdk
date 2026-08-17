@@ -234,6 +234,7 @@ pub fn default_config(network: Network) -> Config {
         network,
         sync_interval_secs: 60, // every 1 minute
         max_deposit_claim_fee: Some(crate::MaxFee::Rate { sat_per_vbyte: 1 }),
+        max_instant_deposit_claim_fee_bps: None,
         lnurl_domain,
         prefer_spark_over_lightning: false,
         external_input_parsers: None,

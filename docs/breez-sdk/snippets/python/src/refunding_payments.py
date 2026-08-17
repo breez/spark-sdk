@@ -87,6 +87,24 @@ async def handle_fee_exceeded(sdk: BreezSdk, deposit):
         raise
     # ANCHOR_END: handle-fee-exceeded
 
+
+async def instant_claim(sdk: BreezSdk, deposit):
+    # ANCHOR: instant-claim
+    # Claim a not-yet-mature deposit instantly (0-conf). Cap it at 4% (400 bps)
+    # of the deposit value.
+    try:
+        claim_request = ClaimDepositRequest(
+            txid=deposit.txid,
+            vout=deposit.vout,
+            max_fee=None,
+            max_instant_fee_bps=400,
+        )
+        await sdk.claim_deposit(request=claim_request)
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: instant-claim
+
 async def refund_deposit(sdk: BreezSdk):
     # ANCHOR: refund-deposit
     try:

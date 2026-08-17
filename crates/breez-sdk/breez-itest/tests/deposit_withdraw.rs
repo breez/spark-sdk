@@ -2,6 +2,7 @@ use anyhow::Result;
 use breez_sdk_itest::*;
 use breez_sdk_spark::*;
 use rstest::*;
+use spark_itest::mempool::MempoolClient;
 use tokio::time::{Duration, sleep};
 use tracing::{info, warn};
 
@@ -205,20 +206,22 @@ async fn test_deposit_fee_manual_claim(
             txid: txid_found.clone(),
             vout,
             max_fee: Some(MaxFee::Fixed { amount: 100_000 }),
+            max_instant_fee_bps: None,
         })
         .await?;
-    assert!(matches!(
-        claim_resp.payment.payment_type,
-        PaymentType::Receive
-    ));
-    assert!(matches!(claim_resp.payment.method, PaymentMethod::Deposit));
+    // A standard (mature) claim settles synchronously and returns the payment.
+    let payment = claim_resp
+        .payment
+        .expect("standard claim should return a settled payment");
+    assert!(matches!(payment.payment_type, PaymentType::Receive));
+    assert!(matches!(payment.method, PaymentMethod::Deposit));
     assert!(
         matches!(
-            &claim_resp.payment.details,
+            &payment.details,
             Some(PaymentDetails::Deposit { vout: v, .. }) if *v == vout
         ),
         "Manual claim payment must carry vout={vout}: {:?}",
-        claim_resp.payment.details
+        payment.details
     );
 
     // After manual claim, deposit should be removed from unclaimed list
@@ -637,6 +640,153 @@ async fn test_deposits_to_multiple_addresses(
         unclaimed.is_empty(),
         "All deposits should be auto-claimed, but found: {:?}",
         unclaimed
+    );
+
+    Ok(())
+}
+
+/// Manual instant (0-conf) claim path, end to end against the deployed SSP: it
+/// exercises the ported 0-conf user statement, the ECIES key-share transport, and
+/// the claim mutation. Auto-claiming is disabled on both fronts (the instant
+/// cascade is off via unset `max_instant_deposit_claim_fee_bps`, the normal claim
+/// is fee-blocked via `max_deposit_claim_fee` = 0), so the manual `claim_deposit`
+/// is the only thing that can claim the funded deposit.
+///
+/// regtest mines fast, so the 0-conf window is a race: it reads the vout straight
+/// from the funding tx to claim as early as possible, but if the deposit confirms
+/// first the SSP offers no 0-conf plan, and the test logs it and skips (nothing to
+/// assert). When the window is caught it asserts no synchronous payment, a
+/// credited balance net of the SSP spread, and the deposit leaving the unclaimed
+/// list. A rejected statement is neither a confirmation nor transient, so it fails
+/// fast. Requires faucet creds and the deployed regtest SSP to have 0-conf enabled.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_manual_instant_deposit_claim(
+    #[future] bob_strict_fee_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    let bob = bob_strict_fee_sdk.await?;
+
+    let start_balance = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+
+    let faucet = RegtestFaucet::new()?;
+    let mempool = MempoolClient::new()?;
+    let fund_amount = 50_000u64;
+
+    // Static deposit address.
+    let addr = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
+        })
+        .await?
+        .payment_request;
+
+    // Fund it and read the vout straight from the funding tx. Waiting for the SDK
+    // to list the deposit is too slow: the operators mark it mature within the
+    // indexing window, so by then the 0-conf window is already gone.
+    let txid = faucet.fund_address(&addr, fund_amount).await?;
+    info!("Funded static deposit, txid: {txid}");
+    let tx = mempool.get_transaction(&txid).await?;
+    let vout = tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| {
+            bitcoin::Address::from_script(&o.script_pubkey, bitcoin::Network::Regtest)
+                .is_ok_and(|a| a.to_string() == addr)
+        })
+        .map(|(i, _)| i as u32)
+        .expect("funding tx has no output paying the deposit address");
+
+    // Claim instantly, retrying only while the SSP indexes the mempool tx. If the
+    // deposit confirms first there is no 0-conf plan and the race is lost: skip.
+    // Any other error (a rejected statement, the failure worth catching) fails fast.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let claim_resp = loop {
+        match bob
+            .sdk
+            .claim_deposit(ClaimDepositRequest {
+                txid: txid.clone(),
+                vout,
+                max_fee: None,
+                // ~340 bps spread at 50k; 500 bps admits it.
+                max_instant_fee_bps: Some(500),
+            })
+            .await
+        {
+            Ok(resp) => break resp,
+            Err(e) if e.to_string().contains("0-conf") => {
+                warn!(
+                    "SKIP test_manual_instant_deposit_claim: 0-conf race lost, deposit confirmed before the claim (regtest mines fast)"
+                );
+                return Ok(());
+            }
+            // The quote-fetch indexing lag surfaces specifically as "Transaction
+            // not found"; retry only that. A submission rejection phrased with
+            // "not found" (unknown/consumed quote) falls through and fails fast.
+            Err(e)
+                if e.to_string()
+                    .to_lowercase()
+                    .contains("transaction not found") =>
+            {
+                if tokio::time::Instant::now() >= deadline {
+                    warn!(
+                        "SKIP test_manual_instant_deposit_claim: SSP did not index the deposit within timeout"
+                    );
+                    return Ok(());
+                }
+                info!("instant quote not indexed yet, retrying: {e}");
+                // Poll tightly: the 0-conf window closes as soon as the deposit
+                // confirms (regtest mines fast), so detect "SSP indexed" quickly
+                // and claim before maturity.
+                sleep(Duration::from_secs(1)).await;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    };
+    // The instant transfer settles asynchronously, so no payment is returned.
+    assert!(
+        claim_resp.payment.is_none(),
+        "instant claim settles asynchronously; no synchronous payment is returned"
+    );
+
+    // Mark-not-delete contract. claim_deposit marks the deposit Submitted, creating
+    // the row first if the background sync has not (the create-if-missing path), so
+    // right after the call the deposit is present and Submitted. reconcile_deposits
+    // only removes it once the claim settles, which the settle-poll below waits for,
+    // so the row is checked here first, while it is guaranteed present.
+    let deposits = bob
+        .sdk
+        .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
+        .await?
+        .deposits;
+    let dep = deposits
+        .iter()
+        .find(|d| d.txid == txid)
+        .expect("a submitted instant claim must be listed (created and marked)");
+    assert!(
+        matches!(
+            dep.instant_claim_status,
+            Some(InstantClaimStatus::Submitted { .. })
+        ),
+        "instant-claimed deposit must be marked Submitted: {:?}",
+        dep.instant_claim_status
+    );
+
+    // Poll until the async credit settles. This is the end-to-end proof: the SSP
+    // accepted the signed statement, key share, and claim, and fronted the credit.
+    let balance = wait_for_balance(&bob.sdk, Some(start_balance + 1), None, 180).await?;
+    info!("Manual instant credit settled: {balance} (was {start_balance})");
+    // Instant credit takes the SSP spread, so it is below the funded amount.
+    assert!(
+        balance < start_balance + fund_amount,
+        "instant credit should be below the funded amount (SSP spread): {balance}"
     );
 
     Ok(())
