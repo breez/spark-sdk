@@ -479,7 +479,7 @@ mod tests {
     }
 
     #[async_test_all]
-    async fn test_storing_a_partial_chain_does_not_signal() {
+    async fn test_a_partial_chain_is_neither_stored_nor_signalled() {
         let leaf = create_test_node_with_parent("leaf", Some("mid"), TreeNodeStatus::Available);
         let mid = create_test_node_with_parent("mid", Some("root"), TreeNodeStatus::Available);
 

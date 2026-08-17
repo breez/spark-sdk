@@ -64,7 +64,7 @@ use spark::{
         AutoOptimizationEvent, AutoOptimizationEventHandler, ExitChainResolver, InMemoryTreeStore,
         LeafOptimizer, LeafPedigree, LeafSelection, OptimizationError, OptimizationOutcome,
         ReservationPurpose, SelectLeavesOptions, SynchronousTreeService, TargetAmounts, TreeNode,
-        TreeNodeId, TreeService, TreeStore, chain_backs_exit, select_leaves_by_target_amounts,
+        TreeNodeId, TreeService, TreeStore, chain_reaches_root, select_leaves_by_target_amounts,
         with_reserved_leaves,
     },
     utils::paging::{PagingFilter, PagingResult},
@@ -186,7 +186,7 @@ fn is_backoff_retryable_error(error: &OperatorRpcError) -> bool {
 /// Neither does one that revisits an id, which is a cycle padding an otherwise
 /// short chain rather than a path to a root.
 ///
-/// Stricter than [`chain_backs_exit`], which trusts the contiguity the store
+/// Stricter than [`chain_reaches_root`], which trusts the contiguity the store
 /// guarantees for its own chains. This walks every link, so it also holds for a
 /// chain of unknown provenance.
 fn links_leaf_to_root(leaf: &TreeNode, ancestors: &[TreeNode]) -> bool {
@@ -1679,7 +1679,7 @@ impl SparkWallet {
                 match held.get(&incoming.leaf.id) {
                     Some(held) => {
                         if parts != ImportableParts::LeafAndChain
-                            || chain_backs_exit(&held.leaf, &held.ancestors)
+                            || chain_reaches_root(&held.leaf, &held.ancestors)
                         {
                             skipped_chains += 1;
                             continue;
@@ -3449,6 +3449,21 @@ mod tests {
         LeafPedigree { leaf, ancestors }
     }
 
+    /// Seeds a store the way the leaf lifecycle does: the leaves through
+    /// `add_leaves`, their chains through the ancestor-only write.
+    async fn seed_pedigrees(store: &dyn TreeStore, pedigrees: &[LeafPedigree]) {
+        let leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
+        store.add_leaves(&leaves).await.unwrap();
+        let with_chains: Vec<LeafPedigree> = pedigrees
+            .iter()
+            .filter(|p| !p.ancestors.is_empty())
+            .cloned()
+            .collect();
+        if !with_chains.is_empty() {
+            store.store_ancestors(&with_chains).await.unwrap();
+        }
+    }
+
     fn refund_tx_at(lock_time: u32) -> Transaction {
         Transaction {
             version: Version::non_standard(3),
@@ -3544,14 +3559,15 @@ mod tests {
         let mid = child_of("mid", &root, TreeNodeStatus::Splitted);
         let mut renewed = child_of("leaf", &mid, TreeNodeStatus::Available);
         renewed.refund_tx = Some(refund_tx_at(200));
-        store
-            .add_leaves(&[pedigree_owned_by(
+        seed_pedigrees(
+            &*store,
+            &[pedigree_owned_by(
                 owner,
                 renewed.clone(),
                 vec![mid.clone(), root.clone()],
-            )])
-            .await
-            .unwrap();
+            )],
+        )
+        .await;
 
         let mut before_renewal = child_of("leaf", &mid, TreeNodeStatus::Available);
         before_renewal.refund_tx = Some(refund_tx_at(100));
@@ -3579,10 +3595,11 @@ mod tests {
         let root = root_node("root");
         let mid = child_of("mid", &root, TreeNodeStatus::Splitted);
         let leaf = child_of("leaf", &mid, TreeNodeStatus::Available);
-        store
-            .add_leaves(&[pedigree_owned_by(owner, leaf, vec![mid, root.clone()])])
-            .await
-            .unwrap();
+        seed_pedigrees(
+            &*store,
+            &[pedigree_owned_by(owner, leaf, vec![mid, root.clone()])],
+        )
+        .await;
 
         // Links its own leaf to a root and is longer, so length is all that
         // separates it from the stored chain.
@@ -3617,14 +3634,15 @@ mod tests {
         let gap = child_of("gap", &root, TreeNodeStatus::Splitted);
         let mid = child_of("mid", &gap, TreeNodeStatus::Splitted);
         let leaf = child_of("leaf", &mid, TreeNodeStatus::Available);
-        store
-            .add_leaves(&[pedigree_owned_by(
+        seed_pedigrees(
+            &*store,
+            &[pedigree_owned_by(
                 owner,
                 leaf.clone(),
                 vec![mid.clone(), gap.clone()],
-            )])
-            .await
-            .unwrap();
+            )],
+        )
+        .await;
 
         let complete = pedigree_owned_by(owner, leaf, vec![mid, gap, root]);
         let outcome = wallet
@@ -3659,10 +3677,11 @@ mod tests {
         let root = root_node("root");
         let mid = child_of("mid", &root, TreeNodeStatus::Splitted);
         let leaf = child_of("leaf", &mid, TreeNodeStatus::Available);
-        store
-            .add_leaves(&[pedigree_owned_by(owner, leaf.clone(), vec![mid.clone()])])
-            .await
-            .unwrap();
+        seed_pedigrees(
+            store,
+            &[pedigree_owned_by(owner, leaf.clone(), vec![mid.clone()])],
+        )
+        .await;
         (leaf, vec![mid, root])
     }
 
@@ -3826,10 +3845,7 @@ mod tests {
         let root = root_node("root");
         let leaf = child_of("leaf", &root, TreeNodeStatus::Available);
         let pedigree = pedigree_owned_by(owner, leaf.clone(), vec![root]);
-        store
-            .add_leaves(std::slice::from_ref(&pedigree))
-            .await
-            .unwrap();
+        seed_pedigrees(&*store, std::slice::from_ref(&pedigree)).await;
         let reservation = store
             .try_reserve_leaves_by_ids(std::slice::from_ref(&leaf.id), ReservationPurpose::Payment)
             .await
@@ -3867,18 +3883,17 @@ mod tests {
         let rewritten = child_of("rewritten", &rewritten_mid, TreeNodeStatus::Available);
         // The operators stopped reporting all three, which the store records on
         // the leaf row itself.
+        let missing = [
+            pedigree_owned_by(owner, kept.clone(), vec![kept_mid, root.clone()]),
+            pedigree_owned_by(owner, chained.clone(), vec![chained_mid.clone()]),
+            pedigree_owned_by(owner, rewritten.clone(), vec![rewritten_mid.clone()]),
+        ];
+        let missing_leaves: Vec<TreeNode> = missing.iter().map(|p| p.leaf.clone()).collect();
         store
-            .set_leaves(
-                &[],
-                &[
-                    pedigree_owned_by(owner, kept.clone(), vec![kept_mid, root.clone()]),
-                    pedigree_owned_by(owner, chained.clone(), vec![chained_mid.clone()]),
-                    pedigree_owned_by(owner, rewritten.clone(), vec![rewritten_mid.clone()]),
-                ],
-                SystemTime::now(),
-            )
+            .set_leaves(&[], &missing_leaves, SystemTime::now())
             .await
             .unwrap();
+        store.store_ancestors(&missing).await.unwrap();
 
         let mut renewed = rewritten;
         renewed.refund_tx = Some(refund_tx_at(200));
@@ -3939,13 +3954,14 @@ mod tests {
         let mid = child_of("mid", &root, TreeNodeStatus::Splitted);
         let leaf_a = child_of("leaf-a", &mid, TreeNodeStatus::Available);
         let leaf_b = child_of("leaf-b", &root, TreeNodeStatus::Available);
-        source_store
-            .add_leaves(&[
+        seed_pedigrees(
+            &*source_store,
+            &[
                 pedigree_owned_by(owner, leaf_a, vec![mid, root.clone()]),
                 pedigree_owned_by(owner, leaf_b, vec![root]),
-            ])
-            .await
-            .unwrap();
+            ],
+        )
+        .await;
 
         let export = source.export_exit_state().await.unwrap();
         assert_eq!(

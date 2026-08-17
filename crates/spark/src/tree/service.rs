@@ -1073,7 +1073,7 @@ mod tests {
         tree::{
             InMemoryTreeStore, SigningKeyshare, TreeNode, TreeNodeId, TreeNodeStatus,
             select_helper::{find_exact_multiple_match, find_exact_single_match},
-            tests::{as_pedigrees, create_test_node_with_parent},
+            tests::create_test_node_with_parent,
         },
     };
 
@@ -1295,7 +1295,10 @@ mod tests {
         service.insert_leaves(vec![expiring]).await.unwrap();
 
         assert!(rx.has_changed().unwrap());
-        assert_eq!(stored_chain(&service, "leaf").await, ["split", "leaf"]);
+        // The chain the renewal rebuilt is the new split node alone, which stops
+        // short of a root, so it is not stored: the leaf stays one the exit chain
+        // resolver will fetch a whole chain for.
+        assert_eq!(stored_chain(&service, "leaf").await, ["leaf"]);
     }
 
     #[async_test_all]
@@ -1321,9 +1324,10 @@ mod tests {
         let fresh = leaf_with_refund_sequence("leaf", 2_000);
         service.insert_leaves(vec![fresh]).await.unwrap();
 
-        // The leaf did move: what decides the signal is the leaves the pass was
-        // handed, not what came back from it.
-        assert_eq!(stored_chain(&service, "leaf").await, ["split", "leaf"]);
+        // What decides the signal is the leaves the pass was handed, not what
+        // came back from it. The rebuilt chain stops short of a root either way,
+        // so it is not stored.
+        assert_eq!(stored_chain(&service, "leaf").await, ["leaf"]);
         assert!(!rx.has_changed().unwrap());
     }
 
@@ -1397,7 +1401,7 @@ mod tests {
         let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
         let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
         service
-            .restore_leaves(&as_pedigrees(std::slice::from_ref(&leaf)))
+            .restore_leaves(&bare_pedigrees(vec![leaf.clone()]))
             .await
             .unwrap();
         service
