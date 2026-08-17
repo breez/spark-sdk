@@ -176,7 +176,8 @@ const exampleServerModeRequestHandler = async (sdk: BreezSdk): Promise<string> =
       description: '<invoice description>',
       amountSats: 5_000,
       expirySecs: 3600,
-      paymentHash: undefined
+      paymentHash: undefined,
+      receiverIdentityPublicKey: undefined
     }
   })
 

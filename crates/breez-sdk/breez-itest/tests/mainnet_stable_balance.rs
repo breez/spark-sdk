@@ -291,6 +291,7 @@ async fn test_stable_balance_auto_conversion() -> Result<()> {
                 amount_sats: Some(invoice_sats),
                 expiry_secs: None,
                 payment_hash: None,
+                receiver_identity_public_key: None,
             },
         })
         .await?

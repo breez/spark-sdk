@@ -263,6 +263,7 @@ async fn test_token_conversion_success() -> Result<()> {
                 amount_sats: Some(invoice_sats),
                 expiry_secs: None,
                 payment_hash: None,
+                receiver_identity_public_key: None,
             },
         })
         .await?

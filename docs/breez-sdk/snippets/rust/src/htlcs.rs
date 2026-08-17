@@ -61,6 +61,7 @@ async fn receive_hodl_invoice_payment(sdk: &BreezSdk) -> Result<()> {
                 amount_sats: Some(50_000),
                 expiry_secs: None,
                 payment_hash: Some(payment_hash),
+                receiver_identity_public_key: None,
             },
         })
         .await?;

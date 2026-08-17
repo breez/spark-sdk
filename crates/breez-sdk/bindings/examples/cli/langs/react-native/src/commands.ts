@@ -522,6 +522,7 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
         amountSats,
         expirySecs,
         paymentHash,
+        receiverIdentityPublicKey: undefined,
       })
       break
     }

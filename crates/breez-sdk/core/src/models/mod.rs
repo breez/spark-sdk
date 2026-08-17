@@ -1305,6 +1305,9 @@ pub enum ReceivePaymentMethod {
         /// The payer's HTLC will be held until the preimage is provided via
         /// `claim_htlc_payment` or the HTLC expires.
         payment_hash: Option<String>,
+        /// Spark identity public key that will receive the payment.
+        /// If absent, the connected wallet's identity public key is used.
+        receiver_identity_public_key: Option<String>,
     },
 }
 

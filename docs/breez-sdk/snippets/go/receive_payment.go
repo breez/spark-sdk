@@ -15,6 +15,8 @@ func ReceiveLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Rec
 	optionalAmountSats := uint64(5_000)
 	// Optionally set the expiry duration in seconds
 	optionalExpirySecs := uint32(3600)
+	// Set this to create an invoice for another Spark identity
+	var optionalReceiverIdentityPublicKey *string
 
 	request := breez_sdk_spark.ReceivePaymentRequest{
 		PaymentMethod: breez_sdk_spark.ReceivePaymentMethodBolt11Invoice{
@@ -22,6 +24,7 @@ func ReceiveLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Rec
 			AmountSats:  &optionalAmountSats,
 			ExpirySecs:  &optionalExpirySecs,
 			PaymentHash: nil,
+			ReceiverIdentityPublicKey: optionalReceiverIdentityPublicKey,
 		},
 	}
 

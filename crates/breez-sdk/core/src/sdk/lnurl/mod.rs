@@ -95,6 +95,7 @@ impl BreezSdk {
                 Some(amount_sats),
                 None,
                 None,
+                None,
             )
             .await?;
         let payment_request = receive.invoice.clone();

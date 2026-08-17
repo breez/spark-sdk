@@ -10,13 +10,16 @@ const exampleReceiveLightningPayment = async (sdk: BreezSdk) => {
   const optionalAmountSats = BigInt(5_000)
   // Optionally set the expiry duration in seconds
   const optionalExpirySecs = 3600
+  // Set this to create an invoice for another Spark identity
+  const optionalReceiverIdentityPublicKey = undefined
 
   const response = await sdk.receivePayment({
     paymentMethod: new ReceivePaymentMethod.Bolt11Invoice({
       description,
       amountSats: optionalAmountSats,
       expirySecs: optionalExpirySecs,
-      paymentHash: undefined
+      paymentHash: undefined,
+      receiverIdentityPublicKey: optionalReceiverIdentityPublicKey
     })
   })
 

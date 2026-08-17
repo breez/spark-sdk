@@ -247,6 +247,7 @@ pub(crate) async fn server_mode_request_handler(sdk: &BreezSdk) -> Result<String
                 amount_sats: Some(5_000),
                 expiry_secs: Some(3600),
                 payment_hash: None,
+                receiver_identity_public_key: None,
             },
         })
         .await?;

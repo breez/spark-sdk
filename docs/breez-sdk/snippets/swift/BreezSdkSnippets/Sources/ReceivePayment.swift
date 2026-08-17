@@ -8,6 +8,7 @@ func receiveLightning(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
     let optionalAmountSats: UInt64 = 5_000
     // Optionally set the expiry duration in seconds
     let optionalExpirySecs: UInt32 = 3600
+    let optionalReceiverIdentityPublicKey: String? = nil
     let response =
         try await sdk
         .receivePayment(
@@ -16,7 +17,8 @@ func receiveLightning(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
                     description: description,
                     amountSats: optionalAmountSats,
                     expirySecs: optionalExpirySecs,
-                    paymentHash: nil
+                    paymentHash: nil,
+                    receiverIdentityPublicKey: optionalReceiverIdentityPublicKey
                 )
             ))
 

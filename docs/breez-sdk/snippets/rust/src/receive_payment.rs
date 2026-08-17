@@ -9,6 +9,8 @@ async fn receive_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
     let optional_amount_sats = Some(5_000);
     // Optionally set the expiry duration in seconds
     let optional_expiry_secs = Some(3600_u32);
+    // Set this to create an invoice for another Spark identity
+    let optional_receiver_identity_public_key = None;
 
     let response = sdk
         .receive_payment(ReceivePaymentRequest {
@@ -17,6 +19,7 @@ async fn receive_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
                 amount_sats: optional_amount_sats,
                 expiry_secs: optional_expiry_secs,
                 payment_hash: None,
+                receiver_identity_public_key: optional_receiver_identity_public_key,
             },
         })
         .await?;

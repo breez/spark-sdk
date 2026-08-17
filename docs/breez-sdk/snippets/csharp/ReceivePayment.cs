@@ -13,11 +13,13 @@ namespace BreezSdkSnippets
             var optionalAmountSats = 5_000UL;
             // Optionally set the expiry duration in seconds
             var optionalExpirySecs = 3600U;
+            string? optionalReceiverIdentityPublicKey = null;
             var paymentMethod = new ReceivePaymentMethod.Bolt11Invoice(
                 description: description,
                 amountSats: optionalAmountSats,
                 expirySecs: optionalExpirySecs,
-                paymentHash: null
+                paymentHash: null,
+                receiverIdentityPublicKey: optionalReceiverIdentityPublicKey
             );
             var request = new ReceivePaymentRequest(paymentMethod: paymentMethod);
             var response = await sdk.ReceivePayment(request: request);
