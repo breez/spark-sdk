@@ -12,7 +12,7 @@ use frost_secp256k1_tr::{
     Identifier,
     round1::{NonceCommitment, SigningCommitments},
 };
-use platform_utils::time::{Duration, SystemTime, UNIX_EPOCH};
+use platform_utils::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 use uuid::Uuid;
@@ -31,6 +31,7 @@ use crate::token::{TokenMetadata, TokenOutput, TokenOutputWithPrevOut};
 use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId, TreeNodeStatus};
 use crate::utils::byte_padding::BytePadding;
 use crate::utils::frost::sign_frost_batch;
+use crate::utils::time::{prost_timestamp_to_secs, prost_timestamp_to_web_time};
 
 use super::ServiceError;
 
@@ -493,6 +494,49 @@ pub struct Transfer {
     pub spark_invoice: Option<String>,
 }
 
+/// Converts a page of operator records, dropping the ones that fail.
+///
+/// Nothing converting is an error: an empty page terminates paging, so returning one
+/// would truncate the history instead of reporting the bad data.
+pub(crate) fn convert_page<T, U>(records: Vec<T>, kind: &str) -> Result<Vec<U>, ServiceError>
+where
+    T: TryInto<U, Error = ServiceError>,
+{
+    let total = records.len();
+    let converted: Vec<U> = records
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, record)| {
+            record
+                .try_into()
+                .inspect_err(|e| warn!("Skipping malformed {kind} at page index {index}: {e:?}"))
+                .ok()
+        })
+        .collect();
+
+    if total > 0 && converted.is_empty() {
+        return Err(ServiceError::ValidationError(format!(
+            "no valid {kind} in a page of {total}"
+        )));
+    }
+
+    Ok(converted)
+}
+
+/// Rejects an out-of-range timestamp rather than returning `None`, which is already taken:
+/// it means the operator did not set the field.
+fn transfer_timestamp_secs(
+    timestamp: Option<prost_types::Timestamp>,
+    field: &str,
+) -> Result<Option<u64>, ServiceError> {
+    timestamp
+        .map(|ts| {
+            prost_timestamp_to_secs(&ts)
+                .ok_or_else(|| ServiceError::ValidationError(format!("invalid transfer {field}")))
+        })
+        .transpose()
+}
+
 impl TryFrom<operator_rpc::spark::Transfer> for Transfer {
     type Error = ServiceError;
 
@@ -520,11 +564,11 @@ impl TryFrom<operator_rpc::spark::Transfer> for Transfer {
             .map(|leaf| leaf.try_into())
             .collect::<Result<Vec<_>, _>>()?;
 
-        let expiry_time = transfer.expiry_time.map(|ts| ts.seconds as u64);
+        let expiry_time = transfer_timestamp_secs(transfer.expiry_time, "expiry_time")?;
 
-        let created_time = transfer.created_time.map(|ts| ts.seconds as u64);
+        let created_time = transfer_timestamp_secs(transfer.created_time, "created_time")?;
 
-        let updated_time = transfer.updated_time.map(|ts| ts.seconds as u64);
+        let updated_time = transfer_timestamp_secs(transfer.updated_time, "updated_time")?;
 
         let spark_invoice = if transfer.spark_invoice.is_empty() {
             None
@@ -1113,14 +1157,14 @@ impl TryFrom<(operator_rpc::spark_token::TokenTransaction, Network)> for TokenTr
         // client_created_timestamp will always be filled for V2 transactions and V1 transactions will be discontinued soon
         let created_timestamp = token_transaction
             .client_created_timestamp
-            .map(|ts| {
-                UNIX_EPOCH
-                    + std::time::Duration::from_secs(ts.seconds as u64)
-                    + std::time::Duration::from_nanos(ts.nanos as u64)
-            })
             .ok_or(ServiceError::Generic(
                 "Missing client created timestamp. Could this be a V1 transaction?".to_string(),
-            ))?;
+            ))
+            .and_then(|ts| {
+                prost_timestamp_to_web_time(&ts).ok_or_else(|| {
+                    ServiceError::ValidationError("invalid client created timestamp".to_string())
+                })
+            })?;
 
         let invoice_attachments = token_transaction
             .invoice_attachments
@@ -1178,14 +1222,14 @@ impl
         // client_created_timestamp will always be filled for V2 transactions and V1 transactions will be discontinued soon
         let created_timestamp = token_transaction
             .client_created_timestamp
-            .map(|ts| {
-                UNIX_EPOCH
-                    + Duration::from_secs(ts.seconds as u64)
-                    + Duration::from_nanos(ts.nanos as u64)
-            })
             .ok_or(ServiceError::Generic(
                 "Missing client created timestamp. Could this be a V1 transaction?".to_string(),
-            ))?;
+            ))
+            .and_then(|ts| {
+                prost_timestamp_to_web_time(&ts).ok_or_else(|| {
+                    ServiceError::ValidationError("invalid client created timestamp".to_string())
+                })
+            })?;
 
         let invoice_attachments = token_transaction
             .invoice_attachments
@@ -1521,9 +1565,9 @@ impl TryFrom<operator_rpc::spark::PreimageRequestWithTransfer> for PreimageReque
             .ok_or(ServiceError::Generic("Missing transfer".to_string()))?
             .expiry_time
             .ok_or(ServiceError::Generic("Missing expiry time".to_string()))?;
-        let expiry_time = UNIX_EPOCH
-            + Duration::from_secs(expiry_time.seconds as u64)
-            + Duration::from_nanos(expiry_time.nanos as u64);
+        let expiry_time = prost_timestamp_to_web_time(&expiry_time).ok_or_else(|| {
+            ServiceError::ValidationError("invalid preimage request expiry time".to_string())
+        })?;
         Ok(PreimageRequestWithTransfer {
             payment_hash: sha256::Hash::from_slice(&request.payment_hash).map_err(|_| {
                 ServiceError::InvalidPaymentHash(hex::encode(request.payment_hash.clone()))
@@ -1533,12 +1577,14 @@ impl TryFrom<operator_rpc::spark::PreimageRequestWithTransfer> for PreimageReque
             status: request.status().into(),
             created_time: request
                 .created_time
-                .map(|ts| {
-                    UNIX_EPOCH
-                        + Duration::from_secs(ts.seconds as u64)
-                        + Duration::from_nanos(ts.nanos as u64)
-                })
-                .ok_or(ServiceError::Generic("Missing created time".to_string()))?,
+                .ok_or(ServiceError::Generic("Missing created time".to_string()))
+                .and_then(|ts| {
+                    prost_timestamp_to_web_time(&ts).ok_or_else(|| {
+                        ServiceError::ValidationError(
+                            "invalid preimage request created time".to_string(),
+                        )
+                    })
+                })?,
             expiry_time,
             transfer: request.transfer.map(|t| t.try_into()).transpose()?,
             preimage: request
@@ -1593,6 +1639,7 @@ mod tests {
     use frost_secp256k1_tr::Identifier;
     use macros::test_all;
 
+    use super::{ServiceError, convert_page};
     use crate::Network;
     use crate::operator::rpc as operator_rpc;
     use crate::token::TokenOutputWithPrevOut;
@@ -1771,5 +1818,41 @@ mod tests {
             hex::encode(previous_transaction_hash)
         );
         assert_eq!(output_with_prev_out.prev_tx_vout, previous_transaction_vout);
+    }
+
+    struct Converted(u32);
+
+    impl TryFrom<u32> for Converted {
+        type Error = ServiceError;
+
+        fn try_from(value: u32) -> Result<Self, Self::Error> {
+            match value {
+                0 => Err(ServiceError::ValidationError("poisoned".to_string())),
+                v => Ok(Converted(v)),
+            }
+        }
+    }
+
+    #[test_all]
+    fn convert_page_drops_a_poisoned_record() {
+        let converted = convert_page::<u32, Converted>(vec![1, 0, 2], "record").unwrap();
+        assert_eq!(
+            converted.iter().map(|c| c.0).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+    }
+
+    #[test_all]
+    fn convert_page_rejects_a_page_where_nothing_converts() {
+        assert!(convert_page::<u32, Converted>(vec![0, 0], "record").is_err());
+    }
+
+    #[test_all]
+    fn convert_page_keeps_an_empty_page_empty() {
+        assert!(
+            convert_page::<u32, Converted>(vec![], "record")
+                .unwrap()
+                .is_empty()
+        );
     }
 }

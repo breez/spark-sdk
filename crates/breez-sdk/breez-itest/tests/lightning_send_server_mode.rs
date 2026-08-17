@@ -66,6 +66,7 @@ async fn test_send_bolt11_invoice_server_mode(
                 amount_sats: Some(invoice_amount_sats),
                 expiry_secs: None,
                 payment_hash: None,
+                receiver_identity_public_key: None,
             },
         })
         .await?

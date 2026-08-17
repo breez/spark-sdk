@@ -576,13 +576,15 @@ impl SparkWallet {
                         PreimageRequestStatus::WaitingForPreimage
                     },
                     created_time: UNIX_EPOCH
-                        + Duration::from_secs(
+                        .checked_add(Duration::from_secs(
                             lightning_payment.transfer.created_time.unwrap_or_default(),
-                        ),
+                        ))
+                        .unwrap_or(UNIX_EPOCH),
                     expiry_time: UNIX_EPOCH
-                        + Duration::from_secs(
+                        .checked_add(Duration::from_secs(
                             lightning_payment.transfer.expiry_time.unwrap_or_default(),
-                        ),
+                        ))
+                        .unwrap_or(UNIX_EPOCH),
                     preimage,
                 };
                 WalletTransfer::from_transfer(
@@ -838,20 +840,15 @@ impl SparkWallet {
     }
 
     pub async fn generate_static_deposit_address(&self) -> Result<Address, SparkWalletError> {
-        let signing_public_key = self.spark_signer.get_static_deposit_public_key(0).await?;
         let address = self
             .deposit_service
-            .generate_static_deposit_address(signing_public_key)
+            .generate_static_deposit_address()
             .await?;
         Ok(address.address)
     }
 
     pub async fn rotate_static_deposit_address(&self) -> Result<Address, SparkWalletError> {
-        let signing_public_key = self.spark_signer.get_static_deposit_public_key(0).await?;
-        let new_address = self
-            .deposit_service
-            .rotate_static_deposit_address(signing_public_key)
-            .await?;
+        let new_address = self.deposit_service.rotate_static_deposit_address().await?;
         Ok(new_address.address)
     }
 
@@ -1042,7 +1039,7 @@ impl SparkWallet {
             status: PreimageRequestStatus::WaitingForPreimage,
             created_time: transfer
                 .created_time
-                .map(|t| UNIX_EPOCH + Duration::from_secs(t))
+                .and_then(|t| UNIX_EPOCH.checked_add(Duration::from_secs(t)))
                 .unwrap_or(SystemTime::now()),
             expiry_time,
             preimage: None,
@@ -1277,9 +1274,11 @@ impl SparkWallet {
         Ok(self.ssp_client.list_wallet_webhooks().await?)
     }
 
-    /// Signs a message with the identity key using ECDSA and returns the signature.
+    /// Signs `message` with the identity key, ECDSA over `SHA256(message)`.
     ///
-    /// If exposing this, consider adding a prefix to prevent mistakenly signing messages.
+    /// No domain separation is applied, so every message signed with this key
+    /// shares one signature space. Keep your message space from colliding with
+    /// anything else signed under it, and never sign a counterparty's message.
     pub async fn sign_message(&self, message: &str) -> Result<Signature, SparkWalletError> {
         Ok(self.spark_signer.sign_message(message.as_bytes()).await?)
     }

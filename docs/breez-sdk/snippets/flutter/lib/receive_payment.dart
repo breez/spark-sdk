@@ -8,6 +8,8 @@ Future<ReceivePaymentResponse> receivePaymentLightning(
   BigInt optionalAmountSats = BigInt.from(5000);
   // Optionally set the expiry duration in seconds
   int optionalExpirySecs = 3600;
+  // Set this to create an invoice for another Spark identity
+  String? optionalReceiverIdentityPublicKey;
 
   // Create an invoice and set the amount you wish the payer to send
   ReceivePaymentRequest request = ReceivePaymentRequest(
@@ -15,7 +17,8 @@ Future<ReceivePaymentResponse> receivePaymentLightning(
           description: description,
           amountSats: optionalAmountSats,
           expirySecs: optionalExpirySecs,
-          paymentHash: null));
+          paymentHash: null,
+          receiverIdentityPublicKey: optionalReceiverIdentityPublicKey));
   ReceivePaymentResponse response = await sdk.receivePayment(
     request: request,
   );

@@ -478,6 +478,7 @@ mod tests {
             fee: None,
             purpose: None,
             amount_adjustment: None,
+            degradation: None,
         };
         let swap = make_swap_min("swap1", BoltzSwapStatus::Completed);
         assert!(boltz_metadata_from_swap(amm, &swap).is_none());

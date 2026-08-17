@@ -55,6 +55,25 @@ jobs:
       - name: Verify CredentialManagerPrfCore copies are in sync
         run: cargo xtask sync-passkey-core --check
 
+  ios-cocoapods-compile:
+    name: iOS CocoaPods compile
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Only Flutter.xcframework is needed, so this job skips setup-build.
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.41.3
+
+      - name: Fetch Flutter iOS artifacts
+        run: flutter precache --ios
+
+      - name: Typecheck Flutter & React Native iOS sources as CocoaPods builds them
+        run: ./scripts/check-ios-cocoapods.sh
+
   rn-post-ubrn-check:
     name: RN post-ubrn sync
     runs-on: ubuntu-latest
@@ -69,6 +88,37 @@ jobs:
       - name: Verify post-ubrn patches are in sync
         working-directory: packages/react-native
         run: node ./scripts/post-ubrn.js --check
+
+  rn-expo-plugin:
+    name: RN Expo plugin
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/react-native
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: packages/react-native/.nvmrc
+
+      # Skips the postinstall hook, which downloads release artifacts keyed off
+      # a `checksums` field that only exists in the published package.json.
+      - name: Install dependencies
+        run: yarn --mode=skip-build
+
+      - name: Build the Expo config plugin
+        run: yarn plugin:build
+
+      # A bare `@expo/config-plugins` require fails from Expo SDK 56 onward,
+      # where the package is nested under `expo/` instead of hoisted.
+      - name: Verify config-plugins is resolved through expo
+        run: |
+          if grep -rnE "(require\(|from )['\"]@expo/config-plugins(/|['\"])" plugin/build; then
+            echo "::error::plugin/build must resolve config-plugins via 'expo/config-plugins'"
+            exit 1
+          fi
 
   itest:
     name: Integration test (${{ matrix.backend.name }})

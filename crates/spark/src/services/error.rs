@@ -26,6 +26,10 @@ pub enum ServiceError {
     MissingLeafId,
     #[error("invalid deposit address proof")]
     InvalidDepositAddressProof,
+    #[error("deposit address does not pay to its verifying key")]
+    DepositAddressKeyMismatch,
+    #[error("deposit address is not derived from the wallet's signing key")]
+    DepositAddressUserKeyMismatch,
     #[error("invalid node id: '{0}'")]
     InvalidNodeId(String),
     #[error("invalid output index")]

@@ -74,7 +74,18 @@ pub(super) async fn receive_payment(
             amount_sats,
             expiry_secs,
             payment_hash,
-        } => receive_bolt11_invoice(sdk, description, amount_sats, expiry_secs, payment_hash).await,
+            receiver_identity_public_key,
+        } => {
+            receive_bolt11_invoice(
+                sdk,
+                description,
+                amount_sats,
+                expiry_secs,
+                payment_hash,
+                receiver_identity_public_key,
+            )
+            .await
+        }
     }
 }
 
@@ -113,10 +124,17 @@ pub(super) async fn receive_bolt11_invoice(
     amount_sats: Option<u64>,
     expiry_secs: Option<u32>,
     payment_hash: Option<String>,
+    receiver_identity_public_key: Option<String>,
 ) -> Result<ReceivePaymentResponse, SdkError> {
-    let receive =
-        receive_bolt11_invoice_inner(sdk, description, amount_sats, expiry_secs, payment_hash)
-            .await?;
+    let receive = receive_bolt11_invoice_inner(
+        sdk,
+        description,
+        amount_sats,
+        expiry_secs,
+        payment_hash,
+        receiver_identity_public_key,
+    )
+    .await?;
     Ok(ReceivePaymentResponse {
         payment_request: receive.invoice,
         fee: 0,
@@ -133,7 +151,12 @@ pub(super) async fn receive_bolt11_invoice_inner(
     amount_sats: Option<u64>,
     expiry_secs: Option<u32>,
     payment_hash: Option<String>,
+    receiver_identity_public_key: Option<String>,
 ) -> Result<LightningReceivePayment, SdkError> {
+    let receiver_identity_public_key = receiver_identity_public_key
+        .map(|key| PublicKey::from_str(&key))
+        .transpose()
+        .map_err(|_| SdkError::InvalidInput("Invalid receiver identity public key".to_string()))?;
     let receive = if let Some(payment_hash_hex) = payment_hash {
         let hash = sha256::Hash::from_str(&payment_hash_hex)
             .map_err(|e| SdkError::InvalidInput(format!("Invalid payment hash: {e}")))?;
@@ -142,7 +165,7 @@ pub(super) async fn receive_bolt11_invoice_inner(
                 amount_sats.unwrap_or_default(),
                 Some(InvoiceDescription::Memo(description.clone())),
                 hash,
-                None,
+                receiver_identity_public_key,
                 expiry_secs,
             )
             .await?
@@ -151,7 +174,7 @@ pub(super) async fn receive_bolt11_invoice_inner(
             .create_lightning_invoice(
                 amount_sats.unwrap_or_default(),
                 Some(InvoiceDescription::Memo(description.clone())),
-                None,
+                receiver_identity_public_key,
                 expiry_secs,
                 sdk.config.prefer_spark_over_lightning,
             )

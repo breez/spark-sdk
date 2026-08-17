@@ -6,7 +6,7 @@ pub use payment_observer::*;
 pub use crate::token_conversion::{
     AmountAdjustmentReason, ConversionEstimate, ConversionInfo, ConversionOptions,
     ConversionPurpose, ConversionStatus, ConversionType, FetchConversionLimitsRequest,
-    FetchConversionLimitsResponse,
+    FetchConversionLimitsResponse, SwapDegradation,
 };
 
 use core::fmt;
@@ -1239,8 +1239,8 @@ pub struct BuyBitcoinResponse {
 pub struct RefundPendingConversionsResponse {
     /// Conversions successfully refunded this pass.
     pub refunded: u32,
-    /// Conversions intentionally deferred (eligible but held back by a
-    /// safety window). The next pass will retry them.
+    /// Conversions not clawed back this pass: held back by a safety window, or
+    /// found to have executed after all. Only the former are retried.
     pub skipped: u32,
     /// Conversions whose clawback did not complete this pass (rejected or
     /// errored; funds not returned). The next pass will retry them.
@@ -1354,6 +1354,9 @@ pub enum ReceivePaymentMethod {
         /// The payer's HTLC will be held until the preimage is provided via
         /// `claim_htlc_payment` or the HTLC expires.
         payment_hash: Option<String>,
+        /// Spark identity public key that will receive the payment.
+        /// If absent, the connected wallet's identity public key is used.
+        receiver_identity_public_key: Option<String>,
     },
 }
 

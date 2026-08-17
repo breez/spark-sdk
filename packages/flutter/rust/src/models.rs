@@ -807,6 +807,7 @@ pub enum _ReceivePaymentMethod {
         amount_sats: Option<u64>,
         expiry_secs: Option<u32>,
         payment_hash: Option<String>,
+        receiver_identity_public_key: Option<String>,
     },
 }
 
@@ -1149,6 +1150,13 @@ pub struct _Conversion {
 pub enum _AmountAdjustmentReason {
     FlooredToMinLimit,
     IncreasedToAvoidDust,
+}
+
+#[frb(mirror(SwapDegradation))]
+pub enum _SwapDegradation {
+    BelowMinimum,
+    UnexpectedAsset,
+    MissingInfo,
 }
 
 #[frb(mirror(PaymentDetails))]
@@ -1736,6 +1744,7 @@ pub enum _ConversionInfo {
         fee: Option<u128>,
         purpose: Option<ConversionPurpose>,
         amount_adjustment: Option<AmountAdjustmentReason>,
+        degradation: Option<SwapDegradation>,
     },
     Boltz {
         chain: String,

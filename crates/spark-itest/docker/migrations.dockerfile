@@ -1,4 +1,4 @@
-ARG VERSION=e8ceff40979d27c1c19e31899901b7b47bd591bc
+ARG VERSION=ee60d305b756d466647567c93ba47f0a65c0767e
 ARG REPOSITORY=https://github.com/buildonspark/spark.git
 
 FROM debian:bookworm-20250721-slim AS downloader

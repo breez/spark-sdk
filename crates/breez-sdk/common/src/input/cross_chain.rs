@@ -58,6 +58,19 @@ impl CrossChainAddressFamily {
             }
         }
     }
+
+    /// Whether two addresses of this family refer to the same account.
+    ///
+    /// EVM hex is compared case-insensitively so a lowercase address matches
+    /// its EIP-55 checksummed form. Solana and Tron are base58, where case
+    /// carries information, so those compare exactly.
+    pub fn addresses_equal(self, a: &str, b: &str) -> bool {
+        let (a, b) = (a.trim(), b.trim());
+        match self {
+            Self::Evm => a.eq_ignore_ascii_case(b),
+            Self::Solana | Self::Tron => a == b,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -371,6 +384,37 @@ mod tests {
         bad.pop();
         bad.push('X');
         assert_eq!(detect_address_family(&bad), None);
+    }
+
+    // -- Address equality ---------------------------------------------------
+
+    #[test]
+    fn evm_equality_ignores_checksum_case() {
+        let checksummed = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
+        assert!(
+            CrossChainAddressFamily::Evm.addresses_equal(checksummed, &checksummed.to_lowercase())
+        );
+    }
+
+    #[test]
+    fn base58_equality_is_case_sensitive() {
+        let tron = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
+        assert!(CrossChainAddressFamily::Tron.addresses_equal(tron, tron));
+        assert!(!CrossChainAddressFamily::Tron.addresses_equal(tron, &tron.to_lowercase()));
+    }
+
+    #[test]
+    fn equality_ignores_surrounding_whitespace() {
+        let sol = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+        assert!(CrossChainAddressFamily::Solana.addresses_equal(sol, &format!("  {sol}\n")));
+    }
+
+    #[test]
+    fn distinct_addresses_are_not_equal() {
+        assert!(!CrossChainAddressFamily::Evm.addresses_equal(
+            "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+            "0x9d9089eE0D37EF0815336de64FbBCB8a99da8344",
+        ));
     }
 
     // -- URI parsing: EVM (EIP-681) -----------------------------------------

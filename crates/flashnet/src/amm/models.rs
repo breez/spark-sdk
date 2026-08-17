@@ -9,6 +9,7 @@ use spark_wallet::{PublicKey, TransferId};
 
 use super::api::BTC_ASSET_ADDRESS;
 use super::utils::decode_token_identifier;
+use crate::config::IntegratorConfig;
 use crate::error::FlashnetError;
 use crate::models::AssetTransfer;
 
@@ -18,6 +19,10 @@ use crate::models::AssetTransfer;
 #[derive(Debug, Clone)]
 pub struct ExecuteSwapResponse {
     pub flashnet_response: FlashnetExecuteSwapResponse,
+    /// The response checked against the signed terms. Distinguishes a swap the
+    /// pool ran from one it refused, which `flashnet_response` alone does not:
+    /// its identifiers are populated by the pool either way.
+    pub outcome: SwapOutcome,
     pub outbound_asset_transfer: AssetTransfer,
 }
 
@@ -123,16 +128,20 @@ impl std::fmt::Display for CurveType {
 
 #[derive(Debug, Clone)]
 pub struct ExecuteSwapRequest {
-    pub pool_id: PublicKey,
     pub asset_in_address: String,
     pub asset_out_address: String,
     pub amount_in: u128,
     pub max_slippage_bps: u32,
     pub min_amount_out: u128,
-    pub integrator_fee_rate_bps: Option<u32>,
-    pub integrator_public_key: Option<PublicKey>,
-    /// Optional transfer ID for idempotency. If provided, the same transfer ID
-    /// will be used for the underlying spark transfer, allowing deduplication.
+    /// Integrator to credit for this swap, in place of the one configured on
+    /// [`FlashnetConfig`](crate::FlashnetConfig). Unset uses that one. The rate
+    /// and the recipient are inseparable: either alone silently drops the fee
+    /// or sends it nowhere.
+    pub integrator_override: Option<IntegratorConfig>,
+    /// Idempotency key for the input transfer, honoured on the BTC leg only,
+    /// where it becomes the Spark `TransferId`. Unset, or on a token leg
+    /// (`transfer_tokens` takes no such key), a retry after an ambiguous
+    /// failure sends the funds a second time.
     pub transfer_id: Option<TransferId>,
 }
 
@@ -144,6 +153,22 @@ impl ExecuteSwapRequest {
             ..self.clone()
         })
     }
+}
+
+/// A swap whose every parameter is fixed, before any funds move. Lets a caller
+/// act between the input transfer and the submission.
+#[derive(Debug, Clone)]
+pub struct PreparedSwap {
+    pub pool_id: PublicKey,
+    /// Decoded to the raw hex form the pool advertises, not bech32m.
+    pub asset_in_address: String,
+    pub asset_out_address: String,
+    pub amount_in: u128,
+    pub max_slippage_bps: u32,
+    pub min_amount_out: u128,
+    pub total_integrator_fee_rate_bps: u32,
+    pub integrator_public_key: Option<PublicKey>,
+    pub transfer_id: Option<TransferId>,
 }
 
 #[serde_as]
@@ -189,7 +214,106 @@ pub struct FlashnetExecuteSwapResponse {
     pub refund_transfer_id: Option<String>,
 }
 
+/// How an executed swap departed from the terms the client signed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwapDegradation {
+    /// Delivered less than the minimum the intent signed.
+    BelowMinimum,
+    /// Delivered an asset other than the one the intent named.
+    UnexpectedAsset,
+    /// Accepted without naming the amount, the asset, or the transfer
+    /// carrying it.
+    MissingInfo,
+}
+
+impl From<&FlashnetError> for SwapDegradation {
+    fn from(e: &FlashnetError) -> Self {
+        match e {
+            FlashnetError::SlippageViolation { .. } => Self::BelowMinimum,
+            FlashnetError::UnexpectedAsset { .. } => Self::UnexpectedAsset,
+            _ => Self::MissingInfo,
+        }
+    }
+}
+
+/// The verdict on a swap response, checked against the terms the client signed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SwapOutcome {
+    /// Delivered at least the signed minimum, in the signed asset.
+    Accepted,
+    /// Executed, but the response does not match the signed terms. The input is
+    /// spent either way, so it is recorded rather than refunded.
+    AcceptedDegraded { degradation: SwapDegradation },
+    /// Declined. The pool returns the input automatically on most failures.
+    Rejected,
+}
+
+impl SwapOutcome {
+    /// Whether the pool took the input. False only for a rejection, which is
+    /// the one case the input can still be recovered.
+    #[must_use]
+    pub fn is_executed(&self) -> bool {
+        matches!(
+            self,
+            SwapOutcome::Accepted | SwapOutcome::AcceptedDegraded { .. }
+        )
+    }
+}
+
 impl FlashnetExecuteSwapResponse {
+    /// Checks a response against the terms carried in the signed intent.
+    ///
+    /// A rejection is `Ok(Rejected)`, not an error: the pool refunds
+    /// automatically, and the refund id it reports on the response has to
+    /// survive to be recorded. Errors are for responses claiming success that
+    /// cannot be used.
+    pub fn validate_accepted(
+        &self,
+        min_amount_out: u128,
+        expected_asset_out: &str,
+    ) -> Result<SwapOutcome, FlashnetError> {
+        if !self.accepted {
+            return Ok(SwapOutcome::Rejected);
+        }
+
+        let Some(amount_out) = self.amount_out else {
+            return Err(FlashnetError::InvalidSwapResponse {
+                reason: "accepted swap reported no amount out".to_string(),
+            });
+        };
+        let Some(outbound_transfer_id) = self.outbound_transfer_id.clone() else {
+            return Err(FlashnetError::InvalidSwapResponse {
+                reason: "accepted swap reported no outbound transfer id".to_string(),
+            });
+        };
+        if outbound_transfer_id.is_empty() {
+            return Err(FlashnetError::InvalidSwapResponse {
+                reason: "accepted swap reported an empty outbound transfer id".to_string(),
+            });
+        }
+        // Required, not merely checked when present: an omitted asset would
+        // otherwise let the response choose whether to be validated.
+        let Some(asset_out_address) = &self.asset_out_address else {
+            return Err(FlashnetError::InvalidSwapResponse {
+                reason: "accepted swap reported no asset out address".to_string(),
+            });
+        };
+        if asset_out_address != expected_asset_out {
+            return Err(FlashnetError::UnexpectedAsset {
+                delivered: asset_out_address.clone(),
+                expected: expected_asset_out.to_string(),
+            });
+        }
+        if amount_out < min_amount_out {
+            return Err(FlashnetError::SlippageViolation {
+                amount_out,
+                min_amount_out,
+            });
+        }
+
+        Ok(SwapOutcome::Accepted)
+    }
+
     pub(crate) fn from_signed_execute_swap_response(
         response: SignedExecuteSwapResponse,
         transfer_id: String,
@@ -460,9 +584,94 @@ pub struct Pool {
     pub created_at: String,
     /// RFC 3339 timestamp emitted by the Flashnet backend.
     pub updated_at: String,
+    /// The pool's price, as the exponent in `1.0001^tick`. Sent only for
+    /// concentrated-liquidity pools, as are the two fields below.
+    pub current_tick: Option<i32>,
+    /// How far apart, in ticks, liquidity ranges may start and end.
+    pub tick_spacing: Option<u32>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    pub total_liquidity: Option<u128>,
+}
+
+/// Most of the output reserve a single swap may consume. Past this the
+/// constant-product denominator collapses and `amount_in` becomes a function of
+/// the pool's own advertised `reserve_in`.
+const MAX_RESERVE_CONSUMPTION_BPS: u128 = 5_000;
+
+/// A BTC output on a non-concentrated curve is rounded up to the next multiple
+/// of 64 sats, to account for variable fee bit masking.
+fn round_btc_output(asset_out_address: &str, is_v3: bool, amount_out: u128) -> u128 {
+    if asset_out_address == BTC_ASSET_ADDRESS && !is_v3 {
+        amount_out.saturating_add(63) & !63
+    } else {
+        amount_out
+    }
 }
 
 impl Pool {
+    /// The reserves this curve prices against, in `(a, b)` order.
+    ///
+    /// A single-sided pool trades against virtual reserves that move as the
+    /// curve is traversed, so its real reserves imply neither its price nor its
+    /// quote. Constant product trades against the real ones.
+    ///
+    /// `None` for a curve this client cannot price, which includes any type it
+    /// does not recognise: `#[serde(other)]` maps those to `Unknown`, so a curve
+    /// the server adds later would otherwise be quoted as constant product.
+    #[must_use]
+    pub fn quote_reserves(&self) -> Option<(u128, u128)> {
+        match self.curve_type {
+            Some(CurveType::SingleSided) => {
+                let initial_a = self.virtual_reserve_a?;
+                let sold = self.initial_reserve_a?.checked_sub(self.asset_a_reserve?)?;
+                // Constant product on the virtual pair: selling A walks the
+                // curve, so the current pair is `(a - sold, k / (a - sold))`.
+                let k = initial_a.checked_mul(self.virtual_reserve_b?)?;
+                let current_a = initial_a.checked_sub(sold)?;
+                Some((current_a, k.checked_div(current_a)?))
+            }
+            // No usable reserve pair: an unrecognised curve is unknown to
+            // this client, and no reserve pair implies a concentrated-liquidity
+            // price, which `price_matches_tick` corroborates instead.
+            Some(CurveType::Unknown | CurveType::V3Concentrated) | None => None,
+            _ => Some((self.asset_a_reserve?, self.asset_b_reserve?)),
+        }
+    }
+
+    /// The price the curve's own reserves imply, as B per A.
+    #[must_use]
+    pub fn implied_price_a_in_b(&self) -> Option<f64> {
+        let (a, b) = self.quote_reserves()?;
+        if a == 0 || b == 0 {
+            return None;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        Some(b as f64 / a as f64)
+    }
+
+    /// The output [`Pool::calculate_amount_in`] derives its input from, which is
+    /// the requested amount rounded up for a BTC output.
+    ///
+    /// Simulating that input returns the rounded figure, not the request, so a
+    /// caller checking a simulation against its request has to compare with
+    /// this. For a small BTC output the difference exceeds any plausible
+    /// tolerance: 63 sats is over 6% of a 1,000 sat request.
+    pub fn effective_amount_out(
+        &self,
+        asset_in_address: &str,
+        amount_out: u128,
+        network: Network,
+    ) -> Result<u128, FlashnetError> {
+        let asset_in_address = decode_token_identifier(asset_in_address, network)?;
+        let asset_out_address = if asset_in_address == self.asset_a_address {
+            &self.asset_b_address
+        } else {
+            &self.asset_a_address
+        };
+        let is_v3 = self.curve_type == Some(CurveType::V3Concentrated);
+        Ok(round_btc_output(asset_out_address, is_v3, amount_out))
+    }
+
     /// Calculate the required amount of the input asset to receive the desired amount of the output asset,
     /// taking into account pool reserves, fees, and slippage. Returns an error if the calculation
     /// cannot be performed due to insufficient pool data or invalid parameters.
@@ -484,6 +693,15 @@ impl Pool {
         integrator_fee_bps: u32,
         network: Network,
     ) -> Result<u128, FlashnetError> {
+        // A curve this client cannot price is refused rather than quoted with
+        // another curve's maths. `#[serde(other)]` folds every unrecognised
+        // type into `Unknown`, so this covers one the server adds later too.
+        if matches!(self.curve_type, Some(CurveType::Unknown) | None) {
+            return Err(FlashnetError::Generic(format!(
+                "Pool {} has no curve this client can price",
+                self.lp_public_key
+            )));
+        }
         let overflow_err =
             FlashnetError::Generic("Amount overflow calculating amount in".to_string());
         let asset_in_address = decode_token_identifier(asset_in_address, network)?;
@@ -494,14 +712,8 @@ impl Pool {
             &self.asset_a_address
         };
 
-        // If it's not a V3 concentrated pool, round up to next multiple of 64 (2^6) to
-        // account for BTC variable fee bit masking
         let is_v3 = self.curve_type == Some(CurveType::V3Concentrated);
-        let amount_out = if asset_out_address == BTC_ASSET_ADDRESS && !is_v3 {
-            amount_out.saturating_add(63) & !63
-        } else {
-            amount_out
-        };
+        let amount_out = round_btc_output(asset_out_address, is_v3, amount_out);
 
         if max_slippage_bps > 10_000 {
             return Err(FlashnetError::Generic(
@@ -547,12 +759,40 @@ impl Pool {
             amount_out_with_slippage
         };
 
+        // A curve prices against reserves the pool need not hold: a bonding
+        // curve's virtual pair runs orders of magnitude above its balance, and
+        // an advertised price says nothing about depth at all. What a pool can
+        // deliver is what it holds.
+        let held_out = if is_a_to_b {
+            self.asset_b_reserve
+        } else {
+            self.asset_a_reserve
+        };
+        if held_out.is_some_and(|held| amount_out_before_output_fees >= held) {
+            return Err(FlashnetError::Generic(format!(
+                "Amount out {amount_out_before_output_fees} is more than the pool holds"
+            )));
+        }
+
         // Calculate amount_in before input fees
         // V3 concentrated pools use concentrated liquidity, not constant product,
         // so we skip reserve-based calculation and use price-based instead
-        let amount_in_before_input_fees = if !is_v3
-            && let (Some(reserve_a), Some(reserve_b)) = (self.asset_a_reserve, self.asset_b_reserve)
-        {
+        // Concentrated liquidity is the only curve priced off the advertised
+        // price. For every other curve the reserves are the model, so a pool
+        // that cannot supply them is refused rather than quoted off a price
+        // nothing corroborates.
+        let reserves = if is_v3 {
+            None
+        } else {
+            Some(self.quote_reserves())
+        };
+        let amount_in_before_input_fees = if let Some(reserves) = reserves {
+            let Some((reserve_a, reserve_b)) = reserves else {
+                return Err(FlashnetError::Generic(format!(
+                    "Pool {} has no reserves to price against",
+                    self.lp_public_key
+                )));
+            };
             // Calculate amount_in using reserves with integer arithmetic
             // amount_in = (reserve_in × amount_out) / (reserve_out - amount_out)
             let (reserve_in, reserve_out) = if is_a_to_b {
@@ -561,11 +801,16 @@ impl Pool {
                 (reserve_b, reserve_a)
             };
 
-            // Check for overflow/underflow conditions
-            if amount_out_before_output_fees >= reserve_out {
-                return Err(FlashnetError::Generic(
-                    "Amount out exceeds reserve out".to_string(),
-                ));
+            // Taking most of the output reserve is not a quote, it is a drain:
+            // the denominator below collapses toward 1 and amount_in scales with
+            // reserve_in, which the pool controls. Bound the draw rather than
+            // only rejecting a denominator of zero.
+            if amount_out_before_output_fees.saturating_mul(10_000)
+                >= reserve_out.saturating_mul(MAX_RESERVE_CONSUMPTION_BPS)
+            {
+                return Err(FlashnetError::Generic(format!(
+                    "Amount out {amount_out_before_output_fees} takes too much of reserve {reserve_out}"
+                )));
             }
 
             let numerator = reserve_in
@@ -644,6 +889,18 @@ impl Pool {
                 .ok_or(overflow_err)?,
             10_000,
         );
+
+        // An input of nothing buys nothing, so a pool quoting one is describing
+        // a trade it cannot honour: an empty input reserve divides a zero
+        // numerator, and a price large enough rounds the input away. Selection
+        // scores the lowest input best, so such a quote wins on data no swap
+        // can execute.
+        if amount_in == 0 && amount_out > 0 {
+            return Err(FlashnetError::Generic(format!(
+                "Pool {} quoted no input for an output of {amount_out}",
+                self.lp_public_key
+            )));
+        }
 
         Ok(amount_in)
     }
@@ -844,6 +1101,9 @@ mod test {
             graduation_threshold_amount: None,
             created_at: "2025-09-22T19:09:36.661269Z".to_string(),
             updated_at: "2025-12-03T12:43:53.903531Z".to_string(),
+            current_tick: None,
+            tick_spacing: None,
+            total_liquidity: None,
         }
     }
 
@@ -935,6 +1195,46 @@ mod test {
         assert!(amount_in > 102_000 && amount_in < 103_000);
     }
     #[test]
+    fn a_pool_with_no_input_reserve_is_refused_not_quoted_free() {
+        // 64 of the 301 pools in a mainnet listing hold one side and not the
+        // other, and 2 of those are constant product, where the empty side is
+        // the input reserve and the quote divides a zero numerator.
+        let pool = create_test_pool(
+            0,
+            5,
+            "020202020202020202020202020202020202020202020202020202020202020202",
+            "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+            Some(75_663),
+            Some(0),
+            None,
+        );
+
+        let err = pool
+            .calculate_amount_in(
+                "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+                1_000,
+                10,
+                0,
+                Network::Regtest,
+            )
+            .expect_err("quoted an input of nothing");
+        assert!(err.to_string().contains("quoted no input"), "{err}");
+
+        // The other direction draws on the reserve that is stocked, so it is
+        // bounded by the consumption cap rather than by this check.
+        assert!(
+            pool.calculate_amount_in(
+                "020202020202020202020202020202020202020202020202020202020202020202",
+                1_000,
+                10,
+                0,
+                Network::Regtest,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn test_calculate_amount_in_b_to_a_with_reserves() {
         // B to A swap: both host and LP fees on input
         let pool = create_test_pool(
@@ -974,7 +1274,7 @@ mod test {
     fn test_calculate_amount_in_with_price_only() {
         // Test using price when reserves are not available (A to B)
         // Price: 1 A = 10 B means 1 sat = 10 tokens (B per A format)
-        let pool = create_test_pool(
+        let mut pool = create_test_pool(
             100, // 1% host fee
             20,  // 0.2% LP fee
             "020202020202020202020202020202020202020202020202020202020202020202",
@@ -987,6 +1287,8 @@ mod test {
         let amount_out = 1_000_000; // Want 1M of asset B (tokens)
         let max_slippage_bps = 100; // 1% slippage
 
+        // Only concentrated liquidity is priced off the advertised price.
+        pool.curve_type = Some(CurveType::V3Concentrated);
         let result = pool.calculate_amount_in(
             "020202020202020202020202020202020202020202020202020202020202020202",
             amount_out,
@@ -1010,7 +1312,7 @@ mod test {
     fn test_calculate_amount_in_with_price_only_b_to_a() {
         // Test using price when reserves are not available (B to A)
         // Price: 1 A = 10 B means 1 sat = 10 tokens (B per A format)
-        let pool = create_test_pool(
+        let mut pool = create_test_pool(
             100, // 1% host fee
             20,  // 0.2% LP fee
             "020202020202020202020202020202020202020202020202020202020202020202",
@@ -1023,6 +1325,8 @@ mod test {
         let amount_out = 100_000; // Want 100K of asset A (sats)
         let max_slippage_bps = 100; // 1% slippage
 
+        // Only concentrated liquidity is priced off the advertised price.
+        pool.curve_type = Some(CurveType::V3Concentrated);
         let result = pool.calculate_amount_in(
             "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
             amount_out,
@@ -1046,7 +1350,7 @@ mod test {
     #[test]
     fn test_calculate_amount_in_with_realistic_btc_usd_price() {
         // Test with high price (B to A swap): 1 sat = 1000 tokens
-        let pool = create_test_pool(
+        let mut pool = create_test_pool(
             100, // 1% host fee
             20,  // 0.2% LP fee
             "020202020202020202020202020202020202020202020202020202020202020202",
@@ -1059,6 +1363,8 @@ mod test {
         let amount_out = 100_000; // Want 100K sats of BTC
         let max_slippage_bps = 100; // 1% slippage
 
+        // Only concentrated liquidity is priced off the advertised price.
+        pool.curve_type = Some(CurveType::V3Concentrated);
         let result = pool.calculate_amount_in(
             "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
             amount_out,
@@ -1086,7 +1392,7 @@ mod test {
     fn test_calculate_amount_in_with_small_price_reversed() {
         // Test with small price (A to B with price 0.001)
         // Price 0.001 means 1 token (A) = 0.001 sats (B), or 1000 tokens per sat
-        let pool = create_test_pool(
+        let mut pool = create_test_pool(
             100,                                                                  // 1% host fee
             20,                                                                   // 0.2% LP fee
             "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca", // token as asset_a
@@ -1100,6 +1406,8 @@ mod test {
         let max_slippage_bps = 100; // 1% slippage
 
         // Swapping A→B (token → BTC)
+        // Only concentrated liquidity is priced off the advertised price.
+        pool.curve_type = Some(CurveType::V3Concentrated);
         let result = pool.calculate_amount_in(
             "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
             amount_out,
@@ -1444,5 +1752,285 @@ mod test {
                 );
             }
         }
+    }
+
+    #[test]
+    fn effective_amount_out_rounds_a_btc_output_up_to_64_sats() {
+        // Below ~6300 sats the 63-sat round-up exceeds any plausible
+        // tolerance, so a caller comparing a simulation against its raw
+        // request rejects it.
+        let pool = create_test_pool(
+            0,
+            20,
+            "some_token",
+            BTC_ASSET_ADDRESS,
+            Some(171_239_613),
+            Some(260_745),
+            Some(0.001_5),
+        );
+        for (requested, expected) in [
+            (100u128, 128u128),
+            (500, 512),
+            (1_010, 1_024),
+            (5_000, 5_056),
+            (6_400, 6_400),
+        ] {
+            assert_eq!(
+                pool.effective_amount_out("some_token", requested, Network::Mainnet)
+                    .unwrap(),
+                expected,
+                "requested {requested}"
+            );
+        }
+    }
+
+    #[test]
+    fn effective_amount_out_leaves_a_token_output_alone() {
+        let pool = create_default_test_pool();
+        assert_eq!(
+            pool.effective_amount_out(BTC_ASSET_ADDRESS, 1_010, Network::Mainnet)
+                .unwrap(),
+            1_010
+        );
+    }
+
+    #[test]
+    fn effective_amount_out_leaves_a_concentrated_pool_alone() {
+        // Concentrated liquidity carries no variable fee mask, which is why the
+        // one live V3 pool never exhibited the rounding.
+        let mut pool = create_test_pool(
+            0,
+            5,
+            "some_token",
+            BTC_ASSET_ADDRESS,
+            Some(171_239_613),
+            Some(260_745),
+            Some(0.001_5),
+        );
+        pool.curve_type = Some(CurveType::V3Concentrated);
+        assert_eq!(
+            pool.effective_amount_out("some_token", 1_010, Network::Mainnet)
+                .unwrap(),
+            1_010
+        );
+    }
+
+    #[test]
+    fn a_swap_draining_the_output_reserve_is_rejected() {
+        // reserve_out just above amount_out leaves a denominator of 1, making
+        // amount_in a multiple of the pool's own reserve_in.
+        let pool = create_test_pool(
+            0,
+            0,
+            "asset_a",
+            "asset_b",
+            Some(1_000_000_000),
+            Some(1_001_000),
+            None,
+        );
+        assert!(
+            pool.calculate_amount_in("asset_a", 1_000_000, 0, 0, Network::Mainnet)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn the_reserve_bound_sits_at_half_the_output_reserve() {
+        // Pins the constant: the guard exists because the constant-product
+        // denominator collapses as the draw approaches the reserve.
+        let pool = create_test_pool(
+            0,
+            0,
+            "asset_a",
+            "asset_b",
+            Some(1_000_000),
+            Some(2_000),
+            None,
+        );
+        // Just under half of 2_000.
+        assert!(
+            pool.calculate_amount_in("asset_a", 999, 0, 0, Network::Mainnet)
+                .is_ok()
+        );
+        // Exactly half is already a drain.
+        assert!(
+            pool.calculate_amount_in("asset_a", 1_000, 0, 0, Network::Mainnet)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn the_derived_input_matches_the_effective_target() {
+        // The ceiling's target has to stay in step with the rounding inside
+        // `calculate_amount_in`, or a small conversion is rejected for
+        // returning the amount it was quoted.
+        let pool = create_test_pool(
+            0,
+            20,
+            "some_token",
+            BTC_ASSET_ADDRESS,
+            Some(171_239_613),
+            Some(260_745),
+            Some(0.001_5),
+        );
+        for requested in [1u128, 100, 1_010, 5_000, 6_400] {
+            let target = pool
+                .effective_amount_out("some_token", requested, Network::Mainnet)
+                .unwrap();
+            assert_eq!(
+                pool.calculate_amount_in("some_token", requested, 10, 5, Network::Mainnet)
+                    .unwrap(),
+                pool.calculate_amount_in("some_token", target, 10, 5, Network::Mainnet)
+                    .unwrap(),
+                "requested {requested}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_swap_inside_the_reserve_bound_still_quotes() {
+        let pool = create_test_pool(
+            0,
+            0,
+            "asset_a",
+            "asset_b",
+            Some(1_000_000_000),
+            Some(1_000_000_000),
+            None,
+        );
+        assert!(
+            pool.calculate_amount_in("asset_a", 1_000_000, 0, 0, Network::Mainnet)
+                .is_ok()
+        );
+    }
+
+    const ASSET_OUT: &str = "020202020202020202020202020202020202020202020202020202020202020202";
+
+    fn swap_response(accepted: bool) -> FlashnetExecuteSwapResponse {
+        FlashnetExecuteSwapResponse {
+            transfer_id: "inbound-1".to_string(),
+            request_id: "req-1".to_string(),
+            accepted,
+            amount_out: Some(1_000),
+            fee_amount: Some(5),
+            execution_price: Some(1.0),
+            asset_out_address: Some(ASSET_OUT.to_string()),
+            asset_in_address: None,
+            outbound_transfer_id: Some("outbound-1".to_string()),
+            error: None,
+            refunded_asset_address: None,
+            refunded_amount: None,
+            refund_transfer_id: None,
+        }
+    }
+
+    #[test]
+    fn validate_accepted_passes_a_good_swap() {
+        let outcome = swap_response(true)
+            .validate_accepted(1_000, ASSET_OUT)
+            .unwrap();
+        assert_eq!(outcome, SwapOutcome::Accepted);
+    }
+
+    #[test]
+    fn validate_accepted_reports_a_rejection_without_erroring() {
+        let mut response = swap_response(false);
+        response.error = Some("pool declined".to_string());
+        response.refund_transfer_id = Some("refund-1".to_string());
+
+        let outcome = response.validate_accepted(1_000, ASSET_OUT).unwrap();
+
+        // The error and refund id stay on the response; the outcome is the
+        // verdict alone.
+        assert_eq!(outcome, SwapOutcome::Rejected);
+        assert_eq!(response.refund_transfer_id.as_deref(), Some("refund-1"));
+    }
+
+    #[test]
+    fn validate_accepted_reports_a_rejection_that_carries_no_refund() {
+        let outcome = swap_response(false)
+            .validate_accepted(1_000, ASSET_OUT)
+            .unwrap();
+        assert_eq!(outcome, SwapOutcome::Rejected);
+    }
+
+    #[test]
+    fn validate_accepted_rejects_delivery_below_the_signed_minimum() {
+        let mut response = swap_response(true);
+        response.amount_out = Some(999);
+
+        let err = response.validate_accepted(1_000, ASSET_OUT).unwrap_err();
+
+        assert!(matches!(
+            err,
+            FlashnetError::SlippageViolation {
+                amount_out: 999,
+                min_amount_out: 1_000
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_accepted_rejects_a_success_with_no_amount() {
+        let mut response = swap_response(true);
+        response.amount_out = None;
+
+        let err = response.validate_accepted(1_000, ASSET_OUT).unwrap_err();
+
+        assert!(matches!(err, FlashnetError::InvalidSwapResponse { .. }));
+    }
+
+    #[test]
+    fn validate_accepted_rejects_a_success_with_no_outbound_transfer() {
+        for id in [None, Some(String::new())] {
+            let mut response = swap_response(true);
+            response.outbound_transfer_id = id;
+
+            let err = response.validate_accepted(1_000, ASSET_OUT).unwrap_err();
+
+            assert!(matches!(err, FlashnetError::InvalidSwapResponse { .. }));
+        }
+    }
+
+    #[test]
+    fn validate_accepted_rejects_delivery_of_the_wrong_asset() {
+        let mut response = swap_response(true);
+        response.asset_out_address = Some("deadbeef".to_string());
+
+        let err = response.validate_accepted(1_000, ASSET_OUT).unwrap_err();
+
+        // Distinct from a malformed response: the pool named what it delivered
+        // and it was not what the intent signed for.
+        assert!(matches!(err, FlashnetError::UnexpectedAsset { .. }));
+        assert_eq!(
+            SwapDegradation::from(&err),
+            SwapDegradation::UnexpectedAsset
+        );
+    }
+
+    #[test]
+    fn validate_accepted_requires_the_asset_out_address() {
+        // Checking it only when present would let the response opt out of
+        // being checked by omitting it.
+        let mut response = swap_response(true);
+        response.asset_out_address = None;
+
+        let err = response.validate_accepted(1_000, ASSET_OUT).unwrap_err();
+
+        assert!(matches!(err, FlashnetError::InvalidSwapResponse { .. }));
+    }
+
+    #[test]
+    fn an_executed_swap_is_never_reported_as_refundable() {
+        // A pool that took the input cannot give it back, so only a rejection
+        // may reach the refund path.
+        assert!(SwapOutcome::Accepted.is_executed());
+        assert!(
+            SwapOutcome::AcceptedDegraded {
+                degradation: SwapDegradation::BelowMinimum
+            }
+            .is_executed()
+        );
+        assert!(!SwapOutcome::Rejected.is_executed());
     }
 }

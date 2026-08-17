@@ -537,6 +537,7 @@ mod tests {
             fee: Some(10),
             purpose: None,
             amount_adjustment: None,
+            degradation: None,
         }
     }
 

@@ -12,13 +12,15 @@ class ReceivePayment {
             val optionalAmountSats = 5_000.toULong()
             // Optionally set the expiry duration in seconds
             val optionalExpirySecs = 3600.toUInt()
+            val optionalReceiverIdentityPublicKey: String? = null
 
             val request = ReceivePaymentRequest(
                 ReceivePaymentMethod.Bolt11Invoice(
                     description,
                     optionalAmountSats,
                     optionalExpirySecs,
-                    null
+                    null,
+                    optionalReceiverIdentityPublicKey
                 )
             )
             val response = sdk.receivePayment(request)

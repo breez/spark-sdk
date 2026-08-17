@@ -34,6 +34,7 @@ where
 
 // -- Background processor for publishing zap receipts to nostr relays ----------
 
+use bitcoin::hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256};
 use nostr::{JsonUtil, TagStandard};
 use tracing::{debug, error, warn};
 
@@ -251,6 +252,41 @@ async fn process_pending_zap_receipt<DB>(
     }
 }
 
+// -- Receipt signing keys -----------------------------------------------------
+
+/// Frozen. A NIP-57 validator resolves a receipt's expected signer live from
+/// the recipient's LNURL-pay response, so changing this stops every receipt
+/// ever published from validating.
+const RECEIPT_KEY_DERIVATION_PREFIX: &[u8] = b"lnurl-zap-receipt-key:";
+
+/// The receipt-signing key for one user, derived from the server key.
+///
+/// Per user, because NIP-57 validates a receipt against the key the recipient's
+/// own address advertises: one key for the whole service would make every
+/// user's receipts interchangeable.
+///
+/// Keyed on the user's wallet rather than their username, so a rename keeps
+/// their receipt history verifiable while a transfer to another wallet does not.
+pub fn derive_user_nostr_keys(
+    server: &nostr::Keys,
+    owner_pubkey: &str,
+) -> Result<nostr::Keys, anyhow::Error> {
+    let owner_pubkey = owner_pubkey.to_lowercase();
+    (0u8..=u8::MAX)
+        .find_map(|counter| {
+            let mut engine = HmacEngine::<sha256::Hash>::new(server.secret_key().as_secret_bytes());
+            engine.input(RECEIPT_KEY_DERIVATION_PREFIX);
+            engine.input(owner_pubkey.as_bytes());
+            // Covers the vanishing chance that a digest is not a valid scalar.
+            engine.input(&[counter]);
+            let hmac: Hmac<sha256::Hash> = Hmac::from_engine(engine);
+            nostr::SecretKey::from_slice(&hmac.to_byte_array())
+                .ok()
+                .map(nostr::Keys::new)
+        })
+        .ok_or_else(|| anyhow::anyhow!("no digest of the receipt key was a valid secp256k1 scalar"))
+}
+
 /// Publish a zap receipt to nostr relays.
 async fn publish_zap_receipt<DB>(
     db: &DB,
@@ -263,11 +299,12 @@ where
     DB: LnurlRepository + Clone + Send + Sync + 'static,
 {
     let zap_request = nostr::Event::from_json(&zap.zap_request)?;
+    let signing_keys = derive_user_nostr_keys(nostr_keys, &zap.user_pubkey)?;
 
     // Build the zap receipt
     let zap_event =
         nostr::EventBuilder::zap_receipt(bolt11, Some(preimage.to_string()), &zap_request)
-            .sign_with_keys(nostr_keys)?;
+            .sign_with_keys(&signing_keys)?;
 
     let relays: Vec<_> = zap_request
         .tags
@@ -287,7 +324,9 @@ where
         return Err(anyhow::anyhow!("No relays in zap request"));
     }
 
-    let nostr_client = nostr_sdk::Client::new(nostr_keys.clone());
+    // Same key that signed the receipt, so relay AUTH does not identify the
+    // service under a different pubkey than the one it publishes as.
+    let nostr_client = nostr_sdk::Client::new(signing_keys);
     for r in &relays {
         if let Err(e) = nostr_client.add_relay(r).await {
             warn!("Failed to add relay {r}: {e}");
@@ -298,8 +337,14 @@ where
     let result = nostr_client.send_event(&zap_event).await;
     nostr_client.disconnect().await;
 
-    if let Err(e) = result {
-        return Err(anyhow::anyhow!("Failed to send zap event: {}", e));
+    // A send every relay rejected still returns Ok, carrying each failure in
+    // `failed`, so reaching nobody has to be read off the success set.
+    let output = result.map_err(|e| anyhow::anyhow!("Failed to send zap event: {}", e))?;
+    if output.success.is_empty() {
+        return Err(anyhow::anyhow!(
+            "no relay accepted the zap receipt: {:?}",
+            output.failed
+        ));
     }
 
     // Update the zap record with the zap event
@@ -310,6 +355,90 @@ where
 
     debug!("Published zap receipt to {} relays", relays.len());
     Ok(())
+}
+
+#[cfg(test)]
+mod derivation_tests {
+    use super::derive_user_nostr_keys;
+    use nostr::{EventBuilder, JsonUtil, Keys, Kind};
+
+    const OWNER_A: &str = "02a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+    const OWNER_B: &str = "03f0e1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5e4f30211203f4e5d6c7b8a9";
+
+    fn server_keys() -> Keys {
+        Keys::parse("0000000000000000000000000000000000000000000000000000000000000042").unwrap()
+    }
+
+    #[test]
+    fn derivation_is_deterministic_and_owner_specific() {
+        let server = server_keys();
+        let a = derive_user_nostr_keys(&server, OWNER_A).unwrap();
+
+        assert_eq!(
+            a.public_key,
+            derive_user_nostr_keys(&server, OWNER_A).unwrap().public_key,
+            "the advertised key must not change between calls"
+        );
+        assert_eq!(
+            a.public_key,
+            derive_user_nostr_keys(&server, &OWNER_A.to_uppercase())
+                .unwrap()
+                .public_key,
+            "pubkey spelling must not produce a second identity for one user"
+        );
+        assert_ne!(
+            a.public_key,
+            derive_user_nostr_keys(&server, OWNER_B).unwrap().public_key,
+            "two users sharing a key would make receipts interchangeable"
+        );
+        assert_ne!(
+            a.public_key, server.public_key,
+            "the server key must not sign receipts directly"
+        );
+    }
+
+    #[test]
+    fn derivation_changes_with_the_server_key() {
+        let other_server =
+            Keys::parse("0000000000000000000000000000000000000000000000000000000000000043")
+                .unwrap();
+        assert_ne!(
+            derive_user_nostr_keys(&server_keys(), OWNER_A)
+                .unwrap()
+                .public_key,
+            derive_user_nostr_keys(&other_server, OWNER_A)
+                .unwrap()
+                .public_key
+        );
+    }
+
+    /// A receipt signed for one user does not validate against the key another
+    /// user advertises, whichever recipient the request names.
+    #[test]
+    fn receipt_from_one_invoice_does_not_validate_for_another_user() {
+        let server = server_keys();
+        let sender = Keys::generate();
+        let zap_request = EventBuilder::new(Kind::ZapRequest, "")
+            .sign_with_keys(&sender)
+            .unwrap();
+
+        let receipt =
+            EventBuilder::zap_receipt("lnbc1", Some("preimage".to_string()), &zap_request)
+                .sign_with_keys(&derive_user_nostr_keys(&server, OWNER_A).unwrap())
+                .unwrap();
+
+        assert!(receipt.verify().is_ok());
+        assert_ne!(
+            receipt.pubkey,
+            derive_user_nostr_keys(&server, OWNER_B).unwrap().public_key,
+            "receipt minted through user A validates against user B's advertised key"
+        );
+        assert_eq!(
+            receipt.pubkey,
+            derive_user_nostr_keys(&server, OWNER_A).unwrap().public_key
+        );
+        assert!(!receipt.as_json().is_empty());
+    }
 }
 
 #[cfg(test)]

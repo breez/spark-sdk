@@ -29,7 +29,7 @@ use crate::{
     services::{
         FreezeIssuerTokenResponse, QueryTokenTransactionsFilter, ReceiverTokenOutput, ServiceError,
         TokenInputs, TokenOutputToSpend, TokenTransaction, TokenTransactionStatus,
-        TokenTransferInput, TransferObserver, TransferTokenOutput,
+        TokenTransferInput, TransferObserver, TransferTokenOutput, convert_page,
     },
     signer::{PrepareTokenTransactionRequest, SparkSigner, TokenTransactionKind},
     token::{
@@ -460,12 +460,14 @@ impl TokenService {
             })
             .await?;
 
+        let records: Vec<_> = response
+            .token_transactions_with_status
+            .into_iter()
+            .map(|t| (t, self.network))
+            .collect();
+
         Ok(PagingResult {
-            items: response
-                .token_transactions_with_status
-                .into_iter()
-                .map(|t| (t, self.network).try_into())
-                .collect::<Result<Vec<TokenTransaction>, _>>()?,
+            items: convert_page(records, "token transaction")?,
             next: paging.next_from_offset(response.offset),
         })
     }
@@ -2048,8 +2050,13 @@ fn compute_common_hash_components(
         .ok_or(ServiceError::Generic(
             "Client created timestamp is required".to_string(),
         ))?;
-    let unix_timestamp_ms =
-        unix_timestamp.seconds as u64 * 1000 + unix_timestamp.nanos as u64 / 1_000_000;
+    let unix_timestamp_ms = crate::utils::time::prost_timestamp_to_web_time(&unix_timestamp)
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis())
+        .and_then(|ms| u64::try_from(ms).ok())
+        .ok_or(ServiceError::Generic(
+            "Invalid client created timestamp".to_string(),
+        ))?;
     let client_created_timestamp_hash = sha256::Hash::hash(&unix_timestamp_ms.to_be_bytes())
         .to_byte_array()
         .to_vec();
@@ -2058,7 +2065,12 @@ fn compute_common_hash_components(
     if !partial {
         let expiry_time = transaction
             .expiry_time
-            .map(|t| t.seconds as u64)
+            .map(|t| {
+                crate::utils::time::prost_timestamp_to_secs(&t).ok_or(ServiceError::Generic(
+                    "Invalid transaction expiry time".to_string(),
+                ))
+            })
+            .transpose()?
             .unwrap_or(0);
         let expiry_time_hash = sha256::Hash::hash(&expiry_time.to_be_bytes())
             .to_byte_array()

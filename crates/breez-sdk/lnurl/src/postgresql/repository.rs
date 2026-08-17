@@ -25,6 +25,38 @@ impl LnurlRepository {
     }
 }
 
+/// Record `statement_hash` as acted on, returning whether this call recorded it.
+///
+/// Runs on any executor, so a route that has to record inside its own
+/// transaction shares this with one that records on its own.
+async fn claim_statement<'e, E>(
+    executor: E,
+    statement_hash: &[u8],
+    route: &str,
+    expires_at: i64,
+) -> Result<bool, LnurlRepositoryError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    // DO NOTHING rather than DO UPDATE, so the first claim survives. A returned
+    // row therefore means this call inserted it.
+    let inserted: Option<(Vec<u8>,)> = sqlx::query_as(
+        "INSERT INTO used_signed_messages
+             (statement_hash, route, expires_at, created_at)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (statement_hash) DO NOTHING
+         RETURNING statement_hash",
+    )
+    .bind(statement_hash)
+    .bind(route)
+    .bind(expires_at)
+    .bind(now())
+    .fetch_optional(executor)
+    .await?;
+
+    Ok(inserted.is_some())
+}
+
 #[async_trait::async_trait]
 impl crate::repository::LnurlRepository for LnurlRepository {
     async fn delete_user(
@@ -121,12 +153,19 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         to_pubkey: &str,
         username: &str,
         description: &str,
+        claim: crate::repository::StatementClaim<'_>,
     ) -> Result<(), LnurlRepositoryError> {
         let mut tx = self
             .pool
             .begin()
             .await
             .map_err(|e| LnurlRepositoryError::General(e.into()))?;
+
+        // Claim before performing, so a concurrent duplicate blocks on this key
+        // until this transaction settles and then sees the outcome.
+        if !claim_statement(&mut *tx, claim.hash, "transfer", claim.expires_at).await? {
+            return Err(LnurlRepositoryError::StatementAlreadyUsed);
+        }
 
         let source_name: Option<(String,)> =
             sqlx::query_as("DELETE FROM users WHERE domain = $1 AND pubkey = $2 RETURNING name")
@@ -137,7 +176,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         match source_name {
             Some((name,)) if name == username => {}
             // Source pubkey doesn't currently own this username. The tx is
-            // rolled back on drop, so the speculative DELETE is undone.
+            // rolled back on drop, so the speculative DELETE and the claim are
+            // both undone.
             _ => return Err(LnurlRepositoryError::SourceNotOwner),
         }
 
@@ -161,6 +201,23 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             .await
             .map_err(|e| LnurlRepositoryError::General(e.into()))?;
         Ok(())
+    }
+
+    async fn claim_signed_message(
+        &self,
+        statement_hash: &[u8],
+        route: &str,
+        expires_at: i64,
+    ) -> Result<bool, LnurlRepositoryError> {
+        claim_statement(&self.pool, statement_hash, route, expires_at).await
+    }
+
+    async fn delete_expired_signed_messages(&self, now: i64) -> Result<u64, LnurlRepositoryError> {
+        let result = sqlx::query("DELETE FROM used_signed_messages WHERE expires_at < $1")
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
     }
 
     async fn upsert_zap(&self, zap: &Zap) -> Result<(), LnurlRepositoryError> {
@@ -802,5 +859,40 @@ mod postgres_tests {
         let pool = test_pool("deleting_name_not_held_no_op").await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::deleting_a_name_the_pubkey_no_longer_holds_is_a_no_op(&db).await;
+    }
+
+    #[tokio::test]
+    async fn a_statement_is_claimable_once() {
+        let pool = test_pool("claim_statement_twice").await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::a_statement_is_claimable_once(&db).await;
+    }
+
+    #[tokio::test]
+    async fn a_transfer_runs_once() {
+        let pool = test_pool("transfer_runs_once").await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::a_transfer_runs_once(&db).await;
+    }
+
+    #[tokio::test]
+    async fn a_failed_transfer_stays_retryable() {
+        let pool = test_pool("failed_transfer_retryable").await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::a_failed_transfer_stays_retryable(&db).await;
+    }
+
+    #[tokio::test]
+    async fn pruning_removes_only_expired_claims() {
+        let pool = test_pool("prune_expired_claims").await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::pruning_removes_only_expired_claims(&db).await;
+    }
+
+    #[tokio::test]
+    async fn a_transfer_pair_is_spendable_once_across_domains() {
+        let pool = test_pool("transfer_pair_spendable_once").await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::a_transfer_pair_is_spendable_once_across_domains(&db).await;
     }
 }

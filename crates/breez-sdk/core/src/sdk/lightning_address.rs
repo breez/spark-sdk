@@ -155,11 +155,11 @@ impl BreezSdk {
 
         match client.unregister_lightning_address(&params).await {
             Ok(()) => {}
-            // A 409 means the cached username is not the address the server
-            // holds, so the signature authorized deleting a name this wallet no
-            // longer has (another device re-registered under the same identity
-            // key). Resync from the server, which leaves a retry signing the
-            // real address.
+            // A 409 is either a name this wallet no longer holds (another
+            // device re-registered under the same identity key) or a statement
+            // the server already acted on. Resync settles both: it re-caches an
+            // address that is still there and clears one that is gone, so a
+            // retry either signs the real address or short-circuits.
             Err(
                 e @ LnurlServerError::Network {
                     statuscode: 409, ..

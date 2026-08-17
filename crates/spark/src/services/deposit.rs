@@ -50,6 +50,10 @@ const CLAIM_STATIC_DEPOSIT_ACTION: &str = "claim_static_deposit";
 const CLAIM_INSTANT_STATIC_DEPOSIT_TAG: [&str; 2] = ["spark", "claim_instant_static_deposit"];
 const INSTANT_UTXO_SWAP_REQUEST_TYPE: u64 = 3;
 
+/// Every static deposit address of a wallet shares one signing key: rotation
+/// changes the operators' share, not the user's.
+const STATIC_DEPOSIT_KEY_INDEX: u32 = 0;
+
 // Conservative minimum fee threshold for refund transactions
 // Based on 194 vbyte estimate for 1-in/1-out tx at 1 sat/vB minimum relay fee.
 const MIN_REFUND_FEE_SATS: u64 = 194;
@@ -110,63 +114,46 @@ impl Fee {
     }
 }
 
-fn parse_deposit_address_result(
-    result: &operator_rpc::spark::DepositAddressQueryResult,
-    network: Network,
-) -> Result<(Address, PublicKey, PublicKey), ServiceError> {
-    let address: Address<NetworkUnchecked> = result
-        .deposit_address
-        .parse()
-        .map_err(|_| ServiceError::InvalidDepositAddress)?;
-    let address = address
-        .require_network(network.into())
-        .map_err(|_| ServiceError::InvalidDepositAddressNetwork)?;
-    let user_signing_public_key = PublicKey::from_slice(&result.user_signing_public_key)
-        .map_err(|_| ServiceError::InvalidDepositAddressProof)?;
-    let verifying_public_key = PublicKey::from_slice(&result.verifying_public_key)
-        .map_err(|_| ServiceError::InvalidDepositAddressProof)?;
-    Ok((address, user_signing_public_key, verifying_public_key))
+/// Checks that funds sent to `address` are spendable by the FROST aggregate
+/// key, which is what makes the address the user's rather than the operators'.
+/// The expected output is the BIP-341 key-path P2TR over the verifying key with
+/// an empty script tree, the same key spends are verified against. Operators
+/// choose both the address and the verifying key, so nothing else ties the two.
+fn validate_address_pays_to_verifying_key(
+    bitcoin_service: &BitcoinService,
+    address: &Address,
+    verifying_public_key: &PublicKey,
+) -> Result<(), ServiceError> {
+    let expected = bitcoin_service.p2tr_address(verifying_public_key.x_only_public_key().0, None);
+    if address.script_pubkey() != expected.script_pubkey() {
+        error!(
+            "Deposit address {address} does not pay to verifying key {verifying_public_key}, expected {expected}"
+        );
+        return Err(ServiceError::DepositAddressKeyMismatch);
+    }
+
+    Ok(())
 }
 
-impl TryFrom<(operator_rpc::spark::DepositAddressQueryResult, Network)> for StaticDepositAddress {
-    type Error = ServiceError;
-
-    fn try_from(
-        (result, network): (operator_rpc::spark::DepositAddressQueryResult, Network),
-    ) -> Result<Self, Self::Error> {
-        let (address, user_signing_public_key, verifying_public_key) =
-            parse_deposit_address_result(&result, network)?;
-        Ok(StaticDepositAddress {
-            address,
-            user_signing_public_key,
-            verifying_public_key,
-        })
+/// The same check as [`validate_address_pays_to_verifying_key`], against the
+/// output a spend is being signed for rather than a listed address. Without it
+/// a wrong verifying key only surfaces as a refund transaction that fails to
+/// broadcast, since the aggregate signature is then over a key the output does
+/// not commit to.
+fn validate_output_pays_to_verifying_key(
+    bitcoin_service: &BitcoinService,
+    tx_out: &TxOut,
+    verifying_public_key: &PublicKey,
+) -> Result<(), ServiceError> {
+    let expected = bitcoin_service.p2tr_address(verifying_public_key.x_only_public_key().0, None);
+    if tx_out.script_pubkey != expected.script_pubkey() {
+        error!(
+            "Deposit output does not pay to verifying key {verifying_public_key}, expected {expected}"
+        );
+        return Err(ServiceError::DepositAddressKeyMismatch);
     }
-}
 
-impl TryFrom<(operator_rpc::spark::DepositAddressQueryResult, Network)>
-    for SingleUseDepositAddress
-{
-    type Error = ServiceError;
-
-    fn try_from(
-        (result, network): (operator_rpc::spark::DepositAddressQueryResult, Network),
-    ) -> Result<Self, Self::Error> {
-        let leaf_id: TreeNodeId = result
-            .leaf_id
-            .as_ref()
-            .ok_or(ServiceError::MissingLeafId)?
-            .parse()
-            .map_err(ServiceError::InvalidNodeId)?;
-        let (address, user_signing_public_key, verifying_public_key) =
-            parse_deposit_address_result(&result, network)?;
-        Ok(SingleUseDepositAddress {
-            address,
-            user_signing_public_key,
-            verifying_public_key,
-            leaf_id,
-        })
-    }
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]
@@ -357,7 +344,7 @@ impl DepositService {
         } = self
             .spark_signer
             .prepare_static_deposit_claim(PrepareStaticDepositClaimRequest {
-                index: 0,
+                index: STATIC_DEPOSIT_KEY_INDEX,
                 user_statement,
             })
             .await?;
@@ -456,7 +443,7 @@ impl DepositService {
         } = self
             .spark_signer
             .start_static_deposit_refund(StartStaticDepositRefundRequest {
-                index: 0,
+                index: STATIC_DEPOSIT_KEY_INDEX,
                 user_statement,
             })
             .await?;
@@ -500,12 +487,20 @@ impl DepositService {
             .map_err(|_| ServiceError::InvalidPublicKey)?
             .ok_or(ServiceError::InvalidVerifyingKey)?;
 
+        // The operators pick the key the refund is signed under, so tie it to
+        // the output being spent before handing it to the signer.
+        validate_output_pays_to_verifying_key(
+            &self.bitcoin_service,
+            tx_out,
+            &verifying_public_key,
+        )?;
+
         // Finish the refund: the signer produces the user's FROST share (bound
         // to the committed nonce) and aggregates it with the operators' shares.
         let spend_signature = self
             .spark_signer
             .sign_static_deposit_refund(SignStaticDepositRefundRequest {
-                index: 0,
+                index: STATIC_DEPOSIT_KEY_INDEX,
                 sighash: *spend_tx_sighash.as_byte_array(),
                 verifying_key: verifying_public_key,
                 nonce_commitment,
@@ -800,8 +795,9 @@ impl DepositService {
         // that we aggregated locally; the package flow aggregates server-side,
         // so we re-derive the same security guarantees here:
         //  1) the verifying key we used really is the tree's verifying key,
-        //  2) each returned transaction carries a valid Schnorr signature
+        //  2) the returned cpfp transactions carry a valid Schnorr signature
         //     under that key for the sighashes we computed.
+        // `direct_from_cpfp_refund_tx` carries no signature to verify.
         let returned_verifying_key = PublicKey::from_slice(&root_node.verifying_public_key)
             .map_err(|_| ServiceError::InvalidVerifyingKey)?;
         if &returned_verifying_key != verifying_public_key {
@@ -817,12 +813,6 @@ impl DepositService {
             &self.bitcoin_service,
             &root_node.refund_tx,
             cpfp_refund_sighash.as_byte_array(),
-            verifying_public_key,
-        )?;
-        verify_finalized_taproot_signature(
-            &self.bitcoin_service,
-            &root_node.direct_from_cpfp_refund_tx,
-            direct_from_cpfp_refund_sighash.as_byte_array(),
             verifying_public_key,
         )?;
 
@@ -857,8 +847,8 @@ impl DepositService {
 
     pub async fn generate_static_deposit_address(
         &self,
-        signing_public_key: PublicKey,
     ) -> Result<StaticDepositAddress, ServiceError> {
+        let signing_public_key = self.static_deposit_public_key().await?;
         let resp = self
             .operator_pool
             .get_coordinator()
@@ -882,8 +872,8 @@ impl DepositService {
 
     pub async fn rotate_static_deposit_address(
         &self,
-        signing_public_key: PublicKey,
     ) -> Result<StaticDepositAddress, ServiceError> {
+        let signing_public_key = self.static_deposit_public_key().await?;
         let resp = self
             .operator_pool
             .get_coordinator()
@@ -905,6 +895,7 @@ impl DepositService {
     async fn query_static_deposit_addresses_inner(
         &self,
         paging: PagingFilter,
+        user_signing_public_key: PublicKey,
     ) -> Result<PagingResult<StaticDepositAddress>, ServiceError> {
         trace!(
             "Querying static deposit addresses with limit: {:?}, offset: {:?}",
@@ -920,17 +911,30 @@ impl DepositService {
                     network: self.network.to_proto_network() as i32,
                     offset: paging.offset as i64,
                     limit: paging.limit as i64,
+                    // Without this the operators hash the proof of possession
+                    // message the legacy way, which the wallet cannot verify.
+                    hash_variant: HashVariant::V2.into(),
                     ..Default::default()
                 },
             )
             .await?;
 
+        // An entry the wallet cannot verify is dropped rather than fatal: the
+        // listing feeds claims for every other address, and the operators can
+        // always serve one entry this wallet rejects, whether by bug or design.
         let addresses = resp
             .deposit_addresses
             .into_iter()
-            .map(|result| (result, self.network).try_into())
-            .collect::<Result<Vec<_>, ServiceError>>()
-            .map_err(|_| ServiceError::InvalidDepositAddress)?;
+            .filter_map(|result| {
+                match self.static_deposit_address_from_result(&result, user_signing_public_key) {
+                    Ok(address) => Some(address),
+                    Err(e) => {
+                        error!("Ignoring static deposit address: {e}");
+                        None
+                    }
+                }
+            })
+            .collect();
 
         // There is no offset in the static addresses response
         Ok(PagingResult::complete(addresses))
@@ -940,11 +944,17 @@ impl DepositService {
         &self,
         paging: Option<PagingFilter>,
     ) -> Result<PagingResult<StaticDepositAddress>, ServiceError> {
+        // Fetched once for the whole listing: with a remote signer, doing it per
+        // page would be a round trip each time.
+        let user_signing_public_key = self.static_deposit_public_key().await?;
         let result = match paging {
-            Some(paging) => self.query_static_deposit_addresses_inner(paging).await?,
+            Some(paging) => {
+                self.query_static_deposit_addresses_inner(paging, user_signing_public_key)
+                    .await?
+            }
             None => {
                 pager(
-                    |f| self.query_static_deposit_addresses_inner(f),
+                    |f| self.query_static_deposit_addresses_inner(f, user_signing_public_key),
                     PagingFilter::default(),
                 )
                 .await?
@@ -988,7 +998,7 @@ impl DepositService {
             .deposit_addresses
             .into_iter()
             .filter_map(
-                |result| match SingleUseDepositAddress::try_from((result, self.network)) {
+                |result| match self.single_use_deposit_address_from_result(&result) {
                     Ok(addr) => Some(addr),
                     Err(ServiceError::MissingLeafId) => {
                         error!("Ignoring deposit address without leaf ID");
@@ -1181,6 +1191,100 @@ impl DepositService {
         Ok(None)
     }
 
+    async fn static_deposit_public_key(&self) -> Result<PublicKey, ServiceError> {
+        Ok(self
+            .spark_signer
+            .get_static_deposit_public_key(STATIC_DEPOSIT_KEY_INDEX)
+            .await?)
+    }
+
+    /// Validates a static deposit address the operators list back, against the
+    /// caller's own signing key rather than the one in the response.
+    fn static_deposit_address_from_result(
+        &self,
+        result: &operator_rpc::spark::DepositAddressQueryResult,
+        user_signing_public_key: PublicKey,
+    ) -> Result<StaticDepositAddress, ServiceError> {
+        // The proof of possession is checked over the caller's key regardless,
+        // so this only turns "the proof does not verify" into an error naming
+        // the key the operators actually used.
+        let listed_signing_public_key = PublicKey::from_slice(&result.user_signing_public_key)
+            .map_err(|_| ServiceError::InvalidDepositAddressProof)?;
+        if listed_signing_public_key != user_signing_public_key {
+            error!(
+                "Deposit address {} is listed for signing key {listed_signing_public_key}, not the wallet's {user_signing_public_key}",
+                result.deposit_address
+            );
+            return Err(ServiceError::DepositAddressUserKeyMismatch);
+        }
+
+        let (address, verifying_public_key) = self.validate_deposit_address_inner(
+            &result.deposit_address,
+            &result.verifying_public_key,
+            result.proof_of_possession.as_ref(),
+            user_signing_public_key,
+            true,
+        )?;
+
+        Ok(StaticDepositAddress {
+            address,
+            user_signing_public_key,
+            verifying_public_key,
+        })
+    }
+
+    /// These results carry no proof of possession, so only the address to
+    /// verifying key binding is checked. That the key holds the user's share is
+    /// established when the address is generated, not here.
+    fn single_use_deposit_address_from_result(
+        &self,
+        result: &operator_rpc::spark::DepositAddressQueryResult,
+    ) -> Result<SingleUseDepositAddress, ServiceError> {
+        let leaf_id: TreeNodeId = result
+            .leaf_id
+            .as_ref()
+            .ok_or(ServiceError::MissingLeafId)?
+            .parse()
+            .map_err(ServiceError::InvalidNodeId)?;
+
+        let user_signing_public_key = PublicKey::from_slice(&result.user_signing_public_key)
+            .map_err(|_| ServiceError::InvalidDepositAddressProof)?;
+        let (address, verifying_public_key) = self
+            .parse_bound_deposit_address(&result.deposit_address, &result.verifying_public_key)?;
+
+        Ok(SingleUseDepositAddress {
+            address,
+            user_signing_public_key,
+            verifying_public_key,
+            leaf_id,
+        })
+    }
+
+    /// Parses an operator-supplied address and its verifying key, rejecting the
+    /// pair unless the address pays to that key.
+    fn parse_bound_deposit_address(
+        &self,
+        deposit_address: &str,
+        verifying_key: &[u8],
+    ) -> Result<(Address, PublicKey), ServiceError> {
+        let address: Address<NetworkUnchecked> = deposit_address
+            .parse()
+            .map_err(|_| ServiceError::InvalidDepositAddress)?;
+        let address = address
+            .require_network(self.network.into())
+            .map_err(|_| ServiceError::InvalidDepositAddressNetwork)?;
+        let verifying_public_key = PublicKey::from_slice(verifying_key)
+            .map_err(|_| ServiceError::InvalidDepositAddressProof)?;
+
+        validate_address_pays_to_verifying_key(
+            &self.bitcoin_service,
+            &address,
+            &verifying_public_key,
+        )?;
+
+        Ok((address, verifying_public_key))
+    }
+
     fn proof_of_possession_message_hash(
         &self,
         operator_public_key: &PublicKey,
@@ -1199,8 +1303,13 @@ impl DepositService {
         user_signing_public_key: PublicKey,
         leaf_id: &TreeNodeId,
     ) -> Result<SingleUseDepositAddress, ServiceError> {
-        let (address, verifying_public_key) =
-            self.validate_deposit_address_inner(deposit_address, user_signing_public_key, false)?;
+        let (address, verifying_public_key) = self.validate_deposit_address_inner(
+            &deposit_address.address,
+            &deposit_address.verifying_key,
+            deposit_address.deposit_address_proof.as_ref(),
+            user_signing_public_key,
+            false,
+        )?;
 
         Ok(SingleUseDepositAddress {
             address,
@@ -1215,8 +1324,13 @@ impl DepositService {
         deposit_address: crate::operator::rpc::spark::Address,
         user_signing_public_key: PublicKey,
     ) -> Result<StaticDepositAddress, ServiceError> {
-        let (address, verifying_public_key) =
-            self.validate_deposit_address_inner(deposit_address, user_signing_public_key, true)?;
+        let (address, verifying_public_key) = self.validate_deposit_address_inner(
+            &deposit_address.address,
+            &deposit_address.verifying_key,
+            deposit_address.deposit_address_proof.as_ref(),
+            user_signing_public_key,
+            true,
+        )?;
 
         Ok(StaticDepositAddress {
             address,
@@ -1225,26 +1339,24 @@ impl DepositService {
         })
     }
 
+    /// `user_signing_public_key` has to be the caller's own key. The proof of
+    /// possession is checked against `verifying_key - user_signing_public_key`,
+    /// so passing back a key the operators supplied would let them satisfy the
+    /// proof with a pair they generated themselves.
     fn validate_deposit_address_inner(
         &self,
-        deposit_address: crate::operator::rpc::spark::Address,
+        deposit_address: &str,
+        verifying_key: &[u8],
+        proof: Option<&operator_rpc::spark::DepositAddressProof>,
         user_signing_public_key: PublicKey,
         verify_coordinator_proof: bool,
     ) -> Result<(Address, PublicKey), ServiceError> {
-        let address: Address<NetworkUnchecked> = deposit_address
-            .address
-            .parse()
-            .map_err(|_| ServiceError::InvalidDepositAddress)?;
-        let address = address
-            .require_network(self.network.into())
-            .map_err(|_| ServiceError::InvalidDepositAddressNetwork)?;
-
-        let Some(proof) = deposit_address.deposit_address_proof else {
+        let Some(proof) = proof else {
             return Err(ServiceError::MissingDepositAddressProof);
         };
 
-        let verifying_public_key = PublicKey::from_slice(&deposit_address.verifying_key)
-            .map_err(|_| ServiceError::InvalidDepositAddressProof)?;
+        let (address, verifying_public_key) =
+            self.parse_bound_deposit_address(deposit_address, verifying_key)?;
 
         let operator_public_key = self
             .bitcoin_service
@@ -1313,5 +1425,122 @@ impl DepositService {
         }
 
         Ok((address, verifying_public_key))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitcoin::key::CompressedPublicKey;
+    use bitcoin::secp256k1::{Secp256k1, SecretKey};
+    use macros::test_all;
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    const NETWORK: bitcoin::Network = bitcoin::Network::Regtest;
+
+    fn test_key(seed: u8) -> PublicKey {
+        let secp = Secp256k1::new();
+        let secret = SecretKey::from_slice(&[seed; 32]).unwrap();
+        PublicKey::from_secret_key(&secp, &secret)
+    }
+
+    fn p2tr(key: &PublicKey) -> Address {
+        let secp = Secp256k1::new();
+        Address::p2tr(&secp, key.x_only_public_key().0, None, NETWORK)
+    }
+
+    #[test_all]
+    fn accepts_p2tr_over_the_verifying_key() {
+        let service = BitcoinService::new(NETWORK);
+        let verifying_key = test_key(1);
+
+        assert!(
+            validate_address_pays_to_verifying_key(&service, &p2tr(&verifying_key), &verifying_key)
+                .is_ok()
+        );
+    }
+
+    #[test_all]
+    fn rejects_p2tr_over_another_key() {
+        let service = BitcoinService::new(NETWORK);
+        let operator_key = test_key(2);
+
+        assert!(matches!(
+            validate_address_pays_to_verifying_key(&service, &p2tr(&operator_key), &test_key(1)),
+            Err(ServiceError::DepositAddressKeyMismatch)
+        ));
+    }
+
+    /// The untweaked key spends nothing on its own: only the BIP-341 tweaked
+    /// output key does, so an address over the raw key must not pass.
+    #[test_all]
+    fn rejects_untweaked_key_output() {
+        let service = BitcoinService::new(NETWORK);
+        let verifying_key = test_key(1);
+        let untweaked = Address::p2tr_tweaked(
+            bitcoin::key::TweakedPublicKey::dangerous_assume_tweaked(
+                verifying_key.x_only_public_key().0,
+            ),
+            NETWORK,
+        );
+
+        assert!(matches!(
+            validate_address_pays_to_verifying_key(&service, &untweaked, &verifying_key),
+            Err(ServiceError::DepositAddressKeyMismatch)
+        ));
+    }
+
+    #[test_all]
+    fn rejects_non_taproot_output_for_the_verifying_key() {
+        let service = BitcoinService::new(NETWORK);
+        let verifying_key = test_key(1);
+        let p2wpkh = Address::p2wpkh(
+            &CompressedPublicKey(bitcoin::PublicKey::new(verifying_key).inner),
+            NETWORK,
+        );
+
+        assert!(matches!(
+            validate_address_pays_to_verifying_key(&service, &p2wpkh, &verifying_key),
+            Err(ServiceError::DepositAddressKeyMismatch)
+        ));
+    }
+
+    fn tx_out(address: &Address) -> TxOut {
+        TxOut {
+            value: Amount::from_sat(10_000),
+            script_pubkey: address.script_pubkey(),
+        }
+    }
+
+    #[test_all]
+    fn accepts_output_paying_to_the_verifying_key() {
+        let service = BitcoinService::new(NETWORK);
+        let verifying_key = test_key(1);
+
+        assert!(
+            validate_output_pays_to_verifying_key(
+                &service,
+                &tx_out(&p2tr(&verifying_key)),
+                &verifying_key
+            )
+            .is_ok()
+        );
+    }
+
+    #[test_all]
+    fn rejects_output_paying_to_another_key() {
+        let service = BitcoinService::new(NETWORK);
+        let operator_key = test_key(2);
+
+        assert!(matches!(
+            validate_output_pays_to_verifying_key(
+                &service,
+                &tx_out(&p2tr(&operator_key)),
+                &test_key(1)
+            ),
+            Err(ServiceError::DepositAddressKeyMismatch)
+        ));
     }
 }

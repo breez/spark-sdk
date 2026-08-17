@@ -163,6 +163,7 @@ async fn lightning_receive(#[case] backend: SignerBackend) -> Result<()> {
                 amount_sats: Some(100),
                 expiry_secs: None,
                 payment_hash: None,
+                receiver_identity_public_key: None,
             },
         })
         .await?

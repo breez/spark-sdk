@@ -128,6 +128,14 @@ const RESERVATION_TIMEOUT_SECS: f64 = 300.0; // 5 minutes
 
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS: i64 = 5 * 60 * 1000; // 5 minutes
 
+/// Leaves per `INSERT` when upserting a refreshed leaf set.
+///
+/// A wallet can hold six figures of leaves, and each one serializes to a JSON
+/// blob carrying up to five transactions. Building that as a single statement
+/// materializes the whole set as `serde_json::Value` plus its encoded form,
+/// which is the largest allocation in a refresh and lands at its very end.
+const LEAF_UPSERT_CHUNK_SIZE: usize = 1_000;
+
 /// Slim projection of selection candidates: id + value only.
 /// Includes all leaves with value <= `$2` (covers exact-match +
 /// minimum-amount accumulators) plus the smallest leaf with value >
@@ -518,6 +526,8 @@ impl TreeStore for PostgresTreeStore {
     ) -> Result<(), TreeServiceError> {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
+
+        self.acquire_write_lock(&tx).await?;
 
         let reservation = tx
             .query_opt(
@@ -942,6 +952,8 @@ impl TreeStore for PostgresTreeStore {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
 
+        self.acquire_write_lock(&tx).await?;
+
         let reservation = tx
             .query_opt(
                 "SELECT id FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
@@ -1189,40 +1201,61 @@ impl PostgresTreeStore {
             return Ok(());
         }
 
-        let mut ids: Vec<String> = Vec::with_capacity(filtered.len());
-        let mut statuses: Vec<String> = Vec::with_capacity(filtered.len());
-        let mut missing_flags: Vec<bool> = Vec::with_capacity(filtered.len());
-        let mut data_values: Vec<serde_json::Value> = Vec::with_capacity(filtered.len());
+        let chunk_len = filtered.len().min(LEAF_UPSERT_CHUNK_SIZE);
+        let mut ids: Vec<String> = Vec::with_capacity(chunk_len);
+        let mut statuses: Vec<String> = Vec::with_capacity(chunk_len);
+        let mut missing_flags: Vec<bool> = Vec::with_capacity(chunk_len);
+        let mut data_values: Vec<serde_json::Value> = Vec::with_capacity(chunk_len);
 
-        for leaf in filtered {
-            ids.push(leaf.id.to_string());
-            statuses.push(leaf.status.to_string());
-            missing_flags.push(is_missing_from_operators);
-            data_values.push(Self::serialize_node(leaf)?);
+        // Prepared once for the whole loop: passing the SQL as a string would
+        // make tokio-postgres re-prepare it per chunk, doubling the round trips
+        // taken while holding the write lock.
+        let stmt = tx
+            .prepare(
+                r"
+                INSERT INTO brz_tree_leaves (user_id, id, status, is_missing_from_operators, data, added_at)
+                SELECT $5, id, status, missing, data, NOW()
+                FROM UNNEST($1::text[], $2::text[], $3::bool[], $4::jsonb[])
+                    AS t(id, status, missing, data)
+                ON CONFLICT (user_id, id) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    is_missing_from_operators = EXCLUDED.is_missing_from_operators,
+                    data = EXCLUDED.data,
+                    added_at = NOW()
+                ",
+            )
+            .await
+            .map_err(map_err)?;
+
+        // All chunks run inside the caller's transaction, and `NOW()` is the
+        // transaction timestamp, so every row still lands atomically with one
+        // shared `added_at`.
+        for chunk in filtered.chunks(LEAF_UPSERT_CHUNK_SIZE) {
+            ids.clear();
+            statuses.clear();
+            missing_flags.clear();
+            data_values.clear();
+
+            for leaf in chunk {
+                ids.push(leaf.id.to_string());
+                statuses.push(leaf.status.to_string());
+                missing_flags.push(is_missing_from_operators);
+                data_values.push(Self::serialize_node(leaf)?);
+            }
+
+            tx.execute(
+                &stmt,
+                &[
+                    &ids,
+                    &statuses,
+                    &missing_flags,
+                    &data_values,
+                    &self.identity,
+                ],
+            )
+            .await
+            .map_err(map_err)?;
         }
-
-        tx.execute(
-            r"
-            INSERT INTO brz_tree_leaves (user_id, id, status, is_missing_from_operators, data, added_at)
-            SELECT $5, id, status, missing, data, NOW()
-            FROM UNNEST($1::text[], $2::text[], $3::bool[], $4::jsonb[])
-                AS t(id, status, missing, data)
-            ON CONFLICT (user_id, id) DO UPDATE SET
-                status = EXCLUDED.status,
-                is_missing_from_operators = EXCLUDED.is_missing_from_operators,
-                data = EXCLUDED.data,
-                added_at = NOW()
-            ",
-            &[
-                &ids,
-                &statuses,
-                &missing_flags,
-                &data_values,
-                &self.identity,
-            ],
-        )
-        .await
-        .map_err(map_err)?;
 
         Ok(())
     }
@@ -1798,6 +1831,12 @@ mod tests {
     async fn test_notification_on_pending_balance_change() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_notification_on_pending_balance_change(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_set_leaves_across_chunk_boundary() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_set_leaves_across_chunk_boundary(&fixture.store).await;
     }
 
     #[tokio::test]
@@ -2512,6 +2551,128 @@ mod tests {
                 .iter()
                 .any(|l| l.id.to_string() == "locked_leaf"),
             "Spent leaf should not be Available"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cancel_reservation_blocked_by_write_lock() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        let leaf = create_test_tree_node("locked_leaf", 100);
+        fixture
+            .store
+            .add_leaves(std::slice::from_ref(&leaf))
+            .await
+            .unwrap();
+        let reservation = reserve_leaves(
+            &fixture.store,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+
+        let lock_key = fixture.store.lock_key;
+        let mut holder = fixture.store.pool.get().await.unwrap();
+        let holder_tx = holder.transaction().await.unwrap();
+        holder_tx
+            .execute("SELECT pg_advisory_xact_lock($1)", &[&lock_key])
+            .await
+            .unwrap();
+
+        let store = Arc::new(fixture.store);
+        let store_for_task = store.clone();
+        let res_id = reservation.id.clone();
+        let leaves_to_keep = reservation.leaves.clone();
+        let cancel_task = tokio::spawn(async move {
+            store_for_task
+                .cancel_reservation(&res_id, &leaves_to_keep)
+                .await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(
+            !cancel_task.is_finished(),
+            "cancel_reservation completed while advisory lock was held — \
+             the lock is not being acquired"
+        );
+
+        holder_tx.commit().await.unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), cancel_task)
+            .await
+            .expect("cancel_reservation did not complete after lock released")
+            .unwrap()
+            .unwrap();
+
+        let leaves = store.get_leaves().await.unwrap();
+        assert!(
+            leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "locked_leaf"),
+            "Cancelled leaf should be Available again"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_reservation_blocked_by_write_lock() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        let leaf = create_test_tree_node("locked_leaf", 100);
+        fixture
+            .store
+            .add_leaves(std::slice::from_ref(&leaf))
+            .await
+            .unwrap();
+        let reservation = reserve_leaves(
+            &fixture.store,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Swap,
+        )
+        .await
+        .unwrap();
+
+        let lock_key = fixture.store.lock_key;
+        let mut holder = fixture.store.pool.get().await.unwrap();
+        let holder_tx = holder.transaction().await.unwrap();
+        holder_tx
+            .execute("SELECT pg_advisory_xact_lock($1)", &[&lock_key])
+            .await
+            .unwrap();
+
+        let store = Arc::new(fixture.store);
+        let store_for_task = store.clone();
+        let res_id = reservation.id.clone();
+        let swap_output = create_test_tree_node("swap_output", 100);
+        let update_task = tokio::spawn(async move {
+            store_for_task
+                .update_reservation(&res_id, std::slice::from_ref(&swap_output), &[])
+                .await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(
+            !update_task.is_finished(),
+            "update_reservation completed while advisory lock was held — \
+             the lock is not being acquired"
+        );
+
+        holder_tx.commit().await.unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), update_task)
+            .await
+            .expect("update_reservation did not complete after lock released")
+            .unwrap()
+            .unwrap();
+
+        let leaves = store.get_leaves().await.unwrap();
+        assert!(
+            leaves
+                .reserved_for_swap
+                .iter()
+                .any(|l| l.id.to_string() == "swap_output"),
+            "Swap output should be reserved"
         );
     }
 
