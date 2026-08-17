@@ -857,8 +857,16 @@ pub trait TreeService: Send + Sync {
     ) -> Result<Vec<LeafPedigree>, TreeServiceError>;
 
     /// Persists each leaf's ancestor chain, leaving the leaf pool untouched, so a
-    /// chain resolved after its leaf was stored completes it in place.
+    /// chain resolved after its leaf was stored completes it in place. Publishes
+    /// an exit state change: a leaf that could not be exited offline before now
+    /// can.
     async fn store_exit_chains(&self, pedigrees: &[LeafPedigree]) -> Result<(), TreeServiceError>;
+
+    /// The same write, replaying a chain read back from a backup. Publishes
+    /// nothing: the backup is where the chain came from, so it cannot be the
+    /// thing that made the backup stale.
+    async fn restore_exit_chains(&self, pedigrees: &[LeafPedigree])
+    -> Result<(), TreeServiceError>;
 
     /// Ids of the stored leaves whose chain cannot back a unilateral exit.
     async fn leaves_missing_exit_chains(&self) -> Result<Vec<TreeNodeId>, TreeServiceError>;

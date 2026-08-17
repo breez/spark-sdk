@@ -107,6 +107,21 @@ impl TreeService for SynchronousTreeService {
     }
 
     async fn store_exit_chains(&self, pedigrees: &[LeafPedigree]) -> Result<(), TreeServiceError> {
+        if pedigrees.is_empty() {
+            return Ok(());
+        }
+        self.state.store_ancestors(pedigrees).await?;
+        self.signal_exit_state_changed();
+        Ok(())
+    }
+
+    async fn restore_exit_chains(
+        &self,
+        pedigrees: &[LeafPedigree],
+    ) -> Result<(), TreeServiceError> {
+        if pedigrees.is_empty() {
+            return Ok(());
+        }
         self.state.store_ancestors(pedigrees).await
     }
 
@@ -131,9 +146,7 @@ impl TreeService for SynchronousTreeService {
     ) -> Result<(), TreeServiceError> {
         self.state.finalize_reservation(&id, new_leaves).await?;
         // A swap's change, which the reservation being finalized paid for.
-        if new_leaves.is_some_and(|leaves| !leaves.is_empty()) {
-            self.notify_leaves_added();
-        }
+        self.notify_leaves_added(new_leaves.unwrap_or_default());
         Ok(())
     }
 
@@ -149,8 +162,8 @@ impl TreeService for SynchronousTreeService {
         } = self.check_renew_nodes(bare_pedigrees(leaves)).await?;
         let leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
         self.state.add_leaves(&leaves).await?;
-        self.store_renewed_chains(&pedigrees).await;
-        self.after_leaf_write(&leaves, any_renewal_due);
+        self.store_renewed_chains(&pedigrees, any_renewal_due).await;
+        self.notify_leaves_added(&leaves);
         Ok(leaves)
     }
 
@@ -165,10 +178,7 @@ impl TreeService for SynchronousTreeService {
             .filter(|p| !p.ancestors.is_empty() && chain_reaches_root(&p.leaf, &p.ancestors))
             .cloned()
             .collect();
-        if restorable.is_empty() {
-            return Ok(());
-        }
-        self.state.store_ancestors(&restorable).await
+        self.restore_exit_chains(&restorable).await
     }
 
     async fn fetch_pedigrees_from_operators(&self, leaf_ids: &[TreeNodeId]) -> Vec<LeafPedigree> {
@@ -472,10 +482,10 @@ impl TreeService for SynchronousTreeService {
                 refresh_started_at,
             )
             .await?;
-        self.store_renewed_chains(&pedigrees).await;
+        self.store_renewed_chains(&pedigrees, any_renewal_due).await;
         // Which of the reported leaves the store already held is the store's to
         // know, so anything reported at all is announced.
-        self.after_leaf_write(&renewed_leaves, any_renewal_due);
+        self.notify_leaves_added(&renewed_leaves);
         Ok(())
     }
 
@@ -511,38 +521,22 @@ impl SynchronousTreeService {
         }
     }
 
-    /// Publishes an exit state change. Raised only once the write that persisted a
-    /// renewal has landed: a renewal leaves the chain complete, so the exit chain
-    /// resolver never revisits the leaf, and a listener told any earlier would
-    /// export the very state the write is replacing.
+    /// Publishes an exit state change. Raised by the write that changed it, once
+    /// the write has landed: a listener told any earlier would export the very
+    /// state the write is replacing.
     fn signal_exit_state_changed(&self) {
         if let Some(sender) = &self.exit_state_changed {
             let _ = sender.send(());
         }
     }
 
-    /// Announces leaves reaching the pool. Errors when nobody is listening,
-    /// which is the usual case and not a failure.
-    fn notify_leaves_added(&self) {
+    /// Announces leaves reaching the pool, so their chains get collected. Errors
+    /// when nobody is listening, which is the usual case and not a failure.
+    fn notify_leaves_added(&self, leaves: &[TreeNode]) {
+        if leaves.is_empty() {
+            return;
+        }
         let _ = self.leaves_added.send(());
-    }
-
-    /// What every write to the leaf pool announces, in one place so a new write
-    /// path cannot raise one notification and forget the other. Call it after
-    /// the write has landed: a listener told any earlier reads the state the
-    /// write is replacing.
-    ///
-    /// The two are separate because they mean different things. Leaves arriving
-    /// may need chains collected. A renewal collects nothing, but re-signs the
-    /// transactions a leaf is exited with, so a chain left untouched is no sign
-    /// that the exit state held.
-    fn after_leaf_write(&self, leaves: &[TreeNode], any_renewal_due: bool) {
-        if !leaves.is_empty() {
-            self.notify_leaves_added();
-        }
-        if any_renewal_due {
-            self.signal_exit_state_changed();
-        }
     }
 
     /// Checks if the reservation already matches the target amounts without needing a swap.
@@ -681,8 +675,8 @@ impl SynchronousTreeService {
                     .into_iter()
                     .chain(change_pedigrees)
                     .collect();
-                self.store_renewed_chains(&renewed).await;
-                self.after_leaf_write(&change_nodes, any_renewal_due);
+                self.store_renewed_chains(&renewed, any_renewal_due).await;
+                self.notify_leaves_added(&change_nodes);
                 Ok(final_reservation)
             }
             Err(e) => {
@@ -699,8 +693,12 @@ impl SynchronousTreeService {
                     .await
                 {
                     error!("Failed to finalize reservation after update error: {finalize_err:?}");
-                } else if any_renewal_due {
-                    self.signal_exit_state_changed();
+                } else {
+                    let renewed: Vec<LeafPedigree> = reserved_pedigrees
+                        .into_iter()
+                        .chain(change_pedigrees)
+                        .collect();
+                    self.store_renewed_chains(&renewed, any_renewal_due).await;
                 }
                 Err(e)
             }
@@ -872,16 +870,24 @@ impl SynchronousTreeService {
         })
     }
 
-    /// Stores the chains a renewal rebuilt. Renewal reparents the leaf, so its
-    /// stored chain no longer starts at its parent and has to be replaced; every
-    /// other chain is written by the exit chain resolver. Call after the leaves
-    /// are in the pool: a chain is only kept for a leaf the store holds.
+    /// Stores the chains a renewal rebuilt and publishes the exit state change,
+    /// so every renewal path announces itself by calling this rather than by
+    /// remembering to. Renewal reparents the leaf, so its stored chain no longer
+    /// starts at its parent and has to be replaced; every other chain is written
+    /// by the exit chain resolver. Call after the leaves are in the pool: a chain
+    /// is only kept for a leaf the store holds.
     ///
     /// Best-effort, and deliberately not fallible to the caller: the leaves are
     /// already committed by then, so failing here would report a completed
     /// operation as failed. A chain left unwritten is reported by
     /// `leaves_missing_exit_chains` and re-resolved in the background.
-    async fn store_renewed_chains(&self, pedigrees: &[LeafPedigree]) {
+    async fn store_renewed_chains(&self, pedigrees: &[LeafPedigree], any_renewal_due: bool) {
+        // Renewal passes over leaves that are not due unchanged, so with none due
+        // the chains here are the stored ones read back, and rewriting them says
+        // an exit state changed that did not.
+        if !any_renewal_due {
+            return;
+        }
         // A renewal that resolved no ancestors rebuilds a chain of just the new
         // split node, which stops short of a root. Storing it would leave the
         // leaf reading as complete and never fetched again.
@@ -890,12 +896,15 @@ impl SynchronousTreeService {
             .filter(|p| !p.ancestors.is_empty() && chain_reaches_root(&p.leaf, &p.ancestors))
             .cloned()
             .collect();
-        if renewed.is_empty() {
-            return;
-        }
-        if let Err(e) = self.state.store_ancestors(&renewed).await {
+        if !renewed.is_empty()
+            && let Err(e) = self.state.store_ancestors(&renewed).await
+        {
             warn!("Failed to store renewed exit chains: {e:?}");
         }
+        // Announced even with nothing written: the ordinary renewal leaves a leaf
+        // where it is and re-signs it there, so the leaf a backup holds is stale
+        // though no chain moved.
+        self.signal_exit_state_changed();
     }
 
     async fn renew_leaves_timelocks(
@@ -955,11 +964,11 @@ impl SynchronousTreeService {
         // from local state.
         let new_leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
         self.state.add_leaves(&new_leaves).await?;
-        self.store_renewed_chains(&pedigrees).await;
+        self.store_renewed_chains(&pedigrees, any_renewal_due).await;
         // Renewal reparents rather than adds, and rebuilds the chain itself. The
         // rebuild is best-effort though, so a listener is given the chance to
         // notice one that did not make it.
-        self.after_leaf_write(&new_leaves, any_renewal_due);
+        self.notify_leaves_added(&new_leaves);
         Ok(LeavesReservation::new(new_leaves, id))
     }
 
@@ -1392,7 +1401,7 @@ mod tests {
     }
 
     #[async_test_all]
-    async fn restore_leaves_and_store_exit_chains_do_not_signal() {
+    async fn a_chain_reaching_the_leaf_signals_when_stored() {
         let (tx, rx) = tokio::sync::watch::channel(());
         let service = service_over(Arc::new(InMemoryTreeStore::new()), Some(tx)).await;
 
@@ -1402,6 +1411,10 @@ mod tests {
             .restore_leaves(&bare_pedigrees(vec![leaf.clone()]))
             .await
             .unwrap();
+        // Nothing yet: the leaf went in with no chain, so it is no more exitable
+        // offline than it was.
+        assert!(!rx.has_changed().unwrap());
+
         service
             .store_exit_chains(&[LeafPedigree {
                 leaf,
@@ -1409,6 +1422,26 @@ mod tests {
             }])
             .await
             .unwrap();
+
+        assert!(rx.has_changed().unwrap());
+    }
+
+    #[async_test_all]
+    async fn a_chain_replayed_from_a_backup_does_not_signal() {
+        let (tx, rx) = tokio::sync::watch::channel(());
+        let service = service_over(Arc::new(InMemoryTreeStore::new()), Some(tx)).await;
+
+        let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+        let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+        let pedigree = LeafPedigree {
+            leaf,
+            ancestors: vec![root],
+        };
+        service
+            .restore_leaves(std::slice::from_ref(&pedigree))
+            .await
+            .unwrap();
+        service.restore_exit_chains(&[pedigree]).await.unwrap();
 
         assert!(!rx.has_changed().unwrap());
     }

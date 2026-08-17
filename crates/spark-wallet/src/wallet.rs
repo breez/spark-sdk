@@ -499,7 +499,7 @@ impl SparkWallet {
             Arc::clone(&timelock_manager),
             Arc::clone(&spark_signer),
             Arc::clone(&swap_service),
-            Some(exit_state_changed_tx.clone()),
+            Some(exit_state_changed_tx),
         ));
 
         let token_output_service: Arc<dyn TokenOutputService> =
@@ -535,10 +535,7 @@ impl SparkWallet {
             event_manager: Arc::clone(&event_manager),
         });
 
-        let exit_chain_resolver = Arc::new(ExitChainResolver::new(
-            Arc::clone(&tree_service),
-            Some(exit_state_changed_tx),
-        ));
+        let exit_chain_resolver = Arc::new(ExitChainResolver::new(Arc::clone(&tree_service)));
 
         let leaf_optimizer = Arc::new(LeafOptimizer::new(
             config.leaf_optimization_options.clone(),
@@ -1713,9 +1710,7 @@ impl SparkWallet {
             if !to_restore.is_empty() {
                 self.tree_service.restore_leaves(&to_restore).await?;
             }
-            if !chains_only.is_empty() {
-                self.tree_service.store_exit_chains(&chains_only).await?;
-            }
+            self.tree_service.restore_exit_chains(&chains_only).await?;
         }
 
         debug!(
