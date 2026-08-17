@@ -914,13 +914,14 @@ func handleClaimDeposit(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, arg
 	feeSat := fs.Uint64("fee-sat", 0, "Max fee in sats (fixed)")
 	satPerVbyte := fs.Uint64("sat-per-vbyte", 0, "Max fee per vbyte (rate)")
 	recommendedFeeLeeway := fs.Uint64("recommended-fee-leeway", 0, "Use fastest recommended fee plus this leeway (sat/vbyte)")
+	instantFeeBps := fs.Uint64("instant-fee-bps", 0, "Claim instantly (0-conf) with this max SSP spread in basis points of the deposit value (e.g. 400 = 4%)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	positional := fs.Args()
 	if len(positional) < 2 {
-		fmt.Println("Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N]")
+		fmt.Println("Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N] [--instant-fee-bps N]")
 		return nil
 	}
 
@@ -950,6 +951,10 @@ func handleClaimDeposit(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, arg
 	}
 	if maxFee != nil {
 		req.MaxFee = &maxFee
+	}
+	if *instantFeeBps > 0 {
+		v := uint32(*instantFeeBps)
+		req.MaxInstantFeeBps = &v
 	}
 
 	result, err := sdk.ClaimDeposit(req)

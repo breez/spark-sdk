@@ -751,7 +751,11 @@ Future<void> _handleClaimDeposit(BreezSdk sdk, TokenIssuer tokenIssuer, List<Str
       _parser('claim-deposit')
         ..addOption('fee-sat')
         ..addOption('sat-per-vbyte')
-        ..addOption('recommended-fee-leeway');
+        ..addOption('recommended-fee-leeway')
+        ..addOption(
+          'instant-fee-bps',
+          help: 'Claim instantly (0-conf) with this max SSP spread in basis points (e.g. 400 = 4%)',
+        );
   final results = _parseArgs(parser, args, 'claim-deposit <txid> <vout> [options]');
   if (results == null) return;
 
@@ -765,6 +769,7 @@ Future<void> _handleClaimDeposit(BreezSdk sdk, TokenIssuer tokenIssuer, List<Str
   final feeSatStr = results.option('fee-sat');
   final satPerVbyteStr = results.option('sat-per-vbyte');
   final leewayStr = results.option('recommended-fee-leeway');
+  final instantFeeBpsStr = results.option('instant-fee-bps');
 
   MaxFee? maxFee;
   if (leewayStr != null) {
@@ -782,7 +787,10 @@ Future<void> _handleClaimDeposit(BreezSdk sdk, TokenIssuer tokenIssuer, List<Str
     maxFee = MaxFee.rate(satPerVbyte: BigInt.parse(satPerVbyteStr));
   }
 
-  final result = await sdk.claimDeposit(request: ClaimDepositRequest(txid: txid, vout: vout, maxFee: maxFee));
+  final maxInstantFeeBps = instantFeeBpsStr != null ? int.parse(instantFeeBpsStr) : null;
+  final result = await sdk.claimDeposit(
+    request: ClaimDepositRequest(txid: txid, vout: vout, maxFee: maxFee, maxInstantFeeBps: maxInstantFeeBps),
+  );
   printValue(result);
 }
 
