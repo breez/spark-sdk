@@ -150,12 +150,7 @@ impl TreeService for SynchronousTreeService {
         let leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
         self.state.add_leaves(&leaves).await?;
         self.store_renewed_chains(&pedigrees).await;
-        if !leaves.is_empty() {
-            self.notify_leaves_added();
-        }
-        if any_renewal_due {
-            self.signal_exit_state_changed();
-        }
+        self.after_leaf_write(&leaves, any_renewal_due);
         Ok(leaves)
     }
 
@@ -480,12 +475,7 @@ impl TreeService for SynchronousTreeService {
         self.store_renewed_chains(&pedigrees).await;
         // Which of the reported leaves the store already held is the store's to
         // know, so anything reported at all is announced.
-        if !renewed_leaves.is_empty() {
-            self.notify_leaves_added();
-        }
-        if any_renewal_due {
-            self.signal_exit_state_changed();
-        }
+        self.after_leaf_write(&renewed_leaves, any_renewal_due);
         Ok(())
     }
 
@@ -535,6 +525,24 @@ impl SynchronousTreeService {
     /// which is the usual case and not a failure.
     fn notify_leaves_added(&self) {
         let _ = self.leaves_added.send(());
+    }
+
+    /// What every write to the leaf pool announces, in one place so a new write
+    /// path cannot raise one notification and forget the other. Call it after
+    /// the write has landed: a listener told any earlier reads the state the
+    /// write is replacing.
+    ///
+    /// The two are separate because they mean different things. Leaves arriving
+    /// may need chains collected. A renewal collects nothing, but re-signs the
+    /// transactions a leaf is exited with, so a chain left untouched is no sign
+    /// that the exit state held.
+    fn after_leaf_write(&self, leaves: &[TreeNode], any_renewal_due: bool) {
+        if !leaves.is_empty() {
+            self.notify_leaves_added();
+        }
+        if any_renewal_due {
+            self.signal_exit_state_changed();
+        }
     }
 
     /// Checks if the reservation already matches the target amounts without needing a swap.
@@ -674,12 +682,7 @@ impl SynchronousTreeService {
                     .chain(change_pedigrees)
                     .collect();
                 self.store_renewed_chains(&renewed).await;
-                if !change_nodes.is_empty() {
-                    self.notify_leaves_added();
-                }
-                if any_renewal_due {
-                    self.signal_exit_state_changed();
-                }
+                self.after_leaf_write(&change_nodes, any_renewal_due);
                 Ok(final_reservation)
             }
             Err(e) => {
@@ -956,12 +959,7 @@ impl SynchronousTreeService {
         // Renewal reparents rather than adds, and rebuilds the chain itself. The
         // rebuild is best-effort though, so a listener is given the chance to
         // notice one that did not make it.
-        if !new_leaves.is_empty() {
-            self.notify_leaves_added();
-        }
-        if any_renewal_due {
-            self.signal_exit_state_changed();
-        }
+        self.after_leaf_write(&new_leaves, any_renewal_due);
         Ok(LeavesReservation::new(new_leaves, id))
     }
 
