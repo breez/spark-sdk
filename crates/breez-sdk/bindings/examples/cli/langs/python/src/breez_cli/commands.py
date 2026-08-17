@@ -281,7 +281,7 @@ async def _handle_receive(sdk, _token_issuer, _session, args):
         )
     elif method == "bitcoin":
         payment_method = ReceivePaymentMethod.BITCOIN_ADDRESS(
-            new_address=args.new_address if args.new_address else None,
+            new_address=args.new_address,
         )
     elif method == "bolt11":
         payment_hash = None
@@ -747,6 +747,9 @@ def _build_buy_bitcoin_parser():
 async def _handle_buy_bitcoin(sdk, _token_issuer, _session, args):
     provider = (args.provider or "moonpay").lower()
     if provider in ("cashapp", "cash_app", "cash-app"):
+        if args.amount_sat is None:
+            print("--amount-sat is required when --provider is cashapp")
+            return
         request = BuyBitcoinRequest.CASH_APP(amount_sats=args.amount_sat)
     else:
         request = BuyBitcoinRequest.MOONPAY(
