@@ -28,7 +28,7 @@ use crate::{
     signer::SparkSigner,
     tree::{
         LeavesReservation, LeavesReservationId, TargetAmounts, TreeNodeId, TreeService, TreeStore,
-        select_helper,
+        assemble_exit_chains, chain_reaches_root, select_helper,
     },
     utils::paging::{PagingFilter, PagingResult, pager},
 };
@@ -795,9 +795,12 @@ impl SynchronousTreeService {
     /// operation as failed. A chain left unwritten is reported by
     /// `leaves_missing_exit_chains` and re-resolved in the background.
     async fn store_renewed_chains(&self, pedigrees: &[LeafPedigree]) {
+        // A renewal that resolved no ancestors rebuilds a chain of just the new
+        // split node, which stops short of a root. Storing it would leave the
+        // leaf reading as complete and never fetched again.
         let renewed: Vec<LeafPedigree> = pedigrees
             .iter()
-            .filter(|p| !p.ancestors.is_empty())
+            .filter(|p| !p.ancestors.is_empty() && chain_reaches_root(&p.leaf, &p.ancestors))
             .cloned()
             .collect();
         if renewed.is_empty() {
@@ -933,56 +936,6 @@ fn bare_pedigrees(leaves: Vec<TreeNode>) -> Vec<LeafPedigree> {
         .map(|leaf| LeafPedigree {
             leaf,
             ancestors: Vec::new(),
-        })
-        .collect()
-}
-
-/// A leaf's ancestors, child first, walking `parent_node_id` through `nodes` and
-/// stopping at the root, a gap, or a cycle in the semi-trusted parent ids.
-fn walk_ancestors(leaf: &TreeNode, nodes: &HashMap<TreeNodeId, TreeNode>) -> Vec<TreeNode> {
-    let mut ancestors = Vec::new();
-    let mut visited: HashSet<TreeNodeId> = HashSet::new();
-    let mut current = leaf.parent_node_id.clone();
-    while let Some(id) = current {
-        if !visited.insert(id.clone()) {
-            break;
-        }
-        let Some(node) = nodes.get(&id) else { break };
-        current = node.parent_node_id.clone();
-        ancestors.push(node.clone());
-    }
-    ancestors
-}
-
-/// Whether `ancestors` is a chain that can back `leaf`'s unilateral exit. A leaf
-/// that is itself a root needs no ancestors.
-///
-/// Only the leaf's current parent is looked for. A stored chain always runs from
-/// some parent to a root, so containing the parent the leaf has now means it
-/// spans the whole path. Timelock renewal reparents a leaf onto a new split node
-/// under the same id, and this is what catches the chain it left behind.
-pub fn chain_backs_exit(leaf: &TreeNode, ancestors: &[TreeNode]) -> bool {
-    let Some(parent_id) = leaf.parent_node_id.as_ref() else {
-        return true;
-    };
-    ancestors.iter().any(|node| &node.id == parent_id)
-}
-
-/// Shapes a batch of exit chains from a node lookup. A store loads its leaves and
-/// their ancestors into `nodes` with a single query, then calls this to pair each
-/// requested leaf with its chain. A leaf id absent from `nodes` is skipped, and a
-/// chain that hits a gap comes back with what it reached; [`chain_backs_exit`] is
-/// what decides whether that is enough.
-pub fn assemble_exit_chains(
-    nodes: &HashMap<TreeNodeId, TreeNode>,
-    leaf_ids: &[TreeNodeId],
-) -> Vec<LeafPedigree> {
-    leaf_ids
-        .iter()
-        .filter_map(|id| {
-            let leaf = nodes.get(id)?.clone();
-            let ancestors = walk_ancestors(&leaf, nodes);
-            Some(LeafPedigree { leaf, ancestors })
         })
         .collect()
 }

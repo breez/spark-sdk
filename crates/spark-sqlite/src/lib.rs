@@ -40,6 +40,15 @@ const RESERVATION_TIMEOUT_MS: i64 = 5 * 60 * 1000;
 /// Spent markers older than this (relative to a refresh) are pruned.
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS: i64 = 5 * 60 * 1000;
 
+/// Ids bound per statement. `SQLite` caps a statement at 32766 parameters, which
+/// a wallet-wide chain backfill would otherwise pass. Low enough that the query
+/// binding each id twice stays under it as well. Tiny under test, so the ordinary
+/// fixtures span several statements and cover the chunking.
+#[cfg(not(test))]
+const IDS_PER_STATEMENT: usize = 8000;
+#[cfg(test)]
+const IDS_PER_STATEMENT: usize = 2;
+
 fn generic(ctx: &str, e: impl std::fmt::Display) -> TreeServiceError {
     TreeServiceError::Generic(format!("{ctx}: {e}"))
 }
@@ -215,16 +224,23 @@ impl SqliteTreeStore {
             .iter()
             .map(|pedigree| pedigree.leaf.id.to_string())
             .collect();
-        let placeholders = vec!["?"; ids.len()].join(",");
-        let sql = format!("SELECT id FROM brz_tree_leaves WHERE id IN ({placeholders})");
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| generic("prepare existing leaf ids", e))?;
-        let rows = stmt
-            .query_map(params_from_iter(ids.iter()), |row| row.get::<_, String>(0))
-            .map_err(|e| generic("query existing leaf ids", e))?;
-        rows.collect::<Result<HashSet<String>, _>>()
-            .map_err(|e| generic("read existing leaf id", e))
+        let mut stored = HashSet::new();
+        for chunk in ids.chunks(IDS_PER_STATEMENT) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!("SELECT id FROM brz_tree_leaves WHERE id IN ({placeholders})");
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|e| generic("prepare existing leaf ids", e))?;
+            let rows = stmt
+                .query_map(params_from_iter(chunk.iter()), |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(|e| generic("query existing leaf ids", e))?;
+            for row in rows {
+                stored.insert(row.map_err(|e| generic("read existing leaf id", e))?);
+            }
+        }
+        Ok(stored)
     }
 
     /// Replaces `leaf_id`'s stored ancestor chain with `nodes`. An empty `nodes`
@@ -275,50 +291,27 @@ impl SqliteTreeStore {
         conn: &Connection,
         leaf_ids: &[String],
     ) -> Result<(), TreeServiceError> {
-        if leaf_ids.is_empty() {
-            return Ok(());
+        for chunk in leaf_ids.chunks(IDS_PER_STATEMENT) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!("DELETE FROM brz_tree_ancestors WHERE leaf_id IN ({placeholders})");
+            conn.execute(&sql, params_from_iter(chunk.iter()))
+                .map_err(|e| generic("delete leaf ancestors", e))?;
         }
-        let placeholders = vec!["?"; leaf_ids.len()].join(",");
-        let sql = format!("DELETE FROM brz_tree_ancestors WHERE leaf_id IN ({placeholders})");
-        conn.execute(&sql, params_from_iter(leaf_ids.iter()))
-            .map_err(|e| generic("delete leaf ancestors", e))?;
         Ok(())
     }
 
-    /// Ids of unreserved leaves added before `refresh_ms`.
-    fn old_unreserved_leaf_ids(
-        conn: &Connection,
-        refresh_ms: i64,
-    ) -> Result<Vec<String>, TreeServiceError> {
-        let mut stmt = conn
-            .prepare(
-                "SELECT id FROM brz_tree_leaves WHERE reservation_id IS NULL AND added_at < ?1",
-            )
-            .map_err(|e| generic("prepare old leaf ids", e))?;
-        let ids = stmt
-            .query_map(params![refresh_ms], |row| row.get::<_, String>(0))
-            .map_err(|e| generic("query old leaf ids", e))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| generic("read old leaf ids", e))?;
-        Ok(ids)
-    }
-
-    /// Deletes the ancestor rows owned by any of `candidate_ids` that is no
-    /// longer a stored leaf; a candidate that is still a leaf keeps its rows.
-    fn delete_orphaned_ancestors(
-        conn: &Connection,
-        candidate_ids: &[String],
-    ) -> Result<(), TreeServiceError> {
-        if candidate_ids.is_empty() {
-            return Ok(());
-        }
-        let placeholders = vec!["?"; candidate_ids.len()].join(",");
-        let sql = format!(
-            "DELETE FROM brz_tree_ancestors WHERE leaf_id IN ({placeholders})
-             AND leaf_id NOT IN (SELECT id FROM brz_tree_leaves)"
-        );
-        conn.execute(&sql, params_from_iter(candidate_ids.iter()))
-            .map_err(|e| generic("delete orphaned ancestors", e))?;
+    /// Deletes every ancestor row whose leaf the pool no longer holds.
+    ///
+    /// Runs after the leaf changes in the same transaction, so the subquery sees
+    /// the pool they leave behind. Sweeping every orphan rather than a given list
+    /// also collects any left by a chain write that raced a delete.
+    fn delete_orphaned_ancestors(conn: &Connection) -> Result<(), TreeServiceError> {
+        conn.execute(
+            "DELETE FROM brz_tree_ancestors
+             WHERE leaf_id NOT IN (SELECT id FROM brz_tree_leaves)",
+            [],
+        )
+        .map_err(|e| generic("delete orphaned ancestors", e))?;
         Ok(())
     }
 
@@ -648,39 +641,44 @@ impl TreeStore for SqliteTreeStore {
         if leaf_ids.is_empty() {
             return Ok(Vec::new());
         }
-        let conn = self.get_connection()?;
-        // One query loads each requested leaf's own row plus its ancestor rows,
-        // both tagged by the owning leaf id (a leaf's own row is tagged with its
-        // own id), so the two cannot be read at different points in time.
-        // Grouping by that tag below keeps each leaf's node set separate, so a
-        // node id shared by several leaves cannot cross-contaminate another
-        // leaf's chain with a status or parent it doesn't itself hold.
+        let mut conn = self.get_connection()?;
+        // Each statement pairs a leaf's own row with its ancestor rows, both
+        // tagged by the owning leaf id, and one transaction spans however many it
+        // takes so no two are read at different points in time. Grouping by that
+        // tag below keeps each leaf's node set separate, so a node id shared by
+        // several leaves cannot cross-contaminate another leaf's chain with a
+        // status or parent it doesn't itself hold.
+        let tx = conn
+            .transaction()
+            .map_err(|e| generic("begin get_exit_chains", e))?;
         let id_strings: Vec<String> = leaf_ids.iter().map(ToString::to_string).collect();
-        let placeholders = vec!["?"; id_strings.len()].join(",");
-        let sql = format!(
-            "SELECT leaf_id, data FROM brz_tree_ancestors WHERE leaf_id IN ({placeholders})
-             UNION ALL
-             SELECT id, data FROM brz_tree_leaves WHERE id IN ({placeholders})"
-        );
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| generic("prepare get_exit_chains", e))?;
-        let rows = stmt
-            .query_map(
-                params_from_iter(id_strings.iter().chain(id_strings.iter())),
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            )
-            .map_err(|e| generic("query get_exit_chains", e))?;
 
         let mut by_leaf: HashMap<TreeNodeId, HashMap<TreeNodeId, TreeNode>> = HashMap::new();
-        for row in rows {
-            let (leaf_id, data) = row.map_err(|e| generic("read get_exit_chains row", e))?;
-            let leaf_id = TreeNodeId::from_str(&leaf_id).map_err(TreeServiceError::Generic)?;
-            let node = Self::row_to_node(&data)?;
-            by_leaf
-                .entry(leaf_id)
-                .or_default()
-                .insert(node.id.clone(), node);
+        for chunk in id_strings.chunks(IDS_PER_STATEMENT) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!(
+                "SELECT leaf_id, data FROM brz_tree_ancestors WHERE leaf_id IN ({placeholders})
+                 UNION ALL
+                 SELECT id, data FROM brz_tree_leaves WHERE id IN ({placeholders})"
+            );
+            let mut stmt = tx
+                .prepare(&sql)
+                .map_err(|e| generic("prepare get_exit_chains", e))?;
+            let rows = stmt
+                .query_map(params_from_iter(chunk.iter().chain(chunk.iter())), |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|e| generic("query get_exit_chains", e))?;
+
+            for row in rows {
+                let (leaf_id, data) = row.map_err(|e| generic("read get_exit_chains row", e))?;
+                let leaf_id = TreeNodeId::from_str(&leaf_id).map_err(TreeServiceError::Generic)?;
+                let node = Self::row_to_node(&data)?;
+                by_leaf
+                    .entry(leaf_id)
+                    .or_default()
+                    .insert(node.id.clone(), node);
+            }
         }
 
         Ok(leaf_ids
@@ -900,10 +898,6 @@ impl TreeStore for SqliteTreeStore {
         Self::cleanup_spent_markers(&tx, refresh_ms)?;
         let spent = Self::spent_ids_since(&tx, refresh_ms)?;
 
-        // Ids the delete below is about to remove, captured first: a candidate
-        // this refresh's data brings back keeps its ancestor rows untouched.
-        let dropped_candidates = Self::old_unreserved_leaf_ids(&tx, refresh_ms)?;
-
         // Delete non-reserved pool leaves older than the refresh; reserved and
         // after-refresh leaves are immune. Leaves present in the refresh below are
         // re-inserted, and any candidate that does not come back is dropped below.
@@ -916,7 +910,7 @@ impl TreeStore for SqliteTreeStore {
 
         Self::upsert_leaves(&tx, leaves.iter(), false, Some(&spent))?;
         Self::upsert_leaves(&tx, missing_operators_leaves.iter(), true, Some(&spent))?;
-        Self::delete_orphaned_ancestors(&tx, &dropped_candidates)?;
+        Self::delete_orphaned_ancestors(&tx)?;
 
         tx.commit().map_err(|e| generic("commit set_leaves", e))?;
         self.notify();

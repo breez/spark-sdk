@@ -55,6 +55,17 @@ const SPENT_MARKER_CLEANUP_THRESHOLD_MS = 5 * 60 * 1000;
 const LEAF_UPSERT_CHUNK_SIZE = 1000;
 
 /**
+ * Ancestor rows per INSERT when storing exit chains.
+ *
+ * A wallet-wide chain backfill carries a row per leaf per ancestor, each a JSON
+ * blob of up to five transactions. The insert goes through conn.query(), which
+ * interpolates its placeholders client-side, so the whole set would otherwise be
+ * built in memory as one statement and sent as one packet, against
+ * max_allowed_packet.
+ */
+const ANCESTOR_INSERT_CHUNK_SIZE = 4096;
+
+/**
  * Slim projection: only (id, value) for leaves the selection might use.
  * Includes all leaves with value <= the max target (covers exact-match + the
  * small-leaf accumulators for the minimum-amount path) plus the single
@@ -1213,10 +1224,10 @@ class MysqlTreeStore {
 
   /**
    * Replaces the ancestor rows of every pedigree wholesale (delete then
-   * insert), in two statements however many leaves there are. A pedigree
-   * carrying no ancestors is skipped: an empty list means the chain is unknown,
-   * not that the leaf has none, so a stored chain must survive being re-added
-   * without one.
+   * insert), in one delete and an insert per ANCESTOR_INSERT_CHUNK_SIZE rows. A
+   * pedigree carrying no ancestors is skipped: an empty list means the chain is
+   * unknown, not that the leaf has none, so a stored chain must survive being
+   * re-added without one.
    */
   async _batchUpsertAncestors(conn, pedigrees) {
     const withAncestors = (pedigrees || []).filter(
@@ -1231,11 +1242,10 @@ class MysqlTreeStore {
       [this.identity, ...leafIds]
     );
 
-    const params = [];
-    let rowCount = 0;
+    const rows = [];
     for (const pedigree of withAncestors) {
       for (const node of pedigree.ancestors) {
-        params.push(
+        rows.push([
           this.identity,
           pedigree.leaf.id,
           node.id,
@@ -1243,21 +1253,23 @@ class MysqlTreeStore {
           node.status,
           JSON.stringify(node),
           node.value,
-          node.verifying_public_key
-        );
-        rowCount += 1;
+          node.verifying_public_key,
+        ]);
       }
     }
-    const valueClauses = new Array(rowCount)
-      .fill("(?, ?, ?, ?, ?, ?, ?, ?)")
-      .join(", ");
 
-    await conn.query(
-      `INSERT INTO brz_tree_ancestors
-           (user_id, leaf_id, id, parent_node_id, status, data, value, verifying_public_key)
-       VALUES ${valueClauses}`,
-      params
-    );
+    for (let i = 0; i < rows.length; i += ANCESTOR_INSERT_CHUNK_SIZE) {
+      const chunk = rows.slice(i, i + ANCESTOR_INSERT_CHUNK_SIZE);
+      const valueClauses = new Array(chunk.length)
+        .fill("(?, ?, ?, ?, ?, ?, ?, ?)")
+        .join(", ");
+      await conn.query(
+        `INSERT INTO brz_tree_ancestors
+             (user_id, leaf_id, id, parent_node_id, status, data, value, verifying_public_key)
+         VALUES ${valueClauses}`,
+        chunk.flat()
+      );
+    }
   }
 
   async _batchSetReservationId(conn, reservationId, leafIds) {

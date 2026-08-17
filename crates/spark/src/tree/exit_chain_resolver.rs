@@ -14,7 +14,7 @@ use platform_utils::time::SystemTime;
 use platform_utils::tokio::sync::Mutex;
 use tracing::trace;
 
-use crate::tree::{LeafPedigree, TreeNodeId, TreeService, TreeServiceError, chain_backs_exit};
+use crate::tree::{LeafPedigree, TreeNodeId, TreeService, TreeServiceError, chain_reaches_root};
 
 /// Delay before a leaf whose chain the operators did not complete is tried again.
 /// Doubles per consecutive failure up to [`MAX_RETRY_DELAY`].
@@ -22,7 +22,7 @@ const INITIAL_RETRY_DELAY: Duration = Duration::from_secs(30);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(30 * 60);
 
 fn is_complete(pedigree: &LeafPedigree) -> bool {
-    chain_backs_exit(&pedigree.leaf, &pedigree.ancestors)
+    chain_reaches_root(&pedigree.leaf, &pedigree.ancestors)
 }
 
 #[derive(Clone, Copy)]
@@ -398,6 +398,26 @@ mod tests {
         resolver.resolve_missing_chains().await.unwrap();
 
         assert_eq!(mock.fetch_call_count().await, 0);
+        assert!(mock.stored().await.is_empty());
+    }
+
+    #[async_test_all]
+    async fn test_chain_stopping_short_of_a_root_is_not_stored() {
+        // The operators answer with the leaf's parent but nothing above it. Storing
+        // that would leave the leaf reading as complete for good, since a stored
+        // chain is only ever checked as far as the parent.
+        let leaf = create_test_node_with_parent("leaf", Some("mid"), TreeNodeStatus::Available);
+        let mid = create_test_node_with_parent("mid", Some("root"), TreeNodeStatus::Available);
+
+        let mock = Arc::new(MockTreeService::default());
+        mock.seed_leaf(leaf.clone(), pedigree(&leaf, Vec::new()))
+            .await;
+        mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, vec![mid]))
+            .await;
+
+        let resolver = ExitChainResolver::new(mock.clone());
+        resolver.resolve_missing_chains().await.unwrap();
+
         assert!(mock.stored().await.is_empty());
     }
 

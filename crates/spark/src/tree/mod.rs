@@ -1,3 +1,4 @@
+mod chain;
 mod error;
 mod exit_chain_resolver;
 mod leaf_optimizer;
@@ -8,6 +9,7 @@ mod store;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod tests;
 
+pub use chain::{assemble_exit_chains, chain_backs_exit, chain_reaches_root};
 pub use error::TreeServiceError;
 pub use exit_chain_resolver::ExitChainResolver;
 pub use leaf_optimizer::*;
@@ -16,7 +18,7 @@ pub use select_helper::{
     select_leaves_by_minimum_amount, select_leaves_by_target_amounts, with_reserved_leaves,
 };
 use serde::{Deserialize, Serialize};
-pub use service::{SynchronousTreeService, assemble_exit_chains, chain_backs_exit};
+pub use service::SynchronousTreeService;
 pub use store::{
     DEFAULT_MAX_CONCURRENT_RESERVATIONS, DEFAULT_RESERVATION_TIMEOUT, InMemoryTreeStore,
 };
@@ -510,10 +512,10 @@ pub trait TreeStore: Send + Sync {
 
     /// Stores the ancestors of `pedigrees`, leaving the leaf pool untouched.
     ///
-    /// Each chain must run from its leaf's current parent to a root. A store takes
-    /// a stored chain to be one that backs an exit and only looks for the parent,
-    /// so a partial chain written here reads as exitable and produces a set of
-    /// transactions that cannot confirm.
+    /// Each chain must run from its leaf's current parent to a root, which
+    /// [`chain_reaches_root`] decides. A store takes a stored chain to be one that
+    /// backs an exit and only looks for the parent, so a partial chain written
+    /// here reads as exitable and produces transactions that cannot confirm.
     ///
     /// Unlike [`Self::add_leaves`], this neither inserts a leaf nor clears its spent
     /// marker, so a leaf spent since its pedigree was resolved stays spent, and a

@@ -628,11 +628,16 @@ impl TreeStore for MysqlTreeStore {
         id: &LeavesReservationId,
         leaves_to_keep: &[TreeNode],
     ) -> Result<(), TreeServiceError> {
-        // No global write lock: this touches only the rows of one reservation
-        // and writes no ancestor rows.
+        // Serialize with set_leaves/finalize_reservation: re-inserting the kept
+        // leaves must not interleave with a concurrent refresh mutating the same
+        // leaf and ancestor rows.
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        self.cancel_reservation_inner(&mut conn, id, leaves_to_keep)
-            .await?;
+        self.acquire_write_lock(&mut conn).await?;
+        let result = self
+            .cancel_reservation_inner(&mut conn, id, leaves_to_keep)
+            .await;
+        self.release_write_lock_quiet(&mut conn).await;
+        result?;
         self.notify_balance_change();
         Ok(())
     }
@@ -792,12 +797,16 @@ impl TreeStore for MysqlTreeStore {
         reserved_leaves: &[TreeNode],
         change_leaves: &[TreeNode],
     ) -> Result<LeavesReservation, TreeServiceError> {
-        // No global write lock: this touches only the rows of one reservation
-        // and writes no ancestor rows.
+        // Serialize with set_leaves/finalize_reservation: this marks the old
+        // reserved leaves spent and upserts the change leaves, which must not race
+        // a concurrent refresh's spent-check.
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        let reservation = self
+        self.acquire_write_lock(&mut conn).await?;
+        let result = self
             .update_reservation_inner(&mut conn, reservation_id, reserved_leaves, change_leaves)
-            .await?;
+            .await;
+        self.release_write_lock_quiet(&mut conn).await;
+        let reservation = result?;
         trace!(
             "Updated reservation {}: reserved {} leaves, added {} change leaves",
             reservation_id,
@@ -1909,42 +1918,48 @@ impl MysqlTreeStore {
     /// `(leaf_id, node)` pair. Callers delete any prior rows for the same leaf
     /// ids first, so this is a plain insert rather than an upsert.
     #[allow(clippy::arithmetic_side_effects)] // `len * 8` for params capacity, bounded by rows slice
+    /// Ancestor rows per INSERT when storing exit chains.
+    ///
+    /// Required for correctness, not just memory: each row binds the eight
+    /// placeholders below, and the `MySQL` protocol caps a prepared statement at
+    /// 65535. A wallet-wide chain backfill would pass that at a few hundred
+    /// leaves.
+    const ANCESTOR_INSERT_CHUNK_SIZE: usize = 4096;
+
     async fn batch_insert_ancestors(
         &self,
         tx: &mut mysql_async::Transaction<'_>,
         rows: &[(String, &TreeNode)],
     ) -> Result<(), TreeServiceError> {
-        if rows.is_empty() {
-            return Ok(());
-        }
-
-        let mut sql = String::from(
-            "INSERT INTO brz_tree_ancestors \
-             (user_id, leaf_id, id, parent_node_id, status, data, value, verifying_public_key) VALUES ",
-        );
-        let mut params: Vec<Value> = Vec::with_capacity(rows.len() * 8);
-        for (i, (leaf_id, node)) in rows.iter().enumerate() {
-            if i > 0 {
-                sql.push_str(", ");
+        for chunk in rows.chunks(Self::ANCESTOR_INSERT_CHUNK_SIZE) {
+            let mut sql = String::from(
+                "INSERT INTO brz_tree_ancestors \
+                 (user_id, leaf_id, id, parent_node_id, status, data, value, verifying_public_key) VALUES ",
+            );
+            let mut params: Vec<Value> = Vec::with_capacity(chunk.len().saturating_mul(8));
+            for (i, (leaf_id, node)) in chunk.iter().enumerate() {
+                if i > 0 {
+                    sql.push_str(", ");
+                }
+                sql.push_str("(?, ?, ?, ?, ?, ?, ?, ?)");
+                #[allow(clippy::cast_possible_wrap)]
+                let value_i64 = node.value as i64;
+                params.push(Value::from(self.identity.clone()));
+                params.push(Value::from(leaf_id.clone()));
+                params.push(Value::from(node.id.to_string()));
+                params.push(Value::from(
+                    node.parent_node_id.as_ref().map(ToString::to_string),
+                ));
+                params.push(Value::from(node.status.to_string()));
+                params.push(Value::from(Self::serialize_node(node)?));
+                params.push(Value::from(value_i64));
+                params.push(Value::from(node.verifying_public_key.to_string()));
             }
-            sql.push_str("(?, ?, ?, ?, ?, ?, ?, ?)");
-            #[allow(clippy::cast_possible_wrap)]
-            let value_i64 = node.value as i64;
-            params.push(Value::from(self.identity.clone()));
-            params.push(Value::from(leaf_id.clone()));
-            params.push(Value::from(node.id.to_string()));
-            params.push(Value::from(
-                node.parent_node_id.as_ref().map(ToString::to_string),
-            ));
-            params.push(Value::from(node.status.to_string()));
-            params.push(Value::from(Self::serialize_node(node)?));
-            params.push(Value::from(value_i64));
-            params.push(Value::from(node.verifying_public_key.to_string()));
-        }
 
-        tx.exec_drop(&sql, Params::Positional(params))
-            .await
-            .map_err(map_err)?;
+            tx.exec_drop(&sql, Params::Positional(params))
+                .await
+                .map_err(map_err)?;
+        }
         Ok(())
     }
 

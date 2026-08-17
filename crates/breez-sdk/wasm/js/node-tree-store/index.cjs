@@ -154,9 +154,9 @@ class NodeTreeStore {
   // ===== TreeStore Methods =====
 
   /**
-   * Add leaves to the pool together with their ancestors. Receiving a leaf back
-   * clears any prior spent marker. Re-adding an id refreshes its mutable fields.
-   * @param {Array} leaves - Array of LeafPedigree { leaf, ancestors }
+   * Add leaves to the pool. Receiving a leaf back clears any prior spent
+   * marker. Re-adding an id refreshes its mutable fields.
+   * @param {Array} leaves - Array of TreeNode
    */
   async addLeaves(leaves) {
     try {
@@ -398,8 +398,8 @@ class NodeTreeStore {
   /**
    * Replace the pool from a refresh. Skipped while a swap is in flight or one
    * completed during the refresh, so a swap's leaves are never clobbered.
-   * @param {Array} leaves - Available LeafPedigree { leaf, ancestors }
-   * @param {Array} missingLeaves - LeafPedigree { leaf, ancestors } missing from some operators
+   * @param {Array} leaves - Available TreeNode
+   * @param {Array} missingLeaves - TreeNode missing from some operators
    * @param {number} refreshStartedAtMs - Epoch milliseconds when refresh started
    */
   async setLeaves(leaves, missingLeaves, refreshStartedAtMs) {
@@ -508,7 +508,7 @@ class NodeTreeStore {
   /**
    * Finalize a reservation, marking its leaves spent and adding any new leaves.
    * @param {string} id
-   * @param {Array|null} newLeaves - Optional new LeafPedigree { leaf, ancestors }
+   * @param {Array|null} newLeaves - Optional new TreeNode
    */
   async finalizeReservation(id, newLeaves) {
     try {
@@ -709,8 +709,8 @@ class NodeTreeStore {
    * Update a reservation after a swap: spend the old reserved leaves, add the
    * change leaves to the pool, and attach the new reserved leaves.
    * @param {string} reservationId
-   * @param {Array} reservedLeaves - New reserved LeafPedigree { leaf, ancestors }
-   * @param {Array} changeLeaves - Change LeafPedigree { leaf, ancestors } for the available pool
+   * @param {Array} reservedLeaves - New reserved TreeNode
+   * @param {Array} changeLeaves - Change TreeNode for the available pool
    * @returns {Promise<Object>} { id, leaves }
    */
   async updateReservation(reservationId, reservedLeaves, changeLeaves) {
