@@ -1497,10 +1497,7 @@ mod tests {
     fn rejects_non_taproot_output_for_the_verifying_key() {
         let service = BitcoinService::new(NETWORK);
         let verifying_key = test_key(1);
-        let p2wpkh = Address::p2wpkh(
-            &CompressedPublicKey(bitcoin::PublicKey::new(verifying_key).inner),
-            NETWORK,
-        );
+        let p2wpkh = Address::p2wpkh(&CompressedPublicKey(verifying_key), NETWORK);
 
         assert!(matches!(
             validate_address_pays_to_verifying_key(&service, &p2wpkh, &verifying_key),
