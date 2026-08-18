@@ -18,6 +18,23 @@
  * logic mirrors the PostgreSQL tree store (js/postgres-tree-store/index.cjs).
  */
 
+/**
+ * Ids bound per statement. SQLite caps a statement at 32766 parameters, which a
+ * wallet-wide chain backfill would otherwise pass. Low enough that the query
+ * binding each id twice stays under it as well. Mirrors `IDS_PER_STATEMENT` in
+ * the Rust `spark-sqlite` store.
+ */
+const IDS_PER_STATEMENT = 8000;
+
+/** Splits `ids` into slices small enough to bind in one statement. */
+function idChunks(ids) {
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += IDS_PER_STATEMENT) {
+    chunks.push(ids.slice(i, i + IDS_PER_STATEMENT));
+  }
+  return chunks;
+}
+
 // Resolve better-sqlite3 from the calling module's context, same as node-storage.
 let Database;
 try {
@@ -185,19 +202,19 @@ class NodeTreeStore {
         return;
       }
       const leafIds = pedigrees.map((p) => p.leaf.id);
-      const placeholders = leafIds.map(() => "?").join(",");
       this.db.transaction(() => {
         // A leaf can be spent between its chain being resolved and this write, and a
         // chain is only ever removed with its leaf. Writing one for a leaf that is
         // already gone would leave it behind for good.
-        const storedLeafIds = new Set(
-          this.db
-            .prepare(
-              `SELECT id FROM brz_tree_leaves WHERE id IN (${placeholders})`
-            )
-            .all(...leafIds)
-            .map((row) => row.id)
-        );
+        const storedLeafIds = new Set();
+        for (const chunk of idChunks(leafIds)) {
+          const placeholders = chunk.map(() => "?").join(",");
+          for (const row of this.db
+            .prepare(`SELECT id FROM brz_tree_leaves WHERE id IN (${placeholders})`)
+            .all(...chunk)) {
+            storedLeafIds.add(row.id);
+          }
+        }
         for (const pedigree of pedigrees) {
           if (!storedLeafIds.has(pedigree.leaf.id)) {
             continue;
@@ -243,38 +260,42 @@ class NodeTreeStore {
   }
 
   /**
-   * Reconstruct the exit chains for many leaves in one query, each as
-   * { leaf, ancestors } with ancestors nearest first. A leaf absent from the store
-   * is skipped; a chain that hits a gap comes back partial.
+   * Reconstruct the exit chains for many leaves, each as { leaf, ancestors } with
+   * ancestors nearest first. A leaf absent from the store is skipped; a chain that
+   * hits a gap comes back partial.
    * @param {Array<string>} leafIds
    * @returns {Promise<Array<{leaf: object, ancestors: Array<object>}>>}
    */
   async getExitChains(leafIds) {
     try {
       if (!leafIds || leafIds.length === 0) return [];
-      // One query, as in every other SQL backend, so the leaf rows and the
-      // ancestor rows cannot come from two points in time. Both halves are
-      // tagged by the owning leaf id, so a node id stored under another leaf
-      // can never cross-contaminate this one.
-      const placeholders = leafIds.map(() => "?").join(",");
-      const rows = this.db
-        .prepare(
-          `SELECT leaf_id, data FROM brz_tree_ancestors WHERE leaf_id IN (${placeholders})
-           UNION ALL
-           SELECT id AS leaf_id, data FROM brz_tree_leaves WHERE id IN (${placeholders})`
-        )
-        .all(...leafIds, ...leafIds);
-
+      // Each statement pairs a leaf's own row with its ancestor rows, both
+      // tagged by the owning leaf id, and one transaction spans however many it
+      // takes so no two are read at different points in time. Grouping by that
+      // tag keeps each leaf's node set separate, so a node id stored under
+      // another leaf can never cross-contaminate this one.
       const byLeaf = new Map();
-      for (const r of rows) {
-        let nodes = byLeaf.get(r.leaf_id);
-        if (!nodes) {
-          nodes = new Map();
-          byLeaf.set(r.leaf_id, nodes);
+      this.db.transaction(() => {
+        for (const chunk of idChunks(leafIds)) {
+          const placeholders = chunk.map(() => "?").join(",");
+          const rows = this.db
+            .prepare(
+              `SELECT leaf_id, data FROM brz_tree_ancestors WHERE leaf_id IN (${placeholders})
+               UNION ALL
+               SELECT id AS leaf_id, data FROM brz_tree_leaves WHERE id IN (${placeholders})`
+            )
+            .all(...chunk, ...chunk);
+          for (const r of rows) {
+            let nodes = byLeaf.get(r.leaf_id);
+            if (!nodes) {
+              nodes = new Map();
+              byLeaf.set(r.leaf_id, nodes);
+            }
+            const node = JSON.parse(r.data);
+            nodes.set(node.id, node);
+          }
         }
-        const node = JSON.parse(r.data);
-        nodes.set(node.id, node);
-      }
+      })();
 
       const result = [];
       for (const id of leafIds) {
@@ -451,12 +472,7 @@ class NodeTreeStore {
           if (!spentIds.has(leaf.id)) survivingIds.add(leaf.id);
         }
         const goneIds = deletedIds.filter((id) => !survivingIds.has(id));
-        if (goneIds.length > 0) {
-          const placeholders = goneIds.map(() => "?").join(",");
-          this.db
-            .prepare(`DELETE FROM brz_tree_ancestors WHERE leaf_id IN (${placeholders})`)
-            .run(...goneIds);
-        }
+        this._deleteAncestorsForLeaves(goneIds);
       })();
     } catch (error) {
       if (error instanceof TreeStoreError) throw error;
@@ -488,12 +504,7 @@ class NodeTreeStore {
 
         this.db.prepare("DELETE FROM brz_tree_leaves WHERE reservation_id = ?").run(id);
         this.db.prepare("DELETE FROM brz_tree_reservations WHERE id = ?").run(id);
-        if (droppedIds.length > 0) {
-          const placeholders = droppedIds.map(() => "?").join(",");
-          this.db
-            .prepare(`DELETE FROM brz_tree_ancestors WHERE leaf_id IN (${placeholders})`)
-            .run(...droppedIds);
-        }
+        this._deleteAncestorsForLeaves(droppedIds);
         this._upsertLeaves(leavesToKeep, false, null);
       })();
     } catch (error) {
@@ -529,12 +540,7 @@ class NodeTreeStore {
           this.db.prepare("DELETE FROM brz_tree_reservations WHERE id = ?").run(id);
           // The spent leaves own these ancestor rows; remove them in the same
           // transaction rather than leaving them to a separate reclaim pass.
-          if (reservedLeafIds.length > 0) {
-            const placeholders = reservedLeafIds.map(() => "?").join(",");
-            this.db
-              .prepare(`DELETE FROM brz_tree_ancestors WHERE leaf_id IN (${placeholders})`)
-              .run(...reservedLeafIds);
-          }
+          this._deleteAncestorsForLeaves(reservedLeafIds);
         }
 
         if (newLeaves && newLeaves.length > 0) {
@@ -733,12 +739,7 @@ class NodeTreeStore {
           .run(reservationId);
         // The spent leaves own these ancestor rows; remove them now since there
         // is no later reclaim pass.
-        if (oldLeafIds.length > 0) {
-          const placeholders = oldLeafIds.map(() => "?").join(",");
-          this.db
-            .prepare(`DELETE FROM brz_tree_ancestors WHERE leaf_id IN (${placeholders})`)
-            .run(...oldLeafIds);
-        }
+        this._deleteAncestorsForLeaves(oldLeafIds);
 
         this._upsertLeaves(changeLeaves, false, null);
         this._upsertLeaves(reservedLeaves, false, null);
@@ -830,6 +831,17 @@ class NodeTreeStore {
         node.verifying_public_key,
         JSON.stringify(node)
       );
+    }
+  }
+
+  /** Drops the ancestor rows of every named leaf. */
+  _deleteAncestorsForLeaves(leafIds) {
+    if (!leafIds || leafIds.length === 0) return;
+    for (const chunk of idChunks(leafIds)) {
+      const placeholders = chunk.map(() => "?").join(",");
+      this.db
+        .prepare(`DELETE FROM brz_tree_ancestors WHERE leaf_id IN (${placeholders})`)
+        .run(...chunk);
     }
   }
 

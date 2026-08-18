@@ -421,7 +421,7 @@ impl TreeService for SynchronousTreeService {
             .collect::<Vec<_>>();
         // A refresh writes no chains, so an already-stored one is left alone
         // rather than rewritten every minute. Collecting the chains of anything
-        // newly reported is the caller's to schedule.
+        // newly reported is what the notification below sets off.
         let pedigrees = self.check_renew_nodes(bare_pedigrees(new_leaves)).await?;
         let renewed_leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
         self.state

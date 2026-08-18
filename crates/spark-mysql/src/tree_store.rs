@@ -146,6 +146,12 @@ const SPENT_MARKER_CLEANUP_THRESHOLD_MS: i64 = 5 * 60 * 1000;
 /// that cap and `max_allowed_packet`.
 const LEAF_UPSERT_CHUNK_SIZE: usize = 1_000;
 
+/// Ids bound per statement when a leaf id set is passed to a query. `MySQL` caps
+/// a prepared statement at 65535 placeholders, which a wallet-wide chain read or
+/// backfill would otherwise pass. Low enough that the query binding each id twice
+/// stays under it as well.
+const IDS_PER_STATEMENT: usize = 8_000;
+
 /// Slim projection of selection candidates: id + value only.
 /// Includes all leaves with value <= the max target (covers exact-match +
 /// minimum-amount accumulators) plus the smallest leaf with a larger value
@@ -434,41 +440,47 @@ impl TreeStore for MysqlTreeStore {
             return Ok(Vec::new());
         }
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        // One query loads each requested leaf's own row plus its ancestor rows,
-        // both tagged by the owning leaf id (a leaf's own row is tagged with its
-        // own id). Grouping by that tag below keeps each leaf's node set separate,
-        // so a node id shared by several leaves cannot cross-contaminate another
-        // leaf's chain with a status or parent it doesn't itself hold.
-        let placeholders = build_placeholders(leaf_ids.len());
-        let sql = format!(
-            "SELECT leaf_id, data FROM brz_tree_ancestors WHERE user_id = ? AND leaf_id IN ({placeholders})
-             UNION ALL
-             SELECT id, data FROM brz_tree_leaves WHERE user_id = ? AND id IN ({placeholders})"
-        );
-        let mut params: Vec<Value> =
-            Vec::with_capacity(leaf_ids.len().saturating_mul(2).saturating_add(2));
-        params.push(Value::from(self.identity.clone()));
-        for id in leaf_ids {
-            params.push(Value::from(id.to_string()));
-        }
-        params.push(Value::from(self.identity.clone()));
-        for id in leaf_ids {
-            params.push(Value::from(id.to_string()));
-        }
-        let rows: Vec<(String, String)> = conn
-            .exec(&sql, Params::Positional(params))
-            .await
-            .map_err(map_err)?;
-
+        // Each statement loads a batch of leaves' own rows plus their ancestor
+        // rows, both tagged by the owning leaf id (a leaf's own row is tagged with
+        // its own id), and one transaction spans however many it takes so no two
+        // are read at different points in time. Grouping by that tag below keeps
+        // each leaf's node set separate, so a node id shared by several leaves
+        // cannot cross-contaminate another leaf's chain with a status or parent it
+        // doesn't itself hold.
+        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
         let mut by_leaf: HashMap<TreeNodeId, HashMap<TreeNodeId, TreeNode>> = HashMap::new();
-        for (leaf_id, data) in rows {
-            let leaf_id = TreeNodeId::from_str(&leaf_id).map_err(TreeServiceError::Generic)?;
-            let node = Self::deserialize_node(&data)?;
-            by_leaf
-                .entry(leaf_id)
-                .or_default()
-                .insert(node.id.clone(), node);
+        for chunk in leaf_ids.chunks(IDS_PER_STATEMENT) {
+            let placeholders = build_placeholders(chunk.len());
+            let sql = format!(
+                "SELECT leaf_id, data FROM brz_tree_ancestors WHERE user_id = ? AND leaf_id IN ({placeholders})
+                 UNION ALL
+                 SELECT id, data FROM brz_tree_leaves WHERE user_id = ? AND id IN ({placeholders})"
+            );
+            let mut params: Vec<Value> =
+                Vec::with_capacity(chunk.len().saturating_mul(2).saturating_add(2));
+            params.push(Value::from(self.identity.clone()));
+            for id in chunk {
+                params.push(Value::from(id.to_string()));
+            }
+            params.push(Value::from(self.identity.clone()));
+            for id in chunk {
+                params.push(Value::from(id.to_string()));
+            }
+            let rows: Vec<(String, String)> = tx
+                .exec(&sql, Params::Positional(params))
+                .await
+                .map_err(map_err)?;
+
+            for (leaf_id, data) in rows {
+                let leaf_id = TreeNodeId::from_str(&leaf_id).map_err(TreeServiceError::Generic)?;
+                let node = Self::deserialize_node(&data)?;
+                by_leaf
+                    .entry(leaf_id)
+                    .or_default()
+                    .insert(node.id.clone(), node);
+            }
         }
+        tx.commit().await.map_err(map_err)?;
 
         Ok(leaf_ids
             .iter()
@@ -1145,19 +1157,24 @@ impl MysqlTreeStore {
         tx: &mut mysql_async::Transaction<'_>,
         pedigrees: &[LeafPedigree],
     ) -> Result<HashSet<String>, TreeServiceError> {
-        let placeholders = build_placeholders(pedigrees.len());
-        let sql =
-            format!("SELECT id FROM brz_tree_leaves WHERE user_id = ? AND id IN ({placeholders})");
-        let mut params: Vec<Value> = Vec::with_capacity(pedigrees.len().saturating_add(1));
-        params.push(Value::from(self.identity.clone()));
-        for pedigree in pedigrees {
-            params.push(Value::from(pedigree.leaf.id.to_string()));
+        let mut existing = HashSet::new();
+        for chunk in pedigrees.chunks(IDS_PER_STATEMENT) {
+            let placeholders = build_placeholders(chunk.len());
+            let sql = format!(
+                "SELECT id FROM brz_tree_leaves WHERE user_id = ? AND id IN ({placeholders})"
+            );
+            let mut params: Vec<Value> = Vec::with_capacity(chunk.len().saturating_add(1));
+            params.push(Value::from(self.identity.clone()));
+            for pedigree in chunk {
+                params.push(Value::from(pedigree.leaf.id.to_string()));
+            }
+            let rows: Vec<String> = tx
+                .exec(&sql, Params::Positional(params))
+                .await
+                .map_err(map_err)?;
+            existing.extend(rows);
         }
-        let rows: Vec<String> = tx
-            .exec(&sql, Params::Positional(params))
-            .await
-            .map_err(map_err)?;
-        Ok(rows.into_iter().collect())
+        Ok(existing)
     }
 
     async fn set_leaves_inner(
@@ -1257,14 +1274,14 @@ impl MysqlTreeStore {
             .into_iter()
             .filter(|id| !fresh_ids.contains(id))
             .collect();
-        if !departed.is_empty() {
+        for chunk in departed.chunks(IDS_PER_STATEMENT) {
             let sql = format!(
                 "DELETE FROM brz_tree_ancestors WHERE user_id = ? AND leaf_id IN ({})",
-                build_placeholders(departed.len())
+                build_placeholders(chunk.len())
             );
-            let mut params: Vec<Value> = Vec::with_capacity(departed.len().saturating_add(1));
+            let mut params: Vec<Value> = Vec::with_capacity(chunk.len().saturating_add(1));
             params.push(Value::from(self.identity.clone()));
-            params.extend(departed.into_iter().map(Value::from));
+            params.extend(chunk.iter().cloned().map(Value::from));
             tx.exec_drop(&sql, Params::Positional(params))
                 .await
                 .map_err(map_err)?;

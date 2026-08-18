@@ -21,6 +21,16 @@ use crate::tree::{LeafPedigree, TreeNodeId, TreeService, TreeServiceError, chain
 const INITIAL_RETRY_DELAY: Duration = Duration::from_secs(30);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(30 * 60);
 
+/// Leaves whose chains are fetched, held and stored at a time. A chain carries a
+/// node per level of the tree, each with its transactions, so the first pass over
+/// a wallet with no chains stored yet would otherwise hold every one of them at
+/// once. Bounds the id list one operator request carries as well. Tiny under
+/// test, so an ordinary fixture spans several batches.
+#[cfg(not(test))]
+const LEAVES_PER_FETCH: usize = 500;
+#[cfg(test)]
+const LEAVES_PER_FETCH: usize = 2;
+
 fn is_complete(pedigree: &LeafPedigree) -> bool {
     chain_reaches_root(&pedigree.leaf, &pedigree.ancestors)
 }
@@ -83,9 +93,24 @@ impl ExitChainResolver {
         }
         trace!("Resolving exit chains for {} leaves", candidates.len());
 
+        // One `now` for the whole pass, so a leaf's retry time does not depend on
+        // which batch it landed in.
+        for batch in candidates.chunks(LEAVES_PER_FETCH) {
+            self.resolve_batch(batch, now).await?;
+        }
+        Ok(())
+    }
+
+    /// Fetches one batch of chains, stores those that came back complete, and
+    /// paces the rest.
+    async fn resolve_batch(
+        &self,
+        candidates: &[TreeNodeId],
+        now: SystemTime,
+    ) -> Result<(), TreeServiceError> {
         let fetched = self
             .tree_service
-            .fetch_pedigrees_from_operators(&candidates)
+            .fetch_pedigrees_from_operators(candidates)
             .await;
         let returned: HashSet<TreeNodeId> = fetched.iter().map(|p| p.leaf.id.clone()).collect();
         let (resolved, unresolved): (Vec<LeafPedigree>, Vec<LeafPedigree>) =
@@ -107,8 +132,9 @@ impl ExitChainResolver {
             .map(|pedigree| pedigree.leaf.id.clone())
             .chain(
                 candidates
-                    .into_iter()
-                    .filter(|leaf_id| !returned.contains(leaf_id)),
+                    .iter()
+                    .filter(|leaf_id| !returned.contains(leaf_id))
+                    .cloned(),
             )
             .collect();
 
@@ -383,6 +409,35 @@ mod tests {
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].leaf, leaf);
         assert_eq!(stored[0].ancestors, vec![root]);
+    }
+
+    #[async_test_all]
+    async fn test_candidates_are_resolved_in_batches() {
+        // A wallet with no chains stored yet reports every leaf at once, and each
+        // chain fetched carries a node per level of the tree. Fetching and storing
+        // in batches is what keeps that off the heap all at once.
+        let root = create_test_node_with_parent("root", None, TreeNodeStatus::Available);
+        let mock = Arc::new(MockTreeService::default());
+        let mut ids = Vec::new();
+        for name in ["leaf-a", "leaf-b", "leaf-c"] {
+            let leaf = create_test_node_with_parent(name, Some("root"), TreeNodeStatus::Available);
+            mock.seed_leaf(leaf.clone(), pedigree(&leaf, Vec::new()))
+                .await;
+            mock.set_operator_response(leaf.id.clone(), pedigree(&leaf, vec![root.clone()]))
+                .await;
+            ids.push(leaf.id);
+        }
+
+        let resolver = ExitChainResolver::new(mock.clone());
+        resolver.resolve_missing_chains().await.unwrap();
+
+        assert_eq!(
+            mock.fetch_calls().await,
+            vec![vec![ids[0].clone(), ids[1].clone()], vec![ids[2].clone()]]
+        );
+        // Every leaf still ends up resolved: batching splits the work, it does not
+        // drop any of it.
+        assert_eq!(mock.stored().await.len(), 3);
     }
 
     #[async_test_all]
