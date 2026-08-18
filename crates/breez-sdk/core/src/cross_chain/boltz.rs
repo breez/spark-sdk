@@ -27,7 +27,7 @@ use tracing::{debug, error, info, warn};
 
 use super::{
     CrossChainFeeMode, CrossChainPrepared, CrossChainProvider, CrossChainProviderContext,
-    CrossChainRouteFilter, CrossChainRoutePair, CrossChainService, SourceAsset,
+    CrossChainRouteFilter, CrossChainRoutePair, CrossChainService, SourceAsset, SourceChain,
     boltz_storage_adapter::PROVIDER_TAG_BOLTZ, derive_btc_leg_transfer_id,
 };
 use crate::{
@@ -514,10 +514,14 @@ impl CrossChainService for BoltzService {
     ) -> Result<Vec<CrossChainRoutePair>, SdkError> {
         let address_details = match filter {
             CrossChainRouteFilter::Send { address_details } => address_details,
-            // v1 Boltz is reverse-swap only (BTC/sats -> external). Submarine
-            // swaps (USDT -> LN) are out of scope for v1 and will populate
-            // this branch when they land.
-            CrossChainRouteFilter::Receive { .. } => return Ok(Vec::new()),
+            // Boltz offers no routes for either filter:
+            // - PaymentLink: a Boltz reverse swap needs this SDK online to claim
+            //   before the payer's HTLC settles, so it can't back a
+            //   fire-and-forget link.
+            // - Receive (submarine swaps, USDT -> LN).
+            CrossChainRouteFilter::PaymentLink { .. } | CrossChainRouteFilter::Receive { .. } => {
+                return Ok(Vec::new());
+            }
         };
 
         // `destinations_accepting` validates the raw recipient address against
@@ -543,15 +547,21 @@ impl CrossChainService for BoltzService {
         recipient_address: &str,
         route: &CrossChainRoutePair,
         amount: u128,
-        token_identifier: Option<String>,
+        source_chain: Option<SourceChain>,
+        source_token_identifier: Option<String>,
         max_slippage_bps: u32,
         fee_mode: CrossChainFeeMode,
     ) -> Result<CrossChainPrepared, SdkError> {
-        // v1 Boltz is BTC-only. Tokens must be rejected before we commit any
-        // state on Boltz's side.
-        if token_identifier.is_some() {
+        // Boltz reverse swaps are always paid over Lightning.
+        if !matches!(source_chain, None | Some(SourceChain::Lightning)) {
             return Err(SdkError::InvalidInput(
-                "Boltz does not support token sends in v1".to_string(),
+                "Boltz routes can only be funded over Lightning".to_string(),
+            ));
+        }
+
+        if source_token_identifier.is_some() {
+            return Err(SdkError::InvalidInput(
+                "Boltz does not support token sends".to_string(),
             ));
         }
 
@@ -889,6 +899,7 @@ fn destination_to_route_pair(
         decimals: 6,
         exact_out_eligible: false,
         supported_sources: vec![SourceAsset::Bitcoin],
+        supported_source_chains: vec![SourceChain::Lightning],
     }
 }
 
@@ -977,6 +988,7 @@ mod tests {
         assert_eq!(pair.contract_address.as_deref(), Some("0xtoken"));
         assert_eq!(pair.decimals, 6);
         assert!(!pair.exact_out_eligible);
+        assert_eq!(pair.supported_source_chains, vec![SourceChain::Lightning]);
     }
 
     #[test_all]
@@ -1030,6 +1042,7 @@ mod tests {
             decimals: 6,
             exact_out_eligible: false,
             supported_sources: vec![SourceAsset::Bitcoin],
+            supported_source_chains: vec![SourceChain::Lightning],
         }
     }
 

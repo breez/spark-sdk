@@ -450,6 +450,36 @@ fn buy_bitcoin() {
 }
 
 #[test]
+fn prepare_payment_link() {
+    let Command::PreparePaymentLink {
+        recipient,
+        amount,
+        fees_included,
+        max_slippage_bps,
+    } = parse_ok("prepare-payment-link 0xabc --amount 1000000")
+    else {
+        panic!("expected PreparePaymentLink");
+    };
+    assert_eq!(recipient, "0xabc");
+    assert_eq!(amount, 1_000_000);
+    assert!(!fees_included);
+    assert!(max_slippage_bps.is_none());
+
+    let Command::PreparePaymentLink {
+        fees_included,
+        max_slippage_bps,
+        ..
+    } = parse_ok(
+        "prepare-payment-link 0xabc --amount 500000 --fees-included --max-slippage-bps 1000",
+    )
+    else {
+        panic!("expected PreparePaymentLink");
+    };
+    assert!(fees_included);
+    assert_eq!(max_slippage_bps, Some(1000));
+}
+
+#[test]
 fn lightning_address() {
     let Command::CheckLightningAddressAvailable { username } =
         parse_ok("check-lightning-address-available alice")

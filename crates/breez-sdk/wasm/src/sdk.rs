@@ -592,6 +592,14 @@ impl BreezSdk {
         Ok(self.sdk.buy_bitcoin(request.into()).await?.into())
     }
 
+    #[wasm_bindgen(js_name = "preparePaymentLink")]
+    pub async fn prepare_payment_link(
+        &self,
+        request: PreparePaymentLinkRequest,
+    ) -> WasmResult<PreparePaymentLinkResponse> {
+        Ok(self.sdk.prepare_payment_link(request.into()).await?.into())
+    }
+
     #[wasm_bindgen(js_name = "registerWebhook")]
     pub async fn register_webhook(
         &self,

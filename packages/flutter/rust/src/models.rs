@@ -377,6 +377,13 @@ pub enum _SourceAsset {
     Token { token_identifier: String },
 }
 
+#[frb(mirror(SourceChain))]
+pub enum _SourceChain {
+    Spark,
+    Lightning,
+    Bitcoin,
+}
+
 #[frb(mirror(CrossChainFeeMode))]
 pub enum _CrossChainFeeMode {
     FeesExcluded,
@@ -393,6 +400,7 @@ pub struct _CrossChainRoutePair {
     pub decimals: u8,
     pub exact_out_eligible: bool,
     pub supported_sources: Vec<SourceAsset>,
+    pub supported_source_chains: Vec<SourceChain>,
 }
 
 #[frb(mirror(CrossChainProviderContext))]
@@ -417,6 +425,9 @@ pub enum _CrossChainRouteFilter {
     },
     Receive {
         contract_address: Option<String>,
+    },
+    PaymentLink {
+        address_details: CrossChainAddressDetails,
     },
 }
 
@@ -1809,6 +1820,26 @@ pub struct _RefundPendingConversionsResponse {
     pub refunded: u32,
     pub skipped: u32,
     pub failed: u32,
+}
+
+#[frb(mirror(PreparePaymentLinkRequest))]
+pub struct _PreparePaymentLinkRequest {
+    pub address: String,
+    pub route: CrossChainRoutePair,
+    pub amount: u128,
+    pub fee_policy: Option<FeePolicy>,
+    pub max_slippage_bps: Option<u32>,
+}
+
+#[frb(mirror(PreparePaymentLinkResponse))]
+pub struct _PreparePaymentLinkResponse {
+    pub url: String,
+    pub amount_sats: u64,
+    pub estimated_out: u128,
+    pub asset: String,
+    pub service_fee_amount: u128,
+    pub service_fee_asset: Option<String>,
+    pub expires_at: String,
 }
 
 #[frb(mirror(ServiceStatus))]

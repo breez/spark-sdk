@@ -10,11 +10,12 @@ use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
     AssetFilter, AuthorizeTransferRequest, BatchRecipient, BreezSdk, BuyBitcoinRequest,
     CheckLightningAddressRequest, ClaimDepositRequest, ClaimHtlcPaymentRequest,
-    ClaimTransferRequest, ConversionOptions, ConversionType, CrossChainRoutePair, Fee, FeePolicy,
-    FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
-    InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
-    LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
-    PaymentRequest, PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendBatchRequest,
+    ClaimTransferRequest, ConversionOptions, ConversionType, CrossChainRouteFilter,
+    CrossChainRoutePair, Fee, FeePolicy, FetchConversionLimitsRequest, GetInfoRequest,
+    GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
+    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest,
+    MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentRequest, PaymentStatus,
+    PaymentType, PrepareLnurlPayRequest, PreparePaymentLinkRequest, PrepareSendBatchRequest,
     PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
     RegisterLightningAddressRequest, SendBatchRequest, SendPaymentMethod, SendPaymentOptions,
     SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SparkMasterIdentityPublicKey,
@@ -367,6 +368,24 @@ pub enum Command {
         #[arg(long)]
         redirect_url: Option<String>,
     },
+    /// Prepare a payment link to send USDC/USDT to an external-chain recipient
+    /// via a fiat rail
+    PreparePaymentLink {
+        /// Recipient address on the destination chain (EVM/Solana/Tron)
+        recipient: String,
+
+        /// Amount in USD base units (6-decimal), so `1000000` = $1.00
+        #[arg(long)]
+        amount: u128,
+
+        /// Deduct fees from the amount instead of adding them on top
+        #[arg(long = "fees-included", action = clap::ArgAction::SetTrue)]
+        fees_included: bool,
+
+        /// Maximum slippage in basis points
+        #[arg(long)]
+        max_slippage_bps: Option<u32>,
+    },
     CheckLightningAddressAvailable {
         /// The username to check
         username: String,
@@ -665,6 +684,51 @@ pub(crate) async fn execute_command(
             println!("{}", value.url);
             Ok(true)
         }
+        Command::PreparePaymentLink {
+            recipient,
+            amount,
+            fees_included,
+            max_slippage_bps,
+        } => {
+            let InputType::CrossChainAddress(address_details) = sdk.parse(&recipient).await? else {
+                return Err(anyhow::anyhow!(
+                    "Recipient must be a cross-chain (EVM/Solana/Tron) address"
+                ));
+            };
+            let address = address_details.address.clone();
+            let route = select_cross_chain_route(
+                sdk,
+                rl,
+                CrossChainRouteFilter::PaymentLink { address_details },
+            )
+            .await?;
+            let fee_policy = if fees_included {
+                Some(FeePolicy::FeesIncluded)
+            } else {
+                None
+            };
+            let response = sdk
+                .prepare_payment_link(PreparePaymentLinkRequest {
+                    address,
+                    route,
+                    amount,
+                    fee_policy,
+                    max_slippage_bps,
+                })
+                .await?;
+            println!("Open this URL in a browser to complete the purchase:");
+            println!("{}", response.url);
+            println!(
+                "Deposit ~{} sats; recipient receives ~{} {}, service fee {} {}, expires {}",
+                response.amount_sats,
+                response.estimated_out,
+                response.asset,
+                response.service_fee_amount,
+                response.service_fee_asset.as_deref().unwrap_or("sats"),
+                response.expires_at,
+            );
+            Ok(true)
+        }
         Command::Receive {
             payment_method,
             description,
@@ -771,7 +835,12 @@ pub(crate) async fn execute_command(
             let payment_request = match sdk.parse(&payment_request).await {
                 Ok(InputType::CrossChainAddress(address_details)) => {
                     let address = address_details.address.clone();
-                    let route = select_cross_chain_route(sdk, rl, address_details).await?;
+                    let route = select_cross_chain_route(
+                        sdk,
+                        rl,
+                        CrossChainRouteFilter::Send { address_details },
+                    )
+                    .await?;
                     PaymentRequest::CrossChain {
                         address,
                         route,
@@ -1193,9 +1262,8 @@ pub(crate) async fn execute_command(
 async fn select_cross_chain_route(
     sdk: &BreezSdk,
     rl: &mut Editor<CliHelper, DefaultHistory>,
-    address_details: breez_sdk_spark::CrossChainAddressDetails,
+    filter: CrossChainRouteFilter,
 ) -> Result<CrossChainRoutePair, anyhow::Error> {
-    let filter = breez_sdk_spark::CrossChainRouteFilter::Send { address_details };
     let routes = sdk.get_cross_chain_routes(&filter).await?;
     if routes.is_empty() {
         return Err(anyhow::anyhow!(

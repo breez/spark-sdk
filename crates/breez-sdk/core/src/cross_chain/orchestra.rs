@@ -31,7 +31,7 @@ use crate::{ConversionInfo, ConversionStatus, Payment, PaymentDetails, PaymentSt
 
 use super::{
     CrossChainFeeMode, CrossChainPrepared, CrossChainProvider, CrossChainProviderContext,
-    CrossChainRouteFilter, CrossChainRoutePair, CrossChainService, SourceAsset,
+    CrossChainRouteFilter, CrossChainRoutePair, CrossChainService, SourceAsset, SourceChain,
     derive_btc_leg_transfer_id,
 };
 
@@ -40,13 +40,39 @@ use crate::utils::{
     polling::{PollSchedule, poll_until},
 };
 
+// Orchestra `/quote` `source_chain` wire values.
+const SOURCE_CHAIN_SPARK: &str = "spark";
+const SOURCE_CHAIN_LIGHTNING: &str = "lightning";
+const SOURCE_CHAIN_BITCOIN: &str = "bitcoin";
+
+/// The Orchestra wire value for a [`SourceChain`].
+fn source_chain_to_wire(source_chain: SourceChain) -> &'static str {
+    match source_chain {
+        SourceChain::Spark => SOURCE_CHAIN_SPARK,
+        SourceChain::Lightning => SOURCE_CHAIN_LIGHTNING,
+        SourceChain::Bitcoin => SOURCE_CHAIN_BITCOIN,
+    }
+}
+
+/// Parses an Orchestra `source_chain` wire value, or `None` for one that isn't
+/// a local funding chain.
+fn source_chain_from_wire(chain: &str) -> Option<SourceChain> {
+    if chain.eq_ignore_ascii_case(SOURCE_CHAIN_SPARK) {
+        Some(SourceChain::Spark)
+    } else if chain.eq_ignore_ascii_case(SOURCE_CHAIN_LIGHTNING) {
+        Some(SourceChain::Lightning)
+    } else if chain.eq_ignore_ascii_case(SOURCE_CHAIN_BITCOIN) {
+        Some(SourceChain::Bitcoin)
+    } else {
+        None
+    }
+}
+
 const DEFAULT_AFFILIATE_ID: &str = "breez_sdk";
 // Polling cadence for the outbound Spark transfer leg.
 const SEND_POLL_INITIAL_DELAY_MS: u64 = 500;
 const SEND_POLL_MAX_DELAY_MS: u64 = 2000;
 const SEND_POLL_TIMEOUT_SECS: u64 = 30;
-/// The canonical Spark source chain string used by Orchestra.
-const SPARK_SOURCE_CHAIN: &str = "spark";
 
 /// Resolves the Orchestra config from Breez server.
 ///
@@ -422,25 +448,24 @@ impl OrchestraService {
     }
 
     /// Resolves the Orchestra-side `source_asset` wire symbol (e.g. `"BTC"`,
-    /// `"USDB"`) for the given destination route + Spark source.
+    /// `"USDB"`) for the given destination route + source chain.
     ///
     /// Orchestra's `/quote` API identifies the source asset by
     /// `(sourceChain, sourceAsset)` symbols rather than contract addresses,
-    /// so we look up the matching raw route and read its `source.asset`.
-    /// This doubles as validation that Orchestra actually offers a route for
-    /// the requested source-to-destination combination.
-    ///
-    /// `spark_routes()` is cache-backed (TTL'd) so this call is effectively
-    /// free in the hot path.
+    /// so we filter the routes to `source_chain` and read the matching route's
+    /// `source.asset` (BTC for a `lightning`/`bitcoin` source; BTC or the token
+    /// for `spark`). This doubles as validation that Orchestra actually offers a
+    /// route for the requested source-to-destination combination.
     async fn resolve_source_asset(
         &self,
         dest: &CrossChainRoutePair,
+        source_chain: &str,
         token_identifier: Option<&str>,
     ) -> Result<ResolvedSourceAsset, SdkError> {
-        let raw_routes = self.client.spark_routes(true).await?;
+        let raw_routes = self.client.filter_routes(source_chain, true).await?;
         find_source_asset(&raw_routes, dest, token_identifier).ok_or_else(|| {
             SdkError::InvalidInput(format!(
-                "Orchestra does not offer a route for source {} → {}/{}",
+                "Orchestra does not offer a {source_chain} route for source {} → {}/{}",
                 token_identifier.unwrap_or("BTC"),
                 dest.chain,
                 dest.asset
@@ -475,13 +500,14 @@ impl OrchestraService {
     /// fee schedule the real quote will.
     async fn estimate_required_source_amount(
         &self,
+        source_chain: &str,
         source_asset: &str,
         route: &CrossChainRoutePair,
         source_amount: u128,
         destination_amount: u128,
     ) -> Result<u128, SdkError> {
         let request = EstimateRequest {
-            source_chain: SPARK_SOURCE_CHAIN.to_string(),
+            source_chain: source_chain.to_string(),
             source_asset: source_asset.to_string(),
             destination_chain: route.chain.clone(),
             destination_asset: route.asset.clone(),
@@ -588,21 +614,44 @@ impl CrossChainService for OrchestraService {
         &self,
         filter: &CrossChainRouteFilter,
     ) -> Result<Vec<CrossChainRoutePair>, SdkError> {
-        let (is_send, contract_filter, family_filter) = match filter {
+        let (source_chains, is_send, contract_filter, family_filter): (
+            Vec<&str>,
+            bool,
+            Option<&str>,
+            Option<CrossChainAddressFamily>,
+        ) = match filter {
             CrossChainRouteFilter::Send { address_details } => {
                 let family: CrossChainAddressFamily = address_details.address_family.into();
                 (
+                    vec![SOURCE_CHAIN_SPARK],
                     true,
                     address_details.contract_address.as_deref(),
                     Some(family),
                 )
             }
-            CrossChainRouteFilter::Receive { contract_address } => {
-                (false, contract_address.as_deref(), None)
+            CrossChainRouteFilter::PaymentLink { address_details } => {
+                let family: CrossChainAddressFamily = address_details.address_family.into();
+                (
+                    vec![SOURCE_CHAIN_LIGHTNING],
+                    true,
+                    address_details.contract_address.as_deref(),
+                    Some(family),
+                )
             }
+            CrossChainRouteFilter::Receive { contract_address } => (
+                vec![SOURCE_CHAIN_SPARK],
+                false,
+                contract_address.as_deref(),
+                None,
+            ),
         };
 
-        let routes = self.client.spark_routes(is_send).await?;
+        // `dedupe_routes` collapses a destination reachable from several
+        // sources into one pair.
+        let mut routes = Vec::new();
+        for chain in source_chains {
+            routes.extend(self.client.filter_routes(chain, is_send).await?);
+        }
 
         Ok(dedupe_routes(
             &routes,
@@ -617,12 +666,18 @@ impl CrossChainService for OrchestraService {
         recipient_address: &str,
         route: &CrossChainRoutePair,
         amount: u128,
-        token_identifier: Option<String>,
+        source_chain: Option<SourceChain>,
+        source_token_identifier: Option<String>,
         max_slippage_bps: u32,
         fee_mode: CrossChainFeeMode,
     ) -> Result<CrossChainPrepared, SdkError> {
+        // Default to the Spark wallet source. Resolve the real Orchestra source
+        // asset for the chain: `spark` matches BTC or the token; `lightning`/
+        // `bitcoin` match the externally funded BTC route. The lookup also
+        // validates the route exists.
+        let source_chain = source_chain_to_wire(source_chain.unwrap_or(SourceChain::Spark));
         let source_asset = self
-            .resolve_source_asset(route, token_identifier.as_deref())
+            .resolve_source_asset(route, source_chain, source_token_identifier.as_deref())
             .await?;
 
         // FeesExcluded inflates the source to deliver the cross-chain
@@ -636,6 +691,7 @@ impl CrossChainService for OrchestraService {
                     .await?;
                 let required_in = self
                     .estimate_required_source_amount(
+                        source_chain,
                         &source_asset.asset,
                         route,
                         amount,
@@ -647,7 +703,7 @@ impl CrossChainService for OrchestraService {
         };
 
         let request = QuoteRequest {
-            source_chain: SPARK_SOURCE_CHAIN.to_string(),
+            source_chain: source_chain.to_string(),
             source_asset: source_asset.asset.clone(),
             destination_chain: route.chain.clone(),
             destination_asset: route.asset.clone(),
@@ -710,7 +766,7 @@ impl CrossChainService for OrchestraService {
             expires_at: quote.expires_at,
             pair: route.clone(),
             recipient_address: recipient_address.to_string(),
-            token_identifier,
+            token_identifier: source_token_identifier,
             provider_context,
         })
     }
@@ -754,9 +810,10 @@ impl CrossChainService for OrchestraService {
         let spark_tx_hash = asset_transfer.id();
         debug!("Orchestra: deposit transfer {spark_tx_hash} sent for quote {quote_id}");
 
-        // Step 2: Submit the deposit to Orchestra.
-        // Include the source spark address for BTC transfers so Orchestra
-        // can verify the deposit sender.
+        // Step 2: Submit the deposit to Orchestra. Submit is an optimization,
+        // not a requirement: Orchestra indexes every deposit and delivers even
+        // without it (orders are submitless). Include the source spark address
+        // for BTC transfers so Orchestra can verify the deposit sender.
         let source_spark_address = if prepared.token_identifier.is_none() {
             let addr = self
                 .spark_wallet
@@ -1183,6 +1240,16 @@ fn dedupe_routes(
                 })
         };
 
+        // Send/Buy are funded from `source_chain` (spark / lightning / bitcoin);
+        // a receive lands on the Spark side, so its funding chain is Spark. An
+        // unrecognized source chain (a receive route's external chain) parses to
+        // `None` and is skipped.
+        let source_chain = if is_send {
+            source_chain_from_wire(&r.source_chain)
+        } else {
+            Some(SourceChain::Spark)
+        };
+
         let entry = grouped.entry(key.clone()).or_insert_with(|| {
             order.push(key.clone());
             side_to_route_pair(side, r.exact_out_eligible)
@@ -1192,6 +1259,11 @@ fn dedupe_routes(
             && !entry.supported_sources.contains(&variant)
         {
             entry.supported_sources.push(variant);
+        }
+        if let Some(chain) = source_chain
+            && !entry.supported_source_chains.contains(&chain)
+        {
+            entry.supported_source_chains.push(chain);
         }
     }
 
@@ -1216,6 +1288,7 @@ fn side_to_route_pair(side: &RouteAsset, exact_out_eligible: bool) -> CrossChain
         decimals: side.decimals,
         exact_out_eligible,
         supported_sources: Vec::new(),
+        supported_source_chains: Vec::new(),
     }
 }
 
@@ -1226,6 +1299,26 @@ mod tests {
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[test_all]
+    fn source_chain_wire_round_trips_case_insensitively() {
+        for chain in [
+            SourceChain::Spark,
+            SourceChain::Lightning,
+            SourceChain::Bitcoin,
+        ] {
+            assert_eq!(
+                source_chain_from_wire(source_chain_to_wire(chain)),
+                Some(chain)
+            );
+        }
+        assert_eq!(
+            source_chain_from_wire("Lightning"),
+            Some(SourceChain::Lightning)
+        );
+        // A receive route's external source chain is not a funding chain.
+        assert_eq!(source_chain_from_wire("base"), None);
+    }
 
     fn test_route_asset(chain: &str, chain_id: Option<&str>) -> RouteAsset {
         RouteAsset {
@@ -1325,6 +1418,47 @@ mod tests {
         assert!(p.supported_sources.contains(&SourceAsset::Token {
             token_identifier: usdb_contract.to_string(),
         }));
+        // A Spark-sourced send reports the Spark funding chain.
+        assert_eq!(p.supported_source_chains, vec![SourceChain::Spark]);
+    }
+
+    #[test_all]
+    fn dedupe_routes_accumulates_buy_source_chains() {
+        // One buy destination (base/USDC) reachable from both a Lightning and a
+        // Bitcoin source dedups to a single pair listing both funding chains.
+        let routes = vec![
+            route(
+                ra("lightning", "BTC", None),
+                ra("base", "USDC", Some("0xUSDC")),
+            ),
+            route(
+                ra("bitcoin", "BTC", None),
+                ra("base", "USDC", Some("0xUSDC")),
+            ),
+        ];
+
+        let pairs = dedupe_routes(&routes, true, None, None);
+
+        assert_eq!(pairs.len(), 1);
+        let p = &pairs[0];
+        assert!(p.supported_source_chains.contains(&SourceChain::Lightning));
+        assert!(p.supported_source_chains.contains(&SourceChain::Bitcoin));
+        assert_eq!(p.supported_source_chains.len(), 2);
+    }
+
+    #[test_all]
+    fn dedupe_routes_receive_funding_chain_is_spark() {
+        // Receiving into Spark reports the Spark funding chain, not the external
+        // source chain.
+        let routes = vec![route(
+            ra("base", "USDC", Some("0xUSDC")),
+            ra("spark", "BTC", None),
+        )];
+
+        let pairs = dedupe_routes(&routes, false, None, None);
+
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].supported_source_chains, vec![SourceChain::Spark]);
     }
 
     #[test_all]
@@ -1991,6 +2125,7 @@ mod tests {
             decimals: 6,
             exact_out_eligible: false,
             supported_sources: Vec::new(),
+            supported_source_chains: Vec::new(),
         }
     }
 

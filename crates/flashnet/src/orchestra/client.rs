@@ -81,24 +81,29 @@ impl OrchestraClient {
         Ok(response)
     }
 
-    /// Return routes where Spark is involved as source or destination.
+    /// Return routes where `chain` is involved as source or destination.
     ///
-    /// When `is_send` is `true`, returns routes with `source_chain == "spark"`
-    /// (sending from Spark to another chain). When `false`, returns routes with
-    /// `destination_chain == "spark"` (receiving into Spark from another chain).
+    /// When `is_send` is `true`, returns routes with `source_chain == chain`
+    /// (funding from `chain` to another chain, e.g. `spark` for a wallet send or
+    /// `lightning` for a Cash App onramp). When `false`, returns routes with
+    /// `destination_chain == chain` (receiving into `chain`).
     ///
     /// Driven by the cached [`Self::routes`] response — cheap to call
     /// repeatedly from the parser / UI layer.
-    pub async fn spark_routes(&self, is_send: bool) -> Result<Vec<Route>, FlashnetError> {
+    pub async fn filter_routes(
+        &self,
+        chain: &str,
+        is_send: bool,
+    ) -> Result<Vec<Route>, FlashnetError> {
         let response = self.routes().await?;
         Ok(response
             .routes
             .into_iter()
             .filter(|r| {
                 if is_send {
-                    r.source_chain.eq_ignore_ascii_case("spark")
+                    r.source_chain.eq_ignore_ascii_case(chain)
                 } else {
-                    r.destination_chain.eq_ignore_ascii_case("spark")
+                    r.destination_chain.eq_ignore_ascii_case(chain)
                 }
             })
             .collect())

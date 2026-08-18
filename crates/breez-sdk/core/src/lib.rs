@@ -35,7 +35,7 @@ pub use common::rest::{RestClient, RestResponse};
 pub use common::{fiat::*, models::*, sync_storage};
 pub use cross_chain::{
     CrossChainFeeMode, CrossChainProvider, CrossChainProviderContext, CrossChainRouteFilter,
-    CrossChainRoutePair, SourceAsset,
+    CrossChainRoutePair, SourceAsset, SourceChain,
 };
 pub use error::{DepositClaimError, SdkError, SignerError};
 pub use events::{AutoOptimizationEvent, EventEmitter, EventListener, SdkEvent};

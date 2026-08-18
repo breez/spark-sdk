@@ -17,6 +17,7 @@ mod messages;
 mod optimize;
 mod parsing_inputs;
 mod passkey;
+mod prepare_payment_link;
 mod receive_payment;
 mod refunding_payments;
 mod sdk_building;
