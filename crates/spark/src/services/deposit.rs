@@ -54,9 +54,10 @@ const INSTANT_UTXO_SWAP_REQUEST_TYPE: u64 = 3;
 /// changes the operators' share, not the user's.
 const STATIC_DEPOSIT_KEY_INDEX: u32 = 0;
 
-// Conservative minimum fee threshold for refund transactions
-// Based on 194 vbyte estimate for 1-in/1-out tx at 1 sat/vB minimum relay fee.
-const MIN_REFUND_FEE_SATS: u64 = 194;
+/// Bitcoin Core's default minimum relay fee rate. The refund fee floor is this
+/// rate applied to the real signed size of the refund transaction, which varies
+/// with the refund address type.
+const MIN_RELAY_FEE_SAT_PER_VBYTE: u64 = 1;
 
 /// Witness vbytes for a single Schnorr signature: ceil(66 witness bytes / 4)
 /// Witness structure: 1 (stack items) + 1 (sig length varint) + 64 (signature) = 66 bytes
@@ -400,10 +401,10 @@ impl DepositService {
         // Account for witness data that will be added after signing
         let signed_vsize = refund_tx.vsize() as u64 + SCHNORR_SIG_WITNESS_VBYTES;
         let fee_sats = fee.to_sats(signed_vsize);
-        if fee_sats < MIN_REFUND_FEE_SATS {
+        let min_fee_sats = signed_vsize * MIN_RELAY_FEE_SAT_PER_VBYTE;
+        if fee_sats < min_fee_sats {
             return Err(ServiceError::Generic(format!(
-                "fee must be at least {} sats",
-                MIN_REFUND_FEE_SATS
+                "fee must be at least {min_fee_sats} sats ({MIN_RELAY_FEE_SAT_PER_VBYTE} sat/vB over {signed_vsize} vbytes)"
             )));
         }
 
@@ -1542,5 +1543,34 @@ mod tests {
             ),
             Err(ServiceError::DepositAddressKeyMismatch)
         ));
+    }
+
+    /// The fee floor is `MIN_RELAY_FEE_SAT_PER_VBYTE * signed_vsize`, so the
+    /// unsigned vsize plus `SCHNORR_SIG_WITNESS_VBYTES` must equal the vsize the
+    /// transaction actually has once the key-path signature is attached.
+    #[test_all]
+    fn signed_vsize_estimate_matches_the_signed_transaction() {
+        let outpoint = OutPoint {
+            txid: Txid::from_slice(&[7u8; 32]).unwrap(),
+            vout: 0,
+        };
+        let key = test_key(1);
+        let refund_addresses = [
+            p2tr(&key),
+            Address::p2wpkh(
+                &CompressedPublicKey(bitcoin::PublicKey::new(key).inner),
+                NETWORK,
+            ),
+            Address::p2pkh(CompressedPublicKey(key), NETWORK),
+        ];
+
+        for address in refund_addresses {
+            let mut tx = create_static_deposit_refund_tx(outpoint, 0, &address);
+            let estimated = tx.vsize() as u64 + SCHNORR_SIG_WITNESS_VBYTES;
+
+            tx.input[0].witness = Witness::from_slice(&[[0u8; 64]]);
+
+            assert_eq!(estimated, tx.vsize() as u64, "address: {address}");
+        }
     }
 }

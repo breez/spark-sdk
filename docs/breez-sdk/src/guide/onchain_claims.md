@@ -46,7 +46,7 @@ The [recommended fees](#recommended-fees) API is useful for determining appropri
 
 <div class="warning">
 <h4>Developer note</h4>
-The total fee must be at least 194 sats to ensure the transaction can be relayed by the Bitcoin network. If the fee is lower, the refund request will be rejected.
+The total fee must cover at least 1 sat/vB of the refund transaction so it can be relayed by the Bitcoin network. The exact minimum depends on the size of the transaction, which varies with the destination address type (around 111 sats for a taproot address). If the fee is lower, the refund request is rejected and the error states the required minimum.
 </div>
 
 ## Implementing a custom claim logic

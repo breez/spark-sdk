@@ -351,7 +351,7 @@ async fn test_send_all_to_bitcoin_address(
     Ok(())
 }
 
-/// Verify deposit no fee blocks auto-claim, refund below MIN_REFUND_FEE_SATS is rejected, then refund succeeds with valid fee
+/// Verify deposit no fee blocks auto-claim, refund below the minimum relay fee is rejected, then refund succeeds with valid fee
 #[rstest]
 #[ignore]
 #[test_log::test(tokio::test)]
@@ -390,7 +390,8 @@ async fn test_deposit_fee_refund(#[future] bob_no_fee_sdk: Result<SdkInstance>) 
         .cloned()
         .expect("unclaimed deposit not found");
 
-    // Refund to the same static address (acceptable for test), with fee below MIN_REFUND_FEE_SATS (194 sats)
+    // Refund to the same static address (acceptable for test), with a fee below
+    // 1 sat/vB for the 111 vbyte refund to a taproot address
     let refund_dest = addr.clone();
     let result_below_min = bob
         .sdk
@@ -398,7 +399,7 @@ async fn test_deposit_fee_refund(#[future] bob_no_fee_sdk: Result<SdkInstance>) 
             txid: dep.txid.clone(),
             vout: dep.vout,
             destination_address: refund_dest.clone(),
-            fee: Fee::Fixed { amount: 193 }, // Below minimum threshold
+            fee: Fee::Fixed { amount: 50 }, // Below minimum threshold
         })
         .await;
 
@@ -410,7 +411,7 @@ async fn test_deposit_fee_refund(#[future] bob_no_fee_sdk: Result<SdkInstance>) 
     let err = result_below_min.unwrap_err();
     let err_msg = format!("{:?}", err);
     assert!(
-        err_msg.contains("fee must be at least 194 sats"),
+        err_msg.contains("fee must be at least 111 sats"),
         "Expected error message about minimum fee, got: {}",
         err_msg
     );
@@ -523,14 +524,14 @@ async fn test_deposit_low_amount_refund_fee_rate(
         .cloned()
         .expect("unclaimed deposit not found");
 
-    // Refund with 2 sat/vB fee rate - this tests the vsize calculation fix
+    // Refund at the minimum relay fee rate, which the fee floor must accept
     let refund = bob
         .sdk
         .refund_deposit(RefundDepositRequest {
             txid: dep.txid.clone(),
             vout: dep.vout,
             destination_address: bob_address,
-            fee: Fee::Rate { sat_per_vbyte: 2 },
+            fee: Fee::Rate { sat_per_vbyte: 1 },
         })
         .await?;
     info!(
