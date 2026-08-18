@@ -1557,10 +1557,7 @@ mod tests {
         let key = test_key(1);
         let refund_addresses = [
             p2tr(&key),
-            Address::p2wpkh(
-                &CompressedPublicKey(bitcoin::PublicKey::new(key).inner),
-                NETWORK,
-            ),
+            Address::p2wpkh(&CompressedPublicKey(key), NETWORK),
             Address::p2pkh(CompressedPublicKey(key), NETWORK),
         ];
 
