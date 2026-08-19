@@ -306,6 +306,10 @@ where
 
     let domains = domains::start(repository.clone(), is_mainnet, default_api_key.clone()).await?;
 
+    // Makes the pre-v2 signed-message tail observable, which is what gates
+    // dropping the legacy candidates.
+    routes::spawn_legacy_signature_reporter();
+
     // Shared partner-JWT cache (mainnet only). Its background task keeps a token
     // warm for every domain with its own api key (persisted to the DB) and one
     // for the default key.

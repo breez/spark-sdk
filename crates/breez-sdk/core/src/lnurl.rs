@@ -2,13 +2,79 @@ use bitcoin::hex::DisplayHex;
 use lnurl_models::{
     CheckUsernameAvailableResponse, ListMetadataResponse, RecoverLnurlPayRequest,
     RecoverLnurlPayResponse, RegisterLnurlPayRequest, RegisterLnurlPayResponse,
-    TransferLnurlPayRequest, UnregisterLnurlPayRequest,
+    TransferLnurlPayRequest, UnregisterLnurlPayRequest, signed_message,
 };
 use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use platform_utils::{ContentType, HttpClient, add_content_type_header};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
+
+/// Headers `list_metadata` sends its credential in, keeping it out of the query
+/// string and so out of proxy and access logs. The response carries preimages.
+const SIGNATURE_HEADER: &str = "X-Breez-Signature";
+const TIMESTAMP_HEADER: &str = "X-Breez-Timestamp";
+
+/// A configured LNURL domain split into the two things a signed request needs.
+///
+/// Both come from one parse, so the domain the client signs cannot drift from
+/// the one the request is addressed to.
+#[derive(Clone)]
+struct ParsedDomain {
+    /// The URL every route is appended to: scheme, userinfo, authority, and any
+    /// path prefix the deployment is mounted under.
+    base_url: String,
+    /// The authority a signed message names, which is what the server resolves
+    /// from `Host`.
+    signed_domain: String,
+}
+
+/// Splits a configured LNURL domain into the URL to call and the authority to
+/// sign.
+///
+/// The authority has to be what the HTTP client will put in `Host`, since that
+/// is what the server resolves and verifies the signature against: lowercased,
+/// without userinfo, and without a port the scheme already implies. `Url`
+/// applies all three while parsing, so the signed value is whatever it
+/// normalized rather than a second implementation of the same rules.
+fn parse_domain(configured: &str) -> ParsedDomain {
+    let absolute = if configured.contains("://") {
+        configured.to_string()
+    } else {
+        format!("https://{configured}")
+    };
+    let Ok(mut url) = url::Url::parse(&absolute) else {
+        // Unparseable, so there is nothing to split. Passing it through leaves
+        // the failure to the request, where the URL appears in the error.
+        return ParsedDomain {
+            base_url: configured.to_string(),
+            signed_domain: configured.to_string(),
+        };
+    };
+
+    // A query or fragment would swallow the route appended after it, and a
+    // trailing slash would double the one the route already starts with.
+    url.set_query(None);
+    url.set_fragment(None);
+    let base_url = url.as_str().trim_end_matches('/').to_string();
+
+    let signed_domain = match (url.host_str(), url.port()) {
+        (Some(host), Some(port)) => format!("{host}:{port}"),
+        (Some(host), None) => host.to_string(),
+        // A scheme that carries no authority at all, such as `mailto:`.
+        (None, _) => configured.to_ascii_lowercase(),
+    };
+
+    ParsedDomain {
+        base_url,
+        signed_domain,
+    }
+}
+
+/// The authority a signed message names, given a configured LNURL domain.
+pub(crate) fn signed_domain(configured: &str) -> String {
+    parse_domain(configured).signed_domain
+}
 
 #[derive(Debug)]
 pub enum LnurlServerError {
@@ -50,8 +116,12 @@ pub struct TransferLightningAddressRequest {
     /// Hex-encoded secp256k1 compressed public key of the current owner.
     pub from_pubkey: String,
     /// Hex-encoded DER ECDSA signature by the current owner over
-    /// `"transfer:{username}-{to_pubkey}"`.
+    /// [`signed_message::transfer_from`].
     pub from_signature: String,
+    /// Seconds since the Unix epoch, taken from the current owner's
+    /// authorization. Both signatures cover it, so both are bound to the same
+    /// window.
+    pub timestamp: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -95,6 +165,9 @@ pub trait LnurlServerClient: Send + Sync {
 pub struct DefaultLnurlServerClient {
     http_client: Arc<dyn HttpClient>,
     domain: String,
+    /// The configured domain as a URL to call and an authority to sign, split
+    /// once here so no request can address one domain and sign another.
+    parsed_domain: ParsedDomain,
     api_key: Option<String>,
     wallet: Arc<spark_wallet::SparkWallet>,
 }
@@ -108,19 +181,21 @@ impl DefaultLnurlServerClient {
     ) -> Self {
         Self {
             http_client,
+            parsed_domain: parse_domain(&domain),
             domain,
             api_key,
             wallet,
         }
     }
 
-    /// Construct the base URL for the lnurl server.
-    fn base_url(&self) -> String {
-        if self.domain.contains("://") {
-            self.domain.clone()
-        } else {
-            format!("https://{}", self.domain)
-        }
+    /// The URL every route is appended to.
+    fn base_url(&self) -> &str {
+        &self.parsed_domain.base_url
+    }
+
+    /// The authority every signed message names.
+    fn signed_domain(&self) -> &str {
+        &self.parsed_domain.signed_domain
     }
 
     /// Get common headers for all requests (User-Agent and Authorization).
@@ -140,17 +215,24 @@ impl DefaultLnurlServerClient {
         headers
     }
 
-    async fn sign_message(&self, message: &str) -> Result<(String, u64), LnurlServerError> {
-        let timestamp = SystemTime::now()
+    /// Seconds since the Unix epoch, the unit every signed message and every
+    /// `timestamp` field on the wire uses.
+    fn now() -> Result<u64, LnurlServerError> {
+        Ok(SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| LnurlServerError::SigningError("invalid systemtime".to_string()))?
-            .as_secs();
+            .as_secs())
+    }
+
+    /// Sign one canonical message, hex-encoding the DER signature the way the
+    /// server parses it.
+    async fn sign(&self, message: &str) -> Result<String, LnurlServerError> {
         let signature = self
             .wallet
-            .sign_message(&format!("{message}-{timestamp}"))
+            .sign_message(message)
             .await
             .map_err(|e| LnurlServerError::SigningError(e.to_string()))?;
-        Ok((signature.serialize_der().to_lower_hex_string(), timestamp))
+        Ok(signature.serialize_der().to_lower_hex_string())
     }
 
     /// Handle response status and parse JSON
@@ -197,7 +279,14 @@ impl LnurlServerClient for DefaultLnurlServerClient {
     ) -> Result<Option<RecoverLnurlPayResponse>, LnurlServerError> {
         let pubkey = self.wallet.get_identity_public_key();
 
-        let (signature, timestamp) = self.sign_message(&pubkey.to_string()).await?;
+        let timestamp = Self::now()?;
+        let signature = self
+            .sign(&signed_message::recover(
+                self.signed_domain(),
+                &pubkey.to_string(),
+                timestamp,
+            ))
+            .await?;
 
         let request = RecoverLnurlPayRequest {
             signature,
@@ -237,7 +326,15 @@ impl LnurlServerClient for DefaultLnurlServerClient {
     ) -> Result<RegisterLnurlPayResponse, LnurlServerError> {
         let pubkey = self.wallet.get_identity_public_key();
 
-        let (signature, timestamp) = self.sign_message(&request.username).await?;
+        let timestamp = Self::now()?;
+        let signature = self
+            .sign(&signed_message::register(
+                self.signed_domain(),
+                &request.username,
+                &request.description,
+                timestamp,
+            ))
+            .await?;
         let api_request = RegisterLnurlPayRequest {
             username: request.username.clone(),
             description: request.description.clone(),
@@ -263,20 +360,25 @@ impl LnurlServerClient for DefaultLnurlServerClient {
     ) -> Result<RegisterLnurlPayResponse, LnurlServerError> {
         let pubkey = self.wallet.get_identity_public_key();
 
-        let message = format!("transfer:{}-{}", request.username, pubkey);
+        // Signed with the current owner's timestamp, not a fresh one: the two
+        // signatures authorize one transfer and must name the same instant.
         let to_signature = self
-            .wallet
-            .sign_message(&message)
-            .await
-            .map_err(|e| LnurlServerError::SigningError(e.to_string()))?
-            .serialize_der()
-            .to_lower_hex_string();
+            .sign(&signed_message::transfer_to(
+                self.signed_domain(),
+                &request.username,
+                &request.from_pubkey,
+                &pubkey.to_string(),
+                &request.description,
+                request.timestamp,
+            ))
+            .await?;
         let api_request = TransferLnurlPayRequest {
             username: request.username.clone(),
             description: request.description.clone(),
             from_pubkey: request.from_pubkey.clone(),
             from_signature: request.from_signature.clone(),
             to_signature,
+            timestamp: Some(request.timestamp),
         };
         let url = format!("{}/lnurlpay/{}/transfer", self.base_url(), pubkey);
         let body = serde_json::to_string(&api_request)
@@ -297,8 +399,13 @@ impl LnurlServerClient for DefaultLnurlServerClient {
     ) -> Result<(), LnurlServerError> {
         let pubkey = self.wallet.get_identity_public_key();
 
-        let (signature, timestamp) = self
-            .sign_message(&format!("unregister:{}", request.username))
+        let timestamp = Self::now()?;
+        let signature = self
+            .sign(&signed_message::unregister(
+                self.signed_domain(),
+                &request.username,
+                timestamp,
+            ))
             .await?;
 
         let api_request = UnregisterLnurlPayRequest {
@@ -334,28 +441,151 @@ impl LnurlServerClient for DefaultLnurlServerClient {
     ) -> Result<ListMetadataResponse, LnurlServerError> {
         let pubkey = self.wallet.get_identity_public_key();
 
-        let (signature, timestamp) = self.sign_message(&pubkey.to_string()).await?;
+        let timestamp = Self::now()?;
+        let signature = self
+            .sign(&signed_message::metadata(
+                self.signed_domain(),
+                &pubkey.to_string(),
+                timestamp,
+            ))
+            .await?;
 
-        let mut url = format!(
-            "{}/lnurlpay/{pubkey}/metadata?signature={signature}&timestamp={timestamp}",
-            self.base_url(),
-        );
-        if let Some(offset) = request.offset {
-            let _ = write!(url, "&offset={offset}");
+        let mut url = format!("{}/lnurlpay/{pubkey}/metadata", self.base_url());
+        let mut separator = '?';
+        for (name, value) in [
+            ("offset", request.offset.map(|v| v.to_string())),
+            ("limit", request.limit.map(|v| v.to_string())),
+            (
+                "updated_after",
+                request.updated_after.map(|v| v.to_string()),
+            ),
+        ] {
+            if let Some(value) = value {
+                let _ = write!(url, "{separator}{name}={value}");
+                separator = '&';
+            }
         }
-        if let Some(limit) = request.limit {
-            let _ = write!(url, "&limit={limit}");
-        }
-        if let Some(updated_after) = request.updated_after {
-            let _ = write!(url, "&updated_after={updated_after}");
-        }
+
+        // Headers, never the query string: the response carries preimages, and a
+        // GET's query string lands in proxy and access logs. Costs a CORS
+        // preflight round trip on wasm web, which the router already allows.
+        let mut headers = self.get_common_headers();
+        headers.insert(SIGNATURE_HEADER.to_string(), signature);
+        headers.insert(TIMESTAMP_HEADER.to_string(), timestamp.to_string());
 
         let response = self
             .http_client
-            .get(url, Some(self.get_common_headers()))
+            .get(url, Some(headers))
             .await
             .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
 
         Self::handle_response(response.status, &response.body)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_domain;
+
+    /// The URL a request is addressed to and the authority its signature names,
+    /// for every shape a configured domain arrives in. Checked as a pair: the
+    /// signature only verifies if the domain matches the `Host` the request URL
+    /// resolves to, so one being right is worth nothing without the other.
+    ///
+    /// The URL is the parse's normalized form, so a configured host may come
+    /// back lowercased and without a port its scheme implies. Both address the
+    /// same server and produce the same `Host`.
+    #[test]
+    fn a_configured_domain_yields_a_request_url_and_the_authority_it_resolves_to() {
+        for (configured, base_url, signed_domain) in [
+            (
+                "https://lnurl.breez.technology",
+                "https://lnurl.breez.technology",
+                "lnurl.breez.technology",
+            ),
+            (
+                "lnurl.breez.technology",
+                "https://lnurl.breez.technology",
+                "lnurl.breez.technology",
+            ),
+            (
+                "http://localhost:8080",
+                "http://localhost:8080",
+                "localhost:8080",
+            ),
+            // The server lowercases the authority it resolves, and so does the
+            // `Host` the HTTP client derives from the URL, so this must too.
+            (
+                "https://LNURL.Breez.Technology",
+                "https://lnurl.breez.technology",
+                "lnurl.breez.technology",
+            ),
+            // A port the scheme already implies is absent from `Host`, so it
+            // must be absent from the signed authority too.
+            (
+                "https://lnurl.breez.technology:443",
+                "https://lnurl.breez.technology",
+                "lnurl.breez.technology",
+            ),
+            ("http://localhost:80", "http://localhost", "localhost"),
+            // A non-default port does reach `Host`.
+            (
+                "https://lnurl.breez.technology:8443",
+                "https://lnurl.breez.technology:8443",
+                "lnurl.breez.technology:8443",
+            ),
+            // Only the scheme's own default is redundant.
+            (
+                "https://lnurl.breez.technology:80",
+                "https://lnurl.breez.technology:80",
+                "lnurl.breez.technology:80",
+            ),
+            // A deployment mounted under a path prefix: the routes hang off it,
+            // and none of it is part of the authority.
+            (
+                "https://lnurl.breez.technology/base",
+                "https://lnurl.breez.technology/base",
+                "lnurl.breez.technology",
+            ),
+            // A trailing slash would double the one every route starts with.
+            (
+                "lnurl.breez.technology/",
+                "https://lnurl.breez.technology",
+                "lnurl.breez.technology",
+            ),
+            // A query or fragment would swallow the route appended to it.
+            (
+                "https://lnurl.breez.technology?a=1",
+                "https://lnurl.breez.technology",
+                "lnurl.breez.technology",
+            ),
+            (
+                "https://lnurl.breez.technology#frag",
+                "https://lnurl.breez.technology",
+                "lnurl.breez.technology",
+            ),
+            // Userinfo stays in the URL and out of the signed authority.
+            (
+                "https://user@lnurl.breez.technology",
+                "https://user@lnurl.breez.technology",
+                "lnurl.breez.technology",
+            ),
+            (
+                "https://user:pw@lnurl.breez.technology:8443/base?a=1",
+                "https://user:pw@lnurl.breez.technology:8443/base",
+                "lnurl.breez.technology:8443",
+            ),
+            // A bracketed IPv6 literal, with and without a port to strip.
+            ("http://[::1]", "http://[::1]", "[::1]"),
+            ("https://[::1]:443", "https://[::1]", "[::1]"),
+            ("http://[::1]:8080", "http://[::1]:8080", "[::1]:8080"),
+        ] {
+            let parsed = parse_domain(configured);
+            assert_eq!(parsed.base_url, base_url, "base_url: {configured}");
+            assert_eq!(
+                parsed.signed_domain, signed_domain,
+                "signed_domain: {configured}"
+            );
+        }
     }
 }

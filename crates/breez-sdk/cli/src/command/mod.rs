@@ -430,6 +430,17 @@ pub enum Command {
         /// DER ECDSA), from `authorize-lightning-address-transfer`.
         #[arg(long)]
         from_signature: String,
+
+        /// The lightning address domain the authorization is for, from
+        /// `authorize-lightning-address-transfer`.
+        #[arg(long)]
+        from_domain: String,
+
+        /// When the authorization was produced, in seconds since the Unix
+        /// epoch, from `authorize-lightning-address-transfer`. Valid for 10
+        /// minutes.
+        #[arg(long)]
+        from_timestamp: u64,
     },
     DeleteLightningAddress,
     /// List fiat currencies
@@ -1166,6 +1177,8 @@ pub(crate) async fn execute_command(
             description,
             from_pubkey,
             from_signature,
+            from_domain,
+            from_timestamp,
         } => {
             let res = sdk
                 .claim_lightning_address_transfer(ClaimTransferRequest {
@@ -1173,6 +1186,8 @@ pub(crate) async fn execute_command(
                         username,
                         pubkey: from_pubkey,
                         signature: from_signature,
+                        domain: from_domain,
+                        timestamp: from_timestamp,
                     },
                     description,
                 })

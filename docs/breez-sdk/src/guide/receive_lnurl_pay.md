@@ -73,13 +73,17 @@ A user who already owns a registered Lightning address can hand it over to a dif
 
 The flow has two steps, one method each, run by the current owner and then the new owner:
 
-**Step 1: Current owner (pubkey A)** calls {{#name authorize_lightning_address_transfer}} with the new owner's {{#name identity_pubkey}} (which the new owner obtains via {{#name get_info}}). It returns a {{#name TransferAuthorization}} (carrying the `username`, A's `pubkey`, and `signature`), which grants B the right to take over the username.
+**Step 1: Current owner (pubkey A)** calls {{#name authorize_lightning_address_transfer}} with the new owner's {{#name identity_pubkey}} (which the new owner obtains via {{#name get_info}}). It returns a {{#name TransferAuthorization}} (carrying the `username`, A's `pubkey`, `signature`, the `domain` the address is registered on, and the `timestamp` it was produced at), which grants B the right to take over the username.
 
-> **Note:** Both owners sign the same canonical message (`"transfer:{username}-{pubkey_b}"`) with no timestamp, so A's authorization is a persistent capability for this specific (address, B) pair. Only B can actually submit the transfer, because the server also requires B's own signature over the same bytes; A's authorization alone doesn't let any third party move the username.
+> **Note:** The two owners sign different messages: A's names A as the outgoing owner and B as the incoming one, and B's names the description B is choosing, so neither signature can stand in for the other. Both cover the same `domain` and `timestamp`, so an authorization is only valid on the server it was made for, and only for 10 minutes. Only B can submit the transfer, because the server requires B's own signature alongside A's; A's authorization alone doesn't let any third party move the username.
 
 {{#tabs lightning_address:authorize-lightning-address-transfer}}
 
-The returned {{#name TransferAuthorization}} is then handed to the new owner over any channel. In an in-app migration, where a user moves their username from an old wallet to a new one, the app holds both SDK instances and passes it directly between them; to hand the username to a separate wallet, share it as a QR code or link. It already carries the username, so B needs nothing else to claim.
+The returned {{#name TransferAuthorization}} is then handed to the new owner over any channel. In an in-app migration, where a user moves their username from an old wallet to a new one, the app holds both SDK instances and passes it directly between them; to hand the username to a separate wallet, share it as a QR code or link. It carries everything B needs to claim.
+
+Because the authorization expires 10 minutes after it is produced, generate it when B is ready to claim rather than ahead of time. If B claims too late, the call fails and A simply authorizes again.
+
+> **Note:** Both wallets must be on an SDK version that signs the timestamped messages described above. A transfer between an older wallet and a newer one is rejected as an invalid signature.
 
 **Step 2: New owner (pubkey B)** calls {{#name claim_lightning_address_transfer}}, passing A's authorization. The SDK submits the transfer to the server which, in one transaction, verifies B's request signature, verifies A's authorization, and transfers ownership, returning the newly-owned {{#name LightningAddressInfo}}.
 

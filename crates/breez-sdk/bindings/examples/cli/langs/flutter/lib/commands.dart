@@ -1022,17 +1022,25 @@ Future<void> _handleClaimLightningAddressTransfer(
   final parser =
       _parser('claim-lightning-address-transfer')
         ..addOption('from-pubkey', mandatory: true, help: 'Current owner identity pubkey (hex)')
-        ..addOption('from-signature', mandatory: true, help: 'Current owner authorization signature (hex)');
+        ..addOption('from-signature', mandatory: true, help: 'Current owner authorization signature (hex)')
+        ..addOption('from-domain', mandatory: true, help: 'Lightning address domain the authorization is for')
+        ..addOption(
+          'from-timestamp',
+          mandatory: true,
+          help: 'When the authorization was produced (seconds since the Unix epoch)',
+        );
   final results = _parseArgs(
     parser,
     args,
-    'claim-lightning-address-transfer <username> [description] --from-pubkey <pubkey> --from-signature <sig>',
+    'claim-lightning-address-transfer <username> [description] --from-pubkey <pubkey> '
+        '--from-signature <sig> --from-domain <domain> --from-timestamp <secs>',
   );
   if (results == null) return;
 
   if (results.rest.isEmpty) {
     print(
-      'Usage: claim-lightning-address-transfer <username> [description] --from-pubkey <pubkey> --from-signature <sig>',
+      'Usage: claim-lightning-address-transfer <username> [description] --from-pubkey <pubkey> '
+      '--from-signature <sig> --from-domain <domain> --from-timestamp <secs>',
     );
     return;
   }
@@ -1040,10 +1048,18 @@ Future<void> _handleClaimLightningAddressTransfer(
   final description = results.rest.length > 1 ? results.rest[1] : null;
   final fromPubkey = results.option('from-pubkey')!;
   final fromSignature = results.option('from-signature')!;
+  final fromDomain = results.option('from-domain')!;
+  final fromTimestamp = BigInt.parse(results.option('from-timestamp')!);
 
   final result = await sdk.claimLightningAddressTransfer(
     request: ClaimTransferRequest(
-      authorization: TransferAuthorization(username: username, pubkey: fromPubkey, signature: fromSignature),
+      authorization: TransferAuthorization(
+        username: username,
+        pubkey: fromPubkey,
+        signature: fromSignature,
+        domain: fromDomain,
+        timestamp: fromTimestamp,
+      ),
       description: description,
     ),
   );

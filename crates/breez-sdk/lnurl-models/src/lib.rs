@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub mod signed_message;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CheckUsernameAvailableResponse {
     pub available: bool,
@@ -47,11 +49,19 @@ pub struct TransferLnurlPayRequest {
     /// Hex-encoded secp256k1 compressed public key of the current owner (A).
     pub from_pubkey: String,
     /// Hex-encoded DER ECDSA signature by A over
-    /// `"transfer:{username}-{to_pubkey}"`.
+    /// [`signed_message::transfer_from`].
     pub from_signature: String,
     /// Hex-encoded DER ECDSA signature by B (the `to_pubkey` in the URL path)
-    /// over the same `"transfer:{username}-{to_pubkey}"` canonical message.
+    /// over [`signed_message::transfer_to`].
     pub to_signature: String,
+    /// Seconds since the Unix epoch, covered by both signatures, bounding the
+    /// authorization in time.
+    ///
+    /// Absent selects the legacy untimestamped messages, which is what a client
+    /// predating the v2 format sends. Required once the legacy candidates are
+    /// dropped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -62,8 +72,16 @@ pub struct TransferLnurlPayResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ListMetadataRequest {
-    pub signature: String,
-    pub timestamp: u64,
+    /// Hex-encoded DER ECDSA signature over [`signed_message::metadata`].
+    ///
+    /// Optional in the query string because the signature travels in the
+    /// `X-Breez-Signature` header, which keeps it out of proxy and access logs.
+    /// The query parameter is the compatibility path for clients predating the
+    /// header, and is required again once those are dropped.
+    pub signature: Option<String>,
+    /// Seconds since the Unix epoch. Travels in `X-Breez-Timestamp`, with the
+    /// same query-parameter compatibility path as `signature`.
+    pub timestamp: Option<u64>,
     pub offset: Option<u32>,
     pub limit: Option<u32>,
     /// Only return metadata updated after this timestamp (milliseconds)

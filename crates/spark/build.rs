@@ -15,6 +15,7 @@ fn main() {
                 "protos/spark/spark.proto",
                 "protos/spark/spark_authn.proto",
                 "protos/spark/spark_token.proto",
+                "protos/ssp/ssp_authn.proto",
             ],
             &["protos"],
         )

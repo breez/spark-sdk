@@ -540,8 +540,11 @@ fn lightning_address_transfer() {
         description,
         from_pubkey,
         from_signature,
+        from_domain,
+        from_timestamp,
     } = parse_ok(
-        "claim-lightning-address-transfer alice --from-pubkey 02aa --from-signature 3044...",
+        "claim-lightning-address-transfer alice --from-pubkey 02aa --from-signature 3044... \
+         --from-domain lnurl.example.com --from-timestamp 1752000000",
     )
     else {
         panic!("expected ClaimLightningAddressTransfer");
@@ -550,8 +553,16 @@ fn lightning_address_transfer() {
     assert!(description.is_none());
     assert_eq!(from_pubkey, "02aa");
     assert_eq!(from_signature, "3044...");
+    assert_eq!(from_domain, "lnurl.example.com");
+    assert_eq!(from_timestamp, 1_752_000_000);
 
+    // Every part of the authorization is required: the domain and the timestamp
+    // are covered by the signature, so a claim missing either cannot verify.
     parse_err("claim-lightning-address-transfer alice --from-pubkey 02aa");
+    parse_err(
+        "claim-lightning-address-transfer alice --from-pubkey 02aa --from-signature 3044... \
+         --from-domain lnurl.example.com",
+    );
 }
 
 #[test]

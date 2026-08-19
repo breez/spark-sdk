@@ -2193,6 +2193,14 @@ pub struct TransferAuthorization {
     pub pubkey: String,
     /// The current owner's signature authorizing the transfer.
     pub signature: String,
+    /// The lightning-address domain the authorization is for, taken from the
+    /// address being handed over. The signed message names this domain, so an
+    /// authorization made for one server does not verify at another.
+    pub domain: String,
+    /// When the authorization was produced, in seconds since the Unix epoch.
+    /// Covered by the signature, and valid for 10 minutes: the transferee has
+    /// to claim within that window or the current owner authorizes again.
+    pub timestamp: u64,
 }
 
 /// Request for [`BreezSdk::authorize_lightning_address_transfer`]. Called by

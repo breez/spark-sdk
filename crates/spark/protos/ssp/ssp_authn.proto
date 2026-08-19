@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package ssp_authn;
+
+// The SSP authentication challenge. Schema shared by Lightspark and not yet
+// published, so this file is the SDK's transcription of it. The live-capture
+// tests in src/ssp/challenge.rs pin the field numbers against real responses.
+
+// The core challenge data.
+message Challenge {
+    int32 version = 1;
+
+    // When the challenge was issued (UTC Unix seconds).
+    int64 timestamp = 10;
+
+    bytes nonce = 20;
+
+    // The public key this challenge is intended for (compressed secp256k1).
+    bytes public_key = 30;
+}
+
+// Wraps a Challenge with a server HMAC. Only the server can verify the HMAC, so
+// the client passes the message back untouched.
+message ProtectedChallenge {
+    int32 version = 1;
+
+    Challenge challenge = 10;
+
+    bytes server_hmac = 20;
+}

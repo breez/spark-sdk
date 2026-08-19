@@ -9,6 +9,8 @@ Through signing and verifying messages we can provide proof that a digital signa
 
 By signing a message using the SDK we can provide a digital signature. Anyone with the `message`, `pubkey` and `signature` can verify the signature was created by the private key of this pubkey.
 
+Messages starting with `breez-lnurl:` are refused: that namespace is reserved for requests to the Lightning address server.
+
 {{#tabs messages:sign-message}}
 
 <h2 id="verifying-a-message">

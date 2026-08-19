@@ -1,9 +1,15 @@
 use crate::ssp::graphql::GraphQLClientConfig;
 
 mod auth;
+mod challenge;
 mod error;
 mod graphql;
 mod service_provider;
+
+mod ssp_authn {
+    #![allow(clippy::all)]
+    tonic::include_proto!("ssp_authn");
+}
 
 pub use auth::SspAuthHeaderProvider;
 use bitcoin::secp256k1::PublicKey;
