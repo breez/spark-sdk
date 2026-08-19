@@ -1,8 +1,10 @@
+use bitcoin::hashes::{Hash, HashEngine, sha256};
 use lnurl_models::ListMetadataMetadata;
 use sqlx::{PgPool, Row};
 
 use crate::repository::{
-    DomainConfig, Invoice, LnurlSenderComment, PendingZapReceipt, WebhookPayloadData,
+    DomainConfig, Invoice, LnurlSenderComment, NameStatus, PendingZapReceipt, TransferRequest,
+    WebhookPayloadData,
 };
 use crate::webhooks::repository::{
     NewWebhookDelivery, WebhookConfig, WebhookDelivery, WebhookRepositoryError,
@@ -57,6 +59,130 @@ where
     Ok(inserted.is_some())
 }
 
+/// Hold `name` for `pubkey`, so no one else may register it while the hold
+/// stands.
+///
+/// The hold stands for good: `reclaimable_from` stays NULL until a policy that
+/// lets holds lapse (a per-partner cooldown, say) writes one.
+///
+/// The last release wins, so a name reserved for a pubkey that took it back and
+/// gave it up again is held for whoever gave it up last.
+async fn reserve_name<'e, E>(
+    executor: E,
+    domain: &str,
+    name: &str,
+    pubkey: &str,
+) -> Result<(), LnurlRepositoryError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    sqlx::query(
+        "INSERT INTO released_names (domain, name, pubkey, released_at, reclaimable_from)
+         VALUES ($1, $2, $3, $4, NULL)
+         ON CONFLICT (domain, name) DO UPDATE
+         SET pubkey = excluded.pubkey
+         ,   released_at = excluded.released_at
+         ,   reclaimable_from = excluded.reclaimable_from",
+    )
+    .bind(domain)
+    .bind(name)
+    .bind(pubkey)
+    .bind(now())
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
+/// Whether `name` is held for a pubkey other than `pubkey`.
+async fn reserved_for_other<'e, E>(
+    executor: E,
+    domain: &str,
+    name: &str,
+    pubkey: &str,
+) -> Result<bool, LnurlRepositoryError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let held: Option<(String, Option<i64>)> = sqlx::query_as(
+        "SELECT pubkey, reclaimable_from FROM released_names WHERE domain = $1 AND name = $2",
+    )
+    .bind(domain)
+    .bind(name)
+    .fetch_optional(executor)
+    .await?;
+
+    Ok(match held {
+        Some((holder, reclaimable_from)) => {
+            holder != pubkey && reclaimable_from.is_none_or(|from| now() < from)
+        }
+        None => false,
+    })
+}
+
+/// The name `pubkey` holds in `domain`. Callers hold that registration's lock,
+/// so the row cannot pick up a different name between this read and the write
+/// that replaces it.
+async fn name_of<'e, E>(
+    executor: E,
+    domain: &str,
+    pubkey: &str,
+) -> Result<Option<String>, LnurlRepositoryError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let held: Option<(String,)> =
+        sqlx::query_as("SELECT name FROM users WHERE domain = $1 AND pubkey = $2")
+            .bind(domain)
+            .bind(pubkey)
+            .fetch_optional(executor)
+            .await?;
+    Ok(held.map(|(name,)| name))
+}
+
+/// The advisory-lock key standing for one pubkey's registration on one domain.
+fn registration_lock_key(domain: &str, pubkey: &str) -> i64 {
+    let mut engine = sha256::Hash::engine();
+    engine.input(b"lnurl/registration/");
+    engine.input(domain.as_bytes());
+    // Neither field can hold a NUL, so no other pair hashes to this one.
+    engine.input(b"\0");
+    engine.input(pubkey.as_bytes());
+    let digest = sha256::Hash::from_engine(engine);
+    let mut key = [0u8; 8];
+    key.copy_from_slice(&digest.as_byte_array()[..8]);
+    i64::from_be_bytes(key)
+}
+
+/// Serialize this transaction against every other write to these pubkeys'
+/// registrations, until it ends.
+///
+/// A pubkey holding no name yet has no row to lock, so without this two
+/// registrations at once would both read that it holds nothing, and whichever
+/// wrote second would drop the other's name without holding it.
+///
+/// Keys are taken in a fixed order, so two transactions locking the same pair
+/// cannot each end up waiting on the key the other took.
+async fn lock_registrations(
+    tx: &mut sqlx::PgConnection,
+    domain: &str,
+    pubkeys: &[&str],
+) -> Result<(), LnurlRepositoryError> {
+    let mut keys: Vec<i64> = pubkeys
+        .iter()
+        .map(|pubkey| registration_lock_key(domain, pubkey))
+        .collect();
+    keys.sort_unstable();
+    keys.dedup();
+
+    for key in keys {
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(key)
+            .execute(&mut *tx)
+            .await?;
+    }
+    Ok(())
+}
+
 #[async_trait::async_trait]
 impl crate::repository::LnurlRepository for LnurlRepository {
     async fn delete_user(
@@ -65,14 +191,31 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         pubkey: &str,
         name: &str,
     ) -> Result<bool, LnurlRepositoryError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| LnurlRepositoryError::General(e.into()))?;
+        lock_registrations(&mut tx, domain, &[pubkey]).await?;
+
         let result =
             sqlx::query("DELETE FROM users WHERE domain = $1 AND pubkey = $2 AND name = $3")
                 .bind(domain)
                 .bind(pubkey)
                 .bind(name)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await?;
-        Ok(result.rows_affected() > 0)
+        if result.rows_affected() == 0 {
+            // Nothing was given up, so nothing is held. The tx rolls back on
+            // drop.
+            return Ok(false);
+        }
+
+        reserve_name(&mut *tx, domain, name, pubkey).await?;
+        tx.commit()
+            .await
+            .map_err(|e| LnurlRepositoryError::General(e.into()))?;
+        Ok(true)
     }
 
     async fn get_user_by_name(
@@ -128,6 +271,22 @@ impl crate::repository::LnurlRepository for LnurlRepository {
     }
 
     async fn upsert_user(&self, user: &User) -> Result<(), LnurlRepositoryError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| LnurlRepositoryError::General(e.into()))?;
+
+        lock_registrations(&mut tx, &user.domain, &[&user.pubkey]).await?;
+
+        // Read before the write overwrites it: taking a new name gives up the
+        // one this pubkey holds now.
+        let previous = name_of(&mut *tx, &user.domain, &user.pubkey).await?;
+
+        // Written before the hold is checked. Taking the name in the unique
+        // index is what serializes this against a release of the same name, so
+        // a release that commits first is always visible below rather than
+        // being read as absent and overtaken.
         sqlx::query(
             "INSERT INTO users (domain, pubkey, name, description, updated_at)
              VALUES ($1, $2, $3, $4, $5)
@@ -141,25 +300,81 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .bind(&user.name)
         .bind(&user.description)
         .bind(now())
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+
+        if reserved_for_other(&mut *tx, &user.domain, &user.name, &user.pubkey).await? {
+            // The tx rolls back on drop, so the name stays as the hold left it.
+            return Err(LnurlRepositoryError::NameReserved);
+        }
+        // Whatever hold stood on this name was this pubkey's own, or had
+        // lapsed; either way holding it no longer means anything.
+        sqlx::query("DELETE FROM released_names WHERE domain = $1 AND name = $2")
+            .bind(&user.domain)
+            .bind(&user.name)
+            .execute(&mut *tx)
+            .await?;
+
+        if let Some(previous) = previous
+            && previous != user.name
+        {
+            reserve_name(&mut *tx, &user.domain, &previous, &user.pubkey).await?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| LnurlRepositoryError::General(e.into()))?;
         Ok(())
+    }
+
+    async fn name_status(
+        &self,
+        domain: &str,
+        name: &str,
+        asking_pubkey: Option<&str>,
+    ) -> Result<NameStatus, LnurlRepositoryError> {
+        let (taken, reserved): (bool, bool) = sqlx::query_as(
+            "SELECT EXISTS(SELECT 1 FROM users WHERE domain = $1 AND name = $2)
+                  , EXISTS(SELECT 1 FROM released_names
+                           WHERE domain = $1 AND name = $2
+                             AND ($4::text IS NULL OR pubkey <> $4)
+                             AND (reclaimable_from IS NULL OR reclaimable_from > $3))",
+        )
+        .bind(domain)
+        .bind(name)
+        .bind(now())
+        .bind(asking_pubkey)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(match (taken, reserved) {
+            (true, _) => NameStatus::Taken,
+            (false, true) => NameStatus::Reserved,
+            (false, false) => NameStatus::Free,
+        })
     }
 
     async fn transfer_username(
         &self,
-        domain: &str,
-        from_pubkey: &str,
-        to_pubkey: &str,
-        username: &str,
-        description: &str,
+        transfer: TransferRequest<'_>,
         claim: crate::repository::StatementClaim<'_>,
     ) -> Result<(), LnurlRepositoryError> {
+        let TransferRequest {
+            domain,
+            from_pubkey,
+            to_pubkey,
+            username,
+            description,
+        } = transfer;
         let mut tx = self
             .pool
             .begin()
             .await
             .map_err(|e| LnurlRepositoryError::General(e.into()))?;
+        // Both sides, before the claim below: transactions that take the
+        // registration locks first and the claim second never hold one while
+        // waiting for the other in the opposite order.
+        lock_registrations(&mut tx, domain, &[from_pubkey, to_pubkey]).await?;
 
         // Claim before performing, so a concurrent duplicate blocks on this key
         // until this transaction settles and then sees the outcome.
@@ -181,6 +396,9 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             _ => return Err(LnurlRepositoryError::SourceNotOwner),
         }
 
+        // Accepting the transfer gives up whatever name the target holds now.
+        let target_previous = name_of(&mut *tx, domain, to_pubkey).await?;
+
         sqlx::query(
             "INSERT INTO users (domain, pubkey, name, description, updated_at)
              VALUES ($1, $2, $3, $4, $5)
@@ -196,6 +414,12 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .bind(now())
         .execute(&mut *tx)
         .await?;
+
+        if let Some(previous) = target_previous
+            && previous != username
+        {
+            reserve_name(&mut *tx, domain, &previous, to_pubkey).await?;
+        }
 
         tx.commit()
             .await
@@ -894,5 +1118,75 @@ mod postgres_tests {
         let pool = test_pool("transfer_pair_spendable_once").await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::a_transfer_pair_is_spendable_once_across_domains(&db).await;
+    }
+
+    #[tokio::test]
+    async fn a_released_name_is_held_for_the_pubkey_that_released_it() {
+        let pool = test_pool("released_name_is_held").await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::a_released_name_is_held_for_the_pubkey_that_released_it(&db).await;
+    }
+
+    #[tokio::test]
+    async fn registering_another_name_holds_the_one_left_behind() {
+        let pool = test_pool("renaming_holds_old_name").await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::registering_another_name_holds_the_one_left_behind(&db).await;
+    }
+
+    #[tokio::test]
+    async fn registering_twice_at_once_holds_the_name_that_loses() {
+        let pool = test_pool("registering_twice_at_once").await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::registering_twice_at_once_holds_the_name_that_loses(&db).await;
+    }
+
+    #[tokio::test]
+    async fn a_transfer_holds_the_name_the_target_gave_up() {
+        let pool = test_pool("transfer_holds_target_name").await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::a_transfer_holds_the_name_the_target_gave_up(&db).await;
+    }
+
+    /// A hold whose `reclaimable_from` has passed stops standing in anyone's
+    /// way. Nothing writes a non-NULL `reclaimable_from` yet, so the row is
+    /// seeded directly: the read side is what a cooldown policy would build on.
+    #[tokio::test]
+    async fn a_lapsed_hold_lets_anyone_register_the_name() {
+        use crate::repository::{LnurlRepository, NameStatus};
+
+        let pool = test_pool("lapsed_hold_frees_name").await;
+        let db = super::LnurlRepository::new(pool.clone());
+        let domain = "lapsed.com";
+
+        sqlx::query(
+            "INSERT INTO released_names (domain, name, pubkey, released_at, reclaimable_from)
+             VALUES ($1, 'jane', 'jjjj', 0, 1)",
+        )
+        .bind(domain)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            db.name_status(domain, "jane", None).await.unwrap(),
+            NameStatus::Free,
+            "a hold whose time has passed must read as free"
+        );
+        db.upsert_user(&crate::user::User {
+            domain: domain.into(),
+            pubkey: "kkkk".into(),
+            name: "jane".into(),
+            description: "jane".into(),
+        })
+        .await
+        .expect("a lapsed hold must not refuse the registration");
+        assert_eq!(
+            db.get_user_by_name(domain, "jane")
+                .await
+                .unwrap()
+                .map(|u| u.pubkey),
+            Some("kkkk".to_string())
+        );
     }
 }

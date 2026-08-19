@@ -49,13 +49,17 @@ The SDK provides several functions to manage Lightning addresses:
 
 Before registering a Lightning address, you can check if the username is available. In your UI you can use a quick check mark to show the address is available before registering.
 
+> **Note:** The answer is specific to this wallet. A username this wallet gave up earlier is reported as available to it, since only it can take that username back, while every other wallet is told the same username is unavailable.
+
+> **Note:** Each check is signed with the wallet's identity key, so it costs a signing operation and a server round trip. Where signing is remote or needs user approval that is slow, so check once the user finishes typing rather than on every keystroke.
+
 {{#tabs lightning_address:check-lightning-address}}
 
 ### Registering a Lightning address
 
 Once you've confirmed a username is available, you can register it by passing a username and a description. The username will be used in `username@domain.com`. The description will be included in lnurl metadata and as the invoice description, so this is what the sender will see. The description is optional, and will default to `Pay to username@domain.com`.
 
-> **Note:** Each user can have only one Lightning address per domain when using the Breez LNURL server. Registering a new address on the same domain will replace the previous one, making it available to others.
+> **Note:** Each user can have only one Lightning address per domain when using the Breez LNURL server. Registering a new address on the same domain will replace the previous one. The previous username stays reserved for this wallet: while the reservation stands no one else can register it, and the wallet can go back to it.
 
 {{#tabs lightning_address:register-lightning-address}}
 
@@ -89,11 +93,13 @@ Because the authorization expires 10 minutes after it is produced, generate it w
 
 {{#tabs lightning_address:claim-lightning-address-transfer}}
 
-If pubkey B had a different username registered, it is replaced by the transferred one. The server rejects the call if pubkey A does not currently own the username (e.g. the name was already transferred to a third pubkey).
+If pubkey B had a different username registered, it is replaced by the transferred one and stays reserved for B. The server rejects the call if pubkey A does not currently own the username (e.g. the name was already transferred to a third pubkey).
 
 ### Deleting a Lightning address
 
 When a user no longer wants to use the Lightning address, you can delete it.
+
+> **Note:** The username stays reserved for this wallet after deletion. While the reservation stands no one else can register it, so senders who saved the old address are not redirected to a stranger, and the wallet can register it again later. How long a reservation stands is up to the server.
 
 {{#tabs lightning_address:delete-lightning-address}}
 

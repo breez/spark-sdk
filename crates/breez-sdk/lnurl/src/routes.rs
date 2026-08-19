@@ -12,8 +12,8 @@ use bitcoin::{
 };
 use lightning_invoice::Bolt11Invoice;
 use lnurl_models::{
-    CheckUsernameAvailableResponse, ListMetadataRequest, ListMetadataResponse,
-    RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
+    CheckUsernameAvailableRequest, CheckUsernameAvailableResponse, ListMetadataRequest,
+    ListMetadataResponse, RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
     RegisterLnurlPayResponse, TransferLnurlPayRequest, TransferLnurlPayResponse,
     UnregisterLnurlPayRequest, sanitize_username, signed_message,
 };
@@ -35,7 +35,9 @@ use crate::{
     zap::{Zap, derive_user_nostr_keys},
 };
 use crate::{
-    repository::{LnurlRepository, LnurlRepositoryError, StatementClaim},
+    repository::{
+        LnurlRepository, LnurlRepositoryError, NameStatus, StatementClaim, TransferRequest,
+    },
     state::State,
     user::{USERNAME_VALIDATION_REGEX, User},
 };
@@ -127,20 +129,54 @@ where
     ) -> Result<Json<CheckUsernameAvailableResponse>, (StatusCode, Json<Value>)> {
         let username = sanitize_username(&identifier);
         validate_username(&username)?;
-        let user = state
-            .db
-            .get_user_by_name(&sanitize_domain(&state, &host).await?, &username)
-            .await
-            .map_err(|e| {
-                error!("failed to execute query: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(Value::String("internal server error".into())),
-                )
-            })?;
+        let domain = sanitize_domain(&state, &host).await?;
+        // Answers for nobody, so a name held for the pubkey that gave it up
+        // reads as unavailable here too. Telling that pubkey apart would mean
+        // saying who a name is held for, and this route carries no signature.
+        // `available_for_pubkey` is the one that answers a wallet about its own
+        // released name.
+        let status = name_status(&state, &domain, &username, None).await?;
 
         Ok(Json(CheckUsernameAvailableResponse {
-            available: user.is_none(),
+            available: status == NameStatus::Free,
+        }))
+    }
+
+    /// The availability check answered for the pubkey that signed it, which is
+    /// what lets a wallet see a name it gave up as one it may take back.
+    pub async fn available_for_pubkey(
+        Host(host): Host,
+        Path(pubkey): Path<String>,
+        Extension(state): Extension<State<DB>>,
+        Json(payload): Json<CheckUsernameAvailableRequest>,
+    ) -> Result<Json<CheckUsernameAvailableResponse>, (StatusCode, Json<Value>)> {
+        let CheckUsernameAvailableRequest {
+            username,
+            signature,
+            timestamp,
+        } = payload;
+        let username = sanitize_username(&username);
+        validate_username(&username)?;
+        let domain = sanitize_domain(&state, &host).await?;
+
+        let (identity, signature) = parse_signed_request(&pubkey, &signature)?;
+        if !timestamp_is_fresh(timestamp) {
+            return Err(invalid_timestamp());
+        }
+        // Claims nothing, for the same reason as `recover`. No legacy message
+        // either: the route is new, so every signature it ever sees is v2.
+        let message =
+            signed_message::available(&domain, &identity.to_string(), &username, timestamp);
+        let secp = Secp256k1::new();
+        if verify_signature_ecdsa(&secp, &message, &signature, &identity).is_err() {
+            trace!("invalid signature for availability check on domain '{domain}'");
+            return Err(invalid_signature_for_domain(&domain));
+        }
+
+        let status = name_status(&state, &domain, &username, Some(&identity.to_string())).await?;
+
+        Ok(Json(CheckUsernameAvailableResponse {
+            available: status == NameStatus::Free,
         }))
     }
 
@@ -185,19 +221,32 @@ where
         };
 
         if let Err(e) = state.db.upsert_user(&user).await {
-            if let LnurlRepositoryError::NameTaken = e {
-                trace!("name already taken: {}", user.name);
-                return Err((
-                    StatusCode::CONFLICT,
-                    Json(Value::String("name already taken".into())),
-                ));
+            match e {
+                LnurlRepositoryError::NameTaken => {
+                    trace!("name already taken: {}", user.name);
+                    return Err((
+                        StatusCode::CONFLICT,
+                        Json(Value::String("name already taken".into())),
+                    ));
+                }
+                LnurlRepositoryError::NameReserved => {
+                    trace!(
+                        "name reserved for the pubkey that released it: {}",
+                        user.name
+                    );
+                    return Err((
+                        StatusCode::CONFLICT,
+                        Json(Value::String("name is reserved".into())),
+                    ));
+                }
+                e => {
+                    error!("failed to execute query: {}", e);
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(Value::String("internal server error".into())),
+                    ));
+                }
             }
-
-            error!("failed to execute query: {}", e);
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(Value::String("internal server error".into())),
-            ));
         }
 
         debug!("registered user '{}' for pubkey {}", user.name, pubkey);
@@ -272,11 +321,13 @@ where
         if let Err(e) = state
             .db
             .transfer_username(
-                &domain,
-                &from_pk.to_string(),
-                &to_pk.to_string(),
-                &username,
-                &description,
+                TransferRequest {
+                    domain: &domain,
+                    from_pubkey: &from_pk.to_string(),
+                    to_pubkey: &to_pk.to_string(),
+                    username: &username,
+                    description: &description,
+                },
                 StatementClaim {
                     hash: &statement_hash(&from_pk, &authorization.message),
                     expires_at: authorization.expiry.expires_at(),
@@ -308,8 +359,13 @@ where
                         Json(Value::String("signature has already been used".into())),
                     )
                 }
-                LnurlRepositoryError::General(err) => {
-                    error!("failed to execute transfer query: {err}");
+                // A held name has no owner to transfer it, so the source check
+                // inside the transfer answers first and a transfer never
+                // reports a name as reserved. Matched rather than folded into a
+                // catch-all, so a transfer that starts checking holds has to
+                // answer for the status code here.
+                LnurlRepositoryError::NameReserved | LnurlRepositoryError::General(_) => {
+                    error!("failed to execute transfer query: {e}");
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(Value::String("internal server error".into())),
@@ -1735,6 +1791,30 @@ fn statement_hash(pubkey: &PublicKey, signed_message: &str) -> [u8; 32] {
     sha256::Hash::from_engine(engine).to_byte_array()
 }
 
+/// Look up what stands between `username` and whoever is asking. See
+/// [`LnurlRepository::name_status`] for what `asking_pubkey` changes.
+async fn name_status<DB>(
+    state: &State<DB>,
+    domain: &str,
+    username: &str,
+    asking_pubkey: Option<&str>,
+) -> Result<NameStatus, (StatusCode, Json<Value>)>
+where
+    DB: LnurlRepository,
+{
+    state
+        .db
+        .name_status(domain, username, asking_pubkey)
+        .await
+        .map_err(|e| {
+            error!("failed to execute query: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(Value::String("internal server error".into())),
+            )
+        })
+}
+
 /// Claim the statement a verified signature authorized, rejecting a replay.
 ///
 /// A statement is claimable once, whichever route presents it and whichever
@@ -1955,13 +2035,17 @@ mod tests {
         async fn upsert_user(&self, _: &User) -> Result<(), LnurlRepositoryError> {
             Ok(())
         }
-        async fn transfer_username(
+        async fn name_status(
             &self,
             _: &str,
             _: &str,
-            _: &str,
-            _: &str,
-            _: &str,
+            _: Option<&str>,
+        ) -> Result<NameStatus, LnurlRepositoryError> {
+            Ok(NameStatus::Free)
+        }
+        async fn transfer_username(
+            &self,
+            _: TransferRequest<'_>,
             _: StatementClaim<'_>,
         ) -> Result<(), LnurlRepositoryError> {
             Ok(())
@@ -2907,6 +2991,13 @@ mod tests {
                     ))
                     .filter(|candidate| !candidate.legacy)
                     .map(|candidate| candidate.message),
+            );
+            // Built inline by its route rather than by a candidate builder: it
+            // is v2-only, so it has nothing to choose between.
+            messages.extend(
+                ["alice", "bob"].map(|name| {
+                    signed_message::available(domain, &hex_alice, name, TEST_TIMESTAMP)
+                }),
             );
         }
 

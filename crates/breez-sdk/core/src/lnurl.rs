@@ -1,8 +1,8 @@
 use bitcoin::hex::DisplayHex;
 use lnurl_models::{
-    CheckUsernameAvailableResponse, ListMetadataResponse, RecoverLnurlPayRequest,
-    RecoverLnurlPayResponse, RegisterLnurlPayRequest, RegisterLnurlPayResponse,
-    TransferLnurlPayRequest, UnregisterLnurlPayRequest, signed_message,
+    CheckUsernameAvailableRequest, CheckUsernameAvailableResponse, ListMetadataResponse,
+    RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
+    RegisterLnurlPayResponse, TransferLnurlPayRequest, UnregisterLnurlPayRequest, signed_message,
 };
 use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use platform_utils::{ContentType, HttpClient, add_content_type_header};
@@ -262,10 +262,33 @@ impl LnurlServerClient for DefaultLnurlServerClient {
     }
 
     async fn check_username_available(&self, username: &str) -> Result<bool, LnurlServerError> {
-        let url = format!("{}/lnurlpay/available/{}", self.base_url(), username);
+        let pubkey = self.wallet.get_identity_public_key();
+
+        let timestamp = Self::now()?;
+        let signature = self
+            .sign(&signed_message::available(
+                self.signed_domain(),
+                &pubkey.to_string(),
+                username,
+                timestamp,
+            ))
+            .await?;
+
+        // Signed so the answer is this wallet's own: a username it gave up is
+        // held for it and available to no one else, which the unsigned route
+        // cannot say without naming who holds a name.
+        let request = CheckUsernameAvailableRequest {
+            username: username.to_string(),
+            signature,
+            timestamp,
+        };
+        let url = format!("{}/lnurlpay/{}/available", self.base_url(), pubkey);
+        let body = serde_json::to_string(&request)
+            .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
+
         let response = self
             .http_client
-            .get(url, Some(self.get_common_headers()))
+            .post(url, Some(self.get_post_headers()), Some(body))
             .await
             .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
 

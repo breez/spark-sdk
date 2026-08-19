@@ -99,6 +99,24 @@ pub fn recover(domain: &str, pubkey: &str, timestamp: u64) -> String {
     join(&[VERSION, "recover", domain, pubkey, &timestamp.to_string()])
 }
 
+/// `POST /lnurlpay/{pubkey}/available`: ask whether `pubkey` may register
+/// `username` on `domain`.
+///
+/// Names the pubkey because the answer is its own: a name held for the pubkey
+/// that gave it up is available to that pubkey and to no one else. The
+/// unsigned route answers for nobody and calls every held name unavailable.
+#[must_use]
+pub fn available(domain: &str, pubkey: &str, username: &str, timestamp: u64) -> String {
+    join(&[
+        VERSION,
+        "available",
+        domain,
+        pubkey,
+        username,
+        &timestamp.to_string(),
+    ])
+}
+
 /// `GET /lnurlpay/{pubkey}/metadata`: read `pubkey`'s payment metadata.
 ///
 /// Commits to no pagination parameter: binding them would couple client
@@ -191,6 +209,10 @@ mod tests {
             format!("breez-lnurl:v2\nmetadata\nlnurl.example.com\n{ALICE}\n1700000000")
         );
         assert_eq!(
+            available(DOMAIN, ALICE, "alice", 1_700_000_000),
+            format!("breez-lnurl:v2\navailable\nlnurl.example.com\n{ALICE}\nalice\n1700000000")
+        );
+        assert_eq!(
             transfer_from(DOMAIN, "alice", ALICE, BOB, 1_700_000_000),
             format!(
                 "breez-lnurl:v2\ntransfer-from\nlnurl.example.com\nalice\n{ALICE}\n{BOB}\n1700000000"
@@ -236,6 +258,7 @@ mod tests {
             unregister(DOMAIN, "alice", 1),
             recover(DOMAIN, ALICE, 1),
             metadata(DOMAIN, ALICE, 1),
+            available(DOMAIN, ALICE, "alice", 1),
             transfer_from(DOMAIN, "alice", ALICE, BOB, 1),
             transfer_to(DOMAIN, "alice", ALICE, BOB, "d", 1),
         ] {
@@ -257,6 +280,7 @@ mod tests {
         let messages = [
             recover(DOMAIN, ALICE, 1),
             metadata(DOMAIN, ALICE, 1),
+            available(DOMAIN, ALICE, ALICE, 1),
             unregister(DOMAIN, ALICE, 1),
             transfer_from(DOMAIN, "alice", ALICE, BOB, 1),
             transfer_to(DOMAIN, "alice", ALICE, BOB, "d", 1),
