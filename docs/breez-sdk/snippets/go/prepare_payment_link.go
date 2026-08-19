@@ -43,8 +43,9 @@ func PreparePaymentLinkViaCashapp(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spa
 		return nil, errors.New("no USDC route on Base")
 	}
 
-	// Send $10 of USDC, funded by Cash App over Lightning. The amount is in USD
-	// base units (6-decimal), so 10_000_000 = $10.00.
+	// Send $10 of USDC, funded by Cash App over Lightning. The amount is in the
+	// route asset's base units (USDC, 6 decimals), so 10_000_000 = 10 USDC,
+	// about $10.
 	request := breez_sdk_spark.PreparePaymentLinkRequest{
 		Address:        addressDetails.Address,
 		Route:          *route,

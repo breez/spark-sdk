@@ -25,8 +25,9 @@ namespace BreezSdkSnippets
             var routes = await sdk.GetCrossChainRoutes(filter: filter);
             var route = routes.First(r => r.asset == "USDC" && r.chain == "base");
 
-            // Send $10 of USDC (amount in USD 6-decimal base units,
-            // 10_000_000 = $10.00), funded by Cash App over Lightning.
+            // Send $10 of USDC, funded by Cash App over Lightning. The amount
+            // is in the route asset's base units (USDC, 6 decimals), so
+            // 10_000_000 = 10 USDC, about $10.
             var request = new PreparePaymentLinkRequest(
                 address: addressDetails.address,
                 route: route,

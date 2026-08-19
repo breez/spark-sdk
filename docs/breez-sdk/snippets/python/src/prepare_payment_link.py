@@ -32,8 +32,9 @@ async def prepare_payment_link_via_cashapp(sdk: BreezSdk):
         if route is None:
             raise ValueError("No USDC route on Base")
 
-        # Send $10 of USDC (amount in USD 6-decimal base units,
-        # 10_000_000 = $10.00), funded by Cash App over Lightning.
+        # Send $10 of USDC, funded by Cash App over Lightning. The amount is in
+        # the route asset's base units (USDC, 6 decimals), so 10_000_000 =
+        # 10 USDC, about $10.
         request = PreparePaymentLinkRequest(
             address=address_details.address,
             route=route,

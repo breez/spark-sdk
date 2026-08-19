@@ -27,8 +27,9 @@ const preparePaymentLinkViaCashapp = async (sdk: BreezSdk) => {
     throw new Error('No USDC route on Base')
   }
 
-  // Send $10 of USDC, funded by Cash App over Lightning. The amount is in USD
-  // base units (6-decimal), so 10_000_000 = $10.00.
+  // Send $10 of USDC, funded by Cash App over Lightning. The amount is in the
+  // route asset's base units (USDC, 6 decimals), so 10_000_000 = 10 USDC,
+  // about $10.
   const response = await sdk.preparePaymentLink({
     address: addressDetails.address,
     route,

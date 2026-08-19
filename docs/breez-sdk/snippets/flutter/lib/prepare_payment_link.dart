@@ -21,8 +21,9 @@ Future<void> preparePaymentLinkViaCashapp(BreezSdk sdk) async {
   CrossChainRoutePair route =
       routes.firstWhere((r) => r.asset == "USDC" && r.chain == "base");
 
-  // Send $10 of USDC, funded by Cash App over Lightning. The amount is in USD
-  // base units (6-decimal), so 10000000 = $10.00.
+  // Send $10 of USDC, funded by Cash App over Lightning. The amount is in the
+  // route asset's base units (USDC, 6 decimals), so 10000000 = 10 USDC,
+  // about $10.
   final response = await sdk.preparePaymentLink(
     request: PreparePaymentLinkRequest(
       address: addressDetails.address,

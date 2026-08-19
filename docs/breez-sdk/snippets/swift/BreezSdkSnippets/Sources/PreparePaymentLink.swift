@@ -17,8 +17,8 @@ func preparePaymentLinkViaCashapp(sdk: BreezSdk) async throws {
         throw NSError(domain: "PreparePaymentLink", code: 2)
     }
 
-    // Send $10 of USDC (amount in USD 6-decimal base units, 10_000_000 = $10.00),
-    // funded by Cash App over Lightning.
+    // Send $10 of USDC, funded by Cash App over Lightning. The amount is in the
+    // route asset's base units (USDC, 6 decimals), so 10_000_000 = 10 USDC, about $10.
     let response = try await sdk.preparePaymentLink(
         request: PreparePaymentLinkRequest(
             address: addressDetails.address,

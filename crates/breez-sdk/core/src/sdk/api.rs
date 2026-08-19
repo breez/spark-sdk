@@ -516,10 +516,18 @@ impl BreezSdk {
                 .and_then(|c| c.default_slippage_bps),
         )?;
 
-        // The `amount` is a 6-decimal USD figure. Convert it to the sats the
-        // provider's `prepare` expects (for both fee modes) via the live rate.
+        // `amount` is in the destination asset's base units (the route's
+        // `decimals`); for these USD-pegged stablecoins it equals the USD value
+        // at parity. Convert it to the sats the provider's `prepare` expects
+        // (for both fee modes) via the live rate.
         let btc_usd = fetch_btc_usd_rate(self.cross_chain_context.fiat_service().as_ref()).await?;
-        let source_sats = convert_destination_amount_to_sats(amount, btc_usd, 6)?;
+        let source_sats =
+            convert_destination_amount_to_sats(amount, btc_usd, route.decimals.into())?;
+        if source_sats == 0 {
+            return Err(SdkError::InvalidInput(
+                "Amount is too small to fund over Lightning".to_string(),
+            ));
+        }
 
         // Match the send path: on `FeesExcluded` pad the source so the recipient
         // lands at or above target despite provider slippage. The pad comes from
@@ -560,9 +568,10 @@ impl BreezSdk {
         // delivers autonomously once the payer settles.
         let deposit_target = deposit_target(&prepared.provider_context);
 
-        // Verify the provider's target is a BOLT11 before sending the payer to it.
+        // Verify the provider's target is a BOLT11 for the quoted amount before
+        // sending the payer to it.
         let parsed_target = self.parse(&deposit_target).await;
-        check_deposit_target(&parsed_target)?;
+        check_deposit_target(&parsed_target, amount_sats)?;
 
         let url = CashAppProvider::build_url(&deposit_target);
 
@@ -577,19 +586,29 @@ fn route_supports_source_chain(route: &CrossChainRoutePair, required: SourceChai
     route.supported_source_chains.contains(&required)
 }
 
-/// Verifies the provider's deposit `target` is a BOLT11 invoice, the Lightning
-/// payment request Cash App funds. A mismatch (or an unparseable target)
-/// indicates a provider bug.
-fn check_deposit_target(parsed_target: &Result<InputType, SdkError>) -> Result<(), SdkError> {
-    if matches!(parsed_target, Ok(InputType::Bolt11Invoice(_))) {
-        Ok(())
-    } else {
-        Err(SdkError::Generic(
+/// Verifies the provider's deposit `target` is a BOLT11 invoice requesting
+/// exactly `expected_sats`, the Lightning payment request Cash App funds. A
+/// wrong type, wrong amount, or unparseable target indicates a provider bug.
+fn check_deposit_target(
+    parsed_target: &Result<InputType, SdkError>,
+    expected_sats: u64,
+) -> Result<(), SdkError> {
+    let Ok(InputType::Bolt11Invoice(details)) = parsed_target else {
+        return Err(SdkError::Generic(
             "The provider returned a deposit target that is not a valid Lightning \
              payment request"
                 .to_string(),
-        ))
+        ));
+    };
+    // The invoice must request the quoted deposit: a mismatch would have the
+    // payer fund the wrong amount.
+    if details.amount_msat.map(u128::from) != Some(u128::from(expected_sats) * 1000) {
+        return Err(SdkError::Generic(format!(
+            "The provider's deposit invoice does not request the quoted \
+             {expected_sats} sats"
+        )));
     }
+    Ok(())
 }
 
 /// The BOLT11 an external payer funds, read from the provider context

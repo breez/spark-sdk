@@ -33,7 +33,7 @@ Cash App is available in the US and UK only (excluding New York State for Bitcoi
 
 ## Amounts and fees
 
-The {{#name amount}} on {{#name PreparePaymentLinkRequest}} is a USD value in 6-decimal base units, so `1_000_000` is $1.00.
+The {{#name amount}} on {{#name PreparePaymentLinkRequest}} is in the destination asset's base units, per the route's {{#name CrossChainRoutePair.decimals}}. These routes deliver USD-pegged stablecoins, so at parity it is the USD value: `1_000_000` is 1 USDC (6 decimals), about $1.
 
 {{#name fee_policy}} controls who absorbs the provider fee, reusing the same {{#name FeePolicy}} as the send flow:
 

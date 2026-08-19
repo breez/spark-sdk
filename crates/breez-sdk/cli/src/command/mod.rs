@@ -374,7 +374,8 @@ pub enum Command {
         /// Recipient address on the destination chain (EVM/Solana/Tron)
         recipient: String,
 
-        /// Amount in USD base units (6-decimal), so `1000000` = $1.00
+        /// Amount in the destination stablecoin's base units (6 decimals for
+        /// USDC/USDT), so `1000000` = 1 USDC, about $1
         #[arg(long)]
         amount: u128,
 

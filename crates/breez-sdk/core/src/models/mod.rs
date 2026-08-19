@@ -1213,10 +1213,12 @@ pub struct PreparePaymentLinkRequest {
     /// `CrossChainRouteFilter::PaymentLink` filter. Selects the destination chain
     /// + asset (e.g. USDC on Base).
     pub route: CrossChainRoutePair,
-    /// Amount in **USD base units (6-decimal)**: `$1 = 1_000_000`.
+    /// Amount in the destination asset's base units, per the route's
+    /// `decimals`. These routes deliver USD-pegged stablecoins, so at parity
+    /// this is the USD value: `1_000_000` is 1 USDC (6 decimals), about $1.
     ///
-    /// With the default fee policy the recipient receives this net amount;
-    /// with `FeesIncluded` it is the USD value the payer deposits.
+    /// With the default fee policy the recipient receives this net amount.
+    /// With `FeesIncluded` it is the amount the payer deposits.
     pub amount: u128,
     /// Whether fees are added on top of `amount` (`FeesExcluded`, the default)
     /// or deducted from it (`FeesIncluded`).
