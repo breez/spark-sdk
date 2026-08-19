@@ -1897,3 +1897,70 @@ async fn test_19_a_zap_request_quoted_on_another_address_cannot_validate() -> Re
     info!("=== Test test_19_a_zap_request_quoted_on_another_address_cannot_validate PASSED ===");
     Ok(())
 }
+
+/// A username its owner gives up stays theirs to take back, and stays out of
+/// everyone else's reach. The availability check is signed, so it answers each
+/// wallet about its own claim on the name rather than about the name alone.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_20_a_released_address_is_reclaimable_only_by_its_owner() -> Result<()> {
+    info!("=== Starting test_20_a_released_address_is_reclaimable_only_by_its_owner ===");
+
+    let lnurl = Arc::new(setup_lnurl().await);
+    let owner = build_sdk_for_lnurl(Arc::clone(&lnurl), "breez-sdk-owner-lnurl").await?;
+    let stranger = build_sdk_for_lnurl(Arc::clone(&lnurl), "breez-sdk-stranger-lnurl").await?;
+    let username = "releasedname";
+
+    owner
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: username.to_string(),
+            description: Some("Address to be released".to_string()),
+        })
+        .await?;
+    owner.sdk.delete_lightning_address().await?;
+    info!("Owner released '{username}'");
+
+    async fn available(instance: &SdkInstance, username: &str) -> Result<bool> {
+        Ok(instance
+            .sdk
+            .check_lightning_address_available(CheckLightningAddressRequest {
+                username: username.to_string(),
+            })
+            .await?)
+    }
+
+    assert!(
+        available(&owner, username).await?,
+        "the released name must read as available to the pubkey that released it"
+    );
+    assert!(
+        !available(&stranger, username).await?,
+        "the released name must read as taken to everyone else"
+    );
+
+    let sniped = stranger
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: username.to_string(),
+            description: Some("Sniped".to_string()),
+        })
+        .await;
+    assert!(
+        sniped.is_err(),
+        "a stranger must not be able to register the released name"
+    );
+
+    let reclaimed = owner
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: username.to_string(),
+            description: Some("Reclaimed".to_string()),
+        })
+        .await?;
+    assert!(reclaimed.lightning_address.starts_with(username));
+    info!("Owner reclaimed '{username}'");
+
+    info!("=== Test test_20_a_released_address_is_reclaimable_only_by_its_owner PASSED ===");
+    Ok(())
+}

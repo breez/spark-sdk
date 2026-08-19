@@ -7,6 +7,15 @@ pub struct CheckUsernameAvailableResponse {
     pub available: bool,
 }
 
+/// Body of the signed availability check, which answers for the pubkey in the
+/// path rather than for everyone.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CheckUsernameAvailableRequest {
+    pub username: String,
+    pub signature: String,
+    pub timestamp: u64,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecoverLnurlPayRequest {
     pub signature: String,

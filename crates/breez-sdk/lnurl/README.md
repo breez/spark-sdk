@@ -168,7 +168,8 @@ The LNURL server provides the following endpoints:
 
 ### Authenticated Endpoints (require API key)
 
-- `/lnurlpay/available/{username}` - Check if a username is available
+- `/lnurlpay/available/{username}` - Check if a username is available to anyone
+- `/lnurlpay/{pubkey}/available` - Check if a username is available to `{pubkey}`
 - `/lnurlpay/{pubkey}` - Register a username (POST) or unregister (DELETE)
 - `/lnurlpay/{pubkey}/transfer` - Hand a username over to another pubkey
 - `/lnurlpay/{pubkey}/recover` - Recover a username registration
@@ -202,8 +203,8 @@ the holder intended an LNURL operation.
 
 ### Where the credential travels
 
-`register`, `unregister`, `recover` and `transfer` carry `signature` and
-`timestamp` in the JSON body.
+`register`, `unregister`, `recover`, `transfer` and `available` carry
+`signature` and `timestamp` in the JSON body.
 
 `metadata` is a GET, and its response carries payment preimages, so its
 credential belongs in headers rather than the query string, which lands in proxy
@@ -226,8 +227,8 @@ same signature is never acted on twice. A client that has to retry re-signs,
 producing a fresh timestamp and so a statement of its own; resending identical
 bytes is refused with a `409`.
 
-`recover` and `metadata` claim nothing: they are reads, and claiming them would
-break legitimate client retries.
+`recover`, `metadata` and `available` claim nothing: they are reads, and
+claiming them would break legitimate client retries.
 
 ### Compatibility
 
@@ -240,6 +241,27 @@ legacy signed-message verifies: register=0 unregister=0 transfer=0 recover=0 met
 ```
 
 The legacy messages are removed once that reads zero across all deployments.
+
+`available` has no legacy form: the route is new, so every signature it sees is
+v2. It is the only signed route with no counter above.
+
+## Released Usernames
+
+A username a pubkey gives up, by unregistering it, registering a different one,
+or accepting a transfer over it, is reserved for that pubkey. Only the pubkey
+that gave it up can register it again: payers keep paying an address long after
+its owner drops it, so handing it to a stranger would misdirect their payments.
+
+The hold is held in `released_names` and stands for good. `reclaimable_from` is
+the column a policy that lets holds lapse (a per-partner cooldown, say) would
+fill in; nothing writes it today.
+
+That is also why there are two availability checks.
+`/lnurlpay/available/{username}` is unsigned, answers for nobody, and calls
+every held name unavailable: saying otherwise would say who a name is held for.
+`/lnurlpay/{pubkey}/available` is signed, so it can answer a wallet about a name
+held for that wallet, which is what lets a client offer the name back to the
+pubkey that released it.
 
 ## Example Usage
 

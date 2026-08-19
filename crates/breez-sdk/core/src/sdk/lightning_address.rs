@@ -78,6 +78,11 @@ fn default_description(username: &str, configured_domain: &str) -> String {
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {
+    /// Check whether a username is free for this wallet to register.
+    ///
+    /// The check is signed with the wallet's identity key, so every call costs
+    /// a signing operation and a server round trip: run it when the user
+    /// finishes typing, not on every keystroke.
     pub async fn check_lightning_address_available(
         &self,
         req: CheckLightningAddressRequest,
@@ -241,6 +246,12 @@ impl BreezSdk {
         Ok(address_info)
     }
 
+    /// Give up this wallet's lightning address.
+    ///
+    /// The server holds the address for this wallet afterwards: while the hold
+    /// stands only this wallet can register it, so payers who kept the old
+    /// address are not redirected to someone else. How long a hold stands is
+    /// the server's policy.
     pub async fn delete_lightning_address(&self) -> Result<(), SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
         let Some(address_info) = cache.fetch_lightning_address().await?.flatten() else {

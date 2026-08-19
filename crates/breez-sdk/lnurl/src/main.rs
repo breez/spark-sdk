@@ -478,6 +478,10 @@ where
             "/lnurlpay/available/{identifier}",
             get(LnurlServer::<DB>::available),
         )
+        .route(
+            "/lnurlpay/{pubkey}/available",
+            post(LnurlServer::<DB>::available_for_pubkey),
+        )
         .route("/lnurlpay/{pubkey}", post(LnurlServer::<DB>::register))
         .route("/lnurlpay/{pubkey}", delete(LnurlServer::<DB>::unregister))
         .route(

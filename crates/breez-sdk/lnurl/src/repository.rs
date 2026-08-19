@@ -7,6 +7,10 @@ use crate::zap::Zap;
 pub enum LnurlRepositoryError {
     #[error("name taken")]
     NameTaken,
+    /// The name is held for the pubkey that released it, and no one else may
+    /// register it.
+    #[error("name reserved")]
+    NameReserved,
     #[error("source user does not own this username")]
     SourceNotOwner,
     /// The signed statement authorizing this request has already been acted on.
@@ -87,10 +91,31 @@ pub struct StatementClaim<'a> {
     pub expires_at: i64,
 }
 
+/// What stands between a name and whoever wants to register it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameStatus {
+    /// No one owns the name and no one holds it.
+    Free,
+    /// A pubkey owns the name now.
+    Taken,
+    /// The name is held for the pubkey that gave it up, who alone may register
+    /// it again.
+    Reserved,
+}
+
+/// Who a username moves between, and what the target's row says afterwards.
+pub struct TransferRequest<'a> {
+    pub domain: &'a str,
+    pub from_pubkey: &'a str,
+    pub to_pubkey: &'a str,
+    pub username: &'a str,
+    pub description: &'a str,
+}
+
 #[async_trait::async_trait]
 pub trait LnurlRepository {
-    /// Delete `pubkey`'s row in `domain`, but only while it still holds `name`.
-    /// Returns whether a row was removed.
+    /// Delete `pubkey`'s row in `domain`, but only while it still holds `name`,
+    /// and hold `name` for it. Returns whether a row was removed.
     ///
     /// `name` is part of the condition so the caller's authorization check and
     /// the delete cannot disagree: a row that changed name in between is left
@@ -112,12 +137,34 @@ pub trait LnurlRepository {
         domain: &str,
         pubkey: &str,
     ) -> Result<Option<User>, LnurlRepositoryError>;
+
+    /// Give `user.pubkey` the name it asks for, releasing whichever name it
+    /// holds now.
+    ///
+    /// Returns [`LnurlRepositoryError::NameReserved`] if the name is held for
+    /// another pubkey, and clears the reservation when `user.pubkey` is the one
+    /// it is held for.
     async fn upsert_user(&self, user: &User) -> Result<(), LnurlRepositoryError>;
 
-    /// Atomically transfer ownership of `username` in `domain` from `from_pubkey`
-    /// to `to_pubkey`, replacing any existing row for `to_pubkey`.
-    /// Returns [`LnurlRepositoryError::SourceNotOwner`] if `from_pubkey` does not
-    /// currently own `username` in `domain`.
+    /// Whether `name` in `domain` is owned, held, or free, answered for
+    /// `asking_pubkey`: a hold that pubkey may still reclaim reads as
+    /// [`NameStatus::Free`], since it is free for the one asking.
+    ///
+    /// `None` asks on nobody's behalf and every hold stands, which is the only
+    /// answer a caller that cannot prove which pubkey is asking may have: the
+    /// reply would otherwise say who a name is held for.
+    async fn name_status(
+        &self,
+        domain: &str,
+        name: &str,
+        asking_pubkey: Option<&str>,
+    ) -> Result<NameStatus, LnurlRepositoryError>;
+
+    /// Atomically transfer ownership of `transfer.username` from the source
+    /// pubkey to the target, replacing any existing row for the target and
+    /// releasing the name that row held.
+    /// Returns [`LnurlRepositoryError::SourceNotOwner`] if the source does not
+    /// currently own the username in that domain.
     ///
     /// Claims `claim` in the same transaction and returns
     /// [`LnurlRepositoryError::StatementAlreadyUsed`] if it was already claimed.
@@ -125,11 +172,7 @@ pub trait LnurlRepository {
     /// actionable.
     async fn transfer_username(
         &self,
-        domain: &str,
-        from_pubkey: &str,
-        to_pubkey: &str,
-        username: &str,
-        description: &str,
+        transfer: TransferRequest<'_>,
         claim: StatementClaim<'_>,
     ) -> Result<(), LnurlRepositoryError>;
 
@@ -248,8 +291,33 @@ pub struct WebhookPayloadData {
 /// tests.
 #[cfg(test)]
 pub mod shared_tests {
-    use super::{LnurlRepository, LnurlRepositoryError, StatementClaim};
+    use super::{
+        LnurlRepository, LnurlRepositoryError, NameStatus, StatementClaim, TransferRequest,
+    };
     use crate::user::User;
+
+    /// A user of `domain` holding `name`, described by their own name.
+    fn user(domain: &str, pubkey: &str, name: &str) -> User {
+        User {
+            domain: domain.into(),
+            pubkey: pubkey.into(),
+            name: name.into(),
+            description: name.into(),
+        }
+    }
+
+    /// Register `name` to `pubkey`, holding whatever it held before.
+    async fn register<DB>(
+        db: &DB,
+        domain: &str,
+        pubkey: &str,
+        name: &str,
+    ) -> Result<(), LnurlRepositoryError>
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        db.upsert_user(&user(domain, pubkey, name)).await
+    }
 
     /// Upserting a name already owned by a different pubkey returns `NameTaken`
     /// and leaves the existing owner's row intact, rather than replacing it.
@@ -257,14 +325,7 @@ pub mod shared_tests {
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        db.upsert_user(&User {
-            domain: "a.com".into(),
-            pubkey: "aaaa".into(),
-            name: "alice".into(),
-            description: "alice".into(),
-        })
-        .await
-        .unwrap();
+        register(db, "a.com", "aaaa", "alice").await.unwrap();
 
         let result = db
             .upsert_user(&User {
@@ -301,14 +362,7 @@ pub mod shared_tests {
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        db.upsert_user(&User {
-            domain: "a.com".into(),
-            pubkey: "dddd".into(),
-            name: "dave".into(),
-            description: "dave".into(),
-        })
-        .await
-        .unwrap();
+        register(db, "a.com", "dddd", "dave").await.unwrap();
 
         let removed = db.delete_user("a.com", "dddd", "erin").await.unwrap();
         assert!(
@@ -320,6 +374,11 @@ pub mod shared_tests {
             held.map(|u| u.name),
             Some("dave".to_string()),
             "deleting 'erin' must not touch the 'dave' the pubkey holds"
+        );
+        assert_eq!(
+            db.name_status("a.com", "erin", None).await.unwrap(),
+            NameStatus::Free,
+            "a delete that removed nothing must not hold a name"
         );
 
         let removed = db.delete_user("a.com", "dddd", "dave").await.unwrap();
@@ -421,6 +480,22 @@ pub mod shared_tests {
         }
     }
 
+    /// A transfer of `username` between the two pubkeys on `domain`.
+    fn transfer<'a>(
+        domain: &'a str,
+        from: &'a str,
+        to: &'a str,
+        username: &'a str,
+    ) -> TransferRequest<'a> {
+        TransferRequest {
+            domain,
+            from_pubkey: from,
+            to_pubkey: to,
+            username,
+            description: username,
+        }
+    }
+
     /// A transfer runs once: presenting the same source, target and username
     /// again is refused, since nothing bounds the pair that authorized it in
     /// time.
@@ -428,23 +503,14 @@ pub mod shared_tests {
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        let seed = |pubkey: &str, name: &str| User {
-            domain: "transfer-once.com".into(),
-            pubkey: pubkey.into(),
-            name: name.into(),
-            description: String::new(),
-        };
-        db.upsert_user(&seed("aaaa", "amy")).await.unwrap();
+        let domain = "transfer-once.com";
+        register(db, domain, "aaaa", "amy").await.unwrap();
 
         let there = transfer_statement("aaaa", "bbbb", "amy");
         let back = transfer_statement("bbbb", "aaaa", "amy");
 
         db.transfer_username(
-            "transfer-once.com",
-            "aaaa",
-            "bbbb",
-            "amy",
-            "amy",
+            transfer(domain, "aaaa", "bbbb", "amy"),
             transfer_claim(&there),
         )
         .await
@@ -453,11 +519,7 @@ pub mod shared_tests {
         // Hand the name back, so only the claim stands between the pair and a
         // second run.
         db.transfer_username(
-            "transfer-once.com",
-            "bbbb",
-            "aaaa",
-            "amy",
-            "amy",
+            transfer(domain, "bbbb", "aaaa", "amy"),
             transfer_claim(&back),
         )
         .await
@@ -465,11 +527,7 @@ pub mod shared_tests {
 
         let replayed = db
             .transfer_username(
-                "transfer-once.com",
-                "aaaa",
-                "bbbb",
-                "amy",
-                "amy",
+                transfer(domain, "aaaa", "bbbb", "amy"),
                 transfer_claim(&there),
             )
             .await;
@@ -498,11 +556,7 @@ pub mod shared_tests {
         let statement = transfer_statement("cccc", "dddd", "cara");
         let failed = db
             .transfer_username(
-                domain,
-                "cccc",
-                "dddd",
-                "cara",
-                "cara",
+                transfer(domain, "cccc", "dddd", "cara"),
                 transfer_claim(&statement),
             )
             .await;
@@ -511,21 +565,10 @@ pub mod shared_tests {
             "expected SourceNotOwner, got {failed:?}"
         );
 
-        db.upsert_user(&User {
-            domain: domain.into(),
-            pubkey: "cccc".into(),
-            name: "cara".into(),
-            description: String::new(),
-        })
-        .await
-        .unwrap();
+        register(db, domain, "cccc", "cara").await.unwrap();
 
         db.transfer_username(
-            domain,
-            "cccc",
-            "dddd",
-            "cara",
-            "cara",
+            transfer(domain, "cccc", "dddd", "cara"),
             transfer_claim(&statement),
         )
         .await
@@ -540,23 +583,12 @@ pub mod shared_tests {
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
         for domain in ["spend-a.com", "spend-b.com"] {
-            db.upsert_user(&User {
-                domain: domain.into(),
-                pubkey: "hhhh".into(),
-                name: "holly".into(),
-                description: String::new(),
-            })
-            .await
-            .unwrap();
+            register(db, domain, "hhhh", "holly").await.unwrap();
         }
 
         let statement = transfer_statement("hhhh", "iiii", "holly");
         db.transfer_username(
-            "spend-a.com",
-            "hhhh",
-            "iiii",
-            "holly",
-            "holly",
+            transfer("spend-a.com", "hhhh", "iiii", "holly"),
             transfer_claim(&statement),
         )
         .await
@@ -565,17 +597,169 @@ pub mod shared_tests {
         assert!(
             matches!(
                 db.transfer_username(
-                    "spend-b.com",
-                    "hhhh",
-                    "iiii",
-                    "holly",
-                    "holly",
+                    transfer("spend-b.com", "hhhh", "iiii", "holly"),
                     transfer_claim(&statement),
                 )
                 .await,
                 Err(super::LnurlRepositoryError::StatementAlreadyUsed)
             ),
             "the same pair must not transfer the name on a second domain"
+        );
+    }
+
+    /// A name its owner gives up is held for them: no one else may register it,
+    /// and taking it back frees it again.
+    pub async fn a_released_name_is_held_for_the_pubkey_that_released_it<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let domain = "released.com";
+        register(db, domain, "aaaa", "alice").await.unwrap();
+        assert!(db.delete_user(domain, "aaaa", "alice").await.unwrap());
+
+        assert_eq!(
+            db.name_status(domain, "alice", None).await.unwrap(),
+            NameStatus::Reserved,
+            "a released name must not read as free"
+        );
+        assert_eq!(
+            db.name_status(domain, "alice", Some("aaaa")).await.unwrap(),
+            NameStatus::Free,
+            "the name must read as free to the pubkey it is held for"
+        );
+        assert_eq!(
+            db.name_status(domain, "alice", Some("bbbb")).await.unwrap(),
+            NameStatus::Reserved,
+            "the hold must stand for every other pubkey"
+        );
+        let sniped = register(db, domain, "bbbb", "alice").await;
+        assert!(
+            matches!(sniped, Err(LnurlRepositoryError::NameReserved)),
+            "expected NameReserved, got {sniped:?}"
+        );
+        assert!(
+            db.get_user_by_name(domain, "alice")
+                .await
+                .unwrap()
+                .is_none(),
+            "the refused registration must not have created a row"
+        );
+
+        register(db, domain, "aaaa", "alice")
+            .await
+            .expect("the pubkey that released the name must be able to take it back");
+        assert_eq!(
+            db.name_status(domain, "alice", None).await.unwrap(),
+            NameStatus::Taken,
+            "taking a name back must clear the hold on it"
+        );
+    }
+
+    /// Registering a second name releases the first, which is the same hold as
+    /// unregistering it: the name a pubkey walks away from never goes to a
+    /// stranger, whichever route it walked away through.
+    pub async fn registering_another_name_holds_the_one_left_behind<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let domain = "renamed.com";
+        register(db, domain, "cccc", "carol").await.unwrap();
+        register(db, domain, "cccc", "caroline").await.unwrap();
+
+        assert_eq!(
+            db.get_user_by_pubkey(domain, "cccc")
+                .await
+                .unwrap()
+                .map(|u| u.name),
+            Some("caroline".to_string())
+        );
+        let sniped = register(db, domain, "dddd", "carol").await;
+        assert!(
+            matches!(sniped, Err(LnurlRepositoryError::NameReserved)),
+            "expected NameReserved, got {sniped:?}"
+        );
+
+        register(db, domain, "cccc", "carol")
+            .await
+            .expect("the pubkey that left the name behind must be able to go back to it");
+        assert_eq!(
+            db.name_status(domain, "caroline", None).await.unwrap(),
+            NameStatus::Reserved,
+            "going back must hold the name being left in turn"
+        );
+    }
+
+    /// Two registrations by one pubkey at once leave it holding one name and
+    /// the other held for it, whichever of them lands second. A pubkey with no
+    /// row yet has none to lock, so nothing but the registration lock keeps the
+    /// second registration from dropping the first name without holding it.
+    pub async fn registering_twice_at_once_holds_the_name_that_loses<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let domain = "at-once.com";
+        let first = {
+            let db = db.clone();
+            tokio::spawn(async move { register(&db, domain, "mmmm", "mary").await })
+        };
+        let second = {
+            let db = db.clone();
+            tokio::spawn(async move { register(&db, domain, "mmmm", "maud").await })
+        };
+        first.await.unwrap().expect("the first registration");
+        second.await.unwrap().expect("the second registration");
+
+        let held = db
+            .get_user_by_pubkey(domain, "mmmm")
+            .await
+            .unwrap()
+            .expect("one of the two names must be registered")
+            .name;
+        let lost = if held == "mary" { "maud" } else { "mary" };
+        assert_eq!(
+            db.name_status(domain, lost, None).await.unwrap(),
+            NameStatus::Reserved,
+            "the name that lost the race must be held, not left free"
+        );
+        assert_eq!(
+            db.name_status(domain, lost, Some("mmmm")).await.unwrap(),
+            NameStatus::Free,
+            "the pubkey that lost it must be able to take it back"
+        );
+    }
+
+    /// A transfer replaces the target's row, so the name the target held is
+    /// released, and held for them the same way.
+    pub async fn a_transfer_holds_the_name_the_target_gave_up<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let domain = "transfer-holds.com";
+        register(db, domain, "eeee", "erin").await.unwrap();
+        register(db, domain, "ffff", "fran").await.unwrap();
+
+        let statement = transfer_statement("eeee", "ffff", "erin");
+        db.transfer_username(
+            transfer(domain, "eeee", "ffff", "erin"),
+            transfer_claim(&statement),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            db.name_status(domain, "fran", None).await.unwrap(),
+            NameStatus::Reserved,
+            "the name the target gave up to accept the transfer must be held"
+        );
+        let sniped = register(db, domain, "gggg", "fran").await;
+        assert!(
+            matches!(sniped, Err(LnurlRepositoryError::NameReserved)),
+            "expected NameReserved, got {sniped:?}"
+        );
+        assert_eq!(
+            db.name_status(domain, "erin", None).await.unwrap(),
+            NameStatus::Taken,
+            "the transferred name is held by its new owner, not released"
         );
     }
 
