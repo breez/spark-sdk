@@ -61,9 +61,11 @@ type RenewStub = Box<dyn Fn(Vec<LeafPedigree>) -> Vec<LeafPedigree> + Send + Syn
 /// already had; the renewal that injects a split node reparents it onto that.
 struct RenewalOutcome {
     pedigrees: Vec<LeafPedigree>,
-    /// Whether any leaf was due for renewal when the pass began, read off the
-    /// leaves the pass was handed.
-    any_renewal_due: bool,
+    /// Whether the pass actually rebuilt a leaf's refund transaction. Not the
+    /// same as one being due: the operators can refuse a renewal, and the leaf
+    /// is handed back exactly as it came to be tried again next pass, with
+    /// nothing for a listener to act on.
+    any_renewal_landed: bool,
 }
 
 /// Notifications buffered per listener before it starts missing them. Each one
@@ -158,11 +160,12 @@ impl TreeService for SynchronousTreeService {
         // needs and returns the reparented leaf with the chain it rebuilt.
         let RenewalOutcome {
             pedigrees,
-            any_renewal_due,
+            any_renewal_landed,
         } = self.check_renew_nodes(bare_pedigrees(leaves)).await?;
         let leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
         self.state.add_leaves(&leaves).await?;
-        self.store_renewed_chains(&pedigrees, any_renewal_due).await;
+        self.store_renewed_chains(&pedigrees, any_renewal_landed)
+            .await;
         self.notify_leaves_added(&leaves);
         Ok(leaves)
     }
@@ -472,7 +475,7 @@ impl TreeService for SynchronousTreeService {
         // newly reported is what the notification below sets off.
         let RenewalOutcome {
             pedigrees,
-            any_renewal_due,
+            any_renewal_landed,
         } = self.check_renew_nodes(bare_pedigrees(new_leaves)).await?;
         let renewed_leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
         self.state
@@ -482,7 +485,8 @@ impl TreeService for SynchronousTreeService {
                 refresh_started_at,
             )
             .await?;
-        self.store_renewed_chains(&pedigrees, any_renewal_due).await;
+        self.store_renewed_chains(&pedigrees, any_renewal_landed)
+            .await;
         // Which of the reported leaves the store already held is the store's to
         // know, so anything reported at all is announced.
         self.notify_leaves_added(&renewed_leaves);
@@ -609,7 +613,7 @@ impl SynchronousTreeService {
 
         let RenewalOutcome {
             pedigrees: new_leaves,
-            any_renewal_due,
+            any_renewal_landed,
         } = match swap_result {
             Ok(checked) => checked,
             Err(e) => {
@@ -675,7 +679,8 @@ impl SynchronousTreeService {
                     .into_iter()
                     .chain(change_pedigrees)
                     .collect();
-                self.store_renewed_chains(&renewed, any_renewal_due).await;
+                self.store_renewed_chains(&renewed, any_renewal_landed)
+                    .await;
                 self.notify_leaves_added(&change_nodes);
                 Ok(final_reservation)
             }
@@ -698,7 +703,8 @@ impl SynchronousTreeService {
                         .into_iter()
                         .chain(change_pedigrees)
                         .collect();
-                    self.store_renewed_chains(&renewed, any_renewal_due).await;
+                    self.store_renewed_chains(&renewed, any_renewal_landed)
+                        .await;
                 }
                 Err(e)
             }
@@ -851,12 +857,13 @@ impl SynchronousTreeService {
         &self,
         pedigrees: Vec<LeafPedigree>,
     ) -> Result<RenewalOutcome, TreeServiceError> {
-        let any_renewal_due = any_needs_renewal(pedigrees.iter().map(|p| &p.leaf))?;
+        let before = refund_sequences(&pedigrees);
         #[cfg(test)]
         if let Some(renew) = &self.renew_stub {
+            let pedigrees = renew(pedigrees);
             return Ok(RenewalOutcome {
-                pedigrees: renew(pedigrees),
-                any_renewal_due,
+                any_renewal_landed: any_renewal_landed(&before, &pedigrees),
+                pedigrees,
             });
         }
         let pedigrees = self
@@ -865,8 +872,8 @@ impl SynchronousTreeService {
             .await
             .map_err(|e| TreeServiceError::Generic(format!("Failed to check time lock: {e:?}")))?;
         Ok(RenewalOutcome {
+            any_renewal_landed: any_renewal_landed(&before, &pedigrees),
             pedigrees,
-            any_renewal_due,
         })
     }
 
@@ -877,15 +884,20 @@ impl SynchronousTreeService {
     /// by the exit chain resolver. Call after the leaves are in the pool: a chain
     /// is only kept for a leaf the store holds.
     ///
+    /// Takes what the pass actually renewed rather than what it was owed: a
+    /// renewal the operators refuse leaves the leaf as it was and is retried on
+    /// the next pass, so announcing one would announce again on every refresh
+    /// until it lands.
+    ///
     /// Best-effort, and deliberately not fallible to the caller: the leaves are
     /// already committed by then, so failing here would report a completed
     /// operation as failed. A chain left unwritten is reported by
     /// `leaves_missing_exit_chains` and re-resolved in the background.
-    async fn store_renewed_chains(&self, pedigrees: &[LeafPedigree], any_renewal_due: bool) {
-        // Renewal passes over leaves that are not due unchanged, so with none due
-        // the chains here are the stored ones read back, and rewriting them says
-        // an exit state changed that did not.
-        if !any_renewal_due {
+    async fn store_renewed_chains(&self, pedigrees: &[LeafPedigree], any_renewal_landed: bool) {
+        // A pass that renewed nothing hands back the leaves as they arrived, so
+        // the chains here are the stored ones read back. Rewriting them, and
+        // announcing them, would say an exit state changed that did not.
+        if !any_renewal_landed {
             return;
         }
         // A renewal that resolved no ancestors rebuilds a chain of just the new
@@ -949,7 +961,7 @@ impl SynchronousTreeService {
 
         let RenewalOutcome {
             pedigrees,
-            any_renewal_due,
+            any_renewal_landed,
         } = match self.check_renew_nodes(pedigrees).await {
             Ok(checked) => checked,
             Err(e) => {
@@ -964,7 +976,8 @@ impl SynchronousTreeService {
         // from local state.
         let new_leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
         self.state.add_leaves(&new_leaves).await?;
-        self.store_renewed_chains(&pedigrees, any_renewal_due).await;
+        self.store_renewed_chains(&pedigrees, any_renewal_landed)
+            .await;
         // Renewal reparents rather than adds, and rebuilds the chain itself. The
         // rebuild is best-effort though, so a listener is given the chance to
         // notice one that did not make it.
@@ -1009,6 +1022,34 @@ impl SynchronousTreeService {
         // Renewal fetches the one parent it needs for an expiring timelock.
         self.check_renew_nodes(bare_pedigrees(claimed_nodes)).await
     }
+}
+
+/// Each leaf's refund timelock, keyed by id. Cheap enough to hold for a whole
+/// refresh: a sequence per leaf rather than a second copy of the leaf set.
+/// A leaf carrying no refund tx maps to `None` on both sides of the pass, which
+/// reads as unchanged.
+fn refund_sequences(pedigrees: &[LeafPedigree]) -> HashMap<TreeNodeId, Option<bitcoin::Sequence>> {
+    pedigrees
+        .iter()
+        .map(|p| (p.leaf.id.clone(), p.leaf.refund_sequence().ok()))
+        .collect()
+}
+
+/// Whether a renewal pass rebuilt any leaf's refund transaction, by comparing the
+/// timelocks it handed back with the ones it was given. A renewal always moves
+/// that timelock, so a leaf that comes back on the one it arrived with was not
+/// renewed, whether or not it was due: the operators refuse one from time to
+/// time, and the leaf is retried on the next pass. Deciding from what was due
+/// instead would announce a change on every pass until the retry succeeds.
+fn any_renewal_landed(
+    before: &HashMap<TreeNodeId, Option<bitcoin::Sequence>>,
+    after: &[LeafPedigree],
+) -> bool {
+    after.iter().any(|p| {
+        before
+            .get(&p.leaf.id)
+            .is_none_or(|seq| *seq != p.leaf.refund_sequence().ok())
+    })
 }
 
 /// Whether any leaf is due for a refund tx renewal, using the same predicate
@@ -1277,6 +1318,12 @@ mod tests {
             .collect()
     }
 
+    /// What it returns for a renewal the operators refused: the leaf exactly as
+    /// it arrived, to be tried again on the next pass.
+    fn renewal_refused(pedigrees: Vec<LeafPedigree>) -> Vec<LeafPedigree> {
+        pedigrees
+    }
+
     /// What it returns for the renewal that injects a split node: the same
     /// rebuilt leaf, reparented onto the split node the chain now leads with.
     fn reparent_onto_split(pedigrees: Vec<LeafPedigree>) -> Vec<LeafPedigree> {
@@ -1323,6 +1370,21 @@ mod tests {
     }
 
     #[async_test_all]
+    async fn a_due_leaf_the_operators_would_not_renew_stays_quiet() {
+        let (tx, rx) = tokio::sync::watch::channel(());
+        let mut service = service_over(Arc::new(InMemoryTreeStore::new()), Some(tx)).await;
+        // A refused renewal is not fatal: the leaf is kept as it arrived and
+        // retried next pass. It stays due, so deciding the signal on what was due
+        // would re-announce on every refresh for an exit state that never moved.
+        service.renew_stub = Some(Box::new(renewal_refused));
+
+        let expiring = leaf_with_refund_sequence("leaf", 50);
+        service.insert_leaves(vec![expiring]).await.unwrap();
+
+        assert!(!rx.has_changed().unwrap());
+    }
+
+    #[async_test_all]
     async fn a_leaf_not_due_stays_quiet_though_the_renewal_moves_it() {
         let (tx, rx) = tokio::sync::watch::channel(());
         let mut service = service_over(Arc::new(InMemoryTreeStore::new()), Some(tx)).await;
@@ -1331,9 +1393,9 @@ mod tests {
         let fresh = leaf_with_refund_sequence("leaf", 2_000);
         service.insert_leaves(vec![fresh]).await.unwrap();
 
-        // What decides the signal is the leaves the pass was handed, not what
-        // came back from it. The rebuilt chain stops short of a root either way,
-        // so it is not stored.
+        // The renewal left the leaf on the timelock it arrived with, so there is
+        // nothing an export would hold differently. The rebuilt chain stops short
+        // of a root either way, so it is not stored.
         assert_eq!(stored_chain(&service, "leaf").await, ["leaf"]);
         assert!(!rx.has_changed().unwrap());
     }
