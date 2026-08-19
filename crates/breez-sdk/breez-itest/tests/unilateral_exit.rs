@@ -25,12 +25,15 @@ use bitcoin::{
     Address, Amount, OutPoint, Psbt, Sequence, Transaction, TxIn, TxOut, Txid, absolute::LockTime,
     consensus::encode::deserialize,
 };
-use breez_sdk_itest::{LocalSdk, SignerBackend, build_local_sdk, wait_for_balance};
+use breez_sdk_itest::{
+    LocalSdk, SignerBackend, build_local_sdk, rebuild_on_empty_storage, wait_for_balance,
+};
 use breez_sdk_spark::signer::{CpfpSigner, single_key_cpfp_signer};
 use breez_sdk_spark::{
     ConfirmationStatus, CpfpFundingKind, CpfpInput, ExitLeafSelection,
-    PrepareUnilateralExitRequest, PrepareUnilateralExitResponse, SdkError, UnilateralExitRequest,
-    UnilateralExitResponse, UnilateralExitTransaction, UnilateralExitTxKind,
+    ImportUnilateralExitStateRequest, PrepareUnilateralExitRequest, PrepareUnilateralExitResponse,
+    SdkError, UnilateralExitRequest, UnilateralExitResponse, UnilateralExitTransaction,
+    UnilateralExitTxKind,
 };
 use rstest::*;
 use rstest_reuse::{apply, template};
@@ -75,6 +78,38 @@ async fn new_local_sdk(backend: SignerBackend) -> Result<LocalSdk> {
 /// URL, so the public claim path (which fetches a fee quote) can't be used.
 async fn deposit_and_claim(sdk: &LocalSdk, amount: Amount) -> Result<()> {
     deposit_with_amount(&sdk.spark_wallet, &sdk.fixtures.bitcoind, amount.to_sat()).await
+}
+
+/// Every leaf in an exit state, mapped to its chain as node ids root first. The
+/// SDK exposes no leaf listing, and the chain is the half that decides whether a
+/// leaf can be exited at all, so comparing these compares what matters.
+fn exit_state_chains(exit_state: &str) -> Result<HashMap<String, Vec<String>>> {
+    let envelope: serde_json::Value = serde_json::from_str(exit_state)?;
+    let pedigrees = envelope["pedigrees"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("exit state carries no pedigrees"))?;
+    let mut chains = HashMap::new();
+    for pedigree in pedigrees {
+        let leaf_id = pedigree["leaf"]["id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("exported leaf has no id"))?
+            .to_string();
+        let mut chain: Vec<String> = pedigree["ancestors"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("exported leaf has no ancestor list"))?
+            .iter()
+            .map(|a| {
+                a["id"]
+                    .as_str()
+                    .map(ToString::to_string)
+                    .ok_or_else(|| anyhow::anyhow!("exported ancestor has no id"))
+            })
+            .collect::<Result<Vec<String>>>()?;
+        chain.reverse();
+        chain.push(leaf_id.clone());
+        chains.insert(leaf_id, chain);
+    }
+    Ok(chains)
 }
 
 /// The default single-key CPFP signer over `key`, as every test funds its exit.
@@ -1126,6 +1161,113 @@ async fn test_multi_leaf_offline_exit(#[case] backend: SignerBackend) -> Result<
         "offline exit conserves value: swept {swept} = funding ({funding_sat}) \
          + recoverable ({}) - fee ({})",
         built.recoverable_value_sat, built.total_fee_sat
+    );
+    Ok(())
+}
+
+/// A restored wallet holds exactly the exit state it was handed, chains included.
+/// The wallet is built in server mode, so it runs no sync and its store starts
+/// and stays empty until the import writes to it: whatever it holds afterwards
+/// can only have come from the backup, never from the operators. That is what an
+/// exit later plans from, so this is the half of the feature that decides whether
+/// a backup is worth anything.
+///
+/// The leaves here are claimed deposits, and a claimed deposit is a single-node
+/// tree, so the chains this compares are one node long. Restoring longer ones is
+/// covered by the shared tree-store suite, which drives multi-node chains through
+/// every backend; what this adds is the round trip through the SDK's own export
+/// and import against real leaves.
+#[test_log::test(tokio::test)]
+async fn test_import_restores_every_leaf_with_its_chain() -> Result<()> {
+    let source = new_local_sdk(SignerBackend::Seed).await?;
+    deposit_and_claim(&source, Amount::from_sat(LEAF_SATS)).await?;
+    deposit_and_claim(&source, Amount::from_sat(LEAF_SATS)).await?;
+    // Waiting on the balance is what puts both leaves, and their chains, in the
+    // store the export reads.
+    wait_for_balance(&source.sdk, Some(LEAF_SATS * 2), None, 60).await?;
+
+    let exported = source.sdk.export_unilateral_exit_state().await?;
+    let expected = exit_state_chains(&exported.exit_state)?;
+    assert_eq!(expected.len(), 2, "both leaves are exported");
+
+    // Same identity, empty store, no sync of its own.
+    let restored = rebuild_on_empty_storage(&source).await?;
+    let before = restored.sdk.export_unilateral_exit_state().await?;
+    assert!(
+        exit_state_chains(&before.exit_state)?.is_empty(),
+        "the restored wallet starts with nothing, so what it holds later came from the import"
+    );
+
+    let imported = restored
+        .sdk
+        .import_unilateral_exit_state(ImportUnilateralExitStateRequest {
+            exit_state: exported.exit_state,
+        })
+        .await?;
+    assert_eq!(imported.imported_leaves, 2);
+    assert_eq!(imported.skipped_foreign_leaves, 0);
+    assert_eq!(imported.skipped_conflicting_leaves, 0);
+    assert_eq!(imported.skipped_chains, 0);
+
+    // Read back through the same door the exit plans from.
+    let after = restored.sdk.export_unilateral_exit_state().await?;
+    assert_eq!(
+        exit_state_chains(&after.exit_state)?,
+        expected,
+        "the restored wallet holds every leaf on the chain it was exported with"
+    );
+    Ok(())
+}
+
+/// An exit state from a different wallet restores nothing. The leaves in it are
+/// real and their chains are complete; the only thing wrong with them is that
+/// they record another identity as their owner. Taking them would have the
+/// wallet count funds it holds no signing share for.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn test_importing_another_wallets_state_takes_nothing(
+    #[case] backend: SignerBackend,
+) -> Result<()> {
+    // Two wallets over one operator pool and bitcoind. Each `build_local_sdk`
+    // derives its own identity, which is what makes them different parties.
+    let fixtures = Arc::new(TestFixtures::new().await?);
+    let theirs = build_local_sdk(Arc::clone(&fixtures), backend).await?;
+    let ours = build_local_sdk(fixtures, backend).await?;
+    deposit_and_claim(&theirs, Amount::from_sat(LEAF_SATS)).await?;
+    wait_for_balance(&theirs.sdk, Some(LEAF_SATS), None, 60).await?;
+
+    let exported = theirs.sdk.export_unilateral_exit_state().await?;
+    let imported = ours
+        .sdk
+        .import_unilateral_exit_state(ImportUnilateralExitStateRequest {
+            exit_state: exported.exit_state,
+        })
+        .await?;
+
+    assert_eq!(imported.imported_leaves, 0);
+    assert_eq!(
+        imported.skipped_foreign_leaves, 1,
+        "the leaf records the other wallet as its owner"
+    );
+    assert_eq!(imported.skipped_conflicting_leaves, 0);
+    assert_eq!(imported.skipped_chains, 0);
+
+    // Nothing to exit, so the quote is empty rather than carrying their leaf.
+    let destination = fund_p2tr_utxo(&ours.fixtures.bitcoind, Amount::from_sat(CPFP_SATS))
+        .await?
+        .address;
+    let quote = ours
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: destination.to_string(),
+            selection: ExitLeafSelection::Auto,
+        })
+        .await?;
+    assert!(
+        quote.leaves.is_empty(),
+        "another wallet's leaf must not become exitable here"
     );
     Ok(())
 }
