@@ -646,20 +646,21 @@ async fn test_deposits_to_multiple_addresses(
     Ok(())
 }
 
-/// Manual instant (0-conf) claim path, end to end against the deployed SSP: it
-/// exercises the ported 0-conf user statement, the ECIES key-share transport, and
-/// the claim mutation. Auto-claiming is disabled on both fronts (the instant
-/// cascade is off via unset `max_instant_deposit_claim_fee_bps`, the normal claim
-/// is fee-blocked via `max_deposit_claim_fee` = 0), so the manual `claim_deposit`
-/// is the only thing that can claim the funded deposit.
+/// Manual instant claim path, end to end against the deployed SSP: it exercises
+/// the ported user statement, the ECIES key-share transport, and the claim
+/// mutation. Auto-claiming is disabled on both fronts (the instant cascade is off
+/// via unset `max_instant_deposit_claim_fee_bps`, the normal claim is fee-blocked
+/// via `max_deposit_claim_fee` = 0), so the manual `claim_deposit` is the only
+/// thing that can claim the funded deposit.
 ///
-/// regtest mines fast, so the 0-conf window is a race: it reads the vout straight
-/// from the funding tx to claim as early as possible, but if the deposit confirms
-/// first the SSP offers no 0-conf plan, and the test logs it and skips (nothing to
-/// assert). When the window is caught it asserts no synchronous payment, a
-/// credited balance net of the SSP spread, and the deposit leaving the unclaimed
-/// list. A rejected statement is neither a confirmation nor transient, so it fails
-/// fast. Requires faucet creds and the deployed regtest SSP to have 0-conf enabled.
+/// It reads the vout straight from the funding tx to claim as early as possible,
+/// but the claim does not depend on winning that race: a deposit that confirms
+/// first is claimed at the shallowest plan the SSP still offers. Only a quote with
+/// no fulfillment plans leaves nothing to assert, and the test skips. Otherwise
+/// it asserts no synchronous payment, a credited balance net of the SSP spread,
+/// and the deposit leaving the unclaimed list. A rejected statement is neither of
+/// those nor transient, so it fails fast. Requires faucet creds and the deployed
+/// regtest SSP to have instant claims enabled.
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_manual_instant_deposit_claim(
@@ -705,9 +706,9 @@ async fn test_manual_instant_deposit_claim(
         .map(|(i, _)| i as u32)
         .expect("funding tx has no output paying the deposit address");
 
-    // Claim instantly, retrying only while the SSP indexes the mempool tx. If the
-    // deposit confirms first there is no 0-conf plan and the race is lost: skip.
-    // Any other error (a rejected statement, the failure worth catching) fails fast.
+    // Claim instantly, retrying only while the SSP indexes the mempool tx. A quote
+    // with no fulfillment plans leaves nothing to claim: skip. Any other error (a
+    // rejected statement, the failure worth catching) fails fast.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     let claim_resp = loop {
         match bob
@@ -722,30 +723,32 @@ async fn test_manual_instant_deposit_claim(
             .await
         {
             Ok(resp) => break resp,
-            Err(e) if e.to_string().contains("0-conf") => {
+            Err(e) if e.to_string().contains("No instant claim plan available") => {
                 warn!(
-                    "SKIP test_manual_instant_deposit_claim: 0-conf race lost, deposit confirmed before the claim (regtest mines fast)"
+                    "SKIP test_manual_instant_deposit_claim: SSP offered no fulfillment plan for the deposit"
                 );
                 return Ok(());
             }
-            // The quote-fetch indexing lag surfaces specifically as "Transaction
-            // not found"; retry only that. A submission rejection phrased with
-            // "not found" (unknown/consumed quote) falls through and fails fast.
+            // Two transient stages: the SSP has not indexed the tx yet
+            // ("Transaction not found"), and it has but the UTXO is not deep
+            // enough on every operator yet ("...confirmations..."). Retry only
+            // those. A submission rejection phrased with "not found"
+            // (unknown/consumed quote) falls through and fails fast.
             Err(e)
-                if e.to_string()
-                    .to_lowercase()
-                    .contains("transaction not found") =>
+                if {
+                    let msg = e.to_string().to_lowercase();
+                    msg.contains("transaction not found") || msg.contains("confirmation")
+                } =>
             {
                 if tokio::time::Instant::now() >= deadline {
                     warn!(
-                        "SKIP test_manual_instant_deposit_claim: SSP did not index the deposit within timeout"
+                        "SKIP test_manual_instant_deposit_claim: deposit was not claimable within timeout"
                     );
                     return Ok(());
                 }
-                info!("instant quote not indexed yet, retrying: {e}");
-                // Poll tightly: the 0-conf window closes as soon as the deposit
-                // confirms (regtest mines fast), so detect "SSP indexed" quickly
-                // and claim before maturity.
+                info!("instant claim not ready yet, retrying: {e}");
+                // Poll tightly: the window closes as soon as the deposit matures
+                // (regtest mines fast), so claim as early as the SSP allows.
                 sleep(Duration::from_secs(1)).await;
             }
             Err(e) => return Err(e.into()),

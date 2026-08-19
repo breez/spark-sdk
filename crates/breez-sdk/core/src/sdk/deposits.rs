@@ -180,7 +180,7 @@ impl BreezSdk {
             .unwrap_or_else(|| SdkError::Generic("transfer not found after claim".to_string())))
     }
 
-    /// Claims a specific not-yet-mature deposit instantly (0-conf), on demand.
+    /// Claims a specific not-yet-mature deposit instantly, on demand.
     /// The transfer settles asynchronously, so no payment is returned.
     async fn instant_claim_deposit(
         &self,
@@ -260,11 +260,12 @@ impl BreezSdk {
         }
     }
 
-    /// Attempts an instant 0-conf static deposit claim for `detailed_utxo`.
-    /// `Ok(Submitted)` on a submitted claim, `Ok(Declined)` for a terminal
-    /// outcome (no 0-conf plan, spread over the ceiling, or a failed claim
-    /// submission), and `Err` only for a failed quote fetch, which is transient
-    /// (the SSP may not have indexed the mempool tx yet) and should be retried.
+    /// Attempts an instant static deposit claim for `detailed_utxo`, ahead of
+    /// maturity. `Ok(Submitted)` on a submitted claim, `Ok(Declined)` for a terminal
+    /// outcome (no plan offered, spread over the ceiling, or a rejected claim), and
+    /// `Err` for the transient cases that should be retried: a failed quote fetch
+    /// (the SSP may not have indexed the tx yet) and a claim the SSP rejected for
+    /// insufficient depth.
     pub(super) async fn instant_claim_utxo(
         &self,
         detailed_utxo: &DetailedUtxo,
@@ -276,6 +277,13 @@ impl BreezSdk {
             .spark_wallet
             .fetch_instant_static_deposit_quote(detailed_utxo.tx.clone(), Some(detailed_utxo.vout))
             .await?;
+        // Log the plans: a decline is otherwise indistinguishable from the SSP
+        // offering none. The UTXO value is not in the quote, and it is what the
+        // spread is priced against below.
+        info!(
+            "Instant quote for {}:{} ({} sats): {quote_result:?}",
+            detailed_utxo.txid, detailed_utxo.vout, detailed_utxo.value
+        );
         // Price the spread against the on-chain UTXO value we already hold, not the
         // SSP-reported deposit amount, so the fee gate does not depend on the quote.
         match select_instant_claim_plan(&quote_result, detailed_utxo.value, max_instant_fee_bps) {
@@ -290,6 +298,11 @@ impl BreezSdk {
                     .await
                 {
                     Ok(claim_id) => Ok(InstantClaimOutcome::Submitted(claim_id)),
+                    // A depth rejection clears on its own, so retry it rather than
+                    // marking the deposit, which would be terminal. This is the
+                    // common case: the cascade attempts as soon as the operators
+                    // surface the deposit, which is when they are still catching up.
+                    Err(e) if is_pending_confirmation_error(&e.to_string()) => Err(e.into()),
                     Err(e) => Ok(InstantClaimOutcome::Declined {
                         error: e.into(),
                         reason: InstantClaimDeclineReason::SubmissionFailed,
@@ -297,7 +310,7 @@ impl BreezSdk {
                 }
             }
             InstantClaimPlan::NoPlan => Ok(InstantClaimOutcome::Declined {
-                error: SdkError::Generic("No instant (0-conf) claim plan available".to_string()),
+                error: SdkError::Generic("No instant claim plan available".to_string()),
                 reason: InstantClaimDeclineReason::NoPlan,
             }),
             InstantClaimPlan::FeeExceeded {
@@ -318,11 +331,11 @@ impl BreezSdk {
     }
 }
 
-/// Result of an instant (0-conf) claim attempt.
+/// Result of an instant claim attempt.
 pub(super) enum InstantClaimOutcome {
     /// Claim submitted; carries the claim id. Settles asynchronously.
     Submitted(String),
-    /// A resolved decline to mark rather than retry via `Err`: no 0-conf plan,
+    /// A resolved decline to mark rather than retry via `Err`: no plan offered,
     /// spread over the ceiling, or a failed submission. Distinct from a failed
     /// quote fetch, which is transient and retries. Carries the error for the
     /// caller and the reason for the persisted status.
@@ -346,31 +359,51 @@ impl InstantClaimOutcome {
     }
 }
 
-/// Classification of an instant quote's 0-conf plan against the bps ceiling.
+/// Message fragments of the depth rejections that clear on their own. Neither the
+/// SSP nor the operators return an error code for these, so the message is all
+/// there is to go on. `enough confirmations` covers the SSP and the operators
+/// alike, which differ only by contraction; the second covers the SSP's separate
+/// "deep enough on some operators but not all" rejection.
+const PENDING_CONFIRMATION_MARKERS: [&str; 2] =
+    ["enough confirmations", "operators have not seen it"];
+
+/// Whether a rejected claim is the SSP or the operators waiting for the UTXO to
+/// reach the required depth, which clears within seconds. A phrasing outside
+/// [`PENDING_CONFIRMATION_MARKERS`] is terminal, so the deposit stops being
+/// retried and falls through to the claim at maturity.
+fn is_pending_confirmation_error(message: &str) -> bool {
+    let message = message.to_lowercase();
+    PENDING_CONFIRMATION_MARKERS
+        .iter()
+        .any(|marker| message.contains(marker))
+}
+
+/// Classification of an instant quote's shallowest plan against the bps ceiling.
 enum InstantClaimPlan {
-    /// The 0-conf plan is within the ceiling and should be claimed.
+    /// The plan is within the ceiling and should be claimed.
     Claimable(InstantStaticDepositPlan),
-    /// No `confirmations == 0` fulfillment plan was offered.
+    /// The quote carried no fulfillment plans at all.
     NoPlan,
     /// The SSP spread (`deposit - credit`) exceeds the ceiling, in both sats and
     /// its basis-points-of-deposit form (for the decline message).
     FeeExceeded { quoted_sats: u64, quoted_bps: u32 },
 }
 
-/// Selects the 0-conf fulfillment plan and checks the SSP spread
-/// (`deposit - credit`) against `max_bps`, as basis points of `deposit_sats` (the
-/// on-chain UTXO value). The spread carries a fixed component, so its bps grows as
-/// the deposit shrinks: a single bps ceiling therefore admits large deposits and
-/// declines small ones.
+/// Selects the shallowest fulfillment plan (the one crediting at the fewest
+/// confirmations) and checks the SSP spread (`deposit - credit`) against `max_bps`,
+/// as basis points of `deposit_sats` (the on-chain UTXO value). The spread carries a
+/// fixed component, so its bps grows as the deposit shrinks: a single bps ceiling
+/// therefore admits large deposits and declines small ones.
 fn select_instant_claim_plan(
     quote_result: &InstantStaticDepositQuoteResult,
     deposit_sats: u64,
     max_bps: u32,
 ) -> InstantClaimPlan {
+    // Ties keep the SSP's ordering: min_by_key returns the first of equal minima.
     let Some(plan) = quote_result
         .fulfillment_plans
         .iter()
-        .find(|p| p.confirmations == 0)
+        .min_by_key(|p| p.confirmations)
     else {
         return InstantClaimPlan::NoPlan;
     };
@@ -395,7 +428,7 @@ fn select_instant_claim_plan(
 
 #[cfg(test)]
 mod tests {
-    use super::{InstantClaimPlan, select_instant_claim_plan};
+    use super::{InstantClaimPlan, is_pending_confirmation_error, select_instant_claim_plan};
     use spark_wallet::{
         CurrencyAmount, InstantStaticDepositPlan, InstantStaticDepositQuote,
         InstantStaticDepositQuoteResult,
@@ -408,30 +441,29 @@ mod tests {
         }
     }
 
-    /// Builds a quote crediting `credit_sats` out of a `deposit_sats` UTXO, with
-    /// one fulfillment plan per confirmation count in `plan_confirmations`.
-    fn quote_result(
-        deposit_sats: u64,
-        credit_sats: u64,
-        plan_confirmations: &[i64],
-    ) -> InstantStaticDepositQuoteResult {
+    /// Builds a quote for a `deposit_sats` UTXO with one fulfillment plan per
+    /// `(confirmations, credit_sats)` pair. The quote-level credit mirrors the
+    /// first plan's.
+    fn quote_result(deposit_sats: u64, plans: &[(i64, u64)]) -> InstantStaticDepositQuoteResult {
         InstantStaticDepositQuoteResult {
             quote: InstantStaticDepositQuote {
                 id: "quote-id".to_string(),
                 transaction_id: "tx".to_string(),
                 output_index: 0,
                 deposit_amount: sats(deposit_sats),
-                credit_amount: sats(credit_sats),
+                credit_amount: sats(plans.first().map_or(0, |(_, credit)| *credit)),
                 quote_signature: "00".to_string(),
             },
-            fulfillment_plans: plan_confirmations
+            fulfillment_plans: plans
                 .iter()
                 .enumerate()
-                .map(|(i, confirmations)| InstantStaticDepositPlan {
-                    id: format!("plan-{i}"),
-                    amount: sats(credit_sats),
-                    confirmations: *confirmations,
-                })
+                .map(
+                    |(i, (confirmations, credit_sats))| InstantStaticDepositPlan {
+                        id: format!("plan-{i}"),
+                        amount: sats(*credit_sats),
+                        confirmations: *confirmations,
+                    },
+                )
                 .collect(),
         }
     }
@@ -439,7 +471,7 @@ mod tests {
     #[test]
     fn selects_zero_conf_plan_within_bps() {
         // Spread 1_000 of 100_000 = 100 bps, ceiling 200 bps -> claim.
-        let q = quote_result(100_000, 99_000, &[0, 1]);
+        let q = quote_result(100_000, &[(0, 99_000), (1, 99_500)]);
         let InstantClaimPlan::Claimable(plan) = select_instant_claim_plan(&q, 100_000, 200) else {
             panic!("expected a claimable 0-conf plan");
         };
@@ -447,9 +479,28 @@ mod tests {
     }
 
     #[test]
-    fn skips_when_no_zero_conf_plan() {
-        // Only 1-conf+ plans available -> the background cascade waits for maturity.
-        let q = quote_result(100_000, 99_000, &[1, 2]);
+    fn selects_shallowest_plan_when_no_zero_conf_plan() {
+        // A deposit that has already confirmed gets no 0-conf plan: claim at the
+        // shallowest depth offered rather than waiting for maturity.
+        let q = quote_result(100_000, &[(1, 99_000), (2, 99_500)]);
+        let InstantClaimPlan::Claimable(plan) = select_instant_claim_plan(&q, 100_000, 200) else {
+            panic!("expected the 1-conf plan to be claimable");
+        };
+        assert_eq!(plan.confirmations, 1);
+    }
+
+    #[test]
+    fn selects_shallowest_plan_regardless_of_order() {
+        let q = quote_result(100_000, &[(3, 99_900), (1, 99_500), (0, 99_000)]);
+        let InstantClaimPlan::Claimable(plan) = select_instant_claim_plan(&q, 100_000, 200) else {
+            panic!("expected a claimable plan");
+        };
+        assert_eq!(plan.confirmations, 0);
+    }
+
+    #[test]
+    fn skips_when_no_plans_offered() {
+        let q = quote_result(100_000, &[]);
         assert!(matches!(
             select_instant_claim_plan(&q, 100_000, 10_000),
             InstantClaimPlan::NoPlan
@@ -457,9 +508,30 @@ mod tests {
     }
 
     #[test]
+    fn gates_on_the_selected_plans_own_credit() {
+        // The 0-conf plan's 5_000 spread (500 bps) breaches the 200 bps ceiling; the
+        // cheaper 3-conf plan must not rescue it.
+        let q = quote_result(100_000, &[(0, 95_000), (3, 99_000)]);
+        assert!(matches!(
+            select_instant_claim_plan(&q, 100_000, 200),
+            InstantClaimPlan::FeeExceeded {
+                quoted_sats: 5_000,
+                quoted_bps: 500
+            }
+        ));
+        // Conversely, an expensive deeper plan must not decline an affordable
+        // shallow one.
+        let q = quote_result(100_000, &[(0, 99_000), (3, 90_000)]);
+        assert!(matches!(
+            select_instant_claim_plan(&q, 100_000, 200),
+            InstantClaimPlan::Claimable(_)
+        ));
+    }
+
+    #[test]
     fn skips_when_spread_over_bps_ceiling() {
         // Spread 5_000 of 100_000 = 500 bps, ceiling 100 bps -> skip.
-        let q = quote_result(100_000, 95_000, &[0]);
+        let q = quote_result(100_000, &[(0, 95_000)]);
         assert!(matches!(
             select_instant_claim_plan(&q, 100_000, 100),
             InstantClaimPlan::FeeExceeded {
@@ -472,7 +544,7 @@ mod tests {
     #[test]
     fn rejects_any_spread_at_zero_bps() {
         // A 0 bps ceiling admits only a zero spread.
-        let q = quote_result(100_000, 99_000, &[0]);
+        let q = quote_result(100_000, &[(0, 99_000)]);
         assert!(matches!(
             select_instant_claim_plan(&q, 100_000, 0),
             InstantClaimPlan::FeeExceeded { .. }
@@ -482,7 +554,7 @@ mod tests {
     #[test]
     fn accepts_spread_equal_to_bps_ceiling() {
         // Spread 1_000 of 100_000 = 100 bps, ceiling exactly 100 bps -> claim (inclusive).
-        let q = quote_result(100_000, 99_000, &[0]);
+        let q = quote_result(100_000, &[(0, 99_000)]);
         assert!(matches!(
             select_instant_claim_plan(&q, 100_000, 100),
             InstantClaimPlan::Claimable(_)
@@ -496,16 +568,39 @@ mod tests {
         // a small one (which should wait for the normal path). Values are measured.
         let cap_bps = 400;
         // 1_000 deposit: spread 229 -> 2290 bps -> declined.
-        let small = quote_result(1_000, 771, &[0]);
+        let small = quote_result(1_000, &[(0, 771)]);
         assert!(matches!(
             select_instant_claim_plan(&small, 1_000, cap_bps),
             InstantClaimPlan::FeeExceeded { .. }
         ));
         // 100_000 deposit: spread 3_199 -> 319 bps -> claimed.
-        let large = quote_result(100_000, 96_801, &[0]);
+        let large = quote_result(100_000, &[(0, 96_801)]);
         assert!(matches!(
             select_instant_claim_plan(&large, 100_000, cap_bps),
             InstantClaimPlan::Claimable(_)
+        ));
+    }
+
+    #[test]
+    fn treats_ssp_depth_rejections_as_retryable() {
+        // Verbatim SSP rejections: the UTXO is not deep enough yet, or is deep
+        // enough but has not propagated to every operator.
+        assert!(is_pending_confirmation_error(
+            "graphql error: UTXO does not have enough confirmations. Required: 1, got: 0"
+        ));
+        assert!(is_pending_confirmation_error(
+            "graphql error: UTXO needs 1 confirmations on every Spark operator before it \
+             can be claimed. Some operators have not seen it that deep yet. Retry in a \
+             few seconds."
+        ));
+        // The Spark operators phrase it differently again, with a contraction.
+        assert!(is_pending_confirmation_error(
+            "deposit tx doesn't have enough confirmations: confirmation height: 100 \
+             current block height: 100"
+        ));
+        // A rejected statement is terminal and must stay that way.
+        assert!(!is_pending_confirmation_error(
+            "graphql error: Something went wrong."
         ));
     }
 
@@ -516,7 +611,7 @@ mod tests {
         // 100 bps, within the 150 bps ceiling -> claim. Pricing off the quote's
         // 100_000 would give a 50_500 spread and decline, so a claim proves the
         // passed value drives the gate.
-        let q = quote_result(100_000, 49_500, &[0]);
+        let q = quote_result(100_000, &[(0, 49_500)]);
         assert!(matches!(
             select_instant_claim_plan(&q, 50_000, 150),
             InstantClaimPlan::Claimable(_)

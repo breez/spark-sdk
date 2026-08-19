@@ -384,7 +384,7 @@ impl BreezSdk {
                 )
                 .await
             } else {
-                // Not yet mature: attempt a one-shot 0-conf instant claim if enabled.
+                // Not yet mature: attempt a one-shot instant claim if enabled.
                 // Skip if instant claims are not enabled (no bps ceiling set).
                 let Some(max_instant_fee_bps) = self.config.max_instant_deposit_claim_fee_bps
                 else {

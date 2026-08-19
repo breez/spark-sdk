@@ -990,8 +990,8 @@ impl SparkWallet {
     }
 
     /// Fetches an instant static deposit quote and its fulfillment plans (one
-    /// per available confirmation profile; `confirmations == 0` is the 0-conf
-    /// path).
+    /// per confirmation depth the SSP will credit at, the shallowest being the
+    /// fastest and priciest).
     pub async fn fetch_instant_static_deposit_quote(
         &self,
         tx: Transaction,

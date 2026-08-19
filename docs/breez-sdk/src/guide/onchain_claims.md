@@ -18,11 +18,11 @@ When a deposit cannot be automatically claimed due to the configured maximum fee
 
 {{#tabs refunding_payments:handle-fee-exceeded}}
 
-### Instant (0-conf) claims
+### Instant claims
 
-By default a deposit is only claimed once it has enough confirmations. With instant (0-conf) claims the Spark Service Provider fronts the credited amount before confirmation and takes a spread, so the funds become usable immediately.
+By default a deposit is only claimed once it has enough confirmations to mature. With instant claims the Spark Service Provider fronts the credited amount ahead of maturity and takes a spread, so the funds become usable sooner.
 
-To claim instantly in the background, set the [maximum instant deposit claim fee](config.md#max-instant-deposit-claim-fee) in the configuration, as basis points of the deposit value. The SDK then attempts a 0-conf claim on each not-yet-mature deposit whose spread is within that ceiling; deposits above it wait for the normal claim at maturity. The spread combines a flat amount and the on-chain fee of the provider's claim with a percentage of the deposit, so it is proportionally larger on small deposits and when on-chain fees are high; those fall through to the normal claim rather than overpaying for speed.
+To claim instantly in the background, set the [maximum instant deposit claim fee](config.md#max-instant-deposit-claim-fee) in the configuration, as basis points of the deposit value. The SDK then attempts an instant claim on each not-yet-mature deposit whose spread is within that ceiling, at the earliest confirmation depth the provider will credit at. Deposits above the ceiling wait for the normal claim at maturity. The spread combines a flat amount and the on-chain fee of the provider's claim with a percentage of the deposit, so it is proportionally larger on small deposits and when on-chain fees are high; those fall through to the normal claim rather than overpaying for speed.
 
 You can also claim a specific not-yet-mature deposit on demand by passing a maximum instant fee, in basis points, to {{#name claim_deposit}}. The resulting transfer settles asynchronously, so no payment is returned; watch for it via {{#name list_payments}} or the [payment events](events.md).
 

@@ -594,10 +594,11 @@ pub struct Config {
     // If not set then any fee is allowed
     pub max_deposit_claim_fee: Option<MaxFee>,
 
-    /// Maximum instant (0-conf) static deposit claim fee, as basis points of the
-    /// deposit value (100 bps = 1%), capping the SSP spread for the instant
-    /// credit. Opt-in: while unset, no 0-conf claim is attempted. Small deposits,
-    /// whose spread is proportionally larger, fall through to the normal claim.
+    /// Maximum instant static deposit claim fee, as basis points of the deposit
+    /// value (100 bps = 1%), capping the SSP spread for crediting the deposit
+    /// before it matures. Opt-in: while unset, no instant claim is attempted.
+    /// Small deposits, whose spread is proportionally larger, fall through to the
+    /// normal claim.
     pub max_instant_deposit_claim_fee_bps: Option<u32>,
 
     /// The domain used for receiving through lnurl-pay and lightning address.
@@ -1106,11 +1107,11 @@ impl Fee {
     }
 }
 
-/// Why an instant (0-conf) claim was declined.
+/// Why an instant claim was declined.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum InstantClaimDeclineReason {
-    /// The SSP offered no 0-conf fulfillment plan for the deposit.
+    /// The SSP offered no fulfillment plan for the deposit.
     NoPlan,
     /// The SSP spread exceeded the ceiling (`max_bps`). The instant claim can be
     /// retried with a higher ceiling. `quoted_bps` / `quoted_sats` are the spread
@@ -1124,7 +1125,7 @@ pub enum InstantClaimDeclineReason {
     SubmissionFailed,
 }
 
-/// State of an instant (0-conf) claim attempt on a deposit.
+/// State of an instant claim attempt on a deposit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum InstantClaimStatus {
@@ -1158,8 +1159,8 @@ pub struct ClaimDepositRequest {
     pub vout: u32,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub max_fee: Option<MaxFee>,
-    /// Set to request an instant (0-conf) claim instead of waiting for the
-    /// deposit to mature, bounding the SSP spread at this many basis points of
+    /// Set to request an instant claim instead of waiting for the deposit to
+    /// mature, bounding the SSP spread at this many basis points of
     /// the deposit value (100 bps = 1%). When set, the call takes the instant
     /// path and `max_fee` is ignored.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
