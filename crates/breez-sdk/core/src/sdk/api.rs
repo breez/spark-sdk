@@ -196,11 +196,16 @@ impl BreezSdk {
     /// Signs a message with the wallet's identity key. The message is SHA256
     /// hashed before signing. The returned signature will be hex encoded in
     /// DER format by default, or compact format if specified.
+    ///
+    /// Messages in the `breez-lnurl:` namespace are refused: it is reserved for
+    /// the SDK's own requests to the Lightning address server.
     pub async fn sign_message(
         &self,
         request: SignMessageRequest,
     ) -> Result<SignMessageResponse, SdkError> {
         use bitcoin::hex::DisplayHex;
+
+        reject_reserved_namespace(&request.message)?;
 
         let pubkey = self.spark_wallet.get_identity_public_key().to_string();
         let signature = self.spark_wallet.sign_message(&request.message).await?;
@@ -660,6 +665,26 @@ fn normalize_expires_at(raw: &str) -> String {
     raw.to_string()
 }
 
+/// Refuses a message in the namespace reserved for the LNURL server.
+///
+/// The identity key signs both user messages and the SDK's own requests to that
+/// server, and this API is for the former. Matching is ASCII case-insensitive:
+/// the server compares exact bytes, so a caller arriving here with another case
+/// did not compose the message either way.
+fn reject_reserved_namespace(message: &str) -> Result<(), SdkError> {
+    let namespace = lnurl_models::signed_message::RESERVED_NAMESPACE;
+    let reserved = message
+        .as_bytes()
+        .get(..namespace.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(namespace.as_bytes()));
+    if reserved {
+        return Err(SdkError::InvalidInput(format!(
+            "messages starting with '{namespace}' are reserved for Lightning address requests and cannot be signed here"
+        )));
+    }
+    Ok(())
+}
+
 /// Parses a 33-byte compressed public key from hex.
 ///
 /// Rejects the uncompressed encoding, which `PublicKey::from_str` also accepts:
@@ -831,6 +856,47 @@ mod tests {
     fn parse_compressed_public_key_round_trips() {
         let key = parse_compressed_public_key(COMPRESSED).unwrap();
         assert_eq!(key.to_string(), COMPRESSED);
+    }
+
+    #[test]
+    fn reject_reserved_namespace_refuses_lnurl_messages() {
+        let messages = [
+            lnurl_models::signed_message::register("lnurl.example.com", "alice", "d", 1),
+            lnurl_models::signed_message::unregister("lnurl.example.com", "alice", 1),
+            lnurl_models::signed_message::recover("lnurl.example.com", COMPRESSED, 1),
+            lnurl_models::signed_message::metadata("lnurl.example.com", COMPRESSED, 1),
+            "BREEZ-LNURL:v2\nregister\n...".to_string(),
+            "breez-lnurl:".to_string(),
+            "breez-lnurl:v3 whatever comes next".to_string(),
+        ];
+        for message in messages {
+            assert!(
+                matches!(
+                    reject_reserved_namespace(&message),
+                    Err(SdkError::InvalidInput(_))
+                ),
+                "expected {message:?} to be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn reject_reserved_namespace_allows_everything_else() {
+        for message in [
+            "",
+            "hello",
+            "breez-lnur",
+            "breez lnurl:v2",
+            // Only a leading namespace authorizes anything.
+            "please sign breez-lnurl:v2\nregister",
+            // A multi-byte first character must not panic the prefix check.
+            "🥖",
+        ] {
+            assert!(
+                reject_reserved_namespace(message).is_ok(),
+                "expected {message:?} to be allowed"
+            );
+        }
     }
 
     #[test]

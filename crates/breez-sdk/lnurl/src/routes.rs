@@ -2,28 +2,31 @@ use axum::{
     Extension, Json,
     body::Bytes,
     extract::{FromRequestParts, Path, Query},
-    http::{HeaderMap, StatusCode, request::Parts},
+    http::{HeaderMap, StatusCode, header, request::Parts},
     response::IntoResponse,
 };
 use bitcoin::{
     bech32,
     hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256},
-    secp256k1::{PublicKey, XOnlyPublicKey, ecdsa::Signature},
+    secp256k1::{PublicKey, Secp256k1, XOnlyPublicKey, ecdsa::Signature},
 };
 use lightning_invoice::Bolt11Invoice;
 use lnurl_models::{
     CheckUsernameAvailableResponse, ListMetadataRequest, ListMetadataResponse,
     RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
     RegisterLnurlPayResponse, TransferLnurlPayRequest, TransferLnurlPayResponse,
-    UnregisterLnurlPayRequest, sanitize_username,
+    UnregisterLnurlPayRequest, sanitize_username, signed_message,
 };
 use nostr::{Alphabet, Event, JsonUtil, Kind, TagStandard};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use spark::utils::verify_signature::verify_signature_ecdsa;
 use std::marker::PhantomData;
 use std::str::FromStr;
-use tracing::{debug, error, trace, warn};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     invoice_paid::{create_invoice, handle_invoice_paid},
@@ -37,7 +40,9 @@ use crate::{
     user::{USERNAME_VALIDATION_REGEX, User},
 };
 
-const ACCEPTABLE_TIME_DIFF_SECS: u64 = 600;
+/// Named locally for how it reads at the call sites, defined in `lnurl-models`
+/// so this server and every client bound a timestamp identically.
+const ACCEPTABLE_TIME_DIFF_SECS: u64 = signed_message::VALIDITY_SECS;
 /// LUD-17 scheme prefixes an `lnurl` tag may carry in place of http(s).
 const LNURL_SCHEME_PREFIXES: [&str; 4] = ["lnurlp://", "lnurlw://", "lnurlc://", "keyauth://"];
 const DEFAULT_METADATA_OFFSET: u32 = 0;
@@ -46,6 +51,13 @@ const DEFAULT_METADATA_LIMIT: u32 = 100;
 const MAX_NOSTR_EVENT_SIZE: usize = 32_768;
 /// Maximum length of a sender comment (LUD-12).
 const MAX_COMMENT_LENGTH: usize = 255;
+/// Where `list_metadata` reads its credential from, in preference to the query
+/// string. A GET's query string lands in proxy and access logs; the response
+/// carries preimages.
+const METADATA_SIGNATURE_HEADER: &str = "x-breez-signature";
+const METADATA_TIMESTAMP_HEADER: &str = "x-breez-timestamp";
+/// How often the accumulated legacy signed-message counts are logged.
+const LEGACY_REPORT_INTERVAL: Duration = Duration::from_mins(1);
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct LnurlPayCallbackParams {
@@ -138,37 +150,38 @@ where
         Extension(state): Extension<State<DB>>,
         Json(payload): Json<RegisterLnurlPayRequest>,
     ) -> Result<Json<RegisterLnurlPayResponse>, (StatusCode, Json<Value>)> {
-        let username = sanitize_username(&payload.username);
+        let RegisterLnurlPayRequest {
+            username,
+            signature,
+            timestamp,
+            description,
+        } = payload;
+        let username = sanitize_username(&username);
         validate_username(&username)?;
-        let (pubkey, signed) = validate_any(
-            &pubkey,
-            &payload.signature,
-            std::slice::from_ref(&username),
-            payload.timestamp,
-            &state,
-        )
-        .await?;
-        validate_description(&payload.description)?;
-        // Resolved before the claim, so a request naming a host this server
-        // does not serve is refused without spending the statement.
+        // The description and the resolved domain are both fields of the v2
+        // message, so both are settled before anything verifies a signature.
+        // Resolving the domain first also refuses a request naming a host this
+        // server does not serve without spending the statement.
+        validate_description(&description)?;
         let domain = sanitize_domain(&state, &host).await?;
-        // Register and the legacy unregister candidate sign identical bytes, so
-        // this claim is what a register signature replayed to unregister runs
-        // into. It outlives that candidate: it also stops a replay resurrecting
-        // an address the pubkey has since unregistered.
-        claim_statement(
-            &state,
-            SignedRoute::Register,
-            &statement_hash(&pubkey, &signed),
-            claim_expiry(payload.timestamp),
-        )
-        .await?;
+
+        let (pubkey, signature) = parse_signed_request(&pubkey, &signature)?;
+        if !timestamp_is_fresh(timestamp) {
+            return Err(invalid_timestamp());
+        }
+        let candidates = register_candidates(&domain, &username, &description, timestamp);
+        let candidate = verify_candidates(&pubkey, &signature, &candidates, &domain)?;
+        // Register and the legacy unregister candidate cover identical bytes,
+        // so claiming here spends the statement for both routes. The claim
+        // outlives that candidate: it also keeps a spent statement from
+        // resurrecting an address the pubkey has since unregistered.
+        claim_statement(&state, &pubkey, candidate).await?;
 
         let user = User {
             domain,
             pubkey: pubkey.to_string(),
             name: username,
-            description: payload.description,
+            description,
         };
 
         if let Err(e) = state.db.upsert_user(&user).await {
@@ -195,26 +208,55 @@ where
         }))
     }
 
+    #[allow(clippy::too_many_lines)]
     pub async fn transfer(
         Host(host): Host,
         Path(to_pubkey): Path<String>,
         Extension(state): Extension<State<DB>>,
         Json(payload): Json<TransferLnurlPayRequest>,
     ) -> Result<Json<TransferLnurlPayResponse>, (StatusCode, Json<Value>)> {
-        let username = sanitize_username(&payload.username);
+        let TransferLnurlPayRequest {
+            username,
+            description,
+            from_pubkey,
+            from_signature,
+            to_signature,
+            timestamp,
+        } = payload;
+        let username = sanitize_username(&username);
         validate_username(&username)?;
-        validate_description(&payload.description)?;
+        validate_description(&description)?;
+        let domain = sanitize_domain(&state, &host).await?;
 
-        let message = format!("transfer:{username}-{to_pubkey}");
-        let from_pk = verify_transfer_signature(
-            &payload.from_pubkey,
-            &payload.from_signature,
-            &message,
-            &state,
-        )
-        .await?;
-        let to_pk =
-            verify_transfer_signature(&to_pubkey, &payload.to_signature, &message, &state).await?;
+        let (from_pk, from_sig) = parse_signed_request(&from_pubkey, &from_signature)?;
+        let (to_pk, to_sig) = parse_signed_request(&to_pubkey, &to_signature)?;
+
+        // A timestamp selects the v2 messages on both signatures. Bounded with
+        // the same symmetric window as every other route: an asymmetric
+        // future bound would cap a stolen authorization slightly tighter at the
+        // cost of a route that fails on a device where every other route works.
+        if let Some(timestamp) = timestamp
+            && !timestamp_is_fresh(timestamp)
+        {
+            return Err(transfer_expired());
+        }
+
+        // Role-tagged, so the current owner's signature does not verify in the
+        // transferee's slot. The transferee's message commits to the description
+        // because the transferee is the one choosing it.
+        let from_candidates =
+            transfer_from_candidates(&domain, &username, &from_pk, &to_pk, &to_pubkey, timestamp);
+        let to_candidates = transfer_to_candidates(
+            &domain,
+            &username,
+            &from_pk,
+            &to_pk,
+            &to_pubkey,
+            &description,
+            timestamp,
+        );
+        let authorization = verify_candidates(&from_pk, &from_sig, &from_candidates, &domain)?;
+        verify_candidates(&to_pk, &to_sig, &to_candidates, &domain)?;
 
         if from_pk == to_pk {
             return Err((
@@ -225,12 +267,8 @@ where
             ));
         }
 
-        let domain = sanitize_domain(&state, &host).await?;
-
         // Claimed in the same transaction as the transfer, so a transfer that
-        // rolls back leaves the statement actionable. The statement names the
-        // source, the target and the username, and no domain, so one pair
-        // authorizes one transfer wherever it is submitted.
+        // rolls back leaves the statement actionable.
         if let Err(e) = state
             .db
             .transfer_username(
@@ -238,10 +276,10 @@ where
                 &from_pk.to_string(),
                 &to_pk.to_string(),
                 &username,
-                &payload.description,
+                &description,
                 StatementClaim {
-                    hash: &statement_hash(&from_pk, &message),
-                    expires_at: claim_expiry_unbounded(),
+                    hash: &statement_hash(&from_pk, &authorization.message),
+                    expires_at: authorization.expiry.expires_at(),
                 },
             )
             .await
@@ -294,30 +332,28 @@ where
         Extension(state): Extension<State<DB>>,
         Json(payload): Json<UnregisterLnurlPayRequest>,
     ) -> Result<(), (StatusCode, Json<Value>)> {
-        let username = sanitize_username(&payload.username);
-        let messages = unregister_candidate_messages(&username);
-        let (pubkey, signed) = validate_any(
-            &pubkey,
-            &payload.signature,
-            &messages,
-            payload.timestamp,
-            &state,
-        )
-        .await?;
-        // Resolved before the claim, so a request naming a host this server
-        // does not serve is refused without spending the statement.
+        let UnregisterLnurlPayRequest {
+            username,
+            signature,
+            timestamp,
+        } = payload;
+        let username = sanitize_username(&username);
+        // Resolved before verification because the v2 message names it, and
+        // before the claim so a request naming a host this server does not serve
+        // is refused without spending the statement.
         let domain = sanitize_domain(&state, &host).await?;
-        // Rejects a register signature replayed here: register claims the same
-        // bare statement, so this finds it already claimed. It outlives that
-        // candidate: it also stops a captured unregister running again after the
-        // name is re-registered.
-        claim_statement(
-            &state,
-            SignedRoute::Unregister,
-            &statement_hash(&pubkey, &signed),
-            claim_expiry(payload.timestamp),
-        )
-        .await?;
+
+        let (pubkey, signature) = parse_signed_request(&pubkey, &signature)?;
+        if !timestamp_is_fresh(timestamp) {
+            return Err(invalid_timestamp());
+        }
+        let candidates = unregister_candidates(&domain, &username, timestamp);
+        let candidate = verify_candidates(&pubkey, &signature, &candidates, &domain)?;
+        // Register claims the same bare statement, so a statement spent there
+        // is already claimed here. The claim outlives that candidate: it also
+        // keeps a spent statement from acting again after the name is
+        // re-registered.
+        claim_statement(&state, &pubkey, candidate).await?;
 
         let registered = state
             .db
@@ -372,18 +408,24 @@ where
         Extension(state): Extension<State<DB>>,
         Json(payload): Json<RecoverLnurlPayRequest>,
     ) -> Result<Json<RecoverLnurlPayResponse>, (StatusCode, Json<Value>)> {
-        let pubkey = validate(
-            &pubkey,
-            &payload.signature,
-            &pubkey,
-            payload.timestamp,
-            &state,
-        )
-        .await?;
+        let RecoverLnurlPayRequest {
+            signature,
+            timestamp,
+        } = payload;
+        let domain = sanitize_domain(&state, &host).await?;
+
+        let (identity, signature) = parse_signed_request(&pubkey, &signature)?;
+        if !timestamp_is_fresh(timestamp) {
+            return Err(invalid_timestamp());
+        }
+        let candidates = recover_candidates(&domain, &identity, &pubkey, timestamp);
+        // Claims nothing: this is a read, and claiming it would break a
+        // legitimate client retry.
+        verify_candidates(&identity, &signature, &candidates, &domain)?;
 
         let user = state
             .db
-            .get_user_by_pubkey(&sanitize_domain(&state, &host).await?, &pubkey.to_string())
+            .get_user_by_pubkey(&domain, &identity.to_string())
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -411,23 +453,42 @@ where
     }
 
     pub async fn list_metadata(
+        Host(host): Host,
         Path(pubkey): Path<String>,
+        headers: HeaderMap,
         Query(params): Query<ListMetadataRequest>,
         Extension(state): Extension<State<DB>>,
-    ) -> Result<Json<ListMetadataResponse>, (StatusCode, Json<Value>)> {
-        let pubkey = validate(
-            &pubkey,
-            &params.signature,
-            &pubkey,
-            params.timestamp,
-            &state,
-        )
-        .await?;
-        let offset = params.offset.unwrap_or(DEFAULT_METADATA_OFFSET);
-        let limit = params.limit.unwrap_or(DEFAULT_METADATA_LIMIT);
+    ) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
+        let ListMetadataRequest {
+            signature,
+            timestamp,
+            offset,
+            limit,
+            updated_after,
+        } = params;
+        let (signature, timestamp) = metadata_credentials(&headers, signature, timestamp)?;
+        let domain = sanitize_domain(&state, &host).await?;
+
+        let (identity, signature) = parse_signed_request(&pubkey, &signature)?;
+        if !timestamp_is_fresh(timestamp) {
+            return Err(invalid_timestamp());
+        }
+        let candidates = metadata_candidates(&domain, &identity, &pubkey, timestamp);
+        // Claims nothing, for the same reason as `recover`.
+        verify_candidates(&identity, &signature, &candidates, &domain)?;
+
+        // Rows are keyed by the identity pubkey, which is the same principal on
+        // every domain a deployment serves, so they are not filtered by domain:
+        // the domain in the message is doing anti-replay work, not authorization
+        // work.
         let metadata = state
             .db
-            .get_metadata_by_pubkey(&pubkey.to_string(), offset, limit, params.updated_after)
+            .get_metadata_by_pubkey(
+                &identity.to_string(),
+                offset.unwrap_or(DEFAULT_METADATA_OFFSET),
+                limit.unwrap_or(DEFAULT_METADATA_LIMIT),
+                updated_after,
+            )
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -436,7 +497,13 @@ where
                     Json(Value::String("internal server error".into())),
                 )
             })?;
-        Ok(Json(ListMetadataResponse { metadata }))
+
+        // The response carries preimages, so it must not be retained by any
+        // cache between here and the client.
+        Ok((
+            [(header::CACHE_CONTROL, "no-store, private")],
+            Json(ListMetadataResponse { metadata }),
+        ))
     }
 
     pub async fn handle_lnurl_pay(
@@ -1135,12 +1202,61 @@ fn validate_description(description: &str) -> Result<(), (StatusCode, Json<Value
     Ok(())
 }
 
-/// Parse a signed request and bound it in time. Independent of the message the
-/// signature covers.
+/// Take the metadata request's signature and timestamp from the headers,
+/// falling back to the query string only where a header is absent.
+///
+/// A present header wins outright, and one that fails to parse is refused
+/// rather than falling through, so a query parameter can never override what a
+/// client put in the header. The response carries preimages, which is why the
+/// credential belongs in a header: a query string lands in proxy and access
+/// logs.
+fn metadata_credentials(
+    headers: &HeaderMap,
+    query_signature: Option<String>,
+    query_timestamp: Option<u64>,
+) -> Result<(String, u64), (StatusCode, Json<Value>)> {
+    let signature = match headers.get(METADATA_SIGNATURE_HEADER) {
+        Some(value) => Some(
+            value
+                .to_str()
+                .map_err(|_| malformed_header(METADATA_SIGNATURE_HEADER))?
+                .to_string(),
+        ),
+        None => query_signature,
+    };
+    let timestamp = match headers.get(METADATA_TIMESTAMP_HEADER) {
+        Some(value) => Some(
+            value
+                .to_str()
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .ok_or_else(|| malformed_header(METADATA_TIMESTAMP_HEADER))?,
+        ),
+        None => query_timestamp,
+    };
+
+    match (signature, timestamp) {
+        (Some(signature), Some(timestamp)) => Ok((signature, timestamp)),
+        _ => Err((
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("missing signature or timestamp".into())),
+        )),
+    }
+}
+
+fn malformed_header(name: &str) -> (StatusCode, Json<Value>) {
+    trace!("malformed '{name}' header");
+    (
+        StatusCode::BAD_REQUEST,
+        Json(Value::String(format!("malformed '{name}' header"))),
+    )
+}
+
+/// Parse the identity pubkey and DER signature a signed request carries.
+/// Independent of the message the signature covers.
 fn parse_signed_request(
     pubkey: &str,
     signature: &str,
-    timestamp: u64,
 ) -> Result<(PublicKey, Signature), (StatusCode, Json<Value>)> {
     let pubkey = parse_pubkey(pubkey)?;
     let signature = hex::decode(signature).map_err(|e| {
@@ -1158,46 +1274,234 @@ fn parse_signed_request(
         )
     })?;
 
-    let now = now_u64();
+    Ok((pubkey, signature))
+}
+
+/// Whether a signed request's timestamp is inside the accept window, bounded
+/// symmetrically so a device whose clock runs fast still works.
+fn timestamp_is_fresh(timestamp: u64) -> bool {
+    is_fresh_at(timestamp, now_u64())
+}
+
+fn is_fresh_at(timestamp: u64, now: u64) -> bool {
     let diff = timestamp.abs_diff(now);
     if diff > ACCEPTABLE_TIME_DIFF_SECS {
         trace!(
             "invalid timestamp, too far off: {}, now: {}, diff: {}",
             timestamp, now, diff
         );
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(Value::String("invalid timestamp".into())),
-        ));
+        return false;
     }
-
-    Ok((pubkey, signature))
+    true
 }
 
-async fn validate<DB>(
-    pubkey: &str,
-    signature: &str,
-    message: &str,
+fn invalid_timestamp() -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(Value::String("invalid timestamp".into())),
+    )
+}
+
+/// Distinct from a rejected signature so a partner can tell a stale
+/// authorization from a mis-signed one. Both sides sign the same timestamp, so
+/// this covers a handover that took longer than the accept window.
+fn transfer_expired() -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(Value::String(
+            "transfer authorization is expired or not yet valid".into(),
+        )),
+    )
+}
+
+/// Naming the resolved domain separates "signed for another domain" from "not
+/// signed by this key", which is the difference between diagnosing a proxy that
+/// rewrites `Host` in minutes or with a packet capture. The caller chose the
+/// header that resolved to this domain, so the response tells it nothing new.
+fn invalid_signature_for_domain(domain: &str) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(Value::String(format!(
+            "invalid signature for domain '{domain}'"
+        ))),
+    )
+}
+
+/// Append the timestamp the way every pre-v2 message did.
+fn legacy_timestamped(message: &str, timestamp: u64) -> String {
+    format!("{message}-{timestamp}")
+}
+
+/// The messages a register signature may cover, most-preferred first.
+fn register_candidates(
+    domain: &str,
+    username: &str,
+    description: &str,
     timestamp: u64,
-    state: &State<DB>,
-) -> Result<PublicKey, (StatusCode, Json<Value>)> {
-    validate_any(pubkey, signature, &[message.to_string()], timestamp, state)
-        .await
-        .map(|(pubkey, _)| pubkey)
+) -> Vec<Candidate> {
+    vec![
+        Candidate::v2(
+            signed_message::register(domain, username, description, timestamp),
+            SignedRoute::Register,
+            timestamp,
+        ),
+        // Commits to neither the domain nor the description, so a legacy
+        // signature can still be aimed at another served domain by header.
+        // TODO: drop at the legacy cutoff, and flip
+        // `register_signature_still_verifies_against_the_legacy_message`.
+        Candidate::legacy(
+            legacy_timestamped(username, timestamp),
+            SignedRoute::Register,
+            ClaimExpiry::Bounded(timestamp),
+        ),
+    ]
 }
 
 /// The messages an unregister signature may cover, most-preferred first.
 ///
-/// The `unregister:` prefix domain-separates deletion from the other signed
-/// messages, so a signature captured from another route cannot authorize one.
-/// The bare form is `register`'s and stays interchangeable with it, so what
-/// stops a captured register request deleting the address is register having
-/// claimed that statement first.
+/// The legacy `unregister:` prefix domain-separates deletion from the other
+/// pre-v2 messages. The bare legacy form is `register`'s own, and a statement
+/// claimed by one route is spent for the other.
 ///
-/// TODO: Remove the bare candidate after all clients have migrated to the
-/// prefix, and flip `register_signature_still_verifies_against_the_legacy_message`.
-fn unregister_candidate_messages(username: &str) -> Vec<String> {
-    vec![format!("unregister:{username}"), username.to_string()]
+/// TODO: drop both legacy candidates at the cutoff.
+fn unregister_candidates(domain: &str, username: &str, timestamp: u64) -> Vec<Candidate> {
+    vec![
+        Candidate::v2(
+            signed_message::unregister(domain, username, timestamp),
+            SignedRoute::Unregister,
+            timestamp,
+        ),
+        Candidate::legacy(
+            legacy_timestamped(&format!("unregister:{username}"), timestamp),
+            SignedRoute::Unregister,
+            ClaimExpiry::Bounded(timestamp),
+        ),
+        Candidate::legacy(
+            legacy_timestamped(username, timestamp),
+            SignedRoute::Unregister,
+            ClaimExpiry::Bounded(timestamp),
+        ),
+    ]
+}
+
+/// The messages a recover signature may cover, most-preferred first.
+///
+/// `raw_pubkey` is the path segment verbatim, which is what the legacy message
+/// was built from; the v2 message uses the parsed, normalized form.
+fn recover_candidates(
+    domain: &str,
+    pubkey: &PublicKey,
+    raw_pubkey: &str,
+    timestamp: u64,
+) -> Vec<Candidate> {
+    vec![
+        Candidate::v2(
+            signed_message::recover(domain, &pubkey.to_string(), timestamp),
+            SignedRoute::Recover,
+            timestamp,
+        ),
+        // Byte-identical to the legacy metadata message, so a legacy recover
+        // signature is a valid credential for the metadata route until the
+        // cutoff. TODO: drop at the legacy cutoff.
+        Candidate::legacy(
+            legacy_timestamped(raw_pubkey, timestamp),
+            SignedRoute::Recover,
+            ClaimExpiry::Bounded(timestamp),
+        ),
+    ]
+}
+
+/// The messages a metadata signature may cover, most-preferred first. See
+/// [`recover_candidates`] for the shared legacy message.
+fn metadata_candidates(
+    domain: &str,
+    pubkey: &PublicKey,
+    raw_pubkey: &str,
+    timestamp: u64,
+) -> Vec<Candidate> {
+    vec![
+        Candidate::v2(
+            signed_message::metadata(domain, &pubkey.to_string(), timestamp),
+            SignedRoute::Metadata,
+            timestamp,
+        ),
+        // TODO: drop at the legacy cutoff.
+        Candidate::legacy(
+            legacy_timestamped(raw_pubkey, timestamp),
+            SignedRoute::Metadata,
+            ClaimExpiry::Bounded(timestamp),
+        ),
+    ]
+}
+
+/// The message the current owner's transfer signature may cover.
+///
+/// A timestamp selects v2 outright with no legacy fallback, which is what makes
+/// stripping it from a v2 request fail rather than downgrade.
+fn transfer_from_candidates(
+    domain: &str,
+    username: &str,
+    from_pubkey: &PublicKey,
+    to_pubkey: &PublicKey,
+    raw_to_pubkey: &str,
+    timestamp: Option<u64>,
+) -> Vec<Candidate> {
+    match timestamp {
+        Some(timestamp) => vec![Candidate::v2(
+            signed_message::transfer_from(
+                domain,
+                username,
+                &from_pubkey.to_string(),
+                &to_pubkey.to_string(),
+                timestamp,
+            ),
+            SignedRoute::Transfer,
+            timestamp,
+        )],
+        None => vec![legacy_transfer_candidate(username, raw_to_pubkey)],
+    }
+}
+
+/// The message the transferee's signature may cover. Role-tagged and
+/// description-committing, so it is not the bytes the current owner signed.
+fn transfer_to_candidates(
+    domain: &str,
+    username: &str,
+    from_pubkey: &PublicKey,
+    to_pubkey: &PublicKey,
+    raw_to_pubkey: &str,
+    description: &str,
+    timestamp: Option<u64>,
+) -> Vec<Candidate> {
+    match timestamp {
+        Some(timestamp) => vec![Candidate::v2(
+            signed_message::transfer_to(
+                domain,
+                username,
+                &from_pubkey.to_string(),
+                &to_pubkey.to_string(),
+                description,
+                timestamp,
+            ),
+            SignedRoute::Transfer,
+            timestamp,
+        )],
+        None => vec![legacy_transfer_candidate(username, raw_to_pubkey)],
+    }
+}
+
+/// The pre-v2 transfer message, signed identically by both parties: it names
+/// neither the domain, nor the time, nor the current owner, so one pair of
+/// signatures authorizes one transfer wherever it is submitted. Its claim is
+/// therefore never pruned.
+///
+/// TODO: drop at the legacy cutoff, along with the accumulated unbounded rows.
+fn legacy_transfer_candidate(username: &str, raw_to_pubkey: &str) -> Candidate {
+    Candidate::legacy(
+        format!("transfer:{username}-{raw_to_pubkey}"),
+        SignedRoute::Transfer,
+        ClaimExpiry::Unbounded,
+    )
 }
 
 /// The response when the signed name is not the one the pubkey holds, whether
@@ -1235,24 +1539,185 @@ fn unregister_action(signed_name: &str, registered: Option<&User>) -> Unregister
     }
 }
 
-/// A route that claims the statements it acts on, so the same signature is
-/// never acted on twice.
+/// A route whose requests carry an identity-key signature.
 ///
-/// Transfers claim inside their own transaction, so they name their route
-/// there rather than here.
+/// Names the claim rows a route writes and the legacy counter it increments.
+/// `Recover` and `Metadata` claim nothing: they are reads, and claiming them
+/// would break legitimate client retries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SignedRoute {
     Register,
     Unregister,
+    Transfer,
+    Recover,
+    Metadata,
 }
 
 impl SignedRoute {
+    const ALL: [Self; 5] = [
+        Self::Register,
+        Self::Unregister,
+        Self::Transfer,
+        Self::Recover,
+        Self::Metadata,
+    ];
+
     fn as_str(self) -> &'static str {
         match self {
             Self::Register => "register",
             Self::Unregister => "unregister",
+            Self::Transfer => "transfer",
+            Self::Recover => "recover",
+            Self::Metadata => "metadata",
         }
     }
+
+    fn index(self) -> usize {
+        match self {
+            Self::Register => 0,
+            Self::Unregister => 1,
+            Self::Transfer => 2,
+            Self::Recover => 3,
+            Self::Metadata => 4,
+        }
+    }
+}
+
+/// How long the claim over a message must be retained.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClaimExpiry {
+    /// The message carries this timestamp, so the claim may be pruned once
+    /// [`timestamp_is_fresh`] rejects it on its own.
+    ///
+    /// Retention is tied to the accept window: widening
+    /// `ACCEPTABLE_TIME_DIFF_SECS` requires extending retention first.
+    Bounded(u64),
+    /// Nothing bounds the message in time. Dropping the claim would put the
+    /// statement back in play, since no other check refuses it later.
+    Unbounded,
+}
+
+impl ClaimExpiry {
+    fn expires_at(self) -> i64 {
+        match self {
+            // Saturating: an unrepresentable expiry only retains the claim
+            // longer, and the timestamp is already bounded to now anyway.
+            Self::Bounded(timestamp) => {
+                i64::try_from(timestamp.saturating_add(ACCEPTABLE_TIME_DIFF_SECS))
+                    .unwrap_or(i64::MAX)
+            }
+            Self::Unbounded => i64::MAX,
+        }
+    }
+}
+
+/// A message a signature may cover, carrying everything the route needs once it
+/// matches.
+///
+/// Pairing the message with its expiry here, rather than at the claim call, is
+/// what keeps a route from claiming an untimestamped message with a prunable
+/// expiry, which would let the claim be forgotten while the message stays
+/// valid.
+struct Candidate {
+    message: String,
+    expiry: ClaimExpiry,
+    route: SignedRoute,
+    /// A pre-v2 message, accepted only for the compatibility window.
+    legacy: bool,
+}
+
+impl Candidate {
+    fn v2(message: String, route: SignedRoute, timestamp: u64) -> Self {
+        Self {
+            message,
+            expiry: ClaimExpiry::Bounded(timestamp),
+            route,
+            legacy: false,
+        }
+    }
+
+    fn legacy(message: String, route: SignedRoute, expiry: ClaimExpiry) -> Self {
+        Self {
+            message,
+            expiry,
+            route,
+            legacy: true,
+        }
+    }
+}
+
+/// Legacy verifies since the last flush, per route.
+///
+/// Counted rather than logged per verify: these are unauthenticated paths, so a
+/// line per legacy verify would be caller-driven unbounded log volume. The tail
+/// reading zero everywhere for 30 consecutive days is the gate on dropping the
+/// legacy candidates.
+static LEGACY_VERIFIES: [AtomicU64; SignedRoute::ALL.len()] =
+    [const { AtomicU64::new(0) }; SignedRoute::ALL.len()];
+
+/// Target the legacy-usage line is logged on, so a deployment can route it
+/// somewhere durable without keeping the rest of this module's output.
+pub const LEGACY_SIGNATURE_TARGET: &str = "breez_lnurl::legacy_signatures";
+
+fn record_legacy_verify(route: SignedRoute) {
+    LEGACY_VERIFIES[route.index()].fetch_add(1, Ordering::Relaxed);
+}
+
+/// Take and reset the counts since the last drain, one entry per route
+/// including the zeroes: a route silently missing from the report cannot be
+/// told apart from a route that has stopped seeing legacy traffic.
+fn drain_legacy_verifies() -> Vec<(&'static str, u64)> {
+    SignedRoute::ALL
+        .iter()
+        .map(|route| {
+            (
+                route.as_str(),
+                LEGACY_VERIFIES[route.index()].swap(0, Ordering::Relaxed),
+            )
+        })
+        .collect()
+}
+
+/// Log one line per interval, so the pre-v2 tail is observable before the
+/// legacy candidates are dropped.
+pub fn spawn_legacy_signature_reporter() {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(LEGACY_REPORT_INTERVAL).await;
+            let counts: Vec<String> = drain_legacy_verifies()
+                .into_iter()
+                .map(|(route, count)| format!("{route}={count}"))
+                .collect();
+            info!(
+                target: LEGACY_SIGNATURE_TARGET,
+                "legacy signed-message verifies: {}",
+                counts.join(" ")
+            );
+        }
+    });
+}
+
+/// Verify `signature` against each candidate, accepting the first match.
+/// Returns the candidate whose exact bytes it covered, which is what identifies
+/// the statement to claim.
+fn verify_candidates<'a>(
+    pubkey: &PublicKey,
+    signature: &Signature,
+    candidates: &'a [Candidate],
+    domain: &str,
+) -> Result<&'a Candidate, (StatusCode, Json<Value>)> {
+    let secp = Secp256k1::new();
+    for candidate in candidates {
+        if verify_signature_ecdsa(&secp, &candidate.message, signature, pubkey).is_ok() {
+            if candidate.legacy {
+                record_legacy_verify(candidate.route);
+            }
+            return Ok(candidate);
+        }
+    }
+
+    trace!("invalid signature, no candidate message verified for domain '{domain}'");
+    Err(invalid_signature_for_domain(domain))
 }
 
 /// Identify the statement a signature authorized, for the claim record.
@@ -1280,16 +1745,19 @@ fn statement_hash(pubkey: &PublicKey, signed_message: &str) -> [u8; 32] {
 /// a statement of its own. Resending identical bytes is rejected.
 async fn claim_statement<DB>(
     state: &State<DB>,
-    route: SignedRoute,
-    hash: &[u8; 32],
-    expires_at: i64,
+    pubkey: &PublicKey,
+    candidate: &Candidate,
 ) -> Result<(), (StatusCode, Json<Value>)>
 where
     DB: LnurlRepository,
 {
     let claimed = state
         .db
-        .claim_signed_message(hash, route.as_str(), expires_at)
+        .claim_signed_message(
+            &statement_hash(pubkey, &candidate.message),
+            candidate.route.as_str(),
+            candidate.expiry.expires_at(),
+        )
         .await
         .map_err(|e| {
             error!("failed to claim signed message: {e}");
@@ -1303,108 +1771,14 @@ where
         return Ok(());
     }
 
-    trace!("signature already used, rejecting on '{}'", route.as_str());
+    trace!(
+        "signature already used, rejecting on '{}'",
+        candidate.route.as_str()
+    );
     Err((
         StatusCode::CONFLICT,
         Json(Value::String("signature has already been used".into())),
     ))
-}
-
-/// When a claim over a message nothing bounds in time may be pruned: never.
-/// Dropping it would put the statement back in play, since no other check
-/// refuses it later.
-fn claim_expiry_unbounded() -> i64 {
-    i64::MAX
-}
-
-/// When a claim over a timestamped message may be pruned. Past this point
-/// [`parse_signed_request`] rejects the timestamp on its own.
-fn claim_expiry(timestamp: u64) -> i64 {
-    // Saturating: an unrepresentable expiry only retains the claim longer, and
-    // `parse_signed_request` has already bounded the timestamp to now anyway.
-    i64::try_from(timestamp.saturating_add(ACCEPTABLE_TIME_DIFF_SECS)).unwrap_or(i64::MAX)
-}
-
-/// Verify `signature` against each candidate message, accepting the first
-/// match. Returns the verified pubkey and the exact bytes it covered, which
-/// identify the statement for [`claim_statement`].
-async fn validate_any<DB>(
-    pubkey: &str,
-    signature: &str,
-    messages: &[String],
-    timestamp: u64,
-    state: &State<DB>,
-) -> Result<(PublicKey, String), (StatusCode, Json<Value>)> {
-    // Hoisted out of the loop below: parsing does not depend on the message.
-    let (pubkey, signature) = parse_signed_request(pubkey, signature, timestamp)?;
-
-    for message in messages {
-        let signed = format!("{message}-{timestamp}");
-        if state
-            .wallet
-            .verify_message(&signed, &signature, &pubkey)
-            .await
-            .is_ok()
-        {
-            return Ok((pubkey, signed));
-        }
-    }
-
-    trace!("invalid signature, no candidate message verified");
-    Err((
-        StatusCode::BAD_REQUEST,
-        Json(Value::String("invalid signature".into())),
-    ))
-}
-
-/// Verify a transfer-route signature over the canonical message
-/// `"transfer:{username}-{to_pubkey}"`. Used symmetrically on both ends: the
-/// current owner A and the new owner B sign the exact same bytes, and the
-/// route calls this once per signature.
-///
-/// Nothing bounds the message in time, so a replay can only re-execute the same
-/// A to B transfer of the same username. `transfer_username` claims the
-/// statement it acts on and refuses one already claimed, which bounds that to
-/// zero further executions.
-///
-/// The `"transfer:"` prefix domain-separates from `validate()`'s
-/// `"{message}-{timestamp}"` format so a captured register signature cannot be
-/// replayed as a transfer.
-async fn verify_transfer_signature<DB>(
-    pubkey: &str,
-    signature: &str,
-    message: &str,
-    state: &State<DB>,
-) -> Result<PublicKey, (StatusCode, Json<Value>)> {
-    let pk = parse_pubkey(pubkey)?;
-    let signature = hex::decode(signature).map_err(|e| {
-        trace!("invalid transfer signature, could not decode: {}", e);
-        (
-            StatusCode::BAD_REQUEST,
-            Json(Value::String("invalid signature".into())),
-        )
-    })?;
-    let signature = Signature::from_der(&signature).map_err(|e| {
-        trace!("invalid transfer signature, could not parse: {:?}", e);
-        (
-            StatusCode::BAD_REQUEST,
-            Json(Value::String("invalid signature".into())),
-        )
-    })?;
-
-    state
-        .wallet
-        .verify_message(message, &signature, &pk)
-        .await
-        .map_err(|e| {
-            trace!("invalid transfer signature, could not verify: {}", e);
-            (
-                StatusCode::BAD_REQUEST,
-                Json(Value::String("invalid signature".into())),
-            )
-        })?;
-
-    Ok(pk)
 }
 
 fn parse_pubkey(pubkey: &str) -> Result<PublicKey, (StatusCode, Json<Value>)> {
@@ -2382,15 +2756,18 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // -- Transfer signature verification ---------------------------------------
+    // -- Signed messages -------------------------------------------------------
     //
-    // The transfer route verifies signatures via SparkWallet::verify_message,
-    // which delegates to verify_signature_ecdsa. These exercise that
-    // verification over the route's canonical "transfer:{username}-{to_pubkey}"
-    // message without needing to construct a wallet.
+    // Routes verify via SparkWallet::verify_message, which delegates to
+    // verify_signature_ecdsa. These exercise the candidate sets and that
+    // verification directly, without constructing a wallet.
 
     use bitcoin::secp256k1::{Message, Secp256k1, SecretKey};
     use spark::utils::verify_signature::verify_signature_ecdsa;
+
+    const TEST_DOMAIN: &str = "lnurl.example.com";
+    const OTHER_DOMAIN: &str = "other.example.com";
+    const TEST_DESCRIPTION: &str = "Pay to alice";
 
     /// Deterministic keypair from a seed byte.
     fn transfer_key(seed: u8) -> (SecretKey, PublicKey) {
@@ -2407,59 +2784,643 @@ mod tests {
         secp.sign_ecdsa(&Message::from_digest(digest.to_byte_array()), secret)
     }
 
-    /// The canonical message the transfer route signs and verifies.
-    fn transfer_message(username: &str, to_pubkey: &PublicKey) -> String {
-        format!("transfer:{username}-{}", hex::encode(to_pubkey.serialize()))
+    /// The candidate `signature` verifies against, mirroring what
+    /// [`verify_candidates`] accepts.
+    fn matching<'a>(
+        candidates: &'a [Candidate],
+        signature: &Signature,
+        public_key: &PublicKey,
+    ) -> Option<&'a Candidate> {
+        let secp = Secp256k1::new();
+        candidates.iter().find(|candidate| {
+            verify_signature_ecdsa(&secp, &candidate.message, signature, public_key).is_ok()
+        })
     }
 
-    #[test]
-    fn transfer_signature_accepts_valid() {
-        let secp = Secp256k1::new();
-        let (alice_secret, alice_pubkey) = transfer_key(1);
-        let (_, bob_pubkey) = transfer_key(2);
-        let message = transfer_message("alice", &bob_pubkey);
-        let sig = sign(&alice_secret, &message);
+    fn verifies(candidates: &[Candidate], signature: &Signature, public_key: &PublicKey) -> bool {
+        matching(candidates, signature, public_key).is_some()
+    }
 
-        assert!(
-            verify_signature_ecdsa(&secp, &message, &sig, &alice_pubkey).is_ok(),
-            "a valid signature over the canonical message must verify"
+    // -- Byte-level golden vectors ---------------------------------------------
+
+    /// Pins the exact bytes each route's v2 candidate covers, from the server's
+    /// side of the wire: a refactor of the builders that changes them changes
+    /// the protocol, and every deployed client with it.
+    #[test]
+    fn v2_candidate_messages_are_pinned() {
+        let (_, alice) = transfer_key(0x11);
+        let (_, bob) = transfer_key(0x22);
+        let desc_hash = signed_message::description_hash(TEST_DESCRIPTION);
+
+        assert_eq!(
+            register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP)[0].message,
+            format!(
+                "breez-lnurl:v2\nregister\n{TEST_DOMAIN}\nalice\n{desc_hash}\n{TEST_TIMESTAMP}"
+            )
+        );
+        assert_eq!(
+            unregister_candidates(TEST_DOMAIN, "alice", TEST_TIMESTAMP)[0].message,
+            format!("breez-lnurl:v2\nunregister\n{TEST_DOMAIN}\nalice\n{TEST_TIMESTAMP}")
+        );
+        assert_eq!(
+            recover_candidates(TEST_DOMAIN, &alice, &alice.to_string(), TEST_TIMESTAMP)[0].message,
+            format!("breez-lnurl:v2\nrecover\n{TEST_DOMAIN}\n{alice}\n{TEST_TIMESTAMP}")
+        );
+        assert_eq!(
+            metadata_candidates(TEST_DOMAIN, &alice, &alice.to_string(), TEST_TIMESTAMP)[0].message,
+            format!("breez-lnurl:v2\nmetadata\n{TEST_DOMAIN}\n{alice}\n{TEST_TIMESTAMP}")
+        );
+        assert_eq!(
+            transfer_from_candidates(
+                TEST_DOMAIN,
+                "alice",
+                &alice,
+                &bob,
+                &bob.to_string(),
+                Some(TEST_TIMESTAMP)
+            )[0]
+            .message,
+            format!(
+                "breez-lnurl:v2\ntransfer-from\n{TEST_DOMAIN}\nalice\n{alice}\n{bob}\n{TEST_TIMESTAMP}"
+            )
+        );
+        assert_eq!(
+            transfer_to_candidates(
+                TEST_DOMAIN,
+                "alice",
+                &alice,
+                &bob,
+                &bob.to_string(),
+                TEST_DESCRIPTION,
+                Some(TEST_TIMESTAMP)
+            )[0]
+            .message,
+            format!(
+                "breez-lnurl:v2\ntransfer-to\n{TEST_DOMAIN}\nalice\n{alice}\n{bob}\n{desc_hash}\n{TEST_TIMESTAMP}"
+            )
         );
     }
 
+    /// No two distinct request tuples build the same message, across every
+    /// route and both transfer roles.
     #[test]
-    fn transfer_signature_rejects_forged_signer() {
-        // Alice signs, but the request attributes the signature to Bob's key.
-        let secp = Secp256k1::new();
-        let (alice_secret, _) = transfer_key(1);
-        let (_, bob_pubkey) = transfer_key(2);
-        let message = transfer_message("alice", &bob_pubkey);
-        let sig = sign(&alice_secret, &message);
-
-        assert!(
-            verify_signature_ecdsa(&secp, &message, &sig, &bob_pubkey).is_err(),
-            "a signature made by a different key must be rejected"
-        );
-    }
-
-    #[test]
-    fn transfer_signature_is_bound_to_message() {
-        // A signature verifies only for the exact bytes signed: changing the
-        // username invalidates it, and a register-style "{name}-{timestamp}"
-        // signature cannot be replayed as a transfer (the "transfer:" prefix
-        // domain-separates the two flows).
-        let secp = Secp256k1::new();
-        let (alice_secret, alice_pubkey) = transfer_key(1);
-        let (_, bob_pubkey) = transfer_key(2);
-        let sig = sign(&alice_secret, &transfer_message("alice", &bob_pubkey));
-
-        let tampered_username = transfer_message("mallory", &bob_pubkey);
-        let register_style = String::from("alice-1700000000");
-        for other in [tampered_username, register_style] {
-            assert!(
-                verify_signature_ecdsa(&secp, &other, &sig, &alice_pubkey).is_err(),
-                "signature must not verify against a different message: {other}"
+    fn no_two_request_tuples_build_the_same_message() {
+        let (_, alice) = transfer_key(0x11);
+        let (_, bob) = transfer_key(0x22);
+        let hex_alice = alice.to_string();
+        let mut messages: Vec<String> = Vec::new();
+        for domain in [TEST_DOMAIN, OTHER_DOMAIN] {
+            for name in ["alice", "bob"] {
+                messages.extend(
+                    register_candidates(domain, name, TEST_DESCRIPTION, TEST_TIMESTAMP)
+                        .into_iter()
+                        .chain(unregister_candidates(domain, name, TEST_TIMESTAMP))
+                        .chain(transfer_from_candidates(
+                            domain,
+                            name,
+                            &alice,
+                            &bob,
+                            &hex_alice,
+                            Some(TEST_TIMESTAMP),
+                        ))
+                        .chain(transfer_to_candidates(
+                            domain,
+                            name,
+                            &alice,
+                            &bob,
+                            &hex_alice,
+                            TEST_DESCRIPTION,
+                            Some(TEST_TIMESTAMP),
+                        ))
+                        .filter(|candidate| !candidate.legacy)
+                        .map(|candidate| candidate.message),
+                );
+            }
+            messages.extend(
+                recover_candidates(domain, &alice, &hex_alice, TEST_TIMESTAMP)
+                    .into_iter()
+                    .chain(metadata_candidates(
+                        domain,
+                        &alice,
+                        &hex_alice,
+                        TEST_TIMESTAMP,
+                    ))
+                    .filter(|candidate| !candidate.legacy)
+                    .map(|candidate| candidate.message),
             );
         }
+
+        let unique: std::collections::HashSet<&String> = messages.iter().collect();
+        assert_eq!(unique.len(), messages.len(), "messages must be distinct");
+    }
+
+    // -- Domain binding --------------------------------------------------------
+
+    /// The whole of the fix: a v2 signature is refused once a caller-supplied
+    /// `Forwarded` / `X-Forwarded-Host` steers the request at another served
+    /// domain. The header still wins domain resolution; the signature is what
+    /// refuses the result.
+    #[test]
+    fn a_v2_signature_does_not_verify_for_another_served_domain() {
+        let (secret, public) = transfer_key(0x11);
+        let signature = sign(
+            &secret,
+            &register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP)[0].message,
+        );
+
+        assert!(verifies(
+            &register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP),
+            &signature,
+            &public
+        ));
+        assert!(
+            !verifies(
+                &register_candidates(OTHER_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP),
+                &signature,
+                &public
+            ),
+            "a v2 signature must not verify against a different resolved domain"
+        );
+    }
+
+    // -- Backward compatibility -----------------------------------------------
+    //
+    // These drive the real `verify_candidates`, over the exact bytes a pre-v2
+    // client signs, so a client that has not migrated keeps working for the
+    // whole compatibility window. Every one of them flips to `is_err()` at the
+    // cutoff (see the TODOs on the candidate builders).
+
+    /// Serializes the tests that verify a legacy candidate, since doing so
+    /// increments the process-wide legacy counters that
+    /// `a_legacy_verify_is_counted_and_a_v2_verify_is_not` asserts on.
+    fn legacy_counter_guard() -> std::sync::MutexGuard<'static, ()> {
+        static GUARD: Mutex<()> = Mutex::new(());
+        // A test that fails while holding the guard must not cascade into the
+        // others reporting a poisoned mutex instead of their own result.
+        GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// What a pre-v2 client signs on each route, paired with the candidate set
+    /// the route offers it against.
+    ///
+    /// The messages are reproduced literally rather than built from the
+    /// candidate helpers: a helper that stopped emitting the legacy form would
+    /// otherwise silently make the assertions vacuous.
+    fn old_client_requests(
+        pubkey: &PublicKey,
+        to_pubkey: &PublicKey,
+    ) -> Vec<(&'static str, String, Vec<Candidate>)> {
+        let hex_pubkey = pubkey.to_string();
+        let hex_to = to_pubkey.to_string();
+        vec![
+            (
+                "register",
+                format!("alice-{TEST_TIMESTAMP}"),
+                register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP),
+            ),
+            (
+                "unregister, prefixed",
+                format!("unregister:alice-{TEST_TIMESTAMP}"),
+                unregister_candidates(TEST_DOMAIN, "alice", TEST_TIMESTAMP),
+            ),
+            (
+                "unregister, bare",
+                format!("alice-{TEST_TIMESTAMP}"),
+                unregister_candidates(TEST_DOMAIN, "alice", TEST_TIMESTAMP),
+            ),
+            (
+                "recover",
+                format!("{hex_pubkey}-{TEST_TIMESTAMP}"),
+                recover_candidates(TEST_DOMAIN, pubkey, &hex_pubkey, TEST_TIMESTAMP),
+            ),
+            (
+                "metadata",
+                format!("{hex_pubkey}-{TEST_TIMESTAMP}"),
+                metadata_candidates(TEST_DOMAIN, pubkey, &hex_pubkey, TEST_TIMESTAMP),
+            ),
+            (
+                "transfer",
+                format!("transfer:alice-{hex_to}"),
+                transfer_from_candidates(TEST_DOMAIN, "alice", pubkey, to_pubkey, &hex_to, None),
+            ),
+        ]
+    }
+
+    /// Every route still accepts the signature a pre-v2 client produces.
+    #[test]
+    fn every_route_still_accepts_a_pre_v2_signature() {
+        let _guard = legacy_counter_guard();
+        let (secret, public) = transfer_key(0x11);
+        let (_, bob) = transfer_key(0x22);
+
+        for (label, message, candidates) in old_client_requests(&public, &bob) {
+            let signature = sign(&secret, &message);
+            let matched = verify_candidates(&public, &signature, &candidates, TEST_DOMAIN)
+                .unwrap_or_else(|_| panic!("{label}: a pre-v2 signature must still verify"));
+
+            assert!(matched.legacy, "{label}: must match the legacy candidate");
+            assert_eq!(matched.message, message, "{label}");
+        }
+    }
+
+    /// The pre-v2 transfer message is signed identically by both parties, so
+    /// one signature pair verifies in both slots. The v2 role tags are what end
+    /// that, and only for requests that carry a timestamp.
+    #[test]
+    fn a_pre_v2_transfer_still_verifies_in_both_slots() {
+        let _guard = legacy_counter_guard();
+        let (alice_secret, alice) = transfer_key(0x11);
+        let (bob_secret, bob) = transfer_key(0x22);
+        let hex_bob = bob.to_string();
+        let from = transfer_from_candidates(TEST_DOMAIN, "alice", &alice, &bob, &hex_bob, None);
+        let to = transfer_to_candidates(
+            TEST_DOMAIN,
+            "alice",
+            &alice,
+            &bob,
+            &hex_bob,
+            TEST_DESCRIPTION,
+            None,
+        );
+
+        assert_eq!(
+            from[0].message, to[0].message,
+            "both parties signed the same bytes before v2"
+        );
+
+        let legacy = format!("transfer:alice-{hex_bob}");
+        assert!(
+            verify_candidates(&alice, &sign(&alice_secret, &legacy), &from, TEST_DOMAIN).is_ok()
+        );
+        assert!(verify_candidates(&bob, &sign(&bob_secret, &legacy), &to, TEST_DOMAIN).is_ok());
+    }
+
+    /// A v2 signature is preferred over the legacy candidate, so a migrated
+    /// client is never recorded as legacy traffic and never claims the bare
+    /// statement a pre-v2 client would.
+    #[test]
+    fn the_v2_candidate_is_matched_before_the_legacy_one() {
+        let (secret, public) = transfer_key(0x11);
+        let candidates =
+            register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP);
+        let signature = sign(&secret, &candidates[0].message);
+
+        let matched = verify_candidates(&public, &signature, &candidates, TEST_DOMAIN)
+            .expect("a v2 signature must verify");
+
+        assert!(!matched.legacy);
+        assert_eq!(matched.expiry, ClaimExpiry::Bounded(TEST_TIMESTAMP));
+    }
+
+    /// The counters are the gate on dropping the legacy candidates, so a legacy
+    /// verify that failed to increment one would make the tail look empty while
+    /// clients still depend on it.
+    #[test]
+    fn a_legacy_verify_is_counted_and_a_v2_verify_is_not() {
+        let _guard = legacy_counter_guard();
+        let (secret, public) = transfer_key(0x33);
+        let candidates = unregister_candidates(TEST_DOMAIN, "alice", TEST_TIMESTAMP);
+        drain_legacy_verifies();
+
+        verify_candidates(
+            &public,
+            &sign(&secret, &candidates[0].message),
+            &candidates,
+            TEST_DOMAIN,
+        )
+        .expect("v2 verifies");
+        assert!(
+            drain_legacy_verifies().iter().all(|(_, count)| *count == 0),
+            "a v2 verify must not be counted as legacy"
+        );
+
+        verify_candidates(
+            &public,
+            &sign(&secret, &format!("unregister:alice-{TEST_TIMESTAMP}")),
+            &candidates,
+            TEST_DOMAIN,
+        )
+        .expect("legacy verifies");
+        let counts = drain_legacy_verifies();
+        assert_eq!(
+            counts
+                .iter()
+                .find(|(route, _)| *route == "unregister")
+                .map(|(_, count)| *count),
+            Some(1),
+            "the legacy verify must be counted against its own route"
+        );
+        assert!(
+            counts
+                .iter()
+                .filter(|(route, _)| *route != "unregister")
+                .all(|(_, count)| *count == 0),
+            "and against no other route"
+        );
+
+        // Draining resets, so each interval reports only its own traffic.
+        assert!(drain_legacy_verifies().iter().all(|(_, count)| *count == 0));
+    }
+
+    /// A legacy signature stays domain-free for the whole compatibility window,
+    /// so it can still be aimed elsewhere by header. Flip at the cutoff.
+    #[test]
+    fn a_legacy_signature_still_verifies_for_any_served_domain() {
+        let (secret, public) = transfer_key(0x11);
+        let signature = sign(&secret, &format!("alice-{TEST_TIMESTAMP}"));
+
+        for domain in [TEST_DOMAIN, OTHER_DOMAIN] {
+            assert!(verifies(
+                &register_candidates(domain, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP),
+                &signature,
+                &public
+            ));
+        }
+    }
+
+    // -- Description binding ---------------------------------------------------
+
+    #[test]
+    fn a_tampered_description_rejects_the_register_signature() {
+        let (secret, public) = transfer_key(0x11);
+        let signature = sign(
+            &secret,
+            &register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP)[0].message,
+        );
+
+        assert!(
+            !verifies(
+                &register_candidates(TEST_DOMAIN, "alice", "Pay to mallory", TEST_TIMESTAMP)
+                    .into_iter()
+                    .filter(|candidate| !candidate.legacy)
+                    .collect::<Vec<_>>(),
+                &signature,
+                &public
+            ),
+            "the description is covered by the signature"
+        );
+    }
+
+    #[test]
+    fn a_tampered_description_rejects_the_transferee_signature() {
+        let (secret, bob) = transfer_key(0x22);
+        let (_, alice) = transfer_key(0x11);
+        let to_candidates = |description| {
+            transfer_to_candidates(
+                TEST_DOMAIN,
+                "alice",
+                &alice,
+                &bob,
+                &bob.to_string(),
+                description,
+                Some(TEST_TIMESTAMP),
+            )
+        };
+        let signature = sign(&secret, &to_candidates(TEST_DESCRIPTION)[0].message);
+
+        assert!(verifies(&to_candidates(TEST_DESCRIPTION), &signature, &bob));
+        assert!(!verifies(
+            &to_candidates("Pay to mallory"),
+            &signature,
+            &bob
+        ));
+    }
+
+    // -- Role separation -------------------------------------------------------
+
+    /// The role tags are what keep the current owner's signature from serving
+    /// as the transferee's, and the other way round.
+    #[test]
+    fn the_two_transfer_roles_sign_different_bytes() {
+        let (alice_secret, alice) = transfer_key(0x11);
+        let (_, bob) = transfer_key(0x22);
+        let hex_bob = bob.to_string();
+        let from = transfer_from_candidates(
+            TEST_DOMAIN,
+            "alice",
+            &alice,
+            &bob,
+            &hex_bob,
+            Some(TEST_TIMESTAMP),
+        );
+        let to = transfer_to_candidates(
+            TEST_DOMAIN,
+            "alice",
+            &alice,
+            &bob,
+            &hex_bob,
+            TEST_DESCRIPTION,
+            Some(TEST_TIMESTAMP),
+        );
+        let signature = sign(&alice_secret, &from[0].message);
+
+        assert!(verifies(&from, &signature, &alice));
+        assert!(
+            !verifies(&to, &signature, &alice),
+            "the current owner's signature must not fill the transferee's slot"
+        );
+    }
+
+    /// A transfer authorization names the direction, so the reversed pair is a
+    /// different transfer rather than the same one.
+    #[test]
+    fn a_transfer_authorization_names_its_direction() {
+        let (alice_secret, alice) = transfer_key(0x11);
+        let (_, bob) = transfer_key(0x22);
+        let forward = transfer_from_candidates(
+            TEST_DOMAIN,
+            "alice",
+            &alice,
+            &bob,
+            &bob.to_string(),
+            Some(TEST_TIMESTAMP),
+        );
+        let reversed = transfer_from_candidates(
+            TEST_DOMAIN,
+            "alice",
+            &bob,
+            &alice,
+            &alice.to_string(),
+            Some(TEST_TIMESTAMP),
+        );
+        let signature = sign(&alice_secret, &forward[0].message);
+
+        assert!(!verifies(&reversed, &signature, &alice));
+    }
+
+    /// A recover signature is not a metadata credential, and the reverse. Until
+    /// the cutoff the shared legacy message keeps both interchangeable, which is
+    /// what the second half asserts; flip it then.
+    #[test]
+    fn recover_and_metadata_sign_different_bytes() {
+        let (secret, public) = transfer_key(0x11);
+        let hex = public.to_string();
+        let recover = recover_candidates(TEST_DOMAIN, &public, &hex, TEST_TIMESTAMP);
+        let metadata = metadata_candidates(TEST_DOMAIN, &public, &hex, TEST_TIMESTAMP);
+        let v2_only = |candidates: Vec<Candidate>| {
+            candidates
+                .into_iter()
+                .filter(|candidate| !candidate.legacy)
+                .collect::<Vec<_>>()
+        };
+
+        let signature = sign(&secret, &recover[0].message);
+        assert!(!verifies(&v2_only(metadata), &signature, &public));
+
+        let legacy = sign(&secret, &format!("{hex}-{TEST_TIMESTAMP}"));
+        assert!(
+            verifies(&recover, &legacy, &public)
+                && verifies(
+                    &metadata_candidates(TEST_DOMAIN, &public, &hex, TEST_TIMESTAMP),
+                    &legacy,
+                    &public
+                ),
+            "the shared legacy message keeps the two interchangeable until the cutoff"
+        );
+    }
+
+    // -- Transfer timestamp ----------------------------------------------------
+
+    /// Stripping `timestamp` from a v2 transfer request must fail rather than
+    /// fall back to the legacy path: the absent timestamp selects the legacy
+    /// candidate alone, and the v2 signature does not verify against it.
+    #[test]
+    fn stripping_the_transfer_timestamp_does_not_downgrade() {
+        let (alice_secret, alice) = transfer_key(0x11);
+        let (_, bob) = transfer_key(0x22);
+        let hex_bob = bob.to_string();
+        let signed = transfer_from_candidates(
+            TEST_DOMAIN,
+            "alice",
+            &alice,
+            &bob,
+            &hex_bob,
+            Some(TEST_TIMESTAMP),
+        );
+        let signature = sign(&alice_secret, &signed[0].message);
+
+        let stripped = transfer_from_candidates(TEST_DOMAIN, "alice", &alice, &bob, &hex_bob, None);
+        assert!(
+            stripped.iter().all(|candidate| candidate.legacy),
+            "an absent timestamp offers only the legacy message"
+        );
+        assert!(!verifies(&stripped, &signature, &alice));
+    }
+
+    #[test]
+    fn a_v2_transfer_claim_is_bounded_and_a_legacy_one_is_not() {
+        let (_, alice) = transfer_key(0x11);
+        let (_, bob) = transfer_key(0x22);
+        let hex_bob = bob.to_string();
+
+        assert_eq!(
+            transfer_from_candidates(
+                TEST_DOMAIN,
+                "alice",
+                &alice,
+                &bob,
+                &hex_bob,
+                Some(TEST_TIMESTAMP)
+            )[0]
+            .expiry,
+            ClaimExpiry::Bounded(TEST_TIMESTAMP)
+        );
+        assert_eq!(
+            transfer_from_candidates(TEST_DOMAIN, "alice", &alice, &bob, &hex_bob, None)[0].expiry,
+            ClaimExpiry::Unbounded,
+            "nothing bounds the legacy message in time, so its claim is never pruned"
+        );
+    }
+
+    #[test]
+    fn a_bounded_claim_outlives_the_timestamp_it_covers() {
+        // Pruning the claim any earlier would put the statement back in play
+        // while `timestamp_is_fresh` still accepts it.
+        assert!(
+            ClaimExpiry::Bounded(TEST_TIMESTAMP).expires_at()
+                >= i64::try_from(TEST_TIMESTAMP + ACCEPTABLE_TIME_DIFF_SECS).unwrap()
+        );
+        assert_eq!(ClaimExpiry::Unbounded.expires_at(), i64::MAX);
+    }
+
+    /// Bounded symmetrically, so a device whose clock runs fast still works.
+    /// An asymmetric future bound would cap a stolen authorization slightly
+    /// tighter at the cost of a route that fails where every other one works.
+    #[test]
+    fn the_accept_window_is_symmetric_around_now() {
+        // Fixed `now`, so a clock tick between the bound and the check cannot
+        // move the boundary by a second.
+        let now = TEST_TIMESTAMP;
+
+        assert!(is_fresh_at(now, now));
+        assert!(is_fresh_at(now - ACCEPTABLE_TIME_DIFF_SECS, now));
+        assert!(is_fresh_at(now + ACCEPTABLE_TIME_DIFF_SECS, now));
+        assert!(!is_fresh_at(now - ACCEPTABLE_TIME_DIFF_SECS - 1, now));
+        assert!(!is_fresh_at(now + ACCEPTABLE_TIME_DIFF_SECS + 1, now));
+    }
+
+    #[test]
+    fn a_transfer_outside_the_window_is_told_apart_from_a_bad_signature() {
+        assert_ne!(transfer_expired().1.0, invalid_timestamp().1.0);
+        assert_ne!(
+            invalid_signature_for_domain(TEST_DOMAIN).1.0,
+            invalid_signature_for_domain(OTHER_DOMAIN).1.0
+        );
+    }
+
+    // -- Metadata credential source --------------------------------------------
+
+    fn header_map(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for (name, value) in pairs {
+            headers.insert(
+                axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                axum::http::HeaderValue::from_str(value).unwrap(),
+            );
+        }
+        headers
+    }
+
+    #[test]
+    fn the_metadata_signature_header_wins_over_the_query_param() {
+        let headers = header_map(&[
+            (METADATA_SIGNATURE_HEADER, "beef"),
+            (METADATA_TIMESTAMP_HEADER, "1752000000"),
+        ]);
+
+        assert_eq!(
+            metadata_credentials(&headers, Some("dead".into()), Some(1)).unwrap(),
+            ("beef".to_string(), 1_752_000_000)
+        );
+    }
+
+    #[test]
+    fn the_metadata_query_params_are_the_fallback() {
+        assert_eq!(
+            metadata_credentials(&HeaderMap::new(), Some("dead".into()), Some(7)).unwrap(),
+            ("dead".to_string(), 7)
+        );
+    }
+
+    #[test]
+    fn a_malformed_metadata_header_is_refused_rather_than_falling_through() {
+        let headers = header_map(&[(METADATA_TIMESTAMP_HEADER, "not-a-number")]);
+        let err = metadata_credentials(&headers, Some("dead".into()), Some(7))
+            .expect_err("a header that fails to parse must not fall back to the query param");
+
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn a_metadata_request_with_no_credential_at_all_is_refused() {
+        assert_eq!(
+            metadata_credentials(&HeaderMap::new(), None, None)
+                .expect_err("neither source present")
+                .0,
+            StatusCode::BAD_REQUEST
+        );
     }
 
     #[test]
@@ -2495,18 +3456,11 @@ mod tests {
         username: &str,
         timestamp: u64,
     ) -> bool {
-        let secp = Secp256k1::new();
-        unregister_candidate_messages(username)
-            .iter()
-            .any(|message| {
-                spark::utils::verify_signature::verify_signature_ecdsa(
-                    &secp,
-                    format!("{message}-{timestamp}"),
-                    signature,
-                    public_key,
-                )
-                .is_ok()
-            })
+        verifies(
+            &unregister_candidates(TEST_DOMAIN, username, timestamp),
+            signature,
+            public_key,
+        )
     }
 
     fn registered_as(name: &str) -> User {
@@ -2519,10 +3473,19 @@ mod tests {
     }
 
     #[test]
-    fn unregister_accepts_the_prefixed_and_legacy_messages() {
+    fn unregister_accepts_the_v2_and_both_legacy_messages() {
+        let messages: Vec<String> = unregister_candidates(TEST_DOMAIN, "alice", TEST_TIMESTAMP)
+            .into_iter()
+            .map(|candidate| candidate.message)
+            .collect();
+
         assert_eq!(
-            unregister_candidate_messages("alice"),
-            vec!["unregister:alice".to_string(), "alice".to_string()]
+            messages,
+            vec![
+                format!("breez-lnurl:v2\nunregister\n{TEST_DOMAIN}\nalice\n{TEST_TIMESTAMP}"),
+                format!("unregister:alice-{TEST_TIMESTAMP}"),
+                format!("alice-{TEST_TIMESTAMP}"),
+            ]
         );
     }
 
@@ -2561,16 +3524,34 @@ mod tests {
     fn register_and_legacy_unregister_claim_one_statement() {
         let (_, public_key) = transfer_key(0x11);
 
-        // Register signs "{username}-{timestamp}". The legacy unregister
-        // candidate reproduces those exact bytes, so a register signature
-        // replayed to unregister lands on the statement register already
-        // claimed, and a claimed statement is refused.
+        // Register signs "{username}-{timestamp}" and the legacy unregister
+        // candidate covers those exact bytes, so both routes claim one
+        // statement and the second to present it is refused.
         let registered = statement_hash(&public_key, &format!("alice-{TEST_TIMESTAMP}"));
-        let mut candidates = unregister_candidate_messages("alice")
+        let mut candidates = unregister_candidates(TEST_DOMAIN, "alice", TEST_TIMESTAMP)
             .into_iter()
-            .map(|message| statement_hash(&public_key, &format!("{message}-{TEST_TIMESTAMP}")));
+            .map(|candidate| statement_hash(&public_key, &candidate.message));
 
         assert!(candidates.any(|hash| hash == registered));
+    }
+
+    /// The v2 messages carry distinct route tags, so the two no longer share a
+    /// statement once both sides speak v2.
+    #[test]
+    fn v2_register_and_unregister_claim_different_statements() {
+        let (_, public_key) = transfer_key(0x11);
+
+        assert_ne!(
+            statement_hash(
+                &public_key,
+                &register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP)[0]
+                    .message
+            ),
+            statement_hash(
+                &public_key,
+                &unregister_candidates(TEST_DOMAIN, "alice", TEST_TIMESTAMP)[0].message
+            )
+        );
     }
 
     #[test]
@@ -2637,7 +3618,7 @@ mod tests {
     }
 
     #[test]
-    fn username_cannot_forge_the_unregister_prefix() {
+    fn a_username_cannot_produce_the_unregister_prefix() {
         // The prefix only separates because ':' is outside the username charset.
         assert!(validate_username("unregister:alice").is_err());
     }

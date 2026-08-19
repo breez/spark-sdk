@@ -1,5 +1,8 @@
+use std::str::FromStr;
+
 use bitcoin::hex::DisplayHex;
-use lnurl_models::sanitize_username;
+use lnurl_models::{sanitize_username, signed_message};
+use platform_utils::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     AuthorizeTransferRequest, CheckLightningAddressRequest, ClaimTransferRequest,
@@ -8,6 +11,69 @@ use crate::{
 };
 
 use super::BreezSdk;
+
+fn now_secs() -> Result<u64, SdkError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .map_err(|_| SdkError::Generic("system clock is before the Unix epoch".to_string()))
+}
+
+/// Lowercase compressed hex, the form the server rebuilds the signed message
+/// with. A caller-supplied pubkey that differs only in case or encoding would
+/// otherwise produce a message the server never reconstructs, and the only
+/// symptom would be "invalid signature".
+fn normalized_pubkey(pubkey: &str) -> Result<String, SdkError> {
+    bitcoin::secp256k1::PublicKey::from_str(pubkey)
+        .map(|pubkey| pubkey.to_string())
+        .map_err(|_| SdkError::InvalidInput(format!("'{pubkey}' is not a valid public key")))
+}
+
+/// The domain a `{username}@{domain}` lightning address lives on.
+///
+/// The address is the server's own record of the domain it resolved when the
+/// registration was made, so it names where the registration lives even after
+/// this SDK is pointed elsewhere.
+fn address_domain(lightning_address: &str) -> Result<String, SdkError> {
+    lightning_address
+        .rsplit_once('@')
+        .map(|(_, domain)| domain.to_ascii_lowercase())
+        .ok_or_else(|| {
+            SdkError::Generic(format!(
+                "cached lightning address '{lightning_address}' has no domain"
+            ))
+        })
+}
+
+/// Rejects a domain that is not the one this SDK talks to, naming both so the
+/// failure says which server that is.
+///
+/// This belongs to the side that makes the request: the domain its server
+/// resolves is what a signature has to match. The side producing a signature for
+/// someone else to submit has no such constraint.
+fn require_configured_domain(
+    configured_domain: &str,
+    domain: &str,
+    subject: &str,
+) -> Result<(), SdkError> {
+    let configured = crate::lnurl::signed_domain(configured_domain);
+    if domain != configured {
+        return Err(SdkError::InvalidInput(format!(
+            "{subject} names domain '{domain}', but this SDK is configured for '{configured}'"
+        )));
+    }
+    Ok(())
+}
+
+/// Names the address as a payer would type it, so the configured domain is
+/// reduced to the authority the server registers the address under rather than
+/// interpolated whole.
+fn default_description(username: &str, configured_domain: &str) -> String {
+    format!(
+        "Pay to {username}@{}",
+        crate::lnurl::signed_domain(configured_domain)
+    )
+}
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
@@ -51,7 +117,7 @@ impl BreezSdk {
 
         let description = match request.description {
             Some(description) => description,
-            None => format!("Pay to {}@{}", username, client.domain()),
+            None => default_description(&username, client.domain()),
         };
 
         let params = crate::lnurl::RegisterLightningAddressRequest {
@@ -85,16 +151,34 @@ impl BreezSdk {
                 "No lightning address registered to transfer".to_string(),
             ));
         };
+
+        // The domain the address is registered on, not this SDK's configured
+        // one. The transferee submits the transfer, so what the signature has to
+        // cover is the domain their server resolves, and this SDK's own
+        // configuration is not part of that: an address cached from a domain it
+        // no longer points at is still a registration it can hand over.
+        let domain = address_domain(&address_info.lightning_address)?;
+
         let self_pubkey = self.spark_wallet.get_identity_public_key().to_string();
-        let message = format!(
-            "transfer:{}-{}",
-            address_info.username, request.transferee_pubkey
-        );
-        let signature = self.spark_wallet.sign_message(&message).await?;
+        let transferee_pubkey = normalized_pubkey(&request.transferee_pubkey)?;
+        let timestamp = now_secs()?;
+        let signature = self
+            .spark_wallet
+            .sign_message(&signed_message::transfer_from(
+                &domain,
+                &address_info.username,
+                &self_pubkey,
+                &transferee_pubkey,
+                timestamp,
+            ))
+            .await?;
+
         Ok(TransferAuthorization {
             username: address_info.username,
             pubkey: self_pubkey,
             signature: signature.serialize_der().to_lower_hex_string(),
+            domain,
+            timestamp,
         })
     }
 
@@ -113,17 +197,37 @@ impl BreezSdk {
             ));
         };
 
+        // Checked before the round trip so the failure names both domains, and
+        // says which one this SDK is configured for.
+        require_configured_domain(
+            client.domain(),
+            &request.authorization.domain,
+            "the authorization",
+        )?;
+        // The window the server enforces, applied here so an authorization the
+        // transferee sat on fails saying so rather than as a generic rejection.
+        // Deliberately short: nothing revokes an authorization, so expiry is the
+        // only thing that takes one back.
+        if now_secs()?.abs_diff(request.authorization.timestamp) > signed_message::VALIDITY_SECS {
+            return Err(SdkError::InvalidInput(
+                "authorization is expired or not yet valid; ask the current owner to \
+                 authorize the transfer again"
+                    .to_string(),
+            ));
+        }
+
         let username = sanitize_username(&request.authorization.username);
         let description = match request.description {
             Some(description) => description,
-            None => format!("Pay to {}@{}", username, client.domain()),
+            None => default_description(&username, client.domain()),
         };
 
         let params = crate::lnurl::TransferLightningAddressRequest {
             username: username.clone(),
             description: description.clone(),
-            from_pubkey: request.authorization.pubkey,
+            from_pubkey: normalized_pubkey(&request.authorization.pubkey)?,
             from_signature: request.authorization.signature,
+            timestamp: request.authorization.timestamp,
         };
 
         let response = client.transfer_lightning_address(&params).await?;
@@ -281,5 +385,59 @@ mod tests {
             .flatten()
             .expect("Expected Some(Some(info)) after save");
         assert_eq!(info.lightning_address, "test@example.com");
+    }
+}
+
+#[cfg(test)]
+mod domain_tests {
+    use super::{address_domain, require_configured_domain};
+
+    /// Read from the address itself, so it names the domain the address is
+    /// actually registered on rather than whatever the SDK is configured with.
+    #[test]
+    fn the_domain_comes_from_the_cached_address() {
+        assert_eq!(address_domain("alice@example.com").unwrap(), "example.com");
+        // Lowercased to match what the server resolves and lowercases.
+        assert_eq!(address_domain("alice@Example.COM").unwrap(), "example.com");
+        // A username may itself contain '@' in principle, so the split takes
+        // the last one.
+        assert_eq!(address_domain("a@b@example.com").unwrap(), "example.com");
+        assert!(address_domain("not-an-address").is_err());
+    }
+
+    /// Compared against the same normalization the signed message uses, so a
+    /// scheme, a mount path or a trailing slash on the configured value is not
+    /// a mismatch.
+    #[test]
+    fn a_configured_domain_matches_however_it_was_written() {
+        for configured in [
+            "example.com",
+            "https://example.com",
+            "https://example.com/",
+            "https://example.com/lnurl",
+            "https://user:pass@example.com",
+            "https://EXAMPLE.com",
+        ] {
+            assert!(
+                require_configured_domain(configured, "example.com", "the authorization").is_ok(),
+                "{configured}"
+            );
+        }
+    }
+
+    /// Both domains are named, since the caller has to see which one this SDK
+    /// talks to before it can tell which side is stale.
+    #[test]
+    fn a_domain_that_is_not_the_configured_one_names_both() {
+        let error = require_configured_domain(
+            "https://example.com",
+            "other.example.com",
+            "the authorization",
+        )
+        .unwrap_err()
+        .to_string();
+        for expected in ["the authorization", "other.example.com", "example.com"] {
+            assert!(error.contains(expected), "{error}");
+        }
     }
 }

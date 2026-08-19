@@ -1582,6 +1582,8 @@ pub struct TransferAuthorization {
     pub username: String,
     pub pubkey: String,
     pub signature: String,
+    pub domain: String,
+    pub timestamp: u64,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::AuthorizeTransferRequest)]

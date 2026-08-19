@@ -1256,11 +1256,14 @@ public static class Commands
     {
         var fromPubkey = GetFlag(args, "--from-pubkey");
         var fromSignature = GetFlag(args, "--from-signature");
+        var fromDomain = GetFlag(args, "--from-domain");
+        var fromTimestampFlag = GetFlag(args, "--from-timestamp");
         var positional = GetPositionalArgs(args);
 
-        if (positional.Length < 1 || fromPubkey == null || fromSignature == null)
+        if (positional.Length < 1 || fromPubkey == null || fromSignature == null
+            || fromDomain == null || !ulong.TryParse(fromTimestampFlag, out var fromTimestamp))
         {
-            Console.WriteLine("Usage: claim-lightning-address-transfer <username> [<description>] --from-pubkey <pk> --from-signature <sig>");
+            Console.WriteLine("Usage: claim-lightning-address-transfer <username> [<description>] --from-pubkey <pk> --from-signature <sig> --from-domain <domain> --from-timestamp <secs>");
             return;
         }
 
@@ -1268,7 +1271,9 @@ public static class Commands
             authorization: new TransferAuthorization(
                 username: positional[0],
                 pubkey: fromPubkey,
-                signature: fromSignature
+                signature: fromSignature,
+                domain: fromDomain,
+                timestamp: fromTimestamp
             ),
             description: positional.Length > 1 ? positional[1] : null
         ));

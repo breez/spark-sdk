@@ -995,7 +995,7 @@ func handleAuthorizeLightningAddressTransfer(_ sdk: BreezSdk, _ args: [String]) 
 func handleClaimLightningAddressTransfer(_ sdk: BreezSdk, _ args: [String]) async throws {
     let fp = FlagParser(args)
     guard let username = fp.positional.first else {
-        print("Usage: claim-lightning-address-transfer <username> [<description>] --from-pubkey <pubkey> --from-signature <signature>")
+        print("Usage: claim-lightning-address-transfer <username> [<description>] --from-pubkey <pubkey> --from-signature <signature> --from-domain <domain> --from-timestamp <secs>")
         return
     }
 
@@ -1009,12 +1009,22 @@ func handleClaimLightningAddressTransfer(_ sdk: BreezSdk, _ args: [String]) asyn
         print("--from-signature is required")
         return
     }
+    guard let fromDomain = fp.get("from-domain") else {
+        print("--from-domain is required")
+        return
+    }
+    guard let fromTimestamp = fp.get("from-timestamp").flatMap(UInt64.init) else {
+        print("--from-timestamp is required")
+        return
+    }
 
     let result = try await sdk.claimLightningAddressTransfer(request: ClaimTransferRequest(
         authorization: TransferAuthorization(
             username: username,
             pubkey: fromPubkey,
-            signature: fromSignature
+            signature: fromSignature,
+            domain: fromDomain,
+            timestamp: fromTimestamp
         ),
         description: description
     ))

@@ -884,6 +884,10 @@ def _build_claim_lightning_address_transfer_parser():
                    help="The current owner's identity public key (hex-encoded compressed secp256k1)")
     p.add_argument("--from-signature", required=True,
                    help="The current owner's signature authorizing the transfer (hex-encoded DER ECDSA)")
+    p.add_argument("--from-domain", required=True,
+                   help="The lightning address domain the authorization is for")
+    p.add_argument("--from-timestamp", required=True, type=int,
+                   help="When the authorization was produced (seconds since the Unix epoch)")
     return p
 
 async def _handle_claim_lightning_address_transfer(sdk, _token_issuer, _session, args):
@@ -893,6 +897,8 @@ async def _handle_claim_lightning_address_transfer(sdk, _token_issuer, _session,
                 username=args.username,
                 pubkey=args.from_pubkey,
                 signature=args.from_signature,
+                domain=args.from_domain,
+                timestamp=args.from_timestamp,
             ),
             description=args.description,
         )

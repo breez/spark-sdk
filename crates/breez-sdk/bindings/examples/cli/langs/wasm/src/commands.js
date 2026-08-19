@@ -801,13 +801,17 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
     .argument('[description]', 'Description in the lnurl response and the invoice')
     .requiredOption('--from-pubkey <pubkey>', 'The current owner\'s identity public key (hex-encoded compressed secp256k1)')
     .requiredOption('--from-signature <signature>', 'The current owner\'s signature authorizing the transfer (hex-encoded DER ECDSA)')
+    .requiredOption('--from-domain <domain>', 'The lightning address domain the authorization is for')
+    .requiredOption('--from-timestamp <secs>', 'When the authorization was produced (seconds since the Unix epoch)')
     .action(async (username, description, options) => {
       const sdk = getSdk()
       const res = await sdk.claimLightningAddressTransfer({
         authorization: {
           username,
           pubkey: options.fromPubkey,
-          signature: options.fromSignature
+          signature: options.fromSignature,
+          domain: options.fromDomain,
+          timestamp: BigInt(options.fromTimestamp)
         },
         description
       })

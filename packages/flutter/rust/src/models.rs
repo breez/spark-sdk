@@ -1493,6 +1493,8 @@ pub struct _TransferAuthorization {
     pub username: String,
     pub pubkey: String,
     pub signature: String,
+    pub domain: String,
+    pub timestamp: u64,
 }
 
 #[frb(mirror(AuthorizeTransferRequest))]

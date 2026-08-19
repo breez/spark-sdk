@@ -89,6 +89,22 @@ function hasFlag(args: string[], ...flags: string[]): boolean {
 }
 
 /**
+ * Collect the arguments that are not a flag or a flag's value. `booleanFlags`
+ * lists the flags that stand alone, so the argument after them is positional.
+ */
+function positionalArgs(args: string[], booleanFlags: string[] = []): string[] {
+  const positional: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    if (!args[i].startsWith('-')) {
+      positional.push(args[i])
+    } else if (!booleanFlags.includes(args[i])) {
+      i++
+    }
+  }
+  return positional
+}
+
+/**
  * Parse an optional numeric flag. Returns undefined if not provided.
  */
 function parseNumericFlag(args: string[], ...flags: string[]): number | undefined {
@@ -767,7 +783,7 @@ async function handlePayBatch(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerI
 
 async function handleLnurlPay(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   // The first positional argument is the LNURL/lightning address
-  const positional = args.filter(a => !a.startsWith('-'))
+  const positional = positionalArgs(args, ['--fees-included'])
   const flagArgs = args
 
   if (positional.length < 1) {
@@ -854,7 +870,7 @@ async function handleLnurlPay(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerI
 // --- lnurl-withdraw ---
 
 async function handleLnurlWithdraw(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
-  const positional = args.filter(a => !a.startsWith('-'))
+  const positional = positionalArgs(args)
 
   if (positional.length < 1) {
     return 'Usage: lnurl-withdraw <lnurl> [-a <amount_sats>] [--timeout <secs>]'
@@ -931,7 +947,7 @@ async function handleClaimHtlcPayment(sdk: BreezSdkInterface, _tokenIssuer: Toke
 // --- claim-deposit ---
 
 async function handleClaimDeposit(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
-  const positional = args.filter(a => !a.startsWith('-'))
+  const positional = positionalArgs(args)
   if (positional.length < 2) {
     return 'Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N] [--instant-fee-bps N]'
   }
@@ -987,7 +1003,7 @@ async function handleParse(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInte
 // --- refund-deposit ---
 
 async function handleRefundDeposit(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
-  const positional = args.filter(a => !a.startsWith('-'))
+  const positional = positionalArgs(args)
   if (positional.length < 3) {
     return 'Usage: refund-deposit <txid> <vout> <destination_address> [--fee-sat N | --sat-per-vbyte N]'
   }
@@ -1142,7 +1158,7 @@ async function handleGetLightningAddress(sdk: BreezSdkInterface, _tokenIssuer: T
 // --- register-lightning-address ---
 
 async function handleRegisterLightningAddress(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
-  const positional = args.filter(a => !a.startsWith('-'))
+  const positional = positionalArgs(args)
   if (positional.length < 1) {
     return 'Usage: register-lightning-address <username> [-d <description>]'
   }
@@ -1171,18 +1187,20 @@ async function handleAuthorizeLightningAddressTransfer(sdk: BreezSdkInterface, _
 // --- claim-lightning-address-transfer ---
 
 async function handleClaimLightningAddressTransfer(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
-  const positional = args.filter(a => !a.startsWith('-'))
+  const positional = positionalArgs(args)
   if (positional.length < 1) {
-    return 'Usage: claim-lightning-address-transfer <username> [<description>] --from-pubkey <pubkey> --from-signature <signature>'
+    return 'Usage: claim-lightning-address-transfer <username> [<description>] --from-pubkey <pubkey> --from-signature <signature> --from-domain <domain> --from-timestamp <secs>'
   }
 
   const username = positional[0]
   const description = positional.length > 1 ? positional[1] : undefined
   const fromPubkey = parseFlag(args, '--from-pubkey')
   const fromSignature = parseFlag(args, '--from-signature')
+  const fromDomain = parseFlag(args, '--from-domain')
+  const fromTimestamp = parseFlag(args, '--from-timestamp')
 
-  if (!fromPubkey || !fromSignature) {
-    return 'Error: --from-pubkey and --from-signature are required'
+  if (!fromPubkey || !fromSignature || !fromDomain || !fromTimestamp) {
+    return 'Error: --from-pubkey, --from-signature, --from-domain and --from-timestamp are required'
   }
 
   const result = await sdk.claimLightningAddressTransfer({
@@ -1190,6 +1208,8 @@ async function handleClaimLightningAddressTransfer(sdk: BreezSdkInterface, _toke
       username,
       pubkey: fromPubkey,
       signature: fromSignature,
+      domain: fromDomain,
+      timestamp: BigInt(fromTimestamp),
     },
     description,
   })
@@ -1242,7 +1262,7 @@ async function handleFetchConversionLimits(sdk: BreezSdkInterface, _tokenIssuer:
   const tokenIdentifier = parseFlag(args, '--token', '--token-identifier')
 
   // Also accept positional argument for token identifier
-  const positional = args.filter(a => !a.startsWith('-'))
+  const positional = positionalArgs(args, ['--from-bitcoin', '-f'])
   const tokenId = tokenIdentifier ?? (positional.length > 0 ? positional[0] : undefined)
 
   if (!tokenId) {

@@ -9,6 +9,7 @@ use tracing::{debug, error};
 use crate::header_provider::{HeaderProvider, HeaderProviderError};
 use crate::session_store::{Session, SessionStore, SessionStoreError};
 use crate::signer::SparkSigner;
+use crate::ssp::challenge;
 use crate::ssp::graphql::client::post_graphql_query;
 use crate::ssp::graphql::error::{GraphQLError, GraphQLResult};
 use crate::ssp::graphql::queries::{self, get_challenge, verify_challenge};
@@ -72,16 +73,12 @@ impl SspAuthHeaderProvider {
     async fn authenticate(&self) -> GraphQLResult<Session> {
         debug!("Authenticating with ssp");
 
-        let identity_public_key = hex::encode(
-            self.spark_signer
-                .get_identity_public_key()
-                .await?
-                .serialize(),
-        );
+        let identity_public_key = self.spark_signer.get_identity_public_key().await?;
+        let identity_public_key_hex = hex::encode(identity_public_key.serialize());
 
         let challenge_vars = get_challenge::Variables {
             input: get_challenge::GetChallengeInput {
-                public_key: identity_public_key.clone(),
+                public_key: identity_public_key_hex.clone(),
             },
         };
         let headers = HashMap::new();
@@ -98,6 +95,11 @@ impl SspAuthHeaderProvider {
             .decode(&challenge_response.get_challenge.protected_challenge)
             .map_err(|e| GraphQLError::serialization(e.to_string()))?;
 
+        // The identity key signs these bytes verbatim, so they are checked to be
+        // a challenge issued to this wallet before they reach the signer.
+        challenge::validate(&challenge_bytes, &identity_public_key)
+            .map_err(|e| GraphQLError::Authentication(e.to_string()))?;
+
         let signature = self
             .spark_signer
             .sign_authentication_challenge(&challenge_bytes)
@@ -109,7 +111,7 @@ impl SspAuthHeaderProvider {
             input: verify_challenge::VerifyChallengeInput {
                 protected_challenge: challenge_response.get_challenge.protected_challenge,
                 signature: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&signature),
-                identity_public_key,
+                identity_public_key: identity_public_key_hex,
                 provider: None,
             },
         };

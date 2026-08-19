@@ -170,7 +170,76 @@ The LNURL server provides the following endpoints:
 
 - `/lnurlpay/available/{username}` - Check if a username is available
 - `/lnurlpay/{pubkey}` - Register a username (POST) or unregister (DELETE)
+- `/lnurlpay/{pubkey}/transfer` - Hand a username over to another pubkey
 - `/lnurlpay/{pubkey}/recover` - Recover a username registration
+- `/lnurlpay/{pubkey}/metadata` - Read payment metadata (comments, zaps, preimages)
+
+## Signed Messages
+
+Every request on an authenticated endpoint carries an ECDSA signature made with
+the caller's Spark identity key over a canonical message. The signature is
+hex-encoded DER; the server verifies it as ECDSA over `sha256(message)`, with no
+tag or prefix applied to the digest.
+
+The message names the format version, the route, the domain the request is
+addressed to, and the request being authorized, so a signature is valid for that
+request and nothing else. An unrecognized version is rejected outright: the
+server never falls through to an older interpretation.
+
+The messages are built by
+[`lnurl-models/src/signed_message.rs`](../lnurl-models/src/signed_message.rs),
+which the server and every client share, so both sides build identical bytes
+from one source. Its `golden_vectors` test is the byte-level spec: implement a
+third-party client against those, not against a copy here, since the test is
+what a change to the format has to break.
+
+`breez-lnurl:` is reserved across all versions. A client keeps its other uses of
+the identity key out of that namespace, so a message here is one the client
+composed for a request it is making.
+
+Treat these signatures as authorizations scoped to a request, not as proof that
+the holder intended an LNURL operation.
+
+### Where the credential travels
+
+`register`, `unregister`, `recover` and `transfer` carry `signature` and
+`timestamp` in the JSON body.
+
+`metadata` is a GET, and its response carries payment preimages, so its
+credential belongs in headers rather than the query string, which lands in proxy
+and access logs:
+
+| Header | Value |
+|---|---|
+| `X-Breez-Signature` | hex-encoded DER signature |
+| `X-Breez-Timestamp` | seconds since the Unix epoch |
+
+The `signature` and `timestamp` query parameters remain accepted as a
+compatibility path. A header present wins outright and the query parameter is
+ignored; a header that fails to parse is a `400` rather than a fall-through. The
+response is served `Cache-Control: no-store, private`.
+
+### Single use
+
+`register`, `unregister` and `transfer` claim the statement they act on, so the
+same signature is never acted on twice. A client that has to retry re-signs,
+producing a fresh timestamp and so a statement of its own; resending identical
+bytes is refused with a `409`.
+
+`recover` and `metadata` claim nothing: they are reads, and claiming them would
+break legitimate client retries.
+
+### Compatibility
+
+Pre-v2 messages are still accepted while clients migrate. Their verifies are
+counted per route and logged once a minute on the
+`breez_lnurl::legacy_signatures` target:
+
+```
+legacy signed-message verifies: register=0 unregister=0 transfer=0 recover=0 metadata=0
+```
+
+The legacy messages are removed once that reads zero across all deployments.
 
 ## Example Usage
 

@@ -1249,13 +1249,15 @@ func handleClaimLightningAddressTransfer(sdk *breez_sdk_spark.BreezSdk, _ *readl
 	fs := flag.NewFlagSet("claim-lightning-address-transfer", flag.ContinueOnError)
 	fromPubkey := fs.String("from-pubkey", "", "Current owner's identity public key")
 	fromSignature := fs.String("from-signature", "", "Current owner's authorization signature")
+	fromDomain := fs.String("from-domain", "", "Lightning address domain the authorization is for")
+	fromTimestamp := fs.Uint64("from-timestamp", 0, "When the authorization was produced (seconds since the Unix epoch)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	positional := fs.Args()
-	if len(positional) < 1 || *fromPubkey == "" || *fromSignature == "" {
-		fmt.Println("Usage: claim-lightning-address-transfer <username> [<description>] --from-pubkey <pubkey> --from-signature <signature>")
+	if len(positional) < 1 || *fromPubkey == "" || *fromSignature == "" || *fromDomain == "" || *fromTimestamp == 0 {
+		fmt.Println("Usage: claim-lightning-address-transfer <username> [<description>] --from-pubkey <pubkey> --from-signature <signature> --from-domain <domain> --from-timestamp <secs>")
 		return nil
 	}
 
@@ -1264,6 +1266,8 @@ func handleClaimLightningAddressTransfer(sdk *breez_sdk_spark.BreezSdk, _ *readl
 			Username:  positional[0],
 			Pubkey:    *fromPubkey,
 			Signature: *fromSignature,
+			Domain:    *fromDomain,
+			Timestamp: *fromTimestamp,
 		},
 	}
 	if len(positional) > 1 {
