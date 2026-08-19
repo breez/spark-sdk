@@ -2705,9 +2705,13 @@ pub struct ImportUnilateralExitStateResponse {
     pub imported_leaves: u32,
     /// Leaves left out because the exit state does not record this wallet as
     /// their owner.
-    pub skipped_leaves: u32,
-    /// Leaves whose imported exit data was left out: it is incomplete, it
-    /// disagrees with what the wallet already holds, or the wallet's own copy
-    /// can already back an exit.
+    pub skipped_foreign_leaves: u32,
+    /// Leaves left out because their exit data disagrees with what the wallet
+    /// already holds, so none of it could be trusted. The wallet is left without
+    /// these leaves.
+    pub skipped_conflicting_leaves: u32,
+    /// Leaves the wallet holds whose imported exit data was left out: it is
+    /// incomplete, the wallet's own copy can already back an exit, or the leaf
+    /// was named more than once. The leaf itself is in the wallet either way.
     pub skipped_chains: u32,
 }

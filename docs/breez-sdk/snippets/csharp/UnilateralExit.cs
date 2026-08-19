@@ -73,7 +73,7 @@ namespace BreezSdkSnippets
             );
 
             Console.WriteLine($"Imported {imported.importedLeaves} leaves, " +
-                $"skipped {imported.skippedLeaves}");
+                $"skipped {imported.skippedForeignLeaves}");
             // ANCHOR_END: import-unilateral-exit-state
         }
 

@@ -36,9 +36,14 @@ pub struct ExitStateImport {
     pub imported_leaves: usize,
     /// Leaves dropped because they do not record this wallet as their owner.
     pub skipped_foreign_leaves: usize,
-    /// Leaves whose incoming exit data was left out: its chain does not link
-    /// the leaf to a root, it contradicts a node the wallet already holds, the
-    /// stored chain already backs an exit, or the leaf was named twice.
+    /// Leaves dropped because the entry disagrees with a node the wallet already
+    /// holds, on a field fixed for that node's lifetime, so none of the entry
+    /// could be trusted. Nothing was written for these, and the wallet is left
+    /// without the leaf.
+    pub skipped_conflicting_leaves: usize,
+    /// Leaves the wallet holds whose incoming chain was not used: it does not
+    /// link the leaf to a root, the stored chain already backs an exit, or the
+    /// leaf was named more than once. The leaf itself is in the store either way.
     pub skipped_chains: usize,
 }
 

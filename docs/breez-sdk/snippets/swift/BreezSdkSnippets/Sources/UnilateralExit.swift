@@ -63,7 +63,7 @@ func importExitState(sdk: BreezSdk, exitState: String) async throws {
         request: ImportUnilateralExitStateRequest(exitState: exitState)
     )
 
-    print("Imported \(imported.importedLeaves) leaves, skipped \(imported.skippedLeaves)")
+    print("Imported \(imported.importedLeaves) leaves, skipped \(imported.skippedForeignLeaves)")
     // ANCHOR_END: import-unilateral-exit-state
 }
 

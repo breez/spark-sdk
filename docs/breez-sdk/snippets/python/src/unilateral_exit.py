@@ -92,7 +92,7 @@ async def import_exit_state(sdk: BreezSdk, exit_state: str):
 
         logging.debug(
             f"Imported {imported.imported_leaves} leaves, "
-            f"skipped {imported.skipped_leaves}"
+            f"skipped {imported.skipped_foreign_leaves}"
         )
         # ANCHOR_END: import-unilateral-exit-state
     except Exception as error:

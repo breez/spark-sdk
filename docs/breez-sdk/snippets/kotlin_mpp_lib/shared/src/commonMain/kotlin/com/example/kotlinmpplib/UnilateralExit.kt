@@ -84,7 +84,7 @@ class UnilateralExit {
 
         // Log.v(
         //     "Breez",
-        //     "Imported ${imported.importedLeaves} leaves, skipped ${imported.skippedLeaves}"
+        //     "Imported ${imported.importedLeaves} leaves, skipped ${imported.skippedForeignLeaves}"
         // )
         // ANCHOR_END: import-unilateral-exit-state
     }

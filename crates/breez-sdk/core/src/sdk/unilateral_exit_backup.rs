@@ -112,16 +112,21 @@ impl BreezSdk {
             .import_exit_state(envelope.pedigrees)
             .await?;
         let imported_leaves = u32::try_from(imported.imported_leaves)?;
-        let skipped_leaves = u32::try_from(imported.skipped_foreign_leaves)?;
+        let skipped_foreign_leaves = u32::try_from(imported.skipped_foreign_leaves)?;
+        let skipped_conflicting_leaves = u32::try_from(imported.skipped_conflicting_leaves)?;
         let skipped_chains = u32::try_from(imported.skipped_chains)?;
         debug!(
             imported_leaves,
-            skipped_leaves, skipped_chains, "import_unilateral_exit_state: exit state merged"
+            skipped_foreign_leaves,
+            skipped_conflicting_leaves,
+            skipped_chains,
+            "import_unilateral_exit_state: exit state merged"
         );
 
         Ok(ImportUnilateralExitStateResponse {
             imported_leaves,
-            skipped_leaves,
+            skipped_foreign_leaves,
+            skipped_conflicting_leaves,
             skipped_chains,
         })
     }

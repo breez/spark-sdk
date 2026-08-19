@@ -133,9 +133,13 @@ pub async fn handle_command(
                 .import_unilateral_exit_state(ImportUnilateralExitStateRequest { exit_state })
                 .await?;
             println!(
-                "Imported {} leaf(s), skipped {} leaf(s) from a different wallet, \
+                "Imported {} leaf(s), skipped {} leaf(s) from a different wallet \
+                 and {} that disagree with what this wallet holds, \
                  left out the exit data of {} leaf(s)",
-                imported.imported_leaves, imported.skipped_leaves, imported.skipped_chains,
+                imported.imported_leaves,
+                imported.skipped_foreign_leaves,
+                imported.skipped_conflicting_leaves,
+                imported.skipped_chains,
             );
             Ok(true)
         }

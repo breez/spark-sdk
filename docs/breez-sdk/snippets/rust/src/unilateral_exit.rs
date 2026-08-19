@@ -71,7 +71,7 @@ async fn import_exit_state(sdk: &BreezSdk, exit_state: String) -> Result<()> {
 
     println!(
         "Imported {} leaves, skipped {}",
-        imported.imported_leaves, imported.skipped_leaves
+        imported.imported_leaves, imported.skipped_foreign_leaves
     );
     // ANCHOR_END: import-unilateral-exit-state
 

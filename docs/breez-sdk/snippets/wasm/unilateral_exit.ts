@@ -61,7 +61,7 @@ const exampleImportExitState = async (sdk: BreezSdk, exitState: string) => {
   // ANCHOR: import-unilateral-exit-state
   const imported = await sdk.importUnilateralExitState({ exitState })
 
-  console.log(`Imported ${imported.importedLeaves} leaves, skipped ${imported.skippedLeaves}`)
+  console.log(`Imported ${imported.importedLeaves} leaves, skipped ${imported.skippedForeignLeaves}`)
   // ANCHOR_END: import-unilateral-exit-state
 }
 

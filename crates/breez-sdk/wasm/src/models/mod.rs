@@ -884,7 +884,8 @@ pub struct ImportUnilateralExitStateRequest {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ImportUnilateralExitStateResponse)]
 pub struct ImportUnilateralExitStateResponse {
     pub imported_leaves: u32,
-    pub skipped_leaves: u32,
+    pub skipped_foreign_leaves: u32,
+    pub skipped_conflicting_leaves: u32,
     pub skipped_chains: u32,
 }
 

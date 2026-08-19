@@ -1632,6 +1632,7 @@ impl SparkWallet {
         pedigrees: Vec<LeafPedigree>,
     ) -> Result<ExitStateImport, SparkWalletError> {
         let mut skipped_foreign_leaves = 0;
+        let mut skipped_conflicting_leaves = 0;
         let mut skipped_chains = 0;
         let mut imported_leaves = 0;
         let mut seen_leaf_ids: HashSet<TreeNodeId> = HashSet::new();
@@ -1690,7 +1691,7 @@ impl SparkWallet {
                     }
                     None => {
                         if parts == ImportableParts::Nothing {
-                            skipped_chains += 1;
+                            skipped_conflicting_leaves += 1;
                             continue;
                         }
                         if parts == ImportableParts::LeafOnly {
@@ -1716,12 +1717,14 @@ impl SparkWallet {
         debug!(
             imported_leaves,
             skipped_foreign_leaves,
+            skipped_conflicting_leaves,
             skipped_chains,
             "import_exit_state: merged exit state into local storage"
         );
         Ok(ExitStateImport {
             imported_leaves,
             skipped_foreign_leaves,
+            skipped_conflicting_leaves,
             skipped_chains,
         })
     }
@@ -3660,6 +3663,56 @@ mod tests {
         assert_eq!(outcome.imported_leaves, 0);
         assert_eq!(outcome.skipped_chains, 1);
         assert_eq!(stored_chain(store.as_ref(), "leaf").await, expected);
+    }
+
+    /// A leaf the wallet does not hold, on a chain that disagrees with a node it
+    /// knows through a different leaf. Ancestors are shared, so an entry can
+    /// contradict the wallet without naming anything the wallet holds as a leaf.
+    /// None of the entry is trusted on the strength of that, so the leaf is not
+    /// restored at all, which is a different outcome from keeping a leaf and
+    /// leaving its chain and is counted apart from it.
+    #[macros::async_test_all]
+    async fn import_exit_state_drops_a_leaf_conflicting_on_a_shared_ancestor() {
+        let store = Arc::new(InMemoryTreeStore::new());
+        let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
+        let owner = wallet.get_identity_public_key();
+
+        // The wallet learns `mid` as leaf-b's ancestor. leaf-a it never holds.
+        let root = root_node("root");
+        let mid = child_of("mid", &root, TreeNodeStatus::Splitted);
+        let leaf_b = child_of("leaf-b", &mid, TreeNodeStatus::Available);
+        seed_pedigrees(
+            &*store,
+            &[pedigree_owned_by(
+                owner,
+                leaf_b,
+                vec![mid.clone(), root.clone()],
+            )],
+        )
+        .await;
+
+        // Same node, different value. A node's value is fixed for its lifetime,
+        // so this cannot be a later state of `mid`: one of the copies is wrong.
+        let mut conflicting_mid = mid.clone();
+        conflicting_mid.value += 1;
+        let leaf_a = child_of("leaf-a", &mid, TreeNodeStatus::Available);
+        let outcome = wallet
+            .import_exit_state(vec![pedigree_owned_by(
+                owner,
+                leaf_a,
+                vec![conflicting_mid, root],
+            )])
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.imported_leaves, 0);
+        assert_eq!(outcome.skipped_conflicting_leaves, 1);
+        // Not a skipped chain: the leaf did not make it in either.
+        assert_eq!(outcome.skipped_chains, 0);
+        assert!(
+            stored_chain(store.as_ref(), "leaf-a").await.is_empty(),
+            "a leaf whose entry the import did not trust must not be stored"
+        );
     }
 
     /// A leaf stored with a chain that stops short of a root, so what the import

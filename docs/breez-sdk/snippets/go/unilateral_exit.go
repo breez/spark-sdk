@@ -84,7 +84,7 @@ func ImportExitState(sdk *breez_sdk_spark.BreezSdk, exitState string) error {
 		return err
 	}
 
-	log.Printf("Imported %d leaves, skipped %d", imported.ImportedLeaves, imported.SkippedLeaves)
+	log.Printf("Imported %d leaves, skipped %d", imported.ImportedLeaves, imported.SkippedForeignLeaves)
 	// ANCHOR_END: import-unilateral-exit-state
 
 	return nil

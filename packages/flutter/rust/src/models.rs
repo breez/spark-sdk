@@ -311,7 +311,8 @@ pub struct _ImportUnilateralExitStateRequest {
 #[frb(mirror(ImportUnilateralExitStateResponse))]
 pub struct _ImportUnilateralExitStateResponse {
     pub imported_leaves: u32,
-    pub skipped_leaves: u32,
+    pub skipped_foreign_leaves: u32,
+    pub skipped_conflicting_leaves: u32,
     pub skipped_chains: u32,
 }
 
