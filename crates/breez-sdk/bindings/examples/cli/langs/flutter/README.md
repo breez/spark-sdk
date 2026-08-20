@@ -80,6 +80,7 @@ Once the CLI is running, type `help` to see all available commands:
 - `refund-deposit` — Refund an on-chain deposit
 - `list-unclaimed-deposits` — List unclaimed deposits
 - `buy-bitcoin` — Get MoonPay URL to buy Bitcoin
+- `prepare-payment-link` — Prepare a payment link (USDC/USDT to EVM/Solana/Tron)
 - `check-lightning-address-available` — Check username availability
 - `get-lightning-address` — Get registered lightning address
 - `register-lightning-address` — Register a lightning address

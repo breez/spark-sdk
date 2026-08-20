@@ -32,6 +32,7 @@ const COMMAND_NAMES = [
   'refund-deposit',
   'list-unclaimed-deposits',
   'buy-bitcoin',
+  'prepare-payment-link',
   'check-lightning-address-available',
   'get-lightning-address',
   'register-lightning-address',
@@ -333,7 +334,7 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
       const parsed = await sdk.parse(options.paymentRequest).catch(() => null)
       if (parsed && parsed.type === 'crossChainAddress') {
         const address = parsed.address
-        const route = await selectCrossChainRoute(sdk, rl, parsed)
+        const route = await selectCrossChainRoute(sdk, rl, { type: 'send', addressDetails: parsed })
         paymentRequest = {
           type: 'crossChain',
           address,
@@ -712,6 +713,39 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
       console.log(value.url)
     })
 
+  // --- prepare-payment-link ---
+  program
+    .command('prepare-payment-link')
+    .description('Prepare a payment link to send USDC/USDT to an external-chain recipient via a fiat rail')
+    .argument('<recipient>', 'Recipient address on the destination chain (EVM/Solana/Tron)')
+    .requiredOption('-a, --amount <number>', 'Amount in the destination stablecoin\'s base units (6 decimals for USDC/USDT)')
+    .option('--fees-included', 'Deduct fees from the amount instead of adding them on top', false)
+    .option('--max-slippage-bps <bps>', 'Maximum slippage in basis points', parseInt)
+    .action(async (recipient, options) => {
+      const sdk = getSdk()
+      const parsed = await sdk.parse(recipient)
+      if (!parsed || parsed.type !== 'crossChainAddress') {
+        throw new Error('Recipient must be a cross-chain (EVM/Solana/Tron) address')
+      }
+      const address = parsed.address
+      const route = await selectCrossChainRoute(sdk, rl, { type: 'paymentLink', addressDetails: parsed })
+      const feePolicy = options.feesIncluded ? 'feesIncluded' : undefined
+      const response = await sdk.preparePaymentLink({
+        address,
+        route,
+        amount: BigInt(options.amount),
+        feePolicy,
+        maxSlippageBps: options.maxSlippageBps
+      })
+      console.log('Open this URL in a browser to complete the purchase:')
+      console.log(response.url)
+      console.log(
+        `Deposit ~${response.amountSats} sats; recipient receives ~${response.estimatedOut} ${response.asset}, ` +
+        `service fee ${response.serviceFeeAmount} ${response.serviceFeeAsset || 'sats'}, ` +
+        `expires ${response.expiresAt}`
+      )
+    })
+
   // --- check-lightning-address-available ---
   program
     .command('check-lightning-address-available')
@@ -1039,8 +1073,7 @@ async function readPaymentOptions(paymentMethod, rl) {
  * Fetch cross-chain routes for an address and prompt the user to select one.
  * Auto-selects if only a single route is available.
  */
-async function selectCrossChainRoute(sdk, rl, addressDetails) {
-  const filter = { type: 'send', addressDetails }
+async function selectCrossChainRoute(sdk, rl, filter) {
   const routes = await sdk.getCrossChainRoutes(filter)
 
   if (!routes || routes.length === 0) {

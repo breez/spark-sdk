@@ -31,6 +31,7 @@ val COMMAND_NAMES = listOf(
     "refund-deposit",
     "list-unclaimed-deposits",
     "buy-bitcoin",
+    "prepare-payment-link",
     "check-lightning-address-available",
     "get-lightning-address",
     "register-lightning-address",
@@ -68,6 +69,7 @@ fun buildCommandRegistry(): Map<String, CliCommand> {
         "refund-deposit" to CliCommand("refund-deposit", "Refund an on-chain deposit", ::handleRefundDeposit),
         "list-unclaimed-deposits" to CliCommand("list-unclaimed-deposits", "List unclaimed on-chain deposits", ::handleListUnclaimedDeposits),
         "buy-bitcoin" to CliCommand("buy-bitcoin", "Buy Bitcoin via an external provider", ::handleBuyBitcoin),
+        "prepare-payment-link" to CliCommand("prepare-payment-link", "Prepare a payment link for cross-chain stablecoin transfer", ::handlePreparePaymentLink),
         "check-lightning-address-available" to CliCommand("check-lightning-address-available", "Check if a lightning address username is available", ::handleCheckLightningAddress),
         "get-lightning-address" to CliCommand("get-lightning-address", "Get registered lightning address", ::handleGetLightningAddress),
         "register-lightning-address" to CliCommand("register-lightning-address", "Register a lightning address", ::handleRegisterLightningAddress),
@@ -456,7 +458,7 @@ suspend fun handlePay(sdk: BreezSdk, reader: LineReader, args: List<String>) {
         is InputType.CrossChainAddress -> {
             val addressDetails = parsed.v1
             val address = addressDetails.address
-            val route = selectCrossChainRoute(sdk, reader, addressDetails)
+            val route = selectCrossChainRoute(sdk, reader, CrossChainRouteFilter.Send(addressDetails = addressDetails))
             PaymentRequest.CrossChain(
                 address = address,
                 route = route,
@@ -904,6 +906,59 @@ suspend fun handleBuyBitcoin(sdk: BreezSdk, reader: LineReader, args: List<Strin
     println(result.url)
 }
 
+// --- prepare-payment-link ---
+
+suspend fun handlePreparePaymentLink(sdk: BreezSdk, reader: LineReader, args: List<String>) {
+    val fp = FlagParser(args)
+    val amountStr = fp.getString("amount")
+    val feesIncluded = fp.hasFlag("fees-included")
+    val maxSlippageBps = fp.getUInt("max-slippage-bps")
+
+    if (fp.positional.isEmpty() || amountStr == null) {
+        println("Usage: prepare-payment-link <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>]")
+        return
+    }
+
+    val recipient = fp.positional[0]
+    val amount = try {
+        BigInteger.parseString(amountStr)
+    } catch (e: Exception) {
+        println("Invalid amount: $amountStr")
+        return
+    }
+
+    val parsed = sdk.parse(recipient)
+    val addressDetails = when (parsed) {
+        is InputType.CrossChainAddress -> parsed.v1
+        else -> {
+            println("Error: Recipient must be a cross-chain (EVM/Solana/Tron) address")
+            return
+        }
+    }
+
+    val address = addressDetails.address
+    val route = selectCrossChainRoute(sdk, reader, CrossChainRouteFilter.PaymentLink(addressDetails = addressDetails))
+
+    val feePolicy = if (feesIncluded) FeePolicy.FEES_INCLUDED else null
+
+    val response = sdk.preparePaymentLink(
+        PreparePaymentLinkRequest(
+            address = address,
+            route = route,
+            amount = amount,
+            feePolicy = feePolicy,
+            maxSlippageBps = maxSlippageBps,
+        )
+    )
+    println("Open this URL in a browser to complete the purchase:")
+    println(response.url)
+    println(
+        "Deposit ~${response.amountSats} sats; recipient receives ~${response.estimatedOut} ${response.asset}, " +
+        "service fee ${response.serviceFeeAmount} ${response.serviceFeeAsset ?: "sats"}, " +
+        "expires ${response.expiresAt}"
+    )
+}
+
 // --- check-lightning-address-available ---
 
 suspend fun handleCheckLightningAddress(sdk: BreezSdk, reader: LineReader, args: List<String>) {
@@ -1114,9 +1169,8 @@ suspend fun handleGetSparkStatus(sdk: BreezSdk, reader: LineReader, args: List<S
 suspend fun selectCrossChainRoute(
     sdk: BreezSdk,
     reader: LineReader,
-    addressDetails: CrossChainAddressDetails,
+    filter: CrossChainRouteFilter,
 ): CrossChainRoutePair {
-    val filter = CrossChainRouteFilter.Send(addressDetails = addressDetails)
     val routes = sdk.getCrossChainRoutes(filter)
     if (routes.isEmpty()) {
         throw Exception("No cross-chain routes available for this address")

@@ -37,6 +37,7 @@ public static class CommandNames
         "refund-deposit",
         "list-unclaimed-deposits",
         "buy-bitcoin",
+        "prepare-payment-link",
         "check-lightning-address-available",
         "get-lightning-address",
         "register-lightning-address",
@@ -161,6 +162,12 @@ public static class Commands
                 Name = "buy-bitcoin",
                 Description = "Buy Bitcoin using an external provider",
                 Run = HandleBuyBitcoin
+            },
+            ["prepare-payment-link"] = new()
+            {
+                Name = "prepare-payment-link",
+                Description = "Prepare a payment link to send stablecoins to an external-chain recipient",
+                Run = HandlePreparePaymentLink
             },
             ["check-lightning-address-available"] = new()
             {
@@ -639,7 +646,7 @@ public static class Commands
         if (parsed is InputType.CrossChainAddress crossChainAddr)
         {
             var address = crossChainAddr.v1.address;
-            var route = await SelectCrossChainRoute(sdk, readline, crossChainAddr.v1);
+            var route = await SelectCrossChainRoute(sdk, readline, new CrossChainRouteFilter.Send(addressDetails: crossChainAddr.v1));
             if (route == null) return;
             paymentRequest = new PaymentRequest.CrossChain(
                 address: address,
@@ -1126,6 +1133,54 @@ public static class Commands
         Console.WriteLine(result.url);
     }
 
+    // --- prepare-payment-link ---
+
+    private static async Task HandlePreparePaymentLink(BreezSdk sdk, Func<string, string?> readline, string[] args)
+    {
+        var positional = GetPositionalArgs(args);
+        var amountStr = GetFlag(args, "-a", "--amount");
+        var feesIncluded = HasFlag(args, "--fees-included");
+        var maxSlippageStr = GetFlag(args, "--max-slippage-bps");
+
+        if (positional.Length < 1 || amountStr == null)
+        {
+            Console.WriteLine("Usage: prepare-payment-link <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>]");
+            return;
+        }
+
+        var recipient = positional[0];
+
+        var parsed = await sdk.Parse(recipient);
+        if (parsed is not InputType.CrossChainAddress crossChainAddr)
+        {
+            Console.Error.WriteLine("Recipient must be a cross-chain (EVM/Solana/Tron) address");
+            return;
+        }
+
+        var addressDetails = crossChainAddr.v1;
+        var address = addressDetails.address;
+        var filter = new CrossChainRouteFilter.PaymentLink(addressDetails: addressDetails);
+        var route = await SelectCrossChainRoute(sdk, readline, filter);
+        if (route == null) return;
+
+        FeePolicy? feePolicy = feesIncluded ? FeePolicy.FeesIncluded : null;
+
+        var response = await sdk.PreparePaymentLink(request: new PreparePaymentLinkRequest(
+            address: address,
+            route: route,
+            amount: BigInteger.Parse(amountStr),
+            feePolicy: feePolicy,
+            maxSlippageBps: ParseOptionalUint(maxSlippageStr)
+        ));
+
+        Console.WriteLine("Open this URL in a browser to complete the purchase:");
+        Console.WriteLine(response.url);
+        var serviceFeeDenom = response.serviceFeeAsset ?? "sats";
+        Console.WriteLine(
+            $"Deposit ~{response.amountSats} sats; recipient receives ~{response.estimatedOut} {response.asset}, " +
+            $"service fee {response.serviceFeeAmount} {serviceFeeDenom}, expires {response.expiresAt}");
+    }
+
     // --- check-lightning-address-available ---
 
     private static async Task HandleCheckLightningAddress(BreezSdk sdk, Func<string, string?> readline, string[] args)
@@ -1469,9 +1524,8 @@ public static class Commands
     private static async Task<CrossChainRoutePair?> SelectCrossChainRoute(
         BreezSdk sdk,
         Func<string, string?> readline,
-        CrossChainAddressDetails addressDetails)
+        CrossChainRouteFilter filter)
     {
-        var filter = new CrossChainRouteFilter.Send(addressDetails: addressDetails);
         var routes = await sdk.GetCrossChainRoutes(filter: filter);
         if (routes.Length == 0)
         {

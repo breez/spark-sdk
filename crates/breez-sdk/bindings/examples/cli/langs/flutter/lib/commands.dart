@@ -26,6 +26,7 @@ const commandNames = [
   'refund-deposit',
   'list-unclaimed-deposits',
   'buy-bitcoin',
+  'prepare-payment-link',
   'check-lightning-address-available',
   'get-lightning-address',
   'register-lightning-address',
@@ -69,6 +70,10 @@ Map<String, CommandEntry> buildCommandRegistry() {
     'refund-deposit': CommandEntry('Refund an on-chain deposit', _handleRefundDeposit),
     'list-unclaimed-deposits': CommandEntry('List unclaimed on-chain deposits', _handleListUnclaimedDeposits),
     'buy-bitcoin': CommandEntry('Buy Bitcoin using an external provider', _handleBuyBitcoin),
+    'prepare-payment-link': CommandEntry(
+      'Prepare a payment link to send USDC/USDT to an external-chain recipient',
+      _handlePreparePaymentLink,
+    ),
     'check-lightning-address-available': CommandEntry(
       'Check if a lightning address username is available',
       _handleCheckLightningAddressAvailable,
@@ -428,7 +433,10 @@ Future<void> _handlePay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args
   if (parsed is InputType_CrossChainAddress) {
     final addressDetails = parsed.field0;
     final address = addressDetails.address;
-    final route = await _selectCrossChainRoute(sdk, addressDetails);
+    final route = await _selectCrossChainRoute(
+      sdk,
+      CrossChainRouteFilter.send(addressDetails: addressDetails),
+    );
     if (route == null) return;
     paymentRequest = PaymentRequest.crossChain(
       address: address,
@@ -888,6 +896,64 @@ Future<void> _handleBuyBitcoin(BreezSdk sdk, TokenIssuer tokenIssuer, List<Strin
   print(result.url);
 }
 
+// --- prepare-payment-link ---
+
+Future<void> _handlePreparePaymentLink(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
+  final parser =
+      _parser('prepare-payment-link')
+        ..addOption(
+          'amount',
+          mandatory: true,
+          help: 'Amount in stablecoin base units (6 decimals for USDC/USDT)',
+        )
+        ..addFlag('fees-included', defaultsTo: false, help: 'Deduct fees from the amount')
+        ..addOption('max-slippage-bps', help: 'Maximum slippage in basis points');
+  final results = _parseArgs(parser, args, 'prepare-payment-link <recipient> --amount <amount> [options]');
+  if (results == null) return;
+
+  if (results.rest.isEmpty) {
+    print('Usage: prepare-payment-link <recipient> --amount <amount> [options]');
+    return;
+  }
+  final recipient = results.rest.first;
+  final amount = BigInt.parse(results.option('amount')!);
+  final feesIncluded = results.flag('fees-included');
+  final maxSlippageBpsStr = results.option('max-slippage-bps');
+  final maxSlippageBps = maxSlippageBpsStr != null ? int.parse(maxSlippageBpsStr) : null;
+
+  final parsed = await sdk.parse(input: recipient);
+  if (parsed is! InputType_CrossChainAddress) {
+    print('Recipient must be a cross-chain (EVM/Solana/Tron) address');
+    return;
+  }
+  final addressDetails = parsed.field0;
+  final address = addressDetails.address;
+  final route = await _selectCrossChainRoute(
+    sdk,
+    CrossChainRouteFilter.paymentLink(addressDetails: addressDetails),
+  );
+  if (route == null) return;
+
+  final feePolicy = feesIncluded ? FeePolicy.feesIncluded : null;
+
+  final response = await sdk.preparePaymentLink(
+    request: PreparePaymentLinkRequest(
+      address: address,
+      route: route,
+      amount: amount,
+      feePolicy: feePolicy,
+      maxSlippageBps: maxSlippageBps,
+    ),
+  );
+  print('Open this URL in a browser to complete the purchase:');
+  print(response.url);
+  print(
+    'Deposit ~${response.amountSats} sats; recipient receives ~${response.estimatedOut} '
+    '${response.asset}, service fee ${response.serviceFeeAmount} '
+    '${response.serviceFeeAsset ?? "sats"}, expires ${response.expiresAt}',
+  );
+}
+
 // --- check-lightning-address-available ---
 
 Future<void> _handleCheckLightningAddressAvailable(
@@ -1180,11 +1246,7 @@ SendPaymentOptions? _readPaymentOptions(SendPaymentMethod paymentMethod) {
 // Cross-chain route selection
 // ---------------------------------------------------------------------------
 
-Future<CrossChainRoutePair?> _selectCrossChainRoute(
-  BreezSdk sdk,
-  CrossChainAddressDetails addressDetails,
-) async {
-  final filter = CrossChainRouteFilter.send(addressDetails: addressDetails);
+Future<CrossChainRoutePair?> _selectCrossChainRoute(BreezSdk sdk, CrossChainRouteFilter filter) async {
   final routes = await sdk.getCrossChainRoutes(filter: filter);
   if (routes.isEmpty) {
     print('No cross-chain routes available for this address');

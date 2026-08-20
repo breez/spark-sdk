@@ -4,7 +4,7 @@
  * Mirrors ALL commands from the Rust CLI:
  *   get-info, get-payment, sync, list-payments, receive, pay, pay-batch, lnurl-pay,
  *   lnurl-withdraw, lnurl-auth, claim-htlc-payment, claim-deposit, parse,
- *   refund-deposit, list-unclaimed-deposits, buy-bitcoin,
+ *   refund-deposit, list-unclaimed-deposits, buy-bitcoin, prepare-payment-link,
  *   check-lightning-address-available, get-lightning-address,
  *   register-lightning-address, delete-lightning-address, list-fiat-currencies,
  *   list-fiat-rates, recommended-fees, get-tokens-metadata,
@@ -168,6 +168,7 @@ export const COMMAND_NAMES = [
   'refund-deposit',
   'list-unclaimed-deposits',
   'buy-bitcoin',
+  'prepare-payment-link',
   'check-lightning-address-available',
   'get-lightning-address',
   'register-lightning-address',
@@ -213,6 +214,7 @@ export function buildCommandRegistry(): Map<string, CommandDef> {
     { name: 'refund-deposit', description: 'Refund an on-chain deposit', run: handleRefundDeposit },
     { name: 'list-unclaimed-deposits', description: 'List unclaimed on-chain deposits', run: handleListUnclaimedDeposits },
     { name: 'buy-bitcoin', description: 'Buy Bitcoin via external provider', run: handleBuyBitcoin },
+    { name: 'prepare-payment-link', description: 'Prepare a payment link to send USDC/USDT to an external-chain recipient', run: handlePreparePaymentLink },
     { name: 'check-lightning-address-available', description: 'Check if a lightning address username is available', run: handleCheckLightningAddress },
     { name: 'get-lightning-address', description: 'Get registered lightning address', run: handleGetLightningAddress },
     { name: 'register-lightning-address', description: 'Register a lightning address', run: handleRegisterLightningAddress },
@@ -592,7 +594,11 @@ async function handlePay(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterf
   const parsed = await sdk.parse(paymentRequestInput)
   if (parsed.tag === InputType_Tags.CrossChainAddress) {
     const addressDetails: CrossChainAddressDetails = parsed.inner[0]
-    const routeResult = await selectCrossChainRoute(sdk, addressDetails, routeIndex)
+    const routeResult = await selectCrossChainRoute(
+      sdk,
+      new CrossChainRouteFilter.Send({ addressDetails }),
+      routeIndex,
+    )
     lines.push(routeResult.message)
     paymentRequest = new PaymentRequest.CrossChain({
       address: addressDetails.address,
@@ -1061,6 +1067,57 @@ async function handleBuyBitcoin(sdk: BreezSdkInterface, _tokenIssuer: TokenIssue
   return lines.join('\n')
 }
 
+// --- prepare-payment-link ---
+
+async function handlePreparePaymentLink(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
+  const positional = args.filter(a => !a.startsWith('-'))
+  if (positional.length < 1) {
+    return 'Usage: prepare-payment-link <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>] [--route <n>]'
+  }
+
+  const recipient = positional[0]
+  const amountStr = parseFlag(args, '--amount')
+  if (!amountStr) {
+    return 'Error: --amount is required'
+  }
+  const amount = BigInt(amountStr)
+  const feesIncluded = hasFlag(args, '--fees-included')
+  const maxSlippageBps = parseNumericFlag(args, '--max-slippage-bps')
+  const routeIndex = parseNumericFlag(args, '--route')
+
+  const parsed = await sdk.parse(recipient)
+  if (parsed.tag !== InputType_Tags.CrossChainAddress) {
+    return 'Error: Recipient must be a cross-chain (EVM/Solana/Tron) address'
+  }
+  const addressDetails = parsed.inner[0]
+
+  const routeResult = await selectCrossChainRoute(
+    sdk,
+    new CrossChainRouteFilter.PaymentLink({ addressDetails }),
+    routeIndex,
+  )
+
+  const feePolicy = feesIncluded ? FeePolicy.FeesIncluded : undefined
+
+  const response = await sdk.preparePaymentLink({
+    address: addressDetails.address,
+    route: routeResult.route,
+    amount,
+    feePolicy,
+    maxSlippageBps,
+  })
+
+  const lines = [routeResult.message]
+  lines.push('Open this URL in a browser to complete the purchase:')
+  lines.push(response.url)
+  const serviceFeeAsset = response.serviceFeeAsset ?? 'sats'
+  lines.push(
+    `Deposit ~${response.amountSats} sats; recipient receives ~${response.estimatedOut} ${response.asset}, ` +
+    `service fee ${response.serviceFeeAmount} ${serviceFeeAsset}, expires ${response.expiresAt}`
+  )
+  return lines.join('\n')
+}
+
 // --- check-lightning-address-available ---
 
 async function handleCheckLightningAddress(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
@@ -1301,10 +1358,9 @@ function maybeTruncateAddress(addr: string | undefined | null): string {
 
 async function selectCrossChainRoute(
   sdk: BreezSdkInterface,
-  addressDetails: CrossChainAddressDetails,
+  filter: InstanceType<typeof CrossChainRouteFilter.Send> | InstanceType<typeof CrossChainRouteFilter.PaymentLink>,
   preferredIndex: number | undefined,
 ): Promise<{ route: CrossChainRoutePair; message: string }> {
-  const filter = new CrossChainRouteFilter.Send({ addressDetails })
   const routes: CrossChainRoutePair[] = await sdk.getCrossChainRoutes(filter)
 
   if (routes.length === 0) {

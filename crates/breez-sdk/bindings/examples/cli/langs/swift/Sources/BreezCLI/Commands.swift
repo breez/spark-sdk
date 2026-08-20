@@ -88,6 +88,7 @@ let commandNames: [String] = [
     "refund-deposit",
     "list-unclaimed-deposits",
     "buy-bitcoin",
+    "prepare-payment-link",
     "check-lightning-address-available",
     "get-lightning-address",
     "register-lightning-address",
@@ -124,6 +125,7 @@ func buildCommandRegistry() -> [String: CommandEntry] {
         "refund-deposit":                    CommandEntry(name: "refund-deposit", description: "Refund an on-chain deposit", run: handleRefundDeposit),
         "list-unclaimed-deposits":           CommandEntry(name: "list-unclaimed-deposits", description: "List unclaimed on-chain deposits", run: handleListUnclaimedDeposits),
         "buy-bitcoin":                       CommandEntry(name: "buy-bitcoin", description: "Buy Bitcoin via MoonPay", run: handleBuyBitcoin),
+        "prepare-payment-link":              CommandEntry(name: "prepare-payment-link", description: "Prepare a payment link for cross-chain stablecoin send", run: handlePreparePaymentLink),
         "check-lightning-address-available": CommandEntry(name: "check-lightning-address-available", description: "Check if a lightning address username is available", run: handleCheckLightningAddress),
         "get-lightning-address":             CommandEntry(name: "get-lightning-address", description: "Get registered lightning address", run: handleGetLightningAddress),
         "register-lightning-address":        CommandEntry(name: "register-lightning-address", description: "Register a lightning address", run: handleRegisterLightningAddress),
@@ -474,7 +476,7 @@ func handlePay(_ sdk: BreezSdk, _ args: [String]) async throws {
     let parsed = try? await sdk.parse(input: paymentRequestStr)
     if case let .crossChainAddress(v1) = parsed {
         let address = v1.address
-        let route = try await selectCrossChainRoute(sdk: sdk, addressDetails: v1)
+        let route = try await selectCrossChainRoute(sdk: sdk, filter: .send(addressDetails: v1))
         paymentRequest = .crossChain(
             address: address,
             route: route,
@@ -885,6 +887,48 @@ func handleBuyBitcoin(_ sdk: BreezSdk, _ args: [String]) async throws {
     print(result.url)
 }
 
+// --- prepare-payment-link ---
+
+func handlePreparePaymentLink(_ sdk: BreezSdk, _ args: [String]) async throws {
+    let fp = FlagParser(args)
+    guard let recipient = fp.positional.first,
+          let amountStr = fp.get("amount"),
+          let amount = BInt(amountStr) else {
+        print("Usage: prepare-payment-link <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>]")
+        return
+    }
+
+    let feesIncluded = fp.has("fees-included")
+    let maxSlippageBps = fp.get("max-slippage-bps").flatMap { UInt32($0) }
+
+    let parsed = try await sdk.parse(input: recipient)
+    guard case let .crossChainAddress(v1) = parsed else {
+        print("Error: Recipient must be a cross-chain (EVM/Solana/Tron) address")
+        return
+    }
+
+    let address = v1.address
+    let route = try await selectCrossChainRoute(
+        sdk: sdk,
+        filter: .paymentLink(addressDetails: v1)
+    )
+
+    let feePolicy: FeePolicy? = feesIncluded ? .feesIncluded : nil
+
+    let response = try await sdk.preparePaymentLink(
+        request: PreparePaymentLinkRequest(
+            address: address,
+            route: route,
+            amount: amount,
+            feePolicy: feePolicy,
+            maxSlippageBps: maxSlippageBps
+        ))
+
+    print("Open this URL in a browser to complete the purchase:")
+    print(response.url)
+    print("Deposit ~\(response.amountSats) sats; recipient receives ~\(response.estimatedOut) \(response.asset), service fee \(response.serviceFeeAmount) \(response.serviceFeeAsset ?? "sats"), expires \(response.expiresAt)")
+}
+
 // --- check-lightning-address-available ---
 
 func handleCheckLightningAddress(_ sdk: BreezSdk, _ args: [String]) async throws {
@@ -1096,9 +1140,8 @@ func handleGetSparkStatus(_ sdk: BreezSdk, _ args: [String]) async throws {
 
 func selectCrossChainRoute(
     sdk: BreezSdk,
-    addressDetails: CrossChainAddressDetails
+    filter: CrossChainRouteFilter
 ) async throws -> CrossChainRoutePair {
-    let filter = CrossChainRouteFilter.send(addressDetails: addressDetails)
     let routes = try await sdk.getCrossChainRoutes(filter: filter)
     if routes.isEmpty {
         throw NSError(domain: "BreezCLI", code: 1, userInfo: [

@@ -35,6 +35,7 @@ from breez_sdk_spark import (
     PaymentStatus,
     PaymentType,
     PrepareLnurlPayRequest,
+    PreparePaymentLinkRequest,
     PrepareSendBatchRequest,
     PrepareSendPaymentRequest,
     ReceivePaymentMethod,
@@ -74,6 +75,7 @@ COMMAND_NAMES = [
     "refund-deposit",
     "list-unclaimed-deposits",
     "buy-bitcoin",
+    "prepare-payment-link",
     "check-lightning-address-available",
     "get-lightning-address",
     "register-lightning-address",
@@ -349,7 +351,9 @@ async def _handle_pay(sdk, _token_issuer, session, args):
     if isinstance(parsed, InputType.CROSS_CHAIN_ADDRESS):
         address_details = parsed[0]
         address = address_details.address
-        route = await _select_cross_chain_route(sdk, session, address_details)
+        route = await _select_cross_chain_route(
+            sdk, session, CrossChainRouteFilter.SEND(address_details=address_details),
+        )
         payment_request = PaymentRequest.CROSS_CHAIN(
             address=address,
             route=route,
@@ -764,6 +768,50 @@ async def _handle_buy_bitcoin(sdk, _token_issuer, _session, args):
     print(result.url)
 
 
+# --- prepare-payment-link ---
+
+def _build_prepare_payment_link_parser():
+    p = _parser("prepare-payment-link",
+                "Prepare a payment link to send USDC/USDT to an external-chain recipient via a fiat rail")
+    p.add_argument("recipient", help="Recipient address on the destination chain (EVM/Solana/Tron)")
+    p.add_argument("--amount", type=int, required=True,
+                   help="Amount in the destination stablecoin's base units (6 decimals for USDC/USDT)")
+    p.add_argument("--fees-included", action="store_true", default=False,
+                   help="Deduct fees from the amount instead of adding them on top")
+    p.add_argument("--max-slippage-bps", type=int, default=None,
+                   help="Maximum slippage in basis points")
+    return p
+
+async def _handle_prepare_payment_link(sdk, _token_issuer, session, args):
+    parsed = await sdk.parse(input=args.recipient)
+    if not isinstance(parsed, InputType.CROSS_CHAIN_ADDRESS):
+        print("Recipient must be a cross-chain (EVM/Solana/Tron) address")
+        return
+    address_details = parsed[0]
+    address = address_details.address
+    route_filter = CrossChainRouteFilter.PAYMENT_LINK(address_details=address_details)
+    route = await _select_cross_chain_route(sdk, session, route_filter)
+    fee_policy = FeePolicy.FEES_INCLUDED if args.fees_included else None
+    response = await sdk.prepare_payment_link(
+        request=PreparePaymentLinkRequest(
+            address=address,
+            route=route,
+            amount=args.amount,
+            fee_policy=fee_policy,
+            max_slippage_bps=args.max_slippage_bps,
+        )
+    )
+    print("Open this URL in a browser to complete the purchase:")
+    print(response.url)
+    service_fee_asset = response.service_fee_asset if response.service_fee_asset else "sats"
+    print(
+        f"Deposit ~{response.amount_sats} sats; "
+        f"recipient receives ~{response.estimated_out} {response.asset}, "
+        f"service fee {response.service_fee_amount} {service_fee_asset}, "
+        f"expires {response.expires_at}"
+    )
+
+
 # --- check-lightning-address-available ---
 
 def _build_check_lightning_address_available_parser():
@@ -994,9 +1042,8 @@ def _maybe_truncate_address(addr):
     return f" ({addr})"
 
 
-async def _select_cross_chain_route(sdk, session, address_details):
+async def _select_cross_chain_route(sdk, session, route_filter):
     """Fetch cross-chain routes and prompt the user to select one."""
-    route_filter = CrossChainRouteFilter.SEND(address_details=address_details)
     routes = await sdk.get_cross_chain_routes(filter=route_filter)
     if not routes:
         raise ValueError("No cross-chain routes available for this address")
@@ -1129,6 +1176,7 @@ def build_command_registry():
         "refund-deposit": (_build_refund_deposit_parser(), _handle_refund_deposit),
         "list-unclaimed-deposits": (_build_list_unclaimed_deposits_parser(), _handle_list_unclaimed_deposits),
         "buy-bitcoin": (_build_buy_bitcoin_parser(), _handle_buy_bitcoin),
+        "prepare-payment-link": (_build_prepare_payment_link_parser(), _handle_prepare_payment_link),
         "check-lightning-address-available": (_build_check_lightning_address_available_parser(), _handle_check_lightning_address_available),
         "get-lightning-address": (_build_get_lightning_address_parser(), _handle_get_lightning_address),
         "register-lightning-address": (_build_register_lightning_address_parser(), _handle_register_lightning_address),
