@@ -1033,7 +1033,7 @@ Future<void> _handleClaimLightningAddressTransfer(
     parser,
     args,
     'claim-lightning-address-transfer <username> [description] --from-pubkey <pubkey> '
-        '--from-signature <sig> --from-domain <domain> --from-timestamp <secs>',
+    '--from-signature <sig> --from-domain <domain> --from-timestamp <secs>',
   );
   if (results == null) return;
 
