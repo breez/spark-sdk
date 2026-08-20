@@ -1493,7 +1493,7 @@ where
             return Ok(Host(host.to_string()));
         }
 
-        if let Some(authority) = parts.uri.authority().map(|a| a.as_str()) {
+        if let Some(authority) = parts.uri.authority() {
             return Ok(Host(authority.to_string()));
         }
 
