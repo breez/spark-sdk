@@ -40,6 +40,7 @@ var CommandNames = []string{
 	"refund-deposit",
 	"list-unclaimed-deposits",
 	"buy-bitcoin",
+	"prepare-payment-link",
 	"check-lightning-address-available",
 	"get-lightning-address",
 	"register-lightning-address",
@@ -75,6 +76,7 @@ func BuildCommandRegistry() map[string]Command {
 		"refund-deposit":                       {Name: "refund-deposit", Description: "Refund an on-chain deposit", Run: handleRefundDeposit},
 		"list-unclaimed-deposits":              {Name: "list-unclaimed-deposits", Description: "List unclaimed on-chain deposits", Run: handleListUnclaimedDeposits},
 		"buy-bitcoin":                          {Name: "buy-bitcoin", Description: "Buy Bitcoin using an external provider", Run: handleBuyBitcoin},
+		"prepare-payment-link":                 {Name: "prepare-payment-link", Description: "Prepare a payment link to send stablecoins to an external-chain recipient", Run: handlePreparePaymentLink},
 		"check-lightning-address-available":    {Name: "check-lightning-address-available", Description: "Check if a lightning address username is available", Run: handleCheckLightningAddress},
 		"get-lightning-address":                {Name: "get-lightning-address", Description: "Get registered lightning address", Run: handleGetLightningAddress},
 		"register-lightning-address":           {Name: "register-lightning-address", Description: "Register a lightning address", Run: handleRegisterLightningAddress},
@@ -417,7 +419,7 @@ func handlePay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []stri
 	if parseErr == nil {
 		if ccAddr, ok := parsed.(breez_sdk_spark.InputTypeCrossChainAddress); ok {
 			address := ccAddr.Field0.Address
-			route, err := selectCrossChainRoute(sdk, rl, ccAddr.Field0)
+			route, err := selectCrossChainRoute(sdk, rl, breez_sdk_spark.CrossChainRouteFilterSend{AddressDetails: ccAddr.Field0})
 			if err != nil {
 				return err
 			}
@@ -1079,6 +1081,82 @@ func handleBuyBitcoin(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args 
 	return nil
 }
 
+// --- prepare-payment-link ---
+
+func handlePreparePaymentLink(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []string) error {
+	fs := flag.NewFlagSet("prepare-payment-link", flag.ContinueOnError)
+	amountStr := fs.String("amount", "", "Amount in the destination stablecoin's base units (6 decimals for USDC/USDT)")
+	feesIncluded := fs.Bool("fees-included", false, "Deduct fees from the amount instead of adding them on top")
+	maxSlippageStr := fs.String("max-slippage-bps", "", "Maximum slippage in basis points")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	positional := fs.Args()
+	if len(positional) < 1 || *amountStr == "" {
+		fmt.Println("Usage: prepare-payment-link <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>]")
+		return nil
+	}
+	recipient := positional[0]
+
+	parsed, err := sdk.Parse(recipient)
+	if err = liftError(err); err != nil {
+		return err
+	}
+	ccAddr, ok := parsed.(breez_sdk_spark.InputTypeCrossChainAddress)
+	if !ok {
+		return fmt.Errorf("recipient must be a cross-chain (EVM/Solana/Tron) address")
+	}
+	addressDetails := ccAddr.Field0
+	address := addressDetails.Address
+
+	route, err := selectCrossChainRoute(sdk, rl, breez_sdk_spark.CrossChainRouteFilterPaymentLink{AddressDetails: addressDetails})
+	if err != nil {
+		return err
+	}
+
+	amount, ok := new(big.Int).SetString(*amountStr, 10)
+	if !ok {
+		return fmt.Errorf("invalid amount: %s", *amountStr)
+	}
+
+	req := breez_sdk_spark.PreparePaymentLinkRequest{
+		Address: address,
+		Route:   route,
+		Amount:  amount,
+	}
+
+	if *feesIncluded {
+		fp := breez_sdk_spark.FeePolicyFeesIncluded
+		req.FeePolicy = &fp
+	}
+
+	if *maxSlippageStr != "" {
+		val, err := strconv.ParseUint(*maxSlippageStr, 10, 32)
+		if err != nil {
+			return fmt.Errorf("invalid max slippage: %s", *maxSlippageStr)
+		}
+		val32 := uint32(val)
+		req.MaxSlippageBps = &val32
+	}
+
+	response, err := sdk.PreparePaymentLink(req)
+	if err = liftError(err); err != nil {
+		return err
+	}
+
+	fmt.Println("Open this URL in a browser to complete the purchase:")
+	fmt.Println(response.Url)
+	serviceFeeAsset := "sats"
+	if response.ServiceFeeAsset != nil {
+		serviceFeeAsset = *response.ServiceFeeAsset
+	}
+	fmt.Printf("Deposit ~%v sats; recipient receives ~%v %s, service fee %v %s, expires %s\n",
+		response.AmountSats, response.EstimatedOut, response.Asset,
+		response.ServiceFeeAmount, serviceFeeAsset, response.ExpiresAt)
+	return nil
+}
+
 // --- check-lightning-address-available ---
 
 func handleCheckLightningAddress(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []string) error {
@@ -1367,8 +1445,7 @@ func handleGetSparkStatus(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, _
 // selectCrossChainRoute — fetch routes and prompt the user to pick one
 // ---------------------------------------------------------------------------
 
-func selectCrossChainRoute(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, addressDetails breez_sdk_spark.CrossChainAddressDetails) (breez_sdk_spark.CrossChainRoutePair, error) {
-	var filter breez_sdk_spark.CrossChainRouteFilter = breez_sdk_spark.CrossChainRouteFilterSend{AddressDetails: addressDetails}
+func selectCrossChainRoute(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, filter breez_sdk_spark.CrossChainRouteFilter) (breez_sdk_spark.CrossChainRoutePair, error) {
 	routes, err := sdk.GetCrossChainRoutes(filter)
 	if err = liftError(err); err != nil {
 		return breez_sdk_spark.CrossChainRoutePair{}, err
