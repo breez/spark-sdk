@@ -703,7 +703,7 @@ fn parse_compressed_public_key(hex_encoded: &str) -> Result<PublicKey, SdkError>
 mod tests {
     use super::{
         CashAppProvider, SdkError, deposit_target, parse_compressed_public_key,
-        prepare_payment_link_response, route_supports_source_chain,
+        prepare_payment_link_response, reject_reserved_namespace, route_supports_source_chain,
     };
     use crate::cross_chain::{CrossChainPrepared, CrossChainProviderContext};
     use crate::{CrossChainFeeMode, CrossChainProvider, CrossChainRoutePair, SourceChain};
