@@ -1,4 +1,4 @@
-use std::{collections::HashMap, str::FromStr as _, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use tracing::{error, info, trace};
 
@@ -6,16 +6,19 @@ use crate::{
     Network,
     operator::{
         OperatorPool,
-        rpc::spark::{
-            GetSigningCommitmentsRequest, RenewLeafRequest, RenewNodeTimelockSigningJob,
-            RenewNodeZeroTimelockSigningJob, RenewRefundTimelockSigningJob, TreeNodeIds,
-            query_nodes_request::Source, renew_leaf_request::SigningJobs,
-            renew_leaf_response::RenewResult,
+        rpc::{
+            QueryNodesPaginatedRequest,
+            spark::{
+                GetSigningCommitmentsRequest, RenewLeafRequest, RenewNodeTimelockSigningJob,
+                RenewNodeZeroTimelockSigningJob, RenewRefundTimelockSigningJob, TreeNodeIds,
+                query_nodes_request::Source, renew_leaf_request::SigningJobs,
+                renew_leaf_response::RenewResult,
+            },
         },
     },
     services::{ServiceError, map_signing_nonce_commitments},
     signer::SparkSigner,
-    tree::{TreeNode, TreeNodeId},
+    tree::{LeafPedigree, TreeNode, TreeNodeId, assemble_exit_chains},
     utils::{
         signing_job::{SigningJob, SigningJobType, sign_signing_jobs},
         transactions::{
@@ -27,12 +30,6 @@ use crate::{
 };
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments};
 use std::collections::BTreeMap;
-enum RenewType<'a> {
-    Node { parent_node: &'a TreeNode },
-    Refund { parent_node: &'a TreeNode },
-    ZeroTimelock,
-}
-
 pub struct TimelockManager {
     spark_signer: Arc<dyn SparkSigner>,
     network: Network,
@@ -75,131 +72,181 @@ impl TimelockManager {
         Ok(signing_commitments)
     }
 
+    /// Renews any leaf whose refund timelock is expiring, returning each leaf with
+    /// its ancestor chain. An unrenewed leaf passes through unchanged. A renewed leaf
+    /// carries its new chain, rebuilt in memory from the ancestors it came in with
+    /// plus the new split node the coordinator returns. The parent that drives the
+    /// renewal normally comes from the pedigree; if the stored chain is incomplete it
+    /// is fetched from the operators as a fallback.
     pub async fn check_renew_nodes(
         &self,
-        nodes: Vec<TreeNode>,
-    ) -> Result<Vec<TreeNode>, ServiceError> {
-        trace!("Checking renew nodes: {:?}", nodes);
-        let mut renewable_nodes = Vec::new();
-        let mut renewable_refunds = Vec::new();
-        let mut renewable_zero_timelock_nodes = Vec::new();
-        let mut node_ids = Vec::new();
-        let mut ready_nodes = Vec::new();
-
-        for node in nodes {
-            if node.needs_refund_tx_renewed()? {
-                node_ids.push(node.id.to_string());
-                if node.is_zero_timelock() {
-                    renewable_zero_timelock_nodes.push(node);
-                } else if node.needs_node_tx_renewed() {
-                    renewable_nodes.push(node);
-                } else {
-                    renewable_refunds.push(node);
-                }
+        pedigrees: Vec<LeafPedigree>,
+    ) -> Result<Vec<LeafPedigree>, ServiceError> {
+        trace!("Checking renew nodes: {:?}", pedigrees);
+        let mut ready = Vec::new();
+        let mut renewable = Vec::new();
+        for pedigree in pedigrees {
+            if pedigree.leaf.needs_refund_tx_renewed()? {
+                renewable.push(pedigree);
             } else {
-                ready_nodes.push(node);
+                ready.push(pedigree);
             }
         }
 
-        if renewable_nodes.is_empty()
-            && renewable_refunds.is_empty()
-            && renewable_zero_timelock_nodes.is_empty()
-        {
-            return Ok(ready_nodes);
+        if renewable.is_empty() {
+            return Ok(ready);
         }
 
-        // Get the parent nodes
-        let paging_result = self
+        let fetched = self.fetch_missing_renewal_parents(&renewable).await?;
+        let renew_futures = renewable
+            .iter()
+            .map(|pedigree| self.renew_pedigree(pedigree, &fetched));
+        // One leaf the operators will not renew does not fail the batch: it is
+        // kept as it arrived and tried again on the next pass.
+        let renew_results = futures::future::join_all(renew_futures).await;
+        for (pedigree, result) in renewable.into_iter().zip(renew_results) {
+            match result {
+                Ok(renewed) => ready.push(renewed),
+                Err(e) => {
+                    error!(
+                        "Timelock renewal failed for leaf {}, keeping it unrenewed for the next pass: {e:?}",
+                        pedigree.leaf.id
+                    );
+                    ready.push(pedigree);
+                }
+            }
+        }
+        Ok(ready)
+    }
+
+    /// Fetches the ancestors of every leaf about to be renewed whose stored chain does
+    /// not already carry its parent, in a single query. Batched rather than resolved
+    /// per leaf: the leaves in a wallet tend to age together, so a query each would
+    /// multiply an operation's round trips by the number of timelocks coming due at
+    /// once. Returns an empty map when every parent is already stored, which is the
+    /// usual case and costs no call at all.
+    async fn fetch_missing_renewal_parents(
+        &self,
+        renewable: &[LeafPedigree],
+    ) -> Result<HashMap<TreeNodeId, TreeNode>, ServiceError> {
+        let node_ids: Vec<String> = renewable
+            .iter()
+            // A zero-timelock renewal builds on no parent.
+            .filter(|pedigree| !pedigree.leaf.is_zero_timelock())
+            .filter(|pedigree| match &pedigree.leaf.parent_node_id {
+                Some(parent_id) => !pedigree.ancestors.iter().any(|a| &a.id == parent_id),
+                None => false,
+            })
+            .map(|pedigree| pedigree.leaf.id.to_string())
+            .collect();
+        if node_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        trace!(
+            "Fetching renewal parents for {} leaves whose stored chain lacks one",
+            node_ids.len()
+        );
+
+        let result = self
             .operator_pool
             .get_coordinator()
             .client
             .query_nodes_paginated(
-                crate::operator::rpc::QueryNodesPaginatedRequest {
+                QueryNodesPaginatedRequest {
                     source: Some(Source::NodeIds(TreeNodeIds { node_ids })),
                     include_parents: true,
-                    network: self.network.to_proto_network() as i32,
+                    network: self.network.to_proto_network().into(),
                     ..Default::default()
                 },
-                None, // fetch all pages
+                None,
             )
             .await?;
-
-        let mut node_ids_to_nodes_map: HashMap<TreeNodeId, TreeNode> = HashMap::new();
-        for (_node_id_str, node) in paging_result.items {
-            node_ids_to_nodes_map.insert(
-                TreeNodeId::from_str(&node.id).map_err(ServiceError::ValidationError)?,
-                node.clone().try_into()?,
-            );
+        let mut nodes = HashMap::new();
+        for (_id, node) in result.items {
+            let node: TreeNode = node.try_into()?;
+            nodes.insert(node.id.clone(), node);
         }
-
-        let get_parent_node = |node: &TreeNode| -> Result<&TreeNode, ServiceError> {
-            node_ids_to_nodes_map
-                .get(
-                    &node
-                        .parent_node_id
-                        .clone()
-                        .ok_or(ServiceError::Generic(format!(
-                            "Node {} has no parent node",
-                            node.id
-                        )))?,
-                )
-                .ok_or(ServiceError::Generic(format!(
-                    "Parent node not found for node {}",
-                    node.id
-                )))
-        };
-
-        let mut renew_futures = Vec::new();
-        let mut renewing_nodes = Vec::new();
-        for node in &renewable_nodes {
-            let parent_node = get_parent_node(node)?;
-            renewing_nodes.push(node.clone());
-            renew_futures.push(self.renew(RenewType::Node { parent_node }, node));
-        }
-        for node in &renewable_refunds {
-            let parent_node = get_parent_node(node)?;
-            renewing_nodes.push(node.clone());
-            renew_futures.push(self.renew(RenewType::Refund { parent_node }, node));
-        }
-        for node in &renewable_zero_timelock_nodes {
-            renewing_nodes.push(node.clone());
-            renew_futures.push(self.renew(RenewType::ZeroTimelock, node));
-        }
-
-        let renew_results = futures::future::join_all(renew_futures).await;
-        for (node, result) in renewing_nodes.into_iter().zip(renew_results) {
-            match result {
-                Ok(renewed) => ready_nodes.push(renewed),
-                Err(e) => {
-                    error!(
-                        "Timelock renewal failed for leaf {}, keeping it unrenewed for the next pass: {e:?}",
-                        node.id
-                    );
-                    ready_nodes.push(node);
-                }
-            }
-        }
-
-        Ok(ready_nodes)
+        Ok(nodes)
     }
 
-    async fn renew<'a>(
+    /// Renews one leaf and rebuilds its pedigree in memory. The renewal may reparent
+    /// the leaf onto a new split node (returned by the coordinator); the rest of the
+    /// chain is unchanged and comes from the pedigree the leaf arrived with.
+    async fn renew_pedigree(
         &self,
-        renew_type: RenewType<'a>,
-        node: &TreeNode,
-    ) -> Result<TreeNode, ServiceError> {
-        match renew_type {
-            RenewType::Node { parent_node } => self.renew_node(node, parent_node).await,
-            RenewType::Refund { parent_node } => self.renew_refund(node, parent_node).await,
-            RenewType::ZeroTimelock => self.renew_zero_timelock(node).await,
+        pedigree: &LeafPedigree,
+        fetched: &HashMap<TreeNodeId, TreeNode>,
+    ) -> Result<LeafPedigree, ServiceError> {
+        let leaf = &pedigree.leaf;
+        let mut nodes: HashMap<TreeNodeId, TreeNode> = pedigree
+            .ancestors
+            .iter()
+            .map(|a| (a.id.clone(), a.clone()))
+            .collect();
+
+        let (renewed_leaf, split_node) = if leaf.is_zero_timelock() {
+            self.renew_zero_timelock(leaf).await?
+        } else {
+            let parent = Self::resolve_renewal_parent(leaf, &mut nodes, fetched)?;
+            if leaf.needs_node_tx_renewed() {
+                self.renew_node(leaf, &parent).await?
+            } else {
+                self.renew_refund(leaf, &parent).await?
+            }
+        };
+
+        if let Some(split_node) = split_node {
+            nodes.insert(split_node.id.clone(), split_node);
         }
+        nodes.insert(renewed_leaf.id.clone(), renewed_leaf.clone());
+        assemble_exit_chains(&nodes, std::slice::from_ref(&renewed_leaf.id))
+            .pop()
+            .ok_or_else(|| {
+                ServiceError::Generic(format!(
+                    "Failed to rebuild chain for node {}",
+                    renewed_leaf.id
+                ))
+            })
+    }
+
+    /// Resolves the parent whose `node_tx` a non-zero-timelock renewal builds on.
+    /// It is normally already in the pedigree; when the stored chain is incomplete
+    /// (e.g. a leaf claimed while the coordinator was unreachable) it comes from the
+    /// batch fetched up front, whose chain is walked in so the pedigree rebuilt after
+    /// the renewal is complete too. Errors only if the parent is in neither.
+    fn resolve_renewal_parent(
+        leaf: &TreeNode,
+        nodes: &mut HashMap<TreeNodeId, TreeNode>,
+        fetched: &HashMap<TreeNodeId, TreeNode>,
+    ) -> Result<TreeNode, ServiceError> {
+        let parent_id = leaf
+            .parent_node_id
+            .clone()
+            .ok_or_else(|| ServiceError::Generic(format!("Node {} has no parent node", leaf.id)))?;
+        if !nodes.contains_key(&parent_id) {
+            // Only this leaf's own line, not every node the batch returned.
+            let mut current = Some(parent_id.clone());
+            while let Some(id) = current {
+                if nodes.contains_key(&id) {
+                    break;
+                }
+                let Some(ancestor) = fetched.get(&id) else {
+                    break;
+                };
+                current = ancestor.parent_node_id.clone();
+                nodes.insert(id, ancestor.clone());
+            }
+        }
+        nodes.get(&parent_id).cloned().ok_or_else(|| {
+            ServiceError::Generic(format!("Parent node not found for node {}", leaf.id))
+        })
     }
 
     async fn renew_node(
         &self,
         node: &TreeNode,
         parent_node: &TreeNode,
-    ) -> Result<TreeNode, ServiceError> {
+    ) -> Result<(TreeNode, Option<TreeNode>), ServiceError> {
         info!("Renewing node: {:?}", node.id);
         let mut signing_jobs = Vec::new();
 
@@ -373,19 +420,23 @@ impl TimelockManager {
             ));
         };
 
-        renew_result
+        // The renewal re-splits from the parent, so the response carries the new
+        // split node the leaf is now parented onto.
+        let node = renew_result
             .node
             .ok_or(ServiceError::Generic(
                 "Expected a node in response".to_string(),
             ))?
-            .try_into()
+            .try_into()?;
+        let split_node = renew_result.split_node.map(TryInto::try_into).transpose()?;
+        Ok((node, split_node))
     }
 
     async fn renew_refund(
         &self,
         node: &TreeNode,
         parent_node: &TreeNode,
-    ) -> Result<TreeNode, ServiceError> {
+    ) -> Result<(TreeNode, Option<TreeNode>), ServiceError> {
         info!("Renewing refund: {:?}", node.id);
         let mut signing_jobs = Vec::new();
 
@@ -528,15 +579,21 @@ impl TimelockManager {
             ));
         };
 
-        renew_result
+        // A refund-only renewal keeps the leaf under the same parent, so there is no
+        // new split node.
+        let node = renew_result
             .node
             .ok_or(ServiceError::Generic(
                 "Expected a node in response".to_string(),
             ))?
-            .try_into()
+            .try_into()?;
+        Ok((node, None))
     }
 
-    pub async fn renew_zero_timelock(&self, node: &TreeNode) -> Result<TreeNode, ServiceError> {
+    pub async fn renew_zero_timelock(
+        &self,
+        node: &TreeNode,
+    ) -> Result<(TreeNode, Option<TreeNode>), ServiceError> {
         info!("Renewing zero timelock: {:?}", node.id);
         let mut signing_jobs = Vec::new();
 
@@ -662,11 +719,13 @@ impl TimelockManager {
             ));
         };
 
-        renew_result
+        let node = renew_result
             .node
             .ok_or(ServiceError::Generic(
                 "Expected a node in response".to_string(),
             ))?
-            .try_into()
+            .try_into()?;
+        let split_node = renew_result.split_node.map(TryInto::try_into).transpose()?;
+        Ok((node, split_node))
     }
 }

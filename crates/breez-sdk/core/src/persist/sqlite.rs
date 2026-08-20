@@ -54,6 +54,12 @@ impl SqliteStorage {
         std::fs::create_dir_all(path)
             .map_err(|e| StorageError::InitializationError(e.to_string()))?;
 
+        // The durable tree store shares this file and runs it in WAL. Opt into WAL
+        // here too (it persists in the header) rather than inheriting it as a side
+        // effect, so the journal mode is the same however the stores initialize.
+        storage
+            .get_connection()?
+            .pragma_update(None, "journal_mode", "WAL")?;
         storage.migrate()?;
         Ok(storage)
     }
@@ -62,7 +68,7 @@ impl SqliteStorage {
         Ok(Connection::open(self.get_db_path())?)
     }
 
-    fn get_db_path(&self) -> PathBuf {
+    pub(crate) fn get_db_path(&self) -> PathBuf {
         self.db_dir.join(DEFAULT_DB_FILENAME)
     }
 

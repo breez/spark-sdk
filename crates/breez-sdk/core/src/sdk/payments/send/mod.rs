@@ -30,7 +30,7 @@ pub(in crate::sdk) enum PublishOutcome {
     Replayed(Vec<Payment>),
 }
 
-pub(in crate::sdk) async fn publish_signed_package_inner(
+pub(in crate::sdk) async fn publish_signed_package(
     sdk: &BreezSdk,
     signed_package: &SignedTransferPackage,
 ) -> Result<PublishOutcome, SdkError> {
@@ -195,7 +195,7 @@ pub(in crate::sdk::payments) async fn publish_signed_transfer_package(
         signed_package.unsigned,
         UnsignedTransferPackage::TokenBatch { .. }
     );
-    match publish_signed_package_inner(sdk, signed_package).await? {
+    match publish_signed_package(sdk, signed_package).await? {
         PublishOutcome::SwapCompleted => Ok(PublishSignedTransferPackageResponse::SwapCompleted),
         PublishOutcome::Replayed(payments) => transfer_package_response(is_batch, payments),
         PublishOutcome::Sent(payments) => {

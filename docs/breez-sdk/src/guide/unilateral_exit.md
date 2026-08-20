@@ -10,7 +10,7 @@ A unilateral exit is a last resort. It is a multi-step, on-chain process that ne
 
 Three things are important to know before you build an exit:
 
-- **The operators must currently be reachable.** Both quoting and building the exit fetch your pre-signed transactions from the Spark operators. Recovering purely from locally stored data, with the operators offline or uncooperative, is not supported yet. In other words, this protects you against operators who refuse to *co-sign* a withdrawal, but not yet against operators who are completely unreachable.
+- **The exit data has to already be on the device.** Quoting and building an exit read each leaf's pre-signed transactions from local storage, so both work with the operators unreachable. What they cannot do is obtain that data: a leaf can be exited this way only once it has been synced at least once while the operators were reachable. The SDK collects it as funds arrive, in the background where background services run and otherwise during {{#name sync_wallet}}, which you can turn off with [{{#name exit_chain_auto_fetch_enabled}}](./config.md#unilateral-exit-data). Call {{#name sync_wallet}} before going offline to run the collection at a moment of your choosing rather than waiting on the background one. Once collected it can be kept outside the SDK's storage, see [Back up the exit data](#back-up-the-exit-data).
 - **You pay the fees from your own UTXO.** The pre-signed transactions carry no fee, so each is fee-bumped with a child transaction (CPFP) funded by a Bitcoin UTXO you provide. That UTXO must be **native SegWit** (a witness-program script). P2WPKH and P2TR are handled by the built-in signer; any other witness program (for example a P2WSH multisig) works through the {{#enum CpfpFundingKind::Custom}} funding kind and a custom signer (see [The signer](#the-signer)). Legacy (non-SegWit) scripts are rejected.
 - **You broadcast the transactions yourself.** The SDK builds and signs the full set but never broadcasts. You send them to the network over time, in order, as their timelocks mature. See [Broadcasting the transactions](#broadcast-the-transactions).
 
@@ -144,6 +144,28 @@ The reported fee reflects on-chain progress. {{#name unilateral_exit}}'s {{#name
 To re-broadcast the same leaves at a higher fee, quote again with the same {{#enum ExitLeafSelection::Specific}} leaves and a higher {{#name fee_rate_sat_per_vbyte}}, then call {{#name unilateral_exit}} again. The not-yet-confirmed transactions are rebuilt at the higher fee and replace the earlier ones by RBF; confirmed steps are left as they are. Once a fan-out has confirmed its outputs are fixed at the fee they were built with, so if the higher rate needs more than they provide the call returns {{#enum SdkError::InsufficientCpfpFunds}}; because those outputs pay to your own funding script, you recover by quoting again and passing them back in as funding UTXOs, together with any extra funding needed.
 
 Confirmed *CPFP* transactions hold funds the same way: once one confirms, your funds sit in its change output. To raise the fee beyond what a confirmed output covers, supply that output back in as a funding UTXO alongside the extra funding — list the confirmed output(s) first, then the new UTXO — so the rebuild spends the confirmed CPFP outputs together with the new funding rather than being capped by them. (Supplying the remaining unspent outputs yourself works too.)
+
+## Back up the exit data
+
+The transactions an exit is built from are held in the SDK's local storage. While the operators are reachable they can be fetched again, so a wallet restored from its seed rebuilds them on its own. When that storage is gone and the operators are unreachable, they cannot be recovered from anywhere, and the leaves they cover cannot be exited.
+
+{{#name export_unilateral_exit_state}} returns that data as a single opaque value, covering every leaf the wallet holds together with the transactions that spend it. It reflects what is present when it is called: a leaf whose data has not been collected yet is exported without it. The value grows with the number of leaves and can reach several megabytes.
+
+Treat the value as sensitive. Carrying every leaf and its transactions, it discloses the wallet's balance, how that balance is split up, and the history of what the wallet has received and spent. Encrypt it wherever you keep it.
+
+{{#tabs unilateral_exit:export-unilateral-exit-state}}
+
+The SDK emits {{#enum SdkEvent::UnilateralExitStateChanged}} once it has completed the data for a leaf that was missing it, and whenever it rebuilds a leaf's data. That is the point at which a previously exported value stops covering the wallet. A leaf the operators answer for only in part is not announced: what came back still cannot back an exit, and it stays that way until they complete it.
+
+{{#name import_unilateral_exit_state}} puts an exported value back. It does not contact the operators, so it works while they are unreachable, and the value must come from the same network the SDK is configured for. A leaf is taken only when the exit state records this wallet as its owner; the rest are skipped and counted in {{#name skipped_foreign_leaves}}.
+
+For the leaves it does take, the wallet keeps whatever exit data it can already exit with. An exported value carries no mark of when it was taken, so nothing in it says it is newer than what is on the device; the imported copy is used only for a leaf the wallet has nothing usable for, and only when that copy is complete on its own. Importing an out of date or half-collected value therefore never leaves a leaf less exitable than it already was. Leaves the wallet keeps but whose imported copy it did not use are counted in {{#name skipped_chains}}.
+
+A leaf is dropped outright when its imported copy disagrees with a node the wallet already holds, on a value that cannot change over a node's lifetime. One of the two copies is then simply wrong about that node, and nothing in the entry is trusted on the strength of it, so the leaf is not restored at all. These are counted separately, in {{#name skipped_conflicting_leaves}}, because unlike the counts above they mark exit data the import could not put back.
+
+{{#tabs unilateral_exit:import-unilateral-exit-state}}
+
+An out of date value can restore leaves that have since been spent, so the balance may read high until the next sync reconciles it with the operators.
 
 ## Troubleshooting
 

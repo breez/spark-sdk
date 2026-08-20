@@ -84,10 +84,10 @@ async fn process_spark_transfer_to_payment(
                 "process_spark_transfer_to_payment({}): claiming",
                 wallet_transfer.id
             );
-            spark_wallet.process_transfer(&wallet_transfer).await?;
-            let mut claimed = wallet_transfer;
-            claimed.status = TransferStatus::Completed;
-            claimed.try_into()?
+            spark_wallet
+                .process_transfer(wallet_transfer)
+                .await?
+                .try_into()?
         }
         // Terminal-failed — convert without claiming so callers see the
         // `Failed` payment.

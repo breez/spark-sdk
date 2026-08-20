@@ -91,6 +91,10 @@ impl EventListener for SdkEventListener {
             SdkEvent::LightningAddressChanged { lightning_address } => {
                 // The lightning address has changed
             }
+            SdkEvent::UnilateralExitStateChanged => {
+                // The unilateral exit state changed, so a previously exported
+                // one is now out of date. Export it again.
+            }
         }
     }
 }

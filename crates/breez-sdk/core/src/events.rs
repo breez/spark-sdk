@@ -51,6 +51,9 @@ pub enum SdkEvent {
     NewDeposits {
         new_deposits: Vec<DepositInfo>,
     },
+    /// Emitted when the data a unilateral exit is built from has changed, so an
+    /// exit state exported earlier is out of date and should be exported again.
+    UnilateralExitStateChanged,
 }
 
 impl SdkEvent {
@@ -93,6 +96,7 @@ impl fmt::Display for SdkEvent {
             SdkEvent::NewDeposits { new_deposits } => {
                 write!(f, "NewDeposits: {new_deposits:?}")
             }
+            SdkEvent::UnilateralExitStateChanged => write!(f, "UnilateralExitStateChanged"),
         }
     }
 }

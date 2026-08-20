@@ -38,6 +38,12 @@ impl RuntimeProfile for ServerRuntime {
         sdk.sync_wallet_internal(sync_type, force).await
     }
 
+    async fn collect_exit_chains(&self, sdk: &BreezSdk) -> Result<(), SdkError> {
+        // No collector runs here, so the sync is the one that does the work.
+        sdk.spark_wallet.fetch_missing_exit_chains().await?;
+        Ok(())
+    }
+
     async fn get_info(
         &self,
         sdk: &BreezSdk,

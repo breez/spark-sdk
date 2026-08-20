@@ -24,7 +24,7 @@ pub use fixtures::lnurl::{LnurlFixture, LnurlImageConfig};
 pub use fixtures::*;
 pub use helpers::*;
 #[cfg(feature = "local-itest")]
-pub use local_sdk::{LocalSdk, build_local_sdk};
+pub use local_sdk::{LocalSdk, build_local_sdk, rebuild_on_empty_storage};
 pub use rand;
 pub use session_store_scenarios::{SessionRow, run_session_persistence_across_restart};
 pub use tempfile;

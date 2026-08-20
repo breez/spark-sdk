@@ -48,6 +48,11 @@ pub(crate) trait RuntimeProfile: Send + Sync {
         force: bool,
     ) -> Result<(), SdkError>;
 
+    /// Collects the exit chains of any leaves still missing one, and waits for
+    /// it. Whether a sync does this at all is the config's call; how it happens
+    /// is the profile's, since only one of them runs a collector to wait on.
+    async fn collect_exit_chains(&self, sdk: &BreezSdk) -> Result<(), SdkError>;
+
     async fn get_info(
         &self,
         sdk: &BreezSdk,

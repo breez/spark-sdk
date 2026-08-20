@@ -38,6 +38,16 @@ pub enum WalletEvent {
     TokenTransaction(TokenTransaction),
     /// Auto-optimization lifecycle event.
     AutoOptimization(AutoOptimizationEvent),
+    /// The leaf pool gained leaves, which may need exit chains collected.
+    ///
+    /// A hint rather than a guarantee: the channel drops events when a listener
+    /// lags, and collection reads which leaves lack a chain rather than which
+    /// ones arrived, so a dropped event costs latency and nothing else. Carries
+    /// no ids for the same reason.
+    LeavesAdded,
+    /// The data a unilateral exit is built from changed, leaving an exit state
+    /// exported earlier out of date.
+    ExitStateChanged,
 }
 
 impl Display for WalletEvent {
@@ -135,6 +145,15 @@ impl WalletTransfer {
 
     pub(crate) fn raw(&self) -> &Transfer {
         &self.raw
+    }
+
+    /// The same transfer at the status a successful claim leaves it in. Promotes
+    /// the underlying `Transfer` alongside the projection, since that is what a
+    /// caller re-claims from.
+    pub(crate) fn claimed(mut self) -> Self {
+        self.status = TransferStatus::Completed;
+        self.raw.status = TransferStatus::Completed;
+        self
     }
 
     pub fn from_preimage_request_with_transfer(

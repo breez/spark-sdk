@@ -1,7 +1,11 @@
+use std::fs;
+use std::path::PathBuf;
+
 use breez_sdk_spark::signer::single_key_cpfp_signer;
 use breez_sdk_spark::{
     BreezSdk, ConfirmationStatus, CpfpFundingKind, CpfpInput, ExitLeafSelection,
-    PrepareUnilateralExitRequest, UnilateralExitRequest, UnilateralExitResponse,
+    ImportUnilateralExitStateRequest, PrepareUnilateralExitRequest, UnilateralExitRequest,
+    UnilateralExitResponse,
 };
 use clap::{Subcommand, ValueEnum};
 use rustyline::{Editor, history::DefaultHistory};
@@ -43,6 +47,20 @@ pub enum AdvancedCommand {
         /// Leaf id to exit (repeatable). Omit to auto-select every profitable leaf.
         #[arg(long = "leaf")]
         leaf_ids: Vec<String>,
+    },
+    /// Export the wallet's unilateral exit state to a file, for safekeeping
+    /// outside the wallet's own storage.
+    ExportUnilateralExitState {
+        /// File to write the exit state to.
+        #[arg(long)]
+        output_file: PathBuf,
+    },
+    /// Import a unilateral exit state previously written by
+    /// `export-unilateral-exit-state`, merging it into the wallet.
+    ImportUnilateralExitState {
+        /// File the exit state was exported to.
+        #[arg(long)]
+        input_file: PathBuf,
     },
 }
 
@@ -97,6 +115,32 @@ pub async fn handle_command(
                 )
                 .await?;
             print_exit_transactions(&response);
+            Ok(true)
+        }
+        AdvancedCommand::ExportUnilateralExitState { output_file } => {
+            let exported = sdk.export_unilateral_exit_state().await?;
+            fs::write(&output_file, &exported.exit_state)?;
+            println!(
+                "Wrote {} bytes to {}",
+                exported.exit_state.len(),
+                output_file.display(),
+            );
+            Ok(true)
+        }
+        AdvancedCommand::ImportUnilateralExitState { input_file } => {
+            let exit_state = fs::read_to_string(&input_file)?;
+            let imported = sdk
+                .import_unilateral_exit_state(ImportUnilateralExitStateRequest { exit_state })
+                .await?;
+            println!(
+                "Imported {} leaf(s), skipped {} leaf(s) from a different wallet \
+                 and {} that disagree with what this wallet holds, \
+                 left out the exit data of {} leaf(s)",
+                imported.imported_leaves,
+                imported.skipped_foreign_leaves,
+                imported.skipped_conflicting_leaves,
+                imported.skipped_chains,
+            );
             Ok(true)
         }
     }

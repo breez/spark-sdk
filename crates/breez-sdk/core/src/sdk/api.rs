@@ -323,8 +323,10 @@ impl BreezSdk {
             OptimizationMode::Full => None,
             OptimizationMode::SingleRound => Some(1),
         };
-        let outcome = self.spark_wallet.optimize_leaves(max_rounds).await?.into();
-        Ok(OptimizeLeavesResponse { outcome })
+        let result = self.spark_wallet.optimize_leaves(max_rounds).await;
+        Ok(OptimizeLeavesResponse {
+            outcome: result?.into(),
+        })
     }
 
     /// Registers a webhook to receive notifications for wallet events.

@@ -1515,6 +1515,7 @@ dependencies = [
  "serde_json",
  "spark-mysql",
  "spark-postgres",
+ "spark-sqlite",
  "spark-wallet",
  "testcontainers",
  "testcontainers-modules",
@@ -6847,6 +6848,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "spark-sqlite"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "macros 0.1.0",
+ "platform-utils 0.1.0",
+ "rusqlite",
+ "serde_json",
+ "spark-wallet",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "spark-token-primitives"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6869,6 +6885,7 @@ dependencies = [
  "frost-secp256k1-tr",
  "futures",
  "hex",
+ "macros 0.1.0",
  "platform-utils 0.1.0",
  "serde",
  "spark",
@@ -6878,6 +6895,7 @@ dependencies = [
  "tonic-types",
  "tracing",
  "uuid",
+ "wasm-bindgen-test",
 ]
 
 [[package]]

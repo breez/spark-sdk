@@ -118,6 +118,11 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
           const lightningAddress = event.lightningAddress
           break
         }
+        case 'unilateralExitStateChanged': {
+          // The unilateral exit state changed, so a previously exported
+          // one is now out of date. Export it again.
+          break
+        }
         default: {
           // Handle any future event types
           break

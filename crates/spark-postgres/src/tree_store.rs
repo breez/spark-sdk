@@ -14,9 +14,10 @@ use bitcoin::secp256k1::PublicKey;
 use deadpool_postgres::Pool;
 use macros::async_trait;
 use spark_wallet::{
-    LeafLike, LeafSelection, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose,
-    ReserveResult, TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError,
-    TreeStore, VerifiedLeafKeys, select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
+    LeafLike, LeafPedigree, LeafSelection, Leaves, LeavesReservation, LeavesReservationId,
+    ReservationPurpose, ReserveResult, TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus,
+    TreeServiceError, TreeStore, VerifiedLeafKeys, assemble_exit_chains,
+    select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
 };
 use tokio::sync::watch;
 use tracing::{debug, info, trace};
@@ -142,22 +143,22 @@ const LEAF_UPSERT_CHUNK_SIZE: usize = 1_000;
 /// `$2` (covers the minimum-amount fallback case where one larger
 /// leaf is sufficient). `$1` is the user id.
 const SLIM_LEAF_CANDIDATES_SQL: &str = r"
-    SELECT id, (data->>'value')::bigint AS value
+    SELECT id, value
     FROM brz_tree_leaves
     WHERE user_id = $1
       AND status = 'Available'
       AND is_missing_from_operators = FALSE
       AND reservation_id IS NULL
       AND (
-        (data->>'value')::bigint <= $2
+        value <= $2
         OR id = (
           SELECT id FROM brz_tree_leaves
           WHERE user_id = $1
             AND status = 'Available'
             AND is_missing_from_operators = FALSE
             AND reservation_id IS NULL
-            AND (data->>'value')::bigint > $2
-          ORDER BY (data->>'value')::bigint
+            AND value > $2
+          ORDER BY value
           LIMIT 1
         )
       )
@@ -280,7 +281,8 @@ impl TreeStore for PostgresTreeStore {
 
         // Batch insert all leaves (no filtering needed since we just removed any
         // that were in spent_leaves)
-        self.batch_upsert_leaves(&tx, leaves, false, None).await?;
+        self.batch_upsert_leaves(&tx, leaves.iter(), false, None)
+            .await?;
 
         tx.commit().await.map_err(map_err)?;
         tracing::trace!(
@@ -291,12 +293,114 @@ impl TreeStore for PostgresTreeStore {
         Ok(())
     }
 
+    async fn store_ancestors(&self, pedigrees: &[LeafPedigree]) -> Result<(), TreeServiceError> {
+        if pedigrees.is_empty() {
+            return Ok(());
+        }
+
+        let mut client = self.pool.get().await.map_err(map_err)?;
+        let tx = client.transaction().await.map_err(map_err)?;
+        // Serialize with set_leaves/finalize_reservation: without the lock, their
+        // GC could run concurrently and delete the ancestor rows this call just wrote.
+        self.acquire_write_lock(&tx).await?;
+
+        // A leaf can be spent between its chain being resolved and this write, and a
+        // chain is only ever removed with its leaf. Writing one for a leaf that is
+        // already gone would leave it behind for good.
+        let stored = self.existing_leaf_ids(&tx, pedigrees).await?;
+        let live: Vec<LeafPedigree> = pedigrees
+            .iter()
+            .filter(|pedigree| stored.contains(&pedigree.leaf.id.to_string()))
+            .cloned()
+            .collect();
+        self.upsert_pedigree_ancestors(&tx, &live, None).await?;
+
+        tx.commit().await.map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn leaves_missing_exit_chains(&self) -> Result<Vec<TreeNodeId>, TreeServiceError> {
+        let client = self.pool.get().await.map_err(map_err)?;
+        let rows = client
+            .query(
+                r"
+                -- A stored chain runs from its leaf's parent to a root, so a leaf
+                -- whose chain holds the parent it has now is exitable. The join
+                -- binds all three primary key columns, making it one index probe
+                -- per leaf. A leaf that is itself a root needs no chain.
+                SELECT l.id
+                FROM brz_tree_leaves l
+                LEFT JOIN brz_tree_ancestors link
+                  ON link.user_id = l.user_id AND link.leaf_id = l.id
+                     AND link.id = l.parent_node_id
+                WHERE l.user_id = $1
+                  AND l.parent_node_id IS NOT NULL
+                  AND link.leaf_id IS NULL
+                ",
+                &[&self.identity],
+            )
+            .await
+            .map_err(map_err)?;
+        rows.into_iter()
+            .map(|row| {
+                let id: String = row.get(0);
+                TreeNodeId::from_str(&id).map_err(TreeServiceError::Generic)
+            })
+            .collect()
+    }
+
+    async fn get_exit_chains(
+        &self,
+        leaf_ids: &[TreeNodeId],
+    ) -> Result<Vec<LeafPedigree>, TreeServiceError> {
+        if leaf_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let client = self.pool.get().await.map_err(map_err)?;
+        // One query loads each requested leaf's own row plus its ancestor rows,
+        // both tagged by the owning leaf id (a leaf's own row is tagged with its
+        // own id). Grouping by that tag below keeps each leaf's node set separate,
+        // so a node id shared by several leaves cannot cross-contaminate another
+        // leaf's chain with a status or parent it doesn't itself hold.
+        let ids: Vec<String> = leaf_ids.iter().map(ToString::to_string).collect();
+        let rows = client
+            .query(
+                r"
+                SELECT leaf_id, data FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)
+                UNION ALL
+                SELECT id, data FROM brz_tree_leaves WHERE user_id = $1 AND id = ANY($2)
+                ",
+                &[&self.identity, &ids],
+            )
+            .await
+            .map_err(map_err)?;
+
+        let mut by_leaf: HashMap<TreeNodeId, HashMap<TreeNodeId, TreeNode>> = HashMap::new();
+        for row in rows {
+            let leaf_id: String = row.get(0);
+            let leaf_id = TreeNodeId::from_str(&leaf_id).map_err(TreeServiceError::Generic)?;
+            let node = Self::deserialize_node(row.get(1))?;
+            by_leaf
+                .entry(leaf_id)
+                .or_default()
+                .insert(node.id.clone(), node);
+        }
+
+        Ok(leaf_ids
+            .iter()
+            .filter_map(|id| {
+                let nodes = by_leaf.get(id)?;
+                assemble_exit_chains(nodes, std::slice::from_ref(id)).pop()
+            })
+            .collect())
+    }
+
     async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
         let client = self.pool.get().await.map_err(map_err)?;
         let row = client
             .query_one(
                 r"
-                SELECT COALESCE(SUM((l.data->>'value')::bigint), 0)::bigint AS balance
+                SELECT COALESCE(SUM(l.value), 0)::bigint AS balance
                 FROM brz_tree_leaves l
                 LEFT JOIN brz_tree_reservations r
                   ON l.reservation_id = r.id AND l.user_id = r.user_id
@@ -328,8 +432,8 @@ impl TreeStore for PostgresTreeStore {
             .query(
                 r"
                 SELECT l.id AS id,
-                       l.data->>'verifying_public_key' AS verifying,
-                       l.data->'signing_keyshare'->>'public_key' AS keyshare
+                       l.verifying_public_key AS verifying,
+                       l.signing_public_key AS keyshare
                 FROM brz_tree_leaves l
                 LEFT JOIN brz_tree_reservations r
                   ON l.reservation_id = r.id AND l.user_id = r.user_id
@@ -392,6 +496,8 @@ impl TreeStore for PostgresTreeStore {
             let is_missing: bool = row.get("is_missing_from_operators");
             let purpose: Option<String> = row.get("purpose");
 
+            let spendable = node.status == TreeNodeStatus::Available;
+
             if let Some(purpose_str) = purpose {
                 match purpose_str
                     .parse::<ReservationPurpose>()
@@ -400,14 +506,12 @@ impl TreeStore for PostgresTreeStore {
                     ReservationPurpose::Payment => reserved_for_payment.push(node),
                     ReservationPurpose::Swap => reserved_for_swap.push(node),
                 }
-            } else if is_missing {
-                if node.status == TreeNodeStatus::Available {
-                    available_missing_from_operators.push(node);
-                }
-            } else if node.status == TreeNodeStatus::Available {
-                available.push(node);
-            } else {
+            } else if !spendable {
                 not_available.push(node);
+            } else if is_missing {
+                available_missing_from_operators.push(node);
+            } else {
+                available.push(node);
             }
         }
 
@@ -470,6 +574,9 @@ impl TreeStore for PostgresTreeStore {
                 "leaf_lifecycle set_leaves: SKIP active_swap={} swap_completed_during_refresh={} refresh_timestamp={:?}",
                 has_active_swap, swap_completed_during_refresh, refresh_timestamp
             );
+            // Skip the potentially-inconsistent refresh but commit the stale-
+            // reservation cleanup, so every backend converges on the same state.
+            tx.commit().await.map_err(map_err)?;
             return Ok(());
         }
 
@@ -496,22 +603,49 @@ impl TreeStore for PostgresTreeStore {
         // Delete non-reserved leaves that were added BEFORE refresh started.
         // The advisory lock acquired at the start of this transaction prevents deadlocks.
         // Includes leaves released earlier in this transaction by cleanup_stale_reservations
-        // (FK ON DELETE SET NULL) — those rows kept their old added_at, so they are
+        // (FK ON DELETE SET NULL) - those rows kept their old added_at, so they are
         // dropped here and re-fetched from the operator response in the upsert below.
-        tx.execute(
-            "DELETE FROM brz_tree_leaves \
-             WHERE user_id = $1 AND reservation_id IS NULL AND added_at < $2",
-            &[&self.identity, &refresh_timestamp],
-        )
-        .await
-        .map_err(map_err)?;
+        let deleted_ids: Vec<String> = tx
+            .query(
+                "DELETE FROM brz_tree_leaves \
+                 WHERE user_id = $1 AND reservation_id IS NULL AND added_at < $2 \
+                 RETURNING id",
+                &[&self.identity, &refresh_timestamp],
+            )
+            .await
+            .map_err(map_err)?
+            .iter()
+            .map(|row| row.get(0))
+            .collect();
+
+        // A chain is only ever removed with its leaf. A leaf the refresh reports
+        // is re-inserted below, so only an id this refresh does not bring back is
+        // truly gone: matching in Rust keeps the id set off the wire, and in the
+        // steady state (nothing departed) there is no statement to run at all.
+        let fresh_ids: HashSet<String> = leaves
+            .iter()
+            .chain(missing_operators_leaves.iter())
+            .map(|leaf| leaf.id.to_string())
+            .collect();
+        let departed: Vec<String> = deleted_ids
+            .into_iter()
+            .filter(|id| !fresh_ids.contains(id))
+            .collect();
+        if !departed.is_empty() {
+            tx.execute(
+                "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)",
+                &[&self.identity, &departed],
+            )
+            .await
+            .map_err(map_err)?;
+        }
 
         // Upsert all leaves. batch_upsert_leaves handles spent filtering via skip_ids,
         // and its ON CONFLICT clause preserves reservation_id (not in the UPDATE SET list).
         // Reserved leaves are also immune to timestamp-based deletion (WHERE reservation_id IS NULL).
-        self.batch_upsert_leaves(&tx, leaves, false, Some(&spent_ids))
+        self.batch_upsert_leaves(&tx, leaves.iter(), false, Some(&spent_ids))
             .await?;
-        self.batch_upsert_leaves(&tx, missing_operators_leaves, true, Some(&spent_ids))
+        self.batch_upsert_leaves(&tx, missing_operators_leaves.iter(), true, Some(&spent_ids))
             .await?;
 
         tx.commit().await.map_err(map_err)?;
@@ -526,21 +660,13 @@ impl TreeStore for PostgresTreeStore {
     ) -> Result<(), TreeServiceError> {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
-
+        // Serialize with set_leaves/finalize_reservation: re-inserting the kept
+        // leaves must not interleave with a concurrent refresh mutating the same
+        // leaf and ancestor rows.
         self.acquire_write_lock(&tx).await?;
-
-        let reservation = tx
-            .query_opt(
-                "SELECT id FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
-                &[&self.identity, id],
-            )
-            .await
-            .map_err(map_err)?;
-
-        if reservation.is_none() {
-            return Ok(());
-        }
-
+        // Return leaves_to_keep to the pool even when the reservation is already
+        // gone (e.g. released by stale cleanup): dropping them here would lose the
+        // leaves until the next refresh. The deletes below no-op in that case.
         let prior_leaf_ids: Vec<String> = tx
             .query(
                 "SELECT id FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
@@ -552,14 +678,27 @@ impl TreeStore for PostgresTreeStore {
             .map(|r| r.get(0))
             .collect();
         let keep_ids: Vec<String> = leaves_to_keep.iter().map(|l| l.id.to_string()).collect();
-        let dropped_ids: Vec<&String> = prior_leaf_ids
+        let dropped_ids: Vec<String> = prior_leaf_ids
             .iter()
             .filter(|id| !keep_ids.contains(id))
+            .cloned()
             .collect();
         info!(
             "leaf_lifecycle cancel: reservation={} prior_leaves={:?} keeping={:?} dropping={:?}",
             id, prior_leaf_ids, keep_ids, dropped_ids
         );
+
+        // A dropped leaf leaves the pool for good, so its ancestor rows go with
+        // it; a kept leaf's ancestor rows are left untouched, having stayed in
+        // the store the whole time it was reserved.
+        if !dropped_ids.is_empty() {
+            tx.execute(
+                "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)",
+                &[&self.identity, &dropped_ids],
+            )
+            .await
+            .map_err(map_err)?;
+        }
 
         tx.execute(
             "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
@@ -575,6 +714,8 @@ impl TreeStore for PostgresTreeStore {
         .await
         .map_err(map_err)?;
 
+        // Only the leaves are re-inserted: their ancestors stayed in the ancestor
+        // table the whole time they were reserved.
         self.batch_upsert_leaves(&tx, leaves_to_keep, false, None)
             .await?;
 
@@ -634,6 +775,15 @@ impl TreeStore for PostgresTreeStore {
         self.batch_insert_spent_leaves(&tx, &reserved_leaf_ids)
             .await?;
 
+        // The reserved leaves are permanently spent; their ancestor rows go
+        // with them.
+        tx.execute(
+            "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)",
+            &[&self.identity, &reserved_leaf_ids],
+        )
+        .await
+        .map_err(map_err)?;
+
         tx.execute(
             "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
             &[&self.identity, id],
@@ -648,14 +798,15 @@ impl TreeStore for PostgresTreeStore {
         .await
         .map_err(map_err)?;
 
-        if let Some(leaves) = new_leaves {
-            for l in leaves {
+        if let Some(new_leaves) = new_leaves {
+            for l in new_leaves {
                 trace!(
                     "leaf_lifecycle finalize: adding new leaf={} value={} reservation={}",
                     l.id, l.value, id
                 );
             }
-            self.batch_upsert_leaves(&tx, leaves, false, None).await?;
+            self.batch_upsert_leaves(&tx, new_leaves.iter(), false, None)
+                .await?;
         }
 
         // If this was a swap with new leaves, update last_completed_at.
@@ -703,7 +854,7 @@ impl TreeStore for PostgresTreeStore {
         let total_row = tx
             .query_one(
                 r"
-                SELECT COALESCE(SUM((data->>'value')::bigint), 0)::bigint AS total
+                SELECT COALESCE(SUM(value), 0)::bigint AS total
                 FROM brz_tree_leaves
                 WHERE user_id = $1
                   AND status = 'Available'
@@ -951,7 +1102,9 @@ impl TreeStore for PostgresTreeStore {
     ) -> Result<LeavesReservation, TreeServiceError> {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
-
+        // Serialize with set_leaves/finalize_reservation: this marks old reserved
+        // leaves spent and upserts change leaves + ancestors, which must not race a
+        // concurrent refresh's spent-check.
         self.acquire_write_lock(&tx).await?;
 
         let reservation = tx
@@ -983,6 +1136,14 @@ impl TreeStore for PostgresTreeStore {
         // Mark old leaves as spent and delete them (they no longer exist after the swap)
         self.batch_insert_spent_leaves(&tx, &old_reserved_leaf_ids)
             .await?;
+        // The old reserved leaves are permanently gone; their ancestor rows go
+        // with them.
+        tx.execute(
+            "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)",
+            &[&self.identity, &old_reserved_leaf_ids],
+        )
+        .await
+        .map_err(map_err)?;
         tx.execute(
             "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
             &[&self.identity, reservation_id],
@@ -991,11 +1152,11 @@ impl TreeStore for PostgresTreeStore {
         .map_err(map_err)?;
 
         // Batch upsert change leaves to available pool with fresh timestamp (race condition fix)
-        self.batch_upsert_leaves(&tx, change_leaves, false, None)
+        self.batch_upsert_leaves(&tx, change_leaves.iter(), false, None)
             .await?;
 
         // Batch upsert reserved leaves with fresh timestamp
-        self.batch_upsert_leaves(&tx, reserved_leaves, false, None)
+        self.batch_upsert_leaves(&tx, reserved_leaves.iter(), false, None)
             .await?;
 
         // Set reservation_id on reserved leaves
@@ -1127,6 +1288,47 @@ impl PostgresTreeStore {
             // `sync_revision` in the SDK-core storage. See `multi_tenant_migration`
             // for the SQL.
             tree_store_multi_tenant_migration(identity),
+            // Migration 4: Ancestor chain. Intermediate nodes a leaf's exit chain
+            // walks through, kept separate from the spendable leaf pool and carrying
+            // no pool metadata. Each row is owned by the leaf it belongs to (rather
+            // than deduplicated into a pool shared by every leaf under a node), so a
+            // node id can appear once per owning leaf. Multi-tenant from creation.
+            vec![
+                "CREATE TABLE IF NOT EXISTS brz_tree_ancestors (
+                    user_id BYTEA NOT NULL,
+                    leaf_id TEXT NOT NULL,
+                    id TEXT NOT NULL,
+                    parent_node_id TEXT,
+                    status TEXT NOT NULL,
+                    value BIGINT NOT NULL DEFAULT 0,
+                    verifying_public_key TEXT NOT NULL DEFAULT '',
+                    data JSONB NOT NULL,
+                    PRIMARY KEY (user_id, leaf_id, id)
+                )"
+                .to_string(),
+            ],
+            // Migration 5: Promote the four queried fields (value, parent,
+            // verifying key, signing key) out of the JSON `data` blob into real
+            // columns on the deployed leaf table, backfilling every existing row
+            // from the blob so queries stop parsing JSON per row.
+            vec![
+                "ALTER TABLE brz_tree_leaves ADD COLUMN IF NOT EXISTS value BIGINT NOT NULL DEFAULT 0"
+                    .to_string(),
+                "ALTER TABLE brz_tree_leaves ADD COLUMN IF NOT EXISTS parent_node_id TEXT"
+                    .to_string(),
+                "ALTER TABLE brz_tree_leaves \
+                 ADD COLUMN IF NOT EXISTS verifying_public_key TEXT NOT NULL DEFAULT ''"
+                    .to_string(),
+                "ALTER TABLE brz_tree_leaves \
+                 ADD COLUMN IF NOT EXISTS signing_public_key TEXT NOT NULL DEFAULT ''"
+                    .to_string(),
+                "UPDATE brz_tree_leaves SET \
+                    value = (data->>'value')::bigint, \
+                    parent_node_id = data->>'parent_node_id', \
+                    verifying_public_key = data->>'verifying_public_key', \
+                    signing_public_key = data->'signing_keyshare'->>'public_key'"
+                    .to_string(),
+            ],
         ]
     }
 
@@ -1172,29 +1374,29 @@ impl PostgresTreeStore {
     /// Batch upserts leaves into `brz_tree_leaves` table using UNNEST.
     /// Optionally skips leaves whose IDs are in the `skip_ids` set.
     /// Uses ON CONFLICT DO UPDATE to replace existing leaves (matching `InMemoryTreeStore` behavior).
-    async fn batch_upsert_leaves(
+    async fn batch_upsert_leaves<'a>(
         &self,
         tx: &tokio_postgres::Transaction<'_>,
-        leaves: &[TreeNode],
+        leaves: impl IntoIterator<Item = &'a TreeNode>,
         is_missing_from_operators: bool,
         skip_ids: Option<&HashSet<String>>,
     ) -> Result<(), TreeServiceError> {
         let filtered: Vec<&TreeNode> = if let Some(skip) = skip_ids {
             let mut kept = Vec::new();
-            for l in leaves {
-                let id_str = l.id.to_string();
+            for leaf in leaves {
+                let id_str = leaf.id.to_string();
                 if skip.contains(&id_str) {
                     trace!(
                         "leaf_lifecycle batch_upsert: skipped leaf={} (in spent_ids) is_missing_from_operators={}",
                         id_str, is_missing_from_operators
                     );
                 } else {
-                    kept.push(l);
+                    kept.push(leaf);
                 }
             }
             kept
         } else {
-            leaves.iter().collect()
+            leaves.into_iter().collect()
         };
 
         if filtered.is_empty() {
@@ -1206,6 +1408,10 @@ impl PostgresTreeStore {
         let mut statuses: Vec<String> = Vec::with_capacity(chunk_len);
         let mut missing_flags: Vec<bool> = Vec::with_capacity(chunk_len);
         let mut data_values: Vec<serde_json::Value> = Vec::with_capacity(chunk_len);
+        let mut values: Vec<i64> = Vec::with_capacity(chunk_len);
+        let mut parents: Vec<Option<String>> = Vec::with_capacity(chunk_len);
+        let mut verifyings: Vec<String> = Vec::with_capacity(chunk_len);
+        let mut signings: Vec<String> = Vec::with_capacity(chunk_len);
 
         // Prepared once for the whole loop: passing the SQL as a string would
         // make tokio-postgres re-prepare it per chunk, doubling the round trips
@@ -1213,14 +1419,23 @@ impl PostgresTreeStore {
         let stmt = tx
             .prepare(
                 r"
-                INSERT INTO brz_tree_leaves (user_id, id, status, is_missing_from_operators, data, added_at)
-                SELECT $5, id, status, missing, data, NOW()
-                FROM UNNEST($1::text[], $2::text[], $3::bool[], $4::jsonb[])
-                    AS t(id, status, missing, data)
+                INSERT INTO brz_tree_leaves
+                    (user_id, id, status, is_missing_from_operators, data,
+                     value, parent_node_id, verifying_public_key, signing_public_key, added_at)
+                SELECT $9, id, status, missing, data,
+                       value, parent_node_id, verifying_public_key, signing_public_key, NOW()
+                FROM UNNEST($1::text[], $2::text[], $3::bool[], $4::jsonb[],
+                            $5::bigint[], $6::text[], $7::text[], $8::text[])
+                    AS t(id, status, missing, data,
+                         value, parent_node_id, verifying_public_key, signing_public_key)
                 ON CONFLICT (user_id, id) DO UPDATE SET
                     status = EXCLUDED.status,
                     is_missing_from_operators = EXCLUDED.is_missing_from_operators,
                     data = EXCLUDED.data,
+                    value = EXCLUDED.value,
+                    parent_node_id = EXCLUDED.parent_node_id,
+                    verifying_public_key = EXCLUDED.verifying_public_key,
+                    signing_public_key = EXCLUDED.signing_public_key,
                     added_at = NOW()
                 ",
             )
@@ -1235,12 +1450,21 @@ impl PostgresTreeStore {
             statuses.clear();
             missing_flags.clear();
             data_values.clear();
+            values.clear();
+            parents.clear();
+            verifyings.clear();
+            signings.clear();
 
-            for leaf in chunk {
+            for &leaf in chunk {
                 ids.push(leaf.id.to_string());
                 statuses.push(leaf.status.to_string());
                 missing_flags.push(is_missing_from_operators);
                 data_values.push(Self::serialize_node(leaf)?);
+                #[allow(clippy::cast_possible_wrap)]
+                values.push(leaf.value as i64);
+                parents.push(leaf.parent_node_id.as_ref().map(ToString::to_string));
+                verifyings.push(leaf.verifying_public_key.to_string());
+                signings.push(leaf.signing_keyshare.public_key.to_string());
             }
 
             tx.execute(
@@ -1250,6 +1474,10 @@ impl PostgresTreeStore {
                     &statuses,
                     &missing_flags,
                     &data_values,
+                    &values,
+                    &parents,
+                    &verifyings,
+                    &signings,
                     &self.identity,
                 ],
             )
@@ -1257,6 +1485,123 @@ impl PostgresTreeStore {
             .map_err(map_err)?;
         }
 
+        Ok(())
+    }
+
+    /// Upserts each pedigree's ancestors under its own leaf id. An empty
+    /// ancestor list means the chain is unknown, not that the leaf has none, so
+    /// it leaves any already-stored chain alone; a non-empty list replaces that
+    /// leaf's stored rows wholesale, so a leaf reparented onto a new branch
+    /// does not keep nodes it no longer descends from.
+    /// Ids among `pedigrees` whose leaf the pool still holds, reserved or not.
+    async fn existing_leaf_ids(
+        &self,
+        tx: &tokio_postgres::Transaction<'_>,
+        pedigrees: &[LeafPedigree],
+    ) -> Result<HashSet<String>, TreeServiceError> {
+        let ids: Vec<String> = pedigrees
+            .iter()
+            .map(|pedigree| pedigree.leaf.id.to_string())
+            .collect();
+        let rows = tx
+            .query(
+                "SELECT id FROM brz_tree_leaves WHERE user_id = $1 AND id = ANY($2)",
+                &[&self.identity, &ids],
+            )
+            .await
+            .map_err(map_err)?;
+        Ok(rows.iter().map(|row| row.get::<_, String>(0)).collect())
+    }
+
+    async fn upsert_pedigree_ancestors(
+        &self,
+        tx: &tokio_postgres::Transaction<'_>,
+        pedigrees: &[LeafPedigree],
+        skip_ids: Option<&HashSet<String>>,
+    ) -> Result<(), TreeServiceError> {
+        // A chain is only ever removed with its leaf, so writing one for a leaf
+        // the caller is about to skip as spent would leave it behind for good.
+        let with_ancestors: Vec<&LeafPedigree> = pedigrees
+            .iter()
+            .filter(|p| !p.ancestors.is_empty())
+            .filter(|p| !skip_ids.is_some_and(|skip| skip.contains(&p.leaf.id.to_string())))
+            .collect();
+        if with_ancestors.is_empty() {
+            return Ok(());
+        }
+
+        let mut rows: Vec<(String, &TreeNode)> = Vec::new();
+        for pedigree in &with_ancestors {
+            let leaf_id = pedigree.leaf.id.to_string();
+            for ancestor in &pedigree.ancestors {
+                rows.push((leaf_id.clone(), ancestor));
+            }
+        }
+        let leaf_ids: Vec<String> = with_ancestors
+            .iter()
+            .map(|p| p.leaf.id.to_string())
+            .collect();
+        tx.execute(
+            "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)",
+            &[&self.identity, &leaf_ids],
+        )
+        .await
+        .map_err(map_err)?;
+
+        self.batch_insert_ancestors(tx, &rows).await
+    }
+
+    /// Batch inserts ancestor rows into `brz_tree_ancestors` using UNNEST, one
+    /// row per `(leaf_id, node)` pair. Callers delete any prior rows for the
+    /// same leaf ids first, so this is a plain insert rather than an upsert.
+    async fn batch_insert_ancestors(
+        &self,
+        tx: &tokio_postgres::Transaction<'_>,
+        rows: &[(String, &TreeNode)],
+    ) -> Result<(), TreeServiceError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        let mut leaf_ids: Vec<String> = Vec::with_capacity(rows.len());
+        let mut ids: Vec<String> = Vec::with_capacity(rows.len());
+        let mut parents: Vec<Option<String>> = Vec::with_capacity(rows.len());
+        let mut statuses: Vec<String> = Vec::with_capacity(rows.len());
+        let mut data_values: Vec<serde_json::Value> = Vec::with_capacity(rows.len());
+        let mut values: Vec<i64> = Vec::with_capacity(rows.len());
+        let mut verifyings: Vec<String> = Vec::with_capacity(rows.len());
+        for (leaf_id, node) in rows {
+            leaf_ids.push(leaf_id.clone());
+            ids.push(node.id.to_string());
+            parents.push(node.parent_node_id.as_ref().map(ToString::to_string));
+            statuses.push(node.status.to_string());
+            data_values.push(Self::serialize_node(node)?);
+            #[allow(clippy::cast_possible_wrap)]
+            values.push(node.value as i64);
+            verifyings.push(node.verifying_public_key.to_string());
+        }
+
+        tx.execute(
+            r"
+            INSERT INTO brz_tree_ancestors
+                (user_id, leaf_id, id, parent_node_id, status, data, value, verifying_public_key)
+            SELECT $8, leaf_id, id, parent_node_id, status, data, value, verifying_public_key
+            FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::jsonb[], $6::bigint[], $7::text[])
+                AS t(leaf_id, id, parent_node_id, status, data, value, verifying_public_key)
+            ",
+            &[
+                &leaf_ids,
+                &ids,
+                &parents,
+                &statuses,
+                &data_values,
+                &values,
+                &verifyings,
+                &self.identity,
+            ],
+        )
+        .await
+        .map_err(map_err)?;
         Ok(())
     }
 
@@ -1642,6 +1987,127 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_upsert_and_get_leaf() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_upsert_and_get_leaf(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_get_exit_chains() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_get_exit_chains(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_get_exit_chain_missing_ancestor() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_get_exit_chain_missing_ancestor(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_incomplete_pedigree_still_spendable() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_incomplete_pedigree_still_spendable(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_exit_chain_after_swap_update() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_exit_chain_after_swap_update(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_exit_chain_after_cancel_reparent() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_exit_chain_after_cancel_reparent(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_node_update_in_place() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_node_update_in_place(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_leaf_reparented_by_renewal() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_leaf_reparented_by_renewal(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_ancestor_not_returned_as_leaf() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_ancestor_not_returned_as_leaf(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_store_ancestors_backfills_chain() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_store_ancestors_backfills_chain(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_stored_chain_survives_refresh_and_dies_with_its_leaf() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_stored_chain_survives_refresh_and_dies_with_its_leaf(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_store_ancestors_does_not_revive_spent_leaf() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_store_ancestors_does_not_revive_spent_leaf(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_store_ancestors_for_absent_leaf() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_store_ancestors_for_absent_leaf(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_leaves_missing_exit_chains() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_leaves_missing_exit_chains(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_stored_chain_survives_refresh() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_stored_chain_survives_refresh(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reparented_leaf_needs_its_chain_again() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_reparented_leaf_needs_its_chain_again(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_unshared_ancestor_deleted_with_leaf() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_unshared_ancestor_deleted_with_leaf(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_shared_ancestor_survives_leaf_deletion() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_shared_ancestor_survives_leaf_deletion(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_empty_pedigree_keeps_stored_chain() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_empty_pedigree_keeps_stored_chain(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_stored_chain_replaces_previous() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_stored_chain_replaces_previous(&fixture.store).await;
+    }
+
+    #[tokio::test]
     async fn test_add_leaves() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_add_leaves(&fixture.store).await;
@@ -1711,6 +2177,12 @@ mod tests {
     async fn test_cancel_reservation_nonexistent() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_cancel_reservation_nonexistent(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_cancel_reservation_nonexistent_keeps_leaves() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_cancel_reservation_nonexistent_keeps_leaves(&fixture.store).await;
     }
 
     #[tokio::test]
@@ -1859,6 +2331,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_set_leaves_skips_chains_of_spent_leaves() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_set_leaves_skips_chains_of_spent_leaves(&fixture.store).await;
+    }
+
+    #[tokio::test]
     async fn test_spent_ids_cleaned_up_when_no_longer_in_refresh() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_spent_ids_cleaned_up_when_no_longer_in_refresh(&fixture.store).await;
@@ -1972,6 +2450,12 @@ mod tests {
     async fn test_missing_from_operators_leaves_are_not_selectable() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_missing_from_operators_leaves_are_not_selectable(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_missing_from_operators_leaf_not_available() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_missing_from_operators_leaf_not_available(&fixture.store).await;
     }
 
     #[tokio::test]
@@ -2730,6 +3214,7 @@ mod tests {
     /// writes by A are invisible to B (and vice versa). Uses identical leaf
     /// IDs across tenants to also confirm the composite primary keys land.
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn test_two_tenant_isolation() {
         let fx = TwoTenantTreeFixture::new().await;
 

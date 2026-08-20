@@ -58,22 +58,22 @@ const LEAF_UPSERT_CHUNK_SIZE = 1000;
  * leaf is sufficient). $1 is the user id.
  */
 const SLIM_LEAF_CANDIDATES_SQL = `
-  SELECT id, (data->>'value')::bigint AS value
+  SELECT id, value
   FROM brz_tree_leaves
   WHERE user_id = $1
     AND status = 'Available'
     AND is_missing_from_operators = FALSE
     AND reservation_id IS NULL
     AND (
-      (data->>'value')::bigint <= $2
+      value <= $2
       OR id = (
         SELECT id FROM brz_tree_leaves
         WHERE user_id = $1
           AND status = 'Available'
           AND is_missing_from_operators = FALSE
           AND reservation_id IS NULL
-          AND (data->>'value')::bigint > $2
-        ORDER BY (data->>'value')::bigint
+          AND value > $2
+        ORDER BY value
         LIMIT 1
       )
     )
@@ -92,6 +92,30 @@ function _identityLockKey(prefix, identity) {
   hash.update(prefix);
   hash.update(Buffer.from(identity));
   return hash.digest().readBigInt64BE(0);
+}
+
+/**
+ * Pair a leaf with its ancestors (nearest first) by walking `parent_node_id`
+ * through `nodes`. Returns null if the leaf itself is absent; stops at a gap or
+ * cycle, returning a partial chain.
+ * @param {Map<string, object>} nodes
+ * @param {string} leafId
+ * @returns {{leaf: object, ancestors: Array<object>}|null}
+ */
+function assembleExitChain(nodes, leafId) {
+  const leaf = nodes.get(leafId);
+  if (!leaf) return null;
+  const ancestors = [];
+  const visited = new Set([leafId]);
+  let current = leaf.parent_node_id;
+  while (current != null && !visited.has(current)) {
+    visited.add(current);
+    const node = nodes.get(current);
+    if (!node) break;
+    ancestors.push(node);
+    current = node.parent_node_id;
+  }
+  return { leaf, ancestors };
 }
 
 class PostgresTreeStore {
@@ -203,13 +227,14 @@ class PostgresTreeStore {
         return;
       }
 
+      const leafNodes = leaves;
       await this._withTransaction(async (client) => {
         // Remove these leaves from spent_leaves table
-        const leafIds = leaves.map((l) => l.id);
+        const leafIds = leafNodes.map((l) => l.id);
         await this._batchRemoveSpentLeaves(client, leafIds);
 
         // Batch upsert all leaves
-        await this._batchUpsertLeaves(client, leaves, false, null);
+        await this._batchUpsertLeaves(client, leafNodes, false, null);
       });
     } catch (error) {
       if (error instanceof TreeStoreError) throw error;
@@ -217,6 +242,120 @@ class PostgresTreeStore {
         `Failed to add leaves: ${error.message}`,
         error
       );
+    }
+  }
+
+  /**
+   * Store the ancestor chain of each pedigree, leaving the leaf pool and any
+   * spent marker untouched.
+   * @param {Array} pedigrees - Array of LeafPedigree { leaf, ancestors }
+   */
+  async storeAncestors(pedigrees) {
+    try {
+      if (!pedigrees || pedigrees.length === 0) {
+        return;
+      }
+
+      await this._withWriteTransaction(async (client) => {
+        // A leaf can be spent between its chain being resolved and this write, and
+        // a chain is only ever removed with its leaf. Writing one for a leaf that is
+        // already gone would leave it behind for good.
+        const stored = await client.query(
+          "SELECT id FROM brz_tree_leaves WHERE user_id = $1 AND id = ANY($2)",
+          [this.identity, pedigrees.map((p) => p.leaf.id)]
+        );
+        const storedLeafIds = new Set(stored.rows.map((row) => row.id));
+
+        await this._batchUpsertAncestors(
+          client,
+          pedigrees.filter((p) => storedLeafIds.has(p.leaf.id))
+        );
+      });
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to store ancestors: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Ids of the stored leaves whose chain cannot back an exit: the leaf has a
+   * parent, and no ancestor row of its own holds that parent.
+   * @returns {Promise<Array<string>>}
+   */
+  async leavesMissingExitChains() {
+    try {
+      const result = await this.pool.query(
+        // A stored chain runs from its leaf's parent to a root, so a leaf whose
+        // chain holds the parent it has now is exitable. The join binds all three
+        // primary key columns, making it one index probe per leaf. A leaf that is
+        // itself a root needs no chain.
+        `SELECT l.id
+         FROM brz_tree_leaves l
+         LEFT JOIN brz_tree_ancestors link
+           ON link.user_id = l.user_id AND link.leaf_id = l.id
+              AND link.id = l.parent_node_id
+         WHERE l.user_id = $1
+           AND l.parent_node_id IS NOT NULL
+           AND link.leaf_id IS NULL`,
+        [this.identity]
+      );
+      return result.rows.map((r) => r.id);
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to get leaves missing exit chains: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Reconstruct the exit chains for many leaves in one query, each as
+   * { leaf, ancestors } with ancestors nearest first. A leaf absent from the store
+   * is skipped; a chain that hits a gap comes back partial.
+   * @param {Array<string>} leafIds
+   * @returns {Promise<Array<{leaf: object, ancestors: Array<object>}>>}
+   */
+  async getExitChains(leafIds) {
+    try {
+      if (!leafIds || leafIds.length === 0) return [];
+      // One query loads each requested leaf's own row plus its ancestor rows,
+      // both tagged by the owning leaf id (a leaf's own row is tagged with its
+      // own id). Reading them in two queries could pair a leaf with ancestors
+      // from a different snapshot. Grouping by that tag keeps each leaf's node
+      // set separate, so a node id stored under another leaf can never
+      // cross-contaminate this one.
+      const result_rows = await this.pool.query(
+        `SELECT leaf_id, data FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)
+         UNION ALL
+         SELECT id AS leaf_id, data FROM brz_tree_leaves WHERE user_id = $1 AND id = ANY($2)`,
+        [this.identity, leafIds]
+      );
+
+      const nodesByLeaf = new Map();
+      for (const r of result_rows.rows) {
+        let nodes = nodesByLeaf.get(r.leaf_id);
+        if (!nodes) {
+          nodes = new Map();
+          nodesByLeaf.set(r.leaf_id, nodes);
+        }
+        nodes.set(r.data.id, r.data);
+      }
+
+      const result = [];
+      for (const id of leafIds) {
+        const nodes = nodesByLeaf.get(id);
+        if (!nodes) continue;
+        const pedigree = assembleExitChain(nodes, id);
+        if (pedigree) result.push(pedigree);
+      }
+      return result;
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(`Failed to get exit chains: ${error.message}`, error);
     }
   }
 
@@ -233,7 +372,7 @@ class PostgresTreeStore {
     try {
       const result = await this.pool.query(
         `
-        SELECT COALESCE(SUM((l.data->>'value')::bigint), 0)::bigint AS balance
+        SELECT COALESCE(SUM(l.value), 0)::bigint AS balance
         FROM brz_tree_leaves l
         LEFT JOIN brz_tree_reservations r
           ON l.reservation_id = r.id AND l.user_id = r.user_id
@@ -263,8 +402,8 @@ class PostgresTreeStore {
       const result = await this.pool.query(
         `
         SELECT l.id AS id,
-               l.data->>'verifying_public_key' AS verifying,
-               l.data->'signing_keyshare'->>'public_key' AS keyshare
+               l.verifying_public_key AS verifying,
+               l.signing_public_key AS keyshare
         FROM brz_tree_leaves l
         LEFT JOIN brz_tree_reservations r
           ON l.reservation_id = r.id AND l.user_id = r.user_id
@@ -304,6 +443,7 @@ class PostgresTreeStore {
 
       for (const row of result.rows) {
         const node = row.data;
+        const spendable = node.status === "Available";
 
         if (row.purpose) {
           if (row.purpose === "Payment") {
@@ -311,14 +451,12 @@ class PostgresTreeStore {
           } else if (row.purpose === "Swap") {
             reservedForSwap.push(node);
           }
-        } else if (row.is_missing_from_operators) {
-          if (node.status === "Available") {
-            availableMissingFromOperators.push(node);
-          }
-        } else if (node.status === "Available") {
-          available.push(node);
-        } else {
+        } else if (!spendable) {
           notAvailable.push(node);
+        } else if (row.is_missing_from_operators) {
+          availableMissingFromOperators.push(node);
+        } else {
+          available.push(node);
         }
       }
 
@@ -391,14 +529,29 @@ class PostgresTreeStore {
         // Includes leaves released earlier in this transaction by
         // _cleanupStaleReservations (which now NULLs reservation_id explicitly,
         // since the composite FK uses NO ACTION).
-        await client.query(
-          "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id IS NULL AND added_at < $2",
+        const deleted = await client.query(
+          "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id IS NULL AND added_at < $2 RETURNING id",
           [this.identity, refreshTimestamp]
         );
 
         // Upsert all leaves (filtering spent)
         await this._batchUpsertLeaves(client, leaves, false, spentIds);
         await this._batchUpsertLeaves(client, missingLeaves, true, spentIds);
+
+        // A leaf reported again in this same refresh is re-inserted above, so its
+        // ancestor rows must survive: only ids that do NOT reappear (truly gone,
+        // e.g. spent) get their ancestor rows dropped alongside them.
+        const survivingIds = new Set();
+        for (const leaf of leaves.concat(missingLeaves || [])) {
+          if (!spentIds.has(leaf.id)) survivingIds.add(leaf.id);
+        }
+        const goneIds = deleted.rows.map((r) => r.id).filter((id) => !survivingIds.has(id));
+        if (goneIds.length > 0) {
+          await client.query(
+            "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)",
+            [this.identity, goneIds]
+          );
+        }
       });
     } catch (error) {
       if (error instanceof TreeStoreError) throw error;
@@ -424,15 +577,20 @@ class PostgresTreeStore {
    */
   async cancelReservation(id, leavesToKeep) {
     try {
-      await this._withWriteTransaction(async (client) => {
-        const res = await client.query(
-          "SELECT id FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
+      await this._withTransaction(async (client) => {
+        // Return leavesToKeep to the pool even when the reservation is already
+        // gone (e.g. released by stale cleanup): dropping them here would lose
+        // the leaves until the next refresh. The deletes no-op in that case.
+        // Only the leaves are re-inserted: a kept leaf's ancestor rows stay put
+        // (they are not touched below); a dropped leaf's are removed with it.
+        const keepIds = new Set((leavesToKeep || []).map((l) => l.id));
+        const reservedResult = await client.query(
+          "SELECT id FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
           [this.identity, id]
         );
-
-        if (res.rows.length === 0) {
-          return;
-        }
+        const droppedIds = reservedResult.rows
+          .map((r) => r.id)
+          .filter((rid) => !keepIds.has(rid));
 
         await client.query(
           "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
@@ -443,6 +601,13 @@ class PostgresTreeStore {
           "DELETE FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
           [this.identity, id]
         );
+
+        if (droppedIds.length > 0) {
+          await client.query(
+            "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)",
+            [this.identity, droppedIds]
+          );
+        }
 
         if (leavesToKeep && leavesToKeep.length > 0) {
           await this._batchUpsertLeaves(client, leavesToKeep, false, null);
@@ -493,6 +658,14 @@ class PostgresTreeStore {
             "DELETE FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
             [this.identity, id]
           );
+          // The spent leaves own these ancestor rows; remove them in the same
+          // transaction rather than leaving them to a separate reclaim pass.
+          if (reservedLeafIds.length > 0) {
+            await client.query(
+              "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)",
+              [this.identity, reservedLeafIds]
+            );
+          }
         }
 
         // Add new leaves if provided
@@ -539,7 +712,7 @@ class PostgresTreeStore {
         // from the prefiltered set since the prefilter may exclude big leaves.
         const totalResult = await client.query(
           `
-          SELECT COALESCE(SUM((data->>'value')::bigint), 0)::bigint AS total
+          SELECT COALESCE(SUM(value), 0)::bigint AS total
           FROM brz_tree_leaves
           WHERE user_id = $1
             AND status = 'Available'
@@ -777,7 +950,7 @@ class PostgresTreeStore {
    */
   async updateReservation(reservationId, reservedLeaves, changeLeaves) {
     try {
-      return await this._withWriteTransaction(async (client) => {
+      return await this._withTransaction(async (client) => {
         // Check if reservation exists
         const res = await client.query(
           "SELECT id FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
@@ -800,6 +973,14 @@ class PostgresTreeStore {
           "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
           [this.identity, reservationId]
         );
+        // The spent leaves own these ancestor rows; remove them now since there
+        // is no later reclaim pass.
+        if (oldLeafIds.length > 0) {
+          await client.query(
+            "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)",
+            [this.identity, oldLeafIds]
+          );
+        }
 
         // Upsert change leaves to available pool
         await this._batchUpsertLeaves(client, changeLeaves, false, null);
@@ -817,6 +998,8 @@ class PostgresTreeStore {
           [this.identity, reservationId]
         );
 
+        // Return value must be plain TreeNodes: the Rust side deserializes
+        // Vec<TreeNode>.
         return {
           id: reservationId,
           leaves: reservedLeaves,
@@ -1021,35 +1204,115 @@ class PostgresTreeStore {
   async _batchUpsertLeaves(client, leaves, isMissingFromOperators, skipIds) {
     if (!leaves || leaves.length === 0) return;
 
-    const filtered = skipIds
+    const leafNodes = skipIds
       ? leaves.filter((l) => !skipIds.has(l.id))
       : leaves;
 
-    if (filtered.length === 0) return;
+    if (leafNodes.length === 0) return;
+
 
     // All chunks run inside the caller's transaction, and NOW() is the
     // transaction timestamp, so every row still lands atomically with one
     // shared added_at.
-    for (let i = 0; i < filtered.length; i += LEAF_UPSERT_CHUNK_SIZE) {
-      const chunk = filtered.slice(i, i + LEAF_UPSERT_CHUNK_SIZE);
+    for (let i = 0; i < leafNodes.length; i += LEAF_UPSERT_CHUNK_SIZE) {
+      const chunk = leafNodes.slice(i, i + LEAF_UPSERT_CHUNK_SIZE);
       const ids = chunk.map((l) => l.id);
       const statuses = chunk.map((l) => l.status);
       const missingFlags = chunk.map(() => isMissingFromOperators);
       const dataValues = chunk.map((l) => JSON.stringify(l));
+      const values = chunk.map((l) => l.value);
+      const parents = chunk.map((l) => l.parent_node_id ?? null);
+      const verifyings = chunk.map((l) => l.verifying_public_key);
+      const signings = chunk.map((l) => l.signing_keyshare.public_key);
 
       await client.query(
-        `INSERT INTO brz_tree_leaves (user_id, id, status, is_missing_from_operators, data, added_at)
-         SELECT $5, id, status, missing, data::jsonb, NOW()
-         FROM UNNEST($1::text[], $2::text[], $3::bool[], $4::text[])
-             AS t(id, status, missing, data)
+        `INSERT INTO brz_tree_leaves
+             (user_id, id, status, is_missing_from_operators, data, added_at,
+              value, parent_node_id, verifying_public_key, signing_public_key)
+         SELECT $5, id, status, missing, data::jsonb, NOW(),
+                value, parent_node_id, verifying, signing
+         FROM UNNEST($1::text[], $2::text[], $3::bool[], $4::text[],
+                     $6::bigint[], $7::text[], $8::text[], $9::text[])
+             AS t(id, status, missing, data, value, parent_node_id, verifying, signing)
          ON CONFLICT (user_id, id) DO UPDATE SET
            status = EXCLUDED.status,
            is_missing_from_operators = EXCLUDED.is_missing_from_operators,
            data = EXCLUDED.data,
-           added_at = NOW()`,
-        [ids, statuses, missingFlags, dataValues, this.identity]
+           added_at = NOW(),
+           value = EXCLUDED.value,
+           parent_node_id = EXCLUDED.parent_node_id,
+           verifying_public_key = EXCLUDED.verifying_public_key,
+           signing_public_key = EXCLUDED.signing_public_key`,
+        [
+          ids,
+          statuses,
+          missingFlags,
+          dataValues,
+          this.identity,
+          values,
+          parents,
+          verifyings,
+          signings,
+        ]
       );
     }
+  }
+
+  /**
+   * Replaces the ancestor rows of every pedigree wholesale (delete then
+   * insert), in two statements however many leaves there are. A pedigree
+   * carrying no ancestors is skipped: an empty list means the chain is unknown,
+   * not that the leaf has none, so a stored chain must survive being re-added
+   * without one.
+   */
+  async _batchUpsertAncestors(client, pedigrees) {
+    const withAncestors = (pedigrees || []).filter(
+      (p) => p.ancestors && p.ancestors.length > 0
+    );
+    if (withAncestors.length === 0) return;
+
+    await client.query(
+      "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)",
+      [this.identity, withAncestors.map((p) => p.leaf.id)]
+    );
+
+    const leafIds = [];
+    const ids = [];
+    const parents = [];
+    const statuses = [];
+    const dataValues = [];
+    const values = [];
+    const verifyings = [];
+    for (const pedigree of withAncestors) {
+      for (const node of pedigree.ancestors) {
+        leafIds.push(pedigree.leaf.id);
+        ids.push(node.id);
+        parents.push(node.parent_node_id ?? null);
+        statuses.push(node.status);
+        dataValues.push(JSON.stringify(node));
+        values.push(node.value);
+        verifyings.push(node.verifying_public_key);
+      }
+    }
+
+    await client.query(
+      `INSERT INTO brz_tree_ancestors
+           (user_id, leaf_id, id, parent_node_id, status, data, value, verifying_public_key)
+       SELECT $1, leaf_id, id, parent_node_id, status, data::jsonb, value, verifying
+       FROM UNNEST($2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
+                   $7::bigint[], $8::text[])
+           AS t(leaf_id, id, parent_node_id, status, data, value, verifying)`,
+      [
+        this.identity,
+        leafIds,
+        ids,
+        parents,
+        statuses,
+        dataValues,
+        values,
+        verifyings,
+      ]
+    );
   }
 
   /**

@@ -54,6 +54,29 @@ namespace BreezSdkSnippets
             // ANCHOR_END: unilateral-exit
         }
 
+        async Task<string> ExportExitState(BreezSdk sdk)
+        {
+            // ANCHOR: export-unilateral-exit-state
+            var exported = await sdk.ExportUnilateralExitState();
+
+            // Keep the state somewhere the wallet's own storage cannot take with it.
+            Console.WriteLine($"Exit state is {exported.exitState.Length} bytes");
+            // ANCHOR_END: export-unilateral-exit-state
+            return exported.exitState;
+        }
+
+        async Task ImportExitState(BreezSdk sdk, string exitState)
+        {
+            // ANCHOR: import-unilateral-exit-state
+            var imported = await sdk.ImportUnilateralExitState(
+                request: new ImportUnilateralExitStateRequest(exitState: exitState)
+            );
+
+            Console.WriteLine($"Imported {imported.importedLeaves} leaves, " +
+                $"skipped {imported.skippedForeignLeaves}");
+            // ANCHOR_END: import-unilateral-exit-state
+        }
+
         // ANCHOR: custom-cpfp-signer
         class MyCpfpSigner : CpfpSigner
         {

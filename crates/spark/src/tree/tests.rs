@@ -12,8 +12,8 @@ use frost_secp256k1_tr::Identifier;
 use platform_utils::time::SystemTime;
 
 use crate::tree::{
-    LeafSelection, Leaves, LeavesReservation, ReservationPurpose, ReserveResult, TargetAmounts,
-    TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore,
+    LeafPedigree, LeafSelection, Leaves, LeavesReservation, ReservationPurpose, ReserveResult,
+    TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore,
 };
 
 /// Creates a test `TreeNode` with the given ID and value.
@@ -54,6 +54,802 @@ pub fn create_test_tree_node(id: &str, value: u64) -> TreeNode {
         },
         status: crate::tree::TreeNodeStatus::Available,
     }
+}
+
+/// Creates a test `TreeNode` with a parent link and status, for exit-chain tests.
+pub fn create_test_node_with_parent(
+    id: &str,
+    parent: Option<&str>,
+    status: TreeNodeStatus,
+) -> TreeNode {
+    let mut node = create_test_tree_node(id, 1_000);
+    node.parent_node_id = parent.map(|p| TreeNodeId::from_str(p).unwrap());
+    node.status = status;
+    node
+}
+
+/// Puts each pedigree's leaf in the pool and then writes its chain: the two
+/// calls a caller makes now that `store_ancestors` is the only ancestor writer.
+async fn add_with_chains(store: &dyn TreeStore, pedigrees: &[LeafPedigree]) {
+    let leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
+    store.add_leaves(&leaves).await.unwrap();
+    store.store_ancestors(pedigrees).await.unwrap();
+}
+
+/// Root-to-leaf ids of a stored leaf's exit chain; empty when the leaf is not
+/// stored.
+async fn exit_chain_ids(store: &dyn TreeStore, leaf_id: &TreeNodeId) -> Vec<String> {
+    let Some(pedigree) = exit_chain(store, leaf_id).await else {
+        return Vec::new();
+    };
+    let mut ids: Vec<String> = pedigree
+        .ancestors
+        .iter()
+        .rev()
+        .map(|a| a.id.to_string())
+        .collect();
+    ids.push(pedigree.leaf.id.to_string());
+    ids
+}
+
+/// A single leaf's pedigree, or `None` when the leaf is not stored.
+async fn exit_chain(store: &dyn TreeStore, leaf_id: &TreeNodeId) -> Option<LeafPedigree> {
+    store
+        .get_exit_chains(std::slice::from_ref(leaf_id))
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+}
+
+/// Storing a leaf round-trips the whole node; an id that is not stored is not
+/// returned.
+pub async fn test_upsert_and_get_leaf(store: &dyn TreeStore) {
+    let node = create_test_tree_node("node-a", 1_000);
+    store.add_leaves(std::slice::from_ref(&node)).await.unwrap();
+
+    let missing = TreeNodeId::from_str("no-such-node").unwrap();
+    let pedigrees = store
+        .get_exit_chains(&[node.id.clone(), missing])
+        .await
+        .unwrap();
+    assert_eq!(pedigrees.len(), 1);
+    assert_eq!(pedigrees[0].leaf, node);
+    assert!(pedigrees[0].ancestors.is_empty());
+}
+
+/// A missing ancestor no longer errors: the store returns as much of the chain
+/// as it has (here `mid`, `leaf`), and the caller detects incompleteness because
+/// the returned root still references an unstored parent.
+pub async fn test_get_exit_chain_missing_ancestor(store: &dyn TreeStore) {
+    let mid = create_test_node_with_parent("mid", Some("root"), TreeNodeStatus::Splitted);
+    let leaf = create_test_node_with_parent("leaf", Some("mid"), TreeNodeStatus::Available);
+    // The root is intentionally left out of the ancestors.
+    add_with_chains(
+        store,
+        &[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![mid],
+        }],
+    )
+    .await;
+
+    let pedigree = exit_chain(store, &leaf.id).await.unwrap();
+    let ids: Vec<String> = pedigree
+        .ancestors
+        .iter()
+        .map(|a| a.id.to_string())
+        .collect();
+    assert_eq!(ids, vec!["mid"]);
+    assert!(pedigree.ancestors[0].parent_node_id.is_some());
+}
+
+/// The batch `get_exit_chains` returns one pedigree per stored leaf in request
+/// order (leaf plus nearest-first ancestors), skips a leaf that is not stored, and
+/// returns a partial chain when an ancestor is missing.
+pub async fn test_get_exit_chains(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Available);
+    let mid_a = create_test_node_with_parent("mid-a", Some("root"), TreeNodeStatus::Splitted);
+    let mid_b = create_test_node_with_parent("mid-b", Some("root"), TreeNodeStatus::Splitted);
+    let leaf_a = create_test_node_with_parent("leaf-a", Some("mid-a"), TreeNodeStatus::Available);
+    let leaf_b = create_test_node_with_parent("leaf-b", Some("mid-b"), TreeNodeStatus::Available);
+    // leaf-c's parent is not stored, so its chain comes back empty (partial).
+    let leaf_c = create_test_node_with_parent("leaf-c", Some("gone"), TreeNodeStatus::Available);
+    add_with_chains(
+        store,
+        &[
+            LeafPedigree {
+                leaf: leaf_a.clone(),
+                ancestors: vec![mid_a, root.clone()],
+            },
+            LeafPedigree {
+                leaf: leaf_b.clone(),
+                ancestors: vec![mid_b, root],
+            },
+            LeafPedigree {
+                leaf: leaf_c.clone(),
+                ancestors: vec![],
+            },
+        ],
+    )
+    .await;
+
+    let missing = TreeNodeId::from_str("not-stored").unwrap();
+    let pedigrees = store
+        .get_exit_chains(&[
+            leaf_a.id.clone(),
+            leaf_b.id.clone(),
+            leaf_c.id.clone(),
+            missing,
+        ])
+        .await
+        .unwrap();
+
+    let ancestor_ids = |p: &LeafPedigree| -> Vec<String> {
+        p.ancestors.iter().map(|a| a.id.to_string()).collect()
+    };
+    // One pedigree per stored leaf, in request order; the unstored id is dropped.
+    assert_eq!(pedigrees.len(), 3);
+    assert_eq!(pedigrees[0].leaf.id.to_string(), "leaf-a");
+    assert_eq!(ancestor_ids(&pedigrees[0]), vec!["mid-a", "root"]);
+    assert_eq!(pedigrees[1].leaf.id.to_string(), "leaf-b");
+    assert_eq!(ancestor_ids(&pedigrees[1]), vec!["mid-b", "root"]);
+    assert_eq!(pedigrees[2].leaf.id.to_string(), "leaf-c");
+    assert!(pedigrees[2].ancestors.is_empty());
+}
+
+/// A leaf whose stored chain does not reach the root is still spendable and
+/// counted: the ancestor chain is needed only at exit time, not for balance or
+/// selection. Completing the rest of the chain later keeps it spendable and makes
+/// its exit chain fully reconstructable.
+pub async fn test_incomplete_pedigree_still_spendable(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let mid = create_test_node_with_parent("mid", Some("root"), TreeNodeStatus::Splitted);
+    let leaf = create_test_node_with_parent("leaf", Some("mid"), TreeNodeStatus::Available);
+
+    // Stored without the root: the chain cannot reach it, but the leaf still counts.
+    add_with_chains(
+        store,
+        &[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![mid.clone()],
+        }],
+    )
+    .await;
+    assert_eq!(store.get_available_balance().await.unwrap(), leaf.value);
+    assert_eq!(get_available(store).await.len(), 1);
+
+    // Completing the chain keeps it spendable and makes the exit chain whole.
+    add_with_chains(
+        store,
+        &[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![mid, root],
+        }],
+    )
+    .await;
+    assert_eq!(store.get_available_balance().await.unwrap(), leaf.value);
+    assert_eq!(
+        exit_chain_ids(store, &leaf.id).await,
+        vec!["root", "mid", "leaf"]
+    );
+}
+
+/// Chains stored for swap outputs after `update_reservation` put them in the
+/// pool survive, so both the reserved and the change leaf keep a reconstructable
+/// exit chain. The update itself writes no chains.
+pub async fn test_exit_chain_after_swap_update(store: &dyn TreeStore) {
+    let original = create_test_tree_node("original", 1_000);
+    store
+        .add_leaves(std::slice::from_ref(&original))
+        .await
+        .unwrap();
+    let reservation = reserve_leaves(store, None, false, ReservationPurpose::Swap)
+        .await
+        .unwrap();
+
+    let reserved_root = create_test_node_with_parent("res_root", None, TreeNodeStatus::Splitted);
+    let reserved_leaf =
+        create_test_node_with_parent("res_leaf", Some("res_root"), TreeNodeStatus::Available);
+    let change_root = create_test_node_with_parent("chg_root", None, TreeNodeStatus::Splitted);
+    let change_leaf =
+        create_test_node_with_parent("chg_leaf", Some("chg_root"), TreeNodeStatus::Available);
+    store
+        .update_reservation(
+            &reservation.id,
+            std::slice::from_ref(&reserved_leaf),
+            std::slice::from_ref(&change_leaf),
+        )
+        .await
+        .unwrap();
+    store
+        .store_ancestors(&[
+            LeafPedigree {
+                leaf: reserved_leaf.clone(),
+                ancestors: vec![reserved_root],
+            },
+            LeafPedigree {
+                leaf: change_leaf.clone(),
+                ancestors: vec![change_root],
+            },
+        ])
+        .await
+        .unwrap();
+
+    assert_eq!(
+        exit_chain_ids(store, &reserved_leaf.id).await,
+        vec!["res_root", "res_leaf"]
+    );
+    assert_eq!(
+        exit_chain_ids(store, &change_leaf.id).await,
+        vec!["chg_root", "chg_leaf"]
+    );
+}
+
+/// A leaf reparented while reserved (a renewal persists the new chain) still has
+/// a complete exit chain after `cancel_reservation` returns it, even though cancel
+/// is passed only the leaf.
+pub async fn test_exit_chain_after_cancel_reparent(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+    add_with_chains(
+        store,
+        &[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![root],
+        }],
+    )
+    .await;
+    let reservation = reserve_leaves(store, None, false, ReservationPurpose::Payment)
+        .await
+        .unwrap();
+
+    // The renewal reparents the leaf under a new node and persists the new chain
+    // while the leaf is still reserved.
+    let new_root = create_test_node_with_parent("new_root", None, TreeNodeStatus::Splitted);
+    let mut reparented = leaf.clone();
+    reparented.parent_node_id = Some(TreeNodeId::from_str("new_root").unwrap());
+    add_with_chains(
+        store,
+        &[LeafPedigree {
+            leaf: reparented.clone(),
+            ancestors: vec![new_root],
+        }],
+    )
+    .await;
+
+    // Cancel returns only the leaf; its new chain is already in the store.
+    store
+        .cancel_reservation(&reservation.id, std::slice::from_ref(&reparented))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        exit_chain_ids(store, &leaf.id).await,
+        vec!["new_root", "leaf"]
+    );
+    assert_eq!(store.get_available_balance().await.unwrap(), leaf.value);
+}
+
+/// Re-storing an existing node updates it in place rather than duplicating it.
+pub async fn test_node_update_in_place(store: &dyn TreeStore) {
+    let ancestor = create_test_node_with_parent("root", None, TreeNodeStatus::Available);
+    let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+    add_with_chains(
+        store,
+        &[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![ancestor.clone()],
+        }],
+    )
+    .await;
+
+    // Re-store the ancestor with a new status and a new parent, both applied.
+    let mut updated = ancestor.clone();
+    updated.status = TreeNodeStatus::OnChain;
+    updated.parent_node_id = Some(TreeNodeId::from_str("new-parent").unwrap());
+    add_with_chains(
+        store,
+        &[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![updated],
+        }],
+    )
+    .await;
+
+    let pedigree = exit_chain(store, &leaf.id).await.unwrap();
+    let stored = &pedigree.ancestors[0];
+    assert_eq!(stored.id, ancestor.id);
+    assert_eq!(stored.value, 1_000, "value unchanged");
+    assert_eq!(stored.status, TreeNodeStatus::OnChain, "status updated");
+    assert_eq!(
+        stored.parent_node_id,
+        Some(TreeNodeId::from_str("new-parent").unwrap()),
+        "parent updated"
+    );
+}
+
+/// A timelock renewal re-parents a leaf (same id) onto a fresh split node, so
+/// re-adding it must repoint its stored parent and re-route the exit chain
+/// through the new ancestor.
+pub async fn test_leaf_reparented_by_renewal(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Available);
+    let old_mid = create_test_node_with_parent("old-mid", Some("root"), TreeNodeStatus::Splitted);
+    let leaf = create_test_node_with_parent("leaf", Some("old-mid"), TreeNodeStatus::Available);
+    add_with_chains(
+        store,
+        &[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![old_mid, root.clone()],
+        }],
+    )
+    .await;
+
+    assert_eq!(
+        exit_chain_ids(store, &leaf.id).await,
+        vec!["root", "old-mid", "leaf"]
+    );
+
+    // Renewal introduces a new split node and re-parents the leaf onto it.
+    let new_mid = create_test_node_with_parent("new-mid", Some("root"), TreeNodeStatus::Splitted);
+    let mut renewed = leaf.clone();
+    renewed.parent_node_id = Some(TreeNodeId::from_str("new-mid").unwrap());
+    add_with_chains(
+        store,
+        &[LeafPedigree {
+            leaf: renewed,
+            ancestors: vec![new_mid, root],
+        }],
+    )
+    .await;
+
+    assert_eq!(
+        exit_chain_ids(store, &leaf.id).await,
+        vec!["root", "new-mid", "leaf"]
+    );
+}
+
+/// An ancestor is stored separately from the leaf pool: it is part of the leaf's
+/// exit chain but never surfaces as a spendable leaf.
+pub async fn test_ancestor_not_returned_as_leaf(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+    add_with_chains(
+        store,
+        &[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![root.clone()],
+        }],
+    )
+    .await;
+
+    let available = get_available(store).await;
+    assert_eq!(available.len(), 1);
+    assert_eq!(available[0].id.to_string(), "leaf");
+    assert_eq!(exit_chain_ids(store, &leaf.id).await, vec!["root", "leaf"]);
+}
+
+/// A leaf stored without its chain has it completed later, without the ancestors
+/// surfacing in the leaf pool.
+pub async fn test_store_ancestors_backfills_chain(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+    store.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
+    assert_eq!(exit_chain_ids(store, &leaf.id).await, vec!["leaf"]);
+
+    store
+        .store_ancestors(&[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![root],
+        }])
+        .await
+        .unwrap();
+
+    assert_eq!(exit_chain_ids(store, &leaf.id).await, vec!["root", "leaf"]);
+    let available = get_available(store).await;
+    assert_eq!(available.len(), 1);
+    assert_eq!(available[0].id.to_string(), "leaf");
+}
+
+/// A stored chain outlives the refreshes that keep reporting its leaf, and is
+/// dropped only when the leaf itself leaves the pool. Refreshes carry leaves
+/// alone, so a chain the resolver wrote must not be collateral damage.
+pub async fn test_stored_chain_survives_refresh_and_dies_with_its_leaf(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let kept = create_test_node_with_parent("kept", Some("root"), TreeNodeStatus::Available);
+    let dropped = create_test_node_with_parent("dropped", Some("root"), TreeNodeStatus::Available);
+    add_with_chains(
+        store,
+        &[
+            LeafPedigree {
+                leaf: kept.clone(),
+                ancestors: vec![root.clone()],
+            },
+            LeafPedigree {
+                leaf: dropped.clone(),
+                ancestors: vec![root],
+            },
+        ],
+    )
+    .await;
+
+    // A refresh reporting both leaves keeps both chains: it writes none itself.
+    let refresh_start = future_refresh_start(store).await;
+    store
+        .set_leaves(&[kept.clone(), dropped.clone()], &[], refresh_start)
+        .await
+        .unwrap();
+    assert_eq!(exit_chain_ids(store, &kept.id).await, vec!["root", "kept"]);
+    assert_eq!(
+        exit_chain_ids(store, &dropped.id).await,
+        vec!["root", "dropped"]
+    );
+
+    // A refresh that stops reporting `dropped` takes its chain with it, and
+    // leaves the surviving leaf's chain intact.
+    let refresh_start = future_refresh_start(store).await;
+    store
+        .set_leaves(std::slice::from_ref(&kept), &[], refresh_start)
+        .await
+        .unwrap();
+    assert_eq!(exit_chain_ids(store, &kept.id).await, vec!["root", "kept"]);
+    assert!(exit_chain(store, &dropped.id).await.is_none());
+}
+
+/// A leaf spent between its chain being resolved and stored stays spent: storing
+/// ancestors must not return it to the pool the way `add_leaves` would.
+pub async fn test_store_ancestors_does_not_revive_spent_leaf(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+    let pedigree = LeafPedigree {
+        leaf: leaf.clone(),
+        ancestors: vec![root],
+    };
+    add_with_chains(store, std::slice::from_ref(&pedigree)).await;
+
+    let reservation = reserve_leaves(store, None, false, ReservationPurpose::Payment)
+        .await
+        .unwrap();
+    store
+        .finalize_reservation(&reservation.id, None)
+        .await
+        .unwrap();
+    assert!(get_available(store).await.is_empty());
+
+    store
+        .store_ancestors(std::slice::from_ref(&pedigree))
+        .await
+        .unwrap();
+
+    let all = get_all(store).await;
+    assert!(
+        all.available.is_empty(),
+        "a spent leaf must not return to the pool"
+    );
+    assert_eq!(all.balance(), 0);
+}
+
+/// Storing a chain whose leaf the pool no longer holds is accepted: the ancestors
+/// are simply unreachable until they are collected.
+pub async fn test_store_ancestors_for_absent_leaf(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+
+    store.store_ancestors(&[]).await.unwrap();
+    store
+        .store_ancestors(&[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![root],
+        }])
+        .await
+        .unwrap();
+
+    assert!(get_available(store).await.is_empty());
+    assert!(exit_chain(store, &leaf.id).await.is_none());
+
+    // Nothing was written for the missing leaf. A chain is only ever removed with
+    // its leaf, so one stored for a leaf that is already gone would never be
+    // collected; adding the leaf afterwards would surface it.
+    add_with_chains(
+        store,
+        &[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: Vec::new(),
+        }],
+    )
+    .await;
+    assert!(
+        exit_chain(store, &leaf.id)
+            .await
+            .expect("leaf was just added")
+            .ancestors
+            .is_empty(),
+        "ancestors stored for an absent leaf outlived it"
+    );
+}
+
+/// Deleting a leaf also drops its unshared ancestors.
+pub async fn test_unshared_ancestor_deleted_with_leaf(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+    add_with_chains(
+        store,
+        &[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![root.clone()],
+        }],
+    )
+    .await;
+
+    // A refresh in the future drops the pre-existing leaf, taking its ancestors.
+    let refresh_start = future_refresh_start(store).await;
+    store.set_leaves(&[], &[], refresh_start).await.unwrap();
+
+    assert!(exit_chain(store, &leaf.id).await.is_none());
+
+    // Re-adding the leaf alone brings back no ancestors: the root went with it,
+    // so the walk up from the leaf has nothing to link to.
+    store.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
+    assert_eq!(exit_chain_ids(store, &leaf.id).await, vec!["leaf"]);
+}
+
+/// Each leaf owns its own copy of a shared ancestor, so dropping one leaf leaves
+/// the other's chain intact.
+pub async fn test_shared_ancestor_survives_leaf_deletion(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let leaf_a = create_test_node_with_parent("leaf-a", Some("root"), TreeNodeStatus::Available);
+    let leaf_b = create_test_node_with_parent("leaf-b", Some("root"), TreeNodeStatus::Available);
+    add_with_chains(
+        store,
+        &[
+            LeafPedigree {
+                leaf: leaf_a.clone(),
+                ancestors: vec![root.clone()],
+            },
+            LeafPedigree {
+                leaf: leaf_b.clone(),
+                ancestors: vec![root.clone()],
+            },
+        ],
+    )
+    .await;
+
+    // A refresh that keeps only leaf-b drops leaf-a and its copy of the root.
+    let refresh_start = future_refresh_start(store).await;
+    store
+        .set_leaves(std::slice::from_ref(&leaf_b), &[], refresh_start)
+        .await
+        .unwrap();
+
+    assert!(exit_chain(store, &leaf_a.id).await.is_none());
+    assert_eq!(
+        exit_chain_ids(store, &leaf_b.id).await,
+        vec!["root", "leaf-b"]
+    );
+}
+
+/// A pedigree with no ancestors means the chain is unknown, not that the leaf has
+/// none, so storing one must leave an already-stored chain alone.
+pub async fn test_empty_pedigree_keeps_stored_chain(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+    add_with_chains(
+        store,
+        &[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![root],
+        }],
+    )
+    .await;
+    assert_eq!(exit_chain_ids(store, &leaf.id).await, vec!["root", "leaf"]);
+
+    store.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
+    assert_eq!(exit_chain_ids(store, &leaf.id).await, vec!["root", "leaf"]);
+
+    let refresh_start = future_refresh_start(store).await;
+    store
+        .set_leaves(std::slice::from_ref(&leaf), &[], refresh_start)
+        .await
+        .unwrap();
+    assert_eq!(exit_chain_ids(store, &leaf.id).await, vec!["root", "leaf"]);
+}
+
+/// Storing a chain replaces the leaf's previous one rather than merging, so a leaf
+/// reparented onto a new branch does not keep the nodes it no longer descends from.
+pub async fn test_stored_chain_replaces_previous(store: &dyn TreeStore) {
+    let old_root = create_test_node_with_parent("old-root", None, TreeNodeStatus::Splitted);
+    let mut leaf =
+        create_test_node_with_parent("leaf", Some("old-root"), TreeNodeStatus::Available);
+    add_with_chains(
+        store,
+        &[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![old_root],
+        }],
+    )
+    .await;
+    assert_eq!(
+        exit_chain_ids(store, &leaf.id).await,
+        vec!["old-root", "leaf"]
+    );
+
+    let new_root = create_test_node_with_parent("new-root", None, TreeNodeStatus::Splitted);
+    let split = create_test_node_with_parent("split", Some("new-root"), TreeNodeStatus::Splitted);
+    leaf.parent_node_id = Some(TreeNodeId::from_str("split").unwrap());
+    add_with_chains(
+        store,
+        &[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![split, new_root],
+        }],
+    )
+    .await;
+
+    assert_eq!(
+        exit_chain_ids(store, &leaf.id).await,
+        vec!["new-root", "split", "leaf"]
+    );
+}
+
+/// Only leaves whose stored chain cannot back an exit are reported, so resolving
+/// them never has to walk the whole wallet.
+pub async fn test_leaves_missing_exit_chains(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let mid = create_test_node_with_parent("mid", Some("root"), TreeNodeStatus::Splitted);
+    let complete =
+        create_test_node_with_parent("complete", Some("root"), TreeNodeStatus::Available);
+    let deep = create_test_node_with_parent("deep", Some("mid"), TreeNodeStatus::Available);
+    let bare = create_test_node_with_parent("bare", Some("root"), TreeNodeStatus::Available);
+    let root_leaf = create_test_node_with_parent("root-leaf", None, TreeNodeStatus::Available);
+
+    add_with_chains(
+        store,
+        &[
+            LeafPedigree {
+                leaf: complete,
+                ancestors: vec![root.clone()],
+            },
+            LeafPedigree {
+                leaf: deep.clone(),
+                ancestors: vec![mid.clone(), root.clone()],
+            },
+            LeafPedigree {
+                leaf: bare.clone(),
+                ancestors: Vec::new(),
+            },
+            LeafPedigree {
+                leaf: root_leaf,
+                ancestors: Vec::new(),
+            },
+        ],
+    )
+    .await;
+
+    // Only `bare` has no chain. A leaf that is its own root needs none, and a
+    // chain is reported once it holds the leaf's parent, at any depth.
+    assert_eq!(missing_chain_ids(store).await, vec!["bare"]);
+
+    store
+        .store_ancestors(&[LeafPedigree {
+            leaf: bare,
+            ancestors: vec![root],
+        }])
+        .await
+        .unwrap();
+    assert!(missing_chain_ids(store).await.is_empty());
+}
+
+/// A refresh reports leaves without their chains, so it must leave the chains
+/// already stored alone. A store that treats the empty incoming chain as "none"
+/// rather than "unknown" reports every leaf as missing one after every refresh,
+/// and the collection then refetches chains it already holds.
+pub async fn test_stored_chain_survives_refresh(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let complete =
+        create_test_node_with_parent("complete", Some("root"), TreeNodeStatus::Available);
+    let bare = create_test_node_with_parent("bare", Some("root"), TreeNodeStatus::Available);
+
+    add_with_chains(
+        store,
+        &[
+            LeafPedigree {
+                leaf: complete.clone(),
+                ancestors: vec![root],
+            },
+            LeafPedigree {
+                leaf: bare.clone(),
+                ancestors: Vec::new(),
+            },
+        ],
+    )
+    .await;
+    assert_eq!(missing_chain_ids(store).await, vec!["bare"]);
+
+    // A refresh only rebuilds rows older than its start, and the leaves were
+    // just added, so the boundary has to sit clearly after them on the store's
+    // own clock. Otherwise the rebuild never happens and this passes vacuously.
+    let refresh_start = future_refresh_start(store).await;
+    store
+        .set_leaves(&[complete, bare], &[], refresh_start)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        missing_chain_ids(store).await,
+        vec!["bare"],
+        "a refresh must not discard the chain a leaf already had"
+    );
+}
+
+/// A stored chain only backs an exit if it holds the leaf's *current* parent.
+/// Timelock renewal reparents a leaf onto a new split node under the same id, and
+/// another device learns that from a leaves-only refresh, which carries no chain.
+/// The rows left behind describe the parent the leaf had before.
+pub async fn test_reparented_leaf_needs_its_chain_again(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let old_parent =
+        create_test_node_with_parent("old-parent", Some("root"), TreeNodeStatus::Splitted);
+    let leaf = create_test_node_with_parent("leaf", Some("old-parent"), TreeNodeStatus::Available);
+
+    add_with_chains(
+        store,
+        &[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![old_parent, root],
+        }],
+    )
+    .await;
+    assert!(
+        missing_chain_ids(store).await.is_empty(),
+        "a rooted chain from the leaf's parent is complete"
+    );
+
+    // Renewal moved the leaf under a new split node. The refresh reports the new
+    // parent and no chain, exactly as a leaves-only refresh does.
+    let reparented =
+        create_test_node_with_parent("leaf", Some("new-parent"), TreeNodeStatus::Available);
+    let refresh_start = future_refresh_start(store).await;
+    store
+        .set_leaves(&[reparented], &[], refresh_start)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        missing_chain_ids(store).await,
+        vec!["leaf"],
+        "the stored chain no longer reaches the leaf, so it needs collecting again"
+    );
+
+    // A chain fetched before the reparent still lands afterwards, carrying the
+    // operators' older copy of the leaf. Storing it must be judged against the
+    // stored leaf, which has moved on, not against the one that came with it.
+    let stale = create_test_node_with_parent("leaf", Some("old-parent"), TreeNodeStatus::Available);
+    let old_parent_again =
+        create_test_node_with_parent("old-parent", Some("root"), TreeNodeStatus::Splitted);
+    let root_again = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    store
+        .store_ancestors(&[LeafPedigree {
+            leaf: stale,
+            ancestors: vec![old_parent_again, root_again],
+        }])
+        .await
+        .unwrap();
+
+    assert_eq!(
+        missing_chain_ids(store).await,
+        vec!["leaf"],
+        "a chain for the parent the leaf used to have does not make it exitable"
+    );
+}
+
+async fn missing_chain_ids(store: &dyn TreeStore) -> Vec<String> {
+    store
+        .leaves_missing_exit_chains()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|id| id.to_string())
+        .collect()
 }
 
 /// Helper function to reserve leaves in tests.
@@ -189,14 +985,15 @@ pub async fn test_add_leaves(store: &dyn TreeStore) {
 
 pub async fn test_add_leaves_duplicate_ids(store: &dyn TreeStore) {
     let leaf1 = create_test_tree_node("node1", 100);
-    let leaf2 = create_test_tree_node("node1", 200); // Same ID, different value
+    let leaf2 = create_test_tree_node("node1", 200); // Same id, different value
 
     store.add_leaves(&[leaf1]).await.unwrap();
+    // The operators are the source of truth: the later report wins, and the id
+    // is updated in place rather than stored twice.
     store.add_leaves(&[leaf2]).await.unwrap();
 
     let stored = get_available(store).await;
     assert_eq!(stored.len(), 1);
-    // Should have the second value (200) as it overwrites the first
     assert_eq!(stored[0].value, 200);
 }
 
@@ -295,21 +1092,25 @@ pub async fn test_set_leaves_with_reservations(store: &dyn TreeStore) {
 
     // Update leaves with new data (including updated versions of reserved leaves)
     let non_existing_operator_leaf = create_test_tree_node("node7", 1000);
-    let mut updated_leaf1 = create_test_tree_node("node1", 150);
+    let mut updated_leaf1 = create_test_tree_node("node1", 100);
     updated_leaf1.status = crate::tree::TreeNodeStatus::TransferLocked;
     let new_leaves = vec![
         updated_leaf1,
-        create_test_tree_node("node2", 250),
+        create_test_tree_node("node2", 200),
         create_test_tree_node("node4", 400),
     ];
     store
-        .set_leaves(&new_leaves, &[non_existing_operator_leaf], refresh_start)
+        .set_leaves(
+            &new_leaves,
+            std::slice::from_ref(&non_existing_operator_leaf),
+            refresh_start,
+        )
         .await
         .unwrap();
 
     // Check main pool via get_leaves
     let all = get_all(store).await;
-    assert_eq!(all.payment_reserved_balance(), 700); // 150+250+300
+    assert_eq!(all.payment_reserved_balance(), 600); // 100+200+300
     assert_eq!(all.available_balance(), 400);
     assert_eq!(all.missing_operators_balance(), 1000);
     assert_eq!(all.balance(), 400 + 1000);
@@ -610,6 +1411,21 @@ pub async fn test_cancel_reservation_nonexistent(store: &dyn TreeStore) {
 
     store.cancel_reservation(&fake_id, &[]).await.unwrap();
     assert_available_count(store, 0).await;
+}
+
+/// Cancelling a reservation that no longer exists (e.g. released by stale
+/// cleanup) still returns `leaves_to_keep` to the pool rather than dropping them.
+pub async fn test_cancel_reservation_nonexistent_keeps_leaves(store: &dyn TreeStore) {
+    let fake_id = "fake-reservation-id".to_string();
+    let leaf = create_test_tree_node("kept", 500);
+
+    store
+        .cancel_reservation(&fake_id, std::slice::from_ref(&leaf))
+        .await
+        .unwrap();
+
+    assert_available_count(store, 1).await;
+    assert_eq!(store.get_available_balance().await.unwrap(), 500);
 }
 
 pub async fn test_finalize_reservation(store: &dyn TreeStore) {
@@ -1104,7 +1920,11 @@ pub async fn test_notification_after_swap_with_exact_amount(store: &dyn TreeStor
     // Simulate a swap that returns exactly the target amount (100 sats)
     let swap_result_leaf = create_test_tree_node("node2", 100);
     store
-        .update_reservation(&reservation_id, &[swap_result_leaf], &[])
+        .update_reservation(
+            &reservation_id,
+            std::slice::from_ref(&swap_result_leaf),
+            &[],
+        )
         .await
         .unwrap();
 
@@ -1216,6 +2036,66 @@ pub async fn test_spent_leaves_not_restored_by_set_leaves(store: &dyn TreeStore)
     assert!(
         !available.iter().any(|l| l.id.to_string() == "node1"),
         "Spent leaf node1 should not be restored by set_leaves when refresh started before spend"
+    );
+}
+
+/// A refresh that reports an already-spent leaf must not store its chain: the
+/// leaf itself is skipped, and a chain is only ever removed with its leaf, so
+/// the rows would never be collected.
+pub async fn test_set_leaves_skips_chains_of_spent_leaves(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    // Needs a parent: a parentless leaf's chain is unreachable by the ancestor
+    // walk, so a stray row stored under it would not be observable below.
+    let mut leaf = create_test_node_with_parent("node1", Some("root"), TreeNodeStatus::Available);
+    leaf.value = 100;
+    store.add_leaves(&[leaf.clone()]).await.unwrap();
+
+    let reservation = reserve_leaves(
+        store,
+        Some(&TargetAmounts::new_amount_and_fee(100, None)),
+        true,
+        ReservationPurpose::Payment,
+    )
+    .await
+    .unwrap();
+    store
+        .finalize_reservation(&reservation.id, None)
+        .await
+        .unwrap();
+
+    // A refresh that started before the spend still reports the leaf, and the
+    // resolver may still be holding a chain for it. The leaf is suppressed, so
+    // its chain must be too.
+    let refresh_start = past_refresh_start(store).await;
+    store
+        .set_leaves(&[leaf.clone()], &[], refresh_start)
+        .await
+        .unwrap();
+    store
+        .store_ancestors(&[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![root],
+        }])
+        .await
+        .unwrap();
+
+    assert!(get_available(store).await.is_empty());
+    // Re-adding the leaf would surface any chain stored for it above.
+    add_with_chains(
+        store,
+        &[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: Vec::new(),
+        }],
+    )
+    .await;
+    assert!(
+        exit_chain(store, &leaf.id)
+            .await
+            .expect("leaf was just added")
+            .ancestors
+            .is_empty(),
+        "a chain stored for a spent leaf outlived it"
     );
 }
 
@@ -1345,7 +2225,11 @@ pub async fn test_change_leaves_from_swap_protected(store: &dyn TreeStore) {
     let reserved_leaf = create_test_tree_node("swap_output", 500);
     let change_leaf = create_test_tree_node("change", 500);
     store
-        .update_reservation(&reservation.id, &[reserved_leaf], &[change_leaf])
+        .update_reservation(
+            &reservation.id,
+            std::slice::from_ref(&reserved_leaf),
+            std::slice::from_ref(&change_leaf),
+        )
         .await
         .unwrap();
 
@@ -1618,7 +2502,7 @@ pub async fn test_payment_reservation_does_not_block_set_leaves(store: &dyn Tree
 
     // set_leaves should proceed (payment reservation doesn't block)
     let new_leaves = vec![
-        create_test_tree_node("node1", 150),
+        create_test_tree_node("node1", 100),
         create_test_tree_node("node3", 300),
     ];
     store
@@ -1652,7 +2536,11 @@ pub async fn test_update_reservation_basic(store: &dyn TreeStore) {
     let swap_output = create_test_tree_node("swap_output", 500);
     let change = create_test_tree_node("change", 500);
     let updated = store
-        .update_reservation(&reservation.id, &[swap_output], &[change])
+        .update_reservation(
+            &reservation.id,
+            std::slice::from_ref(&swap_output),
+            std::slice::from_ref(&change),
+        )
         .await
         .unwrap();
 
@@ -1717,7 +2605,11 @@ pub async fn test_update_reservation_clears_pending(store: &dyn TreeStore) {
     let reserved_leaf = create_test_tree_node("reserved", 100);
     let change_leaf = create_test_tree_node("change", 900);
     store
-        .update_reservation(&reservation_id, &[reserved_leaf], &[change_leaf])
+        .update_reservation(
+            &reservation_id,
+            std::slice::from_ref(&reserved_leaf),
+            std::slice::from_ref(&change_leaf),
+        )
         .await
         .unwrap();
 
@@ -1755,7 +2647,11 @@ pub async fn test_update_reservation_preserves_purpose(store: &dyn TreeStore) {
     let swap_output = create_test_tree_node("swap_output", 600);
     let change = create_test_tree_node("change", 400);
     store
-        .update_reservation(&reservation.id, &[swap_output], &[change])
+        .update_reservation(
+            &reservation.id,
+            std::slice::from_ref(&swap_output),
+            std::slice::from_ref(&change),
+        )
         .await
         .unwrap();
 
@@ -1966,6 +2862,27 @@ pub async fn test_missing_from_operators_leaves_are_not_selectable(store: &dyn T
     .unwrap();
     assert_eq!(reservation.leaves.len(), 1);
     assert_eq!(reservation.leaves[0].id, available.id);
+}
+
+/// A leaf the operators no longer report and whose status is not `Available` is
+/// listed as not-available, so the wallet still knows about it (it can be exited
+/// from local state) while nothing counts it as spendable.
+pub async fn test_missing_from_operators_leaf_not_available(store: &dyn TreeStore) {
+    let mut leaf = create_test_tree_node("locked", 700);
+    leaf.status = TreeNodeStatus::TransferLocked;
+
+    let refresh_start = future_refresh_start(store).await;
+    store
+        .set_leaves(&[], std::slice::from_ref(&leaf), refresh_start)
+        .await
+        .unwrap();
+
+    let all = get_all(store).await;
+    assert_eq!(all.not_available.len(), 1);
+    assert_eq!(all.not_available[0].id, leaf.id);
+    assert!(all.available_missing_from_operators.is_empty());
+    assert!(all.available.is_empty());
+    assert_eq!(all.balance(), 0);
 }
 
 pub async fn test_reserve_with_none_target_reserves_all(store: &dyn TreeStore) {

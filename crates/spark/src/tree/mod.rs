@@ -1,4 +1,6 @@
+mod chain;
 mod error;
+mod exit_chain_resolver;
 mod leaf_optimizer;
 mod select_helper;
 mod service;
@@ -7,9 +9,11 @@ mod store;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod tests;
 
+pub use chain::{assemble_exit_chains, chain_backs_exit, chain_reaches_root};
 pub use error::TreeServiceError;
+pub use exit_chain_resolver::ExitChainResolver;
 pub use leaf_optimizer::*;
-use platform_utils::tokio::sync::watch;
+use platform_utils::tokio::sync::{broadcast, watch};
 pub use select_helper::{
     select_leaves_by_minimum_amount, select_leaves_by_target_amounts, with_reserved_leaves,
 };
@@ -63,6 +67,23 @@ impl Leaves {
     pub fn balance(&self) -> u64 {
         self.available_balance() + self.missing_operators_balance() + self.swap_reserved_balance()
     }
+
+    /// Ids of every leaf in the set, across all buckets, deduplicated and
+    /// ordered by id.
+    pub fn leaf_ids(&self) -> Vec<TreeNodeId> {
+        let mut ids: Vec<TreeNodeId> = self
+            .available
+            .iter()
+            .chain(&self.not_available)
+            .chain(&self.available_missing_from_operators)
+            .chain(&self.reserved_for_payment)
+            .chain(&self.reserved_for_swap)
+            .map(|leaf| leaf.id.clone())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
 }
 
 /// The two public keys needed to confirm a stored leaf's ownership was already
@@ -79,8 +100,7 @@ pub struct VerifiedLeafKeys {
 /// Projects the verified-leaf categories of `leaves` into the keys keyed by id.
 /// The set mirrors `Leaves::balance` inputs plus payment-reserved leaves: every
 /// category whose leaves passed the ownership check before being stored, and
-/// deliberately excludes `not_available` (never verified). Backends that
-/// override `TreeStore::get_verified_leaf_keys` must project the same set.
+/// deliberately excludes `not_available` (never verified).
 pub fn verified_leaf_keys_from_leaves(leaves: &Leaves) -> HashMap<TreeNodeId, VerifiedLeafKeys> {
     leaves
         .available
@@ -480,6 +500,13 @@ impl LeafLike for TreeNode {
     }
 }
 
+/// A leaf together with its ancestor chain up to the root.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LeafPedigree {
+    pub leaf: TreeNode,
+    pub ancestors: Vec<TreeNode>,
+}
+
 /// A low-level storage interface for managing tree nodes and leaf reservations.
 ///
 /// `TreeStore` provides the fundamental storage operations for tree nodes, including
@@ -494,40 +521,44 @@ impl LeafLike for TreeNode {
 /// transactional consistency.
 #[macros::async_trait]
 pub trait TreeStore: Send + Sync {
-    /// Adds new leaves to the store without replacing existing ones.
-    ///
-    /// This method appends the provided leaves to the existing set of leaves
-    /// in the store. If a leaf with the same ID already exists, the behavior
-    /// is implementation-specific but typically the existing leaf is preserved.
-    ///
-    /// # Parameters
-    ///
-    /// * `leaves` - A slice of `TreeNode` objects to add to the store
-    ///
-    /// # Returns
-    ///
-    /// * `Result<(), TreeServiceError>` - Ok if the operation succeeds, or an error
-    ///   if the leaves cannot be added
-    ///
-    /// # Errors
-    ///
-    /// Returns a `TreeServiceError` if:
-    /// * The leaves contain invalid data
-    /// * Storage operation fails
-    /// * Duplicate leaf IDs conflict with existing leaves
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use spark::tree::{TreeStore, TreeNode, TreeServiceError};
-    ///
-    /// # async fn example(store: &dyn TreeStore, new_leaves: &[TreeNode]) -> Result<(), TreeServiceError> {
-    /// // Add new leaves to the store
-    /// store.add_leaves(new_leaves).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Adds leaves to the pool. Re-adding an existing id overwrites the stored
+    /// node: the operators are the source of truth for every field, including
+    /// `value` and the verifying key. Chains are written by
+    /// [`Self::store_ancestors`].
     async fn add_leaves(&self, leaves: &[TreeNode]) -> Result<(), TreeServiceError>;
+
+    /// Stores the ancestors of `pedigrees`, leaving the leaf pool untouched.
+    ///
+    /// Each chain must run from its leaf's current parent to a root, which
+    /// [`chain_reaches_root`] decides. A store takes a stored chain to be one that
+    /// backs an exit and only looks for the parent, so a partial chain written
+    /// here reads as exitable and produces transactions that cannot confirm.
+    ///
+    /// Unlike [`Self::add_leaves`], this neither inserts a leaf nor clears its spent
+    /// marker, so a leaf spent since its pedigree was resolved stays spent, and a
+    /// pedigree whose leaf the pool no longer holds is skipped: a chain is only ever
+    /// removed with its leaf, so one stored for a leaf that is already gone would
+    /// never be collected.
+    async fn store_ancestors(&self, pedigrees: &[LeafPedigree]) -> Result<(), TreeServiceError>;
+
+    /// Ids of the stored leaves that have no chain reaching their current parent,
+    /// which is what [`Self::store_ancestors`] guarantees a stored chain does. See
+    /// [`chain_backs_exit`], the same rule in Rust. A leaf that is itself a root
+    /// needs no ancestors and is never reported.
+    ///
+    /// Returns ids only, but costs one lookup per stored leaf.
+    async fn leaves_missing_exit_chains(&self) -> Result<Vec<TreeNodeId>, TreeServiceError>;
+
+    /// Reconstructs the exit chains for many leaves at once, each as a
+    /// [`LeafPedigree`] (the leaf plus its ancestors, nearest first), by walking
+    /// `parent_node_id` up from each leaf. A leaf absent from the store is skipped,
+    /// and a gap or cycle stops that walk and returns what it reached rather than
+    /// erroring. Backends resolve the whole batch in a single query rather than one
+    /// round-trip per leaf.
+    async fn get_exit_chains(
+        &self,
+        leaf_ids: &[TreeNodeId],
+    ) -> Result<Vec<LeafPedigree>, TreeServiceError>;
 
     /// Retrieves all leaves currently stored in the store.
     ///
@@ -584,52 +615,11 @@ pub trait TreeStore: Send + Sync {
         Ok(verified_leaf_keys_from_leaves(&self.get_leaves().await?))
     }
 
-    /// Replaces all leaves in the store with the provided set.
-    ///
-    /// This method performs a complete replacement of the stored leaves,
-    /// removing any existing leaves that are not in the provided set and
-    /// adding or updating leaves as necessary. Reserved leaves may be
-    /// updated with new data while maintaining their reservation status.
-    ///
-    /// Only leaves that were added BEFORE `refresh_started_at` will be deleted
-    /// if they are not in the provided set. This prevents race conditions where
-    /// a leaf is added (e.g., from a payment) after the refresh started but
-    /// before it completed, which would otherwise cause the new leaf to be lost.
-    ///
-    /// # Parameters
-    ///
-    /// * `leaves` - A slice of `TreeNode` objects that will replace all existing leaves
-    /// * `missing_operators_leaves` - Leaves that are missing from some operators
-    /// * `refresh_started_at` - The time when the refresh operation started. Leaves
-    ///   added after this time will be preserved even if not in the refresh data.
-    ///
-    /// # Returns
-    ///
-    /// * `Result<(), TreeServiceError>` - Ok if the operation succeeds, or an error
-    ///   if the leaves cannot be set
-    ///
-    /// # Errors
-    ///
-    /// Returns a `TreeServiceError` if:
-    /// * The leaves contain invalid data
-    /// * Storage operation fails
-    /// * Active reservations prevent the operation
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use spark::tree::{TreeStore, TreeNode, TreeServiceError};
-    /// use platform_utils::time::SystemTime;
-    ///
-    /// # async fn example(store: &dyn TreeStore, updated_leaves: &[TreeNode], missing_operators_leaves: &[TreeNode]) -> Result<(), TreeServiceError> {
-    /// // Capture time before querying operators
-    /// let refresh_started_at = SystemTime::now();
-    /// // ... query operators for leaves ...
-    /// // Replace all leaves with a new set, preserving any added after refresh started
-    /// store.set_leaves(updated_leaves, missing_operators_leaves, refresh_started_at).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Replaces the leaf pool with `leaves`, removing any prior leaf not in the
+    /// set. A leaf added after `refresh_started_at` is kept even when absent, so
+    /// a leaf added mid-refresh (e.g. from a payment) is not lost. A removed
+    /// leaf's chain is removed with it; a surviving leaf keeps the chain
+    /// [`Self::store_ancestors`] wrote for it.
     async fn set_leaves(
         &self,
         leaves: &[TreeNode],
@@ -646,7 +636,9 @@ pub trait TreeStore: Send + Sync {
     /// To preserve today's "release everything back to the pool" behavior, callers
     /// pass the original reservation leaves as `leaves_to_keep`. To drop part of the
     /// set (e.g. operator-locked leaves the caller has just verified), callers pass
-    /// only the leaves they have confirmed are safe to make available.
+    /// only the leaves they have confirmed are safe to make available. Only the
+    /// leaves are passed: their ancestor chains stayed in the store while they were
+    /// reserved, so a returned leaf is already offline-exitable.
     async fn cancel_reservation(
         &self,
         id: &LeavesReservationId,
@@ -760,6 +752,9 @@ pub trait TreeStore: Send + Sync {
     /// * `reserved_leaves` - The exact leaves to keep in the reservation
     /// * `change_leaves` - The leaves to add to the available pool (change from swap)
     ///
+    /// Both sets carry their ancestors: swap outputs are fresh nodes whose chain
+    /// is otherwise unstored, so without them the leaf could not be exited offline.
+    ///
     /// # Returns
     ///
     /// * `Result<LeavesReservation, TreeServiceError>` - The updated reservation
@@ -778,6 +773,15 @@ pub enum LeafSelection {
 
 #[macros::async_trait]
 pub trait TreeService: Send + Sync {
+    /// Notifies each time leaves reach the pool, for the work that has to follow
+    /// them there: an exit chain to collect, a consolidation to consider.
+    ///
+    /// A prompt to go and look, not a record of what arrived. It carries no ids,
+    /// and a listener that lags misses notifications, so what follows one has to
+    /// read the pool for itself. A refresh cannot tell which of the leaves the
+    /// operators reported are new and notifies for any of them.
+    fn subscribe_leaves_added(&self) -> broadcast::Receiver<()>;
+
     /// Returns the total balance of all available leaves in the tree.
     ///
     /// This method calculates the sum of all leaf values that have a status of
@@ -843,6 +847,38 @@ pub trait TreeService: Send + Sync {
         include_parents: bool,
     ) -> Result<Vec<TreeNode>, TreeServiceError>;
 
+    /// Reads each leaf's exit chain (the leaf plus its ancestors up to the root)
+    /// from the durable store, so an exit builds with the operators offline. A
+    /// leaf whose stored chain does not reach the root comes back with a partial
+    /// one; a leaf absent from the store is omitted.
+    async fn load_exit_chains(
+        &self,
+        leaf_ids: &[TreeNodeId],
+    ) -> Result<Vec<LeafPedigree>, TreeServiceError>;
+
+    /// Persists each leaf's ancestor chain, leaving the leaf pool untouched, so a
+    /// chain resolved after its leaf was stored completes it in place. Publishes
+    /// an exit state change: a leaf that could not be exited offline before now
+    /// can.
+    async fn store_exit_chains(&self, pedigrees: &[LeafPedigree]) -> Result<(), TreeServiceError>;
+
+    /// The same write, replaying a chain read back from a backup. Publishes
+    /// nothing: the backup is where the chain came from, so it cannot be the
+    /// thing that made the backup stale.
+    async fn restore_exit_chains(&self, pedigrees: &[LeafPedigree])
+    -> Result<(), TreeServiceError>;
+
+    /// Ids of the stored leaves whose chain cannot back a unilateral exit.
+    async fn leaves_missing_exit_chains(&self) -> Result<Vec<TreeNodeId>, TreeServiceError>;
+
+    /// Pairs each leaf id with its ancestor chain, fetched from the operators in
+    /// one `include_parents` query.
+    ///
+    /// Best-effort: a failed fetch (e.g. a sporadic network error) is not fatal and
+    /// yields nothing rather than erroring, so a caller can try again later. A chain
+    /// the operators cannot complete comes back partial, which a caller checks for.
+    async fn fetch_pedigrees_from_operators(&self, leaf_ids: &[TreeNodeId]) -> Vec<LeafPedigree>;
+
     /// Refreshes the tree state by fetching the latest leaves from the server.
     ///
     /// This method clears the current local cache of leaves and fetches all available
@@ -877,18 +913,21 @@ pub trait TreeService: Send + Sync {
     /// ```
     async fn refresh_leaves(&self) -> Result<(), TreeServiceError>;
 
-    /// Inserts new leaves into the tree.
+    /// Inserts new leaves into the tree, each with the ancestors the caller
+    /// already knows.
     ///
-    /// This method adds the provided leaves to the tree state.
+    /// A producer that already holds a leaf's chain (a deposit root has none; a
+    /// claim can fetch it) passes it here so the store need not rediscover it.
+    /// Any leaf a renewal reparents is completed against the coordinator.
     ///
     /// # Parameters
     ///
-    /// * `leaves` - A vector of `TreeNode` objects to insert into the tree
+    /// * `leaves` - The leaves to insert.
     ///
     /// # Returns
     ///
-    /// * `Result<Vec<TreeNode>, TreeServiceError>` - The updated tree nodes after insertion,
-    ///   or an error if the operation fails.
+    /// * `Result<Vec<TreeNode>, TreeServiceError>` - The inserted leaves (renewed
+    ///   where a timelock required it), or an error if the operation fails.
     ///
     /// # Errors
     ///
@@ -909,6 +948,13 @@ pub trait TreeService: Send + Sync {
     /// ```
     async fn insert_leaves(&self, leaves: Vec<TreeNode>)
     -> Result<Vec<TreeNode>, TreeServiceError>;
+
+    /// Stores leaves together with their ancestor chains exactly as given, with
+    /// no timelock renewal and no operator round-trip. A leaf already stored
+    /// keeps its place in the pool, and a chain given for it replaces its stored
+    /// one wholesale, complete or not; an empty chain reads as unknown and
+    /// leaves the stored one alone. Leaves not named are untouched.
+    async fn restore_leaves(&self, leaves: &[LeafPedigree]) -> Result<(), TreeServiceError>;
 
     /// Selects and reserves leaves from the tree that match the specified target amounts.
     ///

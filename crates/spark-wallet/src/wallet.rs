@@ -64,10 +64,11 @@ use spark::{
         TokenOutputWithPrevOut, TokenService,
     },
     tree::{
-        AutoOptimizationEvent, AutoOptimizationEventHandler, InMemoryTreeStore, LeafOptimizer,
-        LeafSelection, OptimizationError, OptimizationOutcome, ReservationPurpose,
-        SelectLeavesOptions, SynchronousTreeService, TargetAmounts, TreeNode, TreeNodeId,
-        TreeService, TreeStore, select_leaves_by_target_amounts, with_reserved_leaves,
+        AutoOptimizationEvent, AutoOptimizationEventHandler, ExitChainResolver, InMemoryTreeStore,
+        LeafOptimizer, LeafPedigree, LeafSelection, OptimizationError, OptimizationOutcome,
+        ReservationPurpose, SelectLeavesOptions, SynchronousTreeService, TargetAmounts, TreeNode,
+        TreeNodeId, TreeService, TreeStore, chain_reaches_root, select_leaves_by_target_amounts,
+        with_reserved_leaves,
     },
     utils::paging::{PagingFilter, PagingResult},
 };
@@ -81,7 +82,10 @@ use crate::{
     TokenRecipient, WalletEvent, WalletLeaves, WalletSettings, WithdrawInnerParams,
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
-    unilateral_exit::{CpfpChangeInput, ExitLeafSelection, PreparedUnilateralExit, RefundOutput},
+    unilateral_exit::{
+        CpfpChangeInput, ExitLeafSelection, ExitStateExport, ExitStateImport,
+        PreparedUnilateralExit, RefundOutput,
+    },
 };
 
 const SELECT_LEAVES_MAX_RETRIES: usize = 3;
@@ -175,6 +179,83 @@ const REFUND_MISSING_ENTITY_BASE_DELAY_MS: u64 = 500;
 /// and should be retried after a backoff delay.
 fn is_backoff_retryable_error(error: &OperatorRpcError) -> bool {
     is_resource_exhausted_error(error) || is_leaf_unavailable_error(error)
+}
+
+/// Whether `ancestors` links `leaf` to a root, which is what makes the leaf
+/// exitable without the operators: each node is the parent of the one below it
+/// and spends its transaction, and the topmost has no parent of its own. A leaf
+/// that is itself a root needs no ancestors. A chain that only ends in a
+/// parentless node does not qualify: it may belong to another leaf entirely.
+/// Neither does one that revisits an id, which is a cycle padding an otherwise
+/// short chain rather than a path to a root.
+///
+/// Stricter than [`chain_reaches_root`], which trusts the contiguity the store
+/// guarantees for its own chains. This walks every link, so it also holds for a
+/// chain of unknown provenance.
+fn links_leaf_to_root(leaf: &TreeNode, ancestors: &[TreeNode]) -> bool {
+    let mut seen: HashSet<&TreeNodeId> = HashSet::from([&leaf.id]);
+    let mut child = leaf;
+    for parent in ancestors {
+        if !seen.insert(&parent.id)
+            || child.parent_node_id.as_ref() != Some(&parent.id)
+            || !spends_node_tx(child, parent)
+        {
+            return false;
+        }
+        child = parent;
+    }
+    child.parent_node_id.is_none()
+}
+
+/// Whether `child`'s `node_tx` spends `parent`'s, which is what lets an exit
+/// broadcast the pair back to back.
+///
+/// The output index is left out: the renewal paths rebuild a `node_tx` over
+/// output 0 whatever `TreeNode::vout` says, and picking the wrong output of the
+/// right transaction is not what a tampered chain would be after.
+fn spends_node_tx(child: &TreeNode, parent: &TreeNode) -> bool {
+    child
+        .node_tx
+        .input
+        .first()
+        .is_some_and(|input| input.previous_output.txid == parent.node_tx.compute_txid())
+}
+
+/// What of an incoming pedigree may be written to the store.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ImportableParts {
+    /// Nothing: some node in it contradicts the wallet's own copy of that node.
+    Nothing,
+    /// The leaf alone: its chain does not link it to a root.
+    LeafOnly,
+    /// Both, the chain being one an exit can be built from.
+    LeafAndChain,
+}
+
+/// What of `pedigree` may be written, judged against `stored`, every node the
+/// wallet already holds keyed by id.
+///
+/// `value` and `verifying_public_key` are fixed for the lifetime of a node, so
+/// an incoming copy that disagrees with the stored one is not a later state of
+/// it. The rest of the pedigree is no more trustworthy than that node, so none
+/// of it is written.
+fn importable_parts(
+    pedigree: &LeafPedigree,
+    stored: &HashMap<TreeNodeId, TreeNode>,
+) -> ImportableParts {
+    for node in std::iter::once(&pedigree.leaf).chain(&pedigree.ancestors) {
+        if let Some(known) = stored.get(&node.id)
+            && (known.value != node.value
+                || known.verifying_public_key != node.verifying_public_key)
+        {
+            return ImportableParts::Nothing;
+        }
+    }
+    if links_leaf_to_root(&pedigree.leaf, &pedigree.ancestors) {
+        ImportableParts::LeafAndChain
+    } else {
+        ImportableParts::LeafOnly
+    }
 }
 
 /// Macro to handle retry logic for operations that may fail due to concurrent leaf spending.
@@ -279,6 +360,13 @@ pub struct SparkWallet {
     operator_pool: Arc<OperatorPool>,
     htlc_service: Arc<HtlcService>,
     leaf_optimizer: Arc<LeafOptimizer>,
+    /// Resolves exit chains on demand. When that happens is the caller's to
+    /// decide: this holds no schedule of its own.
+    exit_chain_resolver: Arc<ExitChainResolver>,
+    /// Held from construction rather than subscribed when background processing
+    /// starts, so a change published before then is still delivered: a clone of
+    /// this receiver inherits its unseen changes.
+    exit_state_changed_rx: watch::Receiver<()>,
     /// One-shot, single-flight guard for `select_leaves_with_retry`'s call to
     /// `refresh_leaves`. The cell's `get_or_init` blocks concurrent callers
     /// during the in-flight refresh and short-circuits with a single atomic
@@ -405,6 +493,7 @@ impl SparkWallet {
             Arc::clone(&transfer_service),
         ));
 
+        let (exit_state_changed_tx, exit_state_changed_rx) = watch::channel(());
         let tree_service: Arc<dyn TreeService> = Arc::new(SynchronousTreeService::new(
             identity_public_key,
             config.network,
@@ -413,6 +502,7 @@ impl SparkWallet {
             Arc::clone(&timelock_manager),
             Arc::clone(&spark_signer),
             Arc::clone(&swap_service),
+            Some(exit_state_changed_tx),
         ));
 
         let token_output_service: Arc<dyn TokenOutputService> =
@@ -447,6 +537,8 @@ impl SparkWallet {
         let auto_optimization_event_handler = Arc::new(WalletAutoOptimizationEventHandler {
             event_manager: Arc::clone(&event_manager),
         });
+
+        let exit_chain_resolver = Arc::new(ExitChainResolver::new(Arc::clone(&tree_service)));
 
         let leaf_optimizer = Arc::new(LeafOptimizer::new(
             config.leaf_optimization_options.clone(),
@@ -485,6 +577,8 @@ impl SparkWallet {
             operator_pool,
             htlc_service,
             leaf_optimizer,
+            exit_chain_resolver,
+            exit_state_changed_rx,
             select_leaves_refresh: tokio::sync::OnceCell::new(),
         })
     }
@@ -500,11 +594,20 @@ impl SparkWallet {
         Ok(leaves.into())
     }
 
-    /// Starts leaf optimization if auto-optimization is enabled.
-    async fn maybe_start_optimization(&self) {
+    /// Best-effort follow-up for an operation that changed the leaf set. Does not
+    /// block the caller.
+    async fn on_leaves_changed(&self) {
         if self.config.leaf_auto_optimize_enabled {
             self.leaf_optimizer.start().await;
         }
+    }
+
+    /// Resolves the exit chains of any leaves still missing one. Leaves the
+    /// operators recently failed to complete stay backed off, so calling this
+    /// repeatedly does not turn into a retry storm. Errors are the caller's.
+    pub async fn fetch_missing_exit_chains(&self) -> Result<(), SparkWalletError> {
+        self.exit_chain_resolver.resolve_missing_chains().await?;
+        Ok(())
     }
 
     pub async fn pay_lightning_invoice(
@@ -607,7 +710,7 @@ impl SparkWallet {
             }
         };
 
-        self.maybe_start_optimization().await;
+        self.on_leaves_changed().await;
 
         Ok(PayLightningInvoiceResult {
             transfer: wallet_transfer,
@@ -759,7 +862,7 @@ impl SparkWallet {
             .await?;
         info!("Claimed deposit root node: {:?}", deposit_nodes);
 
-        self.maybe_start_optimization().await;
+        self.on_leaves_changed().await;
 
         Ok(deposit_nodes.into_iter().map(WalletLeaf::from).collect())
     }
@@ -772,7 +875,7 @@ impl SparkWallet {
     ) -> Result<String, SparkWalletError> {
         let transfer_id = self.deposit_service.claim_static_deposit(quote).await?;
 
-        self.maybe_start_optimization().await;
+        self.on_leaves_changed().await;
 
         Ok(transfer_id)
     }
@@ -964,7 +1067,7 @@ impl SparkWallet {
             )
         )?;
 
-        self.maybe_start_optimization().await;
+        self.on_leaves_changed().await;
 
         Ok(WalletTransfer::from_transfer(
             transfer,
@@ -988,7 +1091,7 @@ impl SparkWallet {
         .await?;
 
         if !transfers.is_empty() {
-            self.maybe_start_optimization().await;
+            self.on_leaves_changed().await;
         }
 
         for transfer in &transfers {
@@ -1223,12 +1326,26 @@ impl SparkWallet {
         .await
     }
 
-    /// Claims a transfer and performs a tree-store insert.
+    /// Claims a transfer, inserts its leaves into the tree store, and reports the
+    /// claim to listeners. Returns the transfer at its post-claim status.
     pub async fn process_transfer(
         &self,
-        transfer: &WalletTransfer,
-    ) -> Result<Vec<TreeNode>, SparkWalletError> {
-        claim_transfer(transfer.raw(), &self.transfer_service, &self.tree_service).await
+        transfer: WalletTransfer,
+    ) -> Result<WalletTransfer, SparkWalletError> {
+        let nodes =
+            claim_transfer(transfer.raw(), &self.transfer_service, &self.tree_service).await?;
+        let claimed = transfer.claimed();
+
+        // A claim reports success without producing leaves when the transfer had
+        // none for us, which a caller polling a transfer it sent itself reaches.
+        // Nothing changed then, so there is nothing to report.
+        if !nodes.is_empty() {
+            self.event_manager
+                .notify_listeners(WalletEvent::TransferClaimed(claimed.clone()));
+            self.on_leaves_changed().await;
+        }
+
+        Ok(claimed)
     }
 
     /// Queries the SSP for user requests by their associated transfer IDs
@@ -1350,7 +1467,7 @@ impl SparkWallet {
             })
         )?;
 
-        self.maybe_start_optimization().await;
+        self.on_leaves_changed().await;
 
         create_transfer(
             transfer,
@@ -1416,50 +1533,35 @@ impl SparkWallet {
         Ok(transfer)
     }
 
-    /// Sources the exit tree (leaves plus ancestors) from the operators,
-    /// re-fetching by ID any root the bulk response omitted (legacy mainnet
-    /// trees skip it). An incomplete chain is left as-is for the planner to skip.
-    async fn source_exit_tree_nodes(
+    /// Loads the exit tree (each leaf plus its ancestor chain) from the durable
+    /// tree store, so an exit builds with the operators offline: whatever chain was
+    /// already stored is returned, and an incomplete one is left for the planner to
+    /// skip.
+    async fn load_exit_tree_nodes(
         &self,
         leaf_ids: &[TreeNodeId],
     ) -> Result<HashMap<TreeNodeId, TreeNode>, SparkWalletError> {
         debug!(
             leaves = leaf_ids.len(),
-            "source_exit_tree_nodes: fetching exit tree from the operators"
+            "load_exit_tree_nodes: loading exit tree from local storage"
         );
-        let mut tree_nodes: HashMap<TreeNodeId, TreeNode> = self
-            .tree_service
-            .fetch_nodes(leaf_ids, true)
-            .await?
-            .into_iter()
-            .map(|n| (n.id.clone(), n))
-            .collect();
+        let pedigrees = self.tree_service.load_exit_chains(leaf_ids).await?;
+        let mut tree_nodes: HashMap<TreeNodeId, TreeNode> = HashMap::new();
+        for pedigree in pedigrees {
+            for node in pedigree.ancestors {
+                tree_nodes.insert(node.id.clone(), node);
+            }
+            tree_nodes.insert(pedigree.leaf.id.clone(), pedigree.leaf);
+        }
         for leaf_id in leaf_ids {
-            let Some(leaf) = tree_nodes.get(leaf_id).cloned() else {
-                // Offline sourcing from local storage is deferred.
-                warn!("Requested leaf {leaf_id} not returned by the operators; cannot exit it");
-                continue;
-            };
-            let tree_service = self.tree_service.clone();
-            if let Err(e) =
-                spark::services::build_unilateral_exit_chain(leaf, &mut tree_nodes, move |ids| {
-                    let tree_service = tree_service.clone();
-                    async move {
-                        tree_service
-                            .fetch_nodes(&ids, true)
-                            .await
-                            .map_err(|e| ServiceError::Generic(format!("{e}")))
-                    }
-                })
-                .await
-            {
-                debug!("Exit chain for leaf {leaf_id} incomplete while sourcing tree nodes: {e}");
+            if !tree_nodes.contains_key(leaf_id) {
+                warn!("Leaf {leaf_id} is not in local storage; cannot exit it");
             }
         }
         debug!(
             requested = leaf_ids.len(),
-            sourced = tree_nodes.len(),
-            "source_exit_tree_nodes: exit tree sourced"
+            loaded = tree_nodes.len(),
+            "load_exit_tree_nodes: exit tree loaded"
         );
         Ok(tree_nodes)
     }
@@ -1502,6 +1604,162 @@ impl SparkWallet {
         }
     }
 
+    /// Best-effort refresh so an exit plans against the latest tree state.
+    /// Non-fatal: when the operators are unreachable the exit proceeds from
+    /// whatever the durable store already holds.
+    async fn refresh_before_exit(&self) {
+        if let Err(e) = self.tree_service.refresh_leaves().await {
+            warn!("unilateral exit: refresh failed, planning from local state: {e:?}");
+        }
+        // An exit is planned entirely from stored chains, so resolve the missing
+        // ones here rather than relying on whatever the caller has scheduled.
+        // Backoff is ignored: a leaf still inside its retry delay would otherwise
+        // be left un-exitable with no later pass before the exit is planned.
+        if let Err(e) = self.exit_chain_resolver.resolve_all_missing_chains().await {
+            warn!(
+                "unilateral exit: resolving exit chains failed, planning from local state: {e:?}"
+            );
+        }
+    }
+
+    /// Reads out the wallet's whole unilateral exit state: every stored leaf
+    /// with its ancestor chain.
+    pub async fn export_exit_state(&self) -> Result<ExitStateExport, SparkWalletError> {
+        let leaf_ids = self.tree_service.list_leaves().await?.leaf_ids();
+        let pedigrees = self.tree_service.load_exit_chains(&leaf_ids).await?;
+        debug!(
+            leaves = leaf_ids.len(),
+            exported = pedigrees.len(),
+            "export_exit_state: read exit state from local storage"
+        );
+        Ok(ExitStateExport { pedigrees })
+    }
+
+    /// Merges a previously exported exit state back into the tree store,
+    /// without contacting the operators.
+    ///
+    /// A leaf this wallet is not the recorded owner of is dropped: the store
+    /// holds this wallet's leaves only. Ancestors are taken as they come, since
+    /// they are shared nodes that are not reliably owner-attributed and are
+    /// validated by chaining from an owned leaf. A leaf named twice is
+    /// considered once, on its first entry, so no leaf is written with another
+    /// entry's chain.
+    ///
+    /// A leaf and its chain are weighed as one pair, since a leaf matches only
+    /// the chain it was exported with. Nothing about a pair says how recent it
+    /// is, so a leaf the store already holds keeps what it has as long as that
+    /// backs an exit; only one whose stored chain does not is replaced, and only
+    /// by an incoming pair that links its own leaf to a root. A leaf the store
+    /// does not hold is inserted, with its chain when that chain links it and
+    /// without one otherwise, leaving the chain resolver to complete it.
+    ///
+    /// A leaf spent since the export is one the store no longer holds, so it is
+    /// inserted and spendable again until a refresh reconciles it against the
+    /// operators. Inserting a leaf, or replacing the row of one already held,
+    /// also drops the mark the store keeps for a leaf the operators no longer
+    /// report; a leaf written as a chain alone, or not written at all, keeps it.
+    pub async fn import_exit_state(
+        &self,
+        pedigrees: Vec<LeafPedigree>,
+    ) -> Result<ExitStateImport, SparkWalletError> {
+        let mut skipped_foreign_leaves = 0;
+        let mut skipped_conflicting_leaves = 0;
+        let mut skipped_chains = 0;
+        let mut imported_leaves = 0;
+        let mut seen_leaf_ids: HashSet<TreeNodeId> = HashSet::new();
+        let mut owned: Vec<LeafPedigree> = Vec::new();
+        for pedigree in pedigrees {
+            // An absent owner key is not this wallet's: it is filled in from
+            // what an operator reported, and nothing else vouches for the leaf.
+            if pedigree.leaf.owner_identity_public_key != Some(self.identity_public_key) {
+                skipped_foreign_leaves += 1;
+            } else if seen_leaf_ids.insert(pedigree.leaf.id.clone()) {
+                owned.push(pedigree);
+            } else {
+                skipped_chains += 1;
+            }
+        }
+
+        if !owned.is_empty() {
+            // The whole stored state, not just the incoming leaves': an incoming
+            // ancestor is checked against the wallet's copy of that node, which
+            // may hang under a leaf this import does not name.
+            let stored_leaf_ids = self.tree_service.list_leaves().await?.leaf_ids();
+            let stored = self.tree_service.load_exit_chains(&stored_leaf_ids).await?;
+            let stored_nodes: HashMap<TreeNodeId, TreeNode> = stored
+                .iter()
+                .flat_map(|pedigree| {
+                    std::iter::once(&pedigree.leaf).chain(pedigree.ancestors.iter())
+                })
+                .map(|node| (node.id.clone(), node.clone()))
+                .collect();
+            let held: HashMap<&TreeNodeId, &LeafPedigree> = stored
+                .iter()
+                .map(|pedigree| (&pedigree.leaf.id, pedigree))
+                .collect();
+
+            // A leaf whose row the import does not change is written as a chain
+            // alone, which leaves the row (and what the store tracks on it) as
+            // it stands.
+            let mut to_restore: Vec<LeafPedigree> = Vec::new();
+            let mut chains_only: Vec<LeafPedigree> = Vec::new();
+            for mut incoming in owned {
+                let parts = importable_parts(&incoming, &stored_nodes);
+                match held.get(&incoming.leaf.id) {
+                    Some(held) => {
+                        if parts != ImportableParts::LeafAndChain
+                            || chain_reaches_root(&held.leaf, &held.ancestors)
+                        {
+                            skipped_chains += 1;
+                            continue;
+                        }
+                        imported_leaves += 1;
+                        if incoming.leaf == held.leaf {
+                            chains_only.push(incoming);
+                        } else {
+                            to_restore.push(incoming);
+                        }
+                    }
+                    None => {
+                        if parts == ImportableParts::Nothing {
+                            skipped_conflicting_leaves += 1;
+                            continue;
+                        }
+                        if parts == ImportableParts::LeafOnly {
+                            // Goes in with no chain rather than one that cannot
+                            // back an exit. An empty chain reads as unknown and
+                            // leaves any stored one alone, which for a leaf the
+                            // store does not hold is nothing.
+                            incoming.ancestors = Vec::new();
+                            skipped_chains += 1;
+                        }
+                        imported_leaves += 1;
+                        to_restore.push(incoming);
+                    }
+                }
+            }
+
+            if !to_restore.is_empty() {
+                self.tree_service.restore_leaves(&to_restore).await?;
+            }
+            self.tree_service.restore_exit_chains(&chains_only).await?;
+        }
+
+        debug!(
+            imported_leaves,
+            skipped_foreign_leaves,
+            skipped_conflicting_leaves,
+            skipped_chains,
+            "import_exit_state: merged exit state into local storage"
+        );
+        Ok(ExitStateImport {
+            imported_leaves,
+            skipped_foreign_leaves,
+            skipped_conflicting_leaves,
+            skipped_chains,
+        })
+    }
+
     /// Quotes the funding needed for a unilateral exit of the selected leaves.
     pub async fn quote_unilateral_exit(
         &self,
@@ -1512,8 +1770,9 @@ impl SparkWallet {
         change_dust_limit: u64,
         destination_script_len: usize,
     ) -> Result<spark::services::UnilateralExitQuote, SparkWalletError> {
+        self.refresh_before_exit().await;
         let (leaf_ids, filter) = self.resolve_leaf_selection(selection).await?;
-        let tree_nodes = self.source_exit_tree_nodes(&leaf_ids).await?;
+        let tree_nodes = self.load_exit_tree_nodes(&leaf_ids).await?;
         Ok(spark::services::quote_unilateral_exit(
             &tree_nodes,
             &leaf_ids,
@@ -1526,7 +1785,7 @@ impl SparkWallet {
         )?)
     }
 
-    /// Prepares a unilateral exit of the selected leaves: sources the exit tree,
+    /// Prepares a unilateral exit of the selected leaves: loads the exit tree,
     /// plans it, and derives each leaf's P2TR refund address. `Auto` keeps only
     /// profitable leaves; `Specific` exits every requested one.
     pub async fn prepare_unilateral_exit_plan(
@@ -1536,8 +1795,9 @@ impl SparkWallet {
         inputs: Vec<CpfpInput>,
         destination_script_len: usize,
     ) -> Result<PreparedUnilateralExit, SparkWalletError> {
+        self.refresh_before_exit().await;
         let (leaf_ids, filter) = self.resolve_leaf_selection(selection).await?;
-        let tree_nodes = self.source_exit_tree_nodes(&leaf_ids).await?;
+        let tree_nodes = self.load_exit_tree_nodes(&leaf_ids).await?;
         let plan = spark::services::plan_unilateral_exit(
             tree_nodes,
             &leaf_ids,
@@ -1744,6 +2004,7 @@ impl SparkWallet {
                     Arc::clone(&self.htlc_service),
                     Arc::clone(&self.leaf_optimizer),
                     self.config.leaf_auto_optimize_enabled,
+                    self.exit_state_changed_rx.clone(),
                     Arc::clone(&self.token_service),
                     self.config.token_outputs_optimization_options.clone(),
                     self.config.max_concurrent_claims,
@@ -2602,6 +2863,7 @@ struct BackgroundProcessor {
     htlc_service: Arc<HtlcService>,
     leaf_optimizer: Arc<LeafOptimizer>,
     auto_optimize_enabled: bool,
+    exit_state_changed_rx: watch::Receiver<()>,
     token_service: Arc<TokenService>,
     token_outputs_optimization_options: TokenOutputsOptimizationOptions,
     max_concurrent_claims: u32,
@@ -2620,6 +2882,7 @@ impl BackgroundProcessor {
         htlc_service: Arc<HtlcService>,
         leaf_optimizer: Arc<LeafOptimizer>,
         auto_optimize_enabled: bool,
+        exit_state_changed_rx: watch::Receiver<()>,
         token_service: Arc<TokenService>,
         token_outputs_optimization_options: TokenOutputsOptimizationOptions,
         max_concurrent_claims: u32,
@@ -2635,13 +2898,14 @@ impl BackgroundProcessor {
             htlc_service,
             leaf_optimizer,
             auto_optimize_enabled,
+            exit_state_changed_rx,
             token_service,
             token_outputs_optimization_options,
             max_concurrent_claims,
         }
     }
 
-    async fn maybe_start_optimization(&self) {
+    async fn on_leaves_changed(&self) {
         if self.auto_optimize_enabled {
             self.leaf_optimizer.start().await;
         }
@@ -2681,6 +2945,19 @@ impl BackgroundProcessor {
             .instrument(span),
         );
 
+        let exit_state_rx = self.exit_state_changed_rx.clone();
+        let cloned_self = Arc::clone(self);
+        let cancellation_token_for_exit_state = cancellation_token.clone();
+        let span = tracing::Span::current();
+        tokio::spawn(
+            async move {
+                cloned_self
+                    .forward_exit_state_changes(exit_state_rx, cancellation_token_for_exit_state)
+                    .await;
+            }
+            .instrument(span),
+        );
+
         if let Err(e) = self.tree_service.refresh_leaves().await {
             error!("Error refreshing leaves on startup: {:?}", e);
         }
@@ -2713,8 +2990,26 @@ impl BackgroundProcessor {
     async fn process_events(&self, mut event_stream: broadcast::Receiver<SparkEvent>) {
         use broadcast::error::RecvError;
 
+        // Multiplexed onto this loop rather than given a task of its own: both
+        // are notifications this processor turns into wallet events, and this
+        // loop already outlives the reconnects the server stream goes through.
+        let mut leaves_added = self.tree_service.subscribe_leaves_added();
+
         loop {
-            match event_stream.recv().await {
+            tokio::select! {
+                received = leaves_added.recv() => match received {
+                    // Lagging means notifications were missed, and one raised
+                    // now covers them: each says only that the pool grew.
+                    Ok(()) | Err(RecvError::Lagged(_)) => {
+                        self.event_manager
+                            .notify_listeners(WalletEvent::LeavesAdded);
+                    }
+                    Err(RecvError::Closed) => {
+                        info!("Leaves-added stream closed, stopping event processing");
+                        break;
+                    }
+                },
+                received = event_stream.recv() => match received {
                 Ok(event) => {
                     debug!("Received event: {event}");
                     trace!("Received event: {event:?}");
@@ -2745,6 +3040,7 @@ impl BackgroundProcessor {
                     info!("Event stream closed, stopping event processing");
                     break;
                 }
+                },
             }
         }
     }
@@ -2755,7 +3051,7 @@ impl BackgroundProcessor {
         self.tree_service.insert_leaves(vec![deposit]).await?;
         self.event_manager
             .notify_listeners(WalletEvent::DepositConfirmed(id));
-        self.maybe_start_optimization().await;
+        self.on_leaves_changed().await;
         Ok(())
     }
 
@@ -2841,18 +3137,18 @@ impl BackgroundProcessor {
         claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
         trace!("Claimed transfer from event");
 
-        // Update transfer status before notifying listeners
-        let mut claimed_transfer = transfer;
-        claimed_transfer.status = TransferStatus::Completed;
         self.event_manager
-            .notify_listeners(WalletEvent::TransferClaimed(WalletTransfer::from_transfer(
-                claimed_transfer,
-                ssp_transfer,
-                htlc,
-                self.identity_public_key,
-                self.ssp_client.identity_public_key(),
-            )));
-        self.maybe_start_optimization().await;
+            .notify_listeners(WalletEvent::TransferClaimed(
+                WalletTransfer::from_transfer(
+                    transfer,
+                    ssp_transfer,
+                    htlc,
+                    self.identity_public_key,
+                    self.ssp_client.identity_public_key(),
+                )
+                .claimed(),
+            ));
+        self.on_leaves_changed().await;
 
         Ok(())
     }
@@ -2877,7 +3173,7 @@ impl BackgroundProcessor {
                     transfers.len()
                 );
                 if !transfers.is_empty() {
-                    self.maybe_start_optimization().await;
+                    self.on_leaves_changed().await;
                 }
                 for transfer in &transfers {
                     self.event_manager
@@ -2900,6 +3196,29 @@ impl BackgroundProcessor {
         self.event_manager
             .notify_listeners(WalletEvent::StreamDisconnected);
         Ok(())
+    }
+
+    async fn forward_exit_state_changes(
+        &self,
+        mut exit_state_rx: watch::Receiver<()>,
+        mut cancellation_token: watch::Receiver<()>,
+    ) {
+        loop {
+            tokio::select! {
+                changed = exit_state_rx.changed() => {
+                    if changed.is_err() {
+                        info!("Exit state channel closed, stopping exit state forwarding");
+                        break;
+                    }
+                    self.event_manager
+                        .notify_listeners(WalletEvent::ExitStateChanged);
+                }
+                _ = cancellation_token.changed() => {
+                    info!("Stopping exit state forwarding");
+                    break;
+                }
+            }
+        }
     }
 
     async fn run_token_output_optimization(
@@ -3031,6 +3350,720 @@ fn validate_invoiced_transaction_is_single_token(
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    use bitcoin::{OutPoint, ScriptBuf};
+    use frost_secp256k1_tr::Identifier;
+    use spark::{
+        Network,
+        operator::{OperatorConfig, OperatorPoolConfig},
+        signer::{DefaultSigner, SparkSignerAdapter},
+        tree::{
+            TreeNodeStatus,
+            tests::{create_test_node_with_parent, create_test_tree_node},
+        },
+    };
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    /// Address no operator or SSP answers on, so a test that accidentally leaves
+    /// local storage fails instead of reaching a real deployment.
+    const UNROUTABLE: &str = "http://127.0.0.1:1";
+
+    /// A wallet whose only reachable dependency is `tree_store`. Every wallet
+    /// built here derives from the same seed, so they share one identity and one
+    /// exit state.
+    async fn wallet_over(tree_store: Arc<dyn TreeStore>) -> SparkWallet {
+        let spark_signer: Arc<dyn SparkSigner> = Arc::new(SparkSignerAdapter::new(Arc::new(
+            DefaultSigner::new(&[7u8; 32], Network::Regtest).unwrap(),
+        )));
+        let identity_public_key = spark_signer.get_identity_public_key().await.unwrap();
+
+        let mut config = SparkWalletConfig::default_config(Network::Regtest);
+        config.operator_pool = OperatorPoolConfig::new(
+            0,
+            vec![OperatorConfig {
+                id: 0,
+                identifier: Identifier::try_from(1u16).unwrap(),
+                address: UNROUTABLE.to_string(),
+                ca_cert: None,
+                identity_public_key,
+                user_agent: None,
+            }],
+        )
+        .unwrap();
+        config.split_secret_threshold = 1;
+        config.service_provider_config.base_url = UNROUTABLE.to_string();
+        config.leaf_auto_optimize_enabled = false;
+
+        SparkWallet::new(
+            config,
+            spark_signer,
+            Arc::new(InMemorySessionStore::default()),
+            tree_store,
+            Arc::new(InMemoryTokenOutputStore::default()),
+            Arc::new(DefaultConnectionManager::new()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+    }
+
+    /// Root-to-leaf ids of every pedigree, for comparing two exit states.
+    fn chain_ids(pedigrees: &[LeafPedigree]) -> Vec<Vec<String>> {
+        pedigrees
+            .iter()
+            .map(|pedigree| {
+                let mut ids: Vec<String> = pedigree
+                    .ancestors
+                    .iter()
+                    .rev()
+                    .map(|a| a.id.to_string())
+                    .collect();
+                ids.push(pedigree.leaf.id.to_string());
+                ids
+            })
+            .collect()
+    }
+
+    async fn stored_leaf_ids(store: &dyn TreeStore) -> Vec<String> {
+        let mut ids: Vec<String> = store
+            .get_leaves()
+            .await
+            .unwrap()
+            .available
+            .iter()
+            .map(|leaf| leaf.id.to_string())
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    /// Ids of the stored leaves the operators no longer report, a flag the
+    /// store keeps on the leaf row itself.
+    async fn missing_from_operators_ids(store: &dyn TreeStore) -> Vec<String> {
+        let mut ids: Vec<String> = store
+            .get_leaves()
+            .await
+            .unwrap()
+            .available_missing_from_operators
+            .iter()
+            .map(|leaf| leaf.id.to_string())
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    /// Root-to-leaf ids of one stored leaf's chain, so a test with more than one
+    /// leaf does not depend on the order they come back in.
+    async fn stored_chain(store: &dyn TreeStore, leaf_id: &str) -> Vec<String> {
+        let leaf_id = TreeNodeId::from_str(leaf_id).unwrap();
+        let pedigrees = store
+            .get_exit_chains(std::slice::from_ref(&leaf_id))
+            .await
+            .unwrap();
+        chain_ids(&pedigrees).into_iter().next().unwrap_or_default()
+    }
+
+    fn pedigree_owned_by(
+        owner: PublicKey,
+        mut leaf: TreeNode,
+        ancestors: Vec<TreeNode>,
+    ) -> LeafPedigree {
+        leaf.owner_identity_public_key = Some(owner);
+        LeafPedigree { leaf, ancestors }
+    }
+
+    /// Seeds a store the way the leaf lifecycle does: the leaves through
+    /// `add_leaves`, their chains through the ancestor-only write.
+    async fn seed_pedigrees(store: &dyn TreeStore, pedigrees: &[LeafPedigree]) {
+        let leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
+        store.add_leaves(&leaves).await.unwrap();
+        let with_chains: Vec<LeafPedigree> = pedigrees
+            .iter()
+            .filter(|p| !p.ancestors.is_empty())
+            .cloned()
+            .collect();
+        if !with_chains.is_empty() {
+            store.store_ancestors(&with_chains).await.unwrap();
+        }
+    }
+
+    fn refund_tx_at(lock_time: u32) -> Transaction {
+        Transaction {
+            version: Version::non_standard(3),
+            lock_time: LockTime::from_consensus(lock_time),
+            input: Vec::new(),
+            output: Vec::new(),
+        }
+    }
+
+    /// A transaction spending `previous_output`, made unique by `tag` so no two
+    /// test nodes share a txid.
+    fn node_tx_spending(previous_output: OutPoint, tag: &str) -> Transaction {
+        Transaction {
+            version: Version::non_standard(3),
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output,
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(1_000),
+                script_pubkey: ScriptBuf::from_bytes(tag.as_bytes().to_vec()),
+            }],
+        }
+    }
+
+    /// A parentless node, its `node_tx` spending the deposit that funded the
+    /// tree.
+    fn root_node(id: &str) -> TreeNode {
+        let mut node = create_test_node_with_parent(id, None, TreeNodeStatus::Splitted);
+        node.node_tx = node_tx_spending(OutPoint::null(), id);
+        node
+    }
+
+    /// A node under `parent`, its `node_tx` spending the parent's, which is the
+    /// linkage an incoming chain has to show.
+    fn child_of(id: &str, parent: &TreeNode, status: TreeNodeStatus) -> TreeNode {
+        let parent_id = parent.id.to_string();
+        let mut node = create_test_node_with_parent(id, Some(parent_id.as_str()), status);
+        node.node_tx = node_tx_spending(
+            OutPoint {
+                txid: parent.node_tx.compute_txid(),
+                vout: 0,
+            },
+            id,
+        );
+        node
+    }
+
+    #[macros::async_test_all]
+    async fn import_exit_state_keeps_only_leaves_this_wallet_owns() {
+        let store = Arc::new(InMemoryTreeStore::new());
+        let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
+
+        let mut mine = create_test_tree_node("mine", 1_000);
+        mine.owner_identity_public_key = Some(wallet.get_identity_public_key());
+        let theirs = create_test_tree_node("theirs", 2_000);
+        assert_ne!(
+            theirs.owner_identity_public_key,
+            Some(wallet.get_identity_public_key())
+        );
+        let mut unattributed = create_test_tree_node("unattributed", 3_000);
+        unattributed.owner_identity_public_key = None;
+
+        let pedigrees: Vec<LeafPedigree> = [mine, theirs, unattributed]
+            .into_iter()
+            .map(|leaf| LeafPedigree {
+                leaf,
+                ancestors: Vec::new(),
+            })
+            .collect();
+        let outcome = wallet.import_exit_state(pedigrees).await.unwrap();
+
+        assert_eq!(outcome.imported_leaves, 1);
+        assert_eq!(outcome.skipped_foreign_leaves, 2);
+        assert_eq!(outcome.skipped_chains, 0);
+        assert_eq!(
+            stored_leaf_ids(store.as_ref()).await,
+            vec!["mine".to_string()]
+        );
+    }
+
+    #[macros::async_test_all]
+    async fn import_exit_state_keeps_a_leaf_renewed_since_the_export() {
+        let store = Arc::new(InMemoryTreeStore::new());
+        let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
+        let owner = wallet.get_identity_public_key();
+
+        // The ordinary renewal rebuilds a leaf's transactions under the parent it
+        // already had, so the chain either side of it is the same length and only
+        // the leaf row differs.
+        let root = root_node("root");
+        let mid = child_of("mid", &root, TreeNodeStatus::Splitted);
+        let mut renewed = child_of("leaf", &mid, TreeNodeStatus::Available);
+        renewed.refund_tx = Some(refund_tx_at(200));
+        seed_pedigrees(
+            &*store,
+            &[pedigree_owned_by(
+                owner,
+                renewed.clone(),
+                vec![mid.clone(), root.clone()],
+            )],
+        )
+        .await;
+
+        let mut before_renewal = child_of("leaf", &mid, TreeNodeStatus::Available);
+        before_renewal.refund_tx = Some(refund_tx_at(100));
+        let outcome = wallet
+            .import_exit_state(vec![pedigree_owned_by(
+                owner,
+                before_renewal,
+                vec![mid, root],
+            )])
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.imported_leaves, 0);
+        assert_eq!(outcome.skipped_chains, 1);
+        let export = wallet.export_exit_state().await.unwrap();
+        assert_eq!(export.pedigrees[0].leaf.refund_tx, renewed.refund_tx);
+    }
+
+    #[macros::async_test_all]
+    async fn import_exit_state_keeps_a_stored_chain_that_backs_an_exit() {
+        let store = Arc::new(InMemoryTreeStore::new());
+        let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
+        let owner = wallet.get_identity_public_key();
+
+        let root = root_node("root");
+        let mid = child_of("mid", &root, TreeNodeStatus::Splitted);
+        let leaf = child_of("leaf", &mid, TreeNodeStatus::Available);
+        seed_pedigrees(
+            &*store,
+            &[pedigree_owned_by(owner, leaf, vec![mid, root.clone()])],
+        )
+        .await;
+
+        // Links its own leaf to a root and is longer, so length is all that
+        // separates it from the stored chain.
+        let parent = child_of("parent", &root, TreeNodeStatus::Splitted);
+        let split = child_of("split", &parent, TreeNodeStatus::Splitted);
+        let elsewhere = child_of("leaf", &split, TreeNodeStatus::Available);
+        let outcome = wallet
+            .import_exit_state(vec![pedigree_owned_by(
+                owner,
+                elsewhere,
+                vec![split, parent, root],
+            )])
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.imported_leaves, 0);
+        assert_eq!(outcome.skipped_chains, 1);
+        assert_eq!(
+            stored_chain(store.as_ref(), "leaf").await,
+            ["root".to_string(), "mid".to_string(), "leaf".to_string()]
+        );
+    }
+
+    #[macros::async_test_all]
+    async fn import_exit_state_completes_a_chain_that_reaches_no_root() {
+        let store = Arc::new(InMemoryTreeStore::new());
+        let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
+        let owner = wallet.get_identity_public_key();
+
+        // Stops one node short of a root, so it cannot back an exit.
+        let root = root_node("root");
+        let gap = child_of("gap", &root, TreeNodeStatus::Splitted);
+        let mid = child_of("mid", &gap, TreeNodeStatus::Splitted);
+        let leaf = child_of("leaf", &mid, TreeNodeStatus::Available);
+        seed_pedigrees(
+            &*store,
+            &[pedigree_owned_by(
+                owner,
+                leaf.clone(),
+                vec![mid.clone(), gap.clone()],
+            )],
+        )
+        .await;
+
+        let complete = pedigree_owned_by(owner, leaf, vec![mid, gap, root]);
+        let outcome = wallet
+            .import_exit_state(vec![complete.clone()])
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.imported_leaves, 1);
+        assert_eq!(outcome.skipped_chains, 0);
+        let expected = vec![
+            "root".to_string(),
+            "gap".to_string(),
+            "mid".to_string(),
+            "leaf".to_string(),
+        ];
+        assert_eq!(stored_chain(store.as_ref(), "leaf").await, expected);
+
+        // The same state again: the stored chain now backs an exit, so it stands.
+        let outcome = wallet.import_exit_state(vec![complete]).await.unwrap();
+        assert_eq!(outcome.imported_leaves, 0);
+        assert_eq!(outcome.skipped_chains, 1);
+        assert_eq!(stored_chain(store.as_ref(), "leaf").await, expected);
+    }
+
+    /// A leaf the wallet does not hold, on a chain that disagrees with a node it
+    /// knows through a different leaf. Ancestors are shared, so an entry can
+    /// contradict the wallet without naming anything the wallet holds as a leaf.
+    /// None of the entry is trusted on the strength of that, so the leaf is not
+    /// restored at all, which is a different outcome from keeping a leaf and
+    /// leaving its chain and is counted apart from it.
+    #[macros::async_test_all]
+    async fn import_exit_state_drops_a_leaf_conflicting_on_a_shared_ancestor() {
+        let store = Arc::new(InMemoryTreeStore::new());
+        let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
+        let owner = wallet.get_identity_public_key();
+
+        // The wallet learns `mid` as leaf-b's ancestor. leaf-a it never holds.
+        let root = root_node("root");
+        let mid = child_of("mid", &root, TreeNodeStatus::Splitted);
+        let leaf_b = child_of("leaf-b", &mid, TreeNodeStatus::Available);
+        seed_pedigrees(
+            &*store,
+            &[pedigree_owned_by(
+                owner,
+                leaf_b,
+                vec![mid.clone(), root.clone()],
+            )],
+        )
+        .await;
+
+        // Same node, different value. A node's value is fixed for its lifetime,
+        // so this cannot be a later state of `mid`: one of the copies is wrong.
+        let mut conflicting_mid = mid.clone();
+        conflicting_mid.value += 1;
+        let leaf_a = child_of("leaf-a", &mid, TreeNodeStatus::Available);
+        let outcome = wallet
+            .import_exit_state(vec![pedigree_owned_by(
+                owner,
+                leaf_a,
+                vec![conflicting_mid, root],
+            )])
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.imported_leaves, 0);
+        assert_eq!(outcome.skipped_conflicting_leaves, 1);
+        // Not a skipped chain: the leaf did not make it in either.
+        assert_eq!(outcome.skipped_chains, 0);
+        assert!(
+            stored_chain(store.as_ref(), "leaf-a").await.is_empty(),
+            "a leaf whose entry the import did not trust must not be stored"
+        );
+    }
+
+    /// A leaf stored with a chain that stops short of a root, so what the import
+    /// does with an incoming chain turns on that chain alone. Returns the leaf
+    /// and the chain that would complete it, nearest first.
+    async fn store_leaf_short_of_a_root(
+        store: &InMemoryTreeStore,
+        owner: PublicKey,
+    ) -> (TreeNode, Vec<TreeNode>) {
+        let root = root_node("root");
+        let mid = child_of("mid", &root, TreeNodeStatus::Splitted);
+        let leaf = child_of("leaf", &mid, TreeNodeStatus::Available);
+        seed_pedigrees(
+            store,
+            &[pedigree_owned_by(owner, leaf.clone(), vec![mid.clone()])],
+        )
+        .await;
+        (leaf, vec![mid, root])
+    }
+
+    /// Root-to-leaf ids of the chain [`store_leaf_short_of_a_root`] leaves
+    /// stored, which is what an import that takes nothing leaves behind.
+    fn chain_short_of_a_root() -> [String; 2] {
+        ["mid".to_string(), "leaf".to_string()]
+    }
+
+    #[macros::async_test_all]
+    async fn import_exit_state_rejects_a_chain_that_revisits_a_node() {
+        let store = Arc::new(InMemoryTreeStore::new());
+        let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
+        let owner = wallet.get_identity_public_key();
+        store_leaf_short_of_a_root(store.as_ref(), owner).await;
+
+        // Each reaches a root along transactions that spend one another, and only
+        // by revisiting an id: two nodes parenting each other, a node parenting
+        // itself, and a walk back through the leaf's own id.
+        let rooted_mid = root_node("mid");
+        let looped = child_of("loop", &rooted_mid, TreeNodeStatus::Splitted);
+        let mid_below_loop = child_of("mid", &looped, TreeNodeStatus::Splitted);
+        let cycle = vec![mid_below_loop.clone(), looped, rooted_mid.clone()];
+
+        let mid_below_mid = child_of("mid", &rooted_mid, TreeNodeStatus::Splitted);
+        let self_parent = vec![mid_below_mid.clone(), rooted_mid.clone()];
+
+        let leaf_as_ancestor = child_of("leaf", &rooted_mid, TreeNodeStatus::Splitted);
+        let via_leaf = vec![leaf_as_ancestor.clone(), rooted_mid];
+
+        for (parent, ancestors) in [
+            (mid_below_loop, cycle),
+            (mid_below_mid, self_parent),
+            (leaf_as_ancestor, via_leaf),
+        ] {
+            let cyclic_leaf = child_of("leaf", &parent, TreeNodeStatus::Available);
+            let outcome = wallet
+                .import_exit_state(vec![pedigree_owned_by(owner, cyclic_leaf, ancestors)])
+                .await
+                .unwrap();
+
+            assert_eq!(outcome.imported_leaves, 0);
+            assert_eq!(outcome.skipped_chains, 1);
+            assert_eq!(
+                stored_chain(store.as_ref(), "leaf").await,
+                chain_short_of_a_root()
+            );
+        }
+    }
+
+    #[macros::async_test_all]
+    async fn import_exit_state_rejects_a_chain_of_unrelated_transactions() {
+        let store = Arc::new(InMemoryTreeStore::new());
+        let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
+        let owner = wallet.get_identity_public_key();
+        let (leaf, chain) = store_leaf_short_of_a_root(store.as_ref(), owner).await;
+
+        // Names the right parents all the way to a root, but the leaf's
+        // transaction spends elsewhere, so broadcasting the chain exits nothing.
+        let stranger = root_node("stranger");
+        let mut adrift = leaf;
+        adrift.node_tx = node_tx_spending(
+            OutPoint {
+                txid: stranger.node_tx.compute_txid(),
+                vout: 0,
+            },
+            "leaf",
+        );
+
+        let outcome = wallet
+            .import_exit_state(vec![pedigree_owned_by(owner, adrift, chain)])
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.imported_leaves, 0);
+        assert_eq!(outcome.skipped_chains, 1);
+        assert_eq!(
+            stored_chain(store.as_ref(), "leaf").await,
+            chain_short_of_a_root()
+        );
+    }
+
+    #[macros::async_test_all]
+    async fn import_exit_state_rejects_a_node_the_wallet_knows_otherwise() {
+        let store = Arc::new(InMemoryTreeStore::new());
+        let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
+        let owner = wallet.get_identity_public_key();
+        let (leaf, chain) = store_leaf_short_of_a_root(store.as_ref(), owner).await;
+
+        let stranger_key = PublicKey::from_slice(&[2; 33]).unwrap();
+        assert_ne!(stranger_key, leaf.verifying_public_key);
+        let mut richer_chain = chain.clone();
+        richer_chain[0].value = leaf.value + 1;
+        let mut rekeyed_leaf = leaf.clone();
+        rekeyed_leaf.verifying_public_key = stranger_key;
+
+        for (leaf, ancestors) in [(leaf.clone(), richer_chain), (rekeyed_leaf, chain.clone())] {
+            let outcome = wallet
+                .import_exit_state(vec![pedigree_owned_by(owner, leaf, ancestors)])
+                .await
+                .unwrap();
+
+            assert_eq!(outcome.imported_leaves, 0);
+            assert_eq!(outcome.skipped_chains, 1);
+            assert_eq!(
+                stored_chain(store.as_ref(), "leaf").await,
+                chain_short_of_a_root()
+            );
+        }
+
+        // The same chain, agreeing with what is stored, is taken.
+        let outcome = wallet
+            .import_exit_state(vec![pedigree_owned_by(owner, leaf, chain)])
+            .await
+            .unwrap();
+        assert_eq!(outcome.imported_leaves, 1);
+        assert_eq!(
+            stored_chain(store.as_ref(), "leaf").await,
+            ["root".to_string(), "mid".to_string(), "leaf".to_string()]
+        );
+    }
+
+    #[macros::async_test_all]
+    async fn import_exit_state_considers_a_leaf_named_twice_once() {
+        let store = Arc::new(InMemoryTreeStore::new());
+        let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
+        let owner = wallet.get_identity_public_key();
+        let (held, chain) = store_leaf_short_of_a_root(store.as_ref(), owner).await;
+
+        // A second entry for the same id, on a chain of its own. Weighing the two
+        // entries apart would pair one's leaf with the other's chain.
+        let other_root = root_node("other-root");
+        let other_mid = child_of("mid", &other_root, TreeNodeStatus::Splitted);
+        let mut other_leaf = child_of("leaf", &other_mid, TreeNodeStatus::Available);
+        other_leaf.refund_tx = Some(refund_tx_at(200));
+
+        let outcome = wallet
+            .import_exit_state(vec![
+                pedigree_owned_by(owner, held.clone(), chain),
+                pedigree_owned_by(owner, other_leaf, vec![other_mid, other_root]),
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.imported_leaves, 1);
+        assert_eq!(outcome.skipped_chains, 1);
+        assert_eq!(
+            stored_chain(store.as_ref(), "leaf").await,
+            ["root".to_string(), "mid".to_string(), "leaf".to_string()]
+        );
+        let export = wallet.export_exit_state().await.unwrap();
+        assert_eq!(export.pedigrees[0].leaf.refund_tx, held.refund_tx);
+    }
+
+    #[macros::async_test_all]
+    async fn import_exit_state_restores_a_leaf_spent_since_the_export() {
+        let store = Arc::new(InMemoryTreeStore::new());
+        let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
+        let owner = wallet.get_identity_public_key();
+
+        let root = root_node("root");
+        let leaf = child_of("leaf", &root, TreeNodeStatus::Available);
+        let pedigree = pedigree_owned_by(owner, leaf.clone(), vec![root]);
+        seed_pedigrees(&*store, std::slice::from_ref(&pedigree)).await;
+        let reservation = store
+            .try_reserve_leaves_by_ids(std::slice::from_ref(&leaf.id), ReservationPurpose::Payment)
+            .await
+            .unwrap();
+        store
+            .finalize_reservation(&reservation.id, None)
+            .await
+            .unwrap();
+        assert!(stored_leaf_ids(store.as_ref()).await.is_empty());
+
+        // The store keeps no record a caller can ask about a spent leaf, so the
+        // leaf comes back and stays until a refresh reconciles it.
+        let outcome = wallet.import_exit_state(vec![pedigree]).await.unwrap();
+
+        assert_eq!(outcome.imported_leaves, 1);
+        assert_eq!(outcome.skipped_chains, 0);
+        assert_eq!(
+            stored_leaf_ids(store.as_ref()).await,
+            vec!["leaf".to_string()]
+        );
+    }
+
+    #[macros::async_test_all]
+    async fn import_exit_state_keeps_the_operator_mark_of_a_leaf_it_leaves_alone() {
+        let store = Arc::new(InMemoryTreeStore::new());
+        let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
+        let owner = wallet.get_identity_public_key();
+
+        let root = root_node("root");
+        let kept_mid = child_of("kept-mid", &root, TreeNodeStatus::Splitted);
+        let kept = child_of("kept", &kept_mid, TreeNodeStatus::Available);
+        let chained_mid = child_of("chained-mid", &root, TreeNodeStatus::Splitted);
+        let chained = child_of("chained", &chained_mid, TreeNodeStatus::Available);
+        let rewritten_mid = child_of("rewritten-mid", &root, TreeNodeStatus::Splitted);
+        let rewritten = child_of("rewritten", &rewritten_mid, TreeNodeStatus::Available);
+        // The operators stopped reporting all three, which the store records on
+        // the leaf row itself.
+        let missing = [
+            pedigree_owned_by(owner, kept.clone(), vec![kept_mid, root.clone()]),
+            pedigree_owned_by(owner, chained.clone(), vec![chained_mid.clone()]),
+            pedigree_owned_by(owner, rewritten.clone(), vec![rewritten_mid.clone()]),
+        ];
+        let missing_leaves: Vec<TreeNode> = missing.iter().map(|p| p.leaf.clone()).collect();
+        store
+            .set_leaves(&[], &missing_leaves, SystemTime::now())
+            .await
+            .unwrap();
+        store.store_ancestors(&missing).await.unwrap();
+
+        let mut renewed = rewritten;
+        renewed.refund_tx = Some(refund_tx_at(200));
+        wallet
+            .import_exit_state(vec![
+                pedigree_owned_by(owner, kept, vec![root.clone()]),
+                pedigree_owned_by(owner, chained, vec![chained_mid, root.clone()]),
+                pedigree_owned_by(owner, renewed, vec![rewritten_mid, root]),
+            ])
+            .await
+            .unwrap();
+
+        // Only the leaf whose row was replaced loses the mark: writing a row is
+        // the store's own way of saying the operators reported the leaf.
+        assert_eq!(
+            missing_from_operators_ids(store.as_ref()).await,
+            ["chained".to_string(), "kept".to_string()]
+        );
+        assert_eq!(
+            stored_leaf_ids(store.as_ref()).await,
+            vec!["rewritten".to_string()]
+        );
+    }
+
+    #[macros::async_test_all]
+    async fn import_exit_state_takes_a_leaf_it_does_not_hold() {
+        let store = Arc::new(InMemoryTreeStore::new());
+        let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
+        let owner = wallet.get_identity_public_key();
+
+        // Reaches no root, so the leaf goes in for the chain resolver to
+        // complete rather than with a chain that cannot back an exit.
+        let root = root_node("root");
+        let mid = child_of("mid", &root, TreeNodeStatus::Splitted);
+        let leaf = child_of("leaf", &mid, TreeNodeStatus::Available);
+        let outcome = wallet
+            .import_exit_state(vec![pedigree_owned_by(owner, leaf, vec![mid])])
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.imported_leaves, 1);
+        assert_eq!(outcome.skipped_chains, 1);
+        assert_eq!(
+            stored_leaf_ids(store.as_ref()).await,
+            vec!["leaf".to_string()]
+        );
+        let export = wallet.export_exit_state().await.unwrap();
+        assert_eq!(chain_ids(&export.pedigrees), vec![vec!["leaf".to_string()]]);
+    }
+
+    #[macros::async_test_all]
+    async fn exported_exit_state_restores_into_an_empty_store() {
+        let source_store = Arc::new(InMemoryTreeStore::new());
+        let source = wallet_over(Arc::clone(&source_store) as Arc<dyn TreeStore>).await;
+        let owner = source.get_identity_public_key();
+
+        let root = root_node("root");
+        let mid = child_of("mid", &root, TreeNodeStatus::Splitted);
+        let leaf_a = child_of("leaf-a", &mid, TreeNodeStatus::Available);
+        let leaf_b = child_of("leaf-b", &root, TreeNodeStatus::Available);
+        seed_pedigrees(
+            &*source_store,
+            &[
+                pedigree_owned_by(owner, leaf_a, vec![mid, root.clone()]),
+                pedigree_owned_by(owner, leaf_b, vec![root]),
+            ],
+        )
+        .await;
+
+        let export = source.export_exit_state().await.unwrap();
+        assert_eq!(
+            chain_ids(&export.pedigrees),
+            vec![
+                vec!["root".to_string(), "mid".to_string(), "leaf-a".to_string()],
+                vec!["root".to_string(), "leaf-b".to_string()],
+            ]
+        );
+
+        let restored_store = Arc::new(InMemoryTreeStore::new());
+        let restored = wallet_over(Arc::clone(&restored_store) as Arc<dyn TreeStore>).await;
+        let outcome = restored
+            .import_exit_state(export.pedigrees.clone())
+            .await
+            .unwrap();
+        assert_eq!(outcome.imported_leaves, 2);
+        assert_eq!(outcome.skipped_foreign_leaves, 0);
+        assert_eq!(outcome.skipped_chains, 0);
+
+        let reexport = restored.export_exit_state().await.unwrap();
+        assert_eq!(chain_ids(&reexport.pedigrees), chain_ids(&export.pedigrees));
+    }
 
     #[test]
     fn earliest_execute_before_picks_the_soonest_deadline() {

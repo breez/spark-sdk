@@ -1,6 +1,7 @@
 mod api;
 mod contacts;
 mod deposits;
+pub(crate) mod exit_chain_downloader;
 mod helpers;
 mod init;
 mod lightning_address;
@@ -11,6 +12,7 @@ mod runtime;
 mod sync;
 mod sync_coordinator;
 mod unilateral_exit;
+mod unilateral_exit_backup;
 
 pub(crate) use lightning_sender::LightningSender;
 pub(crate) use runtime::{RuntimeEvent, SdkRuntime, runtime_from_config};
@@ -90,6 +92,9 @@ pub struct BreezSdk {
     pub(crate) lnurl_auth_signer: Option<Arc<LnurlAuthSignerAdapter>>,
     pub(crate) event_emitter: Arc<EventEmitter>,
     pub(crate) shutdown_sender: watch::Sender<()>,
+    /// Wakes the exit chain downloader once an operation has changed the leaf
+    /// set. Held even when collection is off, so nothing has to branch on it.
+    pub(crate) exit_chain_trigger: exit_chain_downloader::ExitChainTrigger,
     pub(crate) runtime: SdkRuntime,
     /// Coordinator for coalescing duplicate sync requests
     pub(crate) sync_coordinator: SyncCoordinator,
@@ -237,6 +242,7 @@ pub fn default_config(network: Network) -> Config {
         max_instant_deposit_claim_fee_bps: None,
         lnurl_domain,
         prefer_spark_over_lightning: false,
+        exit_chain_auto_fetch_enabled: true,
         external_input_parsers: None,
         use_default_external_input_parsers: true,
         real_time_sync_server_url: Some(BREEZ_SYNC_SERVICE_URL.to_string()),

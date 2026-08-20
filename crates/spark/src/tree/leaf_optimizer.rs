@@ -537,6 +537,9 @@ impl LeafOptimizer {
                     swap_reservation.leaves.iter().map(|l| l.value).collect();
                 let received_values: Vec<u64> = new_leaves.iter().map(|l| l.value).collect();
 
+                // The swap outputs go on without their chains: resolving them
+                // here would spend a round trip on leaves a later round may
+                // swap away again.
                 if let Err(e) = self
                     .tree_service
                     .finalize_reservation(swap_reservation.id, Some(&new_leaves))
@@ -547,7 +550,6 @@ impl LeafOptimizer {
                         e
                     );
                 }
-
                 if emit_events {
                     self.emit_event(AutoOptimizationEvent::RoundCompleted {
                         current_round: round,

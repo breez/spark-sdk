@@ -6,7 +6,7 @@ use spark::{
         CpfpInput, ServiceError, UnilateralExitPlan, build_cpfp_child, csv_timelock,
         walk_unilateral_exit_chain,
     },
-    tree::{TreeNode, TreeNodeId, TreeNodeStatus},
+    tree::{LeafPedigree, TreeNode, TreeNodeId, TreeNodeStatus},
     utils::transactions::is_ephemeral_anchor_output,
 };
 use tracing::{debug, trace, warn};
@@ -20,6 +20,31 @@ pub enum ExitLeafSelection {
     Auto,
     /// Exit exactly these leaves, regardless of profitability.
     Specific(Vec<TreeNodeId>),
+}
+
+/// Everything needed to unilaterally exit the wallet's leaves with the
+/// operators unreachable: each leaf paired with its ancestor chain.
+#[derive(Clone, Debug)]
+pub struct ExitStateExport {
+    pub pedigrees: Vec<LeafPedigree>,
+}
+
+/// How a restored exit state landed in the tree store.
+#[derive(Clone, Copy, Debug)]
+pub struct ExitStateImport {
+    /// Leaves written, with or without their chain.
+    pub imported_leaves: usize,
+    /// Leaves dropped because they do not record this wallet as their owner.
+    pub skipped_foreign_leaves: usize,
+    /// Leaves dropped because the entry disagrees with a node the wallet already
+    /// holds, on a field fixed for that node's lifetime, so none of the entry
+    /// could be trusted. Nothing was written for these, and the wallet is left
+    /// without the leaf.
+    pub skipped_conflicting_leaves: usize,
+    /// Leaves the wallet holds whose incoming chain was not used: it does not
+    /// link the leaf to a root, the stored chain already backs an exit, or the
+    /// leaf was named more than once. The leaf itself is in the store either way.
+    pub skipped_chains: usize,
 }
 
 /// A prepared unilateral exit: the chain-independent plan plus per-leaf refund

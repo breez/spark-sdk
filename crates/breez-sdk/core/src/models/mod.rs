@@ -608,6 +608,20 @@ pub struct Config {
     /// but is at the cost of privacy.
     pub prefer_spark_over_lightning: bool,
 
+    /// Whether the data needed to exit a payment unilaterally, without the Spark
+    /// operators, is collected as funds arrive. Collection runs in the background,
+    /// and a sync waits for a collection pass before returning, so syncing is how
+    /// to make that happen at a moment of your choosing. A leaf the operators
+    /// cannot complete stays un-exitable until a later attempt succeeds.
+    ///
+    /// Leave this on unless bandwidth matters more than being able to recover funds
+    /// when the operators are unreachable. With it off, chains are only collected
+    /// when an exit is prepared, which needs the operators reachable at that
+    /// moment: a leaf cannot be exited without them until one is collected.
+    ///
+    /// Default value is true.
+    pub exit_chain_auto_fetch_enabled: bool,
+
     /// A set of external input parsers that are used by [`BreezSdk::parse`](crate::sdk::BreezSdk::parse) when the input
     /// is not recognized. See [`ExternalInputParser`] for more details on how to configure
     /// external parsing.
@@ -2711,4 +2725,42 @@ pub struct UnilateralExitResponse {
     /// The full signed transaction set, in valid topological (broadcast) order
     /// with shared ancestors appearing once and the sweep last.
     pub transactions: Vec<UnilateralExitTransaction>,
+}
+
+/// Result of `export_unilateral_exit_state`: a self-contained copy of the
+/// wallet's exit state, ready to be stored outside the wallet.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ExportUnilateralExitStateResponse {
+    /// The serialized exit state, to be handed back to
+    /// `import_unilateral_exit_state` unmodified.
+    pub exit_state: String,
+}
+
+/// Request for `import_unilateral_exit_state`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ImportUnilateralExitStateRequest {
+    /// An exit state as returned by `export_unilateral_exit_state`.
+    pub exit_state: String,
+}
+
+/// Result of `import_unilateral_exit_state`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ImportUnilateralExitStateResponse {
+    /// Leaves merged into the wallet's exit state, whether or not their exit
+    /// data was taken with them.
+    pub imported_leaves: u32,
+    /// Leaves left out because the exit state does not record this wallet as
+    /// their owner.
+    pub skipped_foreign_leaves: u32,
+    /// Leaves left out because their exit data disagrees with what the wallet
+    /// already holds, so none of it could be trusted. The wallet is left without
+    /// these leaves.
+    pub skipped_conflicting_leaves: u32,
+    /// Leaves the wallet holds whose imported exit data was left out: it is
+    /// incomplete, the wallet's own copy can already back an exit, or the leaf
+    /// was named more than once. The leaf itself is in the wallet either way.
+    pub skipped_chains: u32,
 }

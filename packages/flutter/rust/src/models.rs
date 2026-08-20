@@ -31,6 +31,7 @@ pub struct _Config {
     pub max_instant_deposit_claim_fee_bps: Option<u32>,
     pub lnurl_domain: Option<String>,
     pub prefer_spark_over_lightning: bool,
+    pub exit_chain_auto_fetch_enabled: bool,
     pub external_input_parsers: Option<Vec<ExternalInputParser>>,
     pub use_default_external_input_parsers: bool,
     pub real_time_sync_server_url: Option<String>,
@@ -315,6 +316,24 @@ pub struct _UnilateralExitResponse {
     pub total_fee_sat: u64,
     pub leaves: Vec<UnilateralExitLeaf>,
     pub transactions: Vec<UnilateralExitTransaction>,
+}
+
+#[frb(mirror(ExportUnilateralExitStateResponse))]
+pub struct _ExportUnilateralExitStateResponse {
+    pub exit_state: String,
+}
+
+#[frb(mirror(ImportUnilateralExitStateRequest))]
+pub struct _ImportUnilateralExitStateRequest {
+    pub exit_state: String,
+}
+
+#[frb(mirror(ImportUnilateralExitStateResponse))]
+pub struct _ImportUnilateralExitStateResponse {
+    pub imported_leaves: u32,
+    pub skipped_foreign_leaves: u32,
+    pub skipped_conflicting_leaves: u32,
+    pub skipped_chains: u32,
 }
 
 #[frb(mirror(GetInfoRequest))]

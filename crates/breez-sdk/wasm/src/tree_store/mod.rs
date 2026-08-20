@@ -1,4 +1,4 @@
-#[cfg(all(test, not(feature = "browser-tests")))]
+#[cfg(test)]
 mod tests;
 
 use std::collections::HashMap;
@@ -10,9 +10,9 @@ use platform_utils::time::Instant;
 use platform_utils::tokio::sync::watch;
 use serde::{Deserialize, Serialize};
 use spark_wallet::{
-    LeafSelection, Leaves, LeavesReservation, LeavesReservationId, PublicKey, ReservationPurpose,
-    ReserveResult, TargetAmounts, TreeNode, TreeNodeId, TreeServiceError, TreeStore,
-    VerifiedLeafKeys,
+    LeafPedigree, LeafSelection, Leaves, LeavesReservation, LeavesReservationId, PublicKey,
+    ReservationPurpose, ReserveResult, TargetAmounts, TreeNode, TreeNodeId, TreeServiceError,
+    TreeStore, VerifiedLeafKeys,
 };
 use tracing::info;
 use wasm_bindgen::prelude::*;
@@ -211,6 +211,51 @@ impl TreeStore for WasmTreeStore {
             .map_err(js_error_to_tree_error)?;
         self.notify_balance_change();
         Ok(())
+    }
+
+    async fn store_ancestors(&self, pedigrees: &[LeafPedigree]) -> Result<(), TreeServiceError> {
+        let pedigrees_js = serde_wasm_bindgen::to_value(pedigrees)
+            .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
+        let promise = self
+            .tree_store
+            .store_ancestors(pedigrees_js)
+            .map_err(js_error_to_tree_error)?;
+        JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_tree_error)?;
+        Ok(())
+    }
+
+    async fn leaves_missing_exit_chains(&self) -> Result<Vec<TreeNodeId>, TreeServiceError> {
+        let promise = self
+            .tree_store
+            .leaves_missing_exit_chains()
+            .map_err(js_error_to_tree_error)?;
+        let result = JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_tree_error)?;
+        let ids: Vec<TreeNodeId> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
+        Ok(ids)
+    }
+
+    async fn get_exit_chains(
+        &self,
+        leaf_ids: &[TreeNodeId],
+    ) -> Result<Vec<LeafPedigree>, TreeServiceError> {
+        let ids: Vec<String> = leaf_ids.iter().map(ToString::to_string).collect();
+        let ids_js = serde_wasm_bindgen::to_value(&ids)
+            .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
+        let promise = self
+            .tree_store
+            .get_exit_chains(ids_js)
+            .map_err(js_error_to_tree_error)?;
+        let result = JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_tree_error)?;
+        let pedigrees: Vec<LeafPedigree> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
+        Ok(pedigrees)
     }
 
     async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
@@ -519,6 +564,14 @@ interface LeavesReservation {
     leaves: TreeNode[];
 }
 
+/** A leaf together with its ancestor chain, nearest parent first up to the
+ *  root, so a stored leaf always brings the intermediate nodes its exit chain
+ *  walks through. */
+interface LeafPedigree {
+    leaf: TreeNode;
+    ancestors: TreeNode[];
+}
+
 type TargetAmounts =
     | { type: 'amountAndFee'; amountSats: number; feeSats: number | null }
     | { type: 'exactDenominations'; denominations: number[] };
@@ -535,7 +588,10 @@ type LeafSelection =
 
 export interface TreeStore {
     addLeaves: (leaves: TreeNode[]) => Promise<void>;
+    storeAncestors: (pedigrees: LeafPedigree[]) => Promise<void>;
+    leavesMissingExitChains: () => Promise<string[]>;
     getLeaves: () => Promise<Leaves>;
+    getExitChains: (leafIds: string[]) => Promise<LeafPedigree[]>;
     getAvailableBalance: () => Promise<bigint>;
     getVerifiedLeafKeys: () => Promise<[string, string, string][]>;
     setLeaves: (leaves: TreeNode[], missingLeaves: TreeNode[], refreshStartedAtMs: number) => Promise<void>;
@@ -556,8 +612,17 @@ extern "C" {
     #[wasm_bindgen(structural, method, js_name = addLeaves, catch)]
     pub fn add_leaves(this: &TreeStoreJs, leaves: JsValue) -> Result<Promise, JsValue>;
 
+    #[wasm_bindgen(structural, method, js_name = storeAncestors, catch)]
+    pub fn store_ancestors(this: &TreeStoreJs, pedigrees: JsValue) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = leavesMissingExitChains, catch)]
+    pub fn leaves_missing_exit_chains(this: &TreeStoreJs) -> Result<Promise, JsValue>;
+
     #[wasm_bindgen(structural, method, js_name = getLeaves, catch)]
     pub fn get_leaves(this: &TreeStoreJs) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = getExitChains, catch)]
+    pub fn get_exit_chains(this: &TreeStoreJs, leaf_ids: JsValue) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = getAvailableBalance, catch)]
     pub fn get_available_balance(this: &TreeStoreJs) -> Result<Promise, JsValue>;

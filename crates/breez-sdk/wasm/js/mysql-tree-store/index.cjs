@@ -55,6 +55,17 @@ const SPENT_MARKER_CLEANUP_THRESHOLD_MS = 5 * 60 * 1000;
 const LEAF_UPSERT_CHUNK_SIZE = 1000;
 
 /**
+ * Ancestor rows per INSERT when storing exit chains.
+ *
+ * A wallet-wide chain backfill carries a row per leaf per ancestor, each a JSON
+ * blob of up to five transactions. The insert goes through conn.query(), which
+ * interpolates its placeholders client-side, so the whole set would otherwise be
+ * built in memory as one statement and sent as one packet, against
+ * max_allowed_packet.
+ */
+const ANCESTOR_INSERT_CHUNK_SIZE = 4096;
+
+/**
  * Slim projection: only (id, value) for leaves the selection might use.
  * Includes all leaves with value <= the max target (covers exact-match + the
  * small-leaf accumulators for the minimum-amount path) plus the single
@@ -112,6 +123,30 @@ function toBool(value) {
 
 function buildPlaceholders(n) {
   return new Array(n).fill("?").join(", ");
+}
+
+/**
+ * Pair a leaf with its ancestors (nearest first) by walking `parent_node_id`
+ * through `nodes`. Returns null if the leaf itself is absent; stops at a gap or
+ * cycle, returning a partial chain.
+ * @param {Map<string, object>} nodes
+ * @param {string} leafId
+ * @returns {{leaf: object, ancestors: Array<object>}|null}
+ */
+function assembleExitChain(nodes, leafId) {
+  const leaf = nodes.get(leafId);
+  if (!leaf) return null;
+  const ancestors = [];
+  const visited = new Set([leafId]);
+  let current = leaf.parent_node_id;
+  while (current != null && !visited.has(current)) {
+    visited.add(current);
+    const node = nodes.get(current);
+    if (!node) break;
+    ancestors.push(node);
+    current = node.parent_node_id;
+  }
+  return { leaf, ancestors };
 }
 
 class MysqlTreeStore {
@@ -243,10 +278,11 @@ class MysqlTreeStore {
         return;
       }
 
+      const leafNodes = leaves;
       await this._withTransaction(async (conn) => {
-        const leafIds = leaves.map((l) => l.id);
+        const leafIds = leafNodes.map((l) => l.id);
         await this._batchRemoveSpentLeaves(conn, leafIds);
-        await this._batchUpsertLeaves(conn, leaves, false, null);
+        await this._batchUpsertLeaves(conn, leafNodes, false, null);
       });
     } catch (error) {
       if (error instanceof TreeStoreError) throw error;
@@ -254,6 +290,123 @@ class MysqlTreeStore {
         `Failed to add leaves: ${error.message}`,
         error
       );
+    }
+  }
+
+  /**
+   * Store the ancestor chain of each pedigree, leaving the leaf pool and any
+   * spent marker untouched.
+   * @param {Array} pedigrees - Array of LeafPedigree { leaf, ancestors }
+   */
+  async storeAncestors(pedigrees) {
+    try {
+      if (!pedigrees || pedigrees.length === 0) {
+        return;
+      }
+
+      await this._withWriteTransaction(async (conn) => {
+        // A leaf can be spent between its chain being resolved and this write, and
+        // a chain is only ever removed with its leaf. Writing one for a leaf that is
+        // already gone would leave it behind for good.
+        const placeholders = buildPlaceholders(pedigrees.length);
+        const [storedRows] = await conn.query(
+          `SELECT id FROM brz_tree_leaves WHERE user_id = ? AND id IN (${placeholders})`,
+          [this.identity, ...pedigrees.map((p) => p.leaf.id)]
+        );
+        const storedLeafIds = new Set(storedRows.map((row) => row.id));
+
+        await this._batchUpsertAncestors(
+          conn,
+          pedigrees.filter((p) => storedLeafIds.has(p.leaf.id))
+        );
+      });
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to store ancestors: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Ids of the stored leaves whose chain cannot back an exit: the leaf has a
+   * parent, and no ancestor row of its own holds that parent.
+   * @returns {Promise<Array<string>>}
+   */
+  async leavesMissingExitChains() {
+    try {
+      // A stored chain runs from its leaf's parent to a root, so a leaf whose
+      // chain holds the parent it has now is exitable. The join binds all three
+      // primary key columns, making it one index probe per leaf. A leaf that is
+      // itself a root needs no chain.
+      const [rows] = await this.pool.query(
+        `SELECT l.id
+         FROM brz_tree_leaves l
+         LEFT JOIN brz_tree_ancestors link
+           ON link.user_id = l.user_id AND link.leaf_id = l.id
+              AND link.id = l.parent_node_id
+         WHERE l.user_id = ?
+           AND l.parent_node_id IS NOT NULL
+           AND link.leaf_id IS NULL`,
+        [this.identity]
+      );
+      return rows.map((r) => r.id);
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to get leaves missing exit chains: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Reconstruct the exit chains for many leaves in one query, each as
+   * { leaf, ancestors } with ancestors nearest first. A leaf absent from the store
+   * is skipped; a chain that hits a gap comes back partial.
+   * @param {Array<string>} leafIds
+   * @returns {Promise<Array<{leaf: object, ancestors: Array<object>}>>}
+   */
+  async getExitChains(leafIds) {
+    try {
+      if (!leafIds || leafIds.length === 0) return [];
+      // One query loads each requested leaf's own row plus its ancestor rows,
+      // both tagged by the owning leaf id (a leaf's own row is tagged with its
+      // own id). Reading them in two queries could pair a leaf with ancestors
+      // from a different snapshot. Grouping by that tag keeps each leaf's node
+      // set separate, so a node id stored under another leaf can never
+      // cross-contaminate this one.
+      const placeholders = buildPlaceholders(leafIds.length);
+      const [rows] = await this.pool.query(
+        `SELECT leaf_id, data FROM brz_tree_ancestors WHERE user_id = ? AND leaf_id IN (${placeholders})
+         UNION ALL
+         SELECT id AS leaf_id, data FROM brz_tree_leaves WHERE user_id = ? AND id IN (${placeholders})`,
+        [this.identity, ...leafIds, this.identity, ...leafIds]
+      );
+
+      const nodesByLeaf = new Map();
+      for (const r of rows) {
+        let nodes = nodesByLeaf.get(r.leaf_id);
+        if (!nodes) {
+          nodes = new Map();
+          nodesByLeaf.set(r.leaf_id, nodes);
+        }
+        const node = parseJson(r.data);
+        nodes.set(node.id, node);
+      }
+
+      const result = [];
+      for (const id of leafIds) {
+        const nodes = nodesByLeaf.get(id);
+        if (!nodes) continue;
+        const pedigree = assembleExitChain(nodes, id);
+        if (pedigree) result.push(pedigree);
+      }
+      return result;
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(`Failed to get exit chains: ${error.message}`, error);
     }
   }
 
@@ -293,8 +446,8 @@ class MysqlTreeStore {
       // one, and nothing non-Available and unreserved.
       const [rows] = await this.pool.query(
         `SELECT l.id AS id,
-                l.data->>'$.verifying_public_key' AS verifying,
-                l.data->>'$.signing_keyshare.public_key' AS keyshare
+                l.verifying_public_key AS verifying,
+                l.signing_public_key AS keyshare
          FROM brz_tree_leaves l
          LEFT JOIN brz_tree_reservations r
            ON l.reservation_id = r.id AND l.user_id = r.user_id
@@ -331,6 +484,7 @@ class MysqlTreeStore {
 
       for (const row of rows) {
         const node = parseJson(row.data);
+        const spendable = node.status === "Available";
 
         if (row.purpose) {
           if (row.purpose === "Payment") {
@@ -338,14 +492,12 @@ class MysqlTreeStore {
           } else if (row.purpose === "Swap") {
             reservedForSwap.push(node);
           }
-        } else if (toBool(row.is_missing_from_operators)) {
-          if (node.status === "Available") {
-            availableMissingFromOperators.push(node);
-          }
-        } else if (node.status === "Available") {
-          available.push(node);
-        } else {
+        } else if (!spendable) {
           notAvailable.push(node);
+        } else if (toBool(row.is_missing_from_operators)) {
+          availableMissingFromOperators.push(node);
+        } else {
+          available.push(node);
         }
       }
 
@@ -405,7 +557,13 @@ class MysqlTreeStore {
 
         // Includes leaves released earlier in this transaction by
         // _cleanupStaleReservations (which now NULLs reservation_id explicitly,
-        // since the composite FK uses NO ACTION).
+        // since the composite FK uses NO ACTION). MySQL has no DELETE ...
+        // RETURNING, so the ids are read first.
+        const [oldLeafRows] = await conn.query(
+          "SELECT id FROM brz_tree_leaves WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?",
+          [this.identity, refreshTimestamp]
+        );
+        const deletedIds = oldLeafRows.map((r) => r.id);
         await conn.query(
           "DELETE FROM brz_tree_leaves WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?",
           [this.identity, refreshTimestamp]
@@ -413,6 +571,22 @@ class MysqlTreeStore {
 
         await this._batchUpsertLeaves(conn, leaves, false, spentIds);
         await this._batchUpsertLeaves(conn, missingLeaves, true, spentIds);
+
+        // A leaf reported again in this same refresh is re-inserted above, so its
+        // ancestor rows must survive: only ids that do NOT reappear (truly gone,
+        // e.g. spent) get their ancestor rows dropped alongside them.
+        const survivingIds = new Set();
+        for (const leaf of leaves.concat(missingLeaves || [])) {
+          if (!spentIds.has(leaf.id)) survivingIds.add(leaf.id);
+        }
+        const goneIds = deletedIds.filter((id) => !survivingIds.has(id));
+        if (goneIds.length > 0) {
+          const placeholders = buildPlaceholders(goneIds.length);
+          await conn.query(
+            `DELETE FROM brz_tree_ancestors WHERE user_id = ? AND leaf_id IN (${placeholders})`,
+            [this.identity, ...goneIds]
+          );
+        }
       });
     } catch (error) {
       if (error instanceof TreeStoreError) throw error;
@@ -425,15 +599,20 @@ class MysqlTreeStore {
 
   async cancelReservation(id, leavesToKeep) {
     try {
-      await this._withWriteTransaction(async (conn) => {
-        const [existsRows] = await conn.query(
-          "SELECT id FROM brz_tree_reservations WHERE user_id = ? AND id = ?",
+      await this._withTransaction(async (conn) => {
+        // Return leavesToKeep to the pool even when the reservation is already
+        // gone (e.g. released by stale cleanup): dropping them here would lose
+        // the leaves until the next refresh. The deletes no-op in that case.
+        // Only the leaves are re-inserted: a kept leaf's ancestor rows stay put
+        // (they are not touched below); a dropped leaf's are removed with it.
+        const keepIds = new Set((leavesToKeep || []).map((l) => l.id));
+        const [reservedRows] = await conn.query(
+          "SELECT id FROM brz_tree_leaves WHERE user_id = ? AND reservation_id = ?",
           [this.identity, id]
         );
-
-        if (existsRows.length === 0) {
-          return;
-        }
+        const droppedIds = reservedRows
+          .map((r) => r.id)
+          .filter((rid) => !keepIds.has(rid));
 
         await conn.query(
           "DELETE FROM brz_tree_leaves WHERE user_id = ? AND reservation_id = ?",
@@ -443,6 +622,13 @@ class MysqlTreeStore {
           "DELETE FROM brz_tree_reservations WHERE user_id = ? AND id = ?",
           [this.identity, id]
         );
+        if (droppedIds.length > 0) {
+          const placeholders = buildPlaceholders(droppedIds.length);
+          await conn.query(
+            `DELETE FROM brz_tree_ancestors WHERE user_id = ? AND leaf_id IN (${placeholders})`,
+            [this.identity, ...droppedIds]
+          );
+        }
 
         if (leavesToKeep && leavesToKeep.length > 0) {
           await this._batchUpsertLeaves(conn, leavesToKeep, false, null);
@@ -470,13 +656,14 @@ class MysqlTreeStore {
         );
 
         let isSwap = false;
+        let reservedLeafIds = [];
         if (resRows.length > 0) {
           isSwap = resRows[0].purpose === "Swap";
           const [leafRows] = await conn.query(
             "SELECT id FROM brz_tree_leaves WHERE user_id = ? AND reservation_id = ?",
             [this.identity, id]
           );
-          const reservedLeafIds = leafRows.map((r) => r.id);
+          reservedLeafIds = leafRows.map((r) => r.id);
           await this._batchInsertSpentLeaves(conn, reservedLeafIds);
           await conn.query(
             "DELETE FROM brz_tree_leaves WHERE user_id = ? AND reservation_id = ?",
@@ -486,6 +673,15 @@ class MysqlTreeStore {
             "DELETE FROM brz_tree_reservations WHERE user_id = ? AND id = ?",
             [this.identity, id]
           );
+          // The spent leaves own these ancestor rows; remove them in the same
+          // transaction rather than leaving them to a separate reclaim pass.
+          if (reservedLeafIds.length > 0) {
+            const placeholders = buildPlaceholders(reservedLeafIds.length);
+            await conn.query(
+              `DELETE FROM brz_tree_ancestors WHERE user_id = ? AND leaf_id IN (${placeholders})`,
+              [this.identity, ...reservedLeafIds]
+            );
+          }
         }
 
         if (newLeaves && newLeaves.length > 0) {
@@ -686,7 +882,8 @@ class MysqlTreeStore {
         const [availableRows] = await conn.query(
           `SELECT id FROM brz_tree_leaves
            WHERE user_id = ? AND id IN (${placeholders})
-             AND status = 'Available' AND is_missing_from_operators = 0
+             AND status = 'Available'
+             AND is_missing_from_operators = 0
              AND reservation_id IS NULL`,
           [this.identity, ...leafIds]
         );
@@ -724,7 +921,7 @@ class MysqlTreeStore {
 
   async updateReservation(reservationId, reservedLeaves, changeLeaves) {
     try {
-      return await this._withWriteTransaction(async (conn) => {
+      return await this._withTransaction(async (conn) => {
         const [existsRows] = await conn.query(
           "SELECT id FROM brz_tree_reservations WHERE user_id = ? AND id = ?",
           [this.identity, reservationId]
@@ -745,6 +942,15 @@ class MysqlTreeStore {
           "DELETE FROM brz_tree_leaves WHERE user_id = ? AND reservation_id = ?",
           [this.identity, reservationId]
         );
+        // The spent leaves own these ancestor rows; remove them now since there
+        // is no later reclaim pass.
+        if (oldLeafIds.length > 0) {
+          const placeholders = buildPlaceholders(oldLeafIds.length);
+          await conn.query(
+            `DELETE FROM brz_tree_ancestors WHERE user_id = ? AND leaf_id IN (${placeholders})`,
+            [this.identity, ...oldLeafIds]
+          );
+        }
 
         await this._batchUpsertLeaves(conn, changeLeaves, false, null);
         await this._batchUpsertLeaves(conn, reservedLeaves, false, null);
@@ -757,6 +963,8 @@ class MysqlTreeStore {
           [this.identity, reservationId]
         );
 
+        // Return value must be plain TreeNodes: the Rust side deserializes
+        // Vec<TreeNode>.
         return { id: reservationId, leaves: reservedLeaves };
       });
     } catch (error) {
@@ -968,15 +1176,17 @@ class MysqlTreeStore {
 
     if (filtered.length === 0) return;
 
+    const leafNodes = filtered;
+
     // All chunks run inside the caller's transaction, so the full set still
     // lands atomically. UTC_TIMESTAMP(6) is re-evaluated per statement, so
     // added_at can differ by microseconds between chunks; every value is still
     // after the caller's refreshStartedAt, which is all the timestamp-based
     // deletion in setLeaves depends on.
-    for (let i = 0; i < filtered.length; i += LEAF_UPSERT_CHUNK_SIZE) {
-      const chunk = filtered.slice(i, i + LEAF_UPSERT_CHUNK_SIZE);
+    for (let i = 0; i < leafNodes.length; i += LEAF_UPSERT_CHUNK_SIZE) {
+      const chunk = leafNodes.slice(i, i + LEAF_UPSERT_CHUNK_SIZE);
       const valueClauses = new Array(chunk.length)
-        .fill("(?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6))")
+        .fill("(?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6))")
         .join(", ");
       const params = [];
       for (const leaf of chunk) {
@@ -986,20 +1196,78 @@ class MysqlTreeStore {
           leaf.status,
           isMissingFromOperators ? 1 : 0,
           JSON.stringify(leaf),
-          leaf.value
+          leaf.value,
+          leaf.parent_node_id ?? null,
+          leaf.verifying_public_key,
+          leaf.signing_keyshare.public_key
         );
       }
 
       await conn.query(
-        `INSERT INTO brz_tree_leaves (user_id, id, status, is_missing_from_operators, data, value, added_at)
+        `INSERT INTO brz_tree_leaves
+             (user_id, id, status, is_missing_from_operators, data, value,
+              parent_node_id, verifying_public_key, signing_public_key, added_at)
          VALUES ${valueClauses}
          ON DUPLICATE KEY UPDATE
            status = VALUES(status),
            is_missing_from_operators = VALUES(is_missing_from_operators),
            data = VALUES(data),
            value = VALUES(value),
+           parent_node_id = VALUES(parent_node_id),
+           verifying_public_key = VALUES(verifying_public_key),
+           signing_public_key = VALUES(signing_public_key),
            added_at = UTC_TIMESTAMP(6)`,
         params
+      );
+    }
+  }
+
+  /**
+   * Replaces the ancestor rows of every pedigree wholesale (delete then
+   * insert), in one delete and an insert per ANCESTOR_INSERT_CHUNK_SIZE rows. A
+   * pedigree carrying no ancestors is skipped: an empty list means the chain is
+   * unknown, not that the leaf has none, so a stored chain must survive being
+   * re-added without one.
+   */
+  async _batchUpsertAncestors(conn, pedigrees) {
+    const withAncestors = (pedigrees || []).filter(
+      (p) => p.ancestors && p.ancestors.length > 0
+    );
+    if (withAncestors.length === 0) return;
+
+    const leafIds = withAncestors.map((p) => p.leaf.id);
+    await conn.query(
+      `DELETE FROM brz_tree_ancestors
+       WHERE user_id = ? AND leaf_id IN (${buildPlaceholders(leafIds.length)})`,
+      [this.identity, ...leafIds]
+    );
+
+    const rows = [];
+    for (const pedigree of withAncestors) {
+      for (const node of pedigree.ancestors) {
+        rows.push([
+          this.identity,
+          pedigree.leaf.id,
+          node.id,
+          node.parent_node_id ?? null,
+          node.status,
+          JSON.stringify(node),
+          node.value,
+          node.verifying_public_key,
+        ]);
+      }
+    }
+
+    for (let i = 0; i < rows.length; i += ANCESTOR_INSERT_CHUNK_SIZE) {
+      const chunk = rows.slice(i, i + ANCESTOR_INSERT_CHUNK_SIZE);
+      const valueClauses = new Array(chunk.length)
+        .fill("(?, ?, ?, ?, ?, ?, ?, ?)")
+        .join(", ");
+      await conn.query(
+        `INSERT INTO brz_tree_ancestors
+             (user_id, leaf_id, id, parent_node_id, status, data, value, verifying_public_key)
+         VALUES ${valueClauses}`,
+        chunk.flat()
       );
     }
   }

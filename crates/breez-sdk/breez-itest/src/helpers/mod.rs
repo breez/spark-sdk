@@ -318,6 +318,65 @@ where
     }
 }
 
+/// Drain events for a fixed window and report how many matched.
+///
+/// The `wait_for_*` waiters return on the first match, which cannot answer how
+/// many times something fired. This drains the channel for the whole window,
+/// so a test can assert on a count rather than on presence.
+///
+/// # Arguments
+/// * `event_rx` - Event receiver channel from build_sdk
+/// * `window_secs` - How long to keep draining, in seconds
+/// * `matcher` - Predicate selecting the events to count
+///
+/// # Returns
+/// The number of matching events seen during the window
+pub async fn count_events_during<F>(
+    event_rx: &mut mpsc::Receiver<SdkEvent>,
+    window_secs: u64,
+    matcher: F,
+) -> usize
+where
+    F: Fn(&SdkEvent) -> bool,
+{
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(window_secs);
+    let mut matched = 0;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return matched;
+        }
+
+        match tokio::time::timeout(remaining, event_rx.recv()).await {
+            Ok(Some(event)) => {
+                if matcher(&event) {
+                    matched += 1;
+                    info!("Counted SDK event #{matched}: {event}");
+                } else {
+                    info!("Ignored SDK event: {event}");
+                }
+            }
+            Ok(None) => {
+                info!("Event channel closed, counted {matched} events");
+                return matched;
+            }
+            Err(_) => return matched,
+        }
+    }
+}
+
+/// Count the `UnilateralExitStateChanged` events arriving over a fixed window.
+pub async fn count_unilateral_exit_state_changed_events(
+    event_rx: &mut mpsc::Receiver<SdkEvent>,
+    window_secs: u64,
+) -> usize {
+    count_events_during(event_rx, window_secs, |event| {
+        matches!(event, SdkEvent::UnilateralExitStateChanged)
+    })
+    .await
+}
+
 /// Wait for a deposit claim to succeed by listening to SDK events
 ///
 /// # Arguments

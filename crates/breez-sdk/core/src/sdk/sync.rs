@@ -660,6 +660,13 @@ impl BreezSdk {
         self.runtime
             .run_user_sync(self, super::SyncType::Full, true)
             .await?;
+        // Awaited rather than left to the background collection, so a caller
+        // that syncs before going offline knows the collection has run by the
+        // time this returns. After the sync, so the leaves it brought in are
+        // collected for too.
+        if self.config.exit_chain_auto_fetch_enabled {
+            self.runtime.collect_exit_chains(self).await?;
+        }
         Ok(SyncWalletResponse {})
     }
 }

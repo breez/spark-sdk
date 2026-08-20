@@ -88,6 +88,9 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
       } else if (event.tag === SdkEvent_Tags.LightningAddressChanged) {
         // The lightning address has changed
         const lightningAddress = event.inner.lightningAddress
+      } else if (event.tag === SdkEvent_Tags.UnilateralExitStateChanged) {
+        // The unilateral exit state changed, so a previously exported
+        // one is now out of date. Export it again.
       } else {
         // Handle any future event types
       }

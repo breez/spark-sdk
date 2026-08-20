@@ -113,6 +113,9 @@ func (SdkListener) OnEvent(e breez_sdk_spark.SdkEvent) {
 		// The lightning address has changed
 		lightningAddress := event.LightningAddress
 		_ = lightningAddress
+	case breez_sdk_spark.SdkEventUnilateralExitStateChanged:
+		// The unilateral exit state changed, so a previously exported
+		// one is now out of date. Export it again.
 	default:
 		// Handle any future event types
 	}

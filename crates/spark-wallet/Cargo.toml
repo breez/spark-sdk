@@ -21,6 +21,10 @@ tonic.workspace = true
 tonic-types.workspace = true
 tracing.workspace = true
 
+[dev-dependencies]
+macros.workspace = true
+spark = { workspace = true, features = ["test-utils"] }
+
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 uuid.workspace = true
@@ -28,3 +32,7 @@ uuid.workspace = true
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 uuid = { workspace = true, features = ["js"] }
+
+# WASM dev dependencies
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test.workspace = true
