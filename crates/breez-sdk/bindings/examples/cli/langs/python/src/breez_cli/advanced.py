@@ -5,6 +5,7 @@ from breez_sdk_spark import (
     CpfpFundingKind,
     CpfpInput,
     ExitLeafSelection,
+    ImportUnilateralExitStateRequest,
     PrepareUnilateralExitRequest,
     UnilateralExitRequest,
     single_key_cpfp_signer,
@@ -15,6 +16,8 @@ from breez_cli.serialization import print_value
 # Advanced subcommand names (used for REPL completion)
 ADVANCED_COMMAND_NAMES = [
     "advanced unilateral-exit",
+    "advanced export-unilateral-exit-state",
+    "advanced import-unilateral-exit-state",
 ]
 
 
@@ -82,6 +85,49 @@ def _print_exit_transactions(response):
         print(f"      Package: {package}")
 
 
+def _build_export_unilateral_exit_state_parser():
+    p = _parser(
+        "export-unilateral-exit-state",
+        "Export the wallet's unilateral exit state to a file, for safekeeping outside the wallet's own storage.",
+    )
+    p.add_argument("--output-file", required=True,
+                   help="File to write the exit state to")
+    return p
+
+
+def _build_import_unilateral_exit_state_parser():
+    p = _parser(
+        "import-unilateral-exit-state",
+        "Import a unilateral exit state previously written by export-unilateral-exit-state, merging it into the wallet.",
+    )
+    p.add_argument("--input-file", required=True,
+                   help="File the exit state was exported to")
+    return p
+
+
+async def _handle_export_unilateral_exit_state(sdk, _session, args):
+    exported = await sdk.export_unilateral_exit_state()
+    with open(args.output_file, "w") as f:
+        f.write(exported.exit_state)
+    print(
+        f"Wrote {len(exported.exit_state)} bytes to {args.output_file}"
+    )
+
+
+async def _handle_import_unilateral_exit_state(sdk, _session, args):
+    with open(args.input_file) as f:
+        exit_state = f.read()
+    imported = await sdk.import_unilateral_exit_state(
+        request=ImportUnilateralExitStateRequest(exit_state=exit_state)
+    )
+    print(
+        f"Imported {imported.imported_leaves} leaf(s), "
+        f"skipped {imported.skipped_foreign_leaves} leaf(s) from a different wallet "
+        f"and {imported.skipped_conflicting_leaves} that disagree with what this wallet holds, "
+        f"left out the exit data of {imported.skipped_chains} leaf(s)"
+    )
+
+
 async def _handle_unilateral_exit(sdk, session, args):
     leaf_ids = args.leaf_ids or []
     if leaf_ids:
@@ -135,6 +181,8 @@ async def _handle_unilateral_exit(sdk, session, args):
 def _build_advanced_registry():
     return {
         "unilateral-exit": (_build_unilateral_exit_parser(), _handle_unilateral_exit),
+        "export-unilateral-exit-state": (_build_export_unilateral_exit_state_parser(), _handle_export_unilateral_exit_state),
+        "import-unilateral-exit-state": (_build_import_unilateral_exit_state_parser(), _handle_import_unilateral_exit_state),
     }
 
 

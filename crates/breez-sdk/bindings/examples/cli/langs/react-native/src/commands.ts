@@ -9,8 +9,8 @@
  *   register-lightning-address, delete-lightning-address, list-fiat-currencies,
  *   list-fiat-rates, recommended-fees, get-tokens-metadata,
  *   fetch-conversion-limits, get-user-settings, set-user-settings,
- *   get-spark-status, issuer (subcommand), contacts (subcommand),
- *   webhooks (subcommand)
+ *   get-spark-status, advanced (subcommand), issuer (subcommand),
+ *   contacts (subcommand), webhooks (subcommand)
  */
 
 import {
@@ -46,6 +46,7 @@ import type {
 } from '@breeztech/breez-sdk-spark-react-native'
 import { generateRandomBytes, sha256Hash, bytesToHex } from './crypto_utils'
 import { formatValue } from './serialization'
+import { dispatchAdvancedCommand } from './advanced'
 import { dispatchIssuerCommand } from './issuer'
 import { dispatchContactsCommand } from './contacts'
 import { dispatchWebhooksCommand } from './webhooks'
@@ -181,6 +182,7 @@ export const COMMAND_NAMES = [
   'get-user-settings',
   'set-user-settings',
   'get-spark-status',
+  'advanced',
   'issuer',
   'contacts',
   'webhooks',
@@ -225,6 +227,7 @@ export function buildCommandRegistry(): Map<string, CommandDef> {
     { name: 'get-user-settings', description: 'Get user settings', run: handleGetUserSettings },
     { name: 'set-user-settings', description: 'Update user settings', run: handleSetUserSettings },
     { name: 'get-spark-status', description: 'Get Spark network service status', run: handleGetSparkStatus },
+    { name: 'advanced', description: 'Expert-only commands (use "advanced help" for details)', run: handleAdvanced },
     { name: 'issuer', description: 'Token issuer commands (use "issuer help" for details)', run: handleIssuer },
     { name: 'contacts', description: 'Contacts commands (use "contacts help" for details)', run: handleContacts },
     { name: 'webhooks', description: 'Webhook commands (use "webhooks help" for details)', run: handleWebhooks },
@@ -1252,6 +1255,12 @@ async function handleSetUserSettings(sdk: BreezSdkInterface, _tokenIssuer: Token
 async function handleGetSparkStatus(_sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, _args: string[]): Promise<string> {
   const result = await getSparkStatus()
   return formatValue(result)
+}
+
+// --- advanced (delegation) ---
+
+async function handleAdvanced(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
+  return dispatchAdvancedCommand(args, sdk)
 }
 
 // --- issuer (delegation) ---

@@ -5,6 +5,8 @@ import BreezSdkSpark
 
 let advancedCommandNames: [String] = [
     "advanced unilateral-exit",
+    "advanced export-unilateral-exit-state",
+    "advanced import-unilateral-exit-state",
 ]
 
 // MARK: - Dispatch
@@ -22,6 +24,10 @@ func dispatchAdvancedCommand(_ args: [String], sdk: BreezSdk) async {
         switch subName {
         case "unilateral-exit":
             try await handleUnilateralExit(sdk, subArgs)
+        case "export-unilateral-exit-state":
+            try await handleExportUnilateralExitState(sdk, subArgs)
+        case "import-unilateral-exit-state":
+            try await handleImportUnilateralExitState(sdk, subArgs)
         default:
             print("Unknown advanced subcommand: \(subName). Use 'advanced help' for available commands.")
         }
@@ -34,7 +40,9 @@ func dispatchAdvancedCommand(_ args: [String], sdk: BreezSdk) async {
 
 private func printAdvancedHelp() {
     print("\nAdvanced subcommands (expert-only, misuse can strand or lose funds):")
-    print("  advanced \("unilateral-exit".padding(toLength: 30, withPad: " ", startingAt: 0))Build and sign a unilateral exit")
+    print("  advanced \("unilateral-exit".padding(toLength: 38, withPad: " ", startingAt: 0))Build and sign a unilateral exit")
+    print("  advanced \("export-unilateral-exit-state".padding(toLength: 38, withPad: " ", startingAt: 0))Export exit state to a file")
+    print("  advanced \("import-unilateral-exit-state".padding(toLength: 38, withPad: " ", startingAt: 0))Import exit state from a file")
     print()
 }
 
@@ -114,6 +122,39 @@ private func handleUnilateralExit(_ sdk: BreezSdk, _ args: [String]) async throw
         signer: signer
     )
     printExitTransactions(response)
+}
+
+private func handleExportUnilateralExitState(_ sdk: BreezSdk, _ args: [String]) async throws {
+    let fp = FlagParser(args)
+    guard let outputFile = fp.get("output-file") else {
+        print("Usage: advanced export-unilateral-exit-state --output-file <path>")
+        return
+    }
+
+    let exported = try await sdk.exportUnilateralExitState()
+    let url = URL(fileURLWithPath: outputFile)
+    try exported.exitState.write(to: url, atomically: true, encoding: .utf8)
+    print("Wrote \(exported.exitState.count) bytes to \(outputFile)")
+}
+
+private func handleImportUnilateralExitState(_ sdk: BreezSdk, _ args: [String]) async throws {
+    let fp = FlagParser(args)
+    guard let inputFile = fp.get("input-file") else {
+        print("Usage: advanced import-unilateral-exit-state --input-file <path>")
+        return
+    }
+
+    let url = URL(fileURLWithPath: inputFile)
+    let exitState = try String(contentsOf: url, encoding: .utf8)
+    let imported = try await sdk.importUnilateralExitState(
+        request: ImportUnilateralExitStateRequest(exitState: exitState)
+    )
+    print(
+        "Imported \(imported.importedLeaves) leaf(s), " +
+        "skipped \(imported.skippedForeignLeaves) leaf(s) from a different wallet " +
+        "and \(imported.skippedConflictingLeaves) that disagree with what this wallet holds, " +
+        "left out the exit data of \(imported.skippedChains) leaf(s)"
+    )
 }
 
 // MARK: - Helpers
