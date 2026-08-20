@@ -93,6 +93,29 @@ pub enum SourceAsset {
     Token { token_identifier: String },
 }
 
+/// The chain a cross-chain route is funded from, orthogonal to the
+/// [`SourceAsset`] that moves.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum SourceChain {
+    /// Paid over Spark, using a Bitcoin or token source asset.
+    Spark,
+    /// Paid over Lightning, using a Bitcoin source asset.
+    Lightning,
+    /// Paid on-chain to Bitcoin (L1), using a Bitcoin source asset.
+    Bitcoin,
+}
+
+impl std::fmt::Display for SourceChain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Spark => f.write_str("Spark"),
+            Self::Lightning => f.write_str("Lightning"),
+            Self::Bitcoin => f.write_str("Bitcoin"),
+        }
+    }
+}
+
 /// How the caller wants fees handled against the request `amount`.
 ///
 /// - `FeesExcluded`: `amount` is the provider invoice/deposit target; the
@@ -120,7 +143,7 @@ impl From<crate::FeePolicy> for CrossChainFeeMode {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum CrossChainRouteFilter {
-    /// Routes for sending from Spark to another chain.
+    /// Routes for sending from the Spark wallet to another chain.
     /// Filtered by the parsed recipient address details.
     Send {
         address_details: CrossChainAddressDetails,
@@ -128,6 +151,12 @@ pub enum CrossChainRouteFilter {
     /// Routes for receiving to Spark from another chain.
     /// Optionally filtered by the source token contract address.
     Receive { contract_address: Option<String> },
+    /// Routes for a payment link that sends a stablecoin funded by an external
+    /// rail (Cash App over Lightning) rather than the Spark wallet.
+    /// Filtered by the parsed recipient address details.
+    PaymentLink {
+        address_details: CrossChainAddressDetails,
+    },
 }
 
 /// A single route available for cross-chain transfers, tagged with the provider
@@ -157,6 +186,13 @@ pub struct CrossChainRoutePair {
     /// one or more of `Bitcoin` / `Token(...)` (a given destination endpoint
     /// may be fronted by multiple source variants on Orchestra).
     pub supported_sources: Vec<SourceAsset>,
+    /// The chains this route can be paid over, orthogonal to
+    /// `supported_sources` (the asset moved).
+    ///
+    /// This is the actual funding rail, which differs by provider: Boltz routes
+    /// are always paid over Lightning. Orchestra send routes report Spark, and
+    /// Orchestra payment-link routes report Lightning.
+    pub supported_source_chains: Vec<SourceChain>,
 }
 
 impl CrossChainRoutePair {
@@ -302,12 +338,19 @@ pub(crate) trait CrossChainService: Send + Sync {
         filter: &CrossChainRouteFilter,
     ) -> Result<Vec<CrossChainRoutePair>, SdkError>;
 
-    /// Fetch a quote for a cross-chain send.
+    /// Fetch a quote for a cross-chain send or Lightning onramp. `amount` is
+    /// always in the source-leg sats/token base units; the caller converts any
+    /// USD intent to sats first. `source_chain` selects the funding chain;
+    /// `None` uses the provider's default ([`SourceChain::Spark`] for Orchestra).
+    /// `source_token_identifier` is only meaningful for a Spark source
+    /// (`None` = BTC sats, `Some` = a token).
+    #[allow(clippy::too_many_arguments)]
     async fn prepare(
         &self,
         recipient_address: &str,
         route: &CrossChainRoutePair,
         amount: u128,
+        source_chain: Option<SourceChain>,
         source_token_identifier: Option<String>,
         max_slippage_bps: u32,
         fee_mode: CrossChainFeeMode,
@@ -462,6 +505,13 @@ mod tests {
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[test_all]
+    fn source_chain_display_is_human_readable() {
+        assert_eq!(SourceChain::Spark.to_string(), "Spark");
+        assert_eq!(SourceChain::Lightning.to_string(), "Lightning");
+        assert_eq!(SourceChain::Bitcoin.to_string(), "Bitcoin");
+    }
 
     #[test_all]
     fn derive_btc_leg_transfer_id_uses_caller_key() {

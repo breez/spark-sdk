@@ -390,6 +390,13 @@ impl BreezSdk {
         self.inner.buy_bitcoin(request).await
     }
 
+    pub async fn prepare_payment_link(
+        &self,
+        request: PreparePaymentLinkRequest,
+    ) -> Result<PreparePaymentLinkResponse, SdkError> {
+        self.inner.prepare_payment_link(request).await
+    }
+
     pub async fn register_webhook(
         &self,
         request: RegisterWebhookRequest,

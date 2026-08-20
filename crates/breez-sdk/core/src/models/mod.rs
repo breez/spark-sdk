@@ -1261,6 +1261,60 @@ pub struct RefundPendingConversionsResponse {
     pub failed: u32,
 }
 
+/// Request for a payment link that sends USDC/USDT to an external-chain
+/// recipient, funded by Cash App over Lightning.
+///
+/// The user pays the returned URL, and the cross-chain provider delivers the
+/// stablecoin to `address`. No funds move through the Spark wallet. Only
+/// available on mainnet.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PreparePaymentLinkRequest {
+    /// Recipient address on the destination chain (e.g. an EVM `0x...` address).
+    pub address: String,
+    /// The destination route from calling `get_cross_chain_routes()` with the
+    /// `CrossChainRouteFilter::PaymentLink` filter. Selects the destination chain
+    /// + asset (e.g. USDC on Base).
+    pub route: CrossChainRoutePair,
+    /// Amount in the destination asset's base units, per the route's
+    /// `decimals`. These routes deliver USD-pegged stablecoins, so at parity
+    /// this is the USD value: `1_000_000` is 1 USDC (6 decimals), about $1.
+    ///
+    /// With the default fee policy the recipient receives this net amount.
+    /// With `FeesIncluded` it is the amount the payer deposits.
+    pub amount: u128,
+    /// Whether fees are added on top of `amount` (`FeesExcluded`, the default)
+    /// or deducted from it (`FeesIncluded`).
+    pub fee_policy: Option<FeePolicy>,
+    /// Maximum slippage tolerance in basis points. Falls back to the SDK
+    /// default when unset.
+    pub max_slippage_bps: Option<u32>,
+}
+
+/// Response to a [`PreparePaymentLinkRequest`]. Mirrors `BuyBitcoinResponse`
+/// (a payable `url`) plus the quote so the caller can display the expected
+/// delivery and fees.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PreparePaymentLinkResponse {
+    /// The URL to open in a browser; paying it delivers the stablecoin.
+    pub url: String,
+    /// Sats the payer deposits through the fiat rail.
+    pub amount_sats: u64,
+    /// Estimated amount delivered to the recipient, in `asset` base units.
+    pub estimated_out: u128,
+    /// The destination stablecoin symbol (e.g. `USDC`). `estimated_out` is
+    /// denominated in it.
+    pub asset: String,
+    /// Provider service fee, in `service_fee_asset` base units.
+    pub service_fee_amount: u128,
+    /// Denomination of `service_fee_amount`. `None` means sats: Boltz
+    /// denominates its fee in sats, Orchestra in the stablecoin.
+    pub service_fee_asset: Option<String>,
+    /// RFC3339 timestamp after which the quote is no longer valid.
+    pub expires_at: String,
+}
+
 impl std::fmt::Display for MaxFee {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

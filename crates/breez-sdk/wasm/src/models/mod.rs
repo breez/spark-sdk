@@ -1016,12 +1016,22 @@ pub enum CrossChainRouteFilter {
     Receive {
         contract_address: Option<String>,
     },
+    PaymentLink {
+        address_details: CrossChainAddressDetails,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SourceAsset)]
 pub enum SourceAsset {
     Bitcoin,
     Token { token_identifier: String },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SourceChain)]
+pub enum SourceChain {
+    Spark,
+    Lightning,
+    Bitcoin,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainFeeMode)]
@@ -1041,6 +1051,7 @@ pub struct CrossChainRoutePair {
     pub decimals: u8,
     pub exact_out_eligible: bool,
     pub supported_sources: Vec<SourceAsset>,
+    pub supported_source_chains: Vec<SourceChain>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainProviderContext)]
@@ -2021,6 +2032,26 @@ pub struct RefundPendingConversionsResponse {
     pub refunded: u32,
     pub skipped: u32,
     pub failed: u32,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PreparePaymentLinkRequest)]
+pub struct PreparePaymentLinkRequest {
+    pub address: String,
+    pub route: CrossChainRoutePair,
+    pub amount: u128,
+    pub fee_policy: Option<FeePolicy>,
+    pub max_slippage_bps: Option<u32>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PreparePaymentLinkResponse)]
+pub struct PreparePaymentLinkResponse {
+    pub url: String,
+    pub amount_sats: u64,
+    pub estimated_out: u128,
+    pub asset: String,
+    pub service_fee_amount: u128,
+    pub service_fee_asset: Option<String>,
+    pub expires_at: String,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Contact)]

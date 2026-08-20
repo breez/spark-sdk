@@ -1,17 +1,21 @@
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
-use breez_sdk_common::buy::cashapp::CashAppProvider;
+use breez_sdk_common::{buy::cashapp::CashAppProvider, input::CrossChainAddressFamily};
 use spark_wallet::MasterIdentityPublicKeyUpdate;
 use std::str::FromStr;
 use tracing::{debug, info};
 
 use crate::{
     BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
-    CrossChainRouteFilter, CrossChainRoutePair, GetTokensMetadataRequest,
+    CrossChainProvider, CrossChainRouteFilter, CrossChainRoutePair, GetTokensMetadataRequest,
     GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse, ListFiatRatesResponse,
     Network, OptimizationMode, OptimizeLeavesRequest, OptimizeLeavesResponse,
-    RegisterWebhookRequest, RegisterWebhookResponse, SignMessageRequest, SignMessageResponse,
+    PreparePaymentLinkRequest, PreparePaymentLinkResponse, RegisterWebhookRequest,
+    RegisterWebhookResponse, SignMessageRequest, SignMessageResponse, SourceChain,
     UnregisterWebhookRequest, UpdateUserSettingsRequest, UserSettings, Webhook,
     chain::RecommendedFees,
+    cross_chain::{
+        CrossChainProviderContext, convert_destination_amount_to_sats, fetch_btc_usd_rate,
+    },
     error::SdkError,
     events::EventListener,
     issuer::TokenIssuer,
@@ -22,6 +26,11 @@ use crate::{
     utils::token::get_tokens_metadata_cached_or_query,
 };
 
+use super::payments::validation::{
+    known_token_contracts, resolve_direct_overpay_amount, resolve_slippage_bps,
+    resolve_target_overpay_bps, validate_address_family_against_route, validate_amount,
+    validate_recipient_not_contract_address,
+};
 use super::{BreezSdk, helpers::get_deposit_address, parse_input};
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
@@ -94,7 +103,9 @@ impl BreezSdk {
     /// Returns the available cross-chain routes.
     ///
     /// Use [`CrossChainRouteFilter::Send`] to get routes for sending from Spark
-    /// (filtered by the parsed recipient address), or
+    /// (filtered by the parsed recipient address),
+    /// [`CrossChainRouteFilter::PaymentLink`] for routes fundable by an external
+    /// fiat rail (`prepare_payment_link`), or
     /// [`CrossChainRouteFilter::Receive`] to get routes for receiving into Spark
     /// (optionally filtered by a source contract address).
     pub async fn get_cross_chain_routes(
@@ -438,6 +449,215 @@ impl BreezSdk {
 
         Ok(BuyBitcoinResponse { url })
     }
+
+    /// Prepare a payment link that sends USDC/USDT to an external-chain
+    /// recipient, funded by Cash App over Lightning.
+    ///
+    /// Creates a cross-chain order and returns a `cash.app` deep link the payer
+    /// opens. Once paid, the provider delivers the stablecoin to `address`. No
+    /// funds move through the Spark wallet. Only available on mainnet.
+    pub async fn prepare_payment_link(
+        &self,
+        request: PreparePaymentLinkRequest,
+    ) -> Result<PreparePaymentLinkResponse, SdkError> {
+        if !matches!(self.config.network, Network::Mainnet) {
+            return Err(SdkError::Generic("Only available on mainnet".to_string()));
+        }
+        validate_amount(Some(request.amount))?;
+
+        let PreparePaymentLinkRequest {
+            address,
+            route,
+            amount,
+            fee_policy,
+            max_slippage_bps,
+        } = request;
+
+        // Payment links are Orchestra-only. A Boltz reverse swap needs this
+        // wallet online to claim before the payer's HTLC settles, so it can't
+        // back a link someone else pays later. Orchestra orders are submitless
+        // and deliver without the SDK.
+        if !matches!(route.provider, CrossChainProvider::Orchestra) {
+            return Err(SdkError::InvalidInput(
+                "Payment links are only supported on Orchestra routes".to_string(),
+            ));
+        }
+
+        // Cash App funds the deposit over Lightning. Fail fast before quoting if
+        // the route can't be funded that way. Rejecting an empty
+        // `supported_source_chains` stops a hand-built route from reaching
+        // `prepare` and committing provider state it can't fund.
+        if !route_supports_source_chain(&route, SourceChain::Lightning) {
+            return Err(SdkError::InvalidInput(
+                "The selected route can't be funded over Lightning".to_string(),
+            ));
+        }
+
+        // Validate the recipient before creating the order, using the same guards
+        // as the send path.
+        let InputType::CrossChainAddress(recipient) = self.parse(&address).await? else {
+            return Err(SdkError::InvalidInput(
+                "Recipient must be a cross-chain (EVM/Solana/Tron) address".to_string(),
+            ));
+        };
+        let recipient_family: CrossChainAddressFamily = recipient.address_family.into();
+        validate_address_family_against_route(recipient_family, &route)?;
+        let known_contracts =
+            known_token_contracts(self, &recipient.address, recipient_family, &route).await;
+        validate_recipient_not_contract_address(
+            &recipient.address,
+            recipient_family,
+            &known_contracts,
+        )?;
+
+        let service = self.cross_chain_context.get(route.provider)?;
+        let slippage_bps = resolve_slippage_bps(
+            max_slippage_bps,
+            self.config
+                .cross_chain_config
+                .as_ref()
+                .and_then(|c| c.default_slippage_bps),
+        )?;
+
+        // `amount` is in the destination asset's base units (the route's
+        // `decimals`); for these USD-pegged stablecoins it equals the USD value
+        // at parity. Convert it to the sats the provider's `prepare` expects
+        // (for both fee modes) via the live rate.
+        let btc_usd = fetch_btc_usd_rate(self.cross_chain_context.fiat_service().as_ref()).await?;
+        let source_sats =
+            convert_destination_amount_to_sats(amount, btc_usd, route.decimals.into())?;
+        if source_sats == 0 {
+            return Err(SdkError::InvalidInput(
+                "Amount is too small to fund over Lightning".to_string(),
+            ));
+        }
+
+        // Match the send path: on `FeesExcluded` pad the source so the recipient
+        // lands at or above target despite provider slippage. The pad comes from
+        // config (no per-request override on a payment link).
+        let fee_policy = fee_policy.unwrap_or_default();
+        let overpay_bps = resolve_target_overpay_bps(
+            None,
+            self.config
+                .cross_chain_config
+                .as_ref()
+                .and_then(|c| c.default_target_overpay_bps),
+        )?;
+        let source_sats = resolve_direct_overpay_amount(source_sats, fee_policy, overpay_bps);
+
+        let prepared = service
+            .prepare(
+                &recipient.address,
+                &route,
+                source_sats,
+                Some(SourceChain::Lightning),
+                None,
+                slippage_bps,
+                fee_policy.into(),
+            )
+            .await?;
+
+        let amount_sats = u64::try_from(prepared.amount_in).map_err(|_| {
+            SdkError::Generic(format!(
+                "Deposit amount {} sats exceeds u64::MAX",
+                prepared.amount_in
+            ))
+        })?;
+
+        // The provider returns the BOLT11 the external payer funds in its
+        // context. We build the `cash.app` deep link ourselves and never call
+        // the send stage: the external payer funds the provider's deposit
+        // directly, so there is no Spark-side transfer to make and the provider
+        // delivers autonomously once the payer settles.
+        let deposit_target = deposit_target(&prepared.provider_context);
+
+        // Verify the provider's target is a BOLT11 for the quoted amount before
+        // sending the payer to it.
+        let parsed_target = self.parse(&deposit_target).await;
+        check_deposit_target(&parsed_target, amount_sats)?;
+
+        let url = CashAppProvider::build_url(&deposit_target);
+
+        Ok(prepare_payment_link_response(prepared, url, amount_sats))
+    }
+}
+
+/// Whether `route` advertises `required` as a fundable source chain. An empty
+/// `supported_source_chains` (e.g. a hand-built route) matches nothing and is
+/// rejected.
+fn route_supports_source_chain(route: &CrossChainRoutePair, required: SourceChain) -> bool {
+    route.supported_source_chains.contains(&required)
+}
+
+/// Verifies the provider's deposit `target` is a BOLT11 invoice requesting
+/// exactly `expected_sats`, the Lightning payment request Cash App funds. A
+/// wrong type, wrong amount, or unparseable target indicates a provider bug.
+fn check_deposit_target(
+    parsed_target: &Result<InputType, SdkError>,
+    expected_sats: u64,
+) -> Result<(), SdkError> {
+    let Ok(InputType::Bolt11Invoice(details)) = parsed_target else {
+        return Err(SdkError::Generic(
+            "The provider returned a deposit target that is not a valid Lightning \
+             payment request"
+                .to_string(),
+        ));
+    };
+    // The invoice must request the quoted deposit: a mismatch would have the
+    // payer fund the wrong amount.
+    if details.amount_msat.map(u128::from) != Some(u128::from(expected_sats) * 1000) {
+        return Err(SdkError::Generic(format!(
+            "The provider's deposit invoice does not request the quoted \
+             {expected_sats} sats"
+        )));
+    }
+    Ok(())
+}
+
+/// The BOLT11 an external payer funds, read from the provider context
+/// (Orchestra `deposit_address` or Boltz `invoice`).
+fn deposit_target(context: &CrossChainProviderContext) -> String {
+    match context {
+        CrossChainProviderContext::Orchestra {
+            deposit_address, ..
+        } => deposit_address.clone(),
+        CrossChainProviderContext::Boltz { invoice, .. } => invoice.clone(),
+    }
+}
+
+/// Maps a [`crate::cross_chain::CrossChainPrepared`] + funding `url` to a
+/// [`PreparePaymentLinkResponse`].
+///
+/// `estimated_out` is in the destination `asset`'s base units. The fee mirrors
+/// the cross-chain send response: `service_fee_amount` in `service_fee_asset`
+/// base units, where `None` means sats (Boltz denominates its fee in sats;
+/// Orchestra in the stablecoin).
+fn prepare_payment_link_response(
+    prepared: crate::cross_chain::CrossChainPrepared,
+    url: String,
+    amount_sats: u64,
+) -> PreparePaymentLinkResponse {
+    PreparePaymentLinkResponse {
+        url,
+        amount_sats,
+        estimated_out: prepared.estimated_out,
+        asset: prepared.pair.asset,
+        service_fee_amount: prepared.service_fee_amount,
+        service_fee_asset: prepared.service_fee_asset,
+        expires_at: normalize_expires_at(&prepared.expires_at),
+    }
+}
+
+/// Normalizes a provider `expires_at` to RFC3339. Orchestra already returns
+/// RFC3339; Boltz returns a unix-seconds string, which we convert so callers
+/// see a single format.
+fn normalize_expires_at(raw: &str) -> String {
+    if let Ok(secs) = raw.parse::<i64>()
+        && let Some(dt) = chrono::DateTime::from_timestamp(secs, 0)
+    {
+        return dt.to_rfc3339();
+    }
+    raw.to_string()
 }
 
 /// Parses a 33-byte compressed public key from hex.
@@ -456,7 +676,152 @@ fn parse_compressed_public_key(hex_encoded: &str) -> Result<PublicKey, SdkError>
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        CashAppProvider, SdkError, deposit_target, parse_compressed_public_key,
+        prepare_payment_link_response, route_supports_source_chain,
+    };
+    use crate::cross_chain::{CrossChainPrepared, CrossChainProviderContext};
+    use crate::{CrossChainFeeMode, CrossChainProvider, CrossChainRoutePair, SourceChain};
+    use macros::test_all;
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    fn orchestra_context() -> CrossChainProviderContext {
+        CrossChainProviderContext::Orchestra {
+            quote_id: "q1".to_string(),
+            deposit_address: "lnbc100u1pxyz".to_string(),
+            deposit_amount: 5000,
+        }
+    }
+
+    fn route_with_source_chains(chains: Vec<SourceChain>) -> CrossChainRoutePair {
+        CrossChainRoutePair {
+            provider: CrossChainProvider::Orchestra,
+            chain: "base".to_string(),
+            chain_id: Some("8453".to_string()),
+            asset: "USDC".to_string(),
+            contract_address: None,
+            decimals: 6,
+            exact_out_eligible: false,
+            supported_sources: vec![],
+            supported_source_chains: chains,
+        }
+    }
+
+    #[test_all]
+    fn route_supports_source_chain_checks_membership() {
+        let lightning_only = route_with_source_chains(vec![SourceChain::Lightning]);
+        // Cash App (Lightning) is supported; MoonPay (Bitcoin) is not.
+        assert!(route_supports_source_chain(
+            &lightning_only,
+            SourceChain::Lightning
+        ));
+        assert!(!route_supports_source_chain(
+            &lightning_only,
+            SourceChain::Bitcoin
+        ));
+
+        let both = route_with_source_chains(vec![SourceChain::Lightning, SourceChain::Bitcoin]);
+        assert!(route_supports_source_chain(&both, SourceChain::Bitcoin));
+
+        // An empty list matches nothing: a route must advertise its rails, so a
+        // hand-built route can't slip a bad rail through to `prepare`.
+        let empty = route_with_source_chains(vec![]);
+        assert!(!route_supports_source_chain(&empty, SourceChain::Bitcoin));
+    }
+
+    fn prepared(provider_context: CrossChainProviderContext) -> CrossChainPrepared {
+        CrossChainPrepared {
+            amount_in: 5000,
+            asset_amount_in: 6_500_000,
+            estimated_out: 6_450_000,
+            fee_amount: 50_000,
+            service_fee_amount: 47_684,
+            service_fee_asset: Some("USDC".to_string()),
+            source_transfer_fee_sats: 0,
+            fee_mode: CrossChainFeeMode::FeesExcluded,
+            expires_at: "2026-07-25T08:09:26.770Z".to_string(),
+            pair: CrossChainRoutePair {
+                provider: CrossChainProvider::Orchestra,
+                chain: "base".to_string(),
+                chain_id: Some("8453".to_string()),
+                asset: "USDC".to_string(),
+                contract_address: None,
+                decimals: 6,
+                exact_out_eligible: false,
+                supported_sources: vec![],
+                supported_source_chains: vec![],
+            },
+            recipient_address: "0xabc".to_string(),
+            token_identifier: None,
+            provider_context,
+        }
+    }
+
+    #[test_all]
+    fn deposit_target_reads_orchestra_address_and_boltz_invoice() {
+        assert_eq!(deposit_target(&orchestra_context()), "lnbc100u1pxyz");
+        assert_eq!(
+            deposit_target(&CrossChainProviderContext::Boltz {
+                swap_id: "s1".to_string(),
+                invoice: "lnbc200u1pboltz".to_string(),
+                invoice_amount_sats: 5000,
+                max_slippage_bps: 100,
+            }),
+            "lnbc200u1pboltz"
+        );
+    }
+
+    #[test_all]
+    fn cashapp_url_built_from_deposit_target() {
+        let url = CashAppProvider::build_url(&deposit_target(&orchestra_context()));
+        assert_eq!(url, "https://cash.app/launch/lightning/lnbc100u1pxyz");
+    }
+
+    #[test_all]
+    fn orchestra_response_maps_stablecoin_fee() {
+        let resp = prepare_payment_link_response(
+            prepared(orchestra_context()),
+            "https://x".to_string(),
+            5000,
+        );
+        assert_eq!(resp.url, "https://x");
+        assert_eq!(resp.amount_sats, 5000);
+        assert_eq!(resp.estimated_out, 6_450_000);
+        assert_eq!(resp.asset, "USDC");
+        // Orchestra denominates its service fee in the stablecoin.
+        assert_eq!(resp.service_fee_amount, 47_684);
+        assert_eq!(resp.service_fee_asset.as_deref(), Some("USDC"));
+    }
+
+    #[test_all]
+    fn boltz_response_reports_native_sats_fee() {
+        let mut prepared = prepared(CrossChainProviderContext::Boltz {
+            swap_id: "s1".to_string(),
+            invoice: "lnbc200u1pboltz".to_string(),
+            invoice_amount_sats: 5000,
+            max_slippage_bps: 100,
+        });
+        // Boltz denominates its service fee in sats (service_fee_asset = None).
+        prepared.service_fee_amount = 17;
+        prepared.service_fee_asset = None;
+        let resp = prepare_payment_link_response(prepared, "https://x".to_string(), 5000);
+        assert_eq!(resp.asset, "USDC");
+        assert_eq!(resp.service_fee_amount, 17);
+        assert_eq!(resp.service_fee_asset, None);
+    }
+
+    #[test_all]
+    fn normalize_expires_at_converts_unix_and_passes_rfc3339() {
+        // Boltz-style unix seconds get converted to a parseable RFC3339 string.
+        let converted = super::normalize_expires_at("1784895588");
+        assert_ne!(converted, "1784895588");
+        assert!(chrono::DateTime::parse_from_rfc3339(&converted).is_ok());
+        // Orchestra-style RFC3339 passes through unchanged.
+        let iso = "2026-07-25T08:09:26.770Z";
+        assert_eq!(super::normalize_expires_at(iso), iso);
+    }
 
     const COMPRESSED: &str = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
     const UNCOMPRESSED: &str = "0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179\
