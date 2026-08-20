@@ -1,4 +1,5 @@
 import breez_sdk_spark.*
+import java.io.File
 import org.jline.reader.LineReader
 
 /**
@@ -15,6 +16,8 @@ data class AdvancedCliCommand(
  */
 val ADVANCED_COMMAND_NAMES = listOf(
     "unilateral-exit",
+    "export-unilateral-exit-state",
+    "import-unilateral-exit-state",
 )
 
 /**
@@ -26,6 +29,16 @@ fun buildAdvancedRegistry(): Map<String, AdvancedCliCommand> {
             "unilateral-exit",
             "Build and sign a unilateral exit",
             ::handleUnilateralExit,
+        ),
+        "export-unilateral-exit-state" to AdvancedCliCommand(
+            "export-unilateral-exit-state",
+            "Export the wallet's unilateral exit state to a file",
+            ::handleExportUnilateralExitState,
+        ),
+        "import-unilateral-exit-state" to AdvancedCliCommand(
+            "import-unilateral-exit-state",
+            "Import a unilateral exit state from a file",
+            ::handleImportUnilateralExitState,
         ),
     )
 }
@@ -180,6 +193,43 @@ fun parseCpfpInput(s: String, kind: CpfpFundingKind): CpfpInput {
         is CpfpFundingKind.Custom ->
             throw IllegalArgumentException("custom funding kind is not supported by this CLI")
     }
+}
+
+// --- export-unilateral-exit-state ---
+
+suspend fun handleExportUnilateralExitState(sdk: BreezSdk, reader: LineReader, args: List<String>) {
+    val fp = FlagParser(args)
+    val outputFile = fp.getString("output-file")
+
+    if (outputFile == null) {
+        println("Usage: advanced export-unilateral-exit-state --output-file <path>")
+        return
+    }
+
+    val exported = sdk.exportUnilateralExitState()
+    File(outputFile).writeText(exported.exitState)
+    println("Wrote ${exported.exitState.length} bytes to $outputFile")
+}
+
+// --- import-unilateral-exit-state ---
+
+suspend fun handleImportUnilateralExitState(sdk: BreezSdk, reader: LineReader, args: List<String>) {
+    val fp = FlagParser(args)
+    val inputFile = fp.getString("input-file")
+
+    if (inputFile == null) {
+        println("Usage: advanced import-unilateral-exit-state --input-file <path>")
+        return
+    }
+
+    val exitState = File(inputFile).readText()
+    val imported = sdk.importUnilateralExitState(ImportUnilateralExitStateRequest(exitState))
+    println(
+        "Imported ${imported.importedLeaves} leaf(s), " +
+        "skipped ${imported.skippedForeignLeaves} leaf(s) from a different wallet " +
+        "and ${imported.skippedConflictingLeaves} that disagree with what this wallet holds, " +
+        "left out the exit data of ${imported.skippedChains} leaf(s)"
+    )
 }
 
 fun printExitTransactions(response: UnilateralExitResponse) {

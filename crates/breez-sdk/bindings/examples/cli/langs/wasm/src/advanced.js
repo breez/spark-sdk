@@ -1,5 +1,6 @@
 'use strict'
 
+const fs = require('fs')
 const { Command, Option } = require('commander')
 const { singleKeyCpfpSigner } = require('@breeztech/breez-sdk-spark/nodejs')
 const { printValue } = require('./serialization')
@@ -136,6 +137,35 @@ function registerAdvancedCommands(program, getSdk, rl) {
         signer
       )
       printExitTransactions(response)
+    })
+
+  // --- export-unilateral-exit-state ---
+  advanced
+    .command('export-unilateral-exit-state')
+    .description('Export the wallet\'s unilateral exit state to a file, for safekeeping outside the wallet\'s own storage')
+    .requiredOption('--output-file <path>', 'File to write the exit state to')
+    .action(async (options) => {
+      const sdk = getSdk()
+      const exported = await sdk.exportUnilateralExitState()
+      fs.writeFileSync(options.outputFile, exported.exitState)
+      console.log(`Wrote ${exported.exitState.length} bytes to ${options.outputFile}`)
+    })
+
+  // --- import-unilateral-exit-state ---
+  advanced
+    .command('import-unilateral-exit-state')
+    .description('Import a unilateral exit state previously written by export-unilateral-exit-state, merging it into the wallet')
+    .requiredOption('--input-file <path>', 'File the exit state was exported to')
+    .action(async (options) => {
+      const sdk = getSdk()
+      const exitState = fs.readFileSync(options.inputFile, 'utf-8')
+      const imported = await sdk.importUnilateralExitState({ exitState })
+      console.log(
+        `Imported ${imported.importedLeaves} leaf(s), ` +
+        `skipped ${imported.skippedForeignLeaves} leaf(s) from a different wallet ` +
+        `and ${imported.skippedConflictingLeaves} that disagree with what this wallet holds, ` +
+        `left out the exit data of ${imported.skippedChains} leaf(s)`
+      )
     })
 }
 

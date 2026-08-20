@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:args/args.dart';
@@ -7,7 +8,11 @@ import 'cli.dart';
 import 'serialization.dart';
 
 /// Advanced subcommand names (used for help and tab completion).
-const advancedCommandNames = ['advanced unilateral-exit'];
+const advancedCommandNames = [
+  'advanced unilateral-exit',
+  'advanced export-unilateral-exit-state',
+  'advanced import-unilateral-exit-state',
+];
 
 typedef AdvancedHandler = Future<void> Function(BreezSdk sdk, List<String> args);
 
@@ -24,6 +29,14 @@ Map<String, _AdvancedEntry> _getRegistry() {
     'unilateral-exit': _AdvancedEntry(
       'Build and sign a unilateral exit (expert-only)',
       _handleUnilateralExit,
+    ),
+    'export-unilateral-exit-state': _AdvancedEntry(
+      'Export the wallet\'s unilateral exit state to a file',
+      _handleExportUnilateralExitState,
+    ),
+    'import-unilateral-exit-state': _AdvancedEntry(
+      'Import a previously exported unilateral exit state',
+      _handleImportUnilateralExitState,
     ),
   };
 }
@@ -147,6 +160,41 @@ Future<void> _handleUnilateralExit(BreezSdk sdk, List<String> args) async {
     signerSecretKey: secretKeyBytes,
   );
   _printExitTransactions(response);
+}
+
+// --- export-unilateral-exit-state ---
+
+Future<void> _handleExportUnilateralExitState(BreezSdk sdk, List<String> args) async {
+  final parser = ArgParser(usageLineLength: 80)
+    ..addOption('output-file', mandatory: true, help: 'File to write the exit state to');
+  final results = _parseArgs(parser, args, 'advanced export-unilateral-exit-state --output-file <path>');
+  if (results == null) return;
+
+  final outputFile = results.option('output-file')!;
+  final exported = await sdk.exportUnilateralExitState();
+  File(outputFile).writeAsStringSync(exported.exitState);
+  print('Wrote ${exported.exitState.length} bytes to $outputFile');
+}
+
+// --- import-unilateral-exit-state ---
+
+Future<void> _handleImportUnilateralExitState(BreezSdk sdk, List<String> args) async {
+  final parser = ArgParser(usageLineLength: 80)
+    ..addOption('input-file', mandatory: true, help: 'File the exit state was exported to');
+  final results = _parseArgs(parser, args, 'advanced import-unilateral-exit-state --input-file <path>');
+  if (results == null) return;
+
+  final inputFile = results.option('input-file')!;
+  final exitState = File(inputFile).readAsStringSync();
+  final imported = await sdk.importUnilateralExitState(
+    request: ImportUnilateralExitStateRequest(exitState: exitState),
+  );
+  print(
+    'Imported ${imported.importedLeaves} leaf(s), '
+    'skipped ${imported.skippedForeignLeaves} leaf(s) from a different wallet '
+    'and ${imported.skippedConflictingLeaves} that disagree with what this wallet holds, '
+    'left out the exit data of ${imported.skippedChains} leaf(s)',
+  );
 }
 
 CpfpInput? _parseCpfpInput(String s, String kindStr) {

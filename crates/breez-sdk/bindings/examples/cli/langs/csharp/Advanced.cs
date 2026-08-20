@@ -20,6 +20,8 @@ public static class AdvancedCommandNames
     public static readonly string[] All =
     {
         "advanced unilateral-exit",
+        "advanced export-unilateral-exit-state",
+        "advanced import-unilateral-exit-state",
     };
 }
 
@@ -40,6 +42,18 @@ public static class AdvancedCommands
                 Name = "unilateral-exit",
                 Description = "Build and sign a unilateral exit",
                 Run = HandleUnilateralExit
+            },
+            ["export-unilateral-exit-state"] = new()
+            {
+                Name = "export-unilateral-exit-state",
+                Description = "Export the wallet's unilateral exit state to a file",
+                Run = HandleExportUnilateralExitState
+            },
+            ["import-unilateral-exit-state"] = new()
+            {
+                Name = "import-unilateral-exit-state",
+                Description = "Import a previously exported unilateral exit state",
+                Run = HandleImportUnilateralExitState
             },
         };
     }
@@ -212,6 +226,44 @@ public static class AdvancedCommands
                 txid: txid, vout: vout, value: value, pubkey: pubkey),
             _ => throw new ArgumentException($"Invalid funding kind: {kind}")
         };
+    }
+
+    // --- export-unilateral-exit-state ---
+
+    private static async Task HandleExportUnilateralExitState(BreezSdk sdk, Func<string, string?> readline, string[] args)
+    {
+        var outputFile = GetFlag(args, "--output-file");
+        if (outputFile == null)
+        {
+            Console.WriteLine("Usage: advanced export-unilateral-exit-state --output-file <path>");
+            return;
+        }
+
+        var exported = await sdk.ExportUnilateralExitState();
+        await File.WriteAllTextAsync(outputFile, exported.exitState);
+        Console.WriteLine($"Wrote {exported.exitState.Length} bytes to {outputFile}");
+    }
+
+    // --- import-unilateral-exit-state ---
+
+    private static async Task HandleImportUnilateralExitState(BreezSdk sdk, Func<string, string?> readline, string[] args)
+    {
+        var inputFile = GetFlag(args, "--input-file");
+        if (inputFile == null)
+        {
+            Console.WriteLine("Usage: advanced import-unilateral-exit-state --input-file <path>");
+            return;
+        }
+
+        var exitState = await File.ReadAllTextAsync(inputFile);
+        var imported = await sdk.ImportUnilateralExitState(
+            request: new ImportUnilateralExitStateRequest(exitState: exitState)
+        );
+        Console.WriteLine(
+            $"Imported {imported.importedLeaves} leaf(s), " +
+            $"skipped {imported.skippedForeignLeaves} leaf(s) from a different wallet " +
+            $"and {imported.skippedConflictingLeaves} that disagree with what this wallet holds, " +
+            $"left out the exit data of {imported.skippedChains} leaf(s)");
     }
 
     private static void PrintExitTransactions(UnilateralExitResponse response)

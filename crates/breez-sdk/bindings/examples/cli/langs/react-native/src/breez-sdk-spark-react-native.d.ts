@@ -81,6 +81,17 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export type CrossChainRoutePair = any;
   export type CrossChainAddressDetails = any;
 
+  // --- advanced / unilateral exit ---
+  export const singleKeyCpfpSigner: any;
+  export const CpfpFundingKind: any;
+  export type CpfpFundingKind = any;
+  export const CpfpInput: any;
+  export type CpfpInput = any;
+  export const ExitLeafSelection: any;
+  export type ExitLeafSelection = any;
+  export const ConfirmationStatus: any;
+  export type ConfirmationStatus = any;
+
   // --- passkey ---
   // Note: PasskeyProvider (concrete class) ships at the
   // `/passkey-prf-provider` subpath export, declared separately below.

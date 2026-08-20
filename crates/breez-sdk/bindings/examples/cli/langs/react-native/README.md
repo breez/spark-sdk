@@ -92,6 +92,8 @@ Once the app is running, type commands in the text input at the bottom:
 
 **Webhooks**: `webhooks <subcommand>`
 
+**Advanced**: `advanced unilateral-exit`, `advanced export-unilateral-exit-state`, `advanced import-unilateral-exit-state`
+
 **Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`
 
 Type `help` for a full list of commands. Each command mirrors the Rust CLI behavior.
@@ -168,6 +170,30 @@ list-payments --tx-type mint
 list-payments --from-timestamp 1700000000 --to-timestamp 1710000000
 list-payments --sort-ascending true
 ```
+
+### Advanced Commands
+
+Expert-only commands that build raw transactions for you to broadcast yourself.
+Misuse can strand or lose funds.
+
+```
+# Quote a unilateral exit (no funding, shows the quote only)
+advanced unilateral-exit --fee-rate 2 --destination bc1q...
+
+# Build and sign a unilateral exit
+advanced unilateral-exit --fee-rate 2 --destination bc1q... --utxo txid:vout:value:pubkey --secret-key <hex>
+
+# Select specific leaves to exit
+advanced unilateral-exit --fee-rate 2 --destination bc1q... --leaf id1,id2
+
+# Export exit state to a file (for safekeeping outside the wallet)
+advanced export-unilateral-exit-state --output-file exit-state.json
+
+# Import exit state from a previously exported file
+advanced import-unilateral-exit-state --input-file exit-state.json
+```
+
+File paths are relative to the app's document directory unless an absolute path is given.
 
 ## TypeScript Validation
 

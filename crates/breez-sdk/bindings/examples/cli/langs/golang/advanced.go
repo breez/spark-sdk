@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,12 +22,24 @@ type AdvancedCommand struct {
 
 // AdvancedCommandNames lists all advanced subcommand names (used for REPL completion).
 var AdvancedCommandNames = []string{
+	"advanced export-unilateral-exit-state",
+	"advanced import-unilateral-exit-state",
 	"advanced unilateral-exit",
 }
 
 // BuildAdvancedRegistry returns a map of advanced subcommand name -> AdvancedCommand.
 func BuildAdvancedRegistry() map[string]AdvancedCommand {
 	return map[string]AdvancedCommand{
+		"export-unilateral-exit-state": {
+			Name:        "export-unilateral-exit-state",
+			Description: "Export the wallet's unilateral exit state to a file",
+			Run:         handleExportUnilateralExitState,
+		},
+		"import-unilateral-exit-state": {
+			Name:        "import-unilateral-exit-state",
+			Description: "Import a previously exported unilateral exit state",
+			Run:         handleImportUnilateralExitState,
+		},
 		"unilateral-exit": {
 			Name:        "unilateral-exit",
 			Description: "Build and sign a unilateral exit",
@@ -66,6 +79,69 @@ func DispatchAdvancedCommand(args []string, sdk *breez_sdk_spark.BreezSdk, rl *r
 	if err := cmd.Run(sdk, rl, subArgs); err != nil {
 		fmt.Printf("Error: %v\n", err)
 	}
+}
+
+// --- export-unilateral-exit-state ---
+
+func handleExportUnilateralExitState(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []string) error {
+	fs := flag.NewFlagSet("export-unilateral-exit-state", flag.ContinueOnError)
+	outputFile := fs.String("output-file", "", "File to write the exit state to")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *outputFile == "" {
+		fmt.Println("Usage: advanced export-unilateral-exit-state --output-file <path>")
+		return nil
+	}
+
+	exported, err := sdk.ExportUnilateralExitState()
+	if err = liftError(err); err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(*outputFile, []byte(exported.ExitState), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("Wrote %d bytes to %s\n", len(exported.ExitState), *outputFile)
+	return nil
+}
+
+// --- import-unilateral-exit-state ---
+
+func handleImportUnilateralExitState(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []string) error {
+	fs := flag.NewFlagSet("import-unilateral-exit-state", flag.ContinueOnError)
+	inputFile := fs.String("input-file", "", "File the exit state was exported to")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *inputFile == "" {
+		fmt.Println("Usage: advanced import-unilateral-exit-state --input-file <path>")
+		return nil
+	}
+
+	exitStateBytes, err := os.ReadFile(*inputFile)
+	if err != nil {
+		return err
+	}
+
+	imported, err := sdk.ImportUnilateralExitState(breez_sdk_spark.ImportUnilateralExitStateRequest{
+		ExitState: string(exitStateBytes),
+	})
+	if err = liftError(err); err != nil {
+		return err
+	}
+
+	fmt.Printf("Imported %d leaf(s), skipped %d leaf(s) from a different wallet "+
+		"and %d that disagree with what this wallet holds, "+
+		"left out the exit data of %d leaf(s)\n",
+		imported.ImportedLeaves,
+		imported.SkippedForeignLeaves,
+		imported.SkippedConflictingLeaves,
+		imported.SkippedChains,
+	)
+	return nil
 }
 
 // --- unilateral-exit ---
