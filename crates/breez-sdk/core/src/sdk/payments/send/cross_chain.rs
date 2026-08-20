@@ -4,7 +4,9 @@ use crate::{
     error::SdkError,
     sdk::{BreezSdk, SyncType},
     token_conversion::{ConversionAmount, ConversionPurpose, TokenConversionResponse},
+    utils::payments::enrich_payment_conversions,
 };
+use tracing::warn;
 
 /// Dispatches a `SendPaymentMethod::CrossChainAddress` to its provider.
 ///
@@ -65,11 +67,21 @@ pub(in crate::sdk) async fn send(
     // Each provider's `send()` polls its own outbound leg to terminal and
     // returns the corresponding `Payment`. The SDK no longer wraps this with
     // an extra `wait_for_payment` step — the provider owns that.
-    let payment = sdk
+    let mut payment = sdk
         .cross_chain_context
         .get(route.provider)?
         .send(&prepared, idempotency_key)
         .await?;
+
+    // Storage carries only the conversion's status, so the `conversions` array
+    // is derived on read. The funds have already moved, so a failure here
+    // degrades the response rather than failing the send.
+    if let Err(e) = enrich_payment_conversions(&mut payment, &sdk.storage).await {
+        warn!(
+            "Failed to derive conversion details for payment {}: {e:?}",
+            payment.id
+        );
+    }
 
     Ok(SendPaymentResponse { payment })
 }

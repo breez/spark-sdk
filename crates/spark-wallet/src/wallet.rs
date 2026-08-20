@@ -1336,9 +1336,8 @@ impl SparkWallet {
             claim_transfer(transfer.raw(), &self.transfer_service, &self.tree_service).await?;
         let claimed = transfer.claimed();
 
-        // A claim reports success without producing leaves when the transfer had
-        // none for us, which a caller polling a transfer it sent itself reaches.
-        // Nothing changed then, so there is nothing to report.
+        // An empty claim means no leaf in the transfer was ours, so no local
+        // state changed and there is nothing to report.
         if !nodes.is_empty() {
             self.event_manager
                 .notify_listeners(WalletEvent::TransferClaimed(claimed.clone()));
