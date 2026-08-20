@@ -64,18 +64,30 @@ Future<void> handleFeeExceeded(BreezSdk sdk, DepositInfo deposit) async {
   // ANCHOR_END: handle-fee-exceeded
 }
 
-Future<void> instantClaim(BreezSdk sdk, DepositInfo deposit) async {
-  // ANCHOR: instant-claim
-  // Claim a not-yet-mature deposit instantly (0-conf). Cap it at 4% (400 bps)
-  // of the deposit value.
-  final claimRequest = ClaimDepositRequest(
+Future<void> fetchClaimDepositQuote(BreezSdk sdk, DepositInfo deposit) async {
+  // ANCHOR: fetch-claim-deposit-quote
+  final request = FetchClaimDepositQuoteRequest(
     txid: deposit.txid,
     vout: deposit.vout,
-    maxFee: null,
-    maxInstantFeeBps: 400,
   );
-  await sdk.claimDeposit(request: claimRequest);
-  // ANCHOR_END: instant-claim
+  final quote = await sdk.fetchClaimDepositQuote(request: request);
+
+  // Claiming once the deposit matures, and how many blocks that is away.
+  final confirmations = quote.confirmations;
+  final matureBlocks = quote.mature.confirmationsRequired > confirmations
+      ? quote.mature.confirmationsRequired - confirmations
+      : 0;
+  print("Wait $matureBlocks blocks and pay ${quote.mature.feeSats} sats");
+
+  // Claiming earlier, when the provider offers it.
+  final instant = quote.instant;
+  if (instant != null) {
+    final instantBlocks = instant.confirmationsRequired > confirmations
+        ? instant.confirmationsRequired - confirmations
+        : 0;
+    print("Or wait $instantBlocks blocks and pay ${instant.feeSats} sats");
+  }
+  // ANCHOR_END: fetch-claim-deposit-quote
 }
 
 Future<void> refundDeposit(BreezSdk sdk) async {

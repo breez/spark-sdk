@@ -3,6 +3,7 @@ from breez_sdk_spark import (
     BreezSdk,
     ListUnclaimedDepositsRequest,
     ClaimDepositRequest,
+    FetchClaimDepositQuoteRequest,
     RefundDepositRequest,
     Fee,
     DepositClaimError,
@@ -88,22 +89,32 @@ async def handle_fee_exceeded(sdk: BreezSdk, deposit):
     # ANCHOR_END: handle-fee-exceeded
 
 
-async def instant_claim(sdk: BreezSdk, deposit):
-    # ANCHOR: instant-claim
-    # Claim a not-yet-mature deposit instantly (0-conf). Cap it at 4% (400 bps)
-    # of the deposit value.
+async def fetch_claim_deposit_quote(sdk: BreezSdk, deposit):
+    # ANCHOR: fetch-claim-deposit-quote
     try:
-        claim_request = ClaimDepositRequest(
-            txid=deposit.txid,
-            vout=deposit.vout,
-            max_fee=None,
-            max_instant_fee_bps=400,
+        request = FetchClaimDepositQuoteRequest(txid=deposit.txid, vout=deposit.vout)
+        quote = await sdk.fetch_claim_deposit_quote(request=request)
+
+        # Claiming once the deposit matures, and how many blocks that is away.
+        blocks_to_wait = max(
+            0, quote.mature.confirmations_required - quote.confirmations
         )
-        await sdk.claim_deposit(request=claim_request)
+        logging.info(
+            f"Wait {blocks_to_wait} blocks and pay {quote.mature.fee_sats} sats"
+        )
+
+        # Claiming earlier, when the provider offers it.
+        if quote.instant is not None:
+            blocks_to_wait = max(
+                0, quote.instant.confirmations_required - quote.confirmations
+            )
+            logging.info(
+                f"Or wait {blocks_to_wait} blocks and pay {quote.instant.fee_sats} sats"
+            )
     except Exception as error:
         logging.error(error)
         raise
-    # ANCHOR_END: instant-claim
+    # ANCHOR_END: fetch-claim-deposit-quote
 
 async def refund_deposit(sdk: BreezSdk):
     # ANCHOR: refund-deposit

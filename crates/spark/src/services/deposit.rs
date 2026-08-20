@@ -1118,7 +1118,9 @@ impl DepositService {
 
         // The SSP verifies each depth against a different statement: the tagged
         // instant hash at 0-conf, and the same statement as a normal mature claim
-        // from 1-conf on. Both commit to the quote's credit amount.
+        // from 1-conf on. Both commit to the quote's credit amount, not the plan's.
+        // Mirrors claimInstantStaticDeposit in buildonspark/spark
+        // (sdks/js/packages/spark-sdk/src/spark-wallet/spark-wallet.ts).
         let credit_amount_sats = quote.credit_amount.original_value;
         let user_statement = if plan.confirmations == 0 {
             // The statement names the address the UTXO actually paid to, derived

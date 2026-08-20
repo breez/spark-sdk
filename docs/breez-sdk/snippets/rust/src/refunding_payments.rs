@@ -69,7 +69,6 @@ async fn handle_fee_exceeded(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()
                 max_fee: Some(MaxFee::Fixed {
                     amount: *required_fee_sats,
                 }),
-                max_instant_fee_bps: None,
             };
             sdk.claim_deposit(request).await?;
         }
@@ -78,18 +77,36 @@ async fn handle_fee_exceeded(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()
     Ok(())
 }
 
-async fn instant_claim(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()> {
-    // ANCHOR: instant-claim
-    // Claim a not-yet-mature deposit instantly (0-conf). Cap it at 4% (400 bps)
-    // of the deposit value.
-    let request = ClaimDepositRequest {
-        txid: deposit.txid.clone(),
-        vout: deposit.vout,
-        max_fee: None,
-        max_instant_fee_bps: Some(400),
-    };
-    sdk.claim_deposit(request).await?;
-    // ANCHOR_END: instant-claim
+async fn fetch_claim_deposit_quote(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()> {
+    // ANCHOR: fetch-claim-deposit-quote
+    let quote = sdk
+        .fetch_claim_deposit_quote(FetchClaimDepositQuoteRequest {
+            txid: deposit.txid.clone(),
+            vout: deposit.vout,
+        })
+        .await?;
+
+    // Claiming once the deposit matures, and how many blocks that is away.
+    let blocks_to_wait = quote
+        .mature
+        .confirmations_required
+        .saturating_sub(quote.confirmations);
+    info!(
+        "Wait {} blocks and pay {} sats",
+        blocks_to_wait, quote.mature.fee_sats
+    );
+
+    // Claiming earlier, when the provider offers it.
+    if let Some(instant) = &quote.instant {
+        let blocks_to_wait = instant
+            .confirmations_required
+            .saturating_sub(quote.confirmations);
+        info!(
+            "Or wait {} blocks and pay {} sats",
+            blocks_to_wait, instant.fee_sats
+        );
+    }
+    // ANCHOR_END: fetch-claim-deposit-quote
     Ok(())
 }
 
@@ -155,7 +172,6 @@ async fn custom_claim_logic(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()>
                 max_fee: Some(MaxFee::Rate {
                     sat_per_vbyte: *required_fee_rate_sat_per_vbyte,
                 }),
-                max_instant_fee_bps: None,
             };
             sdk.claim_deposit(request).await?;
         }

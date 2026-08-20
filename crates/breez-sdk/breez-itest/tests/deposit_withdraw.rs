@@ -206,7 +206,6 @@ async fn test_deposit_fee_manual_claim(
             txid: txid_found.clone(),
             vout,
             max_fee: Some(MaxFee::Fixed { amount: 100_000 }),
-            max_instant_fee_bps: None,
         })
         .await?;
     // A standard (mature) claim settles synchronously and returns the payment.
@@ -648,10 +647,10 @@ async fn test_deposits_to_multiple_addresses(
 
 /// Manual instant claim path, end to end against the deployed SSP: it exercises
 /// the ported user statement, the ECIES key-share transport, and the claim
-/// mutation. Auto-claiming is disabled on both fronts (the instant cascade is off
-/// via unset `max_instant_deposit_claim_fee_bps`, the normal claim is fee-blocked
-/// via `max_deposit_claim_fee` = 0), so the manual `claim_deposit` is the only
-/// thing that can claim the funded deposit.
+/// mutation. Auto-claiming is disabled by a configured `max_deposit_claim_fee` of
+/// 0, which now blocks both the instant attempt and the claim at maturity, so the
+/// manual `claim_deposit` with its own ceiling is the only thing that can claim
+/// the funded deposit.
 ///
 /// It reads the vout straight from the funding tx to claim as early as possible,
 /// but the claim does not depend on winning that race: a deposit that confirms
@@ -716,9 +715,9 @@ async fn test_manual_instant_deposit_claim(
             .claim_deposit(ClaimDepositRequest {
                 txid: txid.clone(),
                 vout,
-                max_fee: None,
-                // ~340 bps spread at 50k; 500 bps admits it.
-                max_instant_fee_bps: Some(500),
+                // regtest quotes a 0-conf plan, whose spread carries a 3% term:
+                // ~1_700 sats at 50k, so the ceiling has to clear that.
+                max_fee: Some(MaxFee::Fixed { amount: 3_000 }),
             })
             .await
         {
@@ -754,11 +753,19 @@ async fn test_manual_instant_deposit_claim(
             Err(e) => return Err(e.into()),
         }
     };
-    // The instant transfer settles asynchronously, so no payment is returned.
-    assert!(
-        claim_resp.payment.is_none(),
-        "instant claim settles asynchronously; no synchronous payment is returned"
-    );
+    // Which path the claim took is decided by maturity, not by the caller, and on
+    // regtest a deposit matures at one confirmation. Winning the race to claim
+    // early is therefore not guaranteed; a claim that lands after maturity settles
+    // synchronously and returns a payment, which is correct and leaves nothing for
+    // the early-claim assertions below to check.
+    if let Some(payment) = claim_resp.payment {
+        warn!(
+            "SKIP early-claim assertions: the deposit matured before the claim landed, \
+             so it settled at maturity ({} sats)",
+            payment.amount
+        );
+        return Ok(());
+    }
 
     // Mark-not-delete contract. claim_deposit marks the deposit Submitted, creating
     // the row first if the background sync has not (the create-if-missing path), so
@@ -792,6 +799,212 @@ async fn test_manual_instant_deposit_claim(
         balance < start_balance + fund_amount,
         "instant credit should be below the funded amount (SSP spread): {balance}"
     );
+
+    Ok(())
+}
+
+/// The claim quote API against the deployed SSP and a real chain, which is the
+/// only place its two unknowns can be answered: whether the SSP will quote a
+/// claim at maturity for a deposit that has not matured (and so whether the
+/// estimate fallback is the normal path or the exception), and whether the
+/// confirmation count derived from the chain tip is sane.
+///
+/// Polls until the SSP has indexed the funding tx and offers an early claim,
+/// since before that the quote is all fallbacks and asserts little. If it never
+/// does, the invariants that do not depend on it are still checked.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_fetch_claim_deposit_quote(
+    #[future] bob_strict_fee_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    let bob = bob_strict_fee_sdk.await?;
+    let faucet = RegtestFaucet::new()?;
+    let mempool = MempoolClient::new()?;
+    let fund_amount = 50_000u64;
+
+    let addr = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
+        })
+        .await?
+        .payment_request;
+
+    let txid = faucet.fund_address(&addr, fund_amount).await?;
+    info!("Funded static deposit, txid: {txid}");
+    let tx = mempool.get_transaction(&txid).await?;
+    let vout = tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| {
+            bitcoin::Address::from_script(&o.script_pubkey, bitcoin::Network::Regtest)
+                .is_ok_and(|a| a.to_string() == addr)
+        })
+        .map(|(i, _)| i as u32)
+        .expect("funding tx has no output paying the deposit address");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let quote = loop {
+        let quote = bob
+            .sdk
+            .fetch_claim_deposit_quote(FetchClaimDepositQuoteRequest {
+                txid: txid.clone(),
+                vout,
+            })
+            .await?;
+        // Stop as soon as there is nothing left to wait for: an early claim is
+        // only ever offered before maturity, so once the deposit matures the
+        // answer will not change. regtest matures at one confirmation, so losing
+        // this race to the next block is routine rather than a failure.
+        if quote.instant.is_some()
+            || quote.confirmations >= quote.mature.confirmations_required
+            || tokio::time::Instant::now() >= deadline
+        {
+            break quote;
+        }
+        sleep(Duration::from_secs(1)).await;
+    };
+    info!("Deposit claim quote: {quote:?}");
+
+    assert_eq!(
+        quote.amount_sats, fund_amount,
+        "the quote prices the funded UTXO"
+    );
+    // Freshly funded, so it is at most a block or two deep.
+    assert!(
+        quote.confirmations <= 2,
+        "unexpected depth for a just-funded deposit: {}",
+        quote.confirmations
+    );
+
+    // Waiting always has an answer, real or estimated, and always costs something.
+    // regtest matures at 1 confirmation, unlike mainnet's 3.
+    assert_eq!(quote.mature.confirmations_required, 1);
+    assert!(quote.mature.fee_sats > 0, "a claim is never free");
+    assert_eq!(
+        quote.mature.credit_amount_sats,
+        fund_amount - quote.mature.fee_sats
+    );
+
+    match &quote.instant {
+        Some(instant) => {
+            // Only ever offered when it credits strictly sooner than waiting would.
+            // The provider's shallowest plan often lands at maturity's depth, and
+            // that is filtered out rather than shown as a choice worth nothing.
+            assert!(
+                instant.confirmations_required < quote.mature.confirmations_required,
+                "an early claim was offered at maturity's own depth ({}), which buys \
+                 no time",
+                instant.confirmations_required
+            );
+            assert!(
+                instant.fee_sats > quote.mature.fee_sats,
+                "claiming early costs more than waiting: {} vs {}",
+                instant.fee_sats,
+                quote.mature.fee_sats
+            );
+            assert!(!instant.is_estimate, "an offered plan is a real quote");
+            assert_eq!(instant.credit_amount_sats, fund_amount - instant.fee_sats);
+        }
+        None => warn!(
+            "SKIP early-claim assertions: no early claim on offer at {} confirmations \
+             (maturity {}), either matured before the first quote or the provider \
+             declined to front it",
+            quote.confirmations, quote.mature.confirmations_required
+        ),
+    }
+
+    // The estimate is only needed while the provider refuses to quote, so pair it
+    // with the real quote once the deposit matures. The two numbers are logged
+    // together because the estimate is derived from on-chain fees alone and has
+    // no calibration against what the provider actually charges.
+    let estimate = quote.mature.clone();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
+    let matured = loop {
+        let quote = bob
+            .sdk
+            .fetch_claim_deposit_quote(FetchClaimDepositQuoteRequest {
+                txid: txid.clone(),
+                vout,
+            })
+            .await?
+            .mature;
+        if !quote.is_estimate {
+            break Some(quote);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            break None;
+        }
+        sleep(Duration::from_secs(2)).await;
+    };
+
+    match matured {
+        Some(matured) => {
+            info!(
+                "mature claim fee: estimated {} sats, provider quoted {} sats",
+                estimate.fee_sats, matured.fee_sats
+            );
+            assert!(matured.fee_sats > 0, "a claim is never free");
+            assert_eq!(
+                matured.credit_amount_sats,
+                fund_amount - matured.fee_sats,
+                "the real quote's credit must reconcile with its fee"
+            );
+        }
+        None => warn!(
+            "SKIP estimate calibration: the provider never quoted a claim at maturity \
+             within the timeout (estimated {} sats)",
+            estimate.fee_sats
+        ),
+    }
+
+    // Does a plan's `confirmations_required` track the deposit's actual depth, or
+    // is it a fixed floor? Quote once the deposit is several blocks deep: a plan
+    // still reading shallower than the deposit is a floor, and then it says
+    // nothing about whether claiming early would actually be earlier.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
+    let deep = loop {
+        let quote = bob
+            .sdk
+            .fetch_claim_deposit_quote(FetchClaimDepositQuoteRequest {
+                txid: txid.clone(),
+                vout,
+            })
+            .await?;
+        if quote.confirmations >= 3 {
+            break Some(quote);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            break None;
+        }
+        sleep(Duration::from_secs(2)).await;
+    };
+
+    match deep {
+        Some(deep) => {
+            info!(
+                "at {} confirmations the quote returned an early claim at depth {:?} \
+                 (maturity is {}); the provider still offers one, this is what \
+                 survives filtering",
+                deep.confirmations,
+                deep.instant.as_ref().map(|i| i.confirmations_required),
+                deep.mature.confirmations_required
+            );
+            // The provider keeps offering a plan long past maturity (measured: depth
+            // 1 while the deposit sat at 4 confirmations), and taking it would cost a
+            // spread for no time saved. A matured deposit must therefore be quoted
+            // one option only, matching what claim_deposit would actually do.
+            assert!(
+                deep.instant.is_none(),
+                "a matured deposit was quoted an early claim at depth {:?}, which \
+                 claim_deposit would refuse: the app would show a choice the SDK \
+                 will not take",
+                deep.instant.as_ref().map(|i| i.confirmations_required)
+            );
+        }
+        None => warn!("SKIP depth-tracking measurement: deposit stayed under 3 confirmations"),
+    }
 
     Ok(())
 }

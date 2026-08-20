@@ -110,27 +110,32 @@ func HandleFeeExceeded(sdk *breez_sdk_spark.BreezSdk, deposit breez_sdk_spark.De
 	return nil
 }
 
-func InstantClaim(sdk *breez_sdk_spark.BreezSdk, deposit breez_sdk_spark.DepositInfo) error {
-	// ANCHOR: instant-claim
-	// Claim a not-yet-mature deposit instantly (0-conf). Cap it at 4% (400 bps)
-	// of the deposit value.
-	maxInstantFeeBps := uint32(400)
-	claimRequest := breez_sdk_spark.ClaimDepositRequest{
-		Txid:             deposit.Txid,
-		Vout:             deposit.Vout,
-		MaxFee:           nil,
-		MaxInstantFeeBps: &maxInstantFeeBps,
-	}
-	_, err := sdk.ClaimDeposit(claimRequest)
+func FetchClaimDepositQuote(sdk *breez_sdk_spark.BreezSdk, deposit breez_sdk_spark.DepositInfo) error {
+	// ANCHOR: fetch-claim-deposit-quote
+	quote, err := sdk.FetchClaimDepositQuote(breez_sdk_spark.FetchClaimDepositQuoteRequest{
+		Txid: deposit.Txid,
+		Vout: deposit.Vout,
+	})
 	if err != nil {
-		var sdkErr *breez_sdk_spark.SdkError
-		if errors.As(err, &sdkErr) {
-			// Handle SdkError - can inspect specific variants if needed
-			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
-		}
 		return err
 	}
-	// ANCHOR_END: instant-claim
+
+	// Claiming once the deposit matures, and how many blocks that is away.
+	blocksToWait := uint32(0)
+	if quote.Mature.ConfirmationsRequired > quote.Confirmations {
+		blocksToWait = quote.Mature.ConfirmationsRequired - quote.Confirmations
+	}
+	log.Printf("Wait %v blocks and pay %v sats", blocksToWait, quote.Mature.FeeSats)
+
+	// Claiming earlier, when the provider offers it.
+	if quote.Instant != nil {
+		instantBlocks := uint32(0)
+		if quote.Instant.ConfirmationsRequired > quote.Confirmations {
+			instantBlocks = quote.Instant.ConfirmationsRequired - quote.Confirmations
+		}
+		log.Printf("Or wait %v blocks and pay %v sats", instantBlocks, quote.Instant.FeeSats)
+	}
+	// ANCHOR_END: fetch-claim-deposit-quote
 	return nil
 }
 

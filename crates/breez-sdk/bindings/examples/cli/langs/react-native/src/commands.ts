@@ -933,7 +933,7 @@ async function handleClaimHtlcPayment(sdk: BreezSdkInterface, _tokenIssuer: Toke
 async function handleClaimDeposit(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   const positional = args.filter(a => !a.startsWith('-'))
   if (positional.length < 2) {
-    return 'Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N] [--instant-fee-bps N]'
+    return 'Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N]'
   }
 
   const txid = positional[0]
@@ -945,7 +945,6 @@ async function handleClaimDeposit(sdk: BreezSdkInterface, _tokenIssuer: TokenIss
   const feeSatStr = parseFlag(args, '--fee-sat')
   const satPerVbyteStr = parseFlag(args, '--sat-per-vbyte')
   const recommendedFeeLeewayStr = parseFlag(args, '--recommended-fee-leeway')
-  const instantFeeBpsStr = parseFlag(args, '--instant-fee-bps')
 
   let maxFee: MaxFee | undefined
 
@@ -962,13 +961,10 @@ async function handleClaimDeposit(sdk: BreezSdkInterface, _tokenIssuer: TokenIss
     maxFee = new MaxFee.Rate({ satPerVbyte: BigInt(satPerVbyteStr) })
   }
 
-  const maxInstantFeeBps = instantFeeBpsStr !== undefined ? parseInt(instantFeeBpsStr, 10) : undefined
-
   const result = await sdk.claimDeposit({
     txid,
     vout,
     maxFee,
-    maxInstantFeeBps: maxInstantFeeBps,
   })
   return formatValue(result)
 }
