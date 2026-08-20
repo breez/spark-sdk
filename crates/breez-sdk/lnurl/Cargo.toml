@@ -9,7 +9,6 @@ version = "0.1.0"
 anyhow = "1.0.98"
 async-trait = "0.1.88"
 axum = { version = "0.8.4", features = ["macros"] }
-axum-extra = { version = "0.10.1" }
 base64 = "0.22.1"
 bitcoin = { version = "0.32.6", features = ["serde"] }
 clap = { version = "4.5.40", features = ["derive"] }

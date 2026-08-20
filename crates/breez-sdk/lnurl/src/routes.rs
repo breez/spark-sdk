@@ -1,11 +1,10 @@
 use axum::{
     Extension, Json,
     body::Bytes,
-    extract::{Path, Query},
-    http::{HeaderMap, StatusCode},
+    extract::{FromRequestParts, Path, Query},
+    http::{HeaderMap, StatusCode, request::Parts},
     response::IntoResponse,
 };
-use axum_extra::extract::Host;
 use bitcoin::{
     bech32,
     hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256},
@@ -1479,6 +1478,30 @@ async fn sanitize_domain<DB>(
     }
     warn!("domain not allowed: {}", domain);
     Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))))
+}
+
+pub struct Host(pub String);
+
+impl<S> FromRequestParts<S> for Host
+where
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, Json<Value>);
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        if let Some(host) = parts.headers.get("host").and_then(|h| h.to_str().ok()) {
+            return Ok(Host(host.to_string()));
+        }
+
+        if let Some(authority) = parts.uri.authority().map(|a| a.as_str()) {
+            return Ok(Host(authority.to_string()));
+        }
+
+        Err((
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("missing host header".into())),
+        ))
+    }
 }
 
 #[cfg(test)]
