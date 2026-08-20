@@ -38,8 +38,8 @@ jobs:
       - name: Set latest tag in book
         working-directory: docs/breez-sdk/src/guide
         run: |
-          sed -i.bak "s/{VERSION}/${{ steps.get-latest-tag.outputs.tag }}/" install.md
-          rm -f install.md.bak
+          sed -i.bak "s/{VERSION}/${{ steps.get-latest-tag.outputs.tag }}/" install*.md
+          rm -f install*.md.bak
 
       - name: Build mdbook
         working-directory: docs/breez-sdk
