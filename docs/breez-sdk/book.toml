@@ -28,6 +28,10 @@ renderer = ["html"]
 [preprocessor.variables.variables]
 api_key_form_uri = "https://breez.technology/request-api-key/#contact-us-form-sdk"
 
+# Markdown output (post-preprocessor) so each page is also published as .md,
+# making the llms.txt links resolve and giving LLMs a clean-markdown version
+[output.markdown]
+
 # Basic llmstxt.org format output
 [output.llms-txt]
 
