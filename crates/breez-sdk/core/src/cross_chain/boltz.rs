@@ -29,6 +29,7 @@ use super::{
     CrossChainFeeMode, CrossChainPrepared, CrossChainProvider, CrossChainProviderContext,
     CrossChainRouteFilter, CrossChainRoutePair, CrossChainService, SourceAsset,
     boltz_storage_adapter::PROVIDER_TAG_BOLTZ, derive_btc_leg_transfer_id,
+    payment_with_conversion_info,
 };
 use crate::{
     ConversionInfo, ConversionStatus, CrossChainAddressDetails, Network, PaymentMetadata,
@@ -738,9 +739,10 @@ impl CrossChainService for BoltzService {
         // write and the WS event finds the `ConversionInfo`.
         match self.client().await?.get_swap(swap_id).await {
             Ok(Some(swap)) if swap.status.is_terminal() => {
-                if let Some(updated) =
-                    super::boltz_event_listener::boltz_metadata_from_swap(conversion_info, &swap)
-                {
+                if let Some(updated) = super::boltz_event_listener::boltz_metadata_from_swap(
+                    conversion_info.clone(),
+                    &swap,
+                ) {
                     match self
                         .storage
                         .insert_payment_metadata(payment_id.clone(), updated)
@@ -771,13 +773,13 @@ impl CrossChainService for BoltzService {
             max_delay: Duration::from_millis(SEND_POLL_MAX_DELAY_MS),
             timeout: Duration::from_secs(SEND_POLL_TIMEOUT_SECS),
         };
-        Ok(poll_to_terminal_or_fallback(
-            Arc::clone(&self.storage),
-            payment_id,
-            sdk_payment,
-            schedule,
+        // The poll reads from storage, which hydrates `conversion_info`. The
+        // fallback is built from the Lightning send alone and needs it attached.
+        let fallback = payment_with_conversion_info(sdk_payment, Some(conversion_info));
+        Ok(
+            poll_to_terminal_or_fallback(Arc::clone(&self.storage), payment_id, fallback, schedule)
+                .await,
         )
-        .await)
     }
 }
 
