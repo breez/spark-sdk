@@ -143,11 +143,16 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] Multi-user server mode
 - [x] USDT send support
 - [x] USDC send support
+- [x] Partner portal analytics
+- [x] Unilateral exit 
 - [ ] USDT receive support
-- [ ] USDC receive support 
+- [ ] USDC receive support
+- [ ] Detect pending mempool deposits
+- [ ] Instant claim of on-chain deposits
+- [ ] Add additional fees via the partner portal
 - [ ] NWC
 - [ ] Bolt12
-- [ ] Add additional fees via a dedicated portal
+
 
 
 
