@@ -32,8 +32,29 @@ api_key_form_uri = "https://breez.technology/request-api-key/#contact-us-form-sd
 # making the llms.txt links resolve and giving LLMs a clean-markdown version
 [output.markdown]
 
-# Basic llmstxt.org format output
-[output.llms-txt]
+# llmstxt.org index and the all-language corpus. Named `llms-index` so no
+# renderer directory is called `llms`, which the editions create when the
+# build output is flattened.
+[output.llms-index]
+command = "mdbook-llms"
 
-# Detailed llmstxt.org format output with additional information
-[output.llms-txt-full]
+# One corpus per language edition. Each renderer re-runs the snippets
+# preprocessor, which reduces that pass to a single language.
+[output.llms-rust]
+command = "mdbook-llms"
+[output.llms-swift]
+command = "mdbook-llms"
+[output.llms-kotlin]
+command = "mdbook-llms"
+[output.llms-csharp]
+command = "mdbook-llms"
+[output.llms-wasm]
+command = "mdbook-llms"
+[output.llms-react-native]
+command = "mdbook-llms"
+[output.llms-flutter]
+command = "mdbook-llms"
+[output.llms-python]
+command = "mdbook-llms"
+[output.llms-go]
+command = "mdbook-llms"
