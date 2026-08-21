@@ -590,15 +590,11 @@ pub struct Config {
     pub network: Network,
     pub sync_interval_secs: u32,
 
-    // The maximum fee that can be paid for a static deposit claim
-    // If not set then any fee is allowed
+    /// The maximum fee that can be paid to claim an on-chain deposit. It also caps
+    /// the provider's spread for crediting a deposit before it matures, so raising
+    /// it is what allows deposits to be claimed early. Unset disables claiming
+    /// rather than allowing any fee.
     pub max_deposit_claim_fee: Option<MaxFee>,
-
-    /// Maximum instant (0-conf) static deposit claim fee, as basis points of the
-    /// deposit value (100 bps = 1%), capping the SSP spread for the instant
-    /// credit. Opt-in: while unset, no 0-conf claim is attempted. Small deposits,
-    /// whose spread is proportionally larger, fall through to the normal claim.
-    pub max_instant_deposit_claim_fee_bps: Option<u32>,
 
     /// The domain used for receiving through lnurl-pay and lightning address.
     pub lnurl_domain: Option<String>,
@@ -1106,32 +1102,19 @@ impl Fee {
     }
 }
 
-/// Why an instant (0-conf) claim was declined.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum InstantClaimDeclineReason {
-    /// The SSP offered no 0-conf fulfillment plan for the deposit.
-    NoPlan,
-    /// The SSP spread exceeded the ceiling (`max_bps`). The instant claim can be
-    /// retried with a higher ceiling. `quoted_bps` / `quoted_sats` are the spread
-    /// the SSP quoted at the time.
-    FeeExceeded {
-        max_bps: u32,
-        quoted_bps: u32,
-        quoted_sats: u64,
-    },
-    /// The claim submission failed with an unknown outcome.
-    SubmissionFailed,
-}
-
-/// State of an instant (0-conf) claim attempt on a deposit.
+/// State of an instant claim attempt on a deposit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum InstantClaimStatus {
-    /// The instant claim was declined. The deposit falls through to the normal
-    /// claim once it matures; the background sync may re-attempt an instant claim
-    /// only when the reason permits (see [`InstantClaimDeclineReason`]).
-    Declined { reason: InstantClaimDeclineReason },
+    /// The early claim was declined and the deposit falls through to the claim at
+    /// maturity. `max_fee_sats` is the ceiling that declined it, unset when the
+    /// decline was for a reason no ceiling will fix. `confirmations` is the depth
+    /// it was declined at.
+    Declined {
+        max_fee_sats: Option<u64>,
+        #[serde(default)]
+        confirmations: u32,
+    },
     /// An instant claim was submitted and is settling. The deposit must not be
     /// re-claimed (instant or normal) until the claim settles and it is reconciled
     /// out. Carries the SSP claim id.
@@ -1156,23 +1139,73 @@ pub struct DepositInfo {
 pub struct ClaimDepositRequest {
     pub txid: String,
     pub vout: u32,
+    /// Caps what the claim may cost. A deposit that has not matured is claimed
+    /// instantly when the provider's spread fits within this, so the same ceiling
+    /// governs both. Falls back to the configured max deposit claim fee.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub max_fee: Option<MaxFee>,
-    /// Set to request an instant (0-conf) claim instead of waiting for the
-    /// deposit to mature, bounding the SSP spread at this many basis points of
-    /// the deposit value (100 bps = 1%). When set, the call takes the instant
-    /// path and `max_fee` is ignored.
-    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub max_instant_fee_bps: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ClaimDepositResponse {
-    /// The settled claim payment. Present for a standard claim, which completes
-    /// synchronously. Absent for an instant claim, whose transfer settles
-    /// asynchronously: watch for the payment via events or `list_payments`.
+    /// The settled claim payment, present when the deposit was claimed at maturity,
+    /// which completes synchronously. Absent when it was claimed before maturity,
+    /// whose transfer settles asynchronously: watch for the payment via events or
+    /// `list_payments`. Which of the two happens follows from the deposit's maturity
+    /// and the fee ceiling, not from anything the caller asks for, so treat the
+    /// payment as optional on every claim.
     pub payment: Option<Payment>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct FetchClaimDepositQuoteRequest {
+    pub txid: String,
+    pub vout: u32,
+}
+
+/// What one way of claiming a deposit costs.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ClaimDepositQuote {
+    /// The depth this becomes claimable at, as a total confirmation count on the
+    /// deposit tx and not a number still to wait. A deposit already at or past
+    /// this depth can be claimed.
+    pub confirmations_required: u32,
+    /// What reaches the balance.
+    pub credit_amount_sats: u64,
+    /// The deposit value less the credit.
+    pub fee_sats: u64,
+    /// `fee_sats` as a fee rate over the claim transaction, so it is comparable
+    /// with a max fee expressed as a rate.
+    pub fee_rate_sat_per_vbyte: u64,
+    /// The provider would not quote this yet, so the fee is derived from current
+    /// on-chain fees and the real one may differ.
+    pub is_estimate: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct FetchClaimDepositQuoteResponse {
+    pub amount_sats: u64,
+    /// Confirmations the deposit has now, 0 while unconfirmed.
+    pub confirmations: u32,
+    /// Claiming ahead of maturity, for a spread. Absent when the provider offers
+    /// no such option for this deposit, and when claiming early would not actually
+    /// be earlier: a deposit that has already matured, or a plan crediting no
+    /// sooner than maturity would, is only ever the more expensive way to wait.
+    ///
+    /// Also absent when the provider could not be reached for a quote, which is not
+    /// distinguished here from having nothing to offer: both mean there is no early
+    /// claim to show right now, and the one worth retrying is the transient one.
+    ///
+    /// Priced regardless of the configured maximum claim fee, which is usually far
+    /// below a spread. It is quoted so it can be offered, so claiming it needs a max
+    /// fee of at least its `fee_sats`, otherwise the claim declines and waits.
+    pub instant: Option<ClaimDepositQuote>,
+    /// Claiming once the deposit matures.
+    pub mature: ClaimDepositQuote,
 }
 
 #[derive(Debug, Clone, Serialize)]

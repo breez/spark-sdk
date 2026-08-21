@@ -87,19 +87,31 @@ namespace BreezSdkSnippets
             // ANCHOR_END: handle-fee-exceeded
         }
 
-        async Task InstantClaim(BreezSdk sdk, DepositInfo deposit)
+        async Task FetchClaimDepositQuote(BreezSdk sdk, DepositInfo deposit)
         {
-            // ANCHOR: instant-claim
-            // Claim a not-yet-mature deposit instantly (0-conf). Cap it at 4% (400 bps)
-            // of the deposit value.
-            var claimRequest = new ClaimDepositRequest(
+            // ANCHOR: fetch-claim-deposit-quote
+            var request = new FetchClaimDepositQuoteRequest(
                 txid: deposit.txid,
-                vout: deposit.vout,
-                maxFee: null,
-                maxInstantFeeBps: 400
+                vout: deposit.vout
             );
-            await sdk.ClaimDeposit(request: claimRequest);
-            // ANCHOR_END: instant-claim
+            var quote = await sdk.FetchClaimDepositQuote(request: request);
+
+            // Claiming once the deposit matures, and how many blocks that is away.
+            var blocksToWait = quote.mature.confirmationsRequired > quote.confirmations
+                ? quote.mature.confirmationsRequired - quote.confirmations
+                : 0U;
+            Console.WriteLine($"Wait {blocksToWait} blocks and pay {quote.mature.feeSats} sats");
+
+            // Claiming earlier, when the provider offers it.
+            if (quote.instant is ClaimDepositQuote instant)
+            {
+                var instantBlocksToWait = instant.confirmationsRequired > quote.confirmations
+                    ? instant.confirmationsRequired - quote.confirmations
+                    : 0U;
+                Console.WriteLine($"Or wait {instantBlocksToWait} blocks and " +
+                                  $"pay {instant.feeSats} sats");
+            }
+            // ANCHOR_END: fetch-claim-deposit-quote
         }
 
         async Task RefundDeposit(BreezSdk sdk)

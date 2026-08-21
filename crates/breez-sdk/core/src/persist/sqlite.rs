@@ -380,6 +380,12 @@ impl SqliteStorage {
             // Track the state of a 0-conf instant claim as a JSON-encoded
             // InstantClaimStatus (NULL when no instant claim has been attempted).
             "ALTER TABLE unclaimed_deposits ADD COLUMN instant_claim_status TEXT;",
+            // Only the Declined shape changed, and clearing it costs at most one
+            // extra quote. Submitted rows are left alone: their shape is unchanged
+            // and they are the only guard against re-claiming a UTXO whose earlier
+            // claim is still settling.
+            "UPDATE unclaimed_deposits SET instant_claim_status = NULL \
+             WHERE LOWER(instant_claim_status) LIKE '%declined%';",
         ]
     }
 }

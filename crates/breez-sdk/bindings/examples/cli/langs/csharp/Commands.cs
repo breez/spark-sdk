@@ -980,12 +980,11 @@ public static class Commands
         var feeSatStr = GetFlag(args, "--fee-sat");
         var satPerVbyteStr = GetFlag(args, "--sat-per-vbyte");
         var recFeeLeewayStr = GetFlag(args, "--recommended-fee-leeway");
-        var instantFeeBpsStr = GetFlag(args, "--instant-fee-bps");
         var positional = GetPositionalArgs(args);
 
         if (positional.Length < 2)
         {
-            Console.WriteLine("Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N] [--instant-fee-bps N]");
+            Console.WriteLine("Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N]");
             return;
         }
 
@@ -1016,13 +1015,10 @@ public static class Commands
             maxFee = new MaxFee.Rate(satPerVbyte: ulong.Parse(satPerVbyteStr));
         }
 
-        uint? instantFeeBps = instantFeeBpsStr != null ? uint.Parse(instantFeeBpsStr) : null;
-
         var result = await sdk.ClaimDeposit(new ClaimDepositRequest(
             txid: txid,
             vout: vout,
-            maxFee: maxFee,
-            maxInstantFeeBps: instantFeeBps
+            maxFee: maxFee
         ));
         Serialization.PrintValue(result);
     }

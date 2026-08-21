@@ -537,6 +537,15 @@ impl MysqlStorage {
                 column: "instant_claim_status",
                 definition: "JSON NULL",
             }],
+            // Migration 22: only the Declined shape changed, and clearing it costs at
+            // most one extra quote. Submitted rows are left alone: their shape is
+            // unchanged and they are the only guard against re-claiming a UTXO whose
+            // earlier claim is still settling.
+            vec![Migration::Sql(
+                "UPDATE brz_unclaimed_deposits SET instant_claim_status = NULL \
+                 WHERE LOWER(CAST(instant_claim_status AS CHAR)) LIKE '%declined%'"
+                    .to_string(),
+            )],
         ]
     }
 }
@@ -3013,7 +3022,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(21), "migration version must advance to 21");
+        assert_eq!(version, Some(22), "migration version must advance to 22");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())
@@ -3285,7 +3294,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(21), "migration must advance to 21");
+        assert_eq!(version, Some(22), "migration must advance to 22");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())

@@ -72,8 +72,7 @@ const handleFeeExceeded = async (sdk: BreezSdk, deposit: DepositInfo) => {
       const claimRequest: ClaimDepositRequest = {
         txid: deposit.txid,
         vout: deposit.vout,
-        maxFee: new MaxFee.Fixed({ amount: requiredFee }),
-        maxInstantFeeBps: undefined
+        maxFee: new MaxFee.Fixed({ amount: requiredFee })
       }
       await sdk.claimDeposit(claimRequest)
     }
@@ -81,18 +80,24 @@ const handleFeeExceeded = async (sdk: BreezSdk, deposit: DepositInfo) => {
   // ANCHOR_END: handle-fee-exceeded
 }
 
-const instantClaim = async (sdk: BreezSdk, deposit: DepositInfo) => {
-  // ANCHOR: instant-claim
-  // Claim a not-yet-mature deposit instantly (0-conf). Cap it at 4% (400 bps)
-  // of the deposit value.
-  const claimRequest: ClaimDepositRequest = {
+const fetchClaimDepositQuote = async (sdk: BreezSdk, deposit: DepositInfo) => {
+  // ANCHOR: fetch-claim-deposit-quote
+  const quote = await sdk.fetchClaimDepositQuote({
     txid: deposit.txid,
-    vout: deposit.vout,
-    maxFee: undefined,
-    maxInstantFeeBps: 400
+    vout: deposit.vout
+  })
+
+  // Claiming once the deposit matures, and how many blocks that is away.
+  const blocksToWait = Math.max(0, quote.mature.confirmationsRequired - quote.confirmations)
+  console.log(`Wait ${blocksToWait} blocks and pay ${quote.mature.feeSats} sats`)
+
+  // Claiming earlier, when the provider offers it.
+  const instant = quote.instant
+  if (instant != null) {
+    const instantBlocks = Math.max(0, instant.confirmationsRequired - quote.confirmations)
+    console.log(`Or wait ${instantBlocks} blocks and pay ${instant.feeSats} sats`)
   }
-  await sdk.claimDeposit(claimRequest)
-  // ANCHOR_END: instant-claim
+  // ANCHOR_END: fetch-claim-deposit-quote
 }
 
 const refundDeposit = async (sdk: BreezSdk) => {
@@ -146,8 +151,7 @@ const customClaimLogic = async (sdk: BreezSdk, deposit: DepositInfo) => {
       const claimRequest: ClaimDepositRequest = {
         txid: deposit.txid,
         vout: deposit.vout,
-        maxFee: new MaxFee.Rate({ satPerVbyte: requiredFeeRate }),
-        maxInstantFeeBps: undefined
+        maxFee: new MaxFee.Rate({ satPerVbyte: requiredFeeRate })
       }
       await sdk.claimDeposit(claimRequest)
     }

@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use chrono::Utc;
 
 use crate::{
-    DepositClaimError, InstantClaimDeclineReason, InstantClaimStatus, LnurlWithdrawInfo, Payment,
-    PaymentDetails, PaymentMetadata, PaymentMethod, PaymentStatus, PaymentType, SparkHtlcDetails,
-    SparkHtlcStatus, Storage, TokenMetadata, TokenTransactionType, UpdateDepositPayload,
+    DepositClaimError, InstantClaimStatus, LnurlWithdrawInfo, Payment, PaymentDetails,
+    PaymentMetadata, PaymentMethod, PaymentStatus, PaymentType, SparkHtlcDetails, SparkHtlcStatus,
+    Storage, TokenMetadata, TokenTransactionType, UpdateDepositPayload,
     persist::{ObjectCacheRepository, StorageListPaymentsRequest},
     sync_storage::{Record, RecordId, UnversionedRecordChange},
 };
@@ -1424,14 +1424,15 @@ pub async fn test_instant_claim_status(storage: Box<dyn Storage>) {
     assert_eq!(deposits.len(), 1);
     assert_eq!(deposits[0].instant_claim_status, None);
 
-    // A declined status persists together with its reason.
+    // A decline no ceiling would fix persists with no ceiling recorded.
     storage
         .update_deposit(
             "tx_instant".to_string(),
             0,
             UpdateDepositPayload::InstantClaim {
                 status: InstantClaimStatus::Declined {
-                    reason: InstantClaimDeclineReason::NoPlan,
+                    max_fee_sats: None,
+                    confirmations: 0,
                 },
             },
         )
@@ -1442,23 +1443,21 @@ pub async fn test_instant_claim_status(storage: Box<dyn Storage>) {
     assert_eq!(
         deposits[0].instant_claim_status,
         Some(InstantClaimStatus::Declined {
-            reason: InstantClaimDeclineReason::NoPlan
+            max_fee_sats: None,
+            confirmations: 0,
         })
     );
 
-    // A fee-exceeded decline round-trips its ceiling, overwriting the previous
-    // status.
+    // A fee decline round-trips the ceiling that declined it, overwriting the
+    // previous status.
     storage
         .update_deposit(
             "tx_instant".to_string(),
             0,
             UpdateDepositPayload::InstantClaim {
                 status: InstantClaimStatus::Declined {
-                    reason: InstantClaimDeclineReason::FeeExceeded {
-                        max_bps: 400,
-                        quoted_bps: 500,
-                        quoted_sats: 5_000,
-                    },
+                    max_fee_sats: Some(1_000),
+                    confirmations: 2,
                 },
             },
         )
@@ -1469,11 +1468,8 @@ pub async fn test_instant_claim_status(storage: Box<dyn Storage>) {
     assert_eq!(
         deposits[0].instant_claim_status,
         Some(InstantClaimStatus::Declined {
-            reason: InstantClaimDeclineReason::FeeExceeded {
-                max_bps: 400,
-                quoted_bps: 500,
-                quoted_sats: 5_000,
-            }
+            max_fee_sats: Some(1_000),
+            confirmations: 2
         })
     );
 

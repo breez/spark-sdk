@@ -774,10 +774,9 @@ suspend fun handleClaimDeposit(sdk: BreezSdk, reader: LineReader, args: List<Str
     val feeSat = fp.getULong("fee-sat")
     val satPerVbyte = fp.getULong("sat-per-vbyte")
     val recommendedFeeLeeway = fp.getULong("recommended-fee-leeway")
-    val instantFeeBps = fp.getUInt("instant-fee-bps")
 
     if (fp.positional.size < 2) {
-        println("Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N | --instant-fee-bps N]")
+        println("Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N]")
         return
     }
 
@@ -810,7 +809,6 @@ suspend fun handleClaimDeposit(sdk: BreezSdk, reader: LineReader, args: List<Str
             txid = txid,
             vout = vout,
             maxFee = maxFee,
-            maxInstantFeeBps = instantFeeBps,
         )
     )
     printValue(result)
