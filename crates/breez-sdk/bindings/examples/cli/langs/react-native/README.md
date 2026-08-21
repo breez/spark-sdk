@@ -113,7 +113,7 @@ Transfer a lightning address to another user:
 authorize-lightning-address-transfer <transferee_pubkey>
 
 # New owner claims the transfer
-claim-lightning-address-transfer <username> [<description>] --from-pubkey <pubkey> --from-signature <signature>
+claim-lightning-address-transfer <username> [<description>] --from-pubkey <pubkey> --from-signature <signature> --from-domain <domain> --from-timestamp <secs>
 ```
 
 ### HODL Invoices
