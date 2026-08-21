@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use platform_utils::time::Instant;
 use spark_wallet::{
-    ListTransfersRequest, SparkWallet, TokenTransaction, TransferId, TransferStatus, WalletTransfer,
+    ListTransfersRequest, SparkWallet, TokenTransaction, TransferDirection, TransferId,
+    TransferStatus, WalletTransfer,
 };
 use tracing::{debug, error, info, warn};
 
@@ -64,8 +65,8 @@ pub(crate) async fn get_payment_and_emit_event(
     event_emitter.emit(&SdkEvent::from_payment(payment)).await;
 }
 
-/// Process an already-fetched Spark transfer, claiming it locally if
-/// it is awaiting our key tweak.
+/// Process an already-fetched Spark transfer, claiming it when the transfer is
+/// incoming and awaiting our key tweak.
 ///
 /// Returns `None` when the transfer is at a status we cannot yet finalise
 /// from (e.g. still pending on the operator) — callers can then choose to
@@ -75,11 +76,11 @@ async fn process_spark_transfer_to_payment(
     wallet_transfer: WalletTransfer,
 ) -> Result<Option<Payment>, SdkError> {
     let payment: Payment = match wallet_transfer.status {
-        // Already terminal — convert as-is.
-        TransferStatus::Completed => wallet_transfer.try_into()?,
         // Claimable — pull the leaves into the local tree-store and promote
         // the status before converting.
-        TransferStatus::SenderKeyTweaked => {
+        TransferStatus::SenderKeyTweaked
+            if wallet_transfer.direction == TransferDirection::Incoming =>
+        {
             debug!(
                 "process_spark_transfer_to_payment({}): claiming",
                 wallet_transfer.id
@@ -88,6 +89,11 @@ async fn process_spark_transfer_to_payment(
                 .process_transfer(wallet_transfer)
                 .await?
                 .try_into()?
+        }
+        // Already terminal — convert as-is. `SenderKeyTweaked` is terminal
+        // for the sender: its leaf keys belong to the receiver.
+        TransferStatus::Completed | TransferStatus::SenderKeyTweaked => {
+            wallet_transfer.try_into()?
         }
         // Terminal-failed — convert without claiming so callers see the
         // `Failed` payment.
@@ -285,7 +291,7 @@ pub async fn get_payment_with_conversion_details(
 }
 
 /// Enriches a single payment with its conversion details if applicable.
-async fn enrich_payment_conversions(
+pub(crate) async fn enrich_payment_conversions(
     payment: &mut Payment,
     storage: &Arc<dyn Storage>,
 ) -> Result<(), SdkError> {
@@ -802,5 +808,54 @@ mod tests {
 
         let conversions = build_conversions(&parent, None);
         assert!(conversions.is_empty());
+    }
+
+    /// Storage is required by the signature but unreachable on this path: with
+    /// `conversion_details` unset the child lookup is skipped, which is what
+    /// makes the send and idempotent-replay call sites safe to run inline.
+    #[cfg(feature = "sqlite")]
+    fn test_storage() -> Arc<dyn Storage> {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("breez-enrich-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        Arc::new(crate::SqliteStorage::new(&dir).unwrap())
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn enrich_derives_conversion_details_for_a_crosschain_send() {
+        let mut payment = spark_child("p1", PaymentType::Send);
+        payment.details = Some(PaymentDetails::Spark {
+            invoice_details: None,
+            htlc_details: None,
+            conversion_info: Some(orchestra_info()),
+        });
+        payment.conversion_details = None;
+
+        enrich_payment_conversions(&mut payment, &test_storage())
+            .await
+            .unwrap();
+
+        let details = payment
+            .conversion_details
+            .expect("cross-chain info should derive conversion details");
+        assert_eq!(details.conversions.len(), 1);
+        assert_eq!(
+            details.conversions[0].provider,
+            crate::models::ConversionProvider::Orchestra
+        );
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn enrich_is_a_noop_without_conversion_info() {
+        let mut payment = spark_child("p1", PaymentType::Send);
+        payment.conversion_details = None;
+
+        enrich_payment_conversions(&mut payment, &test_storage())
+            .await
+            .unwrap();
+
+        assert!(payment.conversion_details.is_none());
     }
 }

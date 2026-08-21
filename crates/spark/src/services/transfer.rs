@@ -641,6 +641,10 @@ impl TransferService {
         let mut retry_count = 0;
         loop {
             if retry_count >= config.max_retries {
+                error!(
+                    "Giving up claiming transfer {} after {retry_count} attempts",
+                    transfer.id
+                );
                 return Err(ServiceError::MaxRetriesExceeded);
             }
 
@@ -658,7 +662,8 @@ impl TransferService {
                     return Ok(Vec::new());
                 }
                 Err(e) => {
-                    error!("Failed to claim transfer: {}", e);
+                    // Retried below; only giving up is an error.
+                    warn!("Failed to claim transfer {}: {e}", transfer.id);
                     // A concurrent instance of this wallet may have finalized the
                     // transfer. If so, use its leaves instead of retrying.
                     if let Some(leaves) =

@@ -32,7 +32,7 @@ use crate::{ConversionInfo, ConversionStatus, Payment, PaymentDetails, PaymentSt
 use super::{
     CrossChainFeeMode, CrossChainPrepared, CrossChainProvider, CrossChainProviderContext,
     CrossChainRouteFilter, CrossChainRoutePair, CrossChainService, SourceAsset, SourceChain,
-    derive_btc_leg_transfer_id,
+    derive_btc_leg_transfer_id, payment_with_conversion_info,
 };
 
 use crate::utils::{
@@ -913,13 +913,16 @@ impl CrossChainService for OrchestraService {
                 spark_wallet.as_ref(),
                 Arc::clone(&storage),
                 &payment_id_for_poll,
-                false,
+                true,
             )
         })
         .await;
 
         match polled {
-            Ok(payment) => Ok(payment),
+            // The poll builds the payment from the Spark transfer alone, which
+            // carries no Orchestra metadata. The order id and read token are
+            // what let a caller query the order's progress.
+            Ok(payment) => Ok(payment_with_conversion_info(payment, Some(conversion_info))),
             Err(e) => {
                 // Operator sync still in flight — the metadata is already
                 // cached, and `poll_in_flight_orders` will reconcile the
@@ -942,7 +945,7 @@ impl CrossChainService for OrchestraService {
                         "Orchestra transfer produced no outgoing payment for {payment_id}"
                     ))
                 })?;
-                Ok(payment_with_orchestra_info(payment, Some(conversion_info)))
+                Ok(payment_with_conversion_info(payment, Some(conversion_info)))
             }
         }
     }
@@ -952,44 +955,6 @@ impl CrossChainService for OrchestraService {
 /// source for receives.
 fn non_spark_side(r: &Route, is_send: bool) -> &RouteAsset {
     if is_send { &r.destination } else { &r.source }
-}
-
-/// Attaches the Orchestra [`ConversionInfo`] to a freshly-converted
-/// [`Payment`]. The payment's top-level `status` is left as-is — it reflects
-/// the local Spark/Token transfer settlement, while the cross-chain pending
-/// state lives inside `conversion_info.status`. Lightning / Withdraw /
-/// Deposit details pass through unchanged (they shouldn't occur on the
-/// Orchestra send path; this is defensive).
-fn payment_with_orchestra_info(
-    mut payment: crate::Payment,
-    conversion_info: Option<ConversionInfo>,
-) -> crate::Payment {
-    payment.details = match payment.details {
-        Some(PaymentDetails::Spark {
-            invoice_details,
-            htlc_details,
-            ..
-        }) => Some(PaymentDetails::Spark {
-            invoice_details,
-            htlc_details,
-            conversion_info,
-        }),
-        Some(PaymentDetails::Token {
-            metadata,
-            tx_hash,
-            tx_type,
-            invoice_details,
-            ..
-        }) => Some(PaymentDetails::Token {
-            metadata,
-            tx_hash,
-            tx_type,
-            invoice_details,
-            conversion_info,
-        }),
-        other => other,
-    };
-    payment
 }
 
 /// Whether a raw Orchestra route should appear in the deduplicated list,
@@ -1615,7 +1580,7 @@ mod tests {
         let payment = dummy_payment(crate::PaymentMethod::Spark, original_details);
         let info = orchestra_info("ord1", "q1");
 
-        let out = payment_with_orchestra_info(payment, Some(info));
+        let out = payment_with_conversion_info(payment, Some(info));
 
         // Status reflects the local Spark transfer (already settled by the
         // time we reach the fallback); cross-chain pending lives in
@@ -1644,7 +1609,7 @@ mod tests {
         };
         let payment = dummy_payment(crate::PaymentMethod::Spark, original_details);
 
-        let out = payment_with_orchestra_info(payment, None);
+        let out = payment_with_conversion_info(payment, None);
 
         if let Some(PaymentDetails::Spark {
             invoice_details, ..
@@ -1679,7 +1644,7 @@ mod tests {
         let payment = dummy_payment(crate::PaymentMethod::Token, original_details);
         let info = orchestra_info("ord1", "q1");
 
-        let out = payment_with_orchestra_info(payment, Some(info));
+        let out = payment_with_conversion_info(payment, Some(info));
 
         // Top-level status reflects the local Token transfer.
         assert_eq!(out.status, crate::PaymentStatus::Completed);

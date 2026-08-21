@@ -22,7 +22,7 @@ use breez_sdk_common::fiat::FiatService;
 use serde::{Deserialize, Serialize};
 use spark_wallet::TransferId;
 
-use crate::{CrossChainAddressDetails, error::SdkError};
+use crate::{ConversionInfo, CrossChainAddressDetails, PaymentDetails, error::SdkError};
 
 /// SDK-level bounds for cross-chain slippage.
 pub(crate) const MIN_CROSS_CHAIN_SLIPPAGE_BPS: u32 = 10;
@@ -47,6 +47,61 @@ const USD_STABLE_ASSETS: &[&str] = &["USDB", "USDC", "USDT", "USDT0"];
 
 /// Each provider's background monitor interval.
 pub(crate) const MONITOR_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Attaches a cross-chain [`ConversionInfo`] to a freshly-converted
+/// [`Payment`]. The payment's top-level `status` is left as-is: it reflects
+/// the local Spark/Token/Lightning leg's settlement, while the cross-chain
+/// pending state lives inside `conversion_info.status`.
+pub(crate) fn payment_with_conversion_info(
+    mut payment: crate::Payment,
+    conversion_info: Option<ConversionInfo>,
+) -> crate::Payment {
+    payment.details = match payment.details {
+        Some(PaymentDetails::Spark {
+            invoice_details,
+            htlc_details,
+            ..
+        }) => Some(PaymentDetails::Spark {
+            invoice_details,
+            htlc_details,
+            conversion_info,
+        }),
+        Some(PaymentDetails::Token {
+            metadata,
+            tx_hash,
+            tx_type,
+            invoice_details,
+            ..
+        }) => Some(PaymentDetails::Token {
+            metadata,
+            tx_hash,
+            tx_type,
+            invoice_details,
+            conversion_info,
+        }),
+        Some(PaymentDetails::Lightning {
+            description,
+            invoice,
+            destination_pubkey,
+            htlc_details,
+            lnurl_pay_info,
+            lnurl_withdraw_info,
+            lnurl_receive_metadata,
+            ..
+        }) => Some(PaymentDetails::Lightning {
+            description,
+            invoice,
+            destination_pubkey,
+            htlc_details,
+            lnurl_pay_info,
+            lnurl_withdraw_info,
+            lnurl_receive_metadata,
+            conversion_info,
+        }),
+        other => other,
+    };
+    payment
+}
 
 /// Resolves the BTC-leg [`TransferId`] for a cross-chain send. A
 /// caller-supplied `idempotency_key` from [`crate::SendPaymentRequest`]
@@ -776,5 +831,102 @@ mod tests {
             panic!("expected Orchestra variant");
         };
         assert_eq!(*deposit_amount, 1_020_434);
+    }
+
+    fn boltz_info(swap_id: &str) -> ConversionInfo {
+        ConversionInfo::Boltz {
+            swap_id: swap_id.to_string(),
+            invoice: "lnbc1".to_string(),
+            invoice_amount_sats: 1_000,
+            bridge_ref: None,
+            max_slippage_bps: 100,
+            quote_degraded: false,
+            chain: "polygon".to_string(),
+            chain_id: None,
+            asset: "USDC".to_string(),
+            recipient_address: "0xabc".to_string(),
+            estimated_out: 1_000_000,
+            delivered_amount: None,
+            status: crate::ConversionStatus::Pending,
+            asset_amount_in: None,
+            fee_amount: None,
+            service_fee_amount: None,
+            service_fee_asset: None,
+            asset_decimals: 6,
+            asset_contract: None,
+        }
+    }
+
+    #[test_all]
+    fn payment_with_conversion_info_injects_into_lightning_details() {
+        let payment = crate::Payment {
+            id: "p1".to_string(),
+            payment_type: crate::PaymentType::Send,
+            status: crate::PaymentStatus::Pending,
+            amount: 1_000,
+            fees: 0,
+            timestamp: 100,
+            method: crate::PaymentMethod::Lightning,
+            details: Some(PaymentDetails::Lightning {
+                description: Some("desc".to_string()),
+                invoice: "lnbc1".to_string(),
+                destination_pubkey: "02aa".to_string(),
+                htlc_details: crate::SparkHtlcDetails {
+                    payment_hash: "hash1".to_string(),
+                    preimage: None,
+                    expiry_time: 0,
+                    status: crate::SparkHtlcStatus::PreimageShared,
+                },
+                lnurl_pay_info: None,
+                lnurl_withdraw_info: None,
+                lnurl_receive_metadata: None,
+                conversion_info: None,
+            }),
+            conversion_details: None,
+        };
+
+        let out = payment_with_conversion_info(payment, Some(boltz_info("swap1")));
+
+        assert_eq!(out.status, crate::PaymentStatus::Pending);
+        let Some(PaymentDetails::Lightning {
+            invoice,
+            description,
+            conversion_info,
+            ..
+        }) = out.details
+        else {
+            panic!("expected Lightning details");
+        };
+        // Sibling fields survive the rebuild.
+        assert_eq!(invoice, "lnbc1");
+        assert_eq!(description.as_deref(), Some("desc"));
+        assert!(matches!(
+            conversion_info,
+            Some(ConversionInfo::Boltz { ref swap_id, .. }) if swap_id == "swap1"
+        ));
+    }
+
+    #[test_all]
+    fn payment_with_conversion_info_passes_through_variants_without_a_slot() {
+        let payment = crate::Payment {
+            id: "p1".to_string(),
+            payment_type: crate::PaymentType::Send,
+            status: crate::PaymentStatus::Completed,
+            amount: 1_000,
+            fees: 0,
+            timestamp: 100,
+            method: crate::PaymentMethod::Withdraw,
+            details: Some(PaymentDetails::Withdraw {
+                tx_id: "tx1".to_string(),
+            }),
+            conversion_details: None,
+        };
+
+        let out = payment_with_conversion_info(payment, Some(boltz_info("swap1")));
+
+        assert!(matches!(
+            out.details,
+            Some(PaymentDetails::Withdraw { tx_id }) if tx_id == "tx1"
+        ));
     }
 }

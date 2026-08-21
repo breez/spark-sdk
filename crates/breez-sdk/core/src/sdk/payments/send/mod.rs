@@ -18,6 +18,7 @@ use crate::{
     persist::ObjectCacheRepository,
     sdk::BreezSdk,
     signer::{ExternalPrepareTransferRequest, ExternalPreparedTransfer},
+    utils::payments::enrich_payment_conversions,
 };
 
 use super::conversion;
@@ -314,8 +315,18 @@ pub(in crate::sdk) async fn orchestrate_send(
         ));
     }
     if let Some(idempotency_key) = &request.idempotency_key {
-        // If an idempotency key is provided, check if a payment with that id already exists
-        if let Ok(payment) = sdk.storage.get_payment_by_id(idempotency_key.clone()).await {
+        // If an idempotency key is provided, check if a payment with that id already exists.
+        // Storage carries only the conversion's status, so the `conversions` array is derived
+        // here, matching the shape the first call returned. Only a missing payment may fall
+        // through to sending: a failure to derive degrades the response instead, since
+        // re-sending is what this guard exists to prevent.
+        if let Ok(mut payment) = sdk.storage.get_payment_by_id(idempotency_key.clone()).await {
+            if let Err(e) = enrich_payment_conversions(&mut payment, &sdk.storage).await {
+                warn!(
+                    "Failed to derive conversion details for payment {}: {e:?}",
+                    payment.id
+                );
+            }
             return Ok(SendPaymentResponse { payment });
         }
     }

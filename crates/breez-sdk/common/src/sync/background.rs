@@ -162,7 +162,7 @@ impl SyncProcessor {
         let mut stream = match self.client.listen_changes().await {
             Ok(stream) => stream,
             Err(e) => {
-                error!("Failed to establish real-time sync update subscription: {e}");
+                warn!("Failed to establish real-time sync update subscription: {e}");
                 return;
             }
         };
@@ -193,7 +193,9 @@ impl SyncProcessor {
                             break;
                         }
                         Err(e) => {
-                            error!("Error receiving notification: {}", e);
+                            // An idle stream is torn down by the HTTP client's
+                            // own read timeout, so a drop here is routine.
+                            warn!("Update subscription dropped, reconnecting: {e}");
                             break;
                         }
                     }
