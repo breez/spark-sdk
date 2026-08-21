@@ -29,7 +29,6 @@ jobs:
           cargo install --path ./snippets-processor
           cargo install mdbook-variables --vers "^0.2" --locked
           cargo install mdbook-pagetoc --vers "^0.2" --locked
-          cargo install mdbook-llms-txt-tools
 
       - name: Get latest tag
         uses: actions-ecosystem/action-get-latest-tag@v1
