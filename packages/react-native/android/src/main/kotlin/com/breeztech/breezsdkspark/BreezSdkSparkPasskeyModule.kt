@@ -36,10 +36,10 @@ class BreezSdkSparkPasskeyModule(
 ) : ReactContextBaseJavaModule(reactContext) {
 
     /**
-     * Module-scoped coroutine scope. Cancelled in [onCatalystInstanceDestroy]
-     * so any in-flight passkey ceremony does not outlive the React context
-     * and leak the captured Activity. SupervisorJob keeps siblings alive if
-     * one branch fails, matching the per-call try/catch pattern below.
+     * Module-scoped coroutine scope. Cancelled in [invalidate] so any
+     * in-flight passkey ceremony does not outlive the React context and leak
+     * the captured Activity. SupervisorJob keeps siblings alive if one branch
+     * fails, matching the per-call try/catch pattern below.
      */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -53,9 +53,9 @@ class BreezSdkSparkPasskeyModule(
 
     override fun getName(): String = NAME
 
-    override fun onCatalystInstanceDestroy() {
+    override fun invalidate() {
         scope.cancel()
-        super.onCatalystInstanceDestroy()
+        super.invalidate()
     }
 
     /**
