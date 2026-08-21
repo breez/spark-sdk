@@ -59,7 +59,7 @@ Before registering a Lightning address, you can check if the username is availab
 
 Once you've confirmed a username is available, you can register it by passing a username and a description. The username will be used in `username@domain.com`. The description will be included in lnurl metadata and as the invoice description, so this is what the sender will see. The description is optional, and will default to `Pay to username@domain.com`.
 
-> **Note:** Each user can have only one Lightning address per domain when using the Breez LNURL server. Registering a new address on the same domain will replace the previous one. The previous username stays reserved for this wallet: while the reservation stands no one else can register it, and the wallet can go back to it.
+> **Note:** Each user can have only one Lightning address per domain when using the Breez LNURL server. Registering a new address on the same domain will replace the previous one, but it won't be available to others.
 
 {{#tabs lightning_address:register-lightning-address}}
 
