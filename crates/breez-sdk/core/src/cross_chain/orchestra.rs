@@ -913,7 +913,7 @@ impl CrossChainService for OrchestraService {
                 spark_wallet.as_ref(),
                 Arc::clone(&storage),
                 &payment_id_for_poll,
-                false,
+                true,
             )
         })
         .await;
