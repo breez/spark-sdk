@@ -44,10 +44,10 @@ use spark::{
         },
     },
     services::{
-        CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpInput, DepositService, ExitSpeed,
-        Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription, LightningReceivePayment,
-        LightningSendPayment, LightningService, PayLightningResult, Preimage,
-        PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
+        CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpFundingShape, CpfpInput,
+        DepositService, ExitSpeed, Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription,
+        LightningReceivePayment, LightningSendPayment, LightningService, PayLightningResult,
+        Preimage, PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
         QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap, TimelockManager,
         TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
         TransferTokenOutput, TransferType, UnilateralExitLeafFilter, Utxo,
@@ -1760,6 +1760,7 @@ impl SparkWallet {
     }
 
     /// Quotes the funding needed for a unilateral exit of the selected leaves.
+    #[allow(clippy::too_many_arguments)]
     pub async fn quote_unilateral_exit(
         &self,
         fee_rate_sat_per_kw: u64,
@@ -1767,6 +1768,7 @@ impl SparkWallet {
         funding_input_weight: u64,
         funding_output_script_len: usize,
         change_dust_limit: u64,
+        funding_shape: CpfpFundingShape,
         destination_script_len: usize,
     ) -> Result<spark::services::UnilateralExitQuote, SparkWalletError> {
         self.refresh_before_exit().await;
@@ -1779,7 +1781,7 @@ impl SparkWallet {
             funding_input_weight,
             funding_output_script_len,
             change_dust_limit,
-            spark::services::CpfpFundingShape::PerBranch,
+            funding_shape,
             fee_rate_sat_per_kw,
             destination_script_len,
         )?)
@@ -1793,6 +1795,7 @@ impl SparkWallet {
         fee_rate_sat_per_kw: u64,
         selection: ExitLeafSelection,
         inputs: Vec<CpfpInput>,
+        funding_shape: CpfpFundingShape,
         destination_script_len: usize,
     ) -> Result<PreparedUnilateralExit, SparkWalletError> {
         self.refresh_before_exit().await;
@@ -1803,12 +1806,13 @@ impl SparkWallet {
             &leaf_ids,
             filter,
             inputs,
-            spark::services::CpfpFundingShape::PerBranch,
+            funding_shape,
             fee_rate_sat_per_kw,
             destination_script_len,
         )?;
         debug!(
             fee_rate_sat_per_kw,
+            ?funding_shape,
             selected_leaves = plan.selected_leaves.len(),
             tree_nodes = plan.tree_nodes.len(),
             has_fan_out = plan.fan_out_psbt.is_some(),
@@ -1832,9 +1836,9 @@ impl SparkWallet {
         })
     }
 
-    /// Builds a sweep PSBT that pulls every leaf's refund output and every
-    /// leaf's terminal CPFP-change output into a single payment to
-    /// `destination`. Refund inputs are signed internally; CPFP-change inputs
+    /// Builds a sweep PSBT that pulls every leaf's refund output, plus any
+    /// terminal CPFP-change outputs the build handed back, into a single payment
+    /// to `destination`. Refund inputs are signed internally; CPFP-change inputs
     /// are left unsigned for an external signer.
     pub async fn create_refund_sweep_transaction(
         &self,
