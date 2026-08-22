@@ -275,6 +275,14 @@ fn parse_sslmode_from_connection_string(conn_str: &str) -> SslModeExt {
     SslModeExt::Prefer
 }
 
+fn driver_connection_string(conn_str: &str, ssl_mode: SslModeExt) -> String {
+    match ssl_mode {
+        SslModeExt::VerifyCa => conn_str.replacen("sslmode=verify-ca", "sslmode=require", 1),
+        SslModeExt::VerifyFull => conn_str.replacen("sslmode=verify-full", "sslmode=require", 1),
+        _ => conn_str.to_string(),
+    }
+}
+
 /// Applies pool configuration options from `PostgresStorageConfig` to a deadpool-postgres config.
 fn apply_pool_config(config: &PostgresStorageConfig) -> deadpool_postgres::PoolConfig {
     deadpool_postgres::PoolConfig {
@@ -316,14 +324,14 @@ fn apply_tcp_liveness_defaults(connection_string: &str, pg_config: &mut PgConfig
 
 /// Creates a `PostgreSQL` connection pool from the given configuration.
 pub fn create_pool(config: &PostgresStorageConfig) -> Result<Pool, PostgresError> {
-    let mut pg_config: PgConfig = config
-        .connection_string
+    let ssl_mode = parse_sslmode_from_connection_string(&config.connection_string);
+    let driver_connection_string = driver_connection_string(&config.connection_string, ssl_mode);
+    let mut pg_config: PgConfig = driver_connection_string
         .parse()
         .map_err(|e| PostgresError::Initialization(format!("Invalid connection string: {e}")))?;
 
     apply_tcp_liveness_defaults(&config.connection_string, &mut pg_config);
 
-    let ssl_mode = parse_sslmode_from_connection_string(&config.connection_string);
     let pool_config = apply_pool_config(config);
 
     match ssl_mode {
@@ -547,5 +555,20 @@ mod tests {
             "create_pool with a timeout should build; got: {:?}",
             pool.err(),
         );
+    }
+
+    #[test]
+    fn create_pool_accepts_extended_ssl_modes() {
+        let ca_pem = generate_test_ca_pem("testca");
+        for ssl_mode in ["verify-ca", "verify-full"] {
+            let mut cfg = crate::config::PostgresStorageConfig::with_defaults(format!(
+                "postgres://postgres:password@127.0.0.1:5432/postgres?sslmode={ssl_mode}"
+            ));
+            cfg.root_ca_pem = Some(ca_pem.clone());
+            assert!(
+                create_pool(&cfg).is_ok(),
+                "create_pool should accept sslmode={ssl_mode}"
+            );
+        }
     }
 }
