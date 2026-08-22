@@ -85,6 +85,7 @@ impl BreezSdk {
                 input_weight,
                 output_script.len(),
                 output_script.minimal_non_dust().to_sat(),
+                spark_wallet::CpfpFundingShape::PerBranch,
                 dest_script_len,
             )
             .await?;
@@ -203,6 +204,7 @@ impl BreezSdk {
                 fee_rate_sat_per_kw,
                 spark_wallet::ExitLeafSelection::Specific(leaf_ids),
                 funding_inputs,
+                spark_wallet::CpfpFundingShape::PerBranch,
                 dest_script_len,
             )
             .await?;
