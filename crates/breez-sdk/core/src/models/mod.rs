@@ -1141,12 +1141,19 @@ pub enum InstantClaimStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct DepositInfo {
+    /// Transaction id of the on-chain output the deposit came from.
     pub txid: String,
+    /// Index of that output within its transaction.
     pub vout: u32,
+    /// Deposit value in satoshis.
     pub amount_sats: u64,
+    /// Whether the deposit has enough confirmations to be claimed.
     pub is_mature: bool,
+    /// Raw refund transaction, once one has been created.
     pub refund_tx: Option<String>,
+    /// Transaction id of the refund, once one has been created.
     pub refund_tx_id: Option<String>,
+    /// Why the last claim attempt failed. Unset while none has failed.
     pub claim_error: Option<DepositClaimError>,
     /// Unset when no instant claim has been attempted.
     pub instant_claim_status: Option<InstantClaimStatus>,
