@@ -92,8 +92,8 @@ func (SdkListener) OnEvent(e breez_sdk_spark.SdkEvent) {
 		unclaimedDeposits := event.UnclaimedDeposits
 		_ = unclaimedDeposits
 	case breez_sdk_spark.SdkEventClaimedDeposits:
-		// Deposits claimed into the wallet. The resulting payment
-		// arrives separately as its own event.
+		// Deposits claimed into the wallet. An instant (0-conf) claim is
+		// reported here on submission and settles shortly after.
 		claimedDeposits := event.ClaimedDeposits
 		_ = claimedDeposits
 	case breez_sdk_spark.SdkEventPaymentSucceeded:

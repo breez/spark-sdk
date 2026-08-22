@@ -84,8 +84,8 @@ class SdkListener(EventListener):
             # most often the fee exceeded the configured maximum.
             unclaimed_deposits = event.unclaimed_deposits
         elif isinstance(event, SdkEvent.CLAIMED_DEPOSITS):
-            # Deposits claimed into the wallet. The resulting payment
-            # arrives separately as its own event.
+            # Deposits claimed into the wallet. An instant (0-conf) claim is
+            # reported here on submission and settles shortly after.
             claimed_deposits = event.claimed_deposits
         elif isinstance(event, SdkEvent.PAYMENT_SUCCEEDED):
             # A payment completed. The cached balance is already refreshed,

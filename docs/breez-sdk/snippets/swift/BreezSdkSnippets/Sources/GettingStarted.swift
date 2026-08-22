@@ -65,8 +65,8 @@ class SdkEventListener: EventListener {
             // most often the fee exceeded the configured maximum.
             let _ = unclaimedDeposits
         case .claimedDeposits(let claimedDeposits):
-            // Deposits claimed into the wallet. The resulting payment
-            // arrives separately as its own event.
+            // Deposits claimed into the wallet. An instant (0-conf) claim is
+            // reported here on submission and settles shortly after.
             let _ = claimedDeposits
         case .paymentSucceeded(let paymentSucceeded):
             // A payment completed. The cached balance is already refreshed,

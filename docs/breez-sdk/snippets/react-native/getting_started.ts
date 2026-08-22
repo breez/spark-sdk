@@ -73,8 +73,8 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
         // most often the fee exceeded the configured maximum.
         const unclaimedDeposits = event.inner.unclaimedDeposits
       } else if (event.tag === SdkEvent_Tags.ClaimedDeposits) {
-        // Deposits claimed into the wallet. The resulting payment
-        // arrives separately as its own event.
+        // Deposits claimed into the wallet. An instant (0-conf) claim is
+        // reported here on submission and settles shortly after.
         const claimedDeposits = event.inner.claimedDeposits
       } else if (event.tag === SdkEvent_Tags.PaymentSucceeded) {
         // A payment completed. The cached balance is already refreshed,

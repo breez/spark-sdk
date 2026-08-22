@@ -15,6 +15,7 @@ The SDK emits several events to provide the application with an up-to-date state
 | {{#enum SdkEvent::UnclaimedDeposits}} | {{#name DepositInfo}} list | The SDK could not claim these. Read {{#name claim_error}} for the reason, then claim manually or refund. See [claiming on-chain deposits](onchain_claims.md). |
 | {{#enum SdkEvent::AutoOptimization}} | {{#name AutoOptimizationEvent}} | Progress of the background leaf optimizer. Manual {{#name optimize_leaves}} calls do not emit this. See [custom leaf optimization](optimize.md). |
 | {{#enum SdkEvent::LightningAddressChanged}} | {{#name LightningAddressInfo}}, unset when the address was deleted | The Lightning address changed on another device. See [receiving payments using LNURL-Pay](receive_lnurl_pay.md). |
+| {{#enum SdkEvent::UnilateralExitStateChanged}} | none | An exit state exported earlier is now out of date. Export it again. See [unilateral exit](unilateral_exit.md). |
 
 The fields of {{#name Payment}} are described in [listing payments](list_payments.md). For
 the order in which these events arrive during a receive, see
@@ -32,6 +33,7 @@ what to do next.
 | {{#name is_mature}} | Whether the deposit has enough confirmations to be claimed. |
 | {{#name claim_error}} | Why the last claim attempt failed. Set on {{#enum SdkEvent::UnclaimedDeposits}}. |
 | {{#name refund_tx}}, {{#name refund_tx_id}} | The refund transaction, once one has been created. |
+| {{#name instant_claim_status}} | State of an instant (0-conf) claim attempt. Unset when none was attempted. |
 
 <h2 id="add-event-listener">
     <a class="header" href="#add-event-listener">Add event listener</a>

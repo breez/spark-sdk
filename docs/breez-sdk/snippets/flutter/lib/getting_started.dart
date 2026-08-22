@@ -129,8 +129,8 @@ class BreezSdkSpark {
           final _ = unclaimedDeposits;
           break;
         case SdkEvent_ClaimedDeposits(:final claimedDeposits):
-          // Deposits claimed into the wallet. The resulting payment
-          // arrives separately as its own event.
+          // Deposits claimed into the wallet. An instant (0-conf) claim is
+          // reported here on submission and settles shortly after.
           final _ = claimedDeposits;
           break;
         case SdkEvent_PaymentSucceeded(:final payment):

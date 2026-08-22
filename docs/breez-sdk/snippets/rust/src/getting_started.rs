@@ -76,8 +76,8 @@ impl EventListener for SdkEventListener {
                 // most often the fee exceeded the configured maximum.
             }
             SdkEvent::ClaimedDeposits { claimed_deposits } => {
-                // Deposits claimed into the wallet. The resulting payment
-                // arrives separately as its own event.
+                // Deposits claimed into the wallet. An instant (0-conf) claim is
+                // reported here on submission and settles shortly after.
             }
             SdkEvent::PaymentSucceeded { payment } => {
                 // A payment completed. The cached balance is already refreshed,
