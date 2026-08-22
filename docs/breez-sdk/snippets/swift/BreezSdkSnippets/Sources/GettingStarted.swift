@@ -57,28 +57,36 @@ class SdkEventListener: EventListener {
             // it is recommended to refresh the payment list and wallet balance.
             break
         case .newDeposits(let newDeposits):
-            // New deposits were detected (may be pending or confirmed)
+            // Detected deposits, as DepositInfo. Only those with isMature set
+            // have enough confirmations to be claimed. Show the rest as pending.
             let _ = newDeposits
         case .unclaimedDeposits(let unclaimedDeposits):
-            // SDK was unable to claim some deposits automatically
+            // Deposits the SDK could not claim. Each claimError says why,
+            // most often the fee exceeded the configured maximum.
             let _ = unclaimedDeposits
         case .claimedDeposits(let claimedDeposits):
-            // Deposits were successfully claimed
+            // Deposits claimed into the wallet. An instant (0-conf) claim is
+            // reported here on submission and settles shortly after.
             let _ = claimedDeposits
         case .paymentSucceeded(let paymentSucceeded):
-            // A payment completed successfully
+            // A payment completed. The cached balance is already refreshed,
+            // so getInfo returns the new value.
             let _ = paymentSucceeded
         case .paymentPending(let paymentPending):
-            // A payment is pending (waiting for confirmation)
+            // A payment is awaiting confirmation. It arrives again as
+            // succeeded or failed once it settles.
             let _ = paymentPending
         case .paymentFailed(let paymentFailed):
-            // A payment failed
+            // A payment failed. payment.details carries the method-specific
+            // context to show the user.
             let _ = paymentFailed
         case .autoOptimization(let optimizationEvent):
-            // An auto-optimization event occurred
+            // Background optimizer progress: started, round completed, or a
+            // terminal outcome. Manual optimizeLeaves calls do not emit these.
             let _ = optimizationEvent
         case .lightningAddressChanged(let lightningAddress):
-            // The lightning address has changed
+            // The lightning address changed on another device. Unset when the
+            // address was deleted.
             let _ = lightningAddress
         case .unilateralExitStateChanged:
             // The unilateral exit state changed, so a previously exported

@@ -65,28 +65,36 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
         // Data has been synchronized with the network. When this event is received,
         // it is recommended to refresh the payment list and wallet balance.
       } else if (event.tag === SdkEvent_Tags.NewDeposits) {
-        // New deposits were detected (may be pending or confirmed)
+        // Detected deposits, as DepositInfo. Only those with isMature set
+        // have enough confirmations to be claimed. Show the rest as pending.
         const newDeposits = event.inner.newDeposits
       } else if (event.tag === SdkEvent_Tags.UnclaimedDeposits) {
-        // SDK was unable to claim some deposits automatically
+        // Deposits the SDK could not claim. Each claimError says why,
+        // most often the fee exceeded the configured maximum.
         const unclaimedDeposits = event.inner.unclaimedDeposits
       } else if (event.tag === SdkEvent_Tags.ClaimedDeposits) {
-        // Deposits were successfully claimed
+        // Deposits claimed into the wallet. An instant (0-conf) claim is
+        // reported here on submission and settles shortly after.
         const claimedDeposits = event.inner.claimedDeposits
       } else if (event.tag === SdkEvent_Tags.PaymentSucceeded) {
-        // A payment completed successfully
+        // A payment completed. The cached balance is already refreshed,
+        // so getInfo returns the new value.
         const payment = event.inner.payment
       } else if (event.tag === SdkEvent_Tags.PaymentPending) {
-        // A payment is pending (waiting for confirmation)
+        // A payment is awaiting confirmation. It arrives again as
+        // succeeded or failed once it settles.
         const pendingPayment = event.inner.payment
       } else if (event.tag === SdkEvent_Tags.PaymentFailed) {
-        // A payment failed
+        // A payment failed. payment.details carries the method-specific
+        // context to show the user.
         const failedPayment = event.inner.payment
       } else if (event.tag === SdkEvent_Tags.AutoOptimization) {
-        // An auto-optimization event occurred
+        // Background optimizer progress: started, round completed, or a
+        // terminal outcome. Manual optimizeLeaves calls do not emit these.
         const optimizationEvent = event.inner.optimizationEvent
       } else if (event.tag === SdkEvent_Tags.LightningAddressChanged) {
-        // The lightning address has changed
+        // The lightning address changed on another device. Unset when the
+        // address was deleted.
         const lightningAddress = event.inner.lightningAddress
       } else if (event.tag === SdkEvent_Tags.UnilateralExitStateChanged) {
         // The unilateral exit state changed, so a previously exported

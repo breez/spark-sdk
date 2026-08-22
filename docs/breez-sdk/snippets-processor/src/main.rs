@@ -70,6 +70,100 @@ fn check_mdbook_version(version: &str) {
     }
 }
 
+/// Appended to non-HTML output, where `{{#name}}` and `{{#enum}}` render as one
+/// Rust-cased identifier rather than one span per language.
+const CASING_FOOTER: &str = "\n\n---\n\nIdentifier casing: `get_info` here is `getInfo` \
+in Swift, Kotlin, JavaScript, React Native and Flutter, and `GetInfo` in Go and C#. \
+Enum variants: `SdkEvent::Synced` is `SdkEvent.SYNCED` in Python, `SdkEvent.synced` in \
+Swift, `SdkEventSynced` in Go, and `SdkEvent.Synced` elsewhere.\n";
+
+/// A single-language edition: which snippet tab to keep, and how that
+/// language writes identifiers.
+#[derive(Clone, Copy)]
+struct Edition {
+    key: &'static str,
+    /// Matching tab label in `get_language_paths`.
+    tab: &'static str,
+}
+
+const EDITIONS: [Edition; 9] = [
+    Edition {
+        key: "rust",
+        tab: "Rust",
+    },
+    Edition {
+        key: "swift",
+        tab: "Swift",
+    },
+    Edition {
+        key: "kotlin",
+        tab: "Kotlin",
+    },
+    Edition {
+        key: "csharp",
+        tab: "C#",
+    },
+    Edition {
+        key: "wasm",
+        tab: "Javascript",
+    },
+    Edition {
+        key: "react-native",
+        tab: "React Native",
+    },
+    Edition {
+        key: "flutter",
+        tab: "Flutter",
+    },
+    Edition {
+        key: "python",
+        tab: "Python",
+    },
+    Edition {
+        key: "go",
+        tab: "Go",
+    },
+];
+
+impl Edition {
+    fn from_renderer(renderer: &str) -> Option<Edition> {
+        let key = renderer.strip_prefix("llms-")?;
+        EDITIONS.iter().copied().find(|e| e.key == key)
+    }
+
+    fn case(&self, s: &str) -> String {
+        match self.key {
+            "rust" | "python" => s.to_string(),
+            "go" | "csharp" => capitalize_first(s),
+            _ => SnippetsProcessor::to_camel_case(s),
+        }
+    }
+
+    fn name(&self, identifier: &str) -> String {
+        match identifier.split_once('.') {
+            // An uppercase-initial prefix is a type name, identical everywhere.
+            Some((prefix, method)) if prefix.starts_with(|c: char| c.is_uppercase()) => {
+                format!("{prefix}.{}", self.case(method))
+            }
+            Some((prefix, method)) => format!("{}.{}", self.case(prefix), self.case(method)),
+            None => self.case(identifier),
+        }
+    }
+
+    fn enum_variant(&self, type_name: &str, variant: &str) -> String {
+        match self.key {
+            "rust" => format!("{type_name}::{variant}"),
+            "python" => format!(
+                "{type_name}.{}",
+                SnippetsProcessor::to_screaming_snake(variant)
+            ),
+            "swift" => format!("{type_name}.{}", SnippetsProcessor::to_lower_camel(variant)),
+            "go" => format!("{type_name}{variant}"),
+            _ => format!("{type_name}.{variant}"),
+        }
+    }
+}
+
 struct SnippetsProcessor;
 impl SnippetsProcessor {
     /// Convert snake_case to camelCase
@@ -117,7 +211,14 @@ impl SnippetsProcessor {
     ///   name and emitted verbatim across all languages.
     /// - `field.subfield` — prefix starts lowercase, treated as a snake_case
     ///   field path and case-converted alongside the trailing segment.
-    fn expand_name(identifier: &str) -> String {
+    fn expand_name(identifier: &str, markdown: bool, edition: Option<Edition>) -> String {
+        if let Some(edition) = edition {
+            return format!("`{}`", edition.name(identifier));
+        }
+        if markdown {
+            return format!("`{identifier}`");
+        }
+
         let (type_prefix, method) = identifier
             .split_once('.')
             .map(|(t, m)| (Some(t), m))
@@ -172,7 +273,19 @@ impl SnippetsProcessor {
     }
 
     /// Expand {{#enum Type::Variant}} to language-aware HTML
-    fn expand_enum(enum_str: &str) -> String {
+    fn expand_enum(enum_str: &str, markdown: bool, edition: Option<Edition>) -> String {
+        if let Some(edition) = edition {
+            return match enum_str.split_once("::") {
+                Some((type_name, variant)) => {
+                    format!("`{}`", edition.enum_variant(type_name, variant))
+                }
+                None => format!("`{enum_str}`"),
+            };
+        }
+        if markdown {
+            return format!("`{enum_str}`");
+        }
+
         // Parse Type::Variant
         let (type_name, variant) = enum_str
             .split_once("::")
@@ -201,6 +314,67 @@ impl SnippetsProcessor {
             .collect();
 
         format!("<code class=\"lang-fn\">{}</code>", spans)
+    }
+
+    /// Rewrite the raw `<hN id=...>` blocks carrying the API-docs link into
+    /// markdown headings, so non-HTML output keeps its section structure.
+    fn html_headings_to_markdown(content: &str) -> String {
+        let re = regex::Regex::new(
+            r#"(?s)<h([1-6])\s+id="[^"]*"\s*>\s*<a\s+class="header"[^>]*>(.*?)</a>\s*(?:<a\s+class="tag"[^>]*?href="([^"]*)"[^>]*>.*?</a>\s*)?</h[1-6]\s*>"#,
+        )
+        .unwrap();
+
+        let expanded = re.replace_all(content, |caps: &regex::Captures| {
+            let level = caps[1].parse::<usize>().unwrap_or(2);
+            let mut out = format!("{} {}", "#".repeat(level), caps[2].trim());
+            if let Some(url) = caps.get(3) {
+                out.push_str(&format!("\n\nAPI docs: {}", url.as_str()));
+            }
+            out
+        });
+
+        // Plain `<hN id="...">Title</hN>`, used where there is no API-docs link.
+        let plain =
+            regex::Regex::new(r#"(?s)<h([1-6])\s+id="[^"]*"\s*>\s*(.*?)\s*</h[1-6]\s*>"#).unwrap();
+
+        plain
+            .replace_all(&expanded, |caps: &regex::Captures| {
+                let level = caps[1].parse::<usize>().unwrap_or(2);
+                format!("{} {}", "#".repeat(level), caps[2].trim())
+            })
+            .into_owned()
+    }
+
+    /// Point links at the edition's own pages, so following one from a Rust
+    /// page does not land on the multi-language version.
+    ///
+    /// Relative links already resolve inside the edition directory. Only
+    /// site-absolute `.md` links and image paths need moving; `.html` links
+    /// belong to the rendered site and are left alone.
+    fn rewrite_links(content: &str, edition: Edition) -> String {
+        let pages = regex::Regex::new(r"\]\(/guide/([^)]*\.md[^)]*)\)").unwrap();
+        let moved = pages.replace_all(
+            content,
+            format!("](/llms/{}/guide/$1)", edition.key).as_str(),
+        );
+
+        let images = regex::Regex::new(r"\]\(images/([^)]*)\)").unwrap();
+        images
+            .replace_all(&moved, "](/guide/images/$1)")
+            .into_owned()
+    }
+
+    /// Unwrap `<div class="warning">` blocks, keeping the markdown inside and
+    /// turning the `<h4>` title into bold text.
+    fn unwrap_warning_divs(content: &str) -> String {
+        let block = regex::Regex::new(r#"(?s)<div class="warning">\s*(.*?)\s*</div>"#).unwrap();
+        let title = regex::Regex::new(r"(?s)<h4>\s*(.*?)\s*</h4>\s*").unwrap();
+
+        block
+            .replace_all(content, |caps: &regex::Captures| {
+                title.replace_all(&caps[1], "**$1**\n\n").into_owned()
+            })
+            .into_owned()
     }
 
     fn get_language_paths(file_base: &str) -> Vec<(&'static str, &'static str, Vec<String>)> {
@@ -285,15 +459,36 @@ impl SnippetsProcessor {
         None
     }
 
+    /// The website tab reads "Javascript". In markdown, where React Native is
+    /// also TypeScript, the platform has to be explicit.
+    fn markdown_label(lang_name: &str) -> &str {
+        match lang_name {
+            "Javascript" => "Javascript (Wasm)",
+            other => other,
+        }
+    }
+
     fn expand_tabs(
         ctx: &PreprocessorContext,
         file_base: &str,
         snippet_name: &str,
+        markdown: bool,
+        section_level: usize,
+        edition: Option<Edition>,
     ) -> Result<String> {
         let config = Self::get_language_paths(file_base);
-        let mut result = String::from("<custom-tabs category=\"lang\">\n");
+        let mut result = if markdown {
+            String::new()
+        } else {
+            String::from("<custom-tabs category=\"lang\">\n")
+        };
 
         for (lang_name, lang_code, relative_paths) in &config {
+            // An edition keeps only its own language.
+            if edition.is_some_and(|e| e.tab != *lang_name) {
+                continue;
+            }
+
             // Try each candidate path in order and use the first one that both
             // exists and contains the requested snippet anchor.
             let snippet = relative_paths.iter().find_map(|relative_path| {
@@ -307,13 +502,26 @@ impl SnippetsProcessor {
                 continue;
             };
 
-            result.push_str(&format!(
-                "<div slot=\"title\">{}</div>\n<section>\n\n```{},ignore\n{}\n```\n\n</section>\n\n",
-                lang_name, lang_code, snippet
-            ));
+            if edition.is_some() {
+                // One language, so a heading naming it would be noise.
+                result.push_str(&format!("```{lang_code}\n{snippet}\n```\n\n"));
+            } else if markdown {
+                let hashes = "#".repeat((section_level + 1).min(6));
+                let label = Self::markdown_label(lang_name);
+                result.push_str(&format!(
+                    "{hashes} {label}\n\n```{lang_code}\n{snippet}\n```\n\n"
+                ));
+            } else {
+                result.push_str(&format!(
+                    "<div slot=\"title\">{}</div>\n<section>\n\n```{},ignore\n{}\n```\n\n</section>\n\n",
+                    lang_name, lang_code, snippet
+                ));
+            }
         }
 
-        result.push_str("</custom-tabs>\n");
+        if !markdown {
+            result.push_str("</custom-tabs>\n");
+        }
         Ok(result)
     }
 }
@@ -342,8 +550,33 @@ impl Preprocessor for SnippetsProcessor {
     }
 
     fn run(&self, ctx: &PreprocessorContext, mut book: Book) -> Result<Book> {
+        // Depth of a markdown ATX heading, or None if the line is not one.
+        fn heading_level(line: &str) -> Option<usize> {
+            let hashes = line.len() - line.trim_start_matches('#').len();
+            if (1..=6).contains(&hashes) && line[hashes..].starts_with(' ') {
+                Some(hashes)
+            } else {
+                None
+            }
+        }
+
+        // The HTML renderer gets language tabs and one identifier span per
+        // language. Every other renderer gets plain markdown instead.
+        let markdown = ctx.renderer != "html";
+        let edition = Edition::from_renderer(&ctx.renderer);
+
         book.for_each_mut(|item| {
             if let BookItem::Chapter(chapter) = item {
+                if markdown {
+                    chapter.content = Self::html_headings_to_markdown(&chapter.content);
+                    chapter.content = Self::unwrap_warning_divs(&chapter.content);
+                }
+                if let Some(edition) = edition {
+                    chapter.content = Self::rewrite_links(&chapter.content, edition);
+                }
+
+                let mut used_identifier_macro = false;
+                let mut section_level = 1usize;
                 let mut resulting_lines: Vec<String> = vec![];
                 let mut in_block = false;
                 let mut block_lines: Vec<String> = vec![];
@@ -362,8 +595,14 @@ impl Preprocessor for SnippetsProcessor {
                         if let (Some(file_base), Some(snippet_name)) =
                             (captures.get(1), captures.get(2))
                         {
-                            match Self::expand_tabs(ctx, file_base.as_str(), snippet_name.as_str())
-                            {
+                            match Self::expand_tabs(
+                                ctx,
+                                file_base.as_str(),
+                                snippet_name.as_str(),
+                                markdown,
+                                section_level,
+                                edition,
+                            ) {
                                 Ok(expanded) => {
                                     resulting_lines.push(expanded);
                                 }
@@ -383,12 +622,13 @@ impl Preprocessor for SnippetsProcessor {
                     let has_enum = enum_regex.is_match(line);
 
                     if has_name || has_enum {
+                        used_identifier_macro = true;
                         let mut new_line = line.to_string();
 
                         if has_name {
                             new_line = name_regex
                                 .replace_all(&new_line, |caps: &regex::Captures| {
-                                    Self::expand_name(&caps[1])
+                                    Self::expand_name(&caps[1], markdown, edition)
                                 })
                                 .to_string();
                         }
@@ -396,7 +636,7 @@ impl Preprocessor for SnippetsProcessor {
                         if has_enum {
                             new_line = enum_regex
                                 .replace_all(&new_line, |caps: &regex::Captures| {
-                                    Self::expand_enum(&caps[1])
+                                    Self::expand_enum(&caps[1], markdown, edition)
                                 })
                                 .to_string();
                         }
@@ -434,11 +674,18 @@ impl Preprocessor for SnippetsProcessor {
                                 std::cmp::min(min_indentation, line.len() - trimmed.len())
                         }
                     } else {
+                        if let Some(level) = heading_level(line) {
+                            section_level = level;
+                        }
                         resulting_lines.push(line.to_string());
                     }
                 }
 
                 chapter.content = resulting_lines.join("\n");
+                // An edition already writes identifiers in its own language.
+                if markdown && edition.is_none() && used_identifier_macro {
+                    chapter.content.push_str(CASING_FOOTER);
+                }
             }
         });
         Ok(book)

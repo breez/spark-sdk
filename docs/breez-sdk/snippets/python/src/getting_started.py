@@ -76,28 +76,36 @@ class SdkListener(EventListener):
             # it is recommended to refresh the payment list and wallet balance.
             pass
         elif isinstance(event, SdkEvent.NEW_DEPOSITS):
-            # New deposits were detected (may be pending or confirmed)
+            # Detected deposits, as DepositInfo. Only those with is_mature set
+            # have enough confirmations to be claimed. Show the rest as pending.
             new_deposits = event.new_deposits
         elif isinstance(event, SdkEvent.UNCLAIMED_DEPOSITS):
-            # SDK was unable to claim some deposits automatically
+            # Deposits the SDK could not claim. Each claim_error says why,
+            # most often the fee exceeded the configured maximum.
             unclaimed_deposits = event.unclaimed_deposits
         elif isinstance(event, SdkEvent.CLAIMED_DEPOSITS):
-            # Deposits were successfully claimed
+            # Deposits claimed into the wallet. An instant (0-conf) claim is
+            # reported here on submission and settles shortly after.
             claimed_deposits = event.claimed_deposits
         elif isinstance(event, SdkEvent.PAYMENT_SUCCEEDED):
-            # A payment completed successfully
+            # A payment completed. The cached balance is already refreshed,
+            # so get_info returns the new value.
             payment = event.payment
         elif isinstance(event, SdkEvent.PAYMENT_PENDING):
-            # A payment is pending (waiting for confirmation)
+            # A payment is awaiting confirmation. It arrives again as
+            # succeeded or failed once it settles.
             pending_payment = event.payment
         elif isinstance(event, SdkEvent.PAYMENT_FAILED):
-            # A payment failed
+            # A payment failed. payment.details carries the method-specific
+            # context to show the user.
             failed_payment = event.payment
         elif isinstance(event, SdkEvent.AUTO_OPTIMIZATION):
-            # An auto-optimization event occurred
+            # Background optimizer progress: started, round completed, or a
+            # terminal outcome. Manual optimize_leaves calls do not emit these.
             optimization_event = event.optimization_event
         elif isinstance(event, SdkEvent.LIGHTNING_ADDRESS_CHANGED):
-            # The lightning address has changed
+            # The lightning address changed on another device. Unset when the
+            # address was deleted.
             lightning_address = event.lightning_address
         elif isinstance(event, SdkEvent.UNILATERAL_EXIT_STATE_CHANGED):
             # The unilateral exit state changed, so a previously exported

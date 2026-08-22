@@ -82,35 +82,43 @@ func (SdkListener) OnEvent(e breez_sdk_spark.SdkEvent) {
 		// Data has been synchronized with the network. When this event is received,
 		// it is recommended to refresh the payment list and wallet balance.
 	case breez_sdk_spark.SdkEventNewDeposits:
-		// New deposits were detected (may be pending or confirmed)
+		// Detected deposits, as DepositInfo. Only those with IsMature set
+		// have enough confirmations to be claimed. Show the rest as pending.
 		newDeposits := event.NewDeposits
 		_ = newDeposits
 	case breez_sdk_spark.SdkEventUnclaimedDeposits:
-		// SDK was unable to claim some deposits automatically
+		// Deposits the SDK could not claim. Each ClaimError says why,
+		// most often the fee exceeded the configured maximum.
 		unclaimedDeposits := event.UnclaimedDeposits
 		_ = unclaimedDeposits
 	case breez_sdk_spark.SdkEventClaimedDeposits:
-		// Deposits were successfully claimed
+		// Deposits claimed into the wallet. An instant (0-conf) claim is
+		// reported here on submission and settles shortly after.
 		claimedDeposits := event.ClaimedDeposits
 		_ = claimedDeposits
 	case breez_sdk_spark.SdkEventPaymentSucceeded:
-		// A payment completed successfully
+		// A payment completed. The cached balance is already refreshed,
+		// so GetInfo returns the new value.
 		payment := event.Payment
 		_ = payment
 	case breez_sdk_spark.SdkEventPaymentPending:
-		// A payment is pending (waiting for confirmation)
+		// A payment is awaiting confirmation. It arrives again as
+		// succeeded or failed once it settles.
 		pendingPayment := event.Payment
 		_ = pendingPayment
 	case breez_sdk_spark.SdkEventPaymentFailed:
-		// A payment failed
+		// A payment failed. payment.Details carries the method-specific
+		// context to show the user.
 		failedPayment := event.Payment
 		_ = failedPayment
 	case breez_sdk_spark.SdkEventAutoOptimization:
-		// An auto-optimization event occurred
+		// Background optimizer progress: started, round completed, or a
+		// terminal outcome. Manual OptimizeLeaves calls do not emit these.
 		optimizationEvent := event.OptimizationEvent
 		_ = optimizationEvent
 	case breez_sdk_spark.SdkEventLightningAddressChanged:
-		// The lightning address has changed
+		// The lightning address changed on another device. Unset when the
+		// address was deleted.
 		lightningAddress := event.LightningAddress
 		_ = lightningAddress
 	case breez_sdk_spark.SdkEventUnilateralExitStateChanged:

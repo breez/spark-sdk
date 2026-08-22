@@ -65,42 +65,50 @@ namespace BreezSdkSnippets
                         break;
 
                     case SdkEvent.NewDeposits newDepositsEvent:
-                        // New deposits were detected (may be pending or confirmed)
+                        // Detected deposits, as DepositInfo. Only those with IsMature set
+                        // have enough confirmations to be claimed. Show the rest as pending.
                         var newDeposits = newDepositsEvent.newDeposits;
                         break;
 
                     case SdkEvent.UnclaimedDeposits unclaimedDepositsEvent:
-                        // SDK was unable to claim some deposits automatically
+                        // Deposits the SDK could not claim. Each ClaimError says why,
+                        // most often the fee exceeded the configured maximum.
                         var unclaimedDeposits = unclaimedDepositsEvent.unclaimedDeposits;
                         break;
 
                     case SdkEvent.ClaimedDeposits claimedDepositsEvent:
-                        // Deposits were successfully claimed
+                        // Deposits claimed into the wallet. An instant (0-conf) claim is
+                        // reported here on submission and settles shortly after.
                         var claimedDeposits = claimedDepositsEvent.claimedDeposits;
                         break;
 
                     case SdkEvent.PaymentSucceeded paymentSucceededEvent:
-                        // A payment completed successfully
+                        // A payment completed. The cached balance is already refreshed,
+                        // so GetInfo returns the new value.
                         var payment = paymentSucceededEvent.payment;
                         break;
 
                     case SdkEvent.PaymentPending paymentPendingEvent:
-                        // A payment is pending (waiting for confirmation)
+                        // A payment is awaiting confirmation. It arrives again as
+                        // succeeded or failed once it settles.
                         var pendingPayment = paymentPendingEvent.payment;
                         break;
 
                     case SdkEvent.PaymentFailed paymentFailedEvent:
-                        // A payment failed
+                        // A payment failed. payment.Details carries the method-specific
+                        // context to show the user.
                         var failedPayment = paymentFailedEvent.payment;
                         break;
 
                     case SdkEvent.AutoOptimization optimizationEvent:
-                        // An auto-optimization event occurred
+                        // Background optimizer progress: started, round completed, or a
+                        // terminal outcome. Manual OptimizeLeaves calls do not emit these.
                         var optimization = optimizationEvent.optimizationEvent;
                         break;
 
                     case SdkEvent.LightningAddressChanged lightningAddressChangedEvent:
-                        // The lightning address has changed
+                        // The lightning address changed on another device. Unset when the
+                        // address was deleted.
                         var lightningAddress = lightningAddressChangedEvent.lightningAddress;
                         break;
 
