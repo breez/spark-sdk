@@ -64,35 +64,43 @@ class GettingStarted {
                     // it is recommended to refresh the payment list and wallet balance.
                 }
                 is SdkEvent.NewDeposits -> {
-                    // New deposits were detected (may be pending or confirmed)
+                    // Detected deposits, as DepositInfo. Only those with isMature set
+                    // have enough confirmations to be claimed. Show the rest as pending.
                     val newDeposits = e.newDeposits
                 }
                 is SdkEvent.UnclaimedDeposits -> {
-                    // SDK was unable to claim some deposits automatically
+                    // Deposits the SDK could not claim. Each claimError says why,
+                    // most often the fee exceeded the configured maximum.
                     val unclaimedDeposits = e.unclaimedDeposits
                 }
                 is SdkEvent.ClaimedDeposits -> {
-                    // Deposits were successfully claimed
+                    // Deposits claimed into the wallet. The resulting payment
+                    // arrives separately as its own event.
                     val claimedDeposits = e.claimedDeposits
                 }
                 is SdkEvent.PaymentSucceeded -> {
-                    // A payment completed successfully
+                    // A payment completed. The cached balance is already refreshed,
+                    // so getInfo returns the new value.
                     val payment = e.payment
                 }
                 is SdkEvent.PaymentPending -> {
-                    // A payment is pending (waiting for confirmation)
+                    // A payment is awaiting confirmation. It arrives again as
+                    // succeeded or failed once it settles.
                     val pendingPayment = e.payment
                 }
                 is SdkEvent.PaymentFailed -> {
-                    // A payment failed
+                    // A payment failed. payment.details carries the method-specific
+                    // context to show the user.
                     val failedPayment = e.payment
                 }
                 is SdkEvent.AutoOptimization -> {
-                    // An auto-optimization event occurred
+                    // Background optimizer progress: started, round completed, or a
+                    // terminal outcome. Manual optimizeLeaves calls do not emit these.
                     val optimizationEvent = e.optimizationEvent
                 }
                 is SdkEvent.LightningAddressChanged -> {
-                    // The lightning address has changed
+                    // The lightning address changed on another device. Unset when the
+                    // address was deleted.
                     val lightningAddress = e.lightningAddress
                 }
                 else -> {

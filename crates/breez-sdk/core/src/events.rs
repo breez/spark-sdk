@@ -19,38 +19,40 @@ use crate::{DepositInfo, LightningAddressInfo, Payment, sdk::RuntimeEvent};
 pub enum SdkEvent {
     /// Emitted when the wallet has been synchronized with the network
     Synced,
-    /// Emitted when the SDK was unable to claim deposits
+    /// Emitted when the SDK was unable to claim deposits. Each deposit carries a
+    /// `claim_error` with the reason.
     UnclaimedDeposits {
         unclaimed_deposits: Vec<DepositInfo>,
     },
-    ClaimedDeposits {
-        claimed_deposits: Vec<DepositInfo>,
-    },
-    PaymentSucceeded {
-        payment: Payment,
-    },
-    PaymentPending {
-        payment: Payment,
-    },
-    PaymentFailed {
-        payment: Payment,
-    },
+    /// Emitted when deposits were claimed into the wallet. The resulting payment
+    /// is emitted separately as `PaymentSucceeded`.
+    ClaimedDeposits { claimed_deposits: Vec<DepositInfo> },
+    /// Emitted when a payment completed. The cached balance is refreshed before
+    /// this event, so `get_info` returns the new value.
+    PaymentSucceeded { payment: Payment },
+    /// Emitted when a payment is in flight. The same payment is emitted again as
+    /// succeeded or failed once it settles.
+    PaymentPending { payment: Payment },
+    /// Emitted when a payment failed.
+    PaymentFailed { payment: Payment },
     /// Emitted while the background auto-optimizer is running.
     ///
     /// Only fired from the auto path (enabled via
     /// `LeafOptimizationConfig::auto_enabled`). Manually-triggered runs
-    /// via `BreezSdk::optimize_leaves` do not emit events — they return an
+    /// via `BreezSdk::optimize_leaves` do not emit events: they return an
     /// `OptimizationOutcome` instead.
     AutoOptimization {
         // Named with `optimization` prefix to avoid collision with `event` keyword in C#
         optimization_event: AutoOptimizationEvent,
     },
+    /// Emitted when the Lightning address changed on another device. The address
+    /// is unset when it was deleted.
     LightningAddressChanged {
         lightning_address: Option<LightningAddressInfo>,
     },
-    NewDeposits {
-        new_deposits: Vec<DepositInfo>,
-    },
+    /// Emitted when on-chain deposits are detected. Only deposits whose
+    /// `is_mature` is set have enough confirmations to be claimed.
+    NewDeposits { new_deposits: Vec<DepositInfo> },
 }
 
 impl SdkEvent {

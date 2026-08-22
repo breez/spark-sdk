@@ -79,42 +79,50 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
           break
         }
         case 'newDeposits': {
-          // New deposits were detected (may be pending or confirmed)
+          // Detected deposits, as DepositInfo. Only those with isMature set
+          // have enough confirmations to be claimed. Show the rest as pending.
           const newDeposits = event.newDeposits
           break
         }
         case 'unclaimedDeposits': {
-          // SDK was unable to claim some deposits automatically
+          // Deposits the SDK could not claim. Each claimError says why,
+          // most often the fee exceeded the configured maximum.
           const unclaimedDeposits = event.unclaimedDeposits
           break
         }
         case 'claimedDeposits': {
-          // Deposits were successfully claimed
+          // Deposits claimed into the wallet. The resulting payment
+          // arrives separately as its own event.
           const claimedDeposits = event.claimedDeposits
           break
         }
         case 'paymentSucceeded': {
-          // A payment completed successfully
+          // A payment completed. The cached balance is already refreshed,
+          // so getInfo returns the new value.
           const payment = event.payment
           break
         }
         case 'paymentPending': {
-          // A payment is pending (waiting for confirmation)
+          // A payment is awaiting confirmation. It arrives again as
+          // succeeded or failed once it settles.
           const pendingPayment = event.payment
           break
         }
         case 'paymentFailed': {
-          // A payment failed
+          // A payment failed. payment.details carries the method-specific
+          // context to show the user.
           const failedPayment = event.payment
           break
         }
         case 'autoOptimization': {
-          // An auto-optimization event occurred
+          // Background optimizer progress: started, round completed, or a
+          // terminal outcome. Manual optimizeLeaves calls do not emit these.
           const optimizationEvent = event.optimizationEvent
           break
         }
         case 'lightningAddressChanged': {
-          // The lightning address has changed
+          // The lightning address changed on another device. Unset when the
+          // address was deleted.
           const lightningAddress = event.lightningAddress
           break
         }

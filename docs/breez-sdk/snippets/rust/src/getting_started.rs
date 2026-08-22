@@ -68,28 +68,36 @@ impl EventListener for SdkEventListener {
                 // it is recommended to refresh the payment list and wallet balance.
             }
             SdkEvent::NewDeposits { new_deposits } => {
-                // New deposits were detected (may be pending or confirmed)
+                // Detected deposits, as DepositInfo. Only those with is_mature set
+                // have enough confirmations to be claimed. Show the rest as pending.
             }
             SdkEvent::UnclaimedDeposits { unclaimed_deposits } => {
-                // SDK was unable to claim some deposits automatically
+                // Deposits the SDK could not claim. Each claim_error says why,
+                // most often the fee exceeded the configured maximum.
             }
             SdkEvent::ClaimedDeposits { claimed_deposits } => {
-                // Deposits were successfully claimed
+                // Deposits claimed into the wallet. The resulting payment
+                // arrives separately as its own event.
             }
             SdkEvent::PaymentSucceeded { payment } => {
-                // A payment completed successfully
+                // A payment completed. The cached balance is already refreshed,
+                // so get_info returns the new value.
             }
             SdkEvent::PaymentPending { payment } => {
-                // A payment is pending (waiting for confirmation)
+                // A payment is awaiting confirmation. It arrives again as
+                // succeeded or failed once it settles.
             }
             SdkEvent::PaymentFailed { payment } => {
-                // A payment failed
+                // A payment failed. payment.details carries the method-specific
+                // context to show the user.
             }
             SdkEvent::AutoOptimization { optimization_event } => {
-                // An auto-optimization event occurred
+                // Background optimizer progress: started, round completed, or a
+                // terminal outcome. Manual optimize_leaves calls do not emit these.
             }
             SdkEvent::LightningAddressChanged { lightning_address } => {
-                // The lightning address has changed
+                // The lightning address changed on another device. Unset when the
+                // address was deleted.
             }
         }
     }

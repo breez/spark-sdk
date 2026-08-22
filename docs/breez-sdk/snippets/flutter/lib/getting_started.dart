@@ -119,35 +119,43 @@ class BreezSdkSpark {
           // it is recommended to refresh the payment list and wallet balance.
           break;
         case SdkEvent_NewDeposits(:final newDeposits):
-          // New deposits were detected (may be pending or confirmed)
+          // Detected deposits, as DepositInfo. Only those with isMature set
+          // have enough confirmations to be claimed. Show the rest as pending.
           final _ = newDeposits;
           break;
         case SdkEvent_UnclaimedDeposits(:final unclaimedDeposits):
-          // SDK was unable to claim some deposits automatically
+          // Deposits the SDK could not claim. Each claimError says why,
+          // most often the fee exceeded the configured maximum.
           final _ = unclaimedDeposits;
           break;
         case SdkEvent_ClaimedDeposits(:final claimedDeposits):
-          // Deposits were successfully claimed
+          // Deposits claimed into the wallet. The resulting payment
+          // arrives separately as its own event.
           final _ = claimedDeposits;
           break;
         case SdkEvent_PaymentSucceeded(:final payment):
-          // A payment completed successfully
+          // A payment completed. The cached balance is already refreshed,
+          // so getInfo returns the new value.
           final _ = payment;
           break;
         case SdkEvent_PaymentPending(:final payment):
-          // A payment is pending (waiting for confirmation)
+          // A payment is awaiting confirmation. It arrives again as
+          // succeeded or failed once it settles.
           final _ = payment;
           break;
         case SdkEvent_PaymentFailed(:final payment):
-          // A payment failed
+          // A payment failed. payment.details carries the method-specific
+          // context to show the user.
           final _ = payment;
           break;
         case SdkEvent_AutoOptimization(:final optimizationEvent):
-          // An auto-optimization event occurred
+          // Background optimizer progress: started, round completed, or a
+          // terminal outcome. Manual optimizeLeaves calls do not emit these.
           final _ = optimizationEvent;
           break;
         case SdkEvent_LightningAddressChanged(:final lightningAddress):
-          // The lightning address has changed
+          // The lightning address changed on another device. Unset when the
+          // address was deleted.
           final _ = lightningAddress;
           break;
       }
