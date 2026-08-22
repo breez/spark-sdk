@@ -1,0 +1,931 @@
+<!DOCTYPE HTML>
+<html lang="en" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Unilateral exit - Breez SDK - Spark</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../styles.css">
+        <link rel="stylesheet" href="../theme/pagetoc.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <!--
+                  Breez SDK · Spark docs — brand header partial.
+                
+                  mdBook renders the `header` partial at the top of every page's content. The default
+                  theme ships an EMPTY header.hbs, which is why the reskin's styles.css and
+                  brand-header.js both reference `.brand-header` / #brand-controls but the file
+                  itself was never committed to the reskin branch. THIS is that missing file,
+                  reconstructed from the design mockup (design/Breez SDK Docs.dc.html) and the
+                  class names in styles.css.
+                
+                  Drop this at: docs/breez-sdk/theme/header.hbs
+                  It pairs with styles.css (.brand-header rules) and brand-header.js (which moves
+                  mdBook's theme/search/sidebar controls into #brand-controls at load time).
+                -->
+                <div id="brand-header" class="brand-header">
+                  <a class="brand-logo" href="../index.html" aria-label="Docs home">
+                    <img src="../assets/icons/logo-breez-header.svg" alt="Breez">
+                  </a>
+                  <span class="brand-sep"></span>
+                  <span class="brand-product">SDK Documentation</span>
+                  <span class="brand-badge">
+                    <img src="../assets/icons/spark_icon.svg" alt="">Spark
+                  </span>
+                
+                  <span class="brand-spacer"></span>
+                
+                  <nav class="brand-nav">
+                    <a href="https://breez.technology" target="_blank" rel="noopener">Home</a>
+                    <a href="https://github.com/breez/spark-sdk" target="_blank" rel="noopener">GitHub</a>
+                    <a href="https://t.me/breezsdk" target="_blank" rel="noopener" aria-label="Telegram">
+                      <img src="../assets/icons/telegram-icon.svg" alt="">
+                    </a>
+                  </nav>
+                
+                  <!-- brand-header.js relocates #sidebar-toggle, #theme-toggle, #theme-list and
+                       #search-toggle into this container so they read as one bar. -->
+                  <div id="brand-controls" class="brand-controls"></div>
+                
+                  <a class="brand-cta" href="https://breez.technology/request-api-key/#contact-us-form-sdk" target="_blank" rel="noopener">
+                    Request API Key
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                  </a>
+                </div>
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Breez SDK - Spark</h1>
+
+                    <div class="right-buttons">
+                        <a href="https://github.com/breez/spark-sdk" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/src/guide/unilateral_exit.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="unilateral-exit"><a class="header" href="#unilateral-exit">Unilateral exit</a></h1>
+<p>A unilateral exit moves your Spark balance onto the Bitcoin blockchain without needing the Spark operators to sign the withdrawal for you. It exists as a safety net: if the operators ever stop cooperating with normal <a href="send_payment.html">withdrawals</a>, you can still recover your funds on-chain.</p>
+<div class="warning">
+A unilateral exit is a last resort. It is a multi-step, on-chain process that needs your own Bitcoin (in a separate UTXO) to pay mining fees, and it can take several days to finish because of on-chain timelocks. When a normal cooperative withdrawal is available, it is always cheaper and faster: prefer it.
+</div>
+<h2 id="before-you-start"><a class="header" href="#before-you-start">Before you start</a></h2>
+<p>Three things are important to know before you build an exit:</p>
+<ul>
+<li><strong>The operators must currently be reachable.</strong> Both quoting and building the exit fetch your pre-signed transactions from the Spark operators. Recovering purely from locally stored data, with the operators offline or uncooperative, is not supported yet. In other words, this protects you against operators who refuse to <em>co-sign</em> a withdrawal, but not yet against operators who are completely unreachable.</li>
+<li><strong>You pay the fees from your own UTXO.</strong> The pre-signed transactions carry no fee, so each is fee-bumped with a child transaction (CPFP) funded by a Bitcoin UTXO you provide. That UTXO must be <strong>native SegWit</strong> (a witness-program script). P2WPKH and P2TR are handled by the built-in signer; any other witness program (for example a P2WSH multisig) works through the <code class="lang-fn"><span class="fn-rust">CpfpFundingKind::Custom</span><span class="fn-python">CpfpFundingKind.CUSTOM</span><span class="fn-swift">CpfpFundingKind.custom</span><span class="fn-kotlin">CpfpFundingKind.Custom</span><span class="fn-javascript">CpfpFundingKind.Custom</span><span class="fn-react-native">CpfpFundingKind.Custom</span><span class="fn-flutter">CpfpFundingKind.Custom</span><span class="fn-go">CpfpFundingKindCustom</span><span class="fn-csharp">CpfpFundingKind.Custom</span></code> funding kind and a custom signer (see <a href="#the-signer">The signer</a>). Legacy (non-SegWit) scripts are rejected.</li>
+<li><strong>You broadcast the transactions yourself.</strong> The SDK builds and signs the full set but never broadcasts. You send them to the network over time, in order, as their timelocks mature. See <a href="#broadcast-the-transactions">Broadcasting the transactions</a>.</li>
+</ul>
+<h2 id="how-it-works"><a class="header" href="#how-it-works">How it works</a></h2>
+<p>Your balance is held in a tree of pre-signed Bitcoin transactions. Each leaf is a portion of the balance. To move a leaf on-chain you broadcast the chain of transactions from the tree down to that leaf, then a refund transaction, then a final sweep to your destination address. Because the pre-signed transactions pay no fee on their own, each one is broadcast together with a CPFP child that pays its fee.</p>
+<p>The exit is two calls:</p>
+<ol>
+<li><code class="lang-fn"><span class="fn-rust">prepare_unilateral_exit</span><span class="fn-python">prepare_unilateral_exit</span><span class="fn-swift">prepareUnilateralExit</span><span class="fn-kotlin">prepareUnilateralExit</span><span class="fn-javascript">prepareUnilateralExit</span><span class="fn-react-native">prepareUnilateralExit</span><span class="fn-flutter">prepareUnilateralExit</span><span class="fn-go">PrepareUnilateralExit</span><span class="fn-csharp">PrepareUnilateralExit</span></code> quotes the exit: it picks which leaves to exit and reports the exact fee and how much to fund, without needing any funding UTXOs yet.</li>
+<li><code class="lang-fn"><span class="fn-rust">unilateral_exit</span><span class="fn-python">unilateral_exit</span><span class="fn-swift">unilateralExit</span><span class="fn-kotlin">unilateralExit</span><span class="fn-javascript">unilateralExit</span><span class="fn-react-native">unilateralExit</span><span class="fn-flutter">unilateralExit</span><span class="fn-go">UnilateralExit</span><span class="fn-csharp">UnilateralExit</span></code> takes that quote plus your funding UTXOs and a signer, and returns the complete, signed set of transactions to broadcast.</li>
+</ol>
+<h3 id="a-single-leaf"><a class="header" href="#a-single-leaf">A single leaf</a></h3>
+<p>With one leaf there is no fan-out: your funding UTXO pays the fees directly. You broadcast the tree transactions top to bottom, each with its CPFP child as a package, then the refund once its timelock matures, then the sweep.</p>
+<p><img src="images/unilateral_exit_single_leaf.svg" alt="Single-leaf unilateral exit" /></p>
+<p>The blue transactions come pre-signed and fixed; you cannot change them. The grey CPFP children and the green sweep are built for you from the funding you supply, and are what actually pay the fees and deliver the funds to your address.</p>
+<h3 id="multiple-leaves"><a class="header" href="#multiple-leaves">Multiple leaves</a></h3>
+<p>Exiting several leaves at once starts with a <strong>fan-out</strong> transaction that splits a single funding UTXO into one output per branch. Leaves that share ancestors in the tree share those transactions too, so a shared ancestor is broadcast only once. Every branch's refund is then pulled into a single sweep.</p>
+<p><img src="images/unilateral_exit_multi_leaf.svg" alt="Multi-leaf unilateral exit" /></p>
+<h2 id="leaf-denominations-and-exit-cost"><a class="header" href="#leaf-denominations-and-exit-cost">Leaf denominations and exit cost</a></h2>
+<p>Every leaf is exited by its own chain of transactions, so it carries its own on-chain fee whatever its value. The more leaves your balance is spread across, and the smaller they are, the more of it goes to fees on the way out, and the more low-value leaves an <code class="lang-fn"><span class="fn-rust">ExitLeafSelection::Auto</span><span class="fn-python">ExitLeafSelection.AUTO</span><span class="fn-swift">ExitLeafSelection.auto</span><span class="fn-kotlin">ExitLeafSelection.Auto</span><span class="fn-javascript">ExitLeafSelection.Auto</span><span class="fn-react-native">ExitLeafSelection.Auto</span><span class="fn-flutter">ExitLeafSelection.Auto</span><span class="fn-go">ExitLeafSelectionAuto</span><span class="fn-csharp">ExitLeafSelection.Auto</span></code> exit abandons as uneconomical dust.</p>
+<p>How the balance is split into leaves is governed by the SDK's leaf optimization, which balances everyday payment experience against unilateral exit value. More, smaller denominations let payments go out without leaf swaps, while fewer, larger denominations cost less to exit. The default leans toward payment experience, which suits most wallets, since a unilateral exit is a rare last resort. See <a href="optimize.html">Custom leaf optimization</a> to understand this tradeoff and adjust it if your use case calls for it.</p>
+<h2 id="quote-the-exit"><a class="header" href="#quote-the-exit">Quote the exit</a></h2>
+<p>Call <code class="lang-fn"><span class="fn-rust">prepare_unilateral_exit</span><span class="fn-python">prepare_unilateral_exit</span><span class="fn-swift">prepareUnilateralExit</span><span class="fn-kotlin">prepareUnilateralExit</span><span class="fn-javascript">prepareUnilateralExit</span><span class="fn-react-native">prepareUnilateralExit</span><span class="fn-flutter">prepareUnilateralExit</span><span class="fn-go">PrepareUnilateralExit</span><span class="fn-csharp">PrepareUnilateralExit</span></code> with the target <code class="lang-fn"><span class="fn-rust">fee_rate_sat_per_vbyte</span><span class="fn-python">fee_rate_sat_per_vbyte</span><span class="fn-swift">feeRateSatPerVbyte</span><span class="fn-kotlin">feeRateSatPerVbyte</span><span class="fn-javascript">feeRateSatPerVbyte</span><span class="fn-react-native">feeRateSatPerVbyte</span><span class="fn-flutter">feeRateSatPerVbyte</span><span class="fn-go">FeeRateSatPerVbyte</span><span class="fn-csharp">FeeRateSatPerVbyte</span></code>, the <code class="lang-fn"><span class="fn-rust">funding_kind</span><span class="fn-python">funding_kind</span><span class="fn-swift">fundingKind</span><span class="fn-kotlin">fundingKind</span><span class="fn-javascript">fundingKind</span><span class="fn-react-native">fundingKind</span><span class="fn-flutter">fundingKind</span><span class="fn-go">FundingKind</span><span class="fn-csharp">FundingKind</span></code> of UTXO you will pay fees with, your <code class="lang-fn"><span class="fn-rust">destination</span><span class="fn-python">destination</span><span class="fn-swift">destination</span><span class="fn-kotlin">destination</span><span class="fn-javascript">destination</span><span class="fn-react-native">destination</span><span class="fn-flutter">destination</span><span class="fn-go">Destination</span><span class="fn-csharp">Destination</span></code> address, and a <code class="lang-fn"><span class="fn-rust">selection</span><span class="fn-python">selection</span><span class="fn-swift">selection</span><span class="fn-kotlin">selection</span><span class="fn-javascript">selection</span><span class="fn-react-native">selection</span><span class="fn-flutter">selection</span><span class="fn-go">Selection</span><span class="fn-csharp">Selection</span></code>. <code class="lang-fn"><span class="fn-rust">ExitLeafSelection::Auto</span><span class="fn-python">ExitLeafSelection.AUTO</span><span class="fn-swift">ExitLeafSelection.auto</span><span class="fn-kotlin">ExitLeafSelection.Auto</span><span class="fn-javascript">ExitLeafSelection.Auto</span><span class="fn-react-native">ExitLeafSelection.Auto</span><span class="fn-flutter">ExitLeafSelection.Auto</span><span class="fn-go">ExitLeafSelectionAuto</span><span class="fn-csharp">ExitLeafSelection.Auto</span></code> exits every leaf worth more than its own exit cost; <code class="lang-fn"><span class="fn-rust">ExitLeafSelection::Specific</span><span class="fn-python">ExitLeafSelection.SPECIFIC</span><span class="fn-swift">ExitLeafSelection.specific</span><span class="fn-kotlin">ExitLeafSelection.Specific</span><span class="fn-javascript">ExitLeafSelection.Specific</span><span class="fn-react-native">ExitLeafSelection.Specific</span><span class="fn-flutter">ExitLeafSelection.Specific</span><span class="fn-go">ExitLeafSelectionSpecific</span><span class="fn-csharp">ExitLeafSelection.Specific</span></code> exits exactly the leaves you name.</p>
+<p>The quote returns a <code class="lang-fn"><span class="fn-rust">PrepareUnilateralExitResponse</span><span class="fn-python">PrepareUnilateralExitResponse</span><span class="fn-swift">PrepareUnilateralExitResponse</span><span class="fn-kotlin">PrepareUnilateralExitResponse</span><span class="fn-javascript">PrepareUnilateralExitResponse</span><span class="fn-react-native">PrepareUnilateralExitResponse</span><span class="fn-flutter">PrepareUnilateralExitResponse</span><span class="fn-go">PrepareUnilateralExitResponse</span><span class="fn-csharp">PrepareUnilateralExitResponse</span></code>. Its fields tell you how much Bitcoin to gather and how to structure it:</p>
+<ul>
+<li><code class="lang-fn"><span class="fn-rust">recoverable_value_sat</span><span class="fn-python">recoverable_value_sat</span><span class="fn-swift">recoverableValueSat</span><span class="fn-kotlin">recoverableValueSat</span><span class="fn-javascript">recoverableValueSat</span><span class="fn-react-native">recoverableValueSat</span><span class="fn-flutter">recoverableValueSat</span><span class="fn-go">RecoverableValueSat</span><span class="fn-csharp">RecoverableValueSat</span></code> is the total value of the selected <code class="lang-fn"><span class="fn-rust">leaves</span><span class="fn-python">leaves</span><span class="fn-swift">leaves</span><span class="fn-kotlin">leaves</span><span class="fn-javascript">leaves</span><span class="fn-react-native">leaves</span><span class="fn-flutter">leaves</span><span class="fn-go">Leaves</span><span class="fn-csharp">Leaves</span></code>, and <code class="lang-fn"><span class="fn-rust">total_fee_sat</span><span class="fn-python">total_fee_sat</span><span class="fn-swift">totalFeeSat</span><span class="fn-kotlin">totalFeeSat</span><span class="fn-javascript">totalFeeSat</span><span class="fn-react-native">totalFeeSat</span><span class="fn-flutter">totalFeeSat</span><span class="fn-go">TotalFeeSat</span><span class="fn-csharp">TotalFeeSat</span></code> is the on-chain fee to recover it. Compare them to decide whether the exit is worth it at the current fee rate.</li>
+<li><code class="lang-fn"><span class="fn-rust">single_utxo_funding_sat</span><span class="fn-python">single_utxo_funding_sat</span><span class="fn-swift">singleUtxoFundingSat</span><span class="fn-kotlin">singleUtxoFundingSat</span><span class="fn-javascript">singleUtxoFundingSat</span><span class="fn-react-native">singleUtxoFundingSat</span><span class="fn-flutter">singleUtxoFundingSat</span><span class="fn-go">SingleUtxoFundingSat</span><span class="fn-csharp">SingleUtxoFundingSat</span></code> is the simplest option: fund <strong>one</strong> UTXO of at least this many satoshis and the SDK fans it out across branches.</li>
+<li><code class="lang-fn"><span class="fn-rust">per_branch_funding</span><span class="fn-python">per_branch_funding</span><span class="fn-swift">perBranchFunding</span><span class="fn-kotlin">perBranchFunding</span><span class="fn-javascript">perBranchFunding</span><span class="fn-react-native">perBranchFunding</span><span class="fn-flutter">perBranchFunding</span><span class="fn-go">PerBranchFunding</span><span class="fn-csharp">PerBranchFunding</span></code> lets you skip the fan-out (and its <code class="lang-fn"><span class="fn-rust">fanout_fee_sat</span><span class="fn-python">fanout_fee_sat</span><span class="fn-swift">fanoutFeeSat</span><span class="fn-kotlin">fanoutFeeSat</span><span class="fn-javascript">fanoutFeeSat</span><span class="fn-react-native">fanoutFeeSat</span><span class="fn-flutter">fanoutFeeSat</span><span class="fn-go">FanoutFeeSat</span><span class="fn-csharp">FanoutFeeSat</span></code>) by funding <strong>one UTXO per branch</strong>, each of at least the amount in its <code class="lang-fn"><span class="fn-rust">PerBranchFunding</span><span class="fn-python">PerBranchFunding</span><span class="fn-swift">PerBranchFunding</span><span class="fn-kotlin">PerBranchFunding</span><span class="fn-javascript">PerBranchFunding</span><span class="fn-react-native">PerBranchFunding</span><span class="fn-flutter">PerBranchFunding</span><span class="fn-go">PerBranchFunding</span><span class="fn-csharp">PerBranchFunding</span></code> entry.</li>
+</ul>
+<p>So you do not have to guess how much to send or how many UTXOs to prepare: the quote tells you both.</p>
+<p>Under <code class="lang-fn"><span class="fn-rust">ExitLeafSelection::Auto</span><span class="fn-python">ExitLeafSelection.AUTO</span><span class="fn-swift">ExitLeafSelection.auto</span><span class="fn-kotlin">ExitLeafSelection.Auto</span><span class="fn-javascript">ExitLeafSelection.Auto</span><span class="fn-react-native">ExitLeafSelection.Auto</span><span class="fn-flutter">ExitLeafSelection.Auto</span><span class="fn-go">ExitLeafSelectionAuto</span><span class="fn-csharp">ExitLeafSelection.Auto</span></code> a leaf is kept when its value exceeds its own exit cost, measured per leaf. That per-leaf measure does not include the shared <code class="lang-fn"><span class="fn-rust">fanout_fee_sat</span><span class="fn-python">fanout_fee_sat</span><span class="fn-swift">fanoutFeeSat</span><span class="fn-kotlin">fanoutFeeSat</span><span class="fn-javascript">fanoutFeeSat</span><span class="fn-react-native">fanoutFeeSat</span><span class="fn-flutter">fanoutFeeSat</span><span class="fn-go">FanoutFeeSat</span><span class="fn-csharp">FanoutFeeSat</span></code>, which the single-UTXO path pays once for the whole exit. So when you fund a multi-leaf exit from a <strong>single</strong> UTXO, the fan-out fee can push the total above what you recover, even though every leaf looked profitable on its own.</p>
+<p>Two rules keep an exit from ever costing more than it returns:</p>
+<ol>
+<li><strong>Before funding, require <code class="lang-fn"><span class="fn-rust">recoverable_value_sat</span><span class="fn-python">recoverable_value_sat</span><span class="fn-swift">recoverableValueSat</span><span class="fn-kotlin">recoverableValueSat</span><span class="fn-javascript">recoverableValueSat</span><span class="fn-react-native">recoverableValueSat</span><span class="fn-flutter">recoverableValueSat</span><span class="fn-go">RecoverableValueSat</span><span class="fn-csharp">RecoverableValueSat</span></code> to exceed <code class="lang-fn"><span class="fn-rust">total_fee_sat</span><span class="fn-python">total_fee_sat</span><span class="fn-swift">totalFeeSat</span><span class="fn-kotlin">totalFeeSat</span><span class="fn-javascript">totalFeeSat</span><span class="fn-react-native">totalFeeSat</span><span class="fn-flutter">totalFeeSat</span><span class="fn-go">TotalFeeSat</span><span class="fn-csharp">TotalFeeSat</span></code>.</strong> These are the actual totals for the quote, fan-out fee included. If the margin is thin or negative, do not proceed as quoted.</li>
+<li><strong>Prefer per-branch funding.</strong> Funding one UTXO per branch (<code class="lang-fn"><span class="fn-rust">per_branch_funding</span><span class="fn-python">per_branch_funding</span><span class="fn-swift">perBranchFunding</span><span class="fn-kotlin">perBranchFunding</span><span class="fn-javascript">perBranchFunding</span><span class="fn-react-native">perBranchFunding</span><span class="fn-flutter">perBranchFunding</span><span class="fn-go">PerBranchFunding</span><span class="fn-csharp">PerBranchFunding</span></code>) skips the fan-out entirely, so there is no shared fee. Because <code class="lang-fn"><span class="fn-rust">ExitLeafSelection::Auto</span><span class="fn-python">ExitLeafSelection.AUTO</span><span class="fn-swift">ExitLeafSelection.auto</span><span class="fn-kotlin">ExitLeafSelection.Auto</span><span class="fn-javascript">ExitLeafSelection.Auto</span><span class="fn-react-native">ExitLeafSelection.Auto</span><span class="fn-flutter">ExitLeafSelection.Auto</span><span class="fn-go">ExitLeafSelectionAuto</span><span class="fn-csharp">ExitLeafSelection.Auto</span></code> already keeps only leaves worth more than their own cost, a per-branch-funded auto exit is always net-positive.</li>
+</ol>
+<p>If the single-UTXO total is not worth it, either fund per branch, or narrow the set: re-quote with <code class="lang-fn"><span class="fn-rust">ExitLeafSelection::Specific</span><span class="fn-python">ExitLeafSelection.SPECIFIC</span><span class="fn-swift">ExitLeafSelection.specific</span><span class="fn-kotlin">ExitLeafSelection.Specific</span><span class="fn-javascript">ExitLeafSelection.Specific</span><span class="fn-react-native">ExitLeafSelection.Specific</span><span class="fn-flutter">ExitLeafSelection.Specific</span><span class="fn-go">ExitLeafSelectionSpecific</span><span class="fn-csharp">ExitLeafSelection.Specific</span></code> naming only the higher-value leaves (dropping the marginal ones removes their cost and can turn the total positive), or wait for a lower fee rate.</p>
+<p>If nothing is selected (under <code class="lang-fn"><span class="fn-rust">ExitLeafSelection::Auto</span><span class="fn-python">ExitLeafSelection.AUTO</span><span class="fn-swift">ExitLeafSelection.auto</span><span class="fn-kotlin">ExitLeafSelection.Auto</span><span class="fn-javascript">ExitLeafSelection.Auto</span><span class="fn-react-native">ExitLeafSelection.Auto</span><span class="fn-flutter">ExitLeafSelection.Auto</span><span class="fn-go">ExitLeafSelectionAuto</span><span class="fn-csharp">ExitLeafSelection.Auto</span></code> no leaf is worth exiting at the given fee rate, or there is nothing to exit) the response comes back empty rather than as an error. Check <code class="lang-fn"><span class="fn-rust">leaves</span><span class="fn-python">leaves</span><span class="fn-swift">leaves</span><span class="fn-kotlin">leaves</span><span class="fn-javascript">leaves</span><span class="fn-react-native">leaves</span><span class="fn-flutter">leaves</span><span class="fn-go">Leaves</span><span class="fn-csharp">Leaves</span></code> before gathering funding.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let quote = sdk
+    .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        fee_rate_sat_per_vbyte: 2,
+        funding_kind: CpfpFundingKind::P2wpkh,
+        destination: "bc1q...your-destination-address".to_string(),
+        selection: ExitLeafSelection::Auto,
+    })
+    .await?;
+
+println!(
+    "Recovering {} sats for {} sats in fees",
+    quote.recoverable_value_sat, quote.total_fee_sat
+);
+println!("Fund a single UTXO of at least {} sats", quote.single_utxo_funding_sat);</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let quote = try await sdk.prepareUnilateralExit(
+    request: PrepareUnilateralExitRequest(
+        feeRateSatPerVbyte: 2,
+        fundingKind: .p2wpkh,
+        destination: "bc1q...your-destination-address",
+        selection: .auto
+    )
+)
+
+print("Recovering \(quote.recoverableValueSat) sats for \(quote.totalFeeSat) sats in fees")
+print("Fund a single UTXO of at least \(quote.singleUtxoFundingSat) sats")
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">val quote = sdk.prepareUnilateralExit(
+    PrepareUnilateralExitRequest(
+        feeRateSatPerVbyte = 2u,
+        fundingKind = CpfpFundingKind.P2wpkh,
+        destination = "bc1q...your-destination-address",
+        selection = ExitLeafSelection.Auto
+    )
+)
+
+println("Recovering ${quote.recoverableValueSat} sats for ${quote.totalFeeSat} sats in fees")
+println("Fund a single UTXO of at least ${quote.singleUtxoFundingSat} sats")
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var quote = await sdk.PrepareUnilateralExit(
+    request: new PrepareUnilateralExitRequest(
+        feeRateSatPerVbyte: 2,
+        fundingKind: new CpfpFundingKind.P2wpkh(),
+        destination: "bc1q...your-destination-address",
+        selection: new ExitLeafSelection.Auto()
+    )
+);
+
+Console.WriteLine($"Recovering {quote.recoverableValueSat} sats for {quote.totalFeeSat} sats in fees");
+Console.WriteLine($"Fund a single UTXO of at least {quote.singleUtxoFundingSat} sats");
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const quote = await sdk.prepareUnilateralExit({
+  feeRateSatPerVbyte: 2,
+  fundingKind: { type: 'p2wpkh' },
+  destination: 'bc1q...your-destination-address',
+  selection: { type: 'auto' }
+})
+
+console.log(`Recovering ${quote.recoverableValueSat} sats for ${quote.totalFeeSat} sats in fees`)
+console.log(`Fund a single UTXO of at least ${quote.singleUtxoFundingSat} sats`)
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const quote = await sdk.prepareUnilateralExit({
+  feeRateSatPerVbyte: BigInt(2),
+  fundingKind: new CpfpFundingKind.P2wpkh(),
+  destination: 'bc1q...your-destination-address',
+  selection: new ExitLeafSelection.Auto()
+})
+
+console.log(`Recovering ${quote.recoverableValueSat} sats for ${quote.totalFeeSat} sats in fees`)
+console.log(`Fund a single UTXO of at least ${quote.singleUtxoFundingSat} sats`)
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">PrepareUnilateralExitRequest request = PrepareUnilateralExitRequest(
+  feeRateSatPerVbyte: BigInt.from(2),
+  fundingKind: const CpfpFundingKind.p2Wpkh(),
+  destination: "bc1q...your-destination-address",
+  selection: const ExitLeafSelection.auto(),
+);
+
+PrepareUnilateralExitResponse quote = await sdk.prepareUnilateralExit(request: request);
+
+print("Recovering ${quote.recoverableValueSat} sats for ${quote.totalFeeSat} sats in fees");
+print("Fund a single UTXO of at least ${quote.singleUtxoFundingSat} sats");
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">quote = await sdk.prepare_unilateral_exit(
+    request=PrepareUnilateralExitRequest(
+        fee_rate_sat_per_vbyte=2,
+        funding_kind=CpfpFundingKind.P2WPKH(),
+        destination="bc1q...your-destination-address",
+        selection=ExitLeafSelection.AUTO(),
+    ),
+)
+
+logging.debug(
+    f"Recovering {quote.recoverable_value_sat} sats "
+    f"for {quote.total_fee_sat} sats in fees"
+)
+logging.debug(f"Fund a single UTXO of at least {quote.single_utxo_funding_sat} sats")
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">quote, err := sdk.PrepareUnilateralExit(breez_sdk_spark.PrepareUnilateralExitRequest{
+	FeeRateSatPerVbyte: 2,
+	FundingKind:        breez_sdk_spark.CpfpFundingKindP2wpkh{},
+	Destination:        "bc1q...your-destination-address",
+	Selection:          breez_sdk_spark.ExitLeafSelectionAuto{},
+})
+if err != nil {
+	return nil, err
+}
+
+log.Printf("Recovering %d sats for %d sats in fees", quote.RecoverableValueSat, quote.TotalFeeSat)
+log.Printf("Fund a single UTXO of at least %d sats", quote.SingleUtxoFundingSat)
+</code></pre>
+</section>
+</custom-tabs>
+<h2 id="build-the-exit"><a class="header" href="#build-the-exit">Build the exit</a></h2>
+<p>Gather funding that meets the quote, then call <code class="lang-fn"><span class="fn-rust">unilateral_exit</span><span class="fn-python">unilateral_exit</span><span class="fn-swift">unilateralExit</span><span class="fn-kotlin">unilateralExit</span><span class="fn-javascript">unilateralExit</span><span class="fn-react-native">unilateralExit</span><span class="fn-flutter">unilateralExit</span><span class="fn-go">UnilateralExit</span><span class="fn-csharp">UnilateralExit</span></code> with the quote, your real <code class="lang-fn"><span class="fn-rust">CpfpInput</span><span class="fn-python">CpfpInput</span><span class="fn-swift">CpfpInput</span><span class="fn-kotlin">CpfpInput</span><span class="fn-javascript">CpfpInput</span><span class="fn-react-native">CpfpInput</span><span class="fn-flutter">CpfpInput</span><span class="fn-go">CpfpInput</span><span class="fn-csharp">CpfpInput</span></code> funding UTXOs, and a signer. It returns a <code class="lang-fn"><span class="fn-rust">UnilateralExitResponse</span><span class="fn-python">UnilateralExitResponse</span><span class="fn-swift">UnilateralExitResponse</span><span class="fn-kotlin">UnilateralExitResponse</span><span class="fn-javascript">UnilateralExitResponse</span><span class="fn-react-native">UnilateralExitResponse</span><span class="fn-flutter">UnilateralExitResponse</span><span class="fn-go">UnilateralExitResponse</span><span class="fn-csharp">UnilateralExitResponse</span></code> with the actual <code class="lang-fn"><span class="fn-rust">total_fee_sat</span><span class="fn-python">total_fee_sat</span><span class="fn-swift">totalFeeSat</span><span class="fn-kotlin">totalFeeSat</span><span class="fn-javascript">totalFeeSat</span><span class="fn-react-native">totalFeeSat</span><span class="fn-flutter">totalFeeSat</span><span class="fn-go">TotalFeeSat</span><span class="fn-csharp">TotalFeeSat</span></code> and the full transaction set.</p>
+<p>If the funding is below what the exit needs it returns <code class="lang-fn"><span class="fn-rust">SdkError::InsufficientCpfpFunds</span><span class="fn-python">SdkError.INSUFFICIENT_CPFP_FUNDS</span><span class="fn-swift">SdkError.insufficientCpfpFunds</span><span class="fn-kotlin">SdkError.InsufficientCpfpFunds</span><span class="fn-javascript">SdkError.InsufficientCpfpFunds</span><span class="fn-react-native">SdkError.InsufficientCpfpFunds</span><span class="fn-flutter">SdkError.InsufficientCpfpFunds</span><span class="fn-go">SdkErrorInsufficientCpfpFunds</span><span class="fn-csharp">SdkError.InsufficientCpfpFunds</span></code>. If one of the funding UTXOs has already been spent (for example by an earlier attempt) it returns <code class="lang-fn"><span class="fn-rust">SdkError::FundingUtxoConflict</span><span class="fn-python">SdkError.FUNDING_UTXO_CONFLICT</span><span class="fn-swift">SdkError.fundingUtxoConflict</span><span class="fn-kotlin">SdkError.FundingUtxoConflict</span><span class="fn-javascript">SdkError.FundingUtxoConflict</span><span class="fn-react-native">SdkError.FundingUtxoConflict</span><span class="fn-flutter">SdkError.FundingUtxoConflict</span><span class="fn-go">SdkErrorFundingUtxoConflict</span><span class="fn-csharp">SdkError.FundingUtxoConflict</span></code>, which names the conflicting outpoint so you can supply fresh funding.</p>
+<p>A very thin-margin exit can fail even when the funding is sufficient: if the recoverable value net of fees would leave the swept output below the destination address's dust limit, the sweep cannot be built and the exit fails. Exit higher-value leaves with <code class="lang-fn"><span class="fn-rust">ExitLeafSelection::Specific</span><span class="fn-python">ExitLeafSelection.SPECIFIC</span><span class="fn-swift">ExitLeafSelection.specific</span><span class="fn-kotlin">ExitLeafSelection.Specific</span><span class="fn-javascript">ExitLeafSelection.Specific</span><span class="fn-react-native">ExitLeafSelection.Specific</span><span class="fn-flutter">ExitLeafSelection.Specific</span><span class="fn-go">ExitLeafSelectionSpecific</span><span class="fn-csharp">ExitLeafSelection.Specific</span></code>, lower the <code class="lang-fn"><span class="fn-rust">fee_rate_sat_per_vbyte</span><span class="fn-python">fee_rate_sat_per_vbyte</span><span class="fn-swift">feeRateSatPerVbyte</span><span class="fn-kotlin">feeRateSatPerVbyte</span><span class="fn-javascript">feeRateSatPerVbyte</span><span class="fn-react-native">feeRateSatPerVbyte</span><span class="fn-flutter">feeRateSatPerVbyte</span><span class="fn-go">FeeRateSatPerVbyte</span><span class="fn-csharp">FeeRateSatPerVbyte</span></code>, or wait for a cheaper fee rate.</p>
+<p>The set it builds depends on what is already on-chain. Because each CPFP child spends the previous one, the exit is one connected chain, so to continue it correctly the SDK reads confirmed on-chain state through its chain service: a step already confirmed comes back as <code class="lang-fn"><span class="fn-rust">ConfirmationStatus::Confirmed</span><span class="fn-python">ConfirmationStatus.CONFIRMED</span><span class="fn-swift">ConfirmationStatus.confirmed</span><span class="fn-kotlin">ConfirmationStatus.Confirmed</span><span class="fn-javascript">ConfirmationStatus.Confirmed</span><span class="fn-react-native">ConfirmationStatus.Confirmed</span><span class="fn-flutter">ConfirmationStatus.Confirmed</span><span class="fn-go">ConfirmationStatusConfirmed</span><span class="fn-csharp">ConfirmationStatus.Confirmed</span></code> and is not rebuilt. If the chain service cannot resolve a step, the SDK falls back to the status the operators reported: a node the operators already consider on-chain is left as-is rather than fee-bumped (bumping an already-confirmed node would invalidate the rest of the chain), and any node whose state still cannot be determined comes back as <code class="lang-fn"><span class="fn-rust">ConfirmationStatus::Unverified</span><span class="fn-python">ConfirmationStatus.UNVERIFIED</span><span class="fn-swift">ConfirmationStatus.unverified</span><span class="fn-kotlin">ConfirmationStatus.Unverified</span><span class="fn-javascript">ConfirmationStatus.Unverified</span><span class="fn-react-native">ConfirmationStatus.Unverified</span><span class="fn-flutter">ConfirmationStatus.Unverified</span><span class="fn-go">ConfirmationStatusUnverified</span><span class="fn-csharp">ConfirmationStatus.Unverified</span></code> and is treated as not yet confirmed rather than failing the build. You still get the full set back; broadcasting an already-confirmed transaction is harmless, and re-running once the chain service recovers resolves the status. For a more reliable source you can supply your own chain service (see <a href="customizing.html#with-chain-service">Customizing the SDK</a>).</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let secret_key_bytes: Vec&lt;u8&gt; = hex::decode("your-secret-key-hex")?;
+let signer = signer::single_key_cpfp_signer(secret_key_bytes)?;
+
+let response = sdk
+    .unilateral_exit(
+        UnilateralExitRequest {
+            prepared: quote,
+            funding_inputs: vec![CpfpInput::P2wpkh {
+                txid: "your-utxo-txid".to_string(),
+                vout: 0,
+                value: 50_000,
+                pubkey: "your-compressed-pubkey-hex".to_string(),
+            }],
+        },
+        signer,
+    )
+    .await?;
+
+for tx in &amp;response.transactions {
+    if let Some(blocks) = tx.csv_timelock_blocks {
+        println!("{}: wait {} blocks after its parents confirm", tx.txid, blocks);
+    }
+}</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let secretKeyBytes = Data(hexString: "your-secret-key-hex")!
+let signer = try singleKeyCpfpSigner(secretKeyBytes: secretKeyBytes)
+
+let response = try await sdk.unilateralExit(
+    request: UnilateralExitRequest(
+        prepared: quote,
+        fundingInputs: [
+            .p2wpkh(
+                txid: "your-utxo-txid",
+                vout: 0,
+                value: 50_000,
+                pubkey: "your-compressed-pubkey-hex"
+            )
+        ]
+    ),
+    signer: signer
+)
+
+for tx in response.transactions {
+    if let blocks = tx.csvTimelockBlocks {
+        print("\(tx.txid): wait \(blocks) blocks after its parents confirm")
+    }
+}
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">try {
+    val secretKeyBytes = "your-secret-key-hex".hexToByteArray()
+    val signer = singleKeyCpfpSigner(secretKeyBytes)
+
+    val response = sdk.unilateralExit(
+        UnilateralExitRequest(
+            prepared = quote,
+            fundingInputs = listOf(
+                CpfpInput.P2wpkh(
+                    txid = "your-utxo-txid",
+                    vout = 0u,
+                    value = 50_000u,
+                    pubkey = "your-compressed-pubkey-hex"
+                )
+            )
+        ),
+        signer
+    )
+
+    for (tx in response.transactions) {
+        tx.csvTimelockBlocks?.let { blocks -&gt;
+            println("${tx.txid}: wait $blocks blocks after its parents confirm")
+        }
+    }
+} catch (e: Exception) {
+    // handle error
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var secretKeyBytes = Convert.FromHexString("your-secret-key-hex");
+var signer = BreezSdkSparkMethods.SingleKeyCpfpSigner(secretKeyBytes);
+
+var response = await sdk.UnilateralExit(
+    request: new UnilateralExitRequest(
+        prepared: quote,
+        fundingInputs: new CpfpInput[]
+        {
+            new CpfpInput.P2wpkh(
+                txid: "your-utxo-txid",
+                vout: 0,
+                value: 50_000,
+                pubkey: "your-compressed-pubkey-hex"
+            )
+        }
+    ),
+    signer: signer
+);
+
+foreach (var tx in response.transactions)
+{
+    if (tx.csvTimelockBlocks != null)
+    {
+        Console.WriteLine($"{tx.txid}: wait {tx.csvTimelockBlocks} blocks after its parents confirm");
+    }
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const secretKeyBytes = Buffer.from('your-secret-key-hex', 'hex')
+const signer = singleKeyCpfpSigner(secretKeyBytes)
+
+const response = await sdk.unilateralExit(
+  {
+    prepared: quote,
+    fundingInputs: [{
+      type: 'p2wpkh',
+      txid: 'your-utxo-txid',
+      vout: 0,
+      value: 50_000,
+      pubkey: 'your-compressed-pubkey-hex'
+    }]
+  },
+  signer
+)
+
+for (const tx of response.transactions) {
+  if (tx.csvTimelockBlocks != null) {
+    console.log(`${tx.txid}: wait ${tx.csvTimelockBlocks} blocks after its parents confirm`)
+  }
+}
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const secretKeyBytes = Buffer.from('your-secret-key-hex', 'hex')
+// Buffer.buffer is a shared pool slab; slice to this key's own bytes.
+const signer = singleKeyCpfpSigner(
+  secretKeyBytes.buffer.slice(
+    secretKeyBytes.byteOffset,
+    secretKeyBytes.byteOffset + secretKeyBytes.byteLength
+  )
+)
+
+const response = await sdk.unilateralExit(
+  {
+    prepared: quote,
+    fundingInputs: [
+      new CpfpInput.P2wpkh({
+        txid: 'your-utxo-txid',
+        vout: 0,
+        value: BigInt(50_000),
+        pubkey: 'your-compressed-pubkey-hex'
+      })
+    ]
+  },
+  signer
+)
+
+for (const tx of response.transactions) {
+  if (tx.csvTimelockBlocks != null) {
+    console.log(`${tx.txid}: wait ${tx.csvTimelockBlocks} blocks after its parents confirm`)
+  }
+}
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">List&lt;int&gt; secretKeyBytes = hex.decode("your-secret-key-hex");
+
+UnilateralExitResponse response = await sdk.unilateralExit(
+  request: UnilateralExitRequest(
+    prepared: quote,
+    fundingInputs: [
+      CpfpInput.p2Wpkh(
+        txid: "your-utxo-txid",
+        vout: 0,
+        value: BigInt.from(50000),
+        pubkey: "your-compressed-pubkey-hex",
+      ),
+    ],
+  ),
+  signerSecretKey: Uint8List.fromList(secretKeyBytes),
+);
+
+for (UnilateralExitTransaction tx in response.transactions) {
+  if (tx.csvTimelockBlocks != null) {
+    print("${tx.txid}: wait ${tx.csvTimelockBlocks} blocks after its parents confirm");
+  }
+}
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">secret_key_bytes = bytes.fromhex("your-secret-key-hex")
+signer = single_key_cpfp_signer(secret_key_bytes=secret_key_bytes)
+
+response = await sdk.unilateral_exit(
+    request=UnilateralExitRequest(
+        prepared=quote,
+        funding_inputs=[
+            CpfpInput.P2WPKH(  # type: ignore[list-item]
+                txid="your-utxo-txid",
+                vout=0,
+                value=50_000,
+                pubkey="your-compressed-pubkey-hex",
+            )
+        ],
+    ),
+    signer=signer,
+)
+
+for tx in response.transactions:
+    if tx.csv_timelock_blocks is not None:
+        logging.debug(
+            f"{tx.txid}: wait {tx.csv_timelock_blocks} blocks after its parents confirm"
+        )
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">secretKeyBytes, err := hex.DecodeString("your-secret-key-hex")
+if err != nil {
+	return err
+}
+signer, err := breez_sdk_spark.SingleKeyCpfpSigner(secretKeyBytes)
+if err != nil {
+	return err
+}
+
+response, err := sdk.UnilateralExit(breez_sdk_spark.UnilateralExitRequest{
+	Prepared: quote,
+	FundingInputs: []breez_sdk_spark.CpfpInput{
+		breez_sdk_spark.CpfpInputP2wpkh{
+			Txid:   "your-utxo-txid",
+			Vout:   0,
+			Value:  50_000,
+			Pubkey: "your-compressed-pubkey-hex",
+		},
+	},
+}, signer)
+if err != nil {
+	return err
+}
+
+for _, tx := range response.Transactions {
+	if tx.CsvTimelockBlocks != nil {
+		fmt.Printf("%s: wait %d blocks after its parents confirm\n", tx.Txid, *tx.CsvTimelockBlocks)
+	}
+}
+</code></pre>
+</section>
+</custom-tabs>
+<h3 id="the-signer"><a class="header" href="#the-signer">The signer</a></h3>
+<p>The CPFP children and the fan-out spend your funding UTXOs, so they have to be signed. The SDK does not hold your funding keys; it hands each unsigned transaction to a signer you provide.</p>
+<p>The built-in single-key signer covers the common case: it signs P2WPKH and P2TR inputs from one secret key. For <code class="lang-fn"><span class="fn-rust">CpfpInput::P2tr</span><span class="fn-python">CpfpInput.P2TR</span><span class="fn-swift">CpfpInput.p2tr</span><span class="fn-kotlin">CpfpInput.P2tr</span><span class="fn-javascript">CpfpInput.P2tr</span><span class="fn-react-native">CpfpInput.P2tr</span><span class="fn-flutter">CpfpInput.P2tr</span><span class="fn-go">CpfpInputP2tr</span><span class="fn-csharp">CpfpInput.P2tr</span></code> funding, pass the <strong>internal, untweaked (BIP86)</strong> key, not the tweaked on-chain output key: the tweaked key derives a scriptPubKey that does not match the UTXO, so the transaction is rejected at broadcast. For anything else (a multisig, a hardware wallet, or keeping key material out of the SDK entirely) implement the <code class="lang-fn"><span class="fn-rust">CpfpSigner</span><span class="fn-python">CpfpSigner</span><span class="fn-swift">CpfpSigner</span><span class="fn-kotlin">CpfpSigner</span><span class="fn-javascript">CpfpSigner</span><span class="fn-react-native">CpfpSigner</span><span class="fn-flutter">CpfpSigner</span><span class="fn-go">CpfpSigner</span><span class="fn-csharp">CpfpSigner</span></code> interface and describe the funding with <code class="lang-fn"><span class="fn-rust">CpfpFundingKind::Custom</span><span class="fn-python">CpfpFundingKind.CUSTOM</span><span class="fn-swift">CpfpFundingKind.custom</span><span class="fn-kotlin">CpfpFundingKind.Custom</span><span class="fn-javascript">CpfpFundingKind.Custom</span><span class="fn-react-native">CpfpFundingKind.Custom</span><span class="fn-flutter">CpfpFundingKind.Custom</span><span class="fn-go">CpfpFundingKindCustom</span><span class="fn-csharp">CpfpFundingKind.Custom</span></code> (in the quote) and <code class="lang-fn"><span class="fn-rust">CpfpInput::Custom</span><span class="fn-python">CpfpInput.CUSTOM</span><span class="fn-swift">CpfpInput.custom</span><span class="fn-kotlin">CpfpInput.Custom</span><span class="fn-javascript">CpfpInput.Custom</span><span class="fn-react-native">CpfpInput.Custom</span><span class="fn-flutter">CpfpInput.Custom</span><span class="fn-go">CpfpInputCustom</span><span class="fn-csharp">CpfpInput.Custom</span></code> (in the build). Those carry the funding <code class="lang-fn"><span class="fn-rust">script_pubkey_hex</span><span class="fn-python">script_pubkey_hex</span><span class="fn-swift">scriptPubkeyHex</span><span class="fn-kotlin">scriptPubkeyHex</span><span class="fn-javascript">scriptPubkeyHex</span><span class="fn-react-native">scriptPubkeyHex</span><span class="fn-flutter">scriptPubkeyHex</span><span class="fn-go">ScriptPubkeyHex</span><span class="fn-csharp">ScriptPubkeyHex</span></code> and an upper-bound <code class="lang-fn"><span class="fn-rust">signed_input_weight</span><span class="fn-python">signed_input_weight</span><span class="fn-swift">signedInputWeight</span><span class="fn-kotlin">signedInputWeight</span><span class="fn-javascript">signedInputWeight</span><span class="fn-react-native">signedInputWeight</span><span class="fn-flutter">signedInputWeight</span><span class="fn-go">SignedInputWeight</span><span class="fn-csharp">SignedInputWeight</span></code> so the fee stays exact for any witness program. The signer receives a serialized PSBT, signs the inputs that are not already finalized, and returns the serialized signed PSBT:</p>
+<p>Whichever signer you use, the funding inputs must be <strong>native SegWit</strong> (a witness-program script; P2WPKH or P2TR with the built-in signer, any other witness program with a custom one). The exit refers to each transaction by an id it computes before signing, which only stays stable when the signature lives in the witness (native SegWit) rather than in the input script; legacy scripts are rejected, so your signer only ever has to sign native SegWit inputs.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">struct MyCpfpSigner;
+
+#[async_trait::async_trait]
+impl signer::CpfpSigner for MyCpfpSigner {
+    async fn sign_psbt(&amp;self, psbt_bytes: Vec&lt;u8&gt;) -&gt; Result&lt;Vec&lt;u8&gt;, SignerError&gt; {
+        let signed_psbt_bytes = sign_psbt_with_your_keys(psbt_bytes)?;
+        Ok(signed_psbt_bytes)
+    }
+}
+
+fn sign_psbt_with_your_keys(psbt_bytes: Vec&lt;u8&gt;) -&gt; Result&lt;Vec&lt;u8&gt;, SignerError&gt; {
+    Ok(psbt_bytes)
+}</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">class CustomCpfpSigner: CpfpSigner {
+    func signPsbt(psbtBytes: Data) async throws -&gt; Data {
+        return try await signPsbtWithYourKeys(psbtBytes: psbtBytes)
+    }
+
+    private func signPsbtWithYourKeys(psbtBytes: Data) async throws -&gt; Data {
+        return psbtBytes
+    }
+}
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">class MyCpfpSigner : CpfpSigner {
+    override suspend fun signPsbt(psbtBytes: ByteArray): ByteArray {
+        return signPsbtWithYourKeys(psbtBytes)
+    }
+
+    private fun signPsbtWithYourKeys(psbtBytes: ByteArray): ByteArray {
+        return psbtBytes
+    }
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">class MyCpfpSigner : CpfpSigner
+{
+    public async Task&lt;byte[]&gt; SignPsbt(byte[] psbtBytes)
+    {
+        return await SignPsbtWithYourKeys(psbtBytes);
+    }
+
+    async Task&lt;byte[]&gt; SignPsbtWithYourKeys(byte[] psbtBytes)
+    {
+        return await Task.FromResult(psbtBytes);
+    }
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">class CustomCpfpSigner implements CpfpSigner {
+  async signPsbt (psbtBytes: Uint8Array): Promise&lt;Uint8Array&gt; {
+    return await signPsbtWithYourKeys(psbtBytes)
+  }
+}
+
+const signPsbtWithYourKeys = async (psbtBytes: Uint8Array): Promise&lt;Uint8Array&gt; =&gt; {
+  return psbtBytes
+}
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">class CustomCpfpSigner {
+  signPsbt = async (psbtBytes: ArrayBuffer): Promise&lt;ArrayBuffer&gt; =&gt; {
+    return await signPsbtWithYourKeys(psbtBytes)
+  }
+}
+
+const signPsbtWithYourKeys = async (psbtBytes: ArrayBuffer): Promise&lt;ArrayBuffer&gt; =&gt; {
+  return psbtBytes
+}
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">Future&lt;void&gt; buildExitWithSigner(BreezSdk sdk, PrepareUnilateralExitResponse quote) async {
+  // Flutter cannot pass a foreign CpfpSigner, so it takes a signPsbt callback.
+  UnilateralExitResponse response = await sdk.unilateralExitWithSigner(
+    request: UnilateralExitRequest(
+      prepared: quote,
+      fundingInputs: [
+        CpfpInput.p2Wpkh(
+          txid: "your-utxo-txid",
+          vout: 0,
+          value: BigInt.from(50000),
+          pubkey: "your-compressed-pubkey-hex",
+        ),
+      ],
+    ),
+    signPsbt: (Uint8List psbtBytes) async {
+      return signPsbtWithYourKeys(psbtBytes);
+    },
+  );
+
+  for (UnilateralExitTransaction tx in response.transactions) {
+    if (tx.csvTimelockBlocks != null) {
+      print("${tx.txid}: wait ${tx.csvTimelockBlocks} blocks after its parents confirm");
+    }
+  }
+}
+
+// Receives the serialized PSBT, signs the inputs that are not already
+// finalized, and returns the serialized signed PSBT.
+Future&lt;Uint8List&gt; signPsbtWithYourKeys(Uint8List psbtBytes) async {
+  return psbtBytes;
+}
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">class CustomCpfpSigner(CpfpSigner):
+    async def sign_psbt(self, psbt_bytes: bytes) -&gt; bytes:
+        return sign_psbt_with_your_keys(psbt_bytes)
+
+
+def sign_psbt_with_your_keys(psbt_bytes: bytes) -&gt; bytes:
+    raise NotImplementedError("Sign the PSBT's non-finalized inputs with your keys")
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">type MyCpfpSigner struct{}
+
+func (MyCpfpSigner) SignPsbt(psbtBytes []byte) ([]byte, error) {
+	return signPsbtWithYourKeys(psbtBytes)
+}
+
+func signPsbtWithYourKeys(psbtBytes []byte) ([]byte, error) {
+	return psbtBytes, nil
+}
+</code></pre>
+</section>
+</custom-tabs>
+<div class="warning">
+<h4 id="flutter"><a class="header" href="#flutter">Flutter</a></h4>
+Flutter cannot pass a foreign <code>CpfpSigner</code>, so it exposes two exit calls. <code>unilateralExit</code> takes the funding secret key bytes and uses the built-in single-key signer. <code>unilateralExitWithSigner</code> takes a <code>signPsbt</code> callback that receives the serialized PSBT, signs the inputs that are not already finalized (any scheme), and returns the serialized signed PSBT.
+</div>
+<h2 id="broadcast-the-transactions"><a class="header" href="#broadcast-the-transactions">Broadcast the transactions</a></h2>
+<p>The SDK does not broadcast anything. <code class="lang-fn"><span class="fn-rust">transactions</span><span class="fn-python">transactions</span><span class="fn-swift">transactions</span><span class="fn-kotlin">transactions</span><span class="fn-javascript">transactions</span><span class="fn-react-native">transactions</span><span class="fn-flutter">transactions</span><span class="fn-go">Transactions</span><span class="fn-csharp">Transactions</span></code> is the complete, signed set in valid broadcast order, and it is yours to send to the network over time. Persist it, then broadcast each transaction once it is ready. A transaction is ready when every txid in its <code class="lang-fn"><span class="fn-rust">depends_on</span><span class="fn-python">depends_on</span><span class="fn-swift">dependsOn</span><span class="fn-kotlin">dependsOn</span><span class="fn-javascript">dependsOn</span><span class="fn-react-native">dependsOn</span><span class="fn-flutter">dependsOn</span><span class="fn-go">DependsOn</span><span class="fn-csharp">DependsOn</span></code> has confirmed and its <code class="lang-fn"><span class="fn-rust">csv_timelock_blocks</span><span class="fn-python">csv_timelock_blocks</span><span class="fn-swift">csvTimelockBlocks</span><span class="fn-kotlin">csvTimelockBlocks</span><span class="fn-javascript">csvTimelockBlocks</span><span class="fn-react-native">csvTimelockBlocks</span><span class="fn-flutter">csvTimelockBlocks</span><span class="fn-go">CsvTimelockBlocks</span><span class="fn-csharp">CsvTimelockBlocks</span></code> relative timelock has matured. Because of those timelocks, a full exit can span several days.</p>
+<h3 id="broadcast-each-package-together"><a class="header" href="#broadcast-each-package-together">Broadcast each package together</a></h3>
+<p>Most steps come as a pair: a tree transaction and its <code class="lang-fn"><span class="fn-rust">cpfp_tx_hex</span><span class="fn-python">cpfp_tx_hex</span><span class="fn-swift">cpfpTxHex</span><span class="fn-kotlin">cpfpTxHex</span><span class="fn-javascript">cpfpTxHex</span><span class="fn-react-native">cpfpTxHex</span><span class="fn-flutter">cpfpTxHex</span><span class="fn-go">CpfpTxHex</span><span class="fn-csharp">CpfpTxHex</span></code> CPFP child. The tree transaction pays no fee on its own, so a normal single-transaction broadcast rejects it; only the child makes the pair pay enough. Broadcast the two together, as a package, with a node that supports package relay, for example Bitcoin Core:</p>
+<pre><code class="language-text">bitcoin-cli submitpackage '["&lt;tx_hex&gt;", "&lt;cpfp_tx_hex&gt;"]'
+</code></pre>
+<p>The <strong>fan-out</strong> and the <strong>sweep</strong> are the exceptions: each pays its own fee and has no CPFP child (<code class="lang-fn"><span class="fn-rust">cpfp_tx_hex</span><span class="fn-python">cpfp_tx_hex</span><span class="fn-swift">cpfpTxHex</span><span class="fn-kotlin">cpfpTxHex</span><span class="fn-javascript">cpfpTxHex</span><span class="fn-react-native">cpfpTxHex</span><span class="fn-flutter">cpfpTxHex</span><span class="fn-go">CpfpTxHex</span><span class="fn-csharp">CpfpTxHex</span></code> is unset), so you broadcast it <strong>alone</strong>, as an ordinary transaction, anywhere — including a public endpoint such as <code>POST https://mempool.space/api/tx</code>. Most public broadcast APIs, including mempool.space, accept only one transaction at a time and cannot submit a package, so they reject the zero-fee tree transactions; use a package-relay-capable node (or service) for the pairs.</p>
+<h3 id="wait-for-each-step-to-confirm"><a class="header" href="#wait-for-each-step-to-confirm">Wait for each step to confirm</a></h3>
+<p>Within a branch you broadcast one package, wait for it to confirm, then broadcast the next. This is a mempool relay limit, not a Bitcoin consensus rule: nodes relay an unconfirmed parent with at most one unconfirmed child (the "one-parent-one-child", or 1P1C, package), so a second still-unconfirmed package stacked on top would not propagate. Once a package confirms, the next one has a confirmed parent and can go out. (A refund's <code class="lang-fn"><span class="fn-rust">csv_timelock_blocks</span><span class="fn-python">csv_timelock_blocks</span><span class="fn-swift">csvTimelockBlocks</span><span class="fn-kotlin">csvTimelockBlocks</span><span class="fn-javascript">csvTimelockBlocks</span><span class="fn-react-native">csvTimelockBlocks</span><span class="fn-flutter">csvTimelockBlocks</span><span class="fn-go">CsvTimelockBlocks</span><span class="fn-csharp">CsvTimelockBlocks</span></code> is a separate wait, and that one is a consensus rule.)</p>
+<h3 id="order-and-parallelism"><a class="header" href="#order-and-parallelism">Order and parallelism</a></h3>
+<p>Follow <code class="lang-fn"><span class="fn-rust">depends_on</span><span class="fn-python">depends_on</span><span class="fn-swift">dependsOn</span><span class="fn-kotlin">dependsOn</span><span class="fn-javascript">dependsOn</span><span class="fn-react-native">dependsOn</span><span class="fn-flutter">dependsOn</span><span class="fn-go">DependsOn</span><span class="fn-csharp">DependsOn</span></code> to order the set: a transaction can go out as soon as the transactions it lists have confirmed. With a single leaf this is one straight line, top to bottom. With several leaves the branches are largely independent, so to finish faster you can broadcast them in parallel and serialize only where <code class="lang-fn"><span class="fn-rust">depends_on</span><span class="fn-python">depends_on</span><span class="fn-swift">dependsOn</span><span class="fn-kotlin">dependsOn</span><span class="fn-javascript">dependsOn</span><span class="fn-react-native">dependsOn</span><span class="fn-flutter">dependsOn</span><span class="fn-go">DependsOn</span><span class="fn-csharp">DependsOn</span></code> actually links them:</p>
+<ol>
+<li><strong>The fan-out first, and alone.</strong> It pays its own fee and has no CPFP child, so it is an ordinary single-transaction broadcast. Wait for it to confirm before any branch package — every branch's first package depends on it.</li>
+<li><strong>Then the branch packages, each node transaction with its CPFP child.</strong> A shared ancestor appears once, listed in the <code class="lang-fn"><span class="fn-rust">depends_on</span><span class="fn-python">depends_on</span><span class="fn-swift">dependsOn</span><span class="fn-kotlin">dependsOn</span><span class="fn-javascript">dependsOn</span><span class="fn-react-native">dependsOn</span><span class="fn-flutter">dependsOn</span><span class="fn-go">DependsOn</span><span class="fn-csharp">DependsOn</span></code> of every branch that needs it, so you broadcast it a single time. Within a branch, send one package, wait for it to confirm, then the next (the 1P1C limit above); across branches you can work in parallel.</li>
+<li><strong>The sweep last, and alone,</strong> once every refund in its <code class="lang-fn"><span class="fn-rust">depends_on</span><span class="fn-python">depends_on</span><span class="fn-swift">dependsOn</span><span class="fn-kotlin">dependsOn</span><span class="fn-javascript">dependsOn</span><span class="fn-react-native">dependsOn</span><span class="fn-flutter">dependsOn</span><span class="fn-go">DependsOn</span><span class="fn-csharp">DependsOn</span></code> has confirmed.</li>
+</ol>
+<h2 id="the-transaction-set"><a class="header" href="#the-transaction-set">The transaction set</a></h2>
+<p>Each <code class="lang-fn"><span class="fn-rust">UnilateralExitTransaction</span><span class="fn-python">UnilateralExitTransaction</span><span class="fn-swift">UnilateralExitTransaction</span><span class="fn-kotlin">UnilateralExitTransaction</span><span class="fn-javascript">UnilateralExitTransaction</span><span class="fn-react-native">UnilateralExitTransaction</span><span class="fn-flutter">UnilateralExitTransaction</span><span class="fn-go">UnilateralExitTransaction</span><span class="fn-csharp">UnilateralExitTransaction</span></code> in <code class="lang-fn"><span class="fn-rust">transactions</span><span class="fn-python">transactions</span><span class="fn-swift">transactions</span><span class="fn-kotlin">transactions</span><span class="fn-javascript">transactions</span><span class="fn-react-native">transactions</span><span class="fn-flutter">transactions</span><span class="fn-go">Transactions</span><span class="fn-csharp">Transactions</span></code> carries:</p>
+<ul>
+<li><code class="lang-fn"><span class="fn-rust">kind</span><span class="fn-python">kind</span><span class="fn-swift">kind</span><span class="fn-kotlin">kind</span><span class="fn-javascript">kind</span><span class="fn-react-native">kind</span><span class="fn-flutter">kind</span><span class="fn-go">Kind</span><span class="fn-csharp">Kind</span></code>: whether it is the fan-out, a tree node, a refund, or the sweep.</li>
+<li><code class="lang-fn"><span class="fn-rust">node_id</span><span class="fn-python">node_id</span><span class="fn-swift">nodeId</span><span class="fn-kotlin">nodeId</span><span class="fn-javascript">nodeId</span><span class="fn-react-native">nodeId</span><span class="fn-flutter">nodeId</span><span class="fn-go">NodeId</span><span class="fn-csharp">NodeId</span></code>: the tree node a transaction belongs to (the leaf id for a refund), unset for the fan-out and the sweep.</li>
+<li><code class="lang-fn"><span class="fn-rust">txid</span><span class="fn-python">txid</span><span class="fn-swift">txid</span><span class="fn-kotlin">txid</span><span class="fn-javascript">txid</span><span class="fn-react-native">txid</span><span class="fn-flutter">txid</span><span class="fn-go">Txid</span><span class="fn-csharp">Txid</span></code> and <code class="lang-fn"><span class="fn-rust">tx_hex</span><span class="fn-python">tx_hex</span><span class="fn-swift">txHex</span><span class="fn-kotlin">txHex</span><span class="fn-javascript">txHex</span><span class="fn-react-native">txHex</span><span class="fn-flutter">txHex</span><span class="fn-go">TxHex</span><span class="fn-csharp">TxHex</span></code>: the signed transaction to broadcast.</li>
+<li><code class="lang-fn"><span class="fn-rust">cpfp_tx_hex</span><span class="fn-python">cpfp_tx_hex</span><span class="fn-swift">cpfpTxHex</span><span class="fn-kotlin">cpfpTxHex</span><span class="fn-javascript">cpfpTxHex</span><span class="fn-react-native">cpfpTxHex</span><span class="fn-flutter">cpfpTxHex</span><span class="fn-go">CpfpTxHex</span><span class="fn-csharp">CpfpTxHex</span></code>: its signed CPFP child, to broadcast alongside <code class="lang-fn"><span class="fn-rust">tx_hex</span><span class="fn-python">tx_hex</span><span class="fn-swift">txHex</span><span class="fn-kotlin">txHex</span><span class="fn-javascript">txHex</span><span class="fn-react-native">txHex</span><span class="fn-flutter">txHex</span><span class="fn-go">TxHex</span><span class="fn-csharp">TxHex</span></code> as a package. Unset for the fan-out and the sweep, and for a step that is already confirmed.</li>
+<li><code class="lang-fn"><span class="fn-rust">csv_timelock_blocks</span><span class="fn-python">csv_timelock_blocks</span><span class="fn-swift">csvTimelockBlocks</span><span class="fn-kotlin">csvTimelockBlocks</span><span class="fn-javascript">csvTimelockBlocks</span><span class="fn-react-native">csvTimelockBlocks</span><span class="fn-flutter">csvTimelockBlocks</span><span class="fn-go">CsvTimelockBlocks</span><span class="fn-csharp">CsvTimelockBlocks</span></code>: the relative timelock, in blocks, that must mature before the transaction can confirm.</li>
+<li><code class="lang-fn"><span class="fn-rust">depends_on</span><span class="fn-python">depends_on</span><span class="fn-swift">dependsOn</span><span class="fn-kotlin">dependsOn</span><span class="fn-javascript">dependsOn</span><span class="fn-react-native">dependsOn</span><span class="fn-flutter">dependsOn</span><span class="fn-go">DependsOn</span><span class="fn-csharp">DependsOn</span></code>: the txids of other transactions in the set that must confirm first.</li>
+<li><code class="lang-fn"><span class="fn-rust">status</span><span class="fn-python">status</span><span class="fn-swift">status</span><span class="fn-kotlin">status</span><span class="fn-javascript">status</span><span class="fn-react-native">status</span><span class="fn-flutter">status</span><span class="fn-go">Status</span><span class="fn-csharp">Status</span></code>: whether the transaction is already on-chain. <code class="lang-fn"><span class="fn-rust">ConfirmationStatus::Confirmed</span><span class="fn-python">ConfirmationStatus.CONFIRMED</span><span class="fn-swift">ConfirmationStatus.confirmed</span><span class="fn-kotlin">ConfirmationStatus.Confirmed</span><span class="fn-javascript">ConfirmationStatus.Confirmed</span><span class="fn-react-native">ConfirmationStatus.Confirmed</span><span class="fn-flutter">ConfirmationStatus.Confirmed</span><span class="fn-go">ConfirmationStatusConfirmed</span><span class="fn-csharp">ConfirmationStatus.Confirmed</span></code> means it is done and can be skipped; <code class="lang-fn"><span class="fn-rust">ConfirmationStatus::Unconfirmed</span><span class="fn-python">ConfirmationStatus.UNCONFIRMED</span><span class="fn-swift">ConfirmationStatus.unconfirmed</span><span class="fn-kotlin">ConfirmationStatus.Unconfirmed</span><span class="fn-javascript">ConfirmationStatus.Unconfirmed</span><span class="fn-react-native">ConfirmationStatus.Unconfirmed</span><span class="fn-flutter">ConfirmationStatus.Unconfirmed</span><span class="fn-go">ConfirmationStatusUnconfirmed</span><span class="fn-csharp">ConfirmationStatus.Unconfirmed</span></code> is the normal state of a step that is not yet on-chain and that you must broadcast; <code class="lang-fn"><span class="fn-rust">ConfirmationStatus::Unverified</span><span class="fn-python">ConfirmationStatus.UNVERIFIED</span><span class="fn-swift">ConfirmationStatus.unverified</span><span class="fn-kotlin">ConfirmationStatus.Unverified</span><span class="fn-javascript">ConfirmationStatus.Unverified</span><span class="fn-react-native">ConfirmationStatus.Unverified</span><span class="fn-flutter">ConfirmationStatus.Unverified</span><span class="fn-go">ConfirmationStatusUnverified</span><span class="fn-csharp">ConfirmationStatus.Unverified</span></code> means its on-chain status could not be determined (see the troubleshooting table).</li>
+</ul>
+<h2 id="resuming-and-increasing-the-fee"><a class="header" href="#resuming-and-increasing-the-fee">Resuming and increasing the fee</a></h2>
+<p><code class="lang-fn"><span class="fn-rust">unilateral_exit</span><span class="fn-python">unilateral_exit</span><span class="fn-swift">unilateralExit</span><span class="fn-kotlin">unilateralExit</span><span class="fn-javascript">unilateralExit</span><span class="fn-react-native">unilateralExit</span><span class="fn-flutter">unilateralExit</span><span class="fn-go">UnilateralExit</span><span class="fn-csharp">UnilateralExit</span></code> is safe to call again. It reads confirmed on-chain state on every call, so any step already confirmed comes back as <code class="lang-fn"><span class="fn-rust">ConfirmationStatus::Confirmed</span><span class="fn-python">ConfirmationStatus.CONFIRMED</span><span class="fn-swift">ConfirmationStatus.confirmed</span><span class="fn-kotlin">ConfirmationStatus.Confirmed</span><span class="fn-javascript">ConfirmationStatus.Confirmed</span><span class="fn-react-native">ConfirmationStatus.Confirmed</span><span class="fn-flutter">ConfirmationStatus.Confirmed</span><span class="fn-go">ConfirmationStatusConfirmed</span><span class="fn-csharp">ConfirmationStatus.Confirmed</span></code>, and an interrupted exit resumes from where it stopped instead of starting over. You never re-supply a previously built exit transaction: the SDK re-discovers the confirmed steps — including a confirmed fan-out — from chain state itself. The only thing you ever pass back in is a confirmed fan-out's <em>outputs</em>, and only as fresh funding UTXOs when a higher fee rate needs more than they provide (as described just below).</p>
+<p>For the most reliable resume, re-quote with <code class="lang-fn"><span class="fn-rust">ExitLeafSelection::Specific</span><span class="fn-python">ExitLeafSelection.SPECIFIC</span><span class="fn-swift">ExitLeafSelection.specific</span><span class="fn-kotlin">ExitLeafSelection.Specific</span><span class="fn-javascript">ExitLeafSelection.Specific</span><span class="fn-react-native">ExitLeafSelection.Specific</span><span class="fn-flutter">ExitLeafSelection.Specific</span><span class="fn-go">ExitLeafSelectionSpecific</span><span class="fn-csharp">ExitLeafSelection.Specific</span></code> naming the same leaves as your original quote, rather than <code class="lang-fn"><span class="fn-rust">ExitLeafSelection::Auto</span><span class="fn-python">ExitLeafSelection.AUTO</span><span class="fn-swift">ExitLeafSelection.auto</span><span class="fn-kotlin">ExitLeafSelection.Auto</span><span class="fn-javascript">ExitLeafSelection.Auto</span><span class="fn-react-native">ExitLeafSelection.Auto</span><span class="fn-flutter">ExitLeafSelection.Auto</span><span class="fn-go">ExitLeafSelectionAuto</span><span class="fn-csharp">ExitLeafSelection.Auto</span></code>, then call <code class="lang-fn"><span class="fn-rust">unilateral_exit</span><span class="fn-python">unilateral_exit</span><span class="fn-swift">unilateralExit</span><span class="fn-kotlin">unilateralExit</span><span class="fn-javascript">unilateralExit</span><span class="fn-react-native">unilateralExit</span><span class="fn-flutter">unilateralExit</span><span class="fn-go">UnilateralExit</span><span class="fn-csharp">UnilateralExit</span></code> again. Persist the leaf ids from that first quote so you can name them. Naming the leaves explicitly is the most dependable way to pick up an interrupted exit, including a leaf still waiting out its refund timelock.</p>
+<p>The reported fee reflects on-chain progress. <code class="lang-fn"><span class="fn-rust">unilateral_exit</span><span class="fn-python">unilateral_exit</span><span class="fn-swift">unilateralExit</span><span class="fn-kotlin">unilateralExit</span><span class="fn-javascript">unilateralExit</span><span class="fn-react-native">unilateralExit</span><span class="fn-flutter">unilateralExit</span><span class="fn-go">UnilateralExit</span><span class="fn-csharp">UnilateralExit</span></code>'s <code class="lang-fn"><span class="fn-rust">total_fee_sat</span><span class="fn-python">total_fee_sat</span><span class="fn-swift">totalFeeSat</span><span class="fn-kotlin">totalFeeSat</span><span class="fn-javascript">totalFeeSat</span><span class="fn-react-native">totalFeeSat</span><span class="fn-flutter">totalFeeSat</span><span class="fn-go">TotalFeeSat</span><span class="fn-csharp">TotalFeeSat</span></code> is the actual fee of only the transactions it still returns, so a resume costs less than a fresh exit — already-confirmed steps are free. <code class="lang-fn"><span class="fn-rust">prepare_unilateral_exit</span><span class="fn-python">prepare_unilateral_exit</span><span class="fn-swift">prepareUnilateralExit</span><span class="fn-kotlin">prepareUnilateralExit</span><span class="fn-javascript">prepareUnilateralExit</span><span class="fn-react-native">prepareUnilateralExit</span><span class="fn-flutter">prepareUnilateralExit</span><span class="fn-go">PrepareUnilateralExit</span><span class="fn-csharp">PrepareUnilateralExit</span></code> works from the operators' reported node state rather than a chain lookup, so it treats any node the operators already consider on-chain as paid; a partially-exited leaf therefore quotes cheaper, and its <code class="lang-fn"><span class="fn-rust">per_branch_funding</span><span class="fn-python">per_branch_funding</span><span class="fn-swift">perBranchFunding</span><span class="fn-kotlin">perBranchFunding</span><span class="fn-javascript">perBranchFunding</span><span class="fn-react-native">perBranchFunding</span><span class="fn-flutter">perBranchFunding</span><span class="fn-go">PerBranchFunding</span><span class="fn-csharp">PerBranchFunding</span></code> drops to match.</p>
+<p>To re-broadcast the same leaves at a higher fee, quote again with the same <code class="lang-fn"><span class="fn-rust">ExitLeafSelection::Specific</span><span class="fn-python">ExitLeafSelection.SPECIFIC</span><span class="fn-swift">ExitLeafSelection.specific</span><span class="fn-kotlin">ExitLeafSelection.Specific</span><span class="fn-javascript">ExitLeafSelection.Specific</span><span class="fn-react-native">ExitLeafSelection.Specific</span><span class="fn-flutter">ExitLeafSelection.Specific</span><span class="fn-go">ExitLeafSelectionSpecific</span><span class="fn-csharp">ExitLeafSelection.Specific</span></code> leaves and a higher <code class="lang-fn"><span class="fn-rust">fee_rate_sat_per_vbyte</span><span class="fn-python">fee_rate_sat_per_vbyte</span><span class="fn-swift">feeRateSatPerVbyte</span><span class="fn-kotlin">feeRateSatPerVbyte</span><span class="fn-javascript">feeRateSatPerVbyte</span><span class="fn-react-native">feeRateSatPerVbyte</span><span class="fn-flutter">feeRateSatPerVbyte</span><span class="fn-go">FeeRateSatPerVbyte</span><span class="fn-csharp">FeeRateSatPerVbyte</span></code>, then call <code class="lang-fn"><span class="fn-rust">unilateral_exit</span><span class="fn-python">unilateral_exit</span><span class="fn-swift">unilateralExit</span><span class="fn-kotlin">unilateralExit</span><span class="fn-javascript">unilateralExit</span><span class="fn-react-native">unilateralExit</span><span class="fn-flutter">unilateralExit</span><span class="fn-go">UnilateralExit</span><span class="fn-csharp">UnilateralExit</span></code> again. The not-yet-confirmed transactions are rebuilt at the higher fee and replace the earlier ones by RBF; confirmed steps are left as they are. Once a fan-out has confirmed its outputs are fixed at the fee they were built with, so if the higher rate needs more than they provide the call returns <code class="lang-fn"><span class="fn-rust">SdkError::InsufficientCpfpFunds</span><span class="fn-python">SdkError.INSUFFICIENT_CPFP_FUNDS</span><span class="fn-swift">SdkError.insufficientCpfpFunds</span><span class="fn-kotlin">SdkError.InsufficientCpfpFunds</span><span class="fn-javascript">SdkError.InsufficientCpfpFunds</span><span class="fn-react-native">SdkError.InsufficientCpfpFunds</span><span class="fn-flutter">SdkError.InsufficientCpfpFunds</span><span class="fn-go">SdkErrorInsufficientCpfpFunds</span><span class="fn-csharp">SdkError.InsufficientCpfpFunds</span></code>; because those outputs pay to your own funding script, you recover by quoting again and passing them back in as funding UTXOs, together with any extra funding needed.</p>
+<p>Confirmed <em>CPFP</em> transactions hold funds the same way: once one confirms, your funds sit in its change output. To raise the fee beyond what a confirmed output covers, supply that output back in as a funding UTXO alongside the extra funding — list the confirmed output(s) first, then the new UTXO — so the rebuild spends the confirmed CPFP outputs together with the new funding rather than being capped by them. (Supplying the remaining unspent outputs yourself works too.)</p>
+<h2 id="troubleshooting"><a class="header" href="#troubleshooting">Troubleshooting</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Problem</th><th>Cause</th><th>Solution</th></tr></thead><tbody>
+<tr><td><code class="lang-fn"><span class="fn-rust">prepare_unilateral_exit</span><span class="fn-python">prepare_unilateral_exit</span><span class="fn-swift">prepareUnilateralExit</span><span class="fn-kotlin">prepareUnilateralExit</span><span class="fn-javascript">prepareUnilateralExit</span><span class="fn-react-native">prepareUnilateralExit</span><span class="fn-flutter">prepareUnilateralExit</span><span class="fn-go">PrepareUnilateralExit</span><span class="fn-csharp">PrepareUnilateralExit</span></code> returns no <code class="lang-fn"><span class="fn-rust">leaves</span><span class="fn-python">leaves</span><span class="fn-swift">leaves</span><span class="fn-kotlin">leaves</span><span class="fn-javascript">leaves</span><span class="fn-react-native">leaves</span><span class="fn-flutter">leaves</span><span class="fn-go">Leaves</span><span class="fn-csharp">Leaves</span></code></td><td>Under <code class="lang-fn"><span class="fn-rust">ExitLeafSelection::Auto</span><span class="fn-python">ExitLeafSelection.AUTO</span><span class="fn-swift">ExitLeafSelection.auto</span><span class="fn-kotlin">ExitLeafSelection.Auto</span><span class="fn-javascript">ExitLeafSelection.Auto</span><span class="fn-react-native">ExitLeafSelection.Auto</span><span class="fn-flutter">ExitLeafSelection.Auto</span><span class="fn-go">ExitLeafSelectionAuto</span><span class="fn-csharp">ExitLeafSelection.Auto</span></code>, no leaf is worth exiting at the current rate</td><td>Lower <code class="lang-fn"><span class="fn-rust">fee_rate_sat_per_vbyte</span><span class="fn-python">fee_rate_sat_per_vbyte</span><span class="fn-swift">feeRateSatPerVbyte</span><span class="fn-kotlin">feeRateSatPerVbyte</span><span class="fn-javascript">feeRateSatPerVbyte</span><span class="fn-react-native">feeRateSatPerVbyte</span><span class="fn-flutter">feeRateSatPerVbyte</span><span class="fn-go">FeeRateSatPerVbyte</span><span class="fn-csharp">FeeRateSatPerVbyte</span></code> or wait for cheaper on-chain fees (this is not an error)</td></tr>
+<tr><td>A leaf you are mid-exit on is missing from a resumed <code class="lang-fn"><span class="fn-rust">ExitLeafSelection::Auto</span><span class="fn-python">ExitLeafSelection.AUTO</span><span class="fn-swift">ExitLeafSelection.auto</span><span class="fn-kotlin">ExitLeafSelection.Auto</span><span class="fn-javascript">ExitLeafSelection.Auto</span><span class="fn-react-native">ExitLeafSelection.Auto</span><span class="fn-flutter">ExitLeafSelection.Auto</span><span class="fn-go">ExitLeafSelectionAuto</span><span class="fn-csharp">ExitLeafSelection.Auto</span></code> quote</td><td>The resume reselected leaves with <code class="lang-fn"><span class="fn-rust">ExitLeafSelection::Auto</span><span class="fn-python">ExitLeafSelection.AUTO</span><span class="fn-swift">ExitLeafSelection.auto</span><span class="fn-kotlin">ExitLeafSelection.Auto</span><span class="fn-javascript">ExitLeafSelection.Auto</span><span class="fn-react-native">ExitLeafSelection.Auto</span><span class="fn-flutter">ExitLeafSelection.Auto</span><span class="fn-go">ExitLeafSelectionAuto</span><span class="fn-csharp">ExitLeafSelection.Auto</span></code> instead of naming them</td><td>Re-quote with <code class="lang-fn"><span class="fn-rust">ExitLeafSelection::Specific</span><span class="fn-python">ExitLeafSelection.SPECIFIC</span><span class="fn-swift">ExitLeafSelection.specific</span><span class="fn-kotlin">ExitLeafSelection.Specific</span><span class="fn-javascript">ExitLeafSelection.Specific</span><span class="fn-react-native">ExitLeafSelection.Specific</span><span class="fn-flutter">ExitLeafSelection.Specific</span><span class="fn-go">ExitLeafSelectionSpecific</span><span class="fn-csharp">ExitLeafSelection.Specific</span></code>, naming the leaves from your original quote</td></tr>
+<tr><td><code class="lang-fn"><span class="fn-rust">total_fee_sat</span><span class="fn-python">total_fee_sat</span><span class="fn-swift">totalFeeSat</span><span class="fn-kotlin">totalFeeSat</span><span class="fn-javascript">totalFeeSat</span><span class="fn-react-native">totalFeeSat</span><span class="fn-flutter">totalFeeSat</span><span class="fn-go">TotalFeeSat</span><span class="fn-csharp">TotalFeeSat</span></code> is close to or above <code class="lang-fn"><span class="fn-rust">recoverable_value_sat</span><span class="fn-python">recoverable_value_sat</span><span class="fn-swift">recoverableValueSat</span><span class="fn-kotlin">recoverableValueSat</span><span class="fn-javascript">recoverableValueSat</span><span class="fn-react-native">recoverableValueSat</span><span class="fn-flutter">recoverableValueSat</span><span class="fn-go">RecoverableValueSat</span><span class="fn-csharp">RecoverableValueSat</span></code></td><td>The shared fan-out fee makes a single-UTXO multi-leaf exit uneconomical</td><td>Fund one UTXO per branch (<code class="lang-fn"><span class="fn-rust">per_branch_funding</span><span class="fn-python">per_branch_funding</span><span class="fn-swift">perBranchFunding</span><span class="fn-kotlin">perBranchFunding</span><span class="fn-javascript">perBranchFunding</span><span class="fn-react-native">perBranchFunding</span><span class="fn-flutter">perBranchFunding</span><span class="fn-go">PerBranchFunding</span><span class="fn-csharp">PerBranchFunding</span></code>) to drop the fan-out fee, exit fewer leaves with <code class="lang-fn"><span class="fn-rust">ExitLeafSelection::Specific</span><span class="fn-python">ExitLeafSelection.SPECIFIC</span><span class="fn-swift">ExitLeafSelection.specific</span><span class="fn-kotlin">ExitLeafSelection.Specific</span><span class="fn-javascript">ExitLeafSelection.Specific</span><span class="fn-react-native">ExitLeafSelection.Specific</span><span class="fn-flutter">ExitLeafSelection.Specific</span><span class="fn-go">ExitLeafSelectionSpecific</span><span class="fn-csharp">ExitLeafSelection.Specific</span></code>, or wait for a lower fee rate</td></tr>
+<tr><td>The build/sweep fails with a "below the dust limit" error</td><td>The recoverable value net of fees is below the destination's dust limit</td><td>Exit higher-value leaves with <code class="lang-fn"><span class="fn-rust">ExitLeafSelection::Specific</span><span class="fn-python">ExitLeafSelection.SPECIFIC</span><span class="fn-swift">ExitLeafSelection.specific</span><span class="fn-kotlin">ExitLeafSelection.Specific</span><span class="fn-javascript">ExitLeafSelection.Specific</span><span class="fn-react-native">ExitLeafSelection.Specific</span><span class="fn-flutter">ExitLeafSelection.Specific</span><span class="fn-go">ExitLeafSelectionSpecific</span><span class="fn-csharp">ExitLeafSelection.Specific</span></code>, lower the <code class="lang-fn"><span class="fn-rust">fee_rate_sat_per_vbyte</span><span class="fn-python">fee_rate_sat_per_vbyte</span><span class="fn-swift">feeRateSatPerVbyte</span><span class="fn-kotlin">feeRateSatPerVbyte</span><span class="fn-javascript">feeRateSatPerVbyte</span><span class="fn-react-native">feeRateSatPerVbyte</span><span class="fn-flutter">feeRateSatPerVbyte</span><span class="fn-go">FeeRateSatPerVbyte</span><span class="fn-csharp">FeeRateSatPerVbyte</span></code>, or wait for a cheaper fee rate</td></tr>
+<tr><td><code class="lang-fn"><span class="fn-rust">SdkError::InsufficientCpfpFunds</span><span class="fn-python">SdkError.INSUFFICIENT_CPFP_FUNDS</span><span class="fn-swift">SdkError.insufficientCpfpFunds</span><span class="fn-kotlin">SdkError.InsufficientCpfpFunds</span><span class="fn-javascript">SdkError.InsufficientCpfpFunds</span><span class="fn-react-native">SdkError.InsufficientCpfpFunds</span><span class="fn-flutter">SdkError.InsufficientCpfpFunds</span><span class="fn-go">SdkErrorInsufficientCpfpFunds</span><span class="fn-csharp">SdkError.InsufficientCpfpFunds</span></code></td><td>Funding is below what the exit needs</td><td>Fund at least <code class="lang-fn"><span class="fn-rust">single_utxo_funding_sat</span><span class="fn-python">single_utxo_funding_sat</span><span class="fn-swift">singleUtxoFundingSat</span><span class="fn-kotlin">singleUtxoFundingSat</span><span class="fn-javascript">singleUtxoFundingSat</span><span class="fn-react-native">singleUtxoFundingSat</span><span class="fn-flutter">singleUtxoFundingSat</span><span class="fn-go">SingleUtxoFundingSat</span><span class="fn-csharp">SingleUtxoFundingSat</span></code>, or the amount in each <code class="lang-fn"><span class="fn-rust">PerBranchFunding</span><span class="fn-python">PerBranchFunding</span><span class="fn-swift">PerBranchFunding</span><span class="fn-kotlin">PerBranchFunding</span><span class="fn-javascript">PerBranchFunding</span><span class="fn-react-native">PerBranchFunding</span><span class="fn-flutter">PerBranchFunding</span><span class="fn-go">PerBranchFunding</span><span class="fn-csharp">PerBranchFunding</span></code></td></tr>
+<tr><td><code class="lang-fn"><span class="fn-rust">SdkError::FundingUtxoConflict</span><span class="fn-python">SdkError.FUNDING_UTXO_CONFLICT</span><span class="fn-swift">SdkError.fundingUtxoConflict</span><span class="fn-kotlin">SdkError.FundingUtxoConflict</span><span class="fn-javascript">SdkError.FundingUtxoConflict</span><span class="fn-react-native">SdkError.FundingUtxoConflict</span><span class="fn-flutter">SdkError.FundingUtxoConflict</span><span class="fn-go">SdkErrorFundingUtxoConflict</span><span class="fn-csharp">SdkError.FundingUtxoConflict</span></code></td><td>A funding UTXO was already spent (e.g. a previous attempt)</td><td>Supply fresh, unspent funding; the error names the conflicting outpoint</td></tr>
+<tr><td>"min relay fee not met" when broadcasting</td><td>The package fee is too low for the network</td><td>Increase <code class="lang-fn"><span class="fn-rust">fee_rate_sat_per_vbyte</span><span class="fn-python">fee_rate_sat_per_vbyte</span><span class="fn-swift">feeRateSatPerVbyte</span><span class="fn-kotlin">feeRateSatPerVbyte</span><span class="fn-javascript">feeRateSatPerVbyte</span><span class="fn-react-native">feeRateSatPerVbyte</span><span class="fn-flutter">feeRateSatPerVbyte</span><span class="fn-go">FeeRateSatPerVbyte</span><span class="fn-csharp">FeeRateSatPerVbyte</span></code>, rebuild, and re-broadcast (RBF)</td></tr>
+<tr><td>"mandatory-script-verify-flag-failed"</td><td>A CPFP child was not signed correctly</td><td>Ensure your <code class="lang-fn"><span class="fn-rust">CpfpSigner</span><span class="fn-python">CpfpSigner</span><span class="fn-swift">CpfpSigner</span><span class="fn-kotlin">CpfpSigner</span><span class="fn-javascript">CpfpSigner</span><span class="fn-react-native">CpfpSigner</span><span class="fn-flutter">CpfpSigner</span><span class="fn-go">CpfpSigner</span><span class="fn-csharp">CpfpSigner</span></code> signs every non-finalized input</td></tr>
+<tr><td>"non-BIP68-final"</td><td>A relative timelock has not matured</td><td>Wait the required <code class="lang-fn"><span class="fn-rust">csv_timelock_blocks</span><span class="fn-python">csv_timelock_blocks</span><span class="fn-swift">csvTimelockBlocks</span><span class="fn-kotlin">csvTimelockBlocks</span><span class="fn-javascript">csvTimelockBlocks</span><span class="fn-react-native">csvTimelockBlocks</span><span class="fn-flutter">csvTimelockBlocks</span><span class="fn-go">CsvTimelockBlocks</span><span class="fn-csharp">CsvTimelockBlocks</span></code> after the parent confirms</td></tr>
+<tr><td>A tree transaction is rejected on its own</td><td>The zero-fee parent was broadcast without its child</td><td>Broadcast the parent and its <code class="lang-fn"><span class="fn-rust">cpfp_tx_hex</span><span class="fn-python">cpfp_tx_hex</span><span class="fn-swift">cpfpTxHex</span><span class="fn-kotlin">cpfpTxHex</span><span class="fn-javascript">cpfpTxHex</span><span class="fn-react-native">cpfpTxHex</span><span class="fn-flutter">cpfpTxHex</span><span class="fn-go">CpfpTxHex</span><span class="fn-csharp">CpfpTxHex</span></code> together as a package</td></tr>
+<tr><td>The sweep is rejected</td><td>Not every refund it spends has confirmed</td><td>Wait for all of the sweep's <code class="lang-fn"><span class="fn-rust">depends_on</span><span class="fn-python">depends_on</span><span class="fn-swift">dependsOn</span><span class="fn-kotlin">dependsOn</span><span class="fn-javascript">dependsOn</span><span class="fn-react-native">dependsOn</span><span class="fn-flutter">dependsOn</span><span class="fn-go">DependsOn</span><span class="fn-csharp">DependsOn</span></code> to confirm first</td></tr>
+<tr><td>A transaction's <code class="lang-fn"><span class="fn-rust">status</span><span class="fn-python">status</span><span class="fn-swift">status</span><span class="fn-kotlin">status</span><span class="fn-javascript">status</span><span class="fn-react-native">status</span><span class="fn-flutter">status</span><span class="fn-go">Status</span><span class="fn-csharp">Status</span></code> is <code class="lang-fn"><span class="fn-rust">ConfirmationStatus::Unverified</span><span class="fn-python">ConfirmationStatus.UNVERIFIED</span><span class="fn-swift">ConfirmationStatus.unverified</span><span class="fn-kotlin">ConfirmationStatus.Unverified</span><span class="fn-javascript">ConfirmationStatus.Unverified</span><span class="fn-react-native">ConfirmationStatus.Unverified</span><span class="fn-flutter">ConfirmationStatus.Unverified</span><span class="fn-go">ConfirmationStatusUnverified</span><span class="fn-csharp">ConfirmationStatus.Unverified</span></code></td><td>The chain service was unavailable or rate-limited, so the SDK could not tell whether that step is already on-chain</td><td>Retry, or use a more reliable chain service (see <a href="customizing.html#with-chain-service">Customizing the SDK</a>); calling <code class="lang-fn"><span class="fn-rust">unilateral_exit</span><span class="fn-python">unilateral_exit</span><span class="fn-swift">unilateralExit</span><span class="fn-kotlin">unilateralExit</span><span class="fn-javascript">unilateralExit</span><span class="fn-react-native">unilateralExit</span><span class="fn-flutter">unilateralExit</span><span class="fn-go">UnilateralExit</span><span class="fn-csharp">UnilateralExit</span></code> again re-checks</td></tr>
+</tbody></table>
+</div>
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../guide/cross_chain.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../guide/moving_to_production.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../guide/cross_chain.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../guide/moving_to_production.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../tabs.js"></script>
+        <script src="../theme/pagetoc.js"></script>
+        <script src="../brand-header.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

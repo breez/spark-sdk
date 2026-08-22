@@ -1,0 +1,142 @@
+# Breez SDK - Spark
+
+> End-to-end SDK for instant, non-custodial bitcoin and stablecoin payments, with bindings for nine languages. Start from the language edition matching your project's dependency, listed directly below. Every page is also published as markdown at the same path with a `.md` extension.
+
+## Language editions
+
+Each edition carries every page listed below, with examples in one language only and identifiers in that language's naming convention.
+
+- [Rust](/llms/rust/llms.txt): for the `breez-sdk-spark` crate. [Whole book in one file](/llms-rust-full.txt).
+- [Swift](/llms/swift/llms.txt): for the `breez-sdk-spark-swift` Swift package. [Whole book in one file](/llms-swift-full.txt).
+- [Kotlin](/llms/kotlin/llms.txt): for `technology.breez.spark:breez-sdk-spark-kmp` or `breez_sdk_spark:bindings-android`. [Whole book in one file](/llms-kotlin-full.txt).
+- [C#](/llms/csharp/llms.txt): for the `Breez.Sdk.Spark` NuGet package. [Whole book in one file](/llms-csharp-full.txt).
+- [Javascript (Wasm)](/llms/wasm/llms.txt): for the `@breeztech/breez-sdk-spark` npm package. [Whole book in one file](/llms-wasm-full.txt).
+- [React Native](/llms/react-native/llms.txt): for the `@breeztech/breez-sdk-spark-react-native` npm package. [Whole book in one file](/llms-react-native-full.txt).
+- [Flutter](/llms/flutter/llms.txt): for the `breez_sdk_spark_flutter` pub package. [Whole book in one file](/llms-flutter-full.txt).
+- [Python](/llms/python/llms.txt): for the `breez-sdk-spark` PyPI package. [Whole book in one file](/llms-python-full.txt).
+- [Go](/llms/go/llms.txt): for the `github.com/breez/breez-sdk-spark-go` module. [Whole book in one file](/llms-go-full.txt).
+
+## About Breez SDK - Spark
+
+- [About Breez SDK - Spark](/guide/about_breez_sdk_spark.md)
+
+## Getting started
+
+- [Getting started](/guide/getting_started.md)
+- [Installing the SDK](/guide/install.md)
+- [iOS/Swift](/guide/install_ios_swift.md)
+- [Android/Kotlin](/guide/install_android_kotlin.md)
+- [Kotlin Multiplatform](/guide/install_kotlin_multiplatform.md)
+- [Javascript/Typescript (Wasm)](/guide/install_javascript.md)
+- [React Native/Expo](/guide/install_react_native.md)
+- [Rust](/guide/install_rust.md)
+- [Flutter](/guide/install_flutter.md)
+- [Go](/guide/install_go.md)
+- [Python](/guide/install_python.md)
+- [C#](/guide/install_csharp.md)
+- [Testing and development](/guide/testing.md)
+- [Initializing the SDK](/guide/initializing.md)
+- [Customizing the SDK](/guide/customizing.md)
+- [Getting the SDK info](/guide/get_info.md)
+- [Listening to events](/guide/events.md)
+- [Adding logging](/guide/logging.md)
+- [Spark status](/guide/spark_status.md)
+
+## Payment fundamentals
+
+- [Payment fundamentals](/guide/payments.md)
+- [Parsing inputs](/guide/parse.md)
+- [Receiving payments](/guide/receive_payment.md)
+- [Sending payments](/guide/send_payment.md)
+- [Listing payments](/guide/list_payments.md)
+- [Claiming on-chain deposits](/guide/onchain_claims.md)
+
+## Using LNURL and Lightning addresses
+
+- [Using LNURL and Lightning addresses](/guide/lnurl.md)
+- [Sending payments using LNURL-Pay/Lightning address](/guide/lnurl_pay.md)
+- [Managing contacts](/guide/contacts.md)
+- [Receiving payments using LNURL-Pay/Lightning address](/guide/receive_lnurl_pay.md)
+- [Lightning Address payment notifications](/guide/lnurl_webhooks.md)
+- [Receiving payments using LNURL-Withdraw](/guide/lnurl_withdraw.md)
+- [Using LNURL-Auth](/guide/lnurl_auth.md)
+
+## Passkey login
+
+- [Passkey login](/guide/passkey.md)
+- [Setup](/guide/passkey_setup.md)
+- [Onboarding](/guide/passkey_onboarding.md)
+- [Credential metadata](/guide/passkey_credential_metadata.md)
+- [Managing labels](/guide/passkey_labels.md)
+- [PRF providers](/guide/passkey_prf_providers.md)
+
+## Stable balance
+
+- [Stable balance](/guide/stable_balance.md)
+
+## User settings
+
+- [User settings](/guide/user_settings.md)
+
+## Signing and verifying messages
+
+- [Signing and verifying messages](/guide/messages.md)
+
+## Supporting fiat currencies
+
+- [Supporting fiat currencies](/guide/fiat_currencies.md)
+
+## Buying Bitcoin
+
+- [Buying Bitcoin](/guide/buy_bitcoin.md)
+
+## End-user fees
+
+- [End-user fees](/guide/end-user_fees.md)
+
+## Handling tokens
+
+- [Handling tokens](/guide/tokens.md)
+- [Token payments](/guide/token_payments.md)
+- [Sending to multiple recipients](/guide/batch_send.md)
+- [Converting tokens](/guide/token_conversion.md)
+- [Issuing tokens](/guide/issuing_tokens.md)
+
+## Advanced features
+
+- [Advanced features](/guide/advanced.md)
+- [Custom configuration](/guide/config.md)
+- [Custom leaf optimization](/guide/optimize.md)
+- [Conditional Payments](/guide/htlcs.md)
+- [Using an External Signer](/guide/external_signer.md)
+- [Managing webhooks](/guide/webhooks.md)
+- [Server mode](/guide/server_mode.md)
+- [Client signing](/guide/client_signing.md)
+- [Using Turnkey](/guide/turnkey.md)
+- [Send USDC/USDT](/guide/cross_chain.md)
+- [Unilateral exit](/guide/unilateral_exit.md)
+
+## Moving to production
+
+- [Moving to production](/guide/moving_to_production.md)
+
+## Overview
+
+- [Overview](/guide/uxguide.md)
+
+## Login & backup
+
+- [Login & backup](/guide/uxguide_login.md)
+
+## Displaying payments
+
+- [Displaying payments](/guide/uxguide_display.md)
+
+## Receiving payments
+
+- [Receiving payments](/guide/uxguide_receive.md)
+
+## Sending payments
+
+- [Sending payments](/guide/uxguide_send.md)
+

@@ -1,0 +1,29 @@
+# C#
+
+We recommend using our official NuGet package: [Breez.Sdk.Spark](https://www.nuget.org/packages/Breez.Sdk.Spark).
+
+## Using .NET CLI
+
+```console
+dotnet add package Breez.Sdk.Spark
+```
+
+## Using Package Manager Console
+
+```console
+Install-Package Breez.Sdk.Spark
+```
+
+## Using PackageReference
+
+Add the following to your `.csproj` file:
+
+```xml
+<ItemGroup>
+  <PackageReference Include="Breez.Sdk.Spark" Version="0.22.0" />
+</ItemGroup>
+```
+
+## Example App
+
+For a full working example app, see the [C# CLI example app](https://github.com/breez/spark-sdk/tree/main/crates/breez-sdk/bindings/examples/cli/langs/csharp).
