@@ -15,7 +15,8 @@ const exampleQuoteExit = async (sdk: BreezSdk): Promise<PrepareUnilateralExitRes
     feeRateSatPerVbyte: BigInt(2),
     fundingKind: new CpfpFundingKind.P2wpkh(),
     destination: 'bc1q...your-destination-address',
-    selection: new ExitLeafSelection.Auto()
+    selection: new ExitLeafSelection.Auto(),
+    fundingShape: undefined
   })
 
   console.log(`Recovering ${quote.recoverableValueSat} sats for ${quote.totalFeeSat} sats in fees`)

@@ -9,6 +9,7 @@ async fn quote_exit(sdk: &BreezSdk) -> Result<PrepareUnilateralExitResponse> {
             funding_kind: CpfpFundingKind::P2wpkh,
             destination: "bc1q...your-destination-address".to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
 

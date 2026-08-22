@@ -514,6 +514,7 @@ async fn quote_then_build_single(
             funding_kind: CpfpFundingKind::P2tr,
             destination: utxo.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let signer = signer_for(&utxo.secret_key.secret_bytes())?;
@@ -548,6 +549,7 @@ async fn test_nothing_confirmed(#[case] backend: SignerBackend) -> Result<()> {
             funding_kind: CpfpFundingKind::P2tr,
             destination: destination.clone(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_eq!(quote.leaves.len(), 1, "expected a single selected leaf");
@@ -619,6 +621,7 @@ async fn test_full_exit_and_sweep(#[case] backend: SignerBackend) -> Result<()> 
             funding_kind: CpfpFundingKind::P2tr,
             destination: destination.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_quote_consistent(&quote, FEE_RATE, &destination.to_string(), p2tr_dust());
@@ -692,6 +695,7 @@ async fn test_completed_exit_rerun_redrives_nothing(#[case] backend: SignerBacke
             funding_kind: CpfpFundingKind::P2tr,
             destination: destination.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     // The wallet drops the leaf from its available set once the exit is mined, so
@@ -721,6 +725,7 @@ async fn test_completed_exit_rerun_redrives_nothing(#[case] backend: SignerBacke
             selection: ExitLeafSelection::Specific {
                 leaf_ids: exited_leaf_ids,
             },
+            funding_shape: None,
         })
         .await?;
     let rerun = sdk
@@ -772,6 +777,7 @@ async fn test_first_package_confirmed_resumes(#[case] backend: SignerBackend) ->
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let first = sdk
@@ -801,6 +807,7 @@ async fn test_first_package_confirmed_resumes(#[case] backend: SignerBackend) ->
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let second = sdk
@@ -854,6 +861,7 @@ async fn test_sweep_is_rbf_replaceable(#[case] backend: SignerBackend) -> Result
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     // Captured before the quote is moved: the mined leaf drops out of the available
@@ -933,6 +941,7 @@ async fn test_sweep_is_rbf_replaceable(#[case] backend: SignerBackend) -> Result
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Specific { leaf_ids },
+            funding_shape: None,
         })
         .await?;
     let bumped = sdk
@@ -1016,6 +1025,7 @@ async fn test_multi_leaf_fan_out_and_sweep(#[case] backend: SignerBackend) -> Re
             funding_kind: CpfpFundingKind::P2tr,
             destination: destination.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_eq!(quote.leaves.len(), 2, "expected two selected leaves");
@@ -1114,6 +1124,7 @@ async fn test_multi_leaf_offline_exit(#[case] backend: SignerBackend) -> Result<
             funding_kind: CpfpFundingKind::P2tr,
             destination: destination.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_eq!(
@@ -1263,6 +1274,7 @@ async fn test_importing_another_wallets_state_takes_nothing(
             funding_kind: CpfpFundingKind::P2tr,
             destination: destination.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert!(
@@ -1293,6 +1305,7 @@ async fn test_confirmed_fan_out_is_adopted(#[case] backend: SignerBackend) -> Re
             funding_kind: CpfpFundingKind::P2tr,
             destination: dest.clone(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let first = sdk
@@ -1316,6 +1329,7 @@ async fn test_confirmed_fan_out_is_adopted(#[case] backend: SignerBackend) -> Re
             funding_kind: CpfpFundingKind::P2tr,
             destination: dest.clone(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let second = sdk
@@ -1375,6 +1389,7 @@ async fn test_confirmed_fan_out_insufficient_at_higher_fee(
             funding_kind: CpfpFundingKind::P2tr,
             destination: dest.clone(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let first = sdk
@@ -1396,6 +1411,7 @@ async fn test_confirmed_fan_out_insufficient_at_higher_fee(
             funding_kind: CpfpFundingKind::P2tr,
             destination: dest,
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let err = sdk
@@ -1464,6 +1480,7 @@ async fn test_fees_p2wpkh_never_below_rate(#[case] backend: SignerBackend) -> Re
             funding_kind: CpfpFundingKind::P2wpkh,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_quote_consistent(&quote, FEE_RATE, &cpfp.address.to_string(), dust);
@@ -1507,6 +1524,7 @@ async fn test_single_leaf_multiple_utxos(#[case] backend: SignerBackend) -> Resu
             funding_kind: CpfpFundingKind::P2tr,
             destination: u1.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_quote_consistent(&quote, FEE_RATE, &u1.address.to_string(), p2tr_dust());
@@ -1563,6 +1581,7 @@ async fn test_two_leaves_two_utxos_no_fanout(#[case] backend: SignerBackend) -> 
             funding_kind: CpfpFundingKind::P2tr,
             destination: u1.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_eq!(quote.leaves.len(), 2);
@@ -1614,6 +1633,7 @@ async fn test_two_leaves_undersized_utxo_fans_out(#[case] backend: SignerBackend
             funding_kind: CpfpFundingKind::P2tr,
             destination: big.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_eq!(quote.leaves.len(), 2);
@@ -1660,6 +1680,7 @@ async fn test_two_leaves_subset_assignment_no_fanout(#[case] backend: SignerBack
             funding_kind: CpfpFundingKind::P2tr,
             destination: big.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_eq!(quote.leaves.len(), 2);
@@ -1709,6 +1730,7 @@ async fn test_higher_rate_reuses_fan_out_within_headroom(
             funding_kind: CpfpFundingKind::P2tr,
             destination: dest.clone(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let first = sdk
@@ -1731,6 +1753,7 @@ async fn test_higher_rate_reuses_fan_out_within_headroom(
             funding_kind: CpfpFundingKind::P2tr,
             destination: dest,
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let second = sdk
@@ -1777,6 +1800,7 @@ async fn test_higher_rate_recovers_by_refunding(#[case] backend: SignerBackend) 
             funding_kind: CpfpFundingKind::P2tr,
             destination: dest.clone(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let first = sdk
@@ -1799,6 +1823,7 @@ async fn test_higher_rate_recovers_by_refunding(#[case] backend: SignerBackend) 
             funding_kind: CpfpFundingKind::P2tr,
             destination: dest.clone(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let err = sdk
@@ -1838,6 +1863,7 @@ async fn test_higher_rate_recovers_by_refunding(#[case] backend: SignerBackend) 
             funding_kind: CpfpFundingKind::P2tr,
             destination: dest,
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let recovered = sdk
@@ -1878,6 +1904,7 @@ async fn test_no_profitable_leaves_auto(#[case] backend: SignerBackend) -> Resul
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert!(
@@ -1933,6 +1960,7 @@ async fn test_specific_ignores_other_leaves(#[case] backend: SignerBackend) -> R
             selection: ExitLeafSelection::Specific {
                 leaf_ids: vec![first_id.clone()],
             },
+            funding_shape: None,
         })
         .await?;
     assert_eq!(quote.leaves.len(), 1, "only the named leaf is exited");
@@ -1970,6 +1998,7 @@ async fn test_prepare_is_idempotent(#[case] backend: SignerBackend) -> Result<()
         funding_kind: CpfpFundingKind::P2tr,
         destination: cpfp.address.to_string(),
         selection: ExitLeafSelection::Auto,
+        funding_shape: None,
     };
 
     let quote_a = sdk.sdk.prepare_unilateral_exit(request()).await?;
@@ -2032,6 +2061,7 @@ async fn test_higher_rate_changes_sweep_txid(#[case] backend: SignerBackend) -> 
         funding_kind: CpfpFundingKind::P2tr,
         destination: cpfp.address.to_string(),
         selection: ExitLeafSelection::Auto,
+        funding_shape: None,
     };
     let sweep_txid = |resp: &UnilateralExitResponse| {
         resp.transactions
@@ -2094,6 +2124,7 @@ async fn test_empty_funding_rejected(#[case] backend: SignerBackend) -> Result<(
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let err = sdk
@@ -2126,6 +2157,7 @@ async fn test_explicit_empty_list_rejected(#[case] backend: SignerBackend) -> Re
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Specific { leaf_ids: vec![] },
+            funding_shape: None,
         })
         .await
         .expect_err("no leaves named");
@@ -2149,6 +2181,7 @@ async fn test_zero_fee_rate_succeeds(#[case] backend: SignerBackend) -> Result<(
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_eq!(quote.total_fee_sat, 0, "a zero fee rate quotes a zero fee");
@@ -2192,6 +2225,7 @@ async fn test_mixed_p2tr_p2wpkh_funding(#[case] backend: SignerBackend) -> Resul
             funding_kind: CpfpFundingKind::P2tr,
             destination: taproot.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_quote_consistent(&quote, FEE_RATE, &taproot.address.to_string(), p2tr_dust());
@@ -2261,6 +2295,7 @@ async fn test_single_leaf_funding_boundary(#[case] backend: SignerBackend) -> Re
             funding_kind: CpfpFundingKind::P2tr,
             destination: short.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let err = sdk
@@ -2325,6 +2360,7 @@ async fn test_two_leaf_fanout_funding_boundary(#[case] backend: SignerBackend) -
             funding_kind: CpfpFundingKind::P2tr,
             destination: floor.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let required = match sdk
@@ -2362,6 +2398,7 @@ async fn test_two_leaf_fanout_funding_boundary(#[case] backend: SignerBackend) -
             funding_kind: CpfpFundingKind::P2tr,
             destination: short.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let err = sdk
@@ -2402,6 +2439,7 @@ async fn test_custom_funding_input(#[case] backend: SignerBackend) -> Result<()>
             },
             destination: utxo.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_quote_consistent(&quote, FEE_RATE, &utxo.address.to_string(), p2tr_dust());
@@ -2450,6 +2488,7 @@ async fn test_all_nodes_confirmed_resumes_at_refund(#[case] backend: SignerBacke
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let first = sdk
@@ -2485,6 +2524,7 @@ async fn test_all_nodes_confirmed_resumes_at_refund(#[case] backend: SignerBacke
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let second = sdk
@@ -2545,6 +2585,7 @@ async fn test_unconfirmed_funding_accepted(#[case] backend: SignerBackend) -> Re
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let resp = sdk
@@ -2766,6 +2807,7 @@ async fn test_node_confirmed_by_foreign_cpfp_resumes(#[case] backend: SignerBack
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let leaf_ids: Vec<String> = first_quote
@@ -2807,6 +2849,7 @@ async fn test_node_confirmed_by_foreign_cpfp_resumes(#[case] backend: SignerBack
             selection: ExitLeafSelection::Specific {
                 leaf_ids: leaf_ids.clone(),
             },
+            funding_shape: None,
         })
         .await?;
     let second = sdk
@@ -2884,6 +2927,7 @@ async fn test_refund_confirmed_by_foreign_cpfp_is_adopted(
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let leaf_ids: Vec<String> = first_quote
@@ -2933,6 +2977,7 @@ async fn test_refund_confirmed_by_foreign_cpfp_is_adopted(
             selection: ExitLeafSelection::Specific {
                 leaf_ids: leaf_ids.clone(),
             },
+            funding_shape: None,
         })
         .await?;
     let second = sdk

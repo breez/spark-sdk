@@ -163,6 +163,7 @@ async function handleUnilateralExit(sdk: BreezSdkInterface, args: string[]): Pro
     fundingKind,
     destination,
     selection,
+    fundingShape: undefined,
   })
 
   const lines: string[] = [formatValue(prepared)]
