@@ -1779,6 +1779,7 @@ impl SparkWallet {
             funding_input_weight,
             funding_output_script_len,
             change_dust_limit,
+            spark::services::CpfpFundingShape::PerBranch,
             fee_rate_sat_per_kw,
             destination_script_len,
         )?)
@@ -1802,6 +1803,7 @@ impl SparkWallet {
             &leaf_ids,
             filter,
             inputs,
+            spark::services::CpfpFundingShape::PerBranch,
             fee_rate_sat_per_kw,
             destination_script_len,
         )?;
