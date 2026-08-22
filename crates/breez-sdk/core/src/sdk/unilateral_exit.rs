@@ -22,9 +22,9 @@ use crate::{
     error::SdkError,
     models::{
         ConfirmationStatus, CpfpFundingKind, CpfpInput as ModelCpfpInput, ExitLeafSelection,
-        PerBranchFunding, PrepareUnilateralExitRequest, PrepareUnilateralExitResponse,
-        UnilateralExitLeaf, UnilateralExitRequest, UnilateralExitResponse,
-        UnilateralExitTransaction, UnilateralExitTxKind,
+        PerBranchFunding, PerNodeFunding, PrepareUnilateralExitRequest,
+        PrepareUnilateralExitResponse, UnilateralExitLeaf, UnilateralExitRequest,
+        UnilateralExitResponse, UnilateralExitTransaction, UnilateralExitTxKind,
     },
     signer::CpfpSigner,
 };
@@ -44,6 +44,7 @@ impl BreezSdk {
         debug!(
             fee_rate_sat_per_vbyte = request.fee_rate_sat_per_vbyte,
             funding_kind = ?request.funding_kind,
+            funding_shape = ?request.funding_shape,
             selection = ?request.selection,
             "prepare_unilateral_exit: quoting"
         );
@@ -77,6 +78,7 @@ impl BreezSdk {
         };
 
         let (input_weight, output_script) = funding_kind_params(&request.funding_kind)?;
+        let funding_shape = request.funding_shape.unwrap_or_default();
         let quote = self
             .spark_wallet
             .quote_unilateral_exit(
@@ -85,7 +87,7 @@ impl BreezSdk {
                 input_weight,
                 output_script.len(),
                 output_script.minimal_non_dust().to_sat(),
-                spark_wallet::CpfpFundingShape::PerBranch,
+                funding_shape.into(),
                 dest_script_len,
             )
             .await?;
@@ -111,6 +113,7 @@ impl BreezSdk {
                 funding_sat,
             })
             .collect();
+        let per_node_funding = quoted_per_node_funding(quote.per_node_funding);
 
         debug!(
             selected_leaves = quote.selected_leaves.len(),
@@ -119,6 +122,7 @@ impl BreezSdk {
             fanout_fee_sat = quote.fanout_fee_sat,
             single_utxo_funding_sat = quote.single_utxo_funding_sat,
             branches = per_branch_funding.len(),
+            funded_transactions = per_node_funding.len(),
             "prepare_unilateral_exit: quote ready"
         );
 
@@ -129,6 +133,8 @@ impl BreezSdk {
             fanout_fee_sat: quote.fanout_fee_sat,
             single_utxo_funding_sat: quote.single_utxo_funding_sat,
             per_branch_funding,
+            funding_shape,
+            per_node_funding,
             fee_rate_sat_per_vbyte: request.fee_rate_sat_per_vbyte,
             destination: request.destination,
         })
@@ -204,7 +210,7 @@ impl BreezSdk {
                 fee_rate_sat_per_kw,
                 spark_wallet::ExitLeafSelection::Specific(leaf_ids),
                 funding_inputs,
-                spark_wallet::CpfpFundingShape::PerBranch,
+                prepared.funding_shape.into(),
                 dest_script_len,
             )
             .await?;
@@ -364,6 +370,25 @@ impl BreezSdk {
             transactions,
         })
     }
+}
+
+/// The quote's per-transaction funding, as the caller sees it.
+fn quoted_per_node_funding(
+    quoted: Vec<spark_wallet::UnilateralExitNodeFunding>,
+) -> Vec<PerNodeFunding> {
+    quoted
+        .into_iter()
+        .map(|node| PerNodeFunding {
+            leaf_id: node.leaf_id.to_string(),
+            node_id: node.node_id.to_string(),
+            kind: if node.refund {
+                UnilateralExitTxKind::Refund
+            } else {
+                UnilateralExitTxKind::Node
+            },
+            funding_sat: node.funding_sat,
+        })
+        .collect()
 }
 
 /// The sweep's fee: total input value minus output value.
