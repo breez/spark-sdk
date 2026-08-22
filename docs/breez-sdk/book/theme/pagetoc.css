@@ -1,0 +1,111 @@
+/* Hide table of contents on smaller screens */
+@media only screen and (max-width:1439px) {
+    .sidetoc {
+        display: none;
+    }
+}
+
+/* Table of contents sidebar for larger screens */
+@media only screen and (min-width:1440px) {
+    main {
+        position: relative;
+    }
+    
+    .sidetoc {
+        margin-left: auto;
+        margin-right: auto;
+        left: calc(100% + (var(--content-max-width))/4 - 140px);
+        position: absolute;
+        top: 0;
+    }
+    
+    .pagetoc {
+        position: fixed;
+        width: 220px;
+        max-height: calc(100vh - var(--menu-bar-height) - 2rem);
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 1rem 0;
+        background: var(--bg);
+        border-left: 1px solid var(--table-border-color);
+        border-radius: 4px;
+        
+        /* Custom scrollbar styling */
+        scrollbar-width: thin;
+        scrollbar-color: var(--scrollbar) transparent;
+    }
+    
+    .pagetoc::-webkit-scrollbar {
+        width: 6px;
+    }
+    
+    .pagetoc::-webkit-scrollbar-track {
+        background: transparent;
+    }
+    
+    .pagetoc::-webkit-scrollbar-thumb {
+        background-color: var(--scrollbar);
+        border-radius: 3px;
+    }
+    
+    .pagetoc a {
+        display: block;
+        color: var(--sidebar-fg);
+        text-decoration: none;
+        padding: 0.4rem 1rem;
+        margin: 0;
+        border-left: 3px solid transparent;
+        font-size: 0.9em;
+        line-height: 1.4;
+        transition: color 0.1s ease;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+    }
+    
+    .pagetoc a:link,
+    .pagetoc a:visited {
+        color: var(--sidebar-fg);
+    }
+    
+    .pagetoc a:hover {
+        color: var(--sidebar-active);
+        text-decoration: none;
+    }
+    
+    .pagetoc a.active {
+        color: var(--sidebar-active);
+        border-left-color: var(--sidebar-active);
+    }
+    
+    /* Hierarchical indentation for different heading levels */
+    .pagetoc .pagetoc-H1 {
+        padding-left: 1rem;
+        font-weight: 600;
+        margin-top: 0.5rem;
+    }
+    
+    .pagetoc .pagetoc-H2 {
+        padding-left: 1.5rem;
+    }
+    
+    .pagetoc .pagetoc-H3 {
+        padding-left: 2rem;
+        font-size: 0.85em;
+    }
+    
+    .pagetoc .pagetoc-H4 {
+        padding-left: 2.5rem;
+        font-size: 0.8em;
+        opacity: 0.9;
+    }
+    
+    /* Hide H5 and H6 to avoid clutter */
+    .pagetoc .pagetoc-H5,
+    .pagetoc .pagetoc-H6 {
+        display: none;
+    }
+}
+
+a[class^='pagetoc-H']:only-child {
+    display: none;
+  }

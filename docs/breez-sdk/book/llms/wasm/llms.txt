@@ -1,0 +1,130 @@
+# Breez SDK - Spark: Javascript (Wasm)
+
+> End-to-end SDK for instant, non-custodial bitcoin and stablecoin payments. This edition carries every example in Javascript (Wasm), with identifiers in that language's naming convention. The same pages carrying all nine languages are under `/guide/`.
+
+## About Breez SDK - Spark
+
+- [About Breez SDK - Spark](/llms/wasm/guide/about_breez_sdk_spark.md)
+
+## Getting started
+
+- [Getting started](/llms/wasm/guide/getting_started.md)
+- [Installing the SDK](/llms/wasm/guide/install.md)
+- [iOS/Swift](/llms/wasm/guide/install_ios_swift.md)
+- [Android/Kotlin](/llms/wasm/guide/install_android_kotlin.md)
+- [Kotlin Multiplatform](/llms/wasm/guide/install_kotlin_multiplatform.md)
+- [Javascript/Typescript (Wasm)](/llms/wasm/guide/install_javascript.md)
+- [React Native/Expo](/llms/wasm/guide/install_react_native.md)
+- [Rust](/llms/wasm/guide/install_rust.md)
+- [Flutter](/llms/wasm/guide/install_flutter.md)
+- [Go](/llms/wasm/guide/install_go.md)
+- [Python](/llms/wasm/guide/install_python.md)
+- [C#](/llms/wasm/guide/install_csharp.md)
+- [Testing and development](/llms/wasm/guide/testing.md)
+- [Initializing the SDK](/llms/wasm/guide/initializing.md)
+- [Customizing the SDK](/llms/wasm/guide/customizing.md)
+- [Getting the SDK info](/llms/wasm/guide/get_info.md)
+- [Listening to events](/llms/wasm/guide/events.md)
+- [Adding logging](/llms/wasm/guide/logging.md)
+- [Spark status](/llms/wasm/guide/spark_status.md)
+
+## Payment fundamentals
+
+- [Payment fundamentals](/llms/wasm/guide/payments.md)
+- [Parsing inputs](/llms/wasm/guide/parse.md)
+- [Receiving payments](/llms/wasm/guide/receive_payment.md)
+- [Sending payments](/llms/wasm/guide/send_payment.md)
+- [Listing payments](/llms/wasm/guide/list_payments.md)
+- [Claiming on-chain deposits](/llms/wasm/guide/onchain_claims.md)
+
+## Using LNURL and Lightning addresses
+
+- [Using LNURL and Lightning addresses](/llms/wasm/guide/lnurl.md)
+- [Sending payments using LNURL-Pay/Lightning address](/llms/wasm/guide/lnurl_pay.md)
+- [Managing contacts](/llms/wasm/guide/contacts.md)
+- [Receiving payments using LNURL-Pay/Lightning address](/llms/wasm/guide/receive_lnurl_pay.md)
+- [Lightning Address payment notifications](/llms/wasm/guide/lnurl_webhooks.md)
+- [Receiving payments using LNURL-Withdraw](/llms/wasm/guide/lnurl_withdraw.md)
+- [Using LNURL-Auth](/llms/wasm/guide/lnurl_auth.md)
+
+## Passkey login
+
+- [Passkey login](/llms/wasm/guide/passkey.md)
+- [Setup](/llms/wasm/guide/passkey_setup.md)
+- [Onboarding](/llms/wasm/guide/passkey_onboarding.md)
+- [Credential metadata](/llms/wasm/guide/passkey_credential_metadata.md)
+- [Managing labels](/llms/wasm/guide/passkey_labels.md)
+- [PRF providers](/llms/wasm/guide/passkey_prf_providers.md)
+
+## Stable balance
+
+- [Stable balance](/llms/wasm/guide/stable_balance.md)
+
+## User settings
+
+- [User settings](/llms/wasm/guide/user_settings.md)
+
+## Signing and verifying messages
+
+- [Signing and verifying messages](/llms/wasm/guide/messages.md)
+
+## Supporting fiat currencies
+
+- [Supporting fiat currencies](/llms/wasm/guide/fiat_currencies.md)
+
+## Fiat on-ramps
+
+- [Fiat on-ramps](/llms/wasm/guide/fiat_onramps.md)
+- [Buying Bitcoin](/llms/wasm/guide/buy_bitcoin.md)
+- [Prepare Payment Link](/llms/wasm/guide/prepare_payment_link.md)
+
+## End-user fees
+
+- [End-user fees](/llms/wasm/guide/end-user_fees.md)
+
+## Handling tokens
+
+- [Handling tokens](/llms/wasm/guide/tokens.md)
+- [Token payments](/llms/wasm/guide/token_payments.md)
+- [Sending to multiple recipients](/llms/wasm/guide/batch_send.md)
+- [Converting tokens](/llms/wasm/guide/token_conversion.md)
+- [Issuing tokens](/llms/wasm/guide/issuing_tokens.md)
+
+## Advanced features
+
+- [Advanced features](/llms/wasm/guide/advanced.md)
+- [Custom configuration](/llms/wasm/guide/config.md)
+- [Custom leaf optimization](/llms/wasm/guide/optimize.md)
+- [Conditional Payments](/llms/wasm/guide/htlcs.md)
+- [Using an External Signer](/llms/wasm/guide/external_signer.md)
+- [Managing webhooks](/llms/wasm/guide/webhooks.md)
+- [Server mode](/llms/wasm/guide/server_mode.md)
+- [Client signing](/llms/wasm/guide/client_signing.md)
+- [Using Turnkey](/llms/wasm/guide/turnkey.md)
+- [Send USDC/USDT](/llms/wasm/guide/cross_chain.md)
+- [Unilateral exit](/llms/wasm/guide/unilateral_exit.md)
+
+## Moving to production
+
+- [Moving to production](/llms/wasm/guide/moving_to_production.md)
+
+## Overview
+
+- [Overview](/llms/wasm/guide/uxguide.md)
+
+## Login & backup
+
+- [Login & backup](/llms/wasm/guide/uxguide_login.md)
+
+## Displaying payments
+
+- [Displaying payments](/llms/wasm/guide/uxguide_display.md)
+
+## Receiving payments
+
+- [Receiving payments](/llms/wasm/guide/uxguide_receive.md)
+
+## Sending payments
+
+- [Sending payments](/llms/wasm/guide/uxguide_send.md)
+

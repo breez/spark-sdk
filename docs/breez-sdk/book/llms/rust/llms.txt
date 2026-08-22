@@ -1,0 +1,130 @@
+# Breez SDK - Spark: Rust
+
+> End-to-end SDK for instant, non-custodial bitcoin and stablecoin payments. This edition carries every example in Rust, with identifiers in that language's naming convention. The same pages carrying all nine languages are under `/guide/`.
+
+## About Breez SDK - Spark
+
+- [About Breez SDK - Spark](/llms/rust/guide/about_breez_sdk_spark.md)
+
+## Getting started
+
+- [Getting started](/llms/rust/guide/getting_started.md)
+- [Installing the SDK](/llms/rust/guide/install.md)
+- [iOS/Swift](/llms/rust/guide/install_ios_swift.md)
+- [Android/Kotlin](/llms/rust/guide/install_android_kotlin.md)
+- [Kotlin Multiplatform](/llms/rust/guide/install_kotlin_multiplatform.md)
+- [Javascript/Typescript (Wasm)](/llms/rust/guide/install_javascript.md)
+- [React Native/Expo](/llms/rust/guide/install_react_native.md)
+- [Rust](/llms/rust/guide/install_rust.md)
+- [Flutter](/llms/rust/guide/install_flutter.md)
+- [Go](/llms/rust/guide/install_go.md)
+- [Python](/llms/rust/guide/install_python.md)
+- [C#](/llms/rust/guide/install_csharp.md)
+- [Testing and development](/llms/rust/guide/testing.md)
+- [Initializing the SDK](/llms/rust/guide/initializing.md)
+- [Customizing the SDK](/llms/rust/guide/customizing.md)
+- [Getting the SDK info](/llms/rust/guide/get_info.md)
+- [Listening to events](/llms/rust/guide/events.md)
+- [Adding logging](/llms/rust/guide/logging.md)
+- [Spark status](/llms/rust/guide/spark_status.md)
+
+## Payment fundamentals
+
+- [Payment fundamentals](/llms/rust/guide/payments.md)
+- [Parsing inputs](/llms/rust/guide/parse.md)
+- [Receiving payments](/llms/rust/guide/receive_payment.md)
+- [Sending payments](/llms/rust/guide/send_payment.md)
+- [Listing payments](/llms/rust/guide/list_payments.md)
+- [Claiming on-chain deposits](/llms/rust/guide/onchain_claims.md)
+
+## Using LNURL and Lightning addresses
+
+- [Using LNURL and Lightning addresses](/llms/rust/guide/lnurl.md)
+- [Sending payments using LNURL-Pay/Lightning address](/llms/rust/guide/lnurl_pay.md)
+- [Managing contacts](/llms/rust/guide/contacts.md)
+- [Receiving payments using LNURL-Pay/Lightning address](/llms/rust/guide/receive_lnurl_pay.md)
+- [Lightning Address payment notifications](/llms/rust/guide/lnurl_webhooks.md)
+- [Receiving payments using LNURL-Withdraw](/llms/rust/guide/lnurl_withdraw.md)
+- [Using LNURL-Auth](/llms/rust/guide/lnurl_auth.md)
+
+## Passkey login
+
+- [Passkey login](/llms/rust/guide/passkey.md)
+- [Setup](/llms/rust/guide/passkey_setup.md)
+- [Onboarding](/llms/rust/guide/passkey_onboarding.md)
+- [Credential metadata](/llms/rust/guide/passkey_credential_metadata.md)
+- [Managing labels](/llms/rust/guide/passkey_labels.md)
+- [PRF providers](/llms/rust/guide/passkey_prf_providers.md)
+
+## Stable balance
+
+- [Stable balance](/llms/rust/guide/stable_balance.md)
+
+## User settings
+
+- [User settings](/llms/rust/guide/user_settings.md)
+
+## Signing and verifying messages
+
+- [Signing and verifying messages](/llms/rust/guide/messages.md)
+
+## Supporting fiat currencies
+
+- [Supporting fiat currencies](/llms/rust/guide/fiat_currencies.md)
+
+## Fiat on-ramps
+
+- [Fiat on-ramps](/llms/rust/guide/fiat_onramps.md)
+- [Buying Bitcoin](/llms/rust/guide/buy_bitcoin.md)
+- [Prepare Payment Link](/llms/rust/guide/prepare_payment_link.md)
+
+## End-user fees
+
+- [End-user fees](/llms/rust/guide/end-user_fees.md)
+
+## Handling tokens
+
+- [Handling tokens](/llms/rust/guide/tokens.md)
+- [Token payments](/llms/rust/guide/token_payments.md)
+- [Sending to multiple recipients](/llms/rust/guide/batch_send.md)
+- [Converting tokens](/llms/rust/guide/token_conversion.md)
+- [Issuing tokens](/llms/rust/guide/issuing_tokens.md)
+
+## Advanced features
+
+- [Advanced features](/llms/rust/guide/advanced.md)
+- [Custom configuration](/llms/rust/guide/config.md)
+- [Custom leaf optimization](/llms/rust/guide/optimize.md)
+- [Conditional Payments](/llms/rust/guide/htlcs.md)
+- [Using an External Signer](/llms/rust/guide/external_signer.md)
+- [Managing webhooks](/llms/rust/guide/webhooks.md)
+- [Server mode](/llms/rust/guide/server_mode.md)
+- [Client signing](/llms/rust/guide/client_signing.md)
+- [Using Turnkey](/llms/rust/guide/turnkey.md)
+- [Send USDC/USDT](/llms/rust/guide/cross_chain.md)
+- [Unilateral exit](/llms/rust/guide/unilateral_exit.md)
+
+## Moving to production
+
+- [Moving to production](/llms/rust/guide/moving_to_production.md)
+
+## Overview
+
+- [Overview](/llms/rust/guide/uxguide.md)
+
+## Login & backup
+
+- [Login & backup](/llms/rust/guide/uxguide_login.md)
+
+## Displaying payments
+
+- [Displaying payments](/llms/rust/guide/uxguide_display.md)
+
+## Receiving payments
+
+- [Receiving payments](/llms/rust/guide/uxguide_receive.md)
+
+## Sending payments
+
+- [Sending payments](/llms/rust/guide/uxguide_send.md)
+

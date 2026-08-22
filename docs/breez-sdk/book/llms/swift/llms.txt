@@ -1,0 +1,130 @@
+# Breez SDK - Spark: Swift
+
+> End-to-end SDK for instant, non-custodial bitcoin and stablecoin payments. This edition carries every example in Swift, with identifiers in that language's naming convention. The same pages carrying all nine languages are under `/guide/`.
+
+## About Breez SDK - Spark
+
+- [About Breez SDK - Spark](/llms/swift/guide/about_breez_sdk_spark.md)
+
+## Getting started
+
+- [Getting started](/llms/swift/guide/getting_started.md)
+- [Installing the SDK](/llms/swift/guide/install.md)
+- [iOS/Swift](/llms/swift/guide/install_ios_swift.md)
+- [Android/Kotlin](/llms/swift/guide/install_android_kotlin.md)
+- [Kotlin Multiplatform](/llms/swift/guide/install_kotlin_multiplatform.md)
+- [Javascript/Typescript (Wasm)](/llms/swift/guide/install_javascript.md)
+- [React Native/Expo](/llms/swift/guide/install_react_native.md)
+- [Rust](/llms/swift/guide/install_rust.md)
+- [Flutter](/llms/swift/guide/install_flutter.md)
+- [Go](/llms/swift/guide/install_go.md)
+- [Python](/llms/swift/guide/install_python.md)
+- [C#](/llms/swift/guide/install_csharp.md)
+- [Testing and development](/llms/swift/guide/testing.md)
+- [Initializing the SDK](/llms/swift/guide/initializing.md)
+- [Customizing the SDK](/llms/swift/guide/customizing.md)
+- [Getting the SDK info](/llms/swift/guide/get_info.md)
+- [Listening to events](/llms/swift/guide/events.md)
+- [Adding logging](/llms/swift/guide/logging.md)
+- [Spark status](/llms/swift/guide/spark_status.md)
+
+## Payment fundamentals
+
+- [Payment fundamentals](/llms/swift/guide/payments.md)
+- [Parsing inputs](/llms/swift/guide/parse.md)
+- [Receiving payments](/llms/swift/guide/receive_payment.md)
+- [Sending payments](/llms/swift/guide/send_payment.md)
+- [Listing payments](/llms/swift/guide/list_payments.md)
+- [Claiming on-chain deposits](/llms/swift/guide/onchain_claims.md)
+
+## Using LNURL and Lightning addresses
+
+- [Using LNURL and Lightning addresses](/llms/swift/guide/lnurl.md)
+- [Sending payments using LNURL-Pay/Lightning address](/llms/swift/guide/lnurl_pay.md)
+- [Managing contacts](/llms/swift/guide/contacts.md)
+- [Receiving payments using LNURL-Pay/Lightning address](/llms/swift/guide/receive_lnurl_pay.md)
+- [Lightning Address payment notifications](/llms/swift/guide/lnurl_webhooks.md)
+- [Receiving payments using LNURL-Withdraw](/llms/swift/guide/lnurl_withdraw.md)
+- [Using LNURL-Auth](/llms/swift/guide/lnurl_auth.md)
+
+## Passkey login
+
+- [Passkey login](/llms/swift/guide/passkey.md)
+- [Setup](/llms/swift/guide/passkey_setup.md)
+- [Onboarding](/llms/swift/guide/passkey_onboarding.md)
+- [Credential metadata](/llms/swift/guide/passkey_credential_metadata.md)
+- [Managing labels](/llms/swift/guide/passkey_labels.md)
+- [PRF providers](/llms/swift/guide/passkey_prf_providers.md)
+
+## Stable balance
+
+- [Stable balance](/llms/swift/guide/stable_balance.md)
+
+## User settings
+
+- [User settings](/llms/swift/guide/user_settings.md)
+
+## Signing and verifying messages
+
+- [Signing and verifying messages](/llms/swift/guide/messages.md)
+
+## Supporting fiat currencies
+
+- [Supporting fiat currencies](/llms/swift/guide/fiat_currencies.md)
+
+## Fiat on-ramps
+
+- [Fiat on-ramps](/llms/swift/guide/fiat_onramps.md)
+- [Buying Bitcoin](/llms/swift/guide/buy_bitcoin.md)
+- [Prepare Payment Link](/llms/swift/guide/prepare_payment_link.md)
+
+## End-user fees
+
+- [End-user fees](/llms/swift/guide/end-user_fees.md)
+
+## Handling tokens
+
+- [Handling tokens](/llms/swift/guide/tokens.md)
+- [Token payments](/llms/swift/guide/token_payments.md)
+- [Sending to multiple recipients](/llms/swift/guide/batch_send.md)
+- [Converting tokens](/llms/swift/guide/token_conversion.md)
+- [Issuing tokens](/llms/swift/guide/issuing_tokens.md)
+
+## Advanced features
+
+- [Advanced features](/llms/swift/guide/advanced.md)
+- [Custom configuration](/llms/swift/guide/config.md)
+- [Custom leaf optimization](/llms/swift/guide/optimize.md)
+- [Conditional Payments](/llms/swift/guide/htlcs.md)
+- [Using an External Signer](/llms/swift/guide/external_signer.md)
+- [Managing webhooks](/llms/swift/guide/webhooks.md)
+- [Server mode](/llms/swift/guide/server_mode.md)
+- [Client signing](/llms/swift/guide/client_signing.md)
+- [Using Turnkey](/llms/swift/guide/turnkey.md)
+- [Send USDC/USDT](/llms/swift/guide/cross_chain.md)
+- [Unilateral exit](/llms/swift/guide/unilateral_exit.md)
+
+## Moving to production
+
+- [Moving to production](/llms/swift/guide/moving_to_production.md)
+
+## Overview
+
+- [Overview](/llms/swift/guide/uxguide.md)
+
+## Login & backup
+
+- [Login & backup](/llms/swift/guide/uxguide_login.md)
+
+## Displaying payments
+
+- [Displaying payments](/llms/swift/guide/uxguide_display.md)
+
+## Receiving payments
+
+- [Receiving payments](/llms/swift/guide/uxguide_receive.md)
+
+## Sending payments
+
+- [Sending payments](/llms/swift/guide/uxguide_send.md)
+
