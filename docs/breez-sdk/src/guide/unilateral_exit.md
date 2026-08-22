@@ -11,7 +11,7 @@ A unilateral exit is a last resort. It is a multi-step, on-chain process that ne
 Three things are important to know before you build an exit:
 
 - **The exit data has to already be on the device.** Quoting and building an exit read each leaf's pre-signed transactions from local storage, so both work with the operators unreachable. What they cannot do is obtain that data: a leaf can be exited this way only once it has been synced at least once while the operators were reachable. The SDK collects it as funds arrive, in the background where background services run and otherwise during {{#name sync_wallet}}, which you can turn off with [{{#name exit_chain_auto_fetch_enabled}}](./config.md#unilateral-exit-data). Call {{#name sync_wallet}} before going offline to run the collection at a moment of your choosing rather than waiting on the background one. Once collected it can be kept outside the SDK's storage, see [Back up the exit data](#back-up-the-exit-data).
-- **You pay the fees from your own UTXO.** The pre-signed transactions carry no fee, so each is fee-bumped with a child transaction (CPFP) funded by a Bitcoin UTXO you provide. That UTXO must be **native SegWit** (a witness-program script). P2WPKH and P2TR are handled by the built-in signer; any other witness program (for example a P2WSH multisig) works through the {{#enum CpfpFundingKind::Custom}} funding kind and a custom signer (see [The signer](#the-signer)). Legacy (non-SegWit) scripts are rejected.
+- **You pay the fees from your own UTXO.** The pre-signed transactions carry no fee, so each is fee-bumped with a child transaction (CPFP) funded by a Bitcoin UTXO you provide. That UTXO must be **native SegWit** (a witness-program script). P2WPKH and P2TR are handled by the built-in signer; any other witness program (for example a P2WSH multisig) works through the {{#enum CpfpFundingKind::Custom}} funding kind and a custom signer (see [The signer](#the-signer)). Legacy (non-SegWit) scripts are rejected. One UTXO funds a whole branch by default; you can instead fund every transaction separately, see [One UTXO per branch, or one per transaction](#one-utxo-per-branch-or-one-per-transaction).
 - **You broadcast the transactions yourself.** The SDK builds and signs the full set but never broadcasts. You send them to the network over time, in order, as their timelocks mature. See [Broadcasting the transactions](#broadcast-the-transactions).
 
 ## How it works
@@ -25,15 +25,15 @@ The exit is two calls:
 
 ### A single leaf
 
-With one leaf there is no fan-out: your funding UTXO pays the fees directly. You broadcast the tree transactions top to bottom, each with its CPFP child as a package, then the refund once its timelock matures, then the sweep.
+With one leaf funded per branch there is no fan-out: your funding UTXO pays the fees directly. You broadcast the tree transactions top to bottom, each with its CPFP child as a package, then the refund once its timelock matures, then the sweep.
 
 ![Single-leaf unilateral exit](images/unilateral_exit_single_leaf.svg)
 
-The blue transactions come pre-signed and fixed; you cannot change them. The grey CPFP children and the green sweep are built for you from the funding you supply, and are what actually pay the fees and deliver the funds to your address.
+The blue transactions come pre-signed and fixed; you cannot change them. The grey CPFP children and the green sweep are built for you from the funding you supply, and are what actually pay the fees and deliver the funds to your address. Both diagrams here show the default per-branch funding, where the children spend each other's change.
 
 ### Multiple leaves
 
-Exiting several leaves at once starts with a **fan-out** transaction that splits a single funding UTXO into one output per branch. Leaves that share ancestors in the tree share those transactions too, so a shared ancestor is broadcast only once. Every branch's refund is then pulled into a single sweep.
+Exiting several leaves at once starts with a **fan-out** transaction that splits a single funding UTXO into one output per branch, or one per transaction when you fund per node. Leaves that share ancestors in the tree share those transactions too, so a shared ancestor is broadcast only once. Every branch's refund is then pulled into a single sweep.
 
 ![Multi-leaf unilateral exit](images/unilateral_exit_multi_leaf.svg)
 
@@ -52,6 +52,7 @@ The quote returns a {{#name PrepareUnilateralExitResponse}}. Its fields tell you
 - {{#name recoverable_value_sat}} is the total value of the selected {{#name leaves}}, and {{#name total_fee_sat}} is the on-chain fee to recover it. Compare them to decide whether the exit is worth it at the current fee rate.
 - {{#name single_utxo_funding_sat}} is the simplest option: fund **one** UTXO of at least this many satoshis and the SDK fans it out across branches.
 - {{#name per_branch_funding}} lets you skip the fan-out (and its {{#name fanout_fee_sat}}) by funding **one UTXO per branch**, each of at least the amount in its {{#name PerBranchFunding}} entry.
+- {{#name per_node_funding}} does the same at a finer grain, **one UTXO per transaction**, and replaces {{#name per_branch_funding}} when you ask for it with {{#name funding_shape}}: a quote names exactly one list to fund.
 
 So you do not have to guess how much to send or how many UTXOs to prepare: the quote tells you both.
 
@@ -60,13 +61,23 @@ Under {{#enum ExitLeafSelection::Auto}} a leaf is kept when its value exceeds it
 Two rules keep an exit from ever costing more than it returns:
 
 1. **Before funding, require {{#name recoverable_value_sat}} to exceed {{#name total_fee_sat}}.** These are the actual totals for the quote, fan-out fee included. If the margin is thin or negative, do not proceed as quoted.
-2. **Prefer per-branch funding.** Funding one UTXO per branch ({{#name per_branch_funding}}) skips the fan-out entirely, so there is no shared fee. Because {{#enum ExitLeafSelection::Auto}} already keeps only leaves worth more than their own cost, a per-branch-funded auto exit is always net-positive.
+2. **Fund the UTXOs the quote asks for.** Funding one per branch ({{#name per_branch_funding}}), or one per transaction ({{#name per_node_funding}}), skips the fan-out entirely, so there is no shared fee. Because {{#enum ExitLeafSelection::Auto}} already keeps only leaves worth more than their own cost, a per-branch auto exit funded that way is always net-positive. {{#enum CpfpFundingShape::PerNode}} reserves a dust output per transaction that {{#name total_fee_sat}} does not count, since it is not a fee; on a deep tree weigh that reserve as well, see [One UTXO per branch, or one per transaction](#one-utxo-per-branch-or-one-per-transaction).
 
 If the single-UTXO total is not worth it, either fund per branch, or narrow the set: re-quote with {{#enum ExitLeafSelection::Specific}} naming only the higher-value leaves (dropping the marginal ones removes their cost and can turn the total positive), or wait for a lower fee rate.
 
 If nothing is selected (under {{#enum ExitLeafSelection::Auto}} no leaf is worth exiting at the given fee rate, or there is nothing to exit) the response comes back empty rather than as an error. Check {{#name leaves}} before gathering funding.
 
 {{#tabs unilateral_exit:prepare-unilateral-exit}}
+
+### One UTXO per branch, or one per transaction
+
+By default a branch's CPFP children are chained: the first spends the UTXO you supplied, and each one after it spends the change of the one above. That is why a branch needs a single UTXO however deep it is. It also means a child's inputs are only settled once every child above it has been built, so you cannot sign a child before you know what fee rate the rest of the branch went out at.
+
+Set {{#name funding_shape}} to {{#enum CpfpFundingShape::PerNode}} to fund every transaction on its own instead. Each CPFP child then spends one UTXO and nothing else, so they can all be signed up front, in any order, and each can go out at a fee rate picked independently of the others. That is what an exit needs when it is driven over weeks by something that cannot sign along the way, and every step's alternatives have to be prepared before it starts.
+
+The quote then fills in {{#name per_node_funding}}: one entry per transaction the exit fee-bumps, naming the leaf and the node it belongs to, whether it pays for that node's own transaction or the leaf's refund, and how much it needs. Fund one UTXO per entry. Supplied in the order the quote names them, each UTXO is pinned to its transaction, and stays pinned whatever fee rate you build at: build the exit once per fee rate from the same UTXOs and every alternative for a transaction spends the same one, which is what lets a higher-rate child replace a lower-rate one. Supplied in any other order, they are matched to the named amounts by size. Fund a single UTXO of {{#name single_utxo_funding_sat}} instead and the fan-out splits it the same way.
+
+Funding per node ties up a little more Bitcoin. Every CPFP child writes a change output that has to clear the dust limit. Under per-branch funding the one at the end of the branch is swept to your {{#name destination}}; per node, every child's change pays your own funding script and is left there. The CPFP fees are the same either way, and the sweep is one input per branch cheaper, since it no longer pulls that change; what changes is that the change never reaches your destination. {{#name total_fee_sat}} adds the fan-out on top of those per-leaf costs, so if you fund a single UTXO it quotes higher per node, splitting into a share per transaction rather than per branch. Fund the UTXOs the quote names and there is no fan-out to pay for either way. Each output holds whatever its funding UTXO had left over after the fee: the dust limit when you fund the amount the quote named, and more when you fund more, so anything you supply above the quote stays on your funding script. Above roughly 5 sat/vByte a dust-sized output costs more to spend than it holds, which is why the sweep leaves them; they are yours to spend when it is worth it.
 
 ## Build the exit
 
@@ -76,7 +87,7 @@ If the funding is below what the exit needs it returns {{#enum SdkError::Insuffi
 
 A very thin-margin exit can fail even when the funding is sufficient: if the recoverable value net of fees would leave the swept output below the destination address's dust limit, the sweep cannot be built and the exit fails. Exit higher-value leaves with {{#enum ExitLeafSelection::Specific}}, lower the {{#name fee_rate_sat_per_vbyte}}, or wait for a cheaper fee rate.
 
-The set it builds depends on what is already on-chain. Because each CPFP child spends the previous one, the exit is one connected chain, so to continue it correctly the SDK reads confirmed on-chain state through its chain service: a step already confirmed comes back as {{#enum ConfirmationStatus::Confirmed}} and is not rebuilt. If the chain service cannot resolve a step, the SDK falls back to the status the operators reported: a node the operators already consider on-chain is left as-is rather than fee-bumped (bumping an already-confirmed node would invalidate the rest of the chain), and any node whose state still cannot be determined comes back as {{#enum ConfirmationStatus::Unverified}} and is treated as not yet confirmed rather than failing the build. You still get the full set back; broadcasting an already-confirmed transaction is harmless, and re-running once the chain service recovers resolves the status. For a more reliable source you can supply your own chain service (see [Customizing the SDK](customizing.md#with-chain-service)).
+The set it builds depends on what is already on-chain. The pre-signed transactions form one connected chain, each spending the one above it, so to continue it correctly the SDK reads confirmed on-chain state through its chain service: a step already confirmed comes back as {{#enum ConfirmationStatus::Confirmed}} and is not rebuilt. If the chain service cannot resolve a step, the SDK falls back to the status the operators reported: a node the operators already consider on-chain is left as-is rather than fee-bumped (bumping an already-confirmed node would invalidate the rest of the chain), and any node whose state still cannot be determined comes back as {{#enum ConfirmationStatus::Unverified}} and is treated as not yet confirmed rather than failing the build. You still get the full set back; broadcasting an already-confirmed transaction is harmless, and re-running once the chain service recovers resolves the status. For a more reliable source you can supply your own chain service (see [Customizing the SDK](customizing.md#with-chain-service)).
 
 {{#tabs unilateral_exit:unilateral-exit}}
 
@@ -145,6 +156,8 @@ To re-broadcast the same leaves at a higher fee, quote again with the same {{#en
 
 Confirmed *CPFP* transactions hold funds the same way: once one confirms, your funds sit in its change output. To raise the fee beyond what a confirmed output covers, supply that output back in as a funding UTXO alongside the extra funding — list the confirmed output(s) first, then the new UTXO — so the rebuild spends the confirmed CPFP outputs together with the new funding rather than being capped by them. (Supplying the remaining unspent outputs yourself works too.)
 
+Under {{#enum CpfpFundingShape::PerNode}} no confirmed child's change funds anything further, so there is nothing to pass back: re-quote at the higher rate and supply one UTXO per {{#name per_node_funding}} entry at its new amount. The quote names every transaction the branch could bump, the ones already confirmed included, because only the chain says which still need one. A UTXO for a transaction that turns out not to need bumping is simply left unspent, and a confirmed fan-out's output for one is adopted without being held to the new rate. Resume with the same {{#name funding_shape}} you quoted: a fan-out confirmed under one shape is sized for the other's transactions, and a plan made under the other either refuses it or finds its outputs short. And keep the funding UTXOs parked until the exit completes; they sit on your own funding script looking like ordinary coins, and one spent from under a transaction that still needs it fails the exit with {{#enum SdkError::FundingUtxoConflict}} naming the outpoint.
+
 ## Back up the exit data
 
 The transactions an exit is built from are held in the SDK's local storage. While the operators are reachable they can be fetched again, so a wallet restored from its seed rebuilds them on its own. When that storage is gone and the operators are unreachable, they cannot be recovered from anywhere, and the leaves they cover cannot be exited.
@@ -173,10 +186,10 @@ An out of date value can restore leaves that have since been spent, so the balan
 |---------|-------|----------|
 | {{#name prepare_unilateral_exit}} returns no {{#name leaves}} | Under {{#enum ExitLeafSelection::Auto}}, no leaf is worth exiting at the current rate | Lower {{#name fee_rate_sat_per_vbyte}} or wait for cheaper on-chain fees (this is not an error) |
 | A leaf you are mid-exit on is missing from a resumed {{#enum ExitLeafSelection::Auto}} quote | The resume reselected leaves with {{#enum ExitLeafSelection::Auto}} instead of naming them | Re-quote with {{#enum ExitLeafSelection::Specific}}, naming the leaves from your original quote |
-| {{#name total_fee_sat}} is close to or above {{#name recoverable_value_sat}} | The shared fan-out fee makes a single-UTXO multi-leaf exit uneconomical | Fund one UTXO per branch ({{#name per_branch_funding}}) to drop the fan-out fee, exit fewer leaves with {{#enum ExitLeafSelection::Specific}}, or wait for a lower fee rate |
+| {{#name total_fee_sat}} is close to or above {{#name recoverable_value_sat}} | The shared fan-out fee makes a single-UTXO multi-leaf exit uneconomical | Fund the UTXOs the quote asks for ({{#name per_branch_funding}}, or {{#name per_node_funding}}) to drop the fan-out fee, exit fewer leaves with {{#enum ExitLeafSelection::Specific}}, or wait for a lower fee rate |
 | The build/sweep fails with a "below the dust limit" error | The recoverable value net of fees is below the destination's dust limit | Exit higher-value leaves with {{#enum ExitLeafSelection::Specific}}, lower the {{#name fee_rate_sat_per_vbyte}}, or wait for a cheaper fee rate |
-| {{#enum SdkError::InsufficientCpfpFunds}} | Funding is below what the exit needs | Fund at least {{#name single_utxo_funding_sat}}, or the amount in each {{#name PerBranchFunding}} |
-| {{#enum SdkError::FundingUtxoConflict}} | A funding UTXO was already spent (e.g. a previous attempt) | Supply fresh, unspent funding; the error names the conflicting outpoint |
+| {{#enum SdkError::InsufficientCpfpFunds}} | Funding is below what the exit needs | Fund at least {{#name single_utxo_funding_sat}}, or the amount in each {{#name PerBranchFunding}} or {{#name PerNodeFunding}} entry |
+| {{#enum SdkError::FundingUtxoConflict}} | A funding UTXO was already spent (e.g. a previous attempt), or a per-node re-quote under {{#enum ExitLeafSelection::Auto}} dropped a leaf so the confirmed fan-out no longer fits the plan | Supply fresh, unspent funding; the error names the conflicting outpoint. On a per-node resume, re-quote with {{#enum ExitLeafSelection::Specific}} naming the original leaves first |
 | "min relay fee not met" when broadcasting | The package fee is too low for the network | Increase {{#name fee_rate_sat_per_vbyte}}, rebuild, and re-broadcast (RBF) |
 | "mandatory-script-verify-flag-failed" | A CPFP child was not signed correctly | Ensure your {{#name CpfpSigner}} signs every non-finalized input |
 | "non-BIP68-final" | A relative timelock has not matured | Wait the required {{#name csv_timelock_blocks}} after the parent confirms |
