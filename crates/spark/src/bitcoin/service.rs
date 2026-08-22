@@ -138,6 +138,17 @@ pub fn verify_finalized_taproot_signature(
     let tx: Transaction = bitcoin::consensus::deserialize(signed_tx_bytes).map_err(|e| {
         BitcoinError::InvalidTransaction(format!("failed to decode signed tx: {e}"))
     })?;
+    verify_finalized_taproot_signature_tx(bitcoin_service, &tx, sighash_bytes, verifying_public_key)
+}
+
+/// [`verify_finalized_taproot_signature`] for a transaction that is already
+/// decoded.
+pub fn verify_finalized_taproot_signature_tx(
+    bitcoin_service: &BitcoinService,
+    tx: &Transaction,
+    sighash_bytes: &[u8; 32],
+    verifying_public_key: &PublicKey,
+) -> Result<(), BitcoinError> {
     let witness_sig = tx
         .input
         .first()
