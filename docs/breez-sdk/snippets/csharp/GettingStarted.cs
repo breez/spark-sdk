@@ -141,7 +141,9 @@ namespace BreezSdkSnippets
         // ANCHOR: spark-status
         async Task GetSparkStatus()
         {
-            var sparkStatus = await BreezSdkSparkMethods.GetSparkStatus();
+            var sparkStatus = await BreezSdkSparkMethods.GetSparkStatus(
+                request: new GetSparkStatusRequest()
+            );
 
             switch (sparkStatus.status)
             {

@@ -125,15 +125,15 @@ impl PasskeyClient {
         + 'static,
         breez_api_key: Option<String>,
         config: Option<PasskeyConfig>,
-    ) -> Self {
+    ) -> Result<Self, PasskeyError> {
         let provider = Arc::new(CallbackPrfProvider {
             derive_seeds_fn: Arc::new(derive_seeds),
             is_supported_fn: Arc::new(is_supported),
             create_passkey_fn: Arc::new(create_passkey),
         });
-        Self {
-            inner: breez_sdk_spark::passkey::PasskeyClient::new(provider, breez_api_key, config),
-        }
+        Ok(Self {
+            inner: breez_sdk_spark::passkey::PasskeyClient::new(provider, breez_api_key, config)?,
+        })
     }
 
     /// One-shot capability + configuration probe.

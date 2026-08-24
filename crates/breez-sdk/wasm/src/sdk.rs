@@ -84,7 +84,11 @@ pub fn default_server_config(network: Network) -> Config {
 
 #[wasm_bindgen(js_name = "getSparkStatus")]
 pub async fn get_spark_status() -> WasmResult<SparkStatus> {
-    Ok(breez_sdk_spark::get_spark_status().await?.into())
+    Ok(
+        breez_sdk_spark::get_spark_status(breez_sdk_spark::GetSparkStatusRequest::default())
+            .await?
+            .into(),
+    )
 }
 
 /// The two external signers for the SDK's signer-based connect. Returned by

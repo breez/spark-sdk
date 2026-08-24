@@ -132,11 +132,13 @@ impl OrchestraService {
         spark_wallet: Arc<SparkWallet>,
         storage: Arc<dyn Storage>,
         fiat_service: Arc<dyn FiatService>,
+        http_client: Arc<dyn platform_utils::HttpClient>,
         shutdown_receiver: watch::Receiver<()>,
     ) -> Self {
         let client = Arc::new(OrchestraClient::new(
             config_resolver,
             Arc::clone(&spark_wallet),
+            http_client,
         ));
         let (monitor_trigger, _) = broadcast::channel(10);
 

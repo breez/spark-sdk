@@ -146,7 +146,50 @@ pub trait HttpClient: Send + Sync {
     ) -> Result<HttpResponse, HttpError>;
 }
 
+/// Lets a shared `Arc<dyn HttpClient>` satisfy generic `C: HttpClient` bounds,
+/// so callers can hand the SDK's one pooled client to components that own their
+/// client by value.
+#[macros::async_trait]
+impl HttpClient for Arc<dyn HttpClient> {
+    async fn get(
+        &self,
+        url: String,
+        headers: Option<HashMap<String, String>>,
+    ) -> Result<HttpResponse, HttpError> {
+        (**self).get(url, headers).await
+    }
+
+    async fn post(
+        &self,
+        url: String,
+        headers: Option<HashMap<String, String>>,
+        body: Option<String>,
+    ) -> Result<HttpResponse, HttpError> {
+        (**self).post(url, headers, body).await
+    }
+
+    async fn delete(
+        &self,
+        url: String,
+        headers: Option<HashMap<String, String>>,
+        body: Option<String>,
+    ) -> Result<HttpResponse, HttpError> {
+        (**self).delete(url, headers, body).await
+    }
+}
+
 /// Create a new HTTP client with the given user agent.
 pub fn create_http_client(user_agent: Option<&str>) -> Arc<dyn HttpClient> {
-    Arc::new(ReqwestHttpClient::new(user_agent.map(String::from)))
+    create_http_client_with_proxy(user_agent, None)
+}
+
+/// Create a new HTTP client that routes every request through `proxy`.
+pub fn create_http_client_with_proxy(
+    user_agent: Option<&str>,
+    proxy: Option<&crate::proxy::ProxyConfig>,
+) -> Arc<dyn HttpClient> {
+    Arc::new(ReqwestHttpClient::with_proxy(
+        user_agent.map(String::from),
+        proxy,
+    ))
 }

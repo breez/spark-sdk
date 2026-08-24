@@ -119,7 +119,7 @@ const exampleRemoveEventListener = async (sdk: BreezSdk, listenerId: string) => 
 
 const exampleGetSparkStatus = async () => {
   // ANCHOR: spark-status
-  const sparkStatus = await getSparkStatus()
+  const sparkStatus = await getSparkStatus({ proxy: undefined })
 
   switch (sparkStatus.status) {
     case ServiceStatus.Operational:

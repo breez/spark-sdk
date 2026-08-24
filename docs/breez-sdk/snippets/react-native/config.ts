@@ -142,6 +142,24 @@ const exampleConfigureCrossChain = async () => {
   console.debug('Config:', config)
 }
 
+const exampleConfigureProxy = async () => {
+  // ANCHOR: config-proxy
+  const config = defaultConfig(Network.Mainnet)
+  config.apiKey = '<breez api key>'
+
+  // Route the SDK's connections through a SOCKS5 proxy, such as a local Tor
+  // daemon. Set username and password together for proxies that require
+  // RFC 1929 authentication.
+  config.proxy = {
+    host: '127.0.0.1',
+    port: 9050,
+    username: undefined,
+    password: undefined
+  }
+  // ANCHOR_END: config-proxy
+  console.debug('Config:', config)
+}
+
 export {
   exampleConfigureSdk,
   exampleConfigurePrivateEnabledDefault,
@@ -149,5 +167,6 @@ export {
   exampleConfigureStableBalance,
   exampleConfigureSparkConfig,
   exampleConfigureBackgroundTasks,
-  exampleConfigureCrossChain
+  exampleConfigureCrossChain,
+  exampleConfigureProxy
 }

@@ -10,4 +10,6 @@ pub use cross_chain::{
 };
 pub use error::*;
 pub use models::*;
-pub use parser::{parse, parse_invoice, parse_spark_address, validate_lightning_address_format};
+pub use parser::{
+    InputParser, parse_invoice, parse_spark_address, validate_lightning_address_format,
+};

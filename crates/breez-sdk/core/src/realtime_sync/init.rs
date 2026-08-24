@@ -17,6 +17,7 @@ pub struct RealTimeSyncParams {
     pub server_url: String,
     pub api_key: Option<String>,
     pub user_agent: String,
+    pub proxy: Option<platform_utils::ProxyConfig>,
     pub signer: Arc<dyn breez_sdk_common::sync::SyncSigner>,
     pub storage: Arc<dyn Storage>,
     pub shutdown_receiver: tokio::sync::watch::Receiver<()>,
@@ -51,6 +52,7 @@ pub async fn init_and_start_real_time_sync(
             &params.server_url,
             params.api_key.as_deref(),
             &params.user_agent,
+            params.proxy.as_ref(),
         )
         .map_err(|e| SdkError::Generic(e.to_string()))?,
     );

@@ -50,3 +50,7 @@ clippy.missing_panics_doc = "allow"
 clippy.must_use_candidate = "allow"
 clippy.struct_field_names = "allow"
 clippy.arithmetic_side_effects = "warn"
+# The root clippy.toml bans direct reqwest clients so every SDK connection can
+# honour `Config.proxy`. This is the LNURL server, not the SDK: it has no such
+# config, and its clients are server-side.
+clippy.disallowed_methods = "allow"

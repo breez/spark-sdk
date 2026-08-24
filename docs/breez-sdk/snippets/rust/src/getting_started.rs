@@ -125,7 +125,7 @@ pub(crate) async fn remove_event_listener(sdk: &BreezSdk, listener_id: &str) -> 
 
 // ANCHOR: spark-status
 pub(crate) async fn getting_started_spark_status() -> Result<()> {
-    let spark_status = get_spark_status().await?;
+    let spark_status = get_spark_status(GetSparkStatusRequest::default()).await?;
 
     match spark_status.status {
         ServiceStatus::Operational => {

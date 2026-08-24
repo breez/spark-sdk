@@ -1,3 +1,4 @@
+use platform_utils::ProxyConfig;
 use tokio::sync::Mutex;
 use tonic::codegen::InterceptedService;
 use tonic::metadata::errors::InvalidMetadataValue;
@@ -34,9 +35,10 @@ impl BreezServer {
         server_url: &str,
         api_key: Option<String>,
         user_agent: &str,
+        proxy: Option<&ProxyConfig>,
     ) -> anyhow::Result<Self> {
         Ok(Self {
-            grpc_client: Mutex::new(GrpcClient::new(server_url, user_agent)?),
+            grpc_client: Mutex::new(GrpcClient::new(server_url, user_agent, proxy)?),
             api_key,
         })
     }

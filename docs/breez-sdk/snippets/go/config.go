@@ -158,3 +158,22 @@ func ConfigureCrossChain() {
 	// ANCHOR_END: cross-chain-config
 	log.Printf("Config: %v", config)
 }
+
+func ConfigureProxy() {
+	// ANCHOR: config-proxy
+	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+	apiKey := "<breez api key>"
+	config.ApiKey = &apiKey
+
+	// Route the SDK's connections through a SOCKS5 proxy, such as a local Tor
+	// daemon. Set username and password together for proxies that require
+	// RFC 1929 authentication.
+	config.Proxy = &breez_sdk_spark.ProxyConfig{
+		Host:     "127.0.0.1",
+		Port:     9050,
+		Username: nil,
+		Password: nil,
+	}
+	// ANCHOR_END: config-proxy
+	log.Printf("Config: %v", config)
+}

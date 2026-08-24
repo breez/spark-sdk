@@ -56,6 +56,7 @@
   - [Issuing tokens](guide/issuing_tokens.md)
 - [Advanced features](guide/advanced.md)
   - [Custom configuration](guide/config.md)
+  - [SOCKS5 proxy](guide/proxy.md)
   - [Custom leaf optimization](guide/optimize.md)
   - [Conditional Payments](guide/htlcs.md)
   - [Using an External Signer](guide/external_signer.md)

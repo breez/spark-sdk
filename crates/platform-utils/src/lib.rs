@@ -5,6 +5,7 @@
 
 mod auth;
 pub mod http;
+pub mod proxy;
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub use tokio;
@@ -21,4 +22,11 @@ pub use std::time;
 pub use auth::{
     ContentType, add_basic_auth_header, add_content_type_header, make_basic_auth_header,
 };
-pub use http::{DefaultHttpClient, HttpClient, HttpError, HttpResponse, create_http_client};
+pub use http::{
+    DefaultHttpClient, HttpClient, HttpError, HttpResponse, create_http_client,
+    create_http_client_with_proxy,
+};
+pub use proxy::ProxyConfig;
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+pub use proxy::Socks5Connector;

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use platform_utils::{DefaultHttpClient, HttpClient};
+use platform_utils::HttpClient;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -144,6 +144,17 @@ impl Serialize for Outspend {
     }
 }
 
+/// Options for [`new_rest_chain_service`].
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct NewRestChainServiceRequest {
+    /// Routes the chain service through a SOCKS5 proxy. Pass the same value as
+    /// [`Config::proxy`](crate::Config::proxy): this service is built outside
+    /// the SDK, so it cannot pick the setting up on its own.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub proxy: Option<crate::ProxyConfig>,
+}
+
 /// Constructs a shareable REST-based [`BitcoinChainService`].
 ///
 /// Pass the returned `Arc` to multiple [`SdkBuilder`](crate::SdkBuilder)s via
@@ -152,22 +163,33 @@ impl Serialize for Outspend {
 /// SDK instances. All SDKs sharing the service must use the same `network`.
 ///
 /// For one-off, non-shared use, prefer
-/// [`SdkBuilder::with_rest_chain_service`](crate::SdkBuilder::with_rest_chain_service).
+/// [`SdkBuilder::with_rest_chain_service`](crate::SdkBuilder::with_rest_chain_service),
+/// which builds on the SDK's own client and inherits its proxy automatically.
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-#[must_use]
 pub async fn new_rest_chain_service(
     url: String,
     network: Network,
     api_type: ChainApiType,
     credentials: Option<Credentials>,
-) -> Arc<dyn BitcoinChainService> {
-    let http_client: Arc<dyn HttpClient> = Arc::new(DefaultHttpClient::default());
-    Arc::new(RestClientChainService::new(
+    request: NewRestChainServiceRequest,
+) -> Result<Arc<dyn BitcoinChainService>, crate::SdkError> {
+    if let Some(proxy) = &request.proxy {
+        proxy.validate()?;
+    }
+    let http_client: Arc<dyn HttpClient> = platform_utils::create_http_client_with_proxy(
+        None,
+        request
+            .proxy
+            .as_ref()
+            .map(platform_utils::ProxyConfig::from)
+            .as_ref(),
+    );
+    Ok(Arc::new(RestClientChainService::new(
         url,
         network,
         5,
         http_client,
         credentials.map(|c| BasicAuth::new(c.username, c.password)),
         api_type,
-    ))
+    )))
 }

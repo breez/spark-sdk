@@ -17,6 +17,14 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
+# Native dependencies. The SOCKS5 connector for gRPC has no WASM counterpart:
+# the browser owns connection setup and exposes no proxy knob.
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+http.workspace = true
+hyper-util.workspace = true
+tokio-socks.workspace = true
+tower-service.workspace = true
+
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 web-time = { version = "1.1.0", features = ["serde"] }
@@ -26,3 +34,6 @@ tokio_with_wasm = { version = "0.8.7", features = [
   "sync",
   "time",
 ] }
+
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

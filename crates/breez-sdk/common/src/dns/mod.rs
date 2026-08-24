@@ -1,3 +1,5 @@
+mod doh;
+
 #[cfg_attr(
     all(target_family = "wasm", target_os = "unknown"),
     path = "resolver_wasm.rs"

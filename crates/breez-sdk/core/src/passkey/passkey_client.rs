@@ -179,15 +179,19 @@ pub struct PasskeyClient {
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 impl PasskeyClient {
     /// Construct with the default Nostr-backed label store.
+    ///
+    /// Fails when `config` carries a proxy the relay transport cannot
+    /// honour, rather than letting a wallet be created whose label can
+    /// never be published.
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
     pub fn new(
         prf_provider: Arc<dyn PrfProvider>,
         breez_api_key: Option<String>,
         config: Option<PasskeyConfig>,
-    ) -> Self {
-        Self {
-            passkey: Passkey::new(prf_provider, breez_api_key, config),
-        }
+    ) -> Result<Self, PasskeyError> {
+        Ok(Self {
+            passkey: Passkey::new(prf_provider, breez_api_key, config)?,
+        })
     }
 
     /// One-shot capability + configuration probe. Collapses
@@ -396,7 +400,7 @@ impl PasskeyClient {
         prf_provider: Arc<dyn PrfProvider>,
         sdk_config: &crate::Config,
         passkey_config: Option<PasskeyConfig>,
-    ) -> Self {
+    ) -> Result<Self, PasskeyError> {
         Self::new(prf_provider, sdk_config.api_key.clone(), passkey_config)
     }
 
@@ -415,7 +419,8 @@ impl PasskeyClient {
                 breez_api_key,
                 config,
                 store_builder,
-            ),
+            )
+            .expect("test config is valid"),
         }
     }
 }

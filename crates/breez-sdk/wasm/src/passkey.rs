@@ -35,6 +35,8 @@ pub struct PasskeyConfig {
     /// Relying Party and user identity for the built-in provider on the
     /// zero-config path.
     pub provider_options: Option<PasskeyProviderOptions>,
+    /// Always rejected here: a SOCKS5 proxy cannot be honoured on WASM.
+    pub proxy: Option<crate::models::ProxyConfig>,
 }
 
 /// One-shot capability + configuration probe returned by
@@ -162,16 +164,16 @@ impl PasskeyClient {
         prf_provider: PrfProvider,
         breez_api_key: Option<String>,
         config: Option<PasskeyConfig>,
-    ) -> Self {
+    ) -> WasmResult<PasskeyClient> {
         let provider = Arc::new(WasmPrfProvider::new(prf_provider));
-        Self {
+        Ok(Self {
             inner: breez_sdk_spark::passkey::PasskeyClient::new(
                 provider.clone(),
                 breez_api_key,
                 config.map(Into::into),
-            ),
+            )?,
             provider,
-        }
+        })
     }
 
     /// One-shot capability probe (PRF support + domain association)

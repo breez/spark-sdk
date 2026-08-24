@@ -1,4 +1,5 @@
 use anyhow::Result;
+use platform_utils::{ProxyConfig, Socks5Connector};
 use std::time::Duration;
 use tonic::transport::ClientTlsConfig;
 
@@ -10,10 +11,19 @@ pub struct GrpcClient {
 }
 
 impl GrpcClient {
-    pub fn new(url: &str, user_agent: &str) -> Result<Self> {
-        Ok(Self {
-            inner: Self::create_endpoint(url, user_agent)?.connect_lazy(),
-        })
+    /// A lazily-connected channel to `url`, tunnelled through `proxy` when one
+    /// is set.
+    ///
+    /// The proxy only replaces how the TCP connection is opened. Tonic still
+    /// applies the endpoint's TLS config on top, with the SNI name taken from
+    /// `url`, so certificate validation is unchanged either way.
+    pub fn new(url: &str, user_agent: &str, proxy: Option<&ProxyConfig>) -> Result<Self> {
+        let endpoint = Self::create_endpoint(url, user_agent)?;
+        let inner = match proxy {
+            Some(proxy) => endpoint.connect_with_connector_lazy(Socks5Connector::new(proxy)),
+            None => endpoint.connect_lazy(),
+        };
+        Ok(Self { inner })
     }
 
     pub fn into_inner(self) -> Transport {

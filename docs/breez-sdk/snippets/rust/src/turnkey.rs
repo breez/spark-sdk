@@ -16,6 +16,7 @@ async fn connect_with_turnkey() -> Result<BreezSdk> {
         identity_public_key: None,
         retry: None,
         max_rps: None,
+        proxy: None,
     };
 
     let signers = create_turnkey_signer(turnkey_config).await?;

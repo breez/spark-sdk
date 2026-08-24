@@ -1,19 +1,33 @@
 use anyhow::{Result, anyhow};
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use dnssec_prover::query::{ProofBuilder, QueryBuf};
-use dnssec_prover::rr::Name;
+use platform_utils::ProxyConfig;
 use reqwest::Client;
 
-use super::{DnsResolver, normalize_dns_name, parse_dns_name, verify_proof_and_extract_txt};
+use super::{DnsResolver, doh, normalize_dns_name, parse_dns_name, verify_proof_and_extract_txt};
 
-const DOH_ENDPOINT: &str = "https://cloudflare-dns.com/dns-query";
-
-pub struct Resolver;
+pub struct Resolver {
+    /// A failed build is carried rather than unwrapped: this type is
+    /// constructed during `connect`, where a panic aborts the wasm module.
+    client: Result<Client, String>,
+}
 
 impl Resolver {
     pub fn new() -> Self {
-        Self
+        Self {
+            client: doh::build_client(None).map_err(|e| e.to_string()),
+        }
+    }
+
+    /// `proxy` must be `None`: browser fetch offers no proxy control, so the
+    /// lookup cannot be tunnelled and must not silently go direct.
+    pub fn with_proxy(proxy: Option<&ProxyConfig>) -> Result<Self> {
+        if proxy.is_some() {
+            return Err(anyhow!(
+                "a SOCKS5 proxy cannot be honoured on WASM: fetch exposes no proxy control"
+            ));
+        }
+        Ok(Self {
+            client: Ok(doh::build_client(None)?),
+        })
     }
 }
 
@@ -29,68 +43,12 @@ impl DnsResolver for Resolver {
         let dns_name = normalize_dns_name(dns_name);
         let name = parse_dns_name(&dns_name)?;
 
-        // Build DNSSEC proof using DoH
-        let proof = build_proof_doh(&name).await?;
+        let client = self
+            .client
+            .as_ref()
+            .map_err(|e| anyhow!("Failed to build DoH client: {e}"))?;
+        let proof = doh::build_proof(client, &name).await?;
 
         verify_proof_and_extract_txt(&proof, &name)
     }
-}
-
-/// Build a DNSSEC proof using DNS-over-HTTPS queries
-async fn build_proof_doh(name: &Name) -> Result<Vec<u8>> {
-    let client = Client::builder().build()?;
-
-    // TXT record type = 16
-    let (mut builder, initial_query) = ProofBuilder::new(name, 16);
-
-    // Send initial query
-    let mut pending_queries = vec![initial_query];
-
-    while builder.awaiting_responses() {
-        if pending_queries.is_empty() {
-            anyhow::bail!("ProofBuilder awaiting responses but no queries to send");
-        }
-
-        // Process each pending query
-        let mut new_queries = Vec::new();
-        for query in pending_queries {
-            // Send the query via DoH
-            let response_bytes = send_doh_query(&client, query.as_ref()).await?;
-
-            // Convert response bytes to QueryBuf
-            let mut response_buf = QueryBuf::new_zeroed(0);
-            response_buf.extend_from_slice(&response_bytes);
-
-            // Process the response and collect new queries
-            let queries = builder
-                .process_response(&response_buf)
-                .map_err(|e| anyhow!("Failed to process DNS response: {e:?}"))?;
-            new_queries.extend(queries);
-        }
-        pending_queries = new_queries;
-    }
-
-    // Finish and return the proof
-    let (proof, _ttl) = builder
-        .finish_proof()
-        .map_err(|e| anyhow!("Failed to finish DNSSEC proof: {e:?}"))?;
-
-    Ok(proof)
-}
-
-/// Send a DNS query via DNS-over-HTTPS
-async fn send_doh_query(client: &Client, query: &[u8]) -> Result<Vec<u8>> {
-    // Base64url encode the query for GET request
-    let encoded_query = URL_SAFE_NO_PAD.encode(query);
-
-    let response = client
-        .get(format!("{DOH_ENDPOINT}?dns={encoded_query}"))
-        .header("Accept", "application/dns-message")
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
-
-    Ok(response.to_vec())
 }

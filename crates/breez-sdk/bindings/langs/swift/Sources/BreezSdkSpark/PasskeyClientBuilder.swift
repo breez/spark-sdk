@@ -39,9 +39,11 @@ public class PasskeyClientBuilder {
     /// Construct the client. Falls back to a default ``PasskeyProvider``
     /// on the config's `providerOptions` (default: the Breez RP) when no
     /// provider was injected.
-    public func build() -> PasskeyClient {
+    /// Throws when the config carries a proxy the relay transport cannot
+    /// honour.
+    public func build() throws -> PasskeyClient {
         let resolved = provider ?? PasskeyProvider(options: config?.providerOptions ?? PasskeyProviderOptions())
-        return PasskeyClient(prfProvider: resolved, breezApiKey: breezApiKey, config: config)
+        return try PasskeyClient(prfProvider: resolved, breezApiKey: breezApiKey, config: config)
     }
 }
 
@@ -59,9 +61,11 @@ public extension PasskeyClient {
     ///   - breezApiKey: Breez relay key for authenticated (NIP-42) label
     ///     storage. Pass `nil` for public relays only.
     ///   - config: Passkey client config (`providerOptions` / `defaultLabel`).
+    ///
+    /// Throws when `config` carries a proxy the relay transport cannot honour.
     @available(iOS 18.0, macOS 15.0, *)
-    convenience init(breezApiKey: String?, config: PasskeyConfig? = nil) {
-        self.init(
+    convenience init(breezApiKey: String?, config: PasskeyConfig? = nil) throws {
+        try self.init(
             prfProvider: PasskeyProvider(options: config?.providerOptions ?? PasskeyProviderOptions()),
             breezApiKey: breezApiKey,
             config: config

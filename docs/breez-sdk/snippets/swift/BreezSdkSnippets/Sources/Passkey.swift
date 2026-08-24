@@ -37,7 +37,7 @@ func checkAvailability() async throws {
     let prfProvider = PasskeyProvider(
         options: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App")
     )
-    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
+    let passkey = try PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
 
     // ANCHOR: check-availability
     switch try await passkey.checkAvailability() {
@@ -56,9 +56,10 @@ func checkAvailability() async throws {
     // ANCHOR_END: check-availability
 }
 
-func setupPasskeyClient() -> PasskeyClient {
+func setupPasskeyClient() throws -> PasskeyClient {
     // ANCHOR: setup-client
-    let passkey = PasskeyClient(
+    // Throws when the config carries a proxy the relay transport cannot honour.
+    let passkey = try PasskeyClient(
         breezApiKey: "<breez api key>",
         config: PasskeyConfig(
             providerOptions: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App")
@@ -72,7 +73,7 @@ func connectWithPasskey() async throws -> BreezSdk {
     let prfProvider = PasskeyProvider(
         options: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App")
     )
-    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
+    let passkey = try PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
 
     // ANCHOR: connect-with-passkey
     // Single-CTA onboarding: silent sign-in, fall through to register.
@@ -103,7 +104,7 @@ func signInExistingUser() async throws -> SignInResponse {
     let prfProvider = PasskeyProvider(
         options: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App")
     )
-    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
+    let passkey = try PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
 
     // ANCHOR: sign-in
     // Returning-user sign-in. No fall-through to register.
@@ -115,7 +116,7 @@ func registerNewPasskey() async throws -> BreezSdk {
     let prfProvider = PasskeyProvider(
         options: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App")
     )
-    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
+    let passkey = try PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
 
     // ANCHOR: register-passkey
     var config = defaultConfig(network: .mainnet)
@@ -139,7 +140,7 @@ func credentialMetadata() async throws {
     let prfProvider = PasskeyProvider(
         options: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App")
     )
-    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: nil, config: nil)
+    let passkey = try PasskeyClient(prfProvider: prfProvider, breezApiKey: nil, config: nil)
 
     // ANCHOR: credential-metadata
     let response = try await passkey.register(
@@ -180,7 +181,7 @@ func listLabels() async throws -> [String] {
     let prfProvider = PasskeyProvider(
         options: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App")
     )
-    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
+    let passkey = try PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
     // ANCHOR: list-labels
     let labels = try await passkey.labels().list()
     for label in labels {
@@ -194,7 +195,7 @@ func storeLabel() async throws {
     let prfProvider = PasskeyProvider(
         options: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App")
     )
-    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
+    let passkey = try PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
     // ANCHOR: store-label
     try await passkey.labels().store(label: "personal")
     // ANCHOR_END: store-label
@@ -224,7 +225,7 @@ func recoverFromAlreadyExists() async throws -> Wallet {
     let prfProvider = PasskeyProvider(
         options: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App")
     )
-    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
+    let passkey = try PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
 
     // ANCHOR: recover-already-exists
     do {
@@ -251,7 +252,7 @@ func handleTimeout() async throws -> SignInResponse {
     let prfProvider = PasskeyProvider(
         options: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App")
     )
-    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
+    let passkey = try PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
 
     // ANCHOR: handle-timeout
     do {

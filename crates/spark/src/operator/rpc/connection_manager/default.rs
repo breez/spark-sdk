@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+
+use platform_utils::ProxyConfig;
 use tokio::sync::RwLock;
 use tracing::debug;
 
@@ -10,6 +12,7 @@ use super::ConnectionManager;
 
 pub struct DefaultConnectionManager {
     connections_map: RwLock<HashMap<String, Transport>>,
+    proxy: Option<ProxyConfig>,
 }
 
 impl Default for DefaultConnectionManager {
@@ -20,8 +23,15 @@ impl Default for DefaultConnectionManager {
 
 impl DefaultConnectionManager {
     pub fn new() -> Self {
+        Self::with_proxy(None)
+    }
+
+    /// One connection per operator, tunnelled through `proxy` when set.
+    #[must_use]
+    pub fn with_proxy(proxy: Option<ProxyConfig>) -> Self {
         Self {
             connections_map: RwLock::new(HashMap::new()),
+            proxy,
         }
     }
 }
@@ -43,6 +53,7 @@ impl ConnectionManager for DefaultConnectionManager {
             operator.address.to_string(),
             operator.ca_cert.clone(),
             operator.user_agent.clone(),
+            self.proxy.as_ref(),
         )?
         .into_inner();
 

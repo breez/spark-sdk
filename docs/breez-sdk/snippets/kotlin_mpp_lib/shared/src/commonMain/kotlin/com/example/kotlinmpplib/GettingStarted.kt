@@ -138,7 +138,7 @@ class GettingStarted {
     // ANCHOR: spark-status
     suspend fun gettingStartedSparkStatus() {
         try {
-            val sparkStatus = getSparkStatus()
+            val sparkStatus = getSparkStatus(GetSparkStatusRequest())
 
             when (sparkStatus.status) {
                 ServiceStatus.OPERATIONAL -> {

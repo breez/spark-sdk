@@ -27,10 +27,10 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, OnceCell, oneshot, watch};
 
 use crate::{
-    BitcoinChainService, ExternalInputParser, InputType, LeafOptimizationConfig, Logger, Network,
-    TokenOptimizationConfig, error::SdkError, events::EventEmitter, lnurl::LnurlServerClient,
-    logger, models::Config, persist::Storage, signer::lnurl_auth::LnurlAuthSignerAdapter,
-    stable_balance::StableBalance, token_conversion::TokenConverter,
+    BitcoinChainService, LeafOptimizationConfig, Logger, Network, TokenOptimizationConfig,
+    error::SdkError, events::EventEmitter, lnurl::LnurlServerClient, logger, models::Config,
+    persist::Storage, signer::lnurl_auth::LnurlAuthSignerAdapter, stable_balance::StableBalance,
+    token_conversion::TokenConverter,
 };
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -99,7 +99,9 @@ pub struct BreezSdk {
     /// Coordinator for coalescing duplicate sync requests
     pub(crate) sync_coordinator: SyncCoordinator,
     pub(crate) initial_synced_watcher: watch::Receiver<bool>,
-    pub(crate) external_input_parsers: Vec<ExternalInputParser>,
+    /// Parses payment inputs over the SDK's own transports, so lightning-address
+    /// and LNURL lookups reuse the pooled HTTP client and honour the proxy.
+    pub(crate) input_parser: Arc<SdkInputParser>,
     pub(crate) spark_private_mode_initialized: Arc<OnceCell<()>>,
     pub(crate) token_converter: Arc<dyn TokenConverter>,
     pub(crate) stable_balance: Option<Arc<StableBalance>>,
@@ -112,8 +114,13 @@ pub struct BreezSdk {
     pub(crate) lightning_sender: Arc<LightningSender>,
 }
 
+/// The parser bound to the SDK's shared HTTP client and its DNS resolver.
+pub(crate) type SdkInputParser =
+    breez_sdk_common::input::InputParser<Arc<dyn HttpClient>, breez_sdk_common::dns::Resolver>;
+
 pub(crate) struct BreezSdkParams {
     pub config: Config,
+    pub input_parser: Arc<SdkInputParser>,
     pub storage: Arc<dyn Storage>,
     pub chain_service: Arc<dyn BitcoinChainService>,
     pub fiat_service: Arc<dyn FiatService>,
@@ -130,18 +137,6 @@ pub(crate) struct BreezSdkParams {
     pub sync_coordinator: SyncCoordinator,
     pub cross_chain_context: crate::cross_chain::CrossChainContext,
     pub lightning_sender: Arc<LightningSender>,
-}
-
-pub async fn parse_input(
-    input: &str,
-    external_input_parsers: Option<Vec<ExternalInputParser>>,
-) -> Result<InputType, SdkError> {
-    Ok(breez_sdk_common::input::parse(
-        input,
-        external_input_parsers.map(|parsers| parsers.into_iter().map(From::from).collect()),
-    )
-    .await?
-    .into())
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -260,6 +255,7 @@ pub fn default_config(network: Network) -> Config {
         max_concurrent_claims: 4,
         spark_config: Some(default_spark_config(network)),
         background_tasks_enabled: true,
+        proxy: None,
         cross_chain_config: None,
     }
 }
@@ -420,14 +416,26 @@ pub fn default_external_signers(
     })
 }
 
+/// Options for [`get_spark_status`].
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct GetSparkStatusRequest {
+    /// Routes the status request through a SOCKS5 proxy. Pass the same value as
+    /// [`Config::proxy`]: this call runs without an SDK instance, so it cannot
+    /// pick the setting up on its own.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub proxy: Option<crate::ProxyConfig>,
+}
+
 /// Fetches the current status of Spark network services relevant to the SDK.
 ///
 /// This function queries the Spark status API and returns the worst status
 /// across the Spark Operators and SSP services.
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-pub async fn get_spark_status() -> Result<crate::SparkStatus, SdkError> {
+pub async fn get_spark_status(
+    request: GetSparkStatusRequest,
+) -> Result<crate::SparkStatus, SdkError> {
     use chrono::DateTime;
-    use platform_utils::DefaultHttpClient;
 
     #[derive(serde::Deserialize)]
     struct StatusApiResponse {
@@ -455,7 +463,17 @@ pub async fn get_spark_status() -> Result<crate::SparkStatus, SdkError> {
         }
     }
 
-    let http_client = DefaultHttpClient::default();
+    if let Some(proxy) = &request.proxy {
+        proxy.validate()?;
+    }
+    let http_client = platform_utils::create_http_client_with_proxy(
+        None,
+        request
+            .proxy
+            .as_ref()
+            .map(platform_utils::ProxyConfig::from)
+            .as_ref(),
+    );
 
     let response = http_client
         .get("https://spark.money/api/v1/status".to_string(), None)

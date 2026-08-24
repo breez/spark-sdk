@@ -29,6 +29,7 @@ lightning.workspace = true
 macros.workspace = true
 platform-utils.workspace = true
 prost.workspace = true
+reqwest.workspace = true
 regex-lite.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
@@ -58,7 +59,6 @@ tonic = { workspace = true, features = [
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 dnssec-prover = { workspace = true, features = ["validation"] }
 http.workspace = true
-reqwest.workspace = true
 tonic = { workspace = true, features = ["codegen", "prost"] }
 tonic-web-wasm-client.workspace = true
 tower-service.workspace = true

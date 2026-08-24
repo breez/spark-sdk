@@ -50,7 +50,7 @@ impl PrfProvider for CustomPrfProvider {
 
 async fn check_availability() -> Result<()> {
     let prf_provider = Arc::new(CustomPrfProvider);
-    let passkey = PasskeyClient::new(prf_provider, None, None);
+    let passkey = PasskeyClient::new(prf_provider, None, None)?;
 
     // ANCHOR: check-availability
     match passkey.check_availability().await? {
@@ -73,16 +73,18 @@ async fn check_availability() -> Result<()> {
     Ok(())
 }
 
-fn setup_passkey_client() -> PasskeyClient {
+fn setup_passkey_client() -> Result<PasskeyClient> {
     // ANCHOR: setup-client
     let prf_provider = Arc::new(CustomPrfProvider);
-    PasskeyClient::new(prf_provider, Some("<breez api key>".to_string()), None)
+    // Fails when the config carries a proxy the relay transport cannot honour.
+    let passkey = PasskeyClient::new(prf_provider, Some("<breez api key>".to_string()), None)?;
     // ANCHOR_END: setup-client
+    Ok(passkey)
 }
 
 async fn connect_with_passkey_unified() -> Result<breez_sdk_spark::BreezSdk> {
     let prf_provider = Arc::new(CustomPrfProvider);
-    let passkey = PasskeyClient::new(prf_provider, None, None);
+    let passkey = PasskeyClient::new(prf_provider, None, None)?;
 
     // ANCHOR: connect-with-passkey
     // Single-CTA onboarding: silent sign-in, fall through to register.
@@ -109,7 +111,7 @@ async fn connect_with_passkey_unified() -> Result<breez_sdk_spark::BreezSdk> {
 
 async fn sign_in_existing_user() -> Result<SignInResponse> {
     let prf_provider = Arc::new(CustomPrfProvider);
-    let passkey = PasskeyClient::new(prf_provider, Some("<breez api key>".to_string()), None);
+    let passkey = PasskeyClient::new(prf_provider, Some("<breez api key>".to_string()), None)?;
 
     // ANCHOR: sign-in
     // Returning-user-only sign-in. No fall-through to register.
@@ -124,7 +126,7 @@ async fn sign_in_existing_user() -> Result<SignInResponse> {
 
 async fn register_new_passkey() -> Result<breez_sdk_spark::BreezSdk> {
     let prf_provider = Arc::new(CustomPrfProvider);
-    let passkey = PasskeyClient::new(prf_provider, None, None);
+    let passkey = PasskeyClient::new(prf_provider, None, None)?;
 
     // ANCHOR: register-passkey
     let response = passkey
@@ -147,7 +149,7 @@ async fn register_new_passkey() -> Result<breez_sdk_spark::BreezSdk> {
 
 async fn credential_metadata() -> Result<()> {
     let prf_provider = Arc::new(CustomPrfProvider);
-    let passkey = PasskeyClient::new(prf_provider, None, None);
+    let passkey = PasskeyClient::new(prf_provider, None, None)?;
 
     // ANCHOR: credential-metadata
     let response = passkey
@@ -189,7 +191,7 @@ async fn credential_metadata() -> Result<()> {
 
 async fn list_labels() -> Result<Vec<String>> {
     let prf_provider = Arc::new(CustomPrfProvider);
-    let passkey = PasskeyClient::new(prf_provider, Some("<breez api key>".to_string()), None);
+    let passkey = PasskeyClient::new(prf_provider, Some("<breez api key>".to_string()), None)?;
     // ANCHOR: list-labels
     let labels = passkey.labels().list().await?;
     for label in &labels {
@@ -201,7 +203,7 @@ async fn list_labels() -> Result<Vec<String>> {
 
 async fn store_label() -> Result<()> {
     let prf_provider = Arc::new(CustomPrfProvider);
-    let passkey = PasskeyClient::new(prf_provider, Some("<breez api key>".to_string()), None);
+    let passkey = PasskeyClient::new(prf_provider, Some("<breez api key>".to_string()), None)?;
     // ANCHOR: store-label
     passkey.labels().store("personal".to_string()).await?;
     // ANCHOR_END: store-label
@@ -233,7 +235,7 @@ async fn check_domain() -> Result<()> {
 
 async fn recover_from_already_exists() -> Result<Wallet> {
     let prf_provider = Arc::new(CustomPrfProvider);
-    let passkey = PasskeyClient::new(prf_provider, None, None);
+    let passkey = PasskeyClient::new(prf_provider, None, None)?;
 
     // ANCHOR: recover-already-exists
     match passkey
@@ -263,7 +265,7 @@ async fn recover_from_already_exists() -> Result<Wallet> {
 
 async fn handle_timeout() -> Result<SignInResponse> {
     let prf_provider = Arc::new(CustomPrfProvider);
-    let passkey = PasskeyClient::new(prf_provider, None, None);
+    let passkey = PasskeyClient::new(prf_provider, None, None)?;
 
     // ANCHOR: handle-timeout
     // Biometric inactivity timeout, distinct from a user cancel.

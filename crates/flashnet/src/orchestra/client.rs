@@ -34,7 +34,7 @@ pub trait OrchestraConfigResolver: Send + Sync {
 pub struct OrchestraClient {
     config_resolver: Arc<dyn OrchestraConfigResolver>,
     config: OnceCell<OrchestraConfig>,
-    http_client: platform_utils::DefaultHttpClient,
+    http_client: Arc<dyn HttpClient>,
     cache_store: CacheStore,
     spark_wallet: Arc<SparkWallet>,
 }
@@ -43,11 +43,12 @@ impl OrchestraClient {
     pub fn new(
         config_resolver: Arc<dyn OrchestraConfigResolver>,
         spark_wallet: Arc<SparkWallet>,
+        http_client: Arc<dyn HttpClient>,
     ) -> Self {
         Self {
             config_resolver,
             config: OnceCell::new(),
-            http_client: platform_utils::DefaultHttpClient::default(),
+            http_client,
             cache_store: CacheStore::default(),
             spark_wallet,
         }

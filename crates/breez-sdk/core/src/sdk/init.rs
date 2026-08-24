@@ -19,7 +19,6 @@ impl BreezSdk {
             }
         }
         let (initial_synced_sender, initial_synced_watcher) = watch::channel(false);
-        let external_input_parsers = params.config.get_all_external_input_parsers();
 
         let sdk = Self {
             config: params.config,
@@ -36,7 +35,7 @@ impl BreezSdk {
             runtime: params.runtime,
             sync_coordinator: params.sync_coordinator,
             initial_synced_watcher,
-            external_input_parsers,
+            input_parser: params.input_parser,
             spark_private_mode_initialized: Arc::new(OnceCell::new()),
             token_converter: params.token_converter,
             stable_balance: params.stable_balance,

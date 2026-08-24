@@ -7,6 +7,7 @@ from breez_sdk_spark import (
     EventListener,
     get_spark_status,
     GetInfoRequest,
+    GetSparkStatusRequest,
     init_logging,
     LogEntry,
     Logger,
@@ -143,7 +144,7 @@ async def remove_event_listener(sdk: BreezSdk, listener_id: str):
 # ANCHOR: spark-status
 async def getting_started_spark_status():
     try:
-        spark_status = await get_spark_status()
+        spark_status = await get_spark_status(request=GetSparkStatusRequest())
 
         if spark_status.status == ServiceStatus.OPERATIONAL:
             logging.debug("Spark is fully operational")

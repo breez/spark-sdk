@@ -35,6 +35,8 @@ const EVM_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// its connection pool / TLS setup) per call would be wasteful.
 fn http_client() -> &'static reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    // Test-only helper talking to a local EVM node; no SDK proxy applies.
+    #[allow(clippy::disallowed_methods)]
     CLIENT.get_or_init(reqwest::Client::new)
 }
 

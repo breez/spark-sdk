@@ -146,4 +146,41 @@ pub struct PasskeyConfig {
     /// provider.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub provider_options: Option<PasskeyProviderOptions>,
+
+    /// Routes the Nostr relay connections that store wallet labels through a
+    /// SOCKS5 proxy. Pass the same value as [`Config::proxy`](crate::Config::proxy):
+    /// the passkey client is built before the SDK, so it cannot pick the setting
+    /// up on its own.
+    ///
+    /// Relay connections do not support proxy authentication, so a proxy
+    /// carrying a username and password is rejected when the client is
+    /// built.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub proxy: Option<crate::ProxyConfig>,
+}
+
+impl PasskeyConfig {
+    /// Rejects a proxy the relay transport cannot honour.
+    ///
+    /// Checked when the client is built rather than at the first label
+    /// operation: a wallet label is one of the two PRF salts its seed is
+    /// derived from, and the relay directory is the only copy the SDK
+    /// keeps. Failing later would hand back a working wallet whose label
+    /// can never be published, and so can never be recovered.
+    pub(crate) fn validate(&self) -> Result<(), super::PasskeyError> {
+        let Some(proxy) = &self.proxy else {
+            return Ok(());
+        };
+        proxy
+            .validate()
+            .map_err(|e| super::PasskeyError::InvalidConfig(e.to_string()))?;
+        if proxy.username.is_some() || proxy.password.is_some() {
+            return Err(super::PasskeyError::InvalidConfig(
+                "Nostr relay connections do not support proxy authentication: \
+                 async-wsocket's ConnectionMode::Proxy carries only an address"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
 }

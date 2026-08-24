@@ -144,7 +144,8 @@ func RemoveEventListener(sdk *breez_sdk_spark.BreezSdk, listenerId string) bool 
 
 // ANCHOR: spark-status
 func GetSparkStatus() error {
-	sparkStatus, err := breez_sdk_spark.GetSparkStatus()
+	request := breez_sdk_spark.GetSparkStatusRequest{}
+	sparkStatus, err := breez_sdk_spark.GetSparkStatus(request)
 	if err != nil {
 		return err
 	}
