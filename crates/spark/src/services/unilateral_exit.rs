@@ -304,6 +304,11 @@ pub struct UnilateralExitSelectedLeaf {
     /// floor, since the sweep is paid from the swept value rather than the funding
     /// UTXO. Always `<= estimated_cost`.
     pub cpfp_cost: u64,
+    /// What `cpfp_cost` is made of, per node whose child it pays for. A build that
+    /// has read the chain charges only the steps it is still going to drive.
+    pub cpfp_node_costs: Vec<(TreeNodeId, u64)>,
+    /// The part of `cpfp_cost` paying for the leaf's own refund child.
+    pub cpfp_refund_cost: u64,
 }
 
 pub struct UnilateralExitLeafCostParams {
@@ -527,6 +532,7 @@ pub fn evaluate_unilateral_exit_leaf_costs(
         };
 
         let mut cpfp_cost: u64 = 0;
+        let mut cpfp_node_costs: Vec<(TreeNodeId, u64)> = Vec::new();
         let mut already_funded_ancestor = false;
         for ancestor in &ancestors {
             let txid = ancestor.node_tx.compute_txid();
@@ -543,24 +549,27 @@ pub fn evaluate_unilateral_exit_leaf_costs(
                 already_funded_ancestor = true;
                 params.initial_cpfp_input_weight
             };
-            cpfp_cost = cpfp_cost.saturating_add(compute_cpfp_package_fee(
+            let fee = compute_cpfp_package_fee(
                 ancestor.node_tx.weight(),
                 input_weight,
                 params.change_script_len,
                 params.fee_rate_sat_per_kw,
-            ));
+            );
+            cpfp_node_costs.push((ancestor.id.clone(), fee));
+            cpfp_cost = cpfp_cost.saturating_add(fee);
         }
         let refund_input_weight = if already_funded_ancestor {
             params.single_cpfp_input_weight
         } else {
             params.initial_cpfp_input_weight
         };
-        cpfp_cost = cpfp_cost.saturating_add(compute_cpfp_package_fee(
+        let cpfp_refund_cost = compute_cpfp_package_fee(
             refund_tx.weight(),
             refund_input_weight,
             params.change_script_len,
             params.fee_rate_sat_per_kw,
-        ));
+        );
+        cpfp_cost = cpfp_cost.saturating_add(cpfp_refund_cost);
 
         let per_leaf_input_weight = p2tr_key_path_input_weight() + params.single_cpfp_input_weight;
         let sweep_input_weight =
@@ -593,6 +602,8 @@ pub fn evaluate_unilateral_exit_leaf_costs(
                 value: leaf.value,
                 estimated_cost: total_marginal_cost,
                 cpfp_cost,
+                cpfp_node_costs,
+                cpfp_refund_cost,
             });
             for ancestor in &ancestors {
                 covered_txids.insert(ancestor.node_tx.compute_txid());
@@ -1145,6 +1156,8 @@ mod tests {
                 value,
                 estimated_cost: cost,
                 cpfp_cost: cost,
+                cpfp_node_costs: Vec::new(),
+                cpfp_refund_cost: cost,
             }
         }
 

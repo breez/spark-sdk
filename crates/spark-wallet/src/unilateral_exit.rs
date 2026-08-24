@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use bitcoin::{Address, Amount, OutPoint, ScriptBuf, Transaction, TxOut, Txid};
 use spark::{
     services::{
-        CpfpInput, ServiceError, UnilateralExitPlan, build_cpfp_child, csv_timelock,
-        walk_unilateral_exit_chain,
+        CpfpInput, ServiceError, UnilateralExitPlan, UnilateralExitSelectedLeaf, build_cpfp_child,
+        csv_timelock, walk_unilateral_exit_chain,
     },
     tree::{LeafPedigree, TreeNode, TreeNodeId, TreeNodeStatus},
     utils::transactions::is_ephemeral_anchor_output,
@@ -1252,6 +1252,24 @@ fn refund_output_value(
 type BranchFunding = Vec<(TreeNodeId, Vec<CpfpInput>)>;
 
 /// Resolves the fan-out step and the per-branch funding it feeds. A confirmed
+/// The part of a leaf's CPFP bill that is still to be paid. A node or refund the
+/// walk resolved is confirmed on-chain, or is driven by a transaction that pays
+/// its own fee, so neither takes a child. Anything the walk did not resolve is
+/// absent from `resolved` and stays charged.
+fn remaining_cpfp_cost(leaf: &UnilateralExitSelectedLeaf, resolved: &ResolvedExitState) -> u64 {
+    let nodes: u64 = leaf
+        .cpfp_node_costs
+        .iter()
+        .filter(|(node_id, _)| !resolved.nodes.contains_key(node_id))
+        .map(|(_, fee)| *fee)
+        .sum();
+    if resolved.refunds.contains_key(&leaf.id) {
+        nodes
+    } else {
+        nodes.saturating_add(leaf.cpfp_refund_cost)
+    }
+}
+
 /// fan-out replaces each branch's first input with its real output; a fresh one
 /// is returned unsigned to broadcast first; no fan-out assigns funding directly.
 fn resolve_fan_out_funding(
@@ -1294,12 +1312,14 @@ fn resolve_fan_out_funding(
         };
         // Dust from the branch's own funding script, not the plan's change_dust_limit.
         let dust = first.witness_utxo.script_pubkey.minimal_non_dust().to_sat();
-        // Gate on the physical CPFP floor (cpfp_cost), not the quote's estimated_cost:
-        // the sweep is paid from the swept value, not this output, so its sweep-fee
-        // headroom must not reject a higher-rate resume the CPFP fees can afford.
-        let required = leaf_by_id
-            .get(leaf_id)
-            .map_or(dust, |leaf| leaf.cpfp_cost.saturating_add(dust));
+        // Gate on the physical CPFP floor, not the quote's estimated_cost: the sweep
+        // is paid from the swept value, not this output, so its sweep-fee headroom
+        // must not reject a higher-rate resume the CPFP fees can afford. Only the
+        // steps still to be driven count: a step the walk found settled needs no
+        // child, and one it could not read is absent here and so still charged.
+        let required = leaf_by_id.get(leaf_id).map_or(dust, |leaf| {
+            remaining_cpfp_cost(leaf, resolved).saturating_add(dust)
+        });
         if adopted.value < required {
             return Err(SparkWalletError::ServiceError(
                 ServiceError::InsufficientCpfpBudget {
@@ -1438,6 +1458,8 @@ mod exit_build_tests {
                 value: 100_000,
                 estimated_cost: 2_000,
                 cpfp_cost: 2_000,
+                cpfp_node_costs: Vec::new(),
+                cpfp_refund_cost: 2_000,
             }],
             fan_out_psbt: None,
             per_branch_funding: vec![(leaf.id.clone(), vec![funding(100_000)])],
@@ -1473,6 +1495,57 @@ mod exit_build_tests {
         assert_eq!(build.cpfp_change_inputs.len(), 1);
     }
 
+    /// A leaf whose refund is already on-chain takes no refund child, so the
+    /// funding floor must not still charge for one. The watchtower drives its own
+    /// copy of a refund once the timelock matures, so this is the ordinary way a
+    /// resumed exit finds its refunds settled, not an edge case.
+    #[test]
+    fn a_settled_refund_is_not_charged_for_a_child_it_never_needs() {
+        let leaf = UnilateralExitSelectedLeaf {
+            id: id("leaf"),
+            value: 200_000,
+            estimated_cost: 6_000,
+            cpfp_cost: 5_339,
+            cpfp_node_costs: vec![(id("node"), 3_339)],
+            cpfp_refund_cost: 2_000,
+        };
+
+        let fresh = ResolvedExitState::default();
+        assert_eq!(remaining_cpfp_cost(&leaf, &fresh), 5_339);
+
+        let refund_settled = ResolvedExitState {
+            refunds: [(id("leaf"), RefundState::Swept)].into_iter().collect(),
+            ..Default::default()
+        };
+        assert_eq!(remaining_cpfp_cost(&leaf, &refund_settled), 3_339);
+
+        let all_settled = ResolvedExitState {
+            refunds: [(id("leaf"), RefundState::Swept)].into_iter().collect(),
+            nodes: [(id("node"), NodeState::ConfirmedDirect)]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        assert_eq!(remaining_cpfp_cost(&leaf, &all_settled), 0);
+    }
+
+    /// A step the walk could not read is absent from `resolved`, so it stays
+    /// charged: an unreadable chain must not lower the floor.
+    #[test]
+    fn a_step_the_walk_could_not_read_stays_charged() {
+        let leaf = UnilateralExitSelectedLeaf {
+            id: id("leaf"),
+            value: 200_000,
+            estimated_cost: 6_000,
+            cpfp_cost: 5_339,
+            cpfp_node_costs: vec![(id("node"), 3_339)],
+            cpfp_refund_cost: 2_000,
+        };
+        assert_eq!(
+            remaining_cpfp_cost(&leaf, &ResolvedExitState::default()),
+            leaf.cpfp_cost
+        );
+    }
     #[test]
     fn build_adopts_confirmed_refund() {
         let adopted_outpoint = OutPoint {
@@ -1643,6 +1716,8 @@ mod exit_build_tests {
                 value: 100_000,
                 estimated_cost: 2_000,
                 cpfp_cost: 2_000,
+                cpfp_node_costs: Vec::new(),
+                cpfp_refund_cost: 2_000,
             }],
             fan_out_psbt: Some(fan_out_psbt),
             per_branch_funding: vec![(leaf.id.clone(), vec![branch_output.clone()])],
@@ -1846,12 +1921,16 @@ mod exit_build_tests {
                     value: 100_000,
                     estimated_cost: 2_000,
                     cpfp_cost: 2_000,
+                    cpfp_node_costs: Vec::new(),
+                    cpfp_refund_cost: 2_000,
                 },
                 UnilateralExitSelectedLeaf {
                     id: leaf_b.id.clone(),
                     value: 100_000,
                     estimated_cost: 2_000,
                     cpfp_cost: 2_000,
+                    cpfp_node_costs: Vec::new(),
+                    cpfp_refund_cost: 2_000,
                 },
             ],
             fan_out_psbt: None,
@@ -1931,12 +2010,16 @@ mod exit_build_tests {
                     value: 100_000,
                     estimated_cost: 2_000,
                     cpfp_cost: 2_000,
+                    cpfp_node_costs: Vec::new(),
+                    cpfp_refund_cost: 2_000,
                 },
                 UnilateralExitSelectedLeaf {
                     id: leaf_b.id.clone(),
                     value: 100_000,
                     estimated_cost: 2_000,
                     cpfp_cost: 2_000,
+                    cpfp_node_costs: Vec::new(),
+                    cpfp_refund_cost: 2_000,
                 },
             ],
             fan_out_psbt: Some(fan_out_psbt),
