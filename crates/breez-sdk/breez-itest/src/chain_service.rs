@@ -120,6 +120,18 @@ impl BitcoinChainService for LocalBitcoindChainService {
         })
     }
 
+    async fn tip_height(&self) -> Result<u32, ChainServiceError> {
+        let result: Value = self
+            .bitcoind
+            .rpc("getblockcount", &[])
+            .await
+            .map_err(to_chain_err)?;
+        result
+            .as_u64()
+            .and_then(|h| u32::try_from(h).ok())
+            .ok_or_else(|| ChainServiceError::Generic("invalid block count".to_string()))
+    }
+
     async fn get_address_utxos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError> {
         let parsed: Address<_> = address.parse().map_err(to_chain_err)?;
         let checked = parsed

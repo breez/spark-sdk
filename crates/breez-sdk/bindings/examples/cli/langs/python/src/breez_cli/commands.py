@@ -656,8 +656,6 @@ def _build_claim_deposit_parser():
     p.add_argument("--sat-per-vbyte", type=int, default=None, help="Max fee per vbyte")
     p.add_argument("--recommended-fee-leeway", type=int, default=None,
                    help="Use recommended fee + leeway")
-    p.add_argument("--instant-fee-bps", type=int, default=None,
-                   help="Claim instantly (0-conf) with this max SSP spread in basis points of the deposit value (e.g. 400 = 4%)")
     return p
 
 async def _handle_claim_deposit(sdk, _token_issuer, _session, args):
@@ -680,7 +678,6 @@ async def _handle_claim_deposit(sdk, _token_issuer, _session, args):
         txid=args.txid,
         vout=args.vout,
         max_fee=max_fee,
-        max_instant_fee_bps=args.instant_fee_bps,
     ))
     print_value(result)
 

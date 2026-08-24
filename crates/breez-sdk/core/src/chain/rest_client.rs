@@ -332,6 +332,15 @@ impl RestClientChainServiceInner {
         Ok(tx_info.status)
     }
 
+    async fn do_tip_height(&self) -> Result<u32, ChainServiceError> {
+        // Plain-text height, served by both esplora and mempool.space.
+        let height = self.get_response_text("/blocks/tip/height").await?;
+        height
+            .trim()
+            .parse()
+            .map_err(|_| ChainServiceError::Generic(format!("invalid tip height: {height}")))
+    }
+
     async fn do_get_transaction_hex(&self, txid: String) -> Result<String, ChainServiceError> {
         let tx = self
             .get_response_text(format!("/tx/{txid}/hex").as_str())
@@ -381,6 +390,11 @@ impl BitcoinChainService for RestClientChainService {
         txid: String,
     ) -> Result<super::TxStatus, ChainServiceError> {
         self.run_on_runtime(|inner| async move { inner.do_get_transaction_status(txid).await })
+            .await
+    }
+
+    async fn tip_height(&self) -> Result<u32, ChainServiceError> {
+        self.run_on_runtime(|inner| async move { inner.do_tip_height().await })
             .await
     }
 

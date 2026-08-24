@@ -11,16 +11,16 @@ use breez_sdk_spark::{
     AssetFilter, AuthorizeTransferRequest, BatchRecipient, BreezSdk, BuyBitcoinRequest,
     CheckLightningAddressRequest, ClaimDepositRequest, ClaimHtlcPaymentRequest,
     ClaimTransferRequest, ConversionOptions, ConversionType, CrossChainRouteFilter,
-    CrossChainRoutePair, Fee, FeePolicy, FetchConversionLimitsRequest, GetInfoRequest,
-    GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
-    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest,
-    MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentRequest, PaymentStatus,
-    PaymentType, PrepareLnurlPayRequest, PreparePaymentLinkRequest, PrepareSendBatchRequest,
-    PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
-    RegisterLightningAddressRequest, SendBatchRequest, SendPaymentMethod, SendPaymentOptions,
-    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SparkMasterIdentityPublicKey,
-    SyncWalletRequest, TokenIssuer, TokenTransactionType, TransferAuthorization,
-    UpdateUserSettingsRequest,
+    CrossChainRoutePair, Fee, FeePolicy, FetchClaimDepositQuoteRequest,
+    FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
+    InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
+    LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
+    PaymentRequest, PaymentStatus, PaymentType, PrepareLnurlPayRequest, PreparePaymentLinkRequest,
+    PrepareSendBatchRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
+    ReceivePaymentRequest, RefundDepositRequest, RegisterLightningAddressRequest, SendBatchRequest,
+    SendPaymentMethod, SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
+    SparkMasterIdentityPublicKey, SyncWalletRequest, TokenIssuer, TokenTransactionType,
+    TransferAuthorization, UpdateUserSettingsRequest,
 };
 use clap::{Parser, ValueEnum};
 use rand::RngCore;
@@ -331,10 +331,14 @@ pub enum Command {
         /// If provided, the max fee per vbyte will be set to the fastest recommended fee at time of claim, plus the leeway.
         #[arg(long)]
         recommended_fee_leeway: Option<u64>,
+    },
+    /// Quote both ways of claiming a deposit
+    FetchClaimDepositQuote {
+        /// The txid of the deposit
+        txid: String,
 
-        /// Claim instantly (0-conf) with this max SSP spread in basis points of the deposit value (e.g. 400 = 4%), instead of waiting for the deposit to mature.
-        #[arg(long)]
-        instant_fee_bps: Option<u32>,
+        /// The vout of the deposit
+        vout: u32,
     },
     Parse {
         input: String,
@@ -598,7 +602,6 @@ pub(crate) async fn execute_command(
             fee_sat,
             sat_per_vbyte,
             recommended_fee_leeway,
-            instant_fee_bps,
         } => {
             let max_fee = if let Some(recommended_fee_leeway) = recommended_fee_leeway {
                 if fee_sat.is_some() || sat_per_vbyte.is_some() {
@@ -626,8 +629,14 @@ pub(crate) async fn execute_command(
                     txid,
                     vout,
                     max_fee,
-                    max_instant_fee_bps: instant_fee_bps,
                 })
+                .await?;
+            print_value(&value)?;
+            Ok(true)
+        }
+        Command::FetchClaimDepositQuote { txid, vout } => {
+            let value = sdk
+                .fetch_claim_deposit_quote(FetchClaimDepositQuoteRequest { txid, vout })
                 .await?;
             print_value(&value)?;
             Ok(true)

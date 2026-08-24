@@ -83,17 +83,32 @@ const handleFeeExceeded = async (sdk: BreezSdk, deposit: DepositInfo) => {
   // ANCHOR_END: handle-fee-exceeded
 }
 
-const instantClaim = async (sdk: BreezSdk, deposit: DepositInfo) => {
-  // ANCHOR: instant-claim
-  // Claim a not-yet-mature deposit instantly (0-conf). Cap it at 4% (400 bps)
-  // of the deposit value.
-  const claimRequest: ClaimDepositRequest = {
+const fetchClaimDepositQuote = async (sdk: BreezSdk, deposit: DepositInfo) => {
+  // ANCHOR: fetch-claim-deposit-quote
+  const quote = await sdk.fetchClaimDepositQuote({
     txid: deposit.txid,
-    vout: deposit.vout,
-    maxInstantFeeBps: 400
+    vout: deposit.vout
+  })
+
+  // Claiming once the deposit matures, and how many blocks that is away.
+  const blocksToWait = Math.max(
+    0,
+    quote.mature.confirmationsRequired - quote.confirmations
+  )
+  console.log(`Wait ${blocksToWait} blocks and pay ${quote.mature.feeSats} sats`)
+
+  // Claiming earlier, when the provider offers it.
+  if (quote.instant != null) {
+    const instantBlocksToWait = Math.max(
+      0,
+      quote.instant.confirmationsRequired - quote.confirmations
+    )
+    console.log(
+      `Or wait ${instantBlocksToWait} blocks and ` +
+      `pay ${quote.instant.feeSats} sats`
+    )
   }
-  await sdk.claimDeposit(claimRequest)
-  // ANCHOR_END: instant-claim
+  // ANCHOR_END: fetch-claim-deposit-quote
 }
 
 const refundDeposit = async (sdk: BreezSdk) => {

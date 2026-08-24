@@ -84,22 +84,33 @@ class RefundingPayments {
         // ANCHOR_END: handle-fee-exceeded
     }
 
-    suspend fun instantClaim(sdk: BreezSdk, deposit: DepositInfo) {
-        // ANCHOR: instant-claim
-        // Claim a not-yet-mature deposit instantly (0-conf). Cap it at 4% (400 bps)
-        // of the deposit value.
+    suspend fun fetchClaimDepositQuote(sdk: BreezSdk, deposit: DepositInfo) {
+        // ANCHOR: fetch-claim-deposit-quote
         try {
-            val claimRequest = ClaimDepositRequest(
-                txid = deposit.txid,
-                vout = deposit.vout,
-                maxFee = null,
-                maxInstantFeeBps = 400u
+            val quote = sdk.fetchClaimDepositQuote(
+                FetchClaimDepositQuoteRequest(
+                    txid = deposit.txid,
+                    vout = deposit.vout
+                )
             )
-            sdk.claimDeposit(claimRequest)
+
+            // UInt subtraction wraps, so clamp the wait at zero.
+            fun blocksToWait(required: UInt) =
+                if (required > quote.confirmations) required - quote.confirmations else 0u
+
+            // Claiming once the deposit matures, and how many blocks that is away.
+            val matureWait = blocksToWait(quote.mature.confirmationsRequired)
+            // Log.v("Breez", "Wait $matureWait blocks and pay ${quote.mature.feeSats} sats")
+
+            // Claiming earlier, when the provider offers it.
+            quote.instant?.let { instant ->
+                val instantWait = blocksToWait(instant.confirmationsRequired)
+                // Log.v("Breez", "Or wait $instantWait blocks and pay ${instant.feeSats} sats")
+            }
         } catch (e: Exception) {
             // handle error
         }
-        // ANCHOR_END: instant-claim
+        // ANCHOR_END: fetch-claim-deposit-quote
     }
 
     suspend fun refundDeposit(sdk: BreezSdk) {

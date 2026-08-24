@@ -586,6 +586,31 @@ class MigrationManager {
           }
         },
       },
+      {
+        // Only the Declined shape changed, and clearing it costs at most one extra
+        // quote. Submitted entries are left alone: their shape is unchanged and
+        // they are the only guard against re-claiming a UTXO whose earlier claim
+        // is still settling.
+        name: "Clear declined instant claim status after its shape changed",
+        upgrade: (db, transaction) => {
+          if (!db.objectStoreNames.contains("unclaimed_deposits")) return;
+          const store = transaction.objectStore("unclaimed_deposits");
+          const cursorRequest = store.openCursor();
+          cursorRequest.onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (!cursor) return;
+            const deposit = cursor.value;
+            if (
+              deposit.instantClaimStatus &&
+              String(deposit.instantClaimStatus).toLowerCase().includes("declined")
+            ) {
+              deposit.instantClaimStatus = null;
+              cursor.update(deposit);
+            }
+            cursor.continue();
+          };
+        },
+      },
     ];
   }
 }
@@ -614,7 +639,7 @@ class IndexedDBStorage {
     // so existing databases depend on indices never shifting. Never insert,
     // reorder, or delete a migration — only append. dbVersion MUST equal the
     // number of migrations (enforced by the guard in initialize()).
-    this.dbVersion = 20; // Current schema version (= migration count)
+    this.dbVersion = 21; // Current schema version (= migration count)
   }
 
   /**

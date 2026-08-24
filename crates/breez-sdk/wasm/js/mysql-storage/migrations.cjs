@@ -568,6 +568,16 @@ class MysqlMigrationManager {
           `ALTER TABLE brz_unclaimed_deposits ADD COLUMN instant_claim_status JSON NULL`,
         ],
       },
+      {
+        // Only the Declined shape changed, and clearing it costs at most one
+        // extra quote. Submitted rows are left alone: their shape is unchanged
+        // and they are the only guard against re-claiming a settling deposit.
+        name: "Clear declined instant claim status after its shape changed",
+        sql: [
+          `UPDATE brz_unclaimed_deposits SET instant_claim_status = NULL
+             WHERE LOWER(CAST(instant_claim_status AS CHAR)) LIKE '%declined%'`,
+        ],
+      },
     ];
   }
 }

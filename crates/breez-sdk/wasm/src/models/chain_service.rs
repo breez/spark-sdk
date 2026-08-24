@@ -98,6 +98,18 @@ impl breez_sdk_spark::BitcoinChainService for WasmBitcoinChainService {
         Ok(tx_status.into())
     }
 
+    async fn tip_height(&self) -> Result<u32, breez_sdk_spark::ChainServiceError> {
+        let promise = self
+            .inner
+            .tip_height()
+            .map_err(js_error_to_chain_service_error)?;
+        let future = JsFuture::from(promise);
+        let result = future.await.map_err(js_error_to_chain_service_error)?;
+        let height: u32 = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| breez_sdk_spark::ChainServiceError::Generic(e.to_string()))?;
+        Ok(height)
+    }
+
     async fn get_transaction_hex(
         &self,
         txid: String,
@@ -162,6 +174,7 @@ const EVENT_INTERFACE: &'static str = r#"export interface BitcoinChainService {
     getAddressUtxos(address: string): Promise<Utxo[]>;
     getAddressTxos(address: string): Promise<Utxo[]>;
     getTransactionStatus(txid: string): Promise<TxStatus>;
+    tipHeight(): Promise<number>;
     getTransactionHex(txid: string): Promise<string>;
     getOutspend(txid: string, vout: number): Promise<Outspend>;
     broadcastTransaction(tx: string): Promise<void>;
@@ -190,6 +203,9 @@ extern "C" {
         this: &BitcoinChainService,
         txid: String,
     ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "tipHeight", catch)]
+    pub fn tip_height(this: &BitcoinChainService) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "getTransactionHex", catch)]
     pub fn get_transaction_hex(

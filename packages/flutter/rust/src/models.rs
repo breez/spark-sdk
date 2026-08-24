@@ -28,7 +28,6 @@ pub struct _Config {
     pub network: Network,
     pub sync_interval_secs: u32,
     pub max_deposit_claim_fee: Option<MaxFee>,
-    pub max_instant_deposit_claim_fee_bps: Option<u32>,
     pub lnurl_domain: Option<String>,
     pub prefer_spark_over_lightning: bool,
     pub exit_chain_auto_fetch_enabled: bool,
@@ -150,12 +149,34 @@ pub struct _ClaimDepositRequest {
     pub txid: String,
     pub vout: u32,
     pub max_fee: Option<MaxFee>,
-    pub max_instant_fee_bps: Option<u32>,
 }
 
 #[frb(mirror(ClaimDepositResponse))]
 pub struct _ClaimDepositResponse {
     pub payment: Option<Payment>,
+}
+
+#[frb(mirror(FetchClaimDepositQuoteRequest))]
+pub struct _FetchClaimDepositQuoteRequest {
+    pub txid: String,
+    pub vout: u32,
+}
+
+#[frb(mirror(ClaimDepositQuote))]
+pub struct _ClaimDepositQuote {
+    pub confirmations_required: u32,
+    pub credit_amount_sats: u64,
+    pub fee_sats: u64,
+    pub fee_rate_sat_per_vbyte: u64,
+    pub is_estimate: bool,
+}
+
+#[frb(mirror(FetchClaimDepositQuoteResponse))]
+pub struct _FetchClaimDepositQuoteResponse {
+    pub amount_sats: u64,
+    pub confirmations: u32,
+    pub instant: Option<ClaimDepositQuote>,
+    pub mature: ClaimDepositQuote,
 }
 
 #[frb(mirror(Credentials))]
@@ -164,20 +185,12 @@ pub struct _Credentials {
     pub password: String,
 }
 
-#[frb(mirror(InstantClaimDeclineReason))]
-pub enum _InstantClaimDeclineReason {
-    NoPlan,
-    FeeExceeded {
-        max_bps: u32,
-        quoted_bps: u32,
-        quoted_sats: u64,
-    },
-    SubmissionFailed,
-}
-
 #[frb(mirror(InstantClaimStatus))]
 pub enum _InstantClaimStatus {
-    Declined { reason: InstantClaimDeclineReason },
+    Declined {
+        max_fee_sats: Option<u64>,
+        confirmations: u32,
+    },
     Submitted { claim_id: String },
 }
 

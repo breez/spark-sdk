@@ -53,6 +53,16 @@ impl BitcoinChainServiceHandle {
         serde_wasm_bindgen::to_value(&status).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    #[wasm_bindgen(js_name = "tipHeight")]
+    pub async fn tip_height(&self) -> Result<JsValue, JsValue> {
+        let height = self
+            .inner
+            .tip_height()
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(JsValue::from_f64(f64::from(height)))
+    }
+
     #[wasm_bindgen(js_name = "getTransactionHex")]
     pub async fn get_transaction_hex(&self, txid: String) -> Result<JsValue, JsValue> {
         let hex = self

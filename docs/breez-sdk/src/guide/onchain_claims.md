@@ -18,17 +18,21 @@ When a deposit cannot be automatically claimed due to the configured maximum fee
 
 {{#tabs refunding_payments:handle-fee-exceeded}}
 
-### Instant claims
+### Claiming before maturity
 
-By default a deposit is only claimed once it has enough confirmations to mature. With instant claims the Spark Service Provider fronts the credited amount ahead of maturity and takes a spread, so the funds become usable sooner.
+A deposit does not have to wait for maturity. The Spark Service Provider will front the credited amount earlier and take a spread for carrying the risk, and the SDK claims this way automatically whenever the spread fits within the [maximum deposit claim fee](config.md#max-deposit-claim-fee). There is no separate setting to switch on, but there is a threshold to clear: the same ceiling governs both, and the default of 1 sat/vbyte works out to about 99 sats, below any spread the provider charges. Deposits are therefore claimed at maturity until the ceiling is raised enough to cover a spread, which is what opts into claiming early. The same applies to {{#name claim_deposit}}, which claims a not-yet-mature deposit early when its own {{#name max_fee}} allows.
 
-To claim instantly in the background, set the [maximum instant deposit claim fee](config.md#max-instant-deposit-claim-fee) in the configuration, as basis points of the deposit value. The SDK then attempts an instant claim on each not-yet-mature deposit whose spread is within that ceiling, at the earliest confirmation depth the provider will credit at. Deposits above the ceiling wait for the normal claim at maturity. The spread combines a flat amount and the on-chain fee of the provider's claim with a percentage of the deposit, so it is proportionally larger on small deposits and when on-chain fees are high; those fall through to the normal claim rather than overpaying for speed.
+The spread is largely the on-chain cost of the provider's claim plus a percentage of the deposit, so it grows with the deposit. A single ceiling therefore covers small deposits and leaves larger ones to wait for maturity, and the amount that separates the two moves with on-chain fees.
 
-You can also claim a specific not-yet-mature deposit on demand by passing a maximum instant fee, in basis points, to {{#name claim_deposit}}. The resulting transfer settles asynchronously, so no payment is returned; watch for it via {{#name list_payments}} or the [payment events](events.md).
+A claim made before maturity settles asynchronously, so {{#name claim_deposit}} returns no payment; watch for it via {{#name list_payments}} or the [payment events](events.md). The deposit also stays in {{#name list_unclaimed_deposits}} with its {{#name instant_claim_status}} set to {{#enum InstantClaimStatus::Submitted}} for a short time after submission (a {{#enum SdkEvent::ClaimedDeposits}} event has already fired), and is removed once the claim settles.
 
-Because an instant claim settles asynchronously, the deposit remains in {{#name list_unclaimed_deposits}} with its {{#name instant_claim_status}} set to {{#enum InstantClaimStatus::Submitted}} for a short time after it is submitted (a {{#enum SdkEvent::ClaimedDeposits}} event has already fired). It is removed automatically once the claim settles, so a listed deposit marked {{#enum InstantClaimStatus::Submitted}} may be an instant claim still in flight rather than one awaiting maturity.
+### Showing the choice to the user
 
-{{#tabs refunding_payments:instant-claim}}
+{{#name fetch_claim_deposit_quote}} prices both ways of claiming a deposit, so an app can offer the choice rather than deciding for the user. It returns the deposit's current {{#name confirmations}} alongside a quote for claiming early and one for claiming at maturity, each carrying the fee and the {{#name confirmations_required}}, which is the depth it becomes claimable at rather than a count of blocks still to wait. Subtract the deposit's current confirmations for that: an early claim claimable at 1 confirmation, on a deposit with 0, is available a block from now.
+
+The early quote is absent when the provider will not front this particular deposit, and when claiming early would not actually be earlier: once a deposit has matured, or when the provider would only credit at maturity's own depth, waiting is both cheaper and no slower, so there is no choice left to offer. The early quote is priced whether or not the configured [maximum deposit claim fee](config.md#max-deposit-claim-fee) would allow it, since that ceiling is usually far below a spread and the point of the quote is to let the user decide. Acting on it therefore means passing a {{#name max_fee}} to {{#name claim_deposit}} of at least the quoted {{#name fee_sats}}; with a lower one the call returns {{#enum SdkError::MaxDepositClaimFeeExceeded}} and the deposit waits for maturity instead. The quote for maturity is always present, but may be flagged {{#name is_estimate}} when the provider will not quote a deposit this early, in which case the fee is derived from current on-chain fees and the final one may differ.
+
+{{#tabs refunding_payments:fetch-claim-deposit-quote}}
 
 ## Listing unclaimed deposits
 

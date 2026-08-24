@@ -607,7 +607,6 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
     .option('--fee-sat <amount>', 'The max fee to claim the deposit', parseInt)
     .option('--sat-per-vbyte <rate>', 'The max fee per vbyte to claim the deposit', parseInt)
     .option('--recommended-fee-leeway <amount>', 'Use recommended fee with this leeway in sat/vbyte', parseInt)
-    .option('--instant-fee-bps <bps>', 'Claim instantly (0-conf) with this max SSP spread in basis points of the deposit value (e.g. 400 = 4%)', parseInt)
     .action(async (txid, vout, options) => {
       const sdk = getSdk()
       const voutNum = parseInt(vout, 10)
@@ -629,8 +628,7 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
       const value = await sdk.claimDeposit({
         txid,
         vout: voutNum,
-        maxFee,
-        maxInstantFeeBps: options.instantFeeBps
+        maxFee
       })
       printValue(value)
     })

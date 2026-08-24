@@ -472,6 +472,15 @@ impl PostgresStorage {
             vec![
                 "ALTER TABLE brz_unclaimed_deposits ADD COLUMN instant_claim_status JSONB".to_string(),
             ],
+            // Migration 21: only the Declined shape changed, and clearing it costs at
+            // most one extra quote. Submitted rows are left alone: their shape is
+            // unchanged and they are the only guard against re-claiming a UTXO whose
+            // earlier claim is still settling.
+            vec![
+                "UPDATE brz_unclaimed_deposits SET instant_claim_status = NULL \
+                 WHERE LOWER(instant_claim_status::text) LIKE '%declined%'"
+                    .to_string(),
+            ],
         ]
     }
 }
@@ -3212,7 +3221,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 20, "migration version must advance to 20");
+        assert_eq!(version, 21, "migration version must advance to 21");
 
         // Seed payment row is preserved on the renamed table — proves the
         // table + PK constraint rename worked and the columns line up.
@@ -3508,7 +3517,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 20, "migration must advance to 20");
+        assert_eq!(version, 21, "migration must advance to 21");
 
         // Seed data preserved (multi-tenant backfilled user_id to current tenant).
         let payment_count: i64 = client

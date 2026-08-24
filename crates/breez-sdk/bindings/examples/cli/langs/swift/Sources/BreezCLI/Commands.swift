@@ -769,7 +769,7 @@ func handleClaimDeposit(_ sdk: BreezSdk, _ args: [String]) async throws {
     let fp = FlagParser(args)
     guard fp.positional.count >= 2,
           let vout = UInt32(fp.positional[1]) else {
-        print("Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N] [--instant-fee-bps N]")
+        print("Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N]")
         return
     }
 
@@ -777,7 +777,6 @@ func handleClaimDeposit(_ sdk: BreezSdk, _ args: [String]) async throws {
     let feeSat = fp.get("fee-sat").flatMap { UInt64($0) }
     let satPerVbyte = fp.get("sat-per-vbyte").flatMap { UInt64($0) }
     let recommendedFeeLeeway = fp.get("recommended-fee-leeway").flatMap { UInt64($0) }
-    let instantFeeBps = fp.get("instant-fee-bps").flatMap { UInt32($0) }
 
     let maxFee: MaxFee?
     if let leeway = recommendedFeeLeeway {
@@ -800,8 +799,7 @@ func handleClaimDeposit(_ sdk: BreezSdk, _ args: [String]) async throws {
     let result = try await sdk.claimDeposit(request: ClaimDepositRequest(
         txid: txid,
         vout: vout,
-        maxFee: maxFee,
-        maxInstantFeeBps: instantFeeBps
+        maxFee: maxFee
     ))
     printValue(result)
 }
