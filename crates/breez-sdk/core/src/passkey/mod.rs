@@ -468,10 +468,13 @@ mod tests {
 
         match Passkey::new(prf_provider, None, Some(config)).err() {
             Some(PasskeyError::InvalidConfig(m)) => {
-                assert!(
-                    m.contains("proxy authentication"),
-                    "expected a proxy-auth rejection, got: {m}"
-                );
+                // WASM rejects any proxy before the credentials are looked at.
+                let expected = if cfg!(all(target_family = "wasm", target_os = "unknown")) {
+                    "not supported on WASM"
+                } else {
+                    "proxy authentication"
+                };
+                assert!(m.contains(expected), "expected {expected:?}, got: {m}");
             }
             other => panic!("expected an authenticated proxy to be rejected, got {other:?}"),
         }

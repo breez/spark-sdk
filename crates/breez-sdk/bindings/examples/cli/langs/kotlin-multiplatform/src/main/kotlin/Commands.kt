@@ -1164,7 +1164,7 @@ suspend fun handleSetUserSettings(sdk: BreezSdk, reader: LineReader, args: List<
 // --- get-spark-status ---
 
 suspend fun handleGetSparkStatus(sdk: BreezSdk, reader: LineReader, args: List<String>) {
-    val result = getSparkStatus()
+    val result = getSparkStatus(GetSparkStatusRequest())
     printValue(result)
 }
 

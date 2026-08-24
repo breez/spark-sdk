@@ -1182,7 +1182,7 @@ Future<void> _handleSetUserSettings(BreezSdk sdk, TokenIssuer tokenIssuer, List<
 // --- get-spark-status ---
 
 Future<void> _handleGetSparkStatus(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
-  final result = await getSparkStatus();
+  final result = await getSparkStatus(request: const GetSparkStatusRequest());
   printValue(result);
 }
 

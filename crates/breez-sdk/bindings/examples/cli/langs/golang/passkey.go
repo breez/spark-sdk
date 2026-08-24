@@ -161,7 +161,10 @@ func resolvePasskeySeed(
 	listLabels bool,
 	storeLabel bool,
 ) (breez_sdk_spark.Seed, error) {
-	passkey := breez_sdk_spark.NewPasskeyClient(provider, breezAPIKey, nil)
+	passkey, err := breez_sdk_spark.NewPasskeyClient(provider, breezAPIKey, nil)
+	if err = liftError(err); err != nil {
+		return nil, err
+	}
 
 	// --list-labels: discovery sign-in (no cached label) returns the
 	// published label set; prompt the user to pick one.
