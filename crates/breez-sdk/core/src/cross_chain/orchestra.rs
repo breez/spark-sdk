@@ -918,18 +918,17 @@ impl CrossChainService for OrchestraService {
         })
         .await;
 
-        match polled {
+        let payment = match polled {
             // The poll builds the payment from the Spark transfer alone, which
             // carries no Orchestra metadata. The order id and read token are
             // what let a caller query the order's progress.
-            Ok(payment) => Ok(payment_with_conversion_info(payment, Some(conversion_info))),
+            Ok(payment) => payment_with_conversion_info(payment, Some(conversion_info)),
             Err(e) => {
-                // Operator sync still in flight — the metadata is already
-                // cached, and `poll_in_flight_orders` will reconcile the
-                // payment row as soon as it lands. Surface a payment built
-                // from the deposit transfer (with the Orchestra
-                // `ConversionInfo` attached) so callers see the send as
-                // submitted rather than failed.
+                // Operators haven't surfaced the transfer yet. Build the
+                // payment directly from the deposit transfer (with the
+                // Orchestra `ConversionInfo` attached) so callers see the
+                // send as submitted; the synchronous `apply_payment_update`
+                // below persists it either way.
                 debug!(
                     "Orchestra: payment row for {payment_id} not yet visible: {e}; returning fallback payment built from the deposit transfer"
                 );
@@ -945,9 +944,18 @@ impl CrossChainService for OrchestraService {
                         "Orchestra transfer produced no outgoing payment for {payment_id}"
                     ))
                 })?;
-                Ok(payment_with_conversion_info(payment, Some(conversion_info)))
+                payment_with_conversion_info(payment, Some(conversion_info))
             }
+        };
+
+        if let Err(e) = self.storage.apply_payment_update(payment.clone()).await {
+            error!(
+                "Failed to persist Orchestra payment row {}: {e:?}",
+                payment.id
+            );
         }
+
+        Ok(payment)
     }
 }
 
