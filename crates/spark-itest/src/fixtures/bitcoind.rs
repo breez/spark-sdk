@@ -32,6 +32,9 @@ const REGTEST_RPC_PASSWORD: &str = "rpcpassword";
 const REGTEST_RPC_PORT: u16 = 8332;
 const ZMQPUBRAWBLOCK_RPC_PORT: u16 = 28332;
 const DEFAULT_MINING_ADDRESS: &str = "bcrt1qs758ursh4q9z627kt3pp5yysm78ddny6txaqgw";
+/// Blocks mined per `generatetoaddress` call. Keeps any single request
+/// well inside the RPC client's timeout.
+const GENERATE_BLOCKS_BATCH: u64 = 100;
 
 pub struct BitcoindFixture {
     pub container: ContainerAsync<GenericImage>,
@@ -190,10 +193,26 @@ impl BitcoindFixture {
             .await
     }
 
+    /// Mines `count` blocks, in batches.
+    ///
+    /// Spark refund timelocks start at 2000 blocks, so exit tests mine that
+    /// many to mature a CSV. One `generatetoaddress` for the whole run can
+    /// outlast the RPC client's request timeout on a slow host (each block
+    /// fans out over ZMQ to the operator cluster's chain watchers), which
+    /// surfaces as a spurious timeout even though bitcoind is healthy.
     pub async fn generate_blocks(&self, count: u64) -> Result<Vec<String>> {
         let address = self.mining_address.to_string();
-        self.rpc_call::<Vec<String>>("generatetoaddress", &[json!(count), json!(address)])
-            .await
+        let mut hashes = Vec::new();
+        let mut remaining = count;
+        while remaining > 0 {
+            let batch = remaining.min(GENERATE_BLOCKS_BATCH);
+            let mined = self
+                .rpc_call::<Vec<String>>("generatetoaddress", &[json!(batch), json!(address)])
+                .await?;
+            hashes.extend(mined);
+            remaining -= batch;
+        }
+        Ok(hashes)
     }
 
     pub async fn broadcast_transaction(&self, tx: &Transaction) -> Result<Txid> {
