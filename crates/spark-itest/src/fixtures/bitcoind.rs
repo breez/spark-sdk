@@ -112,7 +112,7 @@ impl BitcoindFixture {
             rpcpassword: REGTEST_RPC_PASSWORD.to_string(),
             mining_address: Address::from_str(DEFAULT_MINING_ADDRESS)?
                 .require_network(Network::Regtest)?,
-            http_client: DefaultHttpClient::default(),
+            http_client: DefaultHttpClient::new(None).expect("http client"),
         };
 
         info!("Created bitcoind container. Ensure wallet created.");

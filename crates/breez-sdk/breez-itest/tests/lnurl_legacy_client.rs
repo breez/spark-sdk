@@ -102,7 +102,7 @@ impl LegacyClient {
             secp,
             secret,
             pubkey,
-            http: DefaultHttpClient::default(),
+            http: DefaultHttpClient::new(None).expect("http client"),
         }
     }
 

@@ -646,6 +646,26 @@ impl ProxyConfig {
                 "Proxy username and password must be set together".to_string(),
             ));
         }
+        // The host ends up in a URL authority, so it has to survive being put
+        // there unchanged. Parsing is not enough on its own: a host carrying
+        // `@` parses, but as userinfo, which silently turns part of it into a
+        // username and moves the address. Checked here rather than at client
+        // build time so the error names the config that caused it.
+        let address = platform_utils::ProxyConfig::from(self).address();
+        let intact = url::Url::parse(&format!("socks5h://{address}")).is_ok_and(|url| {
+            url.username().is_empty()
+                && url.password().is_none()
+                && url.port() == Some(self.port)
+                && url.path().is_empty()
+                && url.query().is_none()
+                && url.fragment().is_none()
+        });
+        if !intact {
+            return Err(SdkError::InvalidInput(format!(
+                "Proxy host '{}' cannot be used in a proxy URL",
+                self.host
+            )));
+        }
         Ok(())
     }
 }

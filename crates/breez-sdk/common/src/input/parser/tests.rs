@@ -345,7 +345,7 @@ async fn test_bip353_real_dns() {
     use platform_utils::DefaultHttpClient;
 
     let dns_resolver = Resolver::new();
-    let rest_client = DefaultHttpClient::default();
+    let rest_client = DefaultHttpClient::new(None).expect("http client");
     let input_parser = InputParser::new(dns_resolver, rest_client, None);
 
     // Test BIP353 address with ₿ prefix

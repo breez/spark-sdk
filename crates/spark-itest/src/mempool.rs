@@ -47,7 +47,7 @@ impl MempoolClient {
         info!("Initialized mempool client with URL: {}", config.url);
         Ok(Self {
             config,
-            http_client: DefaultHttpClient::default(),
+            http_client: DefaultHttpClient::new(None).expect("http client"),
         })
     }
 

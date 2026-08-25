@@ -127,7 +127,8 @@ pub async fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkC
         proxy.validate()?;
     }
     let transport_proxy = proxy.as_ref().map(platform_utils::ProxyConfig::from);
-    let http_client = create_http_client_with_proxy(Some(&user_agent), transport_proxy.as_ref());
+    let http_client = create_http_client_with_proxy(Some(&user_agent), transport_proxy.as_ref())
+        .map_err(|e| SdkError::InvalidInput(format!("Failed to build proxied HTTP client: {e}")))?;
     let breez_server = Arc::new(
         BreezServer::new(
             PRODUCTION_BREEZSERVER_URL,

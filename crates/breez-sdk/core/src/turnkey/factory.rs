@@ -64,7 +64,8 @@ async fn build_client(
             .as_ref()
             .map(platform_utils::ProxyConfig::from)
             .as_ref(),
-    );
+    )
+    .map_err(|e| SignerError::Generic(format!("Failed to build proxied HTTP client: {e}")))?;
     let client = Arc::new(TurnkeyClient::new(config, http).map_err(to_signer_err)?);
     if config.identity_public_key.is_none() {
         client

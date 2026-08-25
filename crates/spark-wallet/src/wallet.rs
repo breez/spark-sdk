@@ -430,7 +430,7 @@ impl SparkWallet {
                 Arc::clone(&spark_signer),
                 Arc::clone(&session_store),
                 ssp_extra_header_provider,
-            ),
+            )?,
         });
 
         let operator_pool = Arc::new(

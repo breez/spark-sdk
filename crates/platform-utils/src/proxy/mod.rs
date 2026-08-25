@@ -47,9 +47,16 @@ impl ProxyConfig {
 
     /// `host:port`, the form both the reqwest proxy URL and the SOCKS5
     /// connector dial.
+    ///
+    /// A bare IPv6 literal is bracketed: without brackets its own colons read
+    /// as the port separator, and neither a URL nor a socket address parses.
     #[must_use]
     pub fn address(&self) -> String {
-        format!("{}:{}", self.host, self.port)
+        if self.host.parse::<std::net::Ipv6Addr>().is_ok() {
+            format!("[{}]:{}", self.host, self.port)
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
     }
 
     /// The `socks5h` URL reqwest needs. The `h` suffix is what makes reqwest
@@ -95,6 +102,20 @@ mod tests {
     fn url_uses_socks5h_so_dns_stays_remote() {
         let proxy = ProxyConfig::new("127.0.0.1", 9050);
         assert_eq!(proxy.reqwest_url(), "socks5h://127.0.0.1:9050");
+    }
+
+    #[test]
+    fn ipv6_host_is_bracketed() {
+        let proxy = ProxyConfig::new("::1", 9050);
+        assert_eq!(proxy.address(), "[::1]:9050");
+        assert_eq!(proxy.reqwest_url(), "socks5h://[::1]:9050");
+        assert!(proxy.address().parse::<std::net::SocketAddr>().is_ok());
+    }
+
+    #[test]
+    fn already_bracketed_ipv6_host_is_left_alone() {
+        let proxy = ProxyConfig::new("[::1]", 9050);
+        assert_eq!(proxy.address(), "[::1]:9050");
     }
 
     #[test]

@@ -96,7 +96,13 @@ impl Service<Uri> for Socks5Connector {
                 source,
             })?;
 
-            Ok(TokioIo::new(stream.into_inner()))
+            // Tonic only sets `TCP_NODELAY` on the `HttpConnector` it builds
+            // itself, which a custom connector replaces, so a proxied channel
+            // would otherwise run with Nagle on and pay up to ~40ms per small
+            // gRPC write. Best-effort: matches tonic's own default.
+            let stream = stream.into_inner();
+            let _ = stream.set_nodelay(true);
+            Ok(TokioIo::new(stream))
         })
     }
 }

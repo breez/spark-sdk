@@ -111,7 +111,8 @@ impl TurnkeyWalletManager {
     /// Builds a manager from `config`. Its `wallet_id` is unused: these calls are
     /// organization-scoped. Uses the default platform HTTP client.
     pub fn new(config: &TurnkeyConfig) -> Result<Self, TurnkeyError> {
-        let http = platform_utils::create_http_client(Some("breez-sdk-spark-turnkey-test"));
+        let http = platform_utils::create_http_client(Some("breez-sdk-spark-turnkey-test"))
+            .map_err(|e| TurnkeyError::Transport(e.to_string()))?;
         Ok(Self {
             client: TurnkeyClient::new(config, http)?,
             network: config.network,

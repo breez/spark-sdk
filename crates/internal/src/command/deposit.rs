@@ -190,7 +190,7 @@ async fn get_transaction(
         add_basic_auth_header(&mut headers, username, password);
     }
 
-    let http_client = DefaultHttpClient::default();
+    let http_client = DefaultHttpClient::new(None)?;
     let response = http_client
         .get(url, Some(headers))
         .await
@@ -213,7 +213,7 @@ async fn broadcast_transaction(
     }
     add_content_type_header(&mut headers, ContentType::TextPlain);
 
-    let http_client = DefaultHttpClient::default();
+    let http_client = DefaultHttpClient::new(None)?;
     let response = http_client
         .post(url, Some(headers), Some(tx_hex.clone()))
         .await

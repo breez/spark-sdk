@@ -33,7 +33,9 @@ async fn resolve_proxy_addr(
             "Nostr relay connections do not support proxy authentication".to_string(),
         ));
     }
-    let address = format!("{}:{}", proxy.host, proxy.port);
+    // Via `platform_utils` so the one place that knows how to render an
+    // authority (bracketing a bare IPv6 literal) stays the only one.
+    let address = platform_utils::ProxyConfig::from(proxy).address();
     tokio::net::lookup_host(&address)
         .await
         .map_err(|e| PasskeyError::Generic(format!("Failed to resolve proxy address: {e}")))?

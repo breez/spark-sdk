@@ -1659,6 +1659,40 @@ mod tests {
         assert!(matches!(config.validate(), Err(SdkError::InvalidInput(_))));
     }
 
+    /// A host that cannot appear in a URL authority has to be caught at
+    /// connect: the client build downstream would otherwise be the first
+    /// thing to notice, far from the config that caused it.
+    #[test]
+    fn validate_rejects_proxy_host_that_cannot_form_a_url() {
+        use crate::{SdkError, default_config};
+        for host in ["local host", "user@host", "socks5://127.0.0.1", "[::g]"] {
+            let mut config = default_config(Network::Mainnet);
+            let mut proxy = test_proxy();
+            proxy.host = host.to_string();
+            config.proxy = Some(proxy);
+
+            match config.validate() {
+                Err(SdkError::InvalidInput(m)) => {
+                    assert!(m.contains(host), "expected the host in the error, got: {m}");
+                }
+                other => panic!("expected host {host:?} to be rejected, got {other:?}"),
+            }
+        }
+    }
+
+    /// A bare IPv6 literal is bracketed before it reaches a URL, so it stays
+    /// valid rather than tripping the check above.
+    #[test]
+    fn validate_accepts_bare_ipv6_proxy_host() {
+        use crate::default_config;
+        let mut config = default_config(Network::Mainnet);
+        let mut proxy = test_proxy();
+        proxy.host = "::1".to_string();
+        config.proxy = Some(proxy);
+
+        assert!(config.validate().is_ok());
+    }
+
     /// Balanced operator connections build their own connectors, so a proxy
     /// there would silently open the extra channels direct.
     #[tokio::test]

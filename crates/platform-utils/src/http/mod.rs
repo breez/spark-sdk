@@ -179,17 +179,25 @@ impl HttpClient for Arc<dyn HttpClient> {
 }
 
 /// Create a new HTTP client with the given user agent.
-pub fn create_http_client(user_agent: Option<&str>) -> Arc<dyn HttpClient> {
-    create_http_client_with_proxy(user_agent, None)
+///
+/// Fails when reqwest cannot assemble a client, most reachably because
+/// `user_agent` is not a valid header value.
+pub fn create_http_client(user_agent: Option<&str>) -> Result<Arc<dyn HttpClient>, HttpError> {
+    Ok(Arc::new(ReqwestHttpClient::new(
+        user_agent.map(String::from),
+    )?))
 }
 
 /// Create a new HTTP client that routes every request through `proxy`.
+///
+/// Fails when `proxy` does not form a usable proxy URL, rather than falling
+/// back to a client that would connect directly.
 pub fn create_http_client_with_proxy(
     user_agent: Option<&str>,
     proxy: Option<&crate::proxy::ProxyConfig>,
-) -> Arc<dyn HttpClient> {
-    Arc::new(ReqwestHttpClient::with_proxy(
+) -> Result<Arc<dyn HttpClient>, HttpError> {
+    Ok(Arc::new(ReqwestHttpClient::with_proxy(
         user_agent.map(String::from),
         proxy,
-    ))
+    )?))
 }
