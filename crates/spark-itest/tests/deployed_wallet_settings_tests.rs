@@ -1,15 +1,17 @@
 use anyhow::Result;
-use bitcoin::Address;
 use rstest::*;
 use spark_itest::{
     faucet::RegtestFaucet,
-    helpers::{create_regtest_wallet, wait_for_event},
+    helpers::{create_regtest_wallet, fund_wallet_via_static_deposit, wait_for},
     mempool::MempoolClient,
 };
-use spark_wallet::{MasterIdentityPublicKeyUpdate, WalletEvent};
+use spark_wallet::MasterIdentityPublicKeyUpdate;
 use tracing::info;
 
 const DEPOSIT_AMOUNT_SATS: u64 = 50_000;
+/// Generous, since it covers the SSP picking up the funding transaction. The
+/// waits it bounds poll, so a healthy run returns well inside it.
+const DEPOSIT_TIMEOUT_SECS: u64 = 300;
 
 /// Exercises the operator-side read access granted by a wallet's master
 /// identity.
@@ -25,36 +27,27 @@ async fn test_master_identity_grants_read_access() -> Result<()> {
     let faucet = RegtestFaucet::new()?;
     let mempool = MempoolClient::new()?;
 
-    let (owner, mut owner_listener) = create_regtest_wallet().await?;
+    let (owner, _owner_listener) = create_regtest_wallet().await?;
     let (reader, _reader_listener) = create_regtest_wallet().await?;
 
     let owner_identity = owner.get_identity_public_key();
     let reader_identity = reader.get_identity_public_key();
 
     // Fund the owner, so there is a balance worth hiding.
-    let deposit = owner.generate_deposit_address().await?;
-    let deposit_address = &deposit.address;
-    let txid = faucet
-        .fund_address(&deposit_address.to_string(), DEPOSIT_AMOUNT_SATS)
-        .await?;
-    let tx = mempool.get_transaction(&txid).await?;
-    let vout = tx
-        .output
-        .iter()
-        .enumerate()
-        .find(|(_, output)| {
-            Address::from_script(&output.script_pubkey, bitcoin::Network::Regtest)
-                .is_ok_and(|addr| &addr == deposit_address)
-        })
-        .map(|(i, _)| i as u32)
-        .expect("Could not find deposit address in transaction outputs");
-    owner.claim_deposit(tx, vout).await?;
-    wait_for_event(&mut owner_listener, 180, "DepositConfirmed", |e| match e {
-        WalletEvent::DepositConfirmed(_) => Ok(Some(e)),
-        _ => Ok(None),
-    })
+    let credited_sats = fund_wallet_via_static_deposit(
+        &owner,
+        &faucet,
+        &mempool,
+        DEPOSIT_AMOUNT_SATS,
+        DEPOSIT_TIMEOUT_SECS,
+    )
     .await?;
-    assert_eq!(owner.get_balance().await?, DEPOSIT_AMOUNT_SATS);
+    wait_for(
+        || async { owner.get_balance().await.is_ok_and(|b| b == credited_sats) },
+        DEPOSIT_TIMEOUT_SECS,
+        "the claimed static deposit to land in the owner's balance",
+    )
+    .await?;
 
     owner.update_wallet_settings(Some(true), None).await?;
     let settings = owner.query_wallet_settings().await?;
@@ -64,7 +57,7 @@ async fn test_master_identity_grants_read_access() -> Result<()> {
     // The owner always reads its own wallet, private mode or not.
     assert_eq!(
         owner.query_available_balance_of(&owner_identity).await?,
-        DEPOSIT_AMOUNT_SATS,
+        credited_sats,
         "the owner must see its own balance under private mode"
     );
 
@@ -89,7 +82,7 @@ async fn test_master_identity_grants_read_access() -> Result<()> {
 
     assert_eq!(
         reader.query_available_balance_of(&owner_identity).await?,
-        DEPOSIT_AMOUNT_SATS,
+        credited_sats,
         "the designated master identity must read the private wallet's balance"
     );
 

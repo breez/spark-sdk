@@ -25,10 +25,12 @@ use tokio::sync::broadcast::Receiver;
 use tracing::{debug, info};
 
 use crate::backend::Backend;
+use crate::faucet::RegtestFaucet;
 use crate::fixtures::{
     bitcoind::BitcoindFixture,
     setup::{TestFixtures, create_test_signer_alice, create_test_signer_bob},
 };
+use crate::mempool::MempoolClient;
 
 /// Builds a `SparkWallet` whose session, tree, and token-output stores are
 /// backed by the resolved `Backend`. For `Backend::InMemory` this is
@@ -395,6 +397,65 @@ pub async fn deposit_with_amount(
     }
 
     Ok(())
+}
+
+/// Funds `wallet` through its static deposit address and returns the credited
+/// amount, which is the deposited amount minus the SSP's claim fee.
+///
+/// The SSP will not quote a claim until it has seen the funding transaction,
+/// so the quote is retried until it is served or `quote_timeout_secs` elapses.
+pub async fn fund_wallet_via_static_deposit(
+    wallet: &SparkWallet,
+    faucet: &RegtestFaucet,
+    mempool: &MempoolClient,
+    amount_sats: u64,
+    quote_timeout_secs: u64,
+) -> Result<u64> {
+    let address = wallet.generate_static_deposit_address().await?;
+    info!("Generated static deposit address: {address}");
+
+    let txid = faucet
+        .fund_address(&address.to_string(), amount_sats)
+        .await?;
+    info!("Faucet funded static deposit address, txid: {txid}");
+
+    let tx = mempool.get_transaction(&txid).await?;
+    let vout = tx
+        .output
+        .iter()
+        .position(|output| {
+            Address::from_script(&output.script_pubkey, bitcoin::Network::Regtest)
+                .is_ok_and(|candidate| candidate == address)
+        })
+        .ok_or_else(|| anyhow::anyhow!("Funding tx {txid} has no output paying {address}"))?
+        as u32;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(quote_timeout_secs);
+    let quote = loop {
+        match wallet
+            .fetch_static_deposit_claim_quote(tx.clone(), Some(vout))
+            .await
+        {
+            Ok(quote) => break quote,
+            Err(e) if tokio::time::Instant::now() < deadline => {
+                debug!("Claim quote for {txid}:{vout} not ready yet ({e}), retrying");
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+            Err(e) => bail!(
+                "Timeout after {quote_timeout_secs}s waiting for a claim quote for \
+                 {txid}:{vout}: {e}"
+            ),
+        }
+    };
+
+    let credit_amount_sats = quote.credit_amount_sats;
+    let transfer_id = wallet.claim_static_deposit(quote).await?;
+    info!(
+        "Claimed static deposit {txid}:{vout} for {credit_amount_sats} sats, \
+         transfer {transfer_id}"
+    );
+
+    Ok(credit_amount_sats)
 }
 
 /// Polls a condition function every 50ms until it returns true or the timeout is reached.
