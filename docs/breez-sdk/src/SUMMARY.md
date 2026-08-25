@@ -47,7 +47,7 @@
 - [Supporting fiat currencies](guide/fiat_currencies.md)
 - [Buying Bitcoin](guide/buy_bitcoin.md)
 - [Send USDC/USDT](guide/cross_chain.md)
-- [Cash App to USDC/USDT payments](guide/prepare_payment_link.md)
+- [Cash App to USDC/USDT](guide/cash_app_to_usdc_usdt.md)
 - [End-user fees](guide/end-user_fees.md)
 - [Handling tokens](guide/tokens.md)
   - [Token payments](guide/token_payments.md)
