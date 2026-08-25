@@ -144,7 +144,8 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] USDT send support
 - [x] USDC send support
 - [x] Partner portal analytics
-- [x] Unilateral exit 
+- [x] Unilateral exit
+- [x] Cash App to USDC/USDT
 - [ ] USDT receive support
 - [ ] USDC receive support
 - [ ] Detect pending mempool deposits
