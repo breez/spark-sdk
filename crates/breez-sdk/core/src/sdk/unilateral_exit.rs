@@ -205,7 +205,7 @@ impl BreezSdk {
             .load_exit_context(spark_wallet::ExitLeafSelection::Specific(leaf_ids))
             .await?;
         let (settled, settlement_observations) = resolve_settled_steps(chain, &context).await?;
-        let prepared_exit = self.spark_wallet.plan_exit(
+        let prepared_exit = self.spark_wallet.plan_unilateral_exit(
             &context,
             fee_rate_sat_per_kw,
             funding_inputs,

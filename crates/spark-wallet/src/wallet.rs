@@ -1833,7 +1833,7 @@ impl SparkWallet {
 
     /// `settled` is what the chain has been observed to have done already; `None`
     /// prices a fresh exit.
-    pub fn plan_exit(
+    pub fn plan_unilateral_exit(
         &self,
         context: &ExitContext,
         fee_rate_sat_per_kw: u64,
@@ -1855,7 +1855,7 @@ impl SparkWallet {
             selected_leaves = plan.selected_leaves.len(),
             settled_nodes = settled.map_or(0, |s| s.nodes.len()),
             settled_refunds = settled.map_or(0, |s| s.refunds.len()),
-            "plan_exit: planned"
+            "plan_unilateral_exit: planned with settled steps"
         );
         let leaf_refund_addresses = plan
             .selected_leaves
@@ -1871,23 +1871,6 @@ impl SparkWallet {
             plan,
             leaf_refund_addresses,
         })
-    }
-
-    pub async fn prepare_unilateral_exit_plan(
-        &self,
-        fee_rate_sat_per_kw: u64,
-        selection: ExitLeafSelection,
-        inputs: Vec<CpfpInput>,
-        destination_script_len: usize,
-    ) -> Result<PreparedUnilateralExit, SparkWalletError> {
-        let context = self.load_exit_context(selection).await?;
-        self.plan_exit(
-            &context,
-            fee_rate_sat_per_kw,
-            inputs,
-            destination_script_len,
-            None,
-        )
     }
 
     /// Builds a sweep PSBT that pulls every leaf's refund output and every
