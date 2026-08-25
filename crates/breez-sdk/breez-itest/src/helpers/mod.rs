@@ -379,17 +379,24 @@ pub async fn count_unilateral_exit_state_changed_events(
 
 /// Wait for a deposit claim to succeed by listening to SDK events
 ///
+/// An `UnclaimedDeposits` event is not by itself a failure. The SDK emits one
+/// on every sync that finds a deposit it could not claim yet, including the
+/// transient case where the operators have not all seen the funding tx deep
+/// enough, and it retries on the next sync. Only a terminal reason aborts;
+/// anything else keeps waiting and is reported if the timeout wins.
+///
 /// # Arguments
 /// * `event_rx` - Event receiver channel from build_sdk
 /// * `timeout_secs` - Maximum time to wait in seconds
 ///
 /// # Returns
-/// Ok if claim succeeded, Error if timeout or failure
+/// Ok if claim succeeded, Error if timeout or terminal failure
 pub async fn wait_for_claimed_event(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     timeout_secs: u64,
 ) -> Result<()> {
-    wait_for_event(
+    let mut last_unclaimed_reason = None;
+    let result = wait_for_event(
         event_rx,
         timeout_secs,
         "ClaimDeposits",
@@ -401,18 +408,44 @@ pub async fn wait_for_claimed_event(
                 );
                 Ok(Some(EventResult::ClaimSucceeded))
             }
-            SdkEvent::UnclaimedDeposits { unclaimed_deposits } => Err(anyhow::anyhow!(
-                "Received UnclaimedDeposits event: {} deposits unclaimed",
-                unclaimed_deposits.len()
-            )),
+            SdkEvent::UnclaimedDeposits { unclaimed_deposits } => {
+                if let Some(terminal) = unclaimed_deposits.iter().find(|deposit| {
+                    matches!(
+                        deposit.claim_error,
+                        Some(DepositClaimError::MaxDepositClaimFeeExceeded { .. })
+                    )
+                }) {
+                    return Err(anyhow::anyhow!(
+                        "Deposit {}:{} cannot be claimed: {:?}",
+                        terminal.txid,
+                        terminal.vout,
+                        terminal.claim_error
+                    ));
+                }
+                last_unclaimed_reason = unclaimed_deposits
+                    .first()
+                    .map(|deposit| format!("{:?}", deposit.claim_error));
+                info!(
+                    "{} deposits still unclaimed, waiting for the SDK to retry",
+                    unclaimed_deposits.len()
+                );
+                Ok(None)
+            }
             other => {
                 info!("Ignored SDK event: {:?}", other);
                 Ok(None)
             }
         },
     )
-    .await
-    .map(|_| ())
+    .await;
+
+    match result {
+        Ok(_) => Ok(()),
+        Err(e) => match last_unclaimed_reason {
+            Some(reason) => Err(e.context(format!("last claim attempt failed with: {reason}"))),
+            None => Err(e),
+        },
+    }
 }
 
 /// Wait for a payment to succeed by listening to SDK events
