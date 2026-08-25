@@ -374,6 +374,50 @@ mod tests {
         .unwrap()
     }
 
+    const POLL_INTERVAL: Duration = Duration::from_millis(25);
+    const POLL_TIMEOUT: Duration = Duration::from_secs(10);
+
+    /// Polls `check` until it yields a value, panicking once `POLL_TIMEOUT`
+    /// elapses.
+    ///
+    /// `process_pending_webhook_deliveries` spawns each delivery onto its own
+    /// task and returns without awaiting it, so an outcome has to be waited
+    /// for rather than read after a fixed sleep.
+    async fn wait_for<T, F, Fut>(description: &str, check: F) -> T
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Option<T>>,
+    {
+        let started = tokio::time::Instant::now();
+        loop {
+            if let Some(value) = check().await {
+                return value;
+            }
+            assert!(
+                started.elapsed() < POLL_TIMEOUT,
+                "timed out after {POLL_TIMEOUT:?} waiting for {description}"
+            );
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    }
+
+    /// Polls the delivery row for `identifier` until `predicate` accepts it.
+    async fn wait_for_delivery<F>(
+        pool: &PgPool,
+        identifier: &str,
+        description: &str,
+        predicate: F,
+    ) -> sqlx::postgres::PgRow
+    where
+        F: Fn(&sqlx::postgres::PgRow) -> bool,
+    {
+        wait_for(description, || async {
+            let row = get_delivery_by_identifier(pool, identifier).await;
+            predicate(&row).then_some(row)
+        })
+        .await
+    }
+
     fn new_semaphores() -> DomainSemaphores {
         Arc::new(tokio::sync::Mutex::new(HashMap::new()))
     }
@@ -423,9 +467,13 @@ mod tests {
         let config = config_cache_with(TEST_DOMAIN, &url, TEST_SECRET);
 
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
-        tokio::time::sleep(Duration::from_millis(100)).await;
 
-        let row = get_delivery_by_identifier(&pool, "success_1").await;
+        let row = wait_for_delivery(&pool, "success_1", "the delivery to succeed", |row| {
+            row.try_get::<Option<i64>, _>("succeeded_at")
+                .unwrap()
+                .is_some()
+        })
+        .await;
         let succeeded_at: Option<i64> = row.try_get("succeeded_at").unwrap();
         let retry_count: i32 = row.try_get("retry_count").unwrap();
         let stored_url: Option<String> = row.try_get("url").unwrap();
@@ -463,9 +511,11 @@ mod tests {
         let config = config_cache_with(TEST_DOMAIN, &url, TEST_SECRET);
 
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
-        tokio::time::sleep(Duration::from_millis(100)).await;
 
-        let row = get_delivery_by_identifier(&pool, "error_1").await;
+        let row = wait_for_delivery(&pool, "error_1", "the delivery to be retried", |row| {
+            row.try_get::<i32, _>("retry_count").unwrap() == 1
+        })
+        .await;
         let succeeded_at: Option<i64> = row.try_get("succeeded_at").unwrap();
         let retry_count: i32 = row.try_get("retry_count").unwrap();
         let next_retry_at: i64 = row.try_get("next_retry_at").unwrap();
@@ -496,9 +546,11 @@ mod tests {
         let config = config_cache_with(TEST_DOMAIN, url, TEST_SECRET);
 
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
-        tokio::time::sleep(Duration::from_millis(200)).await;
 
-        let row = get_delivery_by_identifier(&pool, "conn_err_1").await;
+        let row = wait_for_delivery(&pool, "conn_err_1", "the delivery to be retried", |row| {
+            row.try_get::<i32, _>("retry_count").unwrap() == 1
+        })
+        .await;
         let succeeded_at: Option<i64> = row.try_get("succeeded_at").unwrap();
         let retry_count: i32 = row.try_get("retry_count").unwrap();
         let last_error_status_code: Option<i32> = row.try_get("last_error_status_code").unwrap();
@@ -551,9 +603,11 @@ mod tests {
 
         // First attempt — should fail.
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
-        tokio::time::sleep(Duration::from_millis(100)).await;
 
-        let row = get_delivery_by_identifier(&pool, "retry_1").await;
+        let row = wait_for_delivery(&pool, "retry_1", "the first attempt to fail", |row| {
+            row.try_get::<i32, _>("retry_count").unwrap() == 1
+        })
+        .await;
         let retry_count: i32 = row.try_get("retry_count").unwrap();
         let succeeded_at: Option<i64> = row.try_get("succeeded_at").unwrap();
         assert_eq!(retry_count, 1);
@@ -572,9 +626,13 @@ mod tests {
 
         // Second attempt — should succeed.
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
-        tokio::time::sleep(Duration::from_millis(100)).await;
 
-        let row = get_delivery_by_identifier(&pool, "retry_1").await;
+        let row = wait_for_delivery(&pool, "retry_1", "the retry to succeed", |row| {
+            row.try_get::<Option<i64>, _>("succeeded_at")
+                .unwrap()
+                .is_some()
+        })
+        .await;
         let succeeded_at: Option<i64> = row.try_get("succeeded_at").unwrap();
         assert!(
             succeeded_at.is_some(),
@@ -608,9 +666,13 @@ mod tests {
         let config = config_cache_with(TEST_DOMAIN, &url, TEST_SECRET);
 
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
-        tokio::time::sleep(Duration::from_millis(100)).await;
 
-        let row = get_delivery_by_identifier(&pool, "truncate_1").await;
+        let row = wait_for_delivery(&pool, "truncate_1", "the error body to be stored", |row| {
+            row.try_get::<Option<String>, _>("last_error_body")
+                .unwrap()
+                .is_some()
+        })
+        .await;
         let last_error_body: Option<String> = row.try_get("last_error_body").unwrap();
         let body = last_error_body.expect("error body should be present");
 
@@ -737,9 +799,13 @@ mod tests {
         }
 
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
-        tokio::time::sleep(Duration::from_millis(100)).await;
 
-        let row = get_delivery_by_identifier(&pool, "throttle_1").await;
+        let row = wait_for_delivery(&pool, "throttle_1", "the delivery to be unclaimed", |row| {
+            row.try_get::<Option<i64>, _>("claimed_at")
+                .unwrap()
+                .is_none()
+        })
+        .await;
         let claimed_at: Option<i64> = row.try_get("claimed_at").unwrap();
         let retry_count: i32 = row.try_get("retry_count").unwrap();
         let succeeded_at: Option<i64> = row.try_get("succeeded_at").unwrap();
@@ -760,15 +826,17 @@ mod tests {
         let config = empty_config_cache();
 
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
-        tokio::time::sleep(Duration::from_millis(100)).await;
 
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM webhook_deliveries WHERE identifier = $1")
-                .bind("no_config_1")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(count, 0, "unattempted delivery should be deleted");
+        wait_for("the unattempted delivery to be deleted", || async {
+            let count: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM webhook_deliveries WHERE identifier = $1")
+                    .bind("no_config_1")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            (count == 0).then_some(())
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -788,9 +856,11 @@ mod tests {
         let config = empty_config_cache();
 
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
-        tokio::time::sleep(Duration::from_millis(100)).await;
 
-        let row = get_delivery_by_identifier(&pool, "parked_1").await;
+        let row = wait_for_delivery(&pool, "parked_1", "the delivery to be parked", |row| {
+            row.try_get::<i64, _>("next_retry_at").unwrap() == i64::MAX
+        })
+        .await;
         let next_retry_at: i64 = row.try_get("next_retry_at").unwrap();
         let succeeded_at: Option<i64> = row.try_get("succeeded_at").unwrap();
 
@@ -839,9 +909,12 @@ mod tests {
         let config = config_cache_with(TEST_DOMAIN, &url, secret);
 
         process_pending_webhook_deliveries(&db, &client, &semaphores, &config).await;
-        tokio::time::sleep(Duration::from_millis(100)).await;
 
-        let sig = received_sig.lock().await.clone();
+        let sig = wait_for("the webhook request to arrive", || async {
+            let sig = received_sig.lock().await.clone();
+            (!sig.is_empty()).then_some(sig)
+        })
+        .await;
         let body = received_body.lock().await.clone();
 
         assert!(!sig.is_empty(), "signature header should be present");
