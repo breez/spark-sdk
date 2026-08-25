@@ -173,20 +173,8 @@ pub async fn new_rest_chain_service(
     credentials: Option<Credentials>,
     request: NewRestChainServiceRequest,
 ) -> Result<Arc<dyn BitcoinChainService>, crate::SdkError> {
-    if let Some(proxy) = &request.proxy {
-        proxy.validate()?;
-    }
-    let http_client: Arc<dyn HttpClient> = platform_utils::create_http_client_with_proxy(
-        None,
-        request
-            .proxy
-            .as_ref()
-            .map(platform_utils::ProxyConfig::from)
-            .as_ref(),
-    )
-    .map_err(|e| {
-        crate::SdkError::InvalidInput(format!("Failed to build proxied HTTP client: {e}"))
-    })?;
+    let http_client: Arc<dyn HttpClient> =
+        crate::ProxyConfig::http_client(request.proxy.as_ref(), None)?;
     Ok(Arc::new(RestClientChainService::new(
         url,
         network,

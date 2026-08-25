@@ -463,18 +463,7 @@ pub async fn get_spark_status(
         }
     }
 
-    if let Some(proxy) = &request.proxy {
-        proxy.validate()?;
-    }
-    let http_client = platform_utils::create_http_client_with_proxy(
-        None,
-        request
-            .proxy
-            .as_ref()
-            .map(platform_utils::ProxyConfig::from)
-            .as_ref(),
-    )
-    .map_err(|e| SdkError::InvalidInput(format!("Failed to build proxied HTTP client: {e}")))?;
+    let http_client = crate::ProxyConfig::http_client(request.proxy.as_ref(), None)?;
 
     let response = http_client
         .get("https://spark.money/api/v1/status".to_string(), None)

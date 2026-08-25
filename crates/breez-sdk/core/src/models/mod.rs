@@ -619,6 +619,23 @@ impl From<&ProxyConfig> for platform_utils::ProxyConfig {
 }
 
 impl ProxyConfig {
+    /// A validated HTTP client honouring `proxy`, for the components built
+    /// outside the SDK's shared context. Everything inside it takes the
+    /// context's pooled client instead and never sees a proxy.
+    pub(crate) fn http_client(
+        proxy: Option<&Self>,
+        user_agent: Option<&str>,
+    ) -> Result<std::sync::Arc<dyn platform_utils::HttpClient>, SdkError> {
+        if let Some(proxy) = proxy {
+            proxy.validate()?;
+        }
+        platform_utils::create_http_client_with_proxy(
+            user_agent,
+            proxy.map(platform_utils::ProxyConfig::from).as_ref(),
+        )
+        .map_err(|e| SdkError::InvalidInput(format!("Failed to build proxied HTTP client: {e}")))
+    }
+
     /// Rejects a proxy the SDK cannot honour end to end. Accepting one it can
     /// only partly apply would leave some traffic going direct, which is worse
     /// than refusing outright.

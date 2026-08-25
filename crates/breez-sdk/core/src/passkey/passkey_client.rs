@@ -394,14 +394,26 @@ impl PasskeyClient {
 
 /// Convenience constructors that don't cross the `UniFFI` boundary.
 impl PasskeyClient {
-    /// Build from the SDK's [`crate::Config`], reusing its `api_key`
-    /// for the default Nostr-backed label store.
+    /// Build from the SDK's [`crate::Config`], reusing its `api_key` and
+    /// `proxy` for the default Nostr-backed label store.
+    ///
+    /// A proxy already set on `passkey_config` wins; otherwise the one on
+    /// `sdk_config` is inherited, so the label relays do not connect direct
+    /// while the rest of the SDK is tunnelled.
     pub fn from_config(
         prf_provider: Arc<dyn PrfProvider>,
         sdk_config: &crate::Config,
         passkey_config: Option<PasskeyConfig>,
     ) -> Result<Self, PasskeyError> {
-        Self::new(prf_provider, sdk_config.api_key.clone(), passkey_config)
+        let mut passkey_config = passkey_config.unwrap_or_default();
+        if passkey_config.proxy.is_none() {
+            passkey_config.proxy.clone_from(&sdk_config.proxy);
+        }
+        Self::new(
+            prf_provider,
+            sdk_config.api_key.clone(),
+            Some(passkey_config),
+        )
     }
 
     /// Test-only: construct with a custom [`LabelStore`] builder so unit
@@ -872,6 +884,58 @@ mod tests {
         assert!(credential.user_id.is_none());
         assert!(credential.aaguid.is_none());
         assert!(credential.backup_eligible.is_none());
+    }
+
+    fn sdk_config_with_proxy(username: Option<&str>, password: Option<&str>) -> crate::Config {
+        let mut config = crate::default_config(crate::Network::Mainnet);
+        config.proxy = Some(crate::ProxyConfig {
+            host: "127.0.0.1".to_string(),
+            port: 9050,
+            username: username.map(ToString::to_string),
+            password: password.map(ToString::to_string),
+        });
+        config
+    }
+
+    /// The relays would otherwise connect direct while the rest of the SDK is
+    /// tunnelled. Observed through the credentialed-proxy reject, which only
+    /// fires if the SDK proxy was read at all.
+    #[macros::test_all]
+    fn from_config_inherits_the_sdk_proxy() {
+        let provider = Arc::new(MockProvider::new([0u8; 32]));
+        let config = sdk_config_with_proxy(Some("user"), Some("pass"));
+
+        match PasskeyClient::from_config(provider, &config, None).err() {
+            Some(PasskeyError::InvalidConfig(_)) => {}
+            other => panic!("expected the SDK proxy to be inherited and rejected, got {other:?}"),
+        }
+    }
+
+    /// An explicit passkey proxy is not overwritten by the SDK's.
+    #[macros::test_all]
+    fn from_config_keeps_an_explicit_passkey_proxy() {
+        let provider = Arc::new(MockProvider::new([0u8; 32]));
+        let config = sdk_config_with_proxy(Some("user"), Some("pass"));
+        let passkey_config = PasskeyConfig {
+            proxy: Some(crate::ProxyConfig {
+                host: "127.0.0.1".to_string(),
+                port: 9050,
+                username: None,
+                password: None,
+            }),
+            ..PasskeyConfig::default()
+        };
+
+        let result = PasskeyClient::from_config(provider, &config, Some(passkey_config));
+        // WASM cannot honour any proxy, so the accept case is native-only.
+        if cfg!(all(target_family = "wasm", target_os = "unknown")) {
+            assert!(matches!(result.err(), Some(PasskeyError::InvalidConfig(_))));
+        } else {
+            assert!(
+                result.is_ok(),
+                "the uncredentialed passkey proxy should have won"
+            );
+        }
     }
 
     #[macros::async_test_all]
