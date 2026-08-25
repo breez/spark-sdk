@@ -1,4 +1,9 @@
-use std::{str::FromStr, time::Duration};
+use std::{
+    collections::HashSet,
+    str::FromStr,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use bitcoin::{consensus::serialize, hex::DisplayHex};
 use platform_utils::tokio;
@@ -17,6 +22,7 @@ use crate::{
     models::Payment,
     persist::UpdateDepositPayload,
     sdk::RuntimeEvent,
+    utils::deposit_chain_syncer::TxOutput,
     utils::utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
 };
 
@@ -52,6 +58,18 @@ impl BreezSdk {
         let max_fee = request
             .max_fee
             .or(self.config.max_deposit_claim_fee.clone());
+
+        // Held for the whole attempt, so a sync pass or a second call on the same
+        // outpoint cannot run one alongside it.
+        let Some(_claim_guard) = self.claim_guards.try_acquire(TxOutput {
+            txid: request.txid.clone(),
+            vout: request.vout,
+        }) else {
+            return Err(SdkError::DepositClaimInProgress {
+                tx: request.txid.clone(),
+                vout: request.vout,
+            });
+        };
 
         // An unreadable depth counts as mature.
         let confirmations = self
@@ -373,20 +391,6 @@ impl BreezSdk {
         }
     }
 
-    /// Whether an early claim on this deposit is still settling. Until it does and
-    /// the deposit is reconciled away, any further claim would be a second claim on
-    /// the same UTXO.
-    async fn instant_claim_in_flight(&self, txid: String, vout: u32) -> Result<bool, SdkError> {
-        Ok(self
-            .storage
-            .list_deposits()
-            .await?
-            .iter()
-            .find(|d| d.txid == txid && d.vout == vout)
-            .and_then(|d| d.instant_claim_status.as_ref())
-            .is_some_and(|s| matches!(s, InstantClaimStatus::Submitted { .. })))
-    }
-
     /// Whether the deposit can be claimed at maturity rather than early: true if the
     /// operators say so, or the chain alone is deep enough. Either suffices because
     /// the stored flag is only as fresh as the last deposit sync, which need never
@@ -434,17 +438,6 @@ impl BreezSdk {
         max_fee: Option<MaxFee>,
         confirmations: u32,
     ) -> Result<ClaimDepositResponse, SdkError> {
-        if self
-            .instant_claim_in_flight(detailed_utxo.txid.to_string(), detailed_utxo.vout)
-            .await?
-        {
-            info!(
-                "Early claim already in flight for utxo {}:{}",
-                detailed_utxo.txid, detailed_utxo.vout
-            );
-            return Ok(ClaimDepositResponse { payment: None });
-        }
-
         let row_exists = self
             .storage
             .list_deposits()
@@ -702,11 +695,59 @@ fn select_instant_claim_plan(
     }
 }
 
+/// Serialises claim attempts on the same deposit within this process.
+///
+/// A claim spends several seconds fetching a quote, transferring and signing
+/// before anything reaches storage, so a second attempt starting in that window
+/// finds no trace of the first. Holding the outpoint for the whole attempt closes
+/// that, which persisted state cannot: it is only written once the claim returns.
+#[derive(Clone, Default)]
+pub(crate) struct ClaimGuards {
+    in_flight: Arc<Mutex<HashSet<TxOutput>>>,
+}
+
+impl ClaimGuards {
+    /// `None` when an attempt on this outpoint is already running.
+    pub(crate) fn try_acquire(&self, outpoint: TxOutput) -> Option<ClaimGuard> {
+        let mut in_flight = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !in_flight.insert(outpoint.clone()) {
+            return None;
+        }
+        Some(ClaimGuard {
+            guards: self.clone(),
+            outpoint,
+        })
+    }
+
+    fn release(&self, outpoint: &TxOutput) {
+        self.in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(outpoint);
+    }
+}
+
+/// Releases the outpoint when dropped, so a claim that fails or panics does not
+/// leave it locked out.
+pub(crate) struct ClaimGuard {
+    guards: ClaimGuards,
+    outpoint: TxOutput,
+}
+
+impl Drop for ClaimGuard {
+    fn drop(&mut self) {
+        self.guards.release(&self.outpoint);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        InstantClaimPlan, claim_deposit_quote, is_pending_confirmation_error,
-        select_instant_claim_plan,
+        ClaimGuards, InstantClaimPlan, TxOutput, claim_deposit_quote,
+        is_pending_confirmation_error, select_instant_claim_plan,
     };
     use spark_wallet::{
         CurrencyAmount, InstantStaticDepositPlan, InstantStaticDepositQuote,
@@ -979,5 +1020,29 @@ mod tests {
             select_instant_claim_plan(&q, 50_000, 1_000, 0, 3),
             InstantClaimPlan::Claimable(_)
         ));
+    }
+
+    fn outpoint(vout: u32) -> TxOutput {
+        TxOutput {
+            txid: "tx".to_string(),
+            vout,
+        }
+    }
+
+    #[test]
+    fn a_second_attempt_on_the_same_outpoint_is_refused() {
+        let guards = ClaimGuards::default();
+        let first = guards.try_acquire(outpoint(0));
+        assert!(first.is_some());
+        assert!(guards.try_acquire(outpoint(0)).is_none());
+        drop(first);
+        assert!(guards.try_acquire(outpoint(0)).is_some());
+    }
+
+    #[test]
+    fn different_outpoints_do_not_block_each_other() {
+        let guards = ClaimGuards::default();
+        let _first = guards.try_acquire(outpoint(0));
+        assert!(guards.try_acquire(outpoint(1)).is_some());
     }
 }

@@ -1008,3 +1008,65 @@ async fn test_fetch_claim_deposit_quote(
 
     Ok(())
 }
+
+/// Concurrent `claim_deposit` calls on the same deposit must reject one with
+/// `DepositClaimInProgress`.
+///
+/// The guard is taken before the maturity branch, so the winner's outcome is
+/// irrelevant: it may claim early, claim at maturity, or decline on fee. Only the
+/// loser's typed rejection is asserted, which keeps this off the SSP's plan
+/// offering and off maturity timing.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_claim_deposit_rejects_concurrent_calls(
+    #[future] bob_strict_fee_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    let bob = bob_strict_fee_sdk.await?;
+
+    let addr = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
+        })
+        .await?
+        .payment_request;
+
+    // Read the vout from the funding tx so the claims can start immediately, while
+    // the first is still in flight.
+    let faucet = RegtestFaucet::new()?;
+    let mempool = MempoolClient::new()?;
+    let txid = faucet.fund_address(&addr, 50_000).await?;
+    info!("Funded static deposit, txid: {txid}");
+    let tx = mempool.get_transaction(&txid).await?;
+    let vout = tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| {
+            bitcoin::Address::from_script(&o.script_pubkey, bitcoin::Network::Regtest)
+                .is_ok_and(|a| a.to_string() == addr)
+        })
+        .map(|(i, _)| i as u32)
+        .expect("funding tx has no output paying the deposit address");
+
+    let request = || ClaimDepositRequest {
+        txid: txid.clone(),
+        vout,
+        max_fee: Some(MaxFee::Fixed { amount: 3_000 }),
+    };
+    let (r1, r2) = tokio::join!(
+        bob.sdk.claim_deposit(request()),
+        bob.sdk.claim_deposit(request()),
+    );
+
+    let rejected = [&r1, &r2]
+        .iter()
+        .filter(|r| matches!(r, Err(SdkError::DepositClaimInProgress { .. })))
+        .count();
+    assert_eq!(
+        rejected, 1,
+        "exactly one concurrent claim should be rejected as in progress (r1={r1:?}, r2={r2:?})"
+    );
+
+    Ok(())
+}

@@ -58,6 +58,10 @@ pub enum SdkError {
     #[error("Missing utxo: {tx}:{vout}")]
     MissingUtxo { tx: String, vout: u32 },
 
+    /// Another claim on this deposit is already running.
+    #[error("Deposit claim already in progress: {tx}:{vout}")]
+    DepositClaimInProgress { tx: String, vout: u32 },
+
     #[error("Lnurl error: {0}")]
     LnurlError(String),
 

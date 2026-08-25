@@ -98,6 +98,9 @@ pub struct BreezSdk {
     pub(crate) runtime: SdkRuntime,
     /// Coordinator for coalescing duplicate sync requests
     pub(crate) sync_coordinator: SyncCoordinator,
+    /// Serialises claim attempts on the same deposit across the sync cascade
+    /// and explicit `claim_deposit` calls.
+    pub(crate) claim_guards: deposits::ClaimGuards,
     pub(crate) initial_synced_watcher: watch::Receiver<bool>,
     pub(crate) external_input_parsers: Vec<ExternalInputParser>,
     pub(crate) spark_private_mode_initialized: Arc<OnceCell<()>>,

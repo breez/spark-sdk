@@ -42,6 +42,10 @@ pub enum _SdkError {
         tx: String,
         vout: u32,
     },
+    DepositClaimInProgress {
+        tx: String,
+        vout: u32,
+    },
     LnurlError(String),
     Signer(String),
     OptimizationAlreadyRunning,

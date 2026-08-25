@@ -23,29 +23,20 @@ use crate::{
     },
 };
 
-/// Whether a matured deposit should be claimed now, given its instant-claim
-/// status. A `Submitted` instant claim is still settling, so the deposit must not
-/// be claimed until that claim settles and it is reconciled out; any other status
-/// (declined, or no instant attempt) is fine to claim.
-fn should_claim_matured_deposit(status: Option<&InstantClaimStatus>) -> bool {
-    !matches!(status, Some(InstantClaimStatus::Submitted { .. }))
-}
-
 /// Whether the cascade should (re)attempt an early claim. A decline is retried
 /// once the deposit gains a confirmation, or once the ceiling that declined it
-/// rises. A submitted claim is never retried.
+/// rises.
 fn instant_claim_worth_attempting(
     status: Option<&InstantClaimStatus>,
     confirmations: u32,
     ceiling_sats: u64,
 ) -> bool {
     match status {
-        None => true,
         Some(InstantClaimStatus::Declined {
             max_fee_sats,
             confirmations: declined_at,
         }) => confirmations > *declined_at || max_fee_sats.is_some_and(|prev| ceiling_sats > prev),
-        Some(InstantClaimStatus::Submitted { .. }) => false,
+        _ => true,
     }
 }
 
@@ -395,14 +386,11 @@ impl BreezSdk {
                 txid: detailed_utxo.txid.to_string(),
                 vout: detailed_utxo.vout,
             };
+            // Skip a deposit an explicit claim_deposit call is already working on.
+            let Some(_claim_guard) = self.claim_guards.try_acquire(key.clone()) else {
+                continue;
+            };
             let res = if is_mature {
-                // A submitted instant claim settles asynchronously; until it settles
-                // and the UTXO leaves the operator feed, the deposit can surface as
-                // mature. Claiming it here would race that in-flight claim, so skip it
-                // (reconcile_deposits drops the row once the claim settles).
-                if !should_claim_matured_deposit(instant_status.get(&key)) {
-                    continue;
-                }
                 // Mature deposit: claim via the normal path.
                 self.claim_utxo_and_resolve_deposit(
                     &detailed_utxo,
@@ -709,7 +697,7 @@ impl BreezSdk {
 
 #[cfg(test)]
 mod tests {
-    use super::{instant_claim_worth_attempting, should_claim_matured_deposit};
+    use super::instant_claim_worth_attempting;
     use crate::InstantClaimStatus;
 
     fn declined(max_fee_sats: Option<u64>, confirmations: u32) -> InstantClaimStatus {
@@ -717,27 +705,6 @@ mod tests {
             max_fee_sats,
             confirmations,
         }
-    }
-
-    fn submitted() -> InstantClaimStatus {
-        InstantClaimStatus::Submitted {
-            claim_id: "claim-1".to_string(),
-        }
-    }
-
-    #[test]
-    fn claim_matured_deposit_skips_only_submitted() {
-        // No instant attempt, or a declined one, falls through to the claim at
-        // maturity.
-        assert!(should_claim_matured_deposit(None));
-        assert!(should_claim_matured_deposit(Some(&declined(None, 1))));
-        assert!(should_claim_matured_deposit(Some(&declined(
-            Some(1_000),
-            1
-        ))));
-        // A submitted instant claim is in flight, so claiming the matured deposit
-        // is skipped until the claim settles.
-        assert!(!should_claim_matured_deposit(Some(&submitted())));
     }
 
     #[test]
@@ -781,6 +748,5 @@ mod tests {
             500
         ));
         // An in-flight submission is never re-attempted.
-        assert!(!instant_claim_worth_attempting(Some(&submitted()), 2, 500));
     }
 }
