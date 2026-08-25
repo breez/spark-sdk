@@ -1320,7 +1320,7 @@ dependencies = [
 [[package]]
 name = "boltz-client"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879#b5f4683aba10efd875d674f2bb9a5800b047a879"
+source = "git+https://github.com/breez/boltz-client?rev=82f55b8059f54e6e06a4a2d0a901743dc8f83949#82f55b8059f54e6e06a4a2d0a901743dc8f83949"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -1335,14 +1335,16 @@ dependencies = [
  "hex",
  "k256",
  "lightning-invoice 0.34.0",
- "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879)",
- "platform-utils 0.1.0 (git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879)",
+ "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=82f55b8059f54e6e06a4a2d0a901743dc8f83949)",
+ "platform-utils 0.1.0 (git+https://github.com/breez/boltz-client?rev=82f55b8059f54e6e06a4a2d0a901743dc8f83949)",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.18",
  "tiny-keccak",
  "tokio",
+ "tokio-socks",
+ "tokio-tungstenite 0.28.0",
  "tokio-tungstenite-wasm",
  "tracing",
  "url",
@@ -4336,7 +4338,7 @@ dependencies = [
 [[package]]
 name = "macros"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879#b5f4683aba10efd875d674f2bb9a5800b047a879"
+source = "git+https://github.com/breez/boltz-client?rev=82f55b8059f54e6e06a4a2d0a901743dc8f83949#82f55b8059f54e6e06a4a2d0a901743dc8f83949"
 dependencies = [
  "proc-macro2",
  "quote 1.0.45",
@@ -5092,11 +5094,11 @@ dependencies = [
 [[package]]
 name = "platform-utils"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879#b5f4683aba10efd875d674f2bb9a5800b047a879"
+source = "git+https://github.com/breez/boltz-client?rev=82f55b8059f54e6e06a4a2d0a901743dc8f83949#82f55b8059f54e6e06a4a2d0a901743dc8f83949"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
- "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879)",
+ "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=82f55b8059f54e6e06a4a2d0a901743dc8f83949)",
  "reqwest",
  "serde",
  "serde_json",
@@ -8564,7 +8566,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

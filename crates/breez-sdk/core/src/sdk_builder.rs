@@ -1150,6 +1150,7 @@ fn build_cross_chain_context(
         ecies,
         cached_fiat,
         Arc::clone(lightning_sender),
+        config.proxy.as_ref(),
         shutdown_receiver,
     ) {
         Ok(Some(service)) => {
@@ -1614,8 +1615,8 @@ mod tests {
         }
     }
 
-    /// Orchestra runs on the shared proxied client, so cross-chain is accepted
-    /// alongside a proxy even though Boltz still connects direct.
+    /// Both cross-chain providers honour the proxy: Orchestra on the shared
+    /// client, Boltz through its own config.
     #[test]
     fn validate_accepts_proxy_with_cross_chain_config() {
         use crate::{CrossChainConfig, default_config};

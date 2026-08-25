@@ -8,7 +8,7 @@ Set {{#name username}} and {{#name password}} together for proxies that require 
 
 ## What the proxy covers
 
-Every connection the SDK opens through its own HTTP client and gRPC channels, which is all of its ordinary traffic: payments, sync, chain data, and address lookups.
+Every connection the SDK opens, HTTP and gRPC alike.
 
 Hostnames are resolved **by the proxy**, never locally, so no DNS query reveals which host you are reaching. BIP353 name lookups switch from plain DNS to DNS-over-HTTPS for the same reason: plain DNS is UDP, which a SOCKS5 proxy does not carry, so those queries would otherwise escape the tunnel. They stay DNSSEC-verified either way.
 

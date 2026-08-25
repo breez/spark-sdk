@@ -80,6 +80,7 @@ impl BoltzService {
     ///
     /// Only performs the build validation and builds the storage adapter,
     /// deferring the inner [`BoltzClient`] construction to first use.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn build(
         network: Network,
         spark_wallet: Arc<SparkWallet>,
@@ -87,11 +88,20 @@ impl BoltzService {
         ecies: Option<Arc<dyn crate::signer::EciesSigner>>,
         fiat_service: Arc<dyn FiatService>,
         lightning_sender: Arc<LightningSender>,
+        proxy: Option<&crate::ProxyConfig>,
         shutdown_receiver: watch::Receiver<()>,
     ) -> Result<Option<Arc<dyn CrossChainService>>, SdkError> {
-        let Some(config) = Self::default_client_config(network) else {
+        let Some(mut config) = Self::default_client_config(network) else {
             return Ok(None);
         };
+        // boltz-client opens its own HTTP and WebSocket connections, so the
+        // proxy has to reach it as config rather than as a shared client.
+        config.proxy = proxy.map(|proxy| boltz_client::ProxyConfig {
+            host: proxy.host.clone(),
+            port: proxy.port,
+            username: proxy.username.clone(),
+            password: proxy.password.clone(),
+        });
         // Boltz encrypts each swap's secrets, so it can't run without an ECIES
         // signer (a signing-only signer has none).
         let Some(ecies) = ecies else {
