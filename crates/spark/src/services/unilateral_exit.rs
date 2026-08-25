@@ -78,6 +78,33 @@ pub struct UnilateralExitPlan {
 /// Selects which leaves to exit and maps funding inputs to branches. Never
 /// fetches: works offline as long as `tree_nodes` holds each selected leaf's
 /// full ancestor chain.
+/// The steps an exit no longer has to drive, as the chain shows them. A node or
+/// refund named here is confirmed, or is driven by a transaction paying its own
+/// fee, so it takes no CPFP child and costs the funding nothing.
+#[derive(Debug, Default, Clone)]
+pub struct SettledExitSteps {
+    pub nodes: HashSet<TreeNodeId>,
+    pub refunds: HashSet<TreeNodeId>,
+}
+
+impl SettledExitSteps {
+    /// What a leaf's remaining work costs once the settled steps are dropped.
+    fn discount(&self, leaf: &UnilateralExitSelectedLeaf) -> u64 {
+        leaf.cpfp_node_costs
+            .iter()
+            .filter(|(node_id, _)| self.nodes.contains(node_id))
+            .map(|(_, fee)| *fee)
+            .sum::<u64>()
+            .saturating_add(if self.refunds.contains(&leaf.id) {
+                leaf.cpfp_refund_cost
+            } else {
+                0
+            })
+    }
+}
+
+/// `settled` is what the chain has already been observed to have done. `None`
+/// prices a fresh exit, which is what a caller with no chain access gets.
 pub fn plan_unilateral_exit(
     tree_nodes: HashMap<TreeNodeId, TreeNode>,
     leaf_ids: &[TreeNodeId],
@@ -85,6 +112,7 @@ pub fn plan_unilateral_exit(
     inputs: Vec<CpfpInput>,
     fee_rate_sat_per_kw: u64,
     destination_script_len: usize,
+    settled: Option<&SettledExitSteps>,
 ) -> Result<UnilateralExitPlan, ServiceError> {
     if inputs.is_empty() {
         return Err(ServiceError::ValidationError(
@@ -110,7 +138,14 @@ pub fn plan_unilateral_exit(
         fee_rate_sat_per_kw,
     };
 
-    let selected = evaluate_unilateral_exit_leaf_costs(&tree_nodes, leaf_ids, &params, filter)?;
+    let mut selected = evaluate_unilateral_exit_leaf_costs(&tree_nodes, leaf_ids, &params, filter)?;
+    if let Some(settled) = settled {
+        for leaf in &mut selected {
+            let discount = settled.discount(leaf);
+            leaf.cpfp_cost = leaf.cpfp_cost.saturating_sub(discount);
+            leaf.estimated_cost = leaf.estimated_cost.saturating_sub(discount);
+        }
+    }
     if selected.is_empty() {
         return Ok(UnilateralExitPlan {
             selected_leaves: vec![],
@@ -120,7 +155,20 @@ pub fn plan_unilateral_exit(
         });
     }
 
-    let (per_branch_funding, fan_out_psbt) = if selected.len() == 1 {
+    // Only leaves with CPFP work left take funding. One the chain has settled end
+    // to end drives no child, so it needs no input, no fan-out output and no
+    // change dust. It still gets a branch, funded with nothing, because the build
+    // walks per_branch_funding to collect refunds: drop the entry and its refund
+    // never reaches the sweep.
+    let driving: Vec<UnilateralExitSelectedLeaf> = selected
+        .iter()
+        .filter(|leaf| leaf.cpfp_cost > 0)
+        .cloned()
+        .collect();
+
+    let (assigned, fan_out_psbt) = if driving.is_empty() {
+        (Vec::new(), None)
+    } else if driving.len() == 1 {
         // The single-leaf arm hands every input to the one branch, so unlike the
         // multi-branch paths it has no partition step to reject underfunding. Gate
         // it on build_cpfp_child's physical floor (CPFP fees + dust); the sweep is
@@ -135,14 +183,14 @@ pub fn plan_unilateral_exit(
         let cpfp_cost = if inputs.len() > 1 {
             first_child_cpfp_floor(
                 &tree_nodes,
-                &selected[0].id,
+                &driving[0].id,
                 &inputs,
                 destination_script_len,
                 fee_rate_sat_per_kw,
             )
-            .unwrap_or(selected[0].cpfp_cost)
+            .unwrap_or(driving[0].cpfp_cost)
         } else {
-            selected[0].cpfp_cost
+            driving[0].cpfp_cost
         };
         let required = cpfp_cost.saturating_add(change_dust_limit);
         let available = inputs
@@ -154,8 +202,8 @@ pub fn plan_unilateral_exit(
                 required_sat: required,
             });
         }
-        (vec![(selected[0].id.clone(), inputs)], None)
-    } else if let Some(assignment) = assign_inputs_to_leaves(&inputs, &selected, change_dust_limit)
+        (vec![(driving[0].id.clone(), inputs)], None)
+    } else if let Some(assignment) = assign_inputs_to_leaves(&inputs, &driving, change_dust_limit)
         .filter(|a| {
             assignment_covers_first_child(
                 a,
@@ -168,7 +216,7 @@ pub fn plan_unilateral_exit(
         (assignment, None)
     } else {
         let (psbt, per_leaf) =
-            build_fan_out_psbt(&inputs, &selected, fee_rate_sat_per_kw, change_dust_limit)?;
+            build_fan_out_psbt(&inputs, &driving, fee_rate_sat_per_kw, change_dust_limit)?;
         (
             per_leaf
                 .into_iter()
@@ -177,6 +225,19 @@ pub fn plan_unilateral_exit(
             Some(psbt),
         )
     };
+
+    // Emitted in selected order: build_exit charges a shared ancestor to the first
+    // branch it iterates, which is the branch the funding was sized for.
+    let mut assigned: HashMap<TreeNodeId, Vec<CpfpInput>> = assigned.into_iter().collect();
+    let per_branch_funding: Vec<(TreeNodeId, Vec<CpfpInput>)> = selected
+        .iter()
+        .map(|leaf| {
+            (
+                leaf.id.clone(),
+                assigned.remove(&leaf.id).unwrap_or_default(),
+            )
+        })
+        .collect();
 
     let plan = UnilateralExitPlan {
         selected_leaves: selected,
@@ -187,6 +248,11 @@ pub fn plan_unilateral_exit(
     debug!(
         selected_leaves = plan.selected_leaves.len(),
         branches = plan.per_branch_funding.len(),
+        funded_branches = plan
+            .per_branch_funding
+            .iter()
+            .filter(|(_, f)| !f.is_empty())
+            .count(),
         has_fan_out = plan.fan_out_psbt.is_some(),
         tree_nodes = plan.tree_nodes.len(),
         "plan_unilateral_exit: planned"
@@ -1751,6 +1817,7 @@ mod tests {
                     vec![cpfp_input(a_sat, 0), cpfp_input(b_sat, 1)],
                     250,
                     22,
+                    None,
                 )
             };
 
@@ -1767,6 +1834,51 @@ mod tests {
             // One sat short on either branch and the exit can no longer be funded.
             assert!(fund_at(810, 770).is_err());
             assert!(fund_at(811, 769).is_err());
+        }
+
+        /// A leaf whose refund the chain already settled needs no refund child, so
+        /// the plan must not price one. Without this an exit that is nearly done
+        /// cannot be funded at any amount its remaining work justifies: the
+        /// operators' watchtower drives its own copy of a refund once the timelock
+        /// matures, which is the ordinary way a resumed exit finds them settled.
+        #[test_all]
+        fn a_settled_step_is_not_priced_into_the_plan() {
+            let a = leaf_node_n("a", 1_000_000, 1);
+            let id = a.id.clone();
+            let nodes: HashMap<TreeNodeId, TreeNode> = [(id.clone(), a)].into_iter().collect();
+
+            let plan_with = |settled: Option<&SettledExitSteps>, sats: u64| {
+                plan_unilateral_exit(
+                    nodes.clone(),
+                    std::slice::from_ref(&id),
+                    UnilateralExitLeafFilter::ProfitableOnly,
+                    vec![cpfp_input(sats, 0)],
+                    250,
+                    22,
+                    settled,
+                )
+            };
+
+            let floor = match plan_with(None, 0) {
+                Err(ServiceError::InsufficientCpfpBudget { required_sat }) => required_sat,
+                other => panic!("expected a floor, got {other:?}"),
+            };
+            assert!(plan_with(None, floor).is_ok());
+
+            let settled = SettledExitSteps {
+                refunds: [id.clone()].into_iter().collect(),
+                ..Default::default()
+            };
+            let cheaper = match plan_with(Some(&settled), 0) {
+                Err(ServiceError::InsufficientCpfpBudget { required_sat }) => required_sat,
+                other => panic!("expected a floor, got {other:?}"),
+            };
+            assert!(
+                cheaper < floor,
+                "a settled refund must lower the floor: {cheaper} vs {floor}"
+            );
+            // The amount a fresh exit would reject now funds the remaining work.
+            assert!(plan_with(Some(&settled), cheaper).is_ok());
         }
 
         #[test_all]
@@ -1800,6 +1912,7 @@ mod tests {
                     vec![cpfp_input(sat, 0)],
                     250,
                     22,
+                    None,
                 )
             };
 
@@ -1849,6 +1962,7 @@ mod tests {
                     vec![cpfp_input(sat, 0)],
                     250,
                     22,
+                    None,
                 )
             };
 
@@ -1916,6 +2030,7 @@ mod tests {
                 vec![cpfp_input(50_000, 0), heavy],
                 250,
                 22,
+                None,
             )
             .unwrap();
             assert!(
@@ -1947,6 +2062,7 @@ mod tests {
                 vec![cpfp_input(10_000, 0), cpfp_input(10_000, 1)],
                 250,
                 22,
+                None,
             )
             .unwrap();
             assert!(plan.fan_out_psbt.is_some());
@@ -1954,6 +2070,83 @@ mod tests {
             let fan_out = plan.fan_out_psbt.as_ref().unwrap();
             assert_eq!(fan_out.unsigned_tx.input.len(), 2);
             assert_eq!(fan_out.unsigned_tx.output.len(), 3);
+        }
+
+        #[test_all]
+        fn a_fully_settled_exit_takes_no_funding_and_no_fan_out() {
+            let a = leaf_node_n("a", 1_000_000, 1);
+            let b = leaf_node_n("b", 1_000_000, 3);
+            let c = leaf_node_n("c", 1_000_000, 5);
+            let (ida, idb, idc) = (a.id.clone(), b.id.clone(), c.id.clone());
+            let nodes: HashMap<TreeNodeId, TreeNode> =
+                [(ida.clone(), a), (idb.clone(), b), (idc.clone(), c)]
+                    .into_iter()
+                    .collect();
+            let ids = [ida, idb, idc];
+
+            let settled = SettledExitSteps {
+                nodes: ids.iter().cloned().collect(),
+                refunds: ids.iter().cloned().collect(),
+            };
+
+            // Every step is on-chain, so no branch drives a child. One satoshi of
+            // funding is enough: a fresh exit of the same tree would reject it.
+            let plan = plan_unilateral_exit(
+                nodes,
+                &ids,
+                UnilateralExitLeafFilter::ProfitableOnly,
+                vec![cpfp_input(1, 0)],
+                250,
+                22,
+                Some(&settled),
+            )
+            .unwrap();
+
+            assert!(plan.fan_out_psbt.is_none());
+            // Every leaf keeps a branch so the build still sweeps its refund.
+            assert_eq!(plan.per_branch_funding.len(), 3);
+            assert!(plan.per_branch_funding.iter().all(|(_, f)| f.is_empty()));
+        }
+
+        #[test_all]
+        fn only_the_leaves_with_work_left_take_funding() {
+            let a = leaf_node_n("a", 1_000_000, 1);
+            let b = leaf_node_n("b", 1_000_000, 3);
+            let c = leaf_node_n("c", 1_000_000, 5);
+            let (ida, idb, idc) = (a.id.clone(), b.id.clone(), c.id.clone());
+            let nodes: HashMap<TreeNodeId, TreeNode> =
+                [(ida.clone(), a), (idb.clone(), b), (idc.clone(), c)]
+                    .into_iter()
+                    .collect();
+
+            let settled = SettledExitSteps {
+                nodes: [ida.clone(), idb.clone()].into_iter().collect(),
+                refunds: [ida.clone(), idb.clone()].into_iter().collect(),
+            };
+
+            // Two of three leaves are settled, so the one still driving takes the
+            // whole UTXO: no fan-out, though three leaves and one input would need
+            // one if every leaf still had work.
+            let plan = plan_unilateral_exit(
+                nodes,
+                &[ida.clone(), idb.clone(), idc.clone()],
+                UnilateralExitLeafFilter::ProfitableOnly,
+                vec![cpfp_input(10_000, 0)],
+                250,
+                22,
+                Some(&settled),
+            )
+            .unwrap();
+
+            assert!(plan.fan_out_psbt.is_none());
+            assert_eq!(plan.per_branch_funding.len(), 3);
+            let funded: Vec<&TreeNodeId> = plan
+                .per_branch_funding
+                .iter()
+                .filter(|(_, f)| !f.is_empty())
+                .map(|(id, _)| id)
+                .collect();
+            assert_eq!(funded, vec![&idc]);
         }
 
         fn anchor_tx_n(nonce: u32) -> Transaction {

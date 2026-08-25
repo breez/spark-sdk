@@ -20,12 +20,12 @@ pub use spark::{
         CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpChild, CpfpInput, ExitSpeed, Fee,
         FreezeIssuerTokenResponse, InvoiceDescription, LightningReceivePayment,
         LightningSendPayment, LightningSendStatus, Preimage, PreimageRequestStatus,
-        ReceiverTokenOutput, ServiceError, SingleUseDepositAddress, StaticDepositAddress,
-        TokenInputs, TokenMintInput, TokenOutputToSpend, TokenTransaction, TokenTransactionStatus,
-        TokenTransferInput, TransferId, TransferObserver, TransferObserverError, TransferStatus,
-        TransferTokenOutput, TransferType, UnilateralExitPlan, UnilateralExitSelectedLeaf, Utxo,
-        build_cpfp_child, compute_sweep_fee, csv_timelock, p2tr_key_path_input_weight,
-        p2wpkh_input_weight, walk_unilateral_exit_chain,
+        ReceiverTokenOutput, ServiceError, SettledExitSteps, SingleUseDepositAddress,
+        StaticDepositAddress, TokenInputs, TokenMintInput, TokenOutputToSpend, TokenTransaction,
+        TokenTransactionStatus, TokenTransferInput, TransferId, TransferObserver,
+        TransferObserverError, TransferStatus, TransferTokenOutput, TransferType,
+        UnilateralExitPlan, UnilateralExitSelectedLeaf, Utxo, build_cpfp_child, compute_sweep_fee,
+        csv_timelock, p2tr_key_path_input_weight, p2wpkh_input_weight, walk_unilateral_exit_chain,
     },
     session_store::*,
     signer::{
@@ -67,7 +67,7 @@ pub use spark::{
     },
 };
 pub use unilateral_exit::*;
-pub use wallet::{SendPackagePreparation, SparkWallet};
+pub use wallet::{ExitContext, SendPackagePreparation, SparkWallet};
 pub use wallet_builder::WalletBuilder;
 
 #[cfg(feature = "test-utils")]

@@ -48,9 +48,9 @@ use spark::{
         Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription, LightningReceivePayment,
         LightningSendPayment, LightningService, PayLightningResult, Preimage,
         PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
-        QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap, TimelockManager,
-        TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
-        TransferTokenOutput, TransferType, UnilateralExitLeafFilter, Utxo,
+        QueryTokenTransactionsFilter, ServiceError, SettledExitSteps, StaticDepositQuote, Swap,
+        TimelockManager, TokenTransaction, Transfer, TransferId, TransferObserver, TransferService,
+        TransferStatus, TransferTokenOutput, TransferType, UnilateralExitLeafFilter, Utxo,
     },
     session_store::{InMemorySessionStore, SessionStore},
     signer::{PrepareTransferRequest, PreparedTransfer, SparkSigner},
@@ -376,6 +376,15 @@ pub struct SparkWallet {
     /// lifetime" is what we want here regardless of outcome — subsequent
     /// staleness is handled by the periodic + post-payment sync.
     select_leaves_refresh: tokio::sync::OnceCell<()>,
+}
+
+/// The leaves an exit would move and the tree behind them, before any funding is
+/// considered.
+pub struct ExitContext {
+    pub leaf_ids: Vec<TreeNodeId>,
+    pub filter: UnilateralExitLeafFilter,
+    pub tree_nodes: HashMap<TreeNodeId, TreeNode>,
+    pub leaf_refund_addresses: HashMap<TreeNodeId, Address>,
 }
 
 impl SparkWallet {
@@ -1791,6 +1800,79 @@ impl SparkWallet {
     /// Prepares a unilateral exit of the selected leaves: loads the exit tree,
     /// plans it, and derives each leaf's P2TR refund address. `Auto` keeps only
     /// profitable leaves; `Specific` exits every requested one.
+    /// The leaves an exit would move and the tree behind them, with no funding
+    /// considered. Held apart from planning so the chain can be asked what is
+    /// already settled first, which is what lets funding be sized to the work
+    /// that is actually left.
+    pub async fn load_exit_context(
+        &self,
+        selection: ExitLeafSelection,
+    ) -> Result<ExitContext, SparkWalletError> {
+        self.refresh_before_exit().await;
+        let (leaf_ids, filter) = self.resolve_leaf_selection(selection).await?;
+        let tree_nodes = self.load_exit_tree_nodes(&leaf_ids).await?;
+
+        // A P2TR address over the leaf's derived key recognizes an on-chain
+        // refund (any variant) and is where the sweep pulls from.
+        let secp = Secp256k1::new();
+        let network: bitcoin::Network = self.config.network.into();
+        let mut leaf_refund_addresses = HashMap::new();
+        for leaf_id in &leaf_ids {
+            let pubkey = self.spark_signer.get_public_key_for_leaf(leaf_id).await?;
+            let address = Address::p2tr(&secp, pubkey.x_only_public_key().0, None, network);
+            leaf_refund_addresses.insert(leaf_id.clone(), address);
+        }
+
+        Ok(ExitContext {
+            leaf_ids,
+            filter,
+            tree_nodes,
+            leaf_refund_addresses,
+        })
+    }
+
+    /// `settled` is what the chain has been observed to have done already; `None`
+    /// prices a fresh exit.
+    pub fn plan_exit(
+        &self,
+        context: &ExitContext,
+        fee_rate_sat_per_kw: u64,
+        inputs: Vec<CpfpInput>,
+        destination_script_len: usize,
+        settled: Option<&SettledExitSteps>,
+    ) -> Result<PreparedUnilateralExit, SparkWalletError> {
+        let plan = spark::services::plan_unilateral_exit(
+            context.tree_nodes.clone(),
+            &context.leaf_ids,
+            context.filter,
+            inputs,
+            fee_rate_sat_per_kw,
+            destination_script_len,
+            settled,
+        )?;
+        debug!(
+            fee_rate_sat_per_kw,
+            selected_leaves = plan.selected_leaves.len(),
+            settled_nodes = settled.map_or(0, |s| s.nodes.len()),
+            settled_refunds = settled.map_or(0, |s| s.refunds.len()),
+            "plan_exit: planned"
+        );
+        let leaf_refund_addresses = plan
+            .selected_leaves
+            .iter()
+            .filter_map(|leaf| {
+                context
+                    .leaf_refund_addresses
+                    .get(&leaf.id)
+                    .map(|address| (leaf.id.clone(), address.clone()))
+            })
+            .collect();
+        Ok(PreparedUnilateralExit {
+            plan,
+            leaf_refund_addresses,
+        })
+    }
+
     pub async fn prepare_unilateral_exit_plan(
         &self,
         fee_rate_sat_per_kw: u64,
@@ -1798,40 +1880,14 @@ impl SparkWallet {
         inputs: Vec<CpfpInput>,
         destination_script_len: usize,
     ) -> Result<PreparedUnilateralExit, SparkWalletError> {
-        self.refresh_before_exit().await;
-        let (leaf_ids, filter) = self.resolve_leaf_selection(selection).await?;
-        let tree_nodes = self.load_exit_tree_nodes(&leaf_ids).await?;
-        let plan = spark::services::plan_unilateral_exit(
-            tree_nodes,
-            &leaf_ids,
-            filter,
+        let context = self.load_exit_context(selection).await?;
+        self.plan_exit(
+            &context,
+            fee_rate_sat_per_kw,
             inputs,
-            fee_rate_sat_per_kw,
             destination_script_len,
-        )?;
-        debug!(
-            fee_rate_sat_per_kw,
-            selected_leaves = plan.selected_leaves.len(),
-            tree_nodes = plan.tree_nodes.len(),
-            has_fan_out = plan.fan_out_psbt.is_some(),
-            "prepare_unilateral_exit_plan: planned"
-        );
-
-        // A P2TR address over the leaf's derived key recognizes an on-chain
-        // refund (any variant) and is where the sweep pulls from.
-        let secp = Secp256k1::new();
-        let network: bitcoin::Network = self.config.network.into();
-        let mut leaf_refund_addresses = HashMap::new();
-        for leaf in &plan.selected_leaves {
-            let pubkey = self.spark_signer.get_public_key_for_leaf(&leaf.id).await?;
-            let address = Address::p2tr(&secp, pubkey.x_only_public_key().0, None, network);
-            leaf_refund_addresses.insert(leaf.id.clone(), address);
-        }
-
-        Ok(PreparedUnilateralExit {
-            plan,
-            leaf_refund_addresses,
-        })
+            None,
+        )
     }
 
     /// Builds a sweep PSBT that pulls every leaf's refund output and every

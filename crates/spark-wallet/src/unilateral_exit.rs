@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use bitcoin::{Address, Amount, OutPoint, ScriptBuf, Transaction, TxOut, Txid};
 use spark::{
     services::{
-        CpfpInput, ServiceError, UnilateralExitPlan, UnilateralExitSelectedLeaf, build_cpfp_child,
-        csv_timelock, walk_unilateral_exit_chain,
+        CpfpInput, ServiceError, SettledExitSteps, UnilateralExitPlan, UnilateralExitSelectedLeaf,
+        build_cpfp_child, csv_timelock, walk_unilateral_exit_chain,
     },
     tree::{LeafPedigree, TreeNode, TreeNodeId, TreeNodeStatus},
     utils::transactions::is_ephemeral_anchor_output,
@@ -274,6 +274,80 @@ pub fn next_chain_queries(
         "next_chain_queries"
     );
     Ok(pending)
+}
+
+/// What the chain shows an exit has already done, answered without reference to
+/// any funding. Drive it like the full walk: perform `pending`, feed the results
+/// back, and repeat until nothing is pending.
+///
+/// This exists so funding can be planned against the work that is actually left.
+/// The full walk cannot answer it, because it reads a plan the funding is part of.
+pub struct SettlementScan {
+    pub settled: SettledExitSteps,
+    pub pending: Vec<ChainQuery>,
+}
+
+/// A step is reported settled only when the chain said so. One the lookups could
+/// not resolve is left out, so an unreadable chain can only overstate the work
+/// remaining, never understate it.
+pub fn scan_settlement(
+    tree_nodes: &HashMap<TreeNodeId, TreeNode>,
+    leaf_ids: &[TreeNodeId],
+    refund_addresses: &HashMap<TreeNodeId, Address>,
+    observed: &[Observation],
+) -> SettlementScan {
+    let index = ObservedIndex::new(observed);
+    let observed = &index;
+
+    let mut pending: Vec<ChainQuery> = Vec::new();
+    let mut nodes: HashMap<TreeNodeId, NodeState> = HashMap::new();
+    let mut refunds: HashMap<TreeNodeId, RefundState> = HashMap::new();
+    let mut stopped: HashSet<TreeNodeId> = HashSet::new();
+    let mut needs_change: HashSet<TreeNodeId> = HashSet::new();
+    let mut unverified: HashSet<TreeNodeId> = HashSet::new();
+    let mut unverifiable_confirmed: HashSet<TreeNodeId> = HashSet::new();
+
+    for leaf_id in leaf_ids {
+        walk_branch(
+            tree_nodes,
+            leaf_id,
+            observed,
+            &mut nodes,
+            &mut refunds,
+            &mut stopped,
+            &mut needs_change,
+            &mut unverified,
+            &mut unverifiable_confirmed,
+            &mut pending,
+        );
+    }
+    for (leaf_id, address) in refund_addresses {
+        interpret_refund(
+            leaf_id,
+            address,
+            observed,
+            &mut refunds,
+            &mut unverified,
+            &mut pending,
+        );
+    }
+
+    let mut seen: HashSet<ChainQuery> = HashSet::new();
+    pending.retain(|query| seen.insert(query.clone()));
+
+    SettlementScan {
+        settled: SettledExitSteps {
+            nodes: nodes
+                .into_keys()
+                .filter(|id| !unverified.contains(id) && !unverifiable_confirmed.contains(id))
+                .collect(),
+            refunds: refunds
+                .into_keys()
+                .filter(|id| !unverified.contains(id))
+                .collect(),
+        },
+        pending,
+    }
 }
 
 /// The outcome of interpreting the observations: resolved state plus the lookups
@@ -2217,6 +2291,7 @@ mod exit_build_tests {
                 vec![a, b],
                 FEE_RATE,
                 dest_len,
+                None,
             )
         };
         let one = |total: u64| {
@@ -2229,6 +2304,7 @@ mod exit_build_tests {
                 vec![only],
                 FEE_RATE,
                 dest_len,
+                None,
             )
         };
 
@@ -2313,6 +2389,7 @@ mod exit_build_tests {
             inputs,
             FEE_RATE,
             change_len,
+            None,
         )
         .unwrap();
         assert!(
@@ -2363,6 +2440,7 @@ mod exit_build_tests {
             two(50_000),
             FEE_RATE,
             change_len,
+            None,
         )
         .unwrap();
         assert!(
@@ -2510,6 +2588,67 @@ mod interpret_tests {
                 confirmed: false,
             })),
         }
+    }
+
+    /// The scan answers what is already done without being handed any funding.
+    /// That is the whole point of it: funding can then be planned against the
+    /// work that is left, instead of against a fresh exit's price.
+    #[test]
+    fn scan_settlement_needs_no_funding_to_report_a_settled_refund() {
+        let deposit = OutPoint {
+            txid: Txid::from_byte_array([7u8; 32]),
+            vout: 0,
+        };
+        let root = treenode("root", None, tx_spending(deposit, 1), 0);
+        let leaf = treenode(
+            "leaf",
+            Some("root"),
+            tx_spending(
+                OutPoint {
+                    txid: root.node_tx.compute_txid(),
+                    vout: 0,
+                },
+                2,
+            ),
+            0,
+        );
+        let leaf_id = leaf.id.clone();
+        let leaf_out = OutPoint {
+            txid: leaf.node_tx.compute_txid(),
+            vout: 0,
+        };
+        let tree = to_node_map(vec![root, leaf]);
+        let addresses: HashMap<TreeNodeId, Address> =
+            [(leaf_id.clone(), leaf_addr())].into_iter().collect();
+
+        // A refund on-chain, unspent: the three lookups the walk needs to adopt it.
+        let refund_tx = tx_spending(leaf_out, 3);
+        let refund_txid = refund_tx.compute_txid();
+        let observed = vec![
+            refund_scan(&leaf_id, refund_txid, 55_000),
+            unspent(OutPoint {
+                txid: refund_txid,
+                vout: 0,
+            }),
+            Observation {
+                query: ChainQuery::Transaction(refund_txid),
+                result: ChainResult::Transaction(refund_tx),
+            },
+        ];
+
+        let scan = scan_settlement(&tree, std::slice::from_ref(&leaf_id), &addresses, &observed);
+        assert!(
+            scan.settled.refunds.contains(&leaf_id),
+            "a refund already on-chain is settled: {:?}",
+            scan.settled.refunds
+        );
+
+        // With nothing observed it settles nothing and asks the chain instead, so
+        // an unreadable chain can only overstate the work left, never understate it.
+        let blind = scan_settlement(&tree, std::slice::from_ref(&leaf_id), &addresses, &[]);
+        assert!(blind.settled.refunds.is_empty());
+        assert!(blind.settled.nodes.is_empty());
+        assert!(!blind.pending.is_empty());
     }
 
     #[test]
