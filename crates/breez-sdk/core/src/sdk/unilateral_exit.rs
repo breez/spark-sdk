@@ -311,10 +311,31 @@ impl BreezSdk {
             }
         }
 
-        // A sweep over zero inputs would error: return without one when no refund
-        // is on-chain yet. A later run sweeps any refund that surfaces.
+        // Nothing left to sweep means one of two opposite things: no refund has
+        // reached the chain yet, or every refund was already swept. Report a sweep
+        // that landed, so the caller reads a finished exit as finished instead of
+        // as one that never started.
         if build.refund_outputs.is_empty() {
-            debug!("unilateral_exit: no refund outputs to sweep, omitting the sweep");
+            for sweep in &build.confirmed_sweeps {
+                transactions.push(UnilateralExitTransaction {
+                    kind: UnilateralExitTxKind::Sweep,
+                    node_id: None,
+                    txid: sweep.compute_txid().to_string(),
+                    tx_hex: serialize_hex(sweep),
+                    cpfp_tx_hex: None,
+                    csv_timelock_blocks: None,
+                    depends_on: sweep
+                        .input
+                        .iter()
+                        .map(|i| i.previous_output.txid.to_string())
+                        .collect(),
+                    status: ConfirmationStatus::Confirmed,
+                });
+            }
+            debug!(
+                confirmed_sweeps = build.confirmed_sweeps.len(),
+                "unilateral_exit: nothing left to sweep"
+            );
             return Ok(UnilateralExitResponse {
                 recoverable_value_sat,
                 total_fee_sat: build_fee_sat,

@@ -98,8 +98,10 @@ pub(crate) enum RefundState {
     /// Leaf went out via `direct_tx`; drive the self-fee `direct_refund_tx` as-is
     /// (pays its own fee, no CPFP child).
     DriveDirect,
-    /// Refund confirmed and already swept: nothing to drive or sweep.
-    Swept,
+    /// Refund confirmed and already swept: nothing left to drive, but both it and
+    /// the sweep that spent it are still reported so the caller can see the exit
+    /// finished rather than infer it from their absence.
+    Swept(SweptRefund),
 }
 
 /// An already-confirmed fan-out adopted in place of building a fresh one.
@@ -122,6 +124,14 @@ pub(crate) struct ConfirmedRefund {
     pub tx: Transaction,
     pub outpoint: bitcoin::OutPoint,
     pub value: u64,
+}
+
+/// A refund whose output a confirmed transaction already spent, with that
+/// spender: the sweep this exit was driving towards.
+#[derive(Clone, Debug)]
+pub(crate) struct SweptRefund {
+    pub refund: ConfirmedRefund,
+    pub sweep: Transaction,
 }
 
 /// One unilateral-exit transaction and, when it still needs fee-bumping, the
@@ -187,6 +197,9 @@ pub struct UnilateralExitBuild {
     /// CPFP-package fees of the txs built plus a fresh fan-out's fee; excludes the
     /// sweep fee (the caller adds that).
     pub total_fee_sat: u64,
+    /// Sweeps already on-chain, which is what an exit with nothing left to sweep
+    /// has to report so its caller can tell finished from not yet started.
+    pub confirmed_sweeps: Vec<Transaction>,
 }
 
 /// A refund output sitting on-chain after a unilateral exit.
@@ -938,21 +951,17 @@ fn interpret_refund(
         pending.push(outspend_query);
         return;
     };
-    match spend {
-        // Spent by a confirmed tx: the sweep landed, nothing to drive or sweep.
-        ChainResult::Spend(Some(info)) if info.confirmed => {
-            trace!(%leaf_id, txid = %txo.txid, "interpret_chain: refund swept");
-            refunds.insert(leaf_id.clone(), RefundState::Swept);
-            return;
-        }
+    let swept_by = match spend {
+        // Spent by a confirmed tx: the sweep landed.
+        ChainResult::Spend(Some(info)) if info.confirmed => Some(info.spender_txid),
         ChainResult::Unavailable => {
             unverified.insert(leaf_id.clone());
             return;
         }
         // Unspent, or spent only by an unconfirmed sweep: adopt so the sweep is
         // (re)built.
-        _ => {}
-    }
+        _ => None,
+    };
 
     let tx_query = ChainQuery::Transaction(txo.txid);
     let Some(result) = observed.get(&tx_query) else {
@@ -967,14 +976,36 @@ fn interpret_refund(
         }
         _ => return,
     };
-    trace!(%leaf_id, txid = %txo.txid, value = txo.value, "interpret_chain: adopting on-chain refund");
+    let refund = ConfirmedRefund {
+        tx,
+        outpoint: refund_outpoint,
+        value: txo.value,
+    };
+
+    let Some(sweep_txid) = swept_by else {
+        trace!(%leaf_id, txid = %txo.txid, value = txo.value, "interpret_chain: adopting on-chain refund");
+        refunds.insert(leaf_id.clone(), RefundState::Adopted(refund));
+        return;
+    };
+
+    // The sweep's own body, so it can be reported like any other confirmed step.
+    let sweep_query = ChainQuery::Transaction(sweep_txid);
+    let Some(result) = observed.get(&sweep_query) else {
+        pending.push(sweep_query);
+        return;
+    };
+    let sweep = match result {
+        ChainResult::Transaction(tx) => tx.clone(),
+        ChainResult::Unavailable => {
+            unverified.insert(leaf_id.clone());
+            return;
+        }
+        _ => return,
+    };
+    trace!(%leaf_id, txid = %txo.txid, sweep = %sweep_txid, "interpret_chain: refund swept");
     refunds.insert(
         leaf_id.clone(),
-        RefundState::Adopted(ConfirmedRefund {
-            tx,
-            outpoint: refund_outpoint,
-            value: txo.value,
-        }),
+        RefundState::Swept(SweptRefund { refund, sweep }),
     );
 }
 
@@ -1032,6 +1063,8 @@ pub(crate) fn build_exit(
     let mut emitted: HashSet<Txid> = HashSet::new();
     let mut branches = Vec::with_capacity(per_branch_funding.len());
     let mut refund_outputs: Vec<RefundOutput> = Vec::new();
+    // Sweeps that already landed, keyed by txid: several leaves share one.
+    let mut swept_sweeps: HashMap<Txid, Transaction> = HashMap::new();
     let mut cpfp_change_inputs: Vec<CpfpChangeInput> = Vec::new();
     let mut cpfp_fee_sat: u64 = 0;
 
@@ -1208,7 +1241,19 @@ pub(crate) fn build_exit(
                     status: ExitTxStatus::Unconfirmed,
                 });
             }
-            Some(RefundState::Swept) => {}
+            Some(RefundState::Swept(swept)) => {
+                swept_sweeps.insert(swept.sweep.compute_txid(), swept.sweep.clone());
+                txs.push(ExitTx {
+                    kind: ExitTxKind::Refund,
+                    node_id: Some(leaf_id.clone()),
+                    txid: swept.refund.outpoint.txid,
+                    csv_timelock_blocks: csv_timelock(&swept.refund.tx),
+                    base_tx: swept.refund.tx.clone(),
+                    to_sign: None,
+                    depends_on: vec![],
+                    status: ExitTxStatus::Confirmed,
+                });
+            }
             // Drive the cpfp refund with a fresh child; skipped on a stopped branch.
             None if !stopped => {
                 let refund_tx = leaf.refund_tx.clone().ok_or_else(|| {
@@ -1272,6 +1317,7 @@ pub(crate) fn build_exit(
         "build_unilateral_exit: assembled"
     );
     Ok(UnilateralExitBuild {
+        confirmed_sweeps: swept_sweeps.into_values().collect(),
         fan_out,
         branches,
         refund_outputs,
@@ -1541,6 +1587,20 @@ mod exit_build_tests {
         }
     }
 
+    fn swept_state() -> RefundState {
+        RefundState::Swept(SweptRefund {
+            refund: ConfirmedRefund {
+                tx: anchor_tx(9),
+                outpoint: OutPoint {
+                    txid: anchor_tx(9).compute_txid(),
+                    vout: 0,
+                },
+                value: 10_000,
+            },
+            sweep: anchor_tx(10),
+        })
+    }
+
     fn id(s: &str) -> TreeNodeId {
         TreeNodeId::from_str(s).unwrap()
     }
@@ -1588,13 +1648,13 @@ mod exit_build_tests {
         assert_eq!(remaining_cpfp_cost(&leaf, &fresh), 5_339);
 
         let refund_settled = ResolvedExitState {
-            refunds: [(id("leaf"), RefundState::Swept)].into_iter().collect(),
+            refunds: [(id("leaf"), swept_state())].into_iter().collect(),
             ..Default::default()
         };
         assert_eq!(remaining_cpfp_cost(&leaf, &refund_settled), 3_339);
 
         let all_settled = ResolvedExitState {
-            refunds: [(id("leaf"), RefundState::Swept)].into_iter().collect(),
+            refunds: [(id("leaf"), swept_state())].into_iter().collect(),
             nodes: [(id("node"), NodeState::ConfirmedDirect)]
                 .into_iter()
                 .collect(),
@@ -1957,7 +2017,7 @@ mod exit_build_tests {
     }
 
     #[test]
-    fn build_omits_swept_leaf_refund() {
+    fn build_reports_a_swept_leaf_as_confirmed() {
         let resolved = ResolvedExitState {
             nodes: [
                 (id("root"), NodeState::ConfirmedCpfp { change: None }),
@@ -1965,7 +2025,7 @@ mod exit_build_tests {
             ]
             .into_iter()
             .collect(),
-            refunds: [(id("leaf"), RefundState::Swept)].into_iter().collect(),
+            refunds: [(id("leaf"), swept_state())].into_iter().collect(),
             ..Default::default()
         };
         let build = build_exit(&single_leaf_plan(), &resolved, FEE_RATE).unwrap();
@@ -1973,12 +2033,20 @@ mod exit_build_tests {
             build.refund_outputs.is_empty(),
             "a swept leaf yields no refund output to sweep"
         );
-        assert!(
-            !build.branches[0]
-                .txs
-                .iter()
-                .any(|t| t.kind == ExitTxKind::Refund),
-            "a swept leaf emits no refund tx"
+        let refund = build.branches[0]
+            .txs
+            .iter()
+            .find(|t| t.kind == ExitTxKind::Refund)
+            .expect("a swept leaf still reports its refund");
+        assert_eq!(
+            refund.status,
+            ExitTxStatus::Confirmed,
+            "a swept refund is reported confirmed, not omitted"
+        );
+        assert_eq!(
+            build.confirmed_sweeps.len(),
+            1,
+            "the sweep that spent it is carried out of the build"
         );
         assert!(build.cpfp_change_inputs.is_empty());
     }
@@ -2160,6 +2228,7 @@ mod exit_build_tests {
             },
         };
         let mut build = UnilateralExitBuild {
+            confirmed_sweeps: vec![],
             fan_out: None,
             branches: vec![ExitBranch {
                 leaf_id: id("leaf"),
@@ -2983,11 +3052,22 @@ mod interpret_tests {
             vout: 0,
         };
         // The refund is confirmed and spent by a confirmed sweep: fully done.
+        let sweep_tx = tx_spending(refund_outpoint, 7);
+        let sweep_txid = sweep_tx.compute_txid();
+        let refund_tx = tx_spending(leaf_parent_out, 5);
         let observed = vec![
             spent(deposit, root_txid),
             spent(leaf_parent_out, leaf_cpfp_txid),
             refund_scan(&leaf_id, refund_txid, 42_000),
-            spent(refund_outpoint, Txid::from_byte_array([7u8; 32])),
+            spent(refund_outpoint, sweep_txid),
+            Observation {
+                query: ChainQuery::Transaction(refund_txid),
+                result: ChainResult::Transaction(refund_tx),
+            },
+            Observation {
+                query: ChainQuery::Transaction(sweep_txid),
+                result: ChainResult::Transaction(sweep_tx),
+            },
         ];
         let interp = interpret_chain(&prepared, &observed).unwrap();
 
@@ -2995,7 +3075,7 @@ mod interpret_tests {
         assert!(
             matches!(
                 interp.resolved.refunds.get(&leaf_id),
-                Some(RefundState::Swept)
+                Some(RefundState::Swept(_))
             ),
             "a refund spent by a confirmed sweep is swept"
         );
