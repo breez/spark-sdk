@@ -19,6 +19,13 @@ use tracing::info;
 /// 5. Claims the deposit manually
 /// 6. Waits for deposit confirmation
 /// 7. Verifies the balance increased
+///
+/// Ignored: the deployed operators answer `generate_deposit_address` with
+/// `Unavailable`/`METHOD_DISABLED`, their knob-gated kill switch for a gRPC
+/// method. Nothing in the Spark proto, operator handler, or JS SDK retires the
+/// non-static deposit flow, so this is an environment state rather than a
+/// removed feature. Re-enable once the operators serve the method again.
+#[ignore = "operators disabled generate_deposit_address on the deployed regtest"]
 #[rstest]
 #[tokio::test]
 #[test_log::test]
@@ -137,6 +144,13 @@ async fn test_non_static_deposit_with_faucet() -> Result<()> {
 /// 1. Alice deposits via faucet (non-static deposit)
 /// 2. Alice withdraws (coop exit) to Bob's non-static deposit address
 /// 3. Verifies Alice's balance is zero after withdrawal
+///
+/// Ignored: the deployed operators answer `generate_deposit_address` with
+/// `Unavailable`/`METHOD_DISABLED`, their knob-gated kill switch for a gRPC
+/// method. Nothing in the Spark proto, operator handler, or JS SDK retires the
+/// non-static deposit flow, so this is an environment state rather than a
+/// removed feature. Re-enable once the operators serve the method again.
+#[ignore = "operators disabled generate_deposit_address on the deployed regtest"]
 #[rstest]
 #[tokio::test]
 #[test_log::test]

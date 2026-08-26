@@ -713,14 +713,22 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
     Ok(())
 }
 
-/// Test 6: Lightning payment with short completion timeout returns quickly, then completes
+/// Test 6: Lightning send with no completion wait still settles and credits
+///
+/// Covers the `completion_timeout_secs: 0` branch, which returns whatever the
+/// SSP reported without awaiting the background poll. The immediate status is
+/// deliberately not asserted: on regtest the SSP often settles the send inside
+/// `pay_lightning_invoice`, so the returned payment is already `Completed`,
+/// while a slower route returns `Pending`. Either way the poll must carry it to
+/// success and credit the receiver the exact amount. `test_10` covers the
+/// non-zero timeout, where the returned status *is* pinned down.
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_06_lightning_timeout_and_wait(
+async fn test_06_lightning_send_without_completion_wait(
     #[future] alice_sdk: Result<SdkInstance>,
     #[future] bob_sdk: Result<SdkInstance>,
 ) -> Result<()> {
-    info!("=== Starting test_06_lightning_timeout_and_wait ===");
+    info!("=== Starting test_06_lightning_send_without_completion_wait ===");
 
     let mut alice = alice_sdk.await?;
     let mut bob = bob_sdk.await?;
@@ -756,26 +764,37 @@ async fn test_06_lightning_timeout_and_wait(
         })
         .await?;
 
-    // Send with a very short completion timeout to force an early return if still pending
+    // Return as soon as the send is accepted, without waiting for settlement.
     let send_resp = alice
         .sdk
         .send_payment(SendPaymentRequest {
             prepare_response: prepare.clone(),
             options: Some(SendPaymentOptions::Bolt11Invoice {
                 prefer_spark: false,
-                completion_timeout_secs: Some(1),
+                completion_timeout_secs: Some(0),
             }),
             idempotency_key: None,
         })
         .await?;
     info!("Immediate return status: {:?}", send_resp.payment.status);
-    assert!(matches!(send_resp.payment.status, PaymentStatus::Pending));
+    assert!(
+        matches!(
+            send_resp.payment.status,
+            PaymentStatus::Pending | PaymentStatus::Completed
+        ),
+        "a send that was accepted must not come back {:?}",
+        send_resp.payment.status
+    );
+
+    // Whether or not it had already settled, the send reaches success.
+    let sent = wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 60).await?;
+    assert_eq!(sent.amount, expected_amount as u128);
     // Bob should have received the exact amount
     let received =
         wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
     assert_eq!(received.amount, expected_amount as u128);
 
-    info!("=== Test test_06_lightning_timeout_and_wait PASSED ===");
+    info!("=== Test test_06_lightning_send_without_completion_wait PASSED ===");
     Ok(())
 }
 

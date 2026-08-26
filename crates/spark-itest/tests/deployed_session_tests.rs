@@ -96,10 +96,12 @@ async fn test_operator_session_force_refresh_self_heal() -> Result<()> {
     // explicit RPC below makes the "operator call succeeds" assertion direct.
     let (wallet, _listener) = create_regtest_wallet_with_session_store(store.clone()).await?;
 
-    let deposit = wallet.generate_deposit_address().await?;
-    info!("Generated deposit address: {}", deposit.address);
+    // Any authenticated operator RPC works here; static deposit address
+    // generation is one that the deployed operators keep enabled.
+    let address = wallet.generate_static_deposit_address().await?;
+    info!("Generated static deposit address: {address}");
     assert!(
-        !deposit.address.to_string().is_empty(),
+        !address.to_string().is_empty(),
         "operator RPC returned an empty deposit address"
     );
 
