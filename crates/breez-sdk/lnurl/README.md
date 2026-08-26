@@ -110,6 +110,8 @@ db_url = "postgres://user:password@localhost:5432/lnurl_db"
 # LNURL payment configuration
 min_sendable = 1000                 # Minimum amount in millisatoshi (1 sat)
 max_sendable = 4000000000           # Maximum amount in millisatoshi (4,000,000 sats)
+max_registrations_per_day = 5       # Address registrations per pubkey per domain
+                                    # in a rolling 24h window (0 disables)
 domains = "yourdomain.com"          # Comma-separated list of allowed domains
 default_api_key = "<breez-api-key>" # Fallback Breez API key for partner attribution (required on mainnet)
 ```
@@ -127,6 +129,7 @@ default_api_key = "<breez-api-key>" # Fallback Breez API key for partner attribu
 | `--network` | Spark network (mainnet, testnet, regtest) | `mainnet` |
 | `--min-sendable` | Minimum payment amount (millisatoshi) | `1000` |
 | `--max-sendable` | Maximum payment amount (millisatoshi) | `4000000000` |
+| `--max-registrations-per-day` | Address registrations one pubkey may perform per domain in a rolling 24h window, refused with `429` past it (`0` disables) | `5` |
 | `--webhook-domain` | Domain for the webhook URL registered with the SSP | (none) |
 | `--ssp-auth-seed` | Hex-encoded 32-byte seed for SSP authentication | (random) |
 

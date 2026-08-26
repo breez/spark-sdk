@@ -16,8 +16,32 @@ pub enum LnurlRepositoryError {
     /// The signed statement authorizing this request has already been acted on.
     #[error("statement already used")]
     StatementAlreadyUsed,
+    /// The pubkey has registered as many addresses as its limit allows inside
+    /// the counting window.
+    #[error("registration limit exceeded")]
+    RegistrationLimitExceeded,
     #[error("database error: {0}")]
     General(anyhow::Error),
+}
+
+/// A cap on the successful registrations one pubkey may perform in one domain
+/// inside a rolling window.
+#[derive(Debug, Clone, Copy)]
+pub struct RegistrationLimit {
+    pub max_per_window: u32,
+    pub window_secs: u64,
+}
+
+impl RegistrationLimit {
+    /// The production window: one rolling day.
+    pub const DAY_SECS: u64 = 86_400;
+
+    pub fn daily(max_per_window: u32) -> Self {
+        Self {
+            max_per_window,
+            window_secs: Self::DAY_SECS,
+        }
+    }
 }
 
 pub struct LnurlSenderComment {
@@ -62,22 +86,37 @@ pub struct DomainConfig {
 /// How often expired signed-message claims are pruned.
 const CLAIM_CLEANUP_INTERVAL: std::time::Duration = std::time::Duration::from_hours(1);
 
-/// Start the background pruner for expired signed-message claims.
+/// Start the background pruner for expired signed-message claims and for
+/// registration-log rows that have aged out of the counting window.
 ///
 /// A claim only needs to outlive the window in which its message's timestamp is
-/// still accepted.
-pub fn start_claim_cleanup_processor<DB>(db: DB)
+/// still accepted. Registration rows are pruned on `registration_limit`'s own
+/// window: pruning sooner would hand back quota the count still charges for.
+/// With no limit, nothing writes new rows, and the default window clears what
+/// an earlier run left behind.
+pub fn start_claim_cleanup_processor<DB>(db: DB, registration_limit: Option<RegistrationLimit>)
 where
     DB: LnurlRepository + Send + Sync + 'static,
 {
+    let registration_window =
+        registration_limit.map_or(RegistrationLimit::DAY_SECS, |limit| limit.window_secs);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(CLAIM_CLEANUP_INTERVAL);
         loop {
             interval.tick().await;
-            match db.delete_expired_signed_messages(crate::time::now()).await {
+            let now = crate::time::now();
+            match db.delete_expired_signed_messages(now).await {
                 Ok(0) => {}
                 Ok(count) => tracing::debug!("pruned {count} expired signed-message claims"),
                 Err(e) => tracing::error!("failed to prune signed-message claims: {e}"),
+            }
+            // A window too long to express prunes nothing, which is the
+            // side to fail on: the count keeps charging for every row.
+            let cutoff = now.saturating_sub(i64::try_from(registration_window).unwrap_or(i64::MAX));
+            match db.delete_old_registrations(cutoff).await {
+                Ok(0) => {}
+                Ok(count) => tracing::debug!("pruned {count} old registration-log rows"),
+                Err(e) => tracing::error!("failed to prune the registration log: {e}"),
             }
         }
     });
@@ -144,7 +183,18 @@ pub trait LnurlRepository {
     /// Returns [`LnurlRepositoryError::NameReserved`] if the name is held for
     /// another pubkey, and clears the reservation when `user.pubkey` is the one
     /// it is held for.
-    async fn upsert_user(&self, user: &User) -> Result<(), LnurlRepositoryError>;
+    ///
+    /// With a `limit`, a registration that changes the held name counts against
+    /// it and is refused with
+    /// [`LnurlRepositoryError::RegistrationLimitExceeded`] once the pubkey has
+    /// used up its window on this domain. Re-registering the held name (e.g. a
+    /// description update) never counts, and a refused registration leaves no
+    /// trace.
+    async fn upsert_user(
+        &self,
+        user: &User,
+        limit: Option<RegistrationLimit>,
+    ) -> Result<(), LnurlRepositoryError>;
 
     /// Whether `name` in `domain` is owned, held, or free, answered for
     /// `asking_pubkey`: a hold that pubkey may still reclaim reads as
@@ -191,6 +241,10 @@ pub trait LnurlRepository {
 
     /// Delete claimed statements whose `expires_at` has passed.
     async fn delete_expired_signed_messages(&self, now: i64) -> Result<u64, LnurlRepositoryError>;
+
+    /// Delete registration-log rows created before `cutoff`, returning how many
+    /// were removed.
+    async fn delete_old_registrations(&self, cutoff: i64) -> Result<u64, LnurlRepositoryError>;
 
     async fn upsert_zap(&self, zap: &Zap) -> Result<(), LnurlRepositoryError>;
     async fn insert_lnurl_sender_comment(
@@ -292,7 +346,8 @@ pub struct WebhookPayloadData {
 #[cfg(test)]
 pub mod shared_tests {
     use super::{
-        LnurlRepository, LnurlRepositoryError, NameStatus, StatementClaim, TransferRequest,
+        LnurlRepository, LnurlRepositoryError, NameStatus, RegistrationLimit, StatementClaim,
+        TransferRequest,
     };
     use crate::user::User;
 
@@ -316,7 +371,7 @@ pub mod shared_tests {
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        db.upsert_user(&user(domain, pubkey, name)).await
+        db.upsert_user(&user(domain, pubkey, name), None).await
     }
 
     /// Upserting a name already owned by a different pubkey returns `NameTaken`
@@ -328,12 +383,15 @@ pub mod shared_tests {
         register(db, "a.com", "aaaa", "alice").await.unwrap();
 
         let result = db
-            .upsert_user(&User {
-                domain: "a.com".into(),
-                pubkey: "bbbb".into(),
-                name: "alice".into(),
-                description: "bob".into(),
-            })
+            .upsert_user(
+                &User {
+                    domain: "a.com".into(),
+                    pubkey: "bbbb".into(),
+                    name: "alice".into(),
+                    description: "bob".into(),
+                },
+                None,
+            )
             .await;
         assert!(
             matches!(result, Err(LnurlRepositoryError::NameTaken)),
@@ -814,5 +872,249 @@ pub mod shared_tests {
                 .as_deref(),
             Some("tok")
         );
+    }
+
+    /// A limit inside a window that never expires during the test.
+    fn limit(max_per_window: u32) -> RegistrationLimit {
+        RegistrationLimit {
+            max_per_window,
+            window_secs: 3_600,
+        }
+    }
+
+    /// Register `name` to `pubkey` under `limit`.
+    async fn register_limited<DB>(
+        db: &DB,
+        domain: &str,
+        pubkey: &str,
+        name: &str,
+        limit: Option<RegistrationLimit>,
+    ) -> Result<(), LnurlRepositoryError>
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        db.upsert_user(&user(domain, pubkey, name), limit).await
+    }
+
+    /// The limit refuses the registration past `max_per_window` name changes,
+    /// leaves the refused attempt without a trace, and binds one
+    /// `(domain, pubkey)` only: other pubkeys and other domains keep their own
+    /// budgets, and no limit enforces nothing.
+    pub async fn the_registration_limit_bounds_name_changes<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let domain = "limit.com";
+        register_limited(db, domain, "aaaa", "ada1", Some(limit(2)))
+            .await
+            .unwrap();
+        register_limited(db, domain, "aaaa", "ada2", Some(limit(2)))
+            .await
+            .unwrap();
+
+        let third = register_limited(db, domain, "aaaa", "ada3", Some(limit(2))).await;
+        assert!(
+            matches!(third, Err(LnurlRepositoryError::RegistrationLimitExceeded)),
+            "expected RegistrationLimitExceeded, got {third:?}"
+        );
+        assert_eq!(
+            db.get_user_by_pubkey(domain, "aaaa")
+                .await
+                .unwrap()
+                .map(|u| u.name),
+            Some("ada2".to_string()),
+            "the refused registration must leave the held name alone"
+        );
+        assert_eq!(
+            db.name_status(domain, "ada3", None).await.unwrap(),
+            NameStatus::Free,
+            "the refused registration must not have taken or held the name"
+        );
+
+        register_limited(db, domain, "bbbb", "bea", Some(limit(2)))
+            .await
+            .expect("another pubkey must have its own budget");
+        register_limited(db, "limit-other.com", "aaaa", "ada1", Some(limit(2)))
+            .await
+            .expect("the same pubkey must have its own budget on another domain");
+        register_limited(db, domain, "aaaa", "ada3", None)
+            .await
+            .expect("no limit must enforce nothing");
+    }
+
+    /// Re-registering the held name is not a name change: it never consumes
+    /// quota, and it still applies the description.
+    pub async fn re_registering_the_held_name_is_not_counted<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let domain = "limit-rereg.com";
+        register_limited(db, domain, "cccc", "cleo", Some(limit(1)))
+            .await
+            .unwrap();
+
+        db.upsert_user(
+            &User {
+                domain: domain.into(),
+                pubkey: "cccc".into(),
+                name: "cleo".into(),
+                description: "new description".into(),
+            },
+            Some(limit(1)),
+        )
+        .await
+        .expect("re-registering the held name must not consume quota");
+        assert_eq!(
+            db.get_user_by_pubkey(domain, "cccc")
+                .await
+                .unwrap()
+                .map(|u| u.description),
+            Some("new description".to_string())
+        );
+
+        let changed = register_limited(db, domain, "cccc", "cora", Some(limit(1))).await;
+        assert!(
+            matches!(
+                changed,
+                Err(LnurlRepositoryError::RegistrationLimitExceeded)
+            ),
+            "a name change must still count: got {changed:?}"
+        );
+    }
+
+    /// Only registrations inside the window count: with a zero-length window
+    /// every prior registration is out of it, so the same request passes.
+    pub async fn registrations_outside_the_window_do_not_count<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let domain = "limit-window.com";
+        register_limited(db, domain, "dddd", "dot1", Some(limit(1)))
+            .await
+            .unwrap();
+        let refused = register_limited(db, domain, "dddd", "dot2", Some(limit(1))).await;
+        assert!(matches!(
+            refused,
+            Err(LnurlRepositoryError::RegistrationLimitExceeded)
+        ));
+
+        let expired_window = Some(RegistrationLimit {
+            max_per_window: 1,
+            window_secs: 0,
+        });
+        register_limited(db, domain, "dddd", "dot2", expired_window)
+            .await
+            .expect("a registration outside the window must not count");
+    }
+
+    /// A registration refused for a taken name consumes no quota.
+    pub async fn a_refused_registration_does_not_consume_quota<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let domain = "limit-refused.com";
+        register(db, domain, "eeee", "elsa").await.unwrap();
+
+        let taken = register_limited(db, domain, "ffff", "elsa", Some(limit(1))).await;
+        assert!(
+            matches!(taken, Err(LnurlRepositoryError::NameTaken)),
+            "expected NameTaken, got {taken:?}"
+        );
+        register_limited(db, domain, "ffff", "faye", Some(limit(1)))
+            .await
+            .expect("the refused attempt must not have consumed the quota");
+    }
+
+    /// Reclaiming a name reserved for the pubkey is a name change like any
+    /// other. Exempting it would let a pubkey flap between two names it has
+    /// held without ever hitting the limit.
+    pub async fn reclaiming_a_reserved_name_consumes_quota<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let domain = "limit-reclaim.com";
+        register_limited(db, domain, "gggg", "gwen", Some(limit(2)))
+            .await
+            .unwrap();
+        register_limited(db, domain, "gggg", "gail", Some(limit(2)))
+            .await
+            .unwrap();
+        assert_eq!(
+            db.name_status(domain, "gwen", None).await.unwrap(),
+            NameStatus::Reserved
+        );
+
+        let reclaimed = register_limited(db, domain, "gggg", "gwen", Some(limit(2))).await;
+        assert!(
+            matches!(
+                reclaimed,
+                Err(LnurlRepositoryError::RegistrationLimitExceeded)
+            ),
+            "expected RegistrationLimitExceeded, got {reclaimed:?}"
+        );
+    }
+
+    /// A transfer target at its registration limit still receives the name:
+    /// a transfer moves an existing address rather than consuming a new one.
+    pub async fn a_transfer_ignores_the_registration_limit<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let domain = "limit-transfer.com";
+        register_limited(db, domain, "hhhh", "hana", Some(limit(1)))
+            .await
+            .unwrap();
+        register(db, domain, "iiii", "iris").await.unwrap();
+
+        let statement = transfer_statement("iiii", "hhhh", "iris");
+        db.transfer_username(
+            transfer(domain, "iiii", "hhhh", "iris"),
+            transfer_claim(&statement),
+        )
+        .await
+        .expect("a transfer to a pubkey at its limit must succeed");
+        assert_eq!(
+            db.get_user_by_pubkey(domain, "hhhh")
+                .await
+                .unwrap()
+                .map(|u| u.name),
+            Some("iris".to_string())
+        );
+    }
+
+    /// Pruning drops only rows created before the cutoff, and a pruned budget
+    /// frees the quota.
+    pub async fn pruning_removes_only_old_registrations<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let domain = "limit-prune.com";
+        register_limited(db, domain, "jjjj", "june1", Some(limit(2)))
+            .await
+            .unwrap();
+        register_limited(db, domain, "jjjj", "june2", Some(limit(2)))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            db.delete_old_registrations(0).await.unwrap(),
+            0,
+            "a cutoff in the past must prune nothing"
+        );
+        let refused = register_limited(db, domain, "jjjj", "june3", Some(limit(2))).await;
+        assert!(matches!(
+            refused,
+            Err(LnurlRepositoryError::RegistrationLimitExceeded)
+        ));
+
+        // Far in the future, so both rows are older than it. Other tests may
+        // share the table, so assert at least this test's rows go.
+        assert!(
+            db.delete_old_registrations(i64::MAX).await.unwrap() >= 2,
+            "a cutoff past every row must prune them"
+        );
+        register_limited(db, domain, "jjjj", "june3", Some(limit(2)))
+            .await
+            .expect("pruned registrations must not count");
     }
 }

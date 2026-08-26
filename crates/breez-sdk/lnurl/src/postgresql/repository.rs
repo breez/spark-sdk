@@ -3,8 +3,8 @@ use lnurl_models::ListMetadataMetadata;
 use sqlx::{PgPool, Row};
 
 use crate::repository::{
-    DomainConfig, Invoice, LnurlSenderComment, NameStatus, PendingZapReceipt, TransferRequest,
-    WebhookPayloadData,
+    DomainConfig, Invoice, LnurlSenderComment, NameStatus, PendingZapReceipt, RegistrationLimit,
+    TransferRequest, WebhookPayloadData,
 };
 use crate::webhooks::repository::{
     NewWebhookDelivery, WebhookConfig, WebhookDelivery, WebhookRepositoryError,
@@ -139,6 +139,42 @@ where
     Ok(held.map(|(name,)| name))
 }
 
+/// Log a registration that changed the held name and enforce `limit`, all
+/// inside the caller's transaction: a refusal rolls back the registration and
+/// the log row together. The caller holds the registration lock for this
+/// pubkey, so the count cannot race a concurrent registration.
+async fn record_registration(
+    tx: &mut sqlx::PgConnection,
+    domain: &str,
+    pubkey: &str,
+    limit: RegistrationLimit,
+) -> Result<(), LnurlRepositoryError> {
+    sqlx::query(
+        "INSERT INTO address_registrations (domain, pubkey, created_at) VALUES ($1, $2, $3)",
+    )
+    .bind(domain)
+    .bind(pubkey)
+    .bind(now())
+    .execute(&mut *tx)
+    .await?;
+
+    let cutoff = now().saturating_sub(i64::try_from(limit.window_secs).unwrap_or(i64::MAX));
+    let (count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM address_registrations
+         WHERE domain = $1 AND pubkey = $2 AND created_at > $3",
+    )
+    .bind(domain)
+    .bind(pubkey)
+    .bind(cutoff)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if count > i64::from(limit.max_per_window) {
+        return Err(LnurlRepositoryError::RegistrationLimitExceeded);
+    }
+    Ok(())
+}
+
 /// The advisory-lock key standing for one pubkey's registration on one domain.
 fn registration_lock_key(domain: &str, pubkey: &str) -> i64 {
     let mut engine = sha256::Hash::engine();
@@ -270,7 +306,11 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(maybe_user)
     }
 
-    async fn upsert_user(&self, user: &User) -> Result<(), LnurlRepositoryError> {
+    async fn upsert_user(
+        &self,
+        user: &User,
+        limit: Option<RegistrationLimit>,
+    ) -> Result<(), LnurlRepositoryError> {
         let mut tx = self
             .pool
             .begin()
@@ -315,10 +355,15 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             .execute(&mut *tx)
             .await?;
 
+        let name_changed = previous.as_deref() != Some(user.name.as_str());
         if let Some(previous) = previous
             && previous != user.name
         {
             reserve_name(&mut *tx, &user.domain, &previous, &user.pubkey).await?;
+        }
+
+        if name_changed && let Some(limit) = limit {
+            record_registration(&mut tx, &user.domain, &user.pubkey, limit).await?;
         }
 
         tx.commit()
@@ -439,6 +484,14 @@ impl crate::repository::LnurlRepository for LnurlRepository {
     async fn delete_expired_signed_messages(&self, now: i64) -> Result<u64, LnurlRepositoryError> {
         let result = sqlx::query("DELETE FROM used_signed_messages WHERE expires_at < $1")
             .bind(now)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+
+    async fn delete_old_registrations(&self, cutoff: i64) -> Result<u64, LnurlRepositoryError> {
+        let result = sqlx::query("DELETE FROM address_registrations WHERE created_at < $1")
+            .bind(cutoff)
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected())
@@ -1148,6 +1201,55 @@ mod postgres_tests {
         shared_tests::a_transfer_holds_the_name_the_target_gave_up(&db).await;
     }
 
+    #[tokio::test]
+    async fn the_registration_limit_bounds_name_changes() {
+        let pool = test_pool("limit_bounds_name_changes").await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::the_registration_limit_bounds_name_changes(&db).await;
+    }
+
+    #[tokio::test]
+    async fn re_registering_the_held_name_is_not_counted() {
+        let pool = test_pool("limit_rereg_not_counted").await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::re_registering_the_held_name_is_not_counted(&db).await;
+    }
+
+    #[tokio::test]
+    async fn registrations_outside_the_window_do_not_count() {
+        let pool = test_pool("limit_window_expiry").await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::registrations_outside_the_window_do_not_count(&db).await;
+    }
+
+    #[tokio::test]
+    async fn a_refused_registration_does_not_consume_quota() {
+        let pool = test_pool("limit_refused_no_quota").await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::a_refused_registration_does_not_consume_quota(&db).await;
+    }
+
+    #[tokio::test]
+    async fn reclaiming_a_reserved_name_consumes_quota() {
+        let pool = test_pool("limit_reclaim_counts").await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::reclaiming_a_reserved_name_consumes_quota(&db).await;
+    }
+
+    #[tokio::test]
+    async fn a_transfer_ignores_the_registration_limit() {
+        let pool = test_pool("limit_transfer_ignores").await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::a_transfer_ignores_the_registration_limit(&db).await;
+    }
+
+    #[tokio::test]
+    async fn pruning_removes_only_old_registrations() {
+        let pool = test_pool("limit_prune_old_rows").await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::pruning_removes_only_old_registrations(&db).await;
+    }
+
     /// A hold whose `reclaimable_from` has passed stops standing in anyone's
     /// way. Nothing writes a non-NULL `reclaimable_from` yet, so the row is
     /// seeded directly: the read side is what a cooldown policy would build on.
@@ -1173,12 +1275,15 @@ mod postgres_tests {
             NameStatus::Free,
             "a hold whose time has passed must read as free"
         );
-        db.upsert_user(&crate::user::User {
-            domain: domain.into(),
-            pubkey: "kkkk".into(),
-            name: "jane".into(),
-            description: "jane".into(),
-        })
+        db.upsert_user(
+            &crate::user::User {
+                domain: domain.into(),
+                pubkey: "kkkk".into(),
+                name: "jane".into(),
+                description: "jane".into(),
+            },
+            None,
+        )
         .await
         .expect("a lapsed hold must not refuse the registration");
         assert_eq!(
