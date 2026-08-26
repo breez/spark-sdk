@@ -9,7 +9,9 @@ from breez_sdk_spark import (
     DeriveSeedsRequest,
     DomainAssociation,
     PasskeyClient,
+    PasskeyConfig,
     PrfProvider,
+    ProxyConfig,
     Seed,
     SignInRequest,
 )
@@ -131,9 +133,13 @@ async def resolve_passkey_seed(
     label,
     list_labels,
     store_label,
+    proxy=None,
 ) -> Seed:
     """Resolve a Seed from a passkey PRF provider, with optional Nostr label operations."""
-    client = PasskeyClient(provider, breez_api_key, None)
+    config = None
+    if proxy is not None:
+        config = PasskeyConfig(proxy=proxy)
+    client = PasskeyClient(provider, breez_api_key, config)
 
     if list_labels:
         print("Querying Nostr for available labels...")

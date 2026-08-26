@@ -15,6 +15,9 @@ string? stableBalanceDefaultActiveLabel = null;
 ulong? stableBalanceThreshold = null;
 bool serverMode = false;
 string? lnurlDomain = null;
+string? proxyAddress = null;
+string? proxyUser = null;
+string? proxyPassword = null;
 string? passkeyProviderStr = null;
 string? label = null;
 bool listLabels = false;
@@ -71,6 +74,15 @@ for (int i = 0; i < args.Length; i++)
         case "--lnurl-domain":
             if (i + 1 < args.Length) lnurlDomain = args[++i];
             break;
+        case "--proxy":
+            if (i + 1 < args.Length) proxyAddress = args[++i];
+            break;
+        case "--proxy-user":
+            if (i + 1 < args.Length) proxyUser = args[++i];
+            break;
+        case "--proxy-password":
+            if (i + 1 < args.Length) proxyPassword = args[++i];
+            break;
         case "--help":
         case "-h":
             PrintUsage();
@@ -121,6 +133,24 @@ if (rpId != null && passkeyProviderStr == null)
 if (listLabels && (label != null || storeLabel))
 {
     Console.Error.WriteLine("Error: --list-labels conflicts with --label and --store-label");
+    return;
+}
+
+if (proxyUser != null && proxyAddress == null)
+{
+    Console.Error.WriteLine("Error: --proxy-user requires --proxy");
+    return;
+}
+
+if (proxyPassword != null && proxyAddress == null)
+{
+    Console.Error.WriteLine("Error: --proxy-password requires --proxy");
+    return;
+}
+
+if ((proxyUser != null) != (proxyPassword != null))
+{
+    Console.Error.WriteLine("Error: --proxy-user and --proxy-password must be specified together");
     return;
 }
 
@@ -185,6 +215,14 @@ if (passkeyProviderStr != null)
 }
 
 // ---------------------------------------------------------------------------
+// Parse proxy
+// ---------------------------------------------------------------------------
+
+ProxyConfig? proxy = proxyAddress != null
+    ? ParseProxy(proxyAddress, proxyUser, proxyPassword)
+    : null;
+
+// ---------------------------------------------------------------------------
 // Run interactive mode
 // ---------------------------------------------------------------------------
 
@@ -197,7 +235,8 @@ await RunInteractiveMode(
     mysqlConnectionString,
     stableBalanceConfig,
     passkeyConfig,
-    lnurlDomain
+    lnurlDomain,
+    proxy
 );
 
 return;
@@ -205,6 +244,22 @@ return;
 // ===========================================================================
 // Functions
 // ===========================================================================
+
+static ProxyConfig ParseProxy(string address, string? username, string? password)
+{
+    var lastColon = address.LastIndexOf(':');
+    if (lastColon < 0)
+    {
+        throw new ArgumentException($"Invalid proxy '{address}', expected HOST:PORT");
+    }
+    var host = address[..lastColon];
+    var portStr = address[(lastColon + 1)..];
+    if (!ushort.TryParse(portStr, out var port))
+    {
+        throw new ArgumentException($"Invalid proxy port '{portStr}'");
+    }
+    return new ProxyConfig(host: host, port: port, username: username, password: password);
+}
 
 static string ExpandPath(string path)
 {
@@ -238,6 +293,9 @@ static void PrintUsage()
     Console.WriteLine("  --rpid <RPID>                               Relying party ID for FIDO2 provider (requires --passkey)");
     Console.WriteLine("  --server-mode                               Run in server mode (background tasks disabled)");
     Console.WriteLine("  --lnurl-domain <DOMAIN>                     LNURL server domain for lightning address registration");
+    Console.WriteLine("  --proxy <HOST:PORT>                         Route connections through a SOCKS5 proxy");
+    Console.WriteLine("  --proxy-user <USER>                         SOCKS5 username (requires --proxy and --proxy-password)");
+    Console.WriteLine("  --proxy-password <PASS>                     SOCKS5 password (requires --proxy and --proxy-user)");
     Console.WriteLine("  -h, --help                                  Show this help");
 }
 
@@ -250,7 +308,8 @@ static async Task RunInteractiveMode(
     string? mysqlConnectionString,
     StableBalanceConfig? stableBalanceConfig,
     CliPasskeyConfig? passkeyConfig,
-    string? lnurlDomain)
+    string? lnurlDomain,
+    ProxyConfig? proxy)
 {
     // Init logging
     try
@@ -286,6 +345,10 @@ static async Task RunInteractiveMode(
     {
         config = config with { stableBalanceConfig = stableBalanceConfig };
     }
+    if (proxy != null)
+    {
+        config = config with { proxy = proxy };
+    }
     if (lnurlDomain != null)
     {
         config = config with { lnurlDomain = lnurlDomain };
@@ -308,7 +371,8 @@ static async Task RunInteractiveMode(
             apiKey,
             passkeyConfig.Label,
             passkeyConfig.ListLabels,
-            passkeyConfig.StoreLabel);
+            passkeyConfig.StoreLabel,
+            proxy);
     }
     else
     {

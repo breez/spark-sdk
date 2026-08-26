@@ -20,6 +20,9 @@ struct CliOptions {
     var rpid: String?
     var serverMode: Bool = false
     var lnurlDomain: String?
+    var proxy: String?
+    var proxyUser: String?
+    var proxyPassword: String?
 }
 
 func parseCliFlags() -> CliOptions {
@@ -70,6 +73,15 @@ func parseCliFlags() -> CliOptions {
         case "--lnurl-domain":
             i += 1
             if i < args.count { opts.lnurlDomain = args[i] }
+        case "--proxy":
+            i += 1
+            if i < args.count { opts.proxy = args[i] }
+        case "--proxy-user":
+            i += 1
+            if i < args.count { opts.proxyUser = args[i] }
+        case "--proxy-password":
+            i += 1
+            if i < args.count { opts.proxyPassword = args[i] }
         default:
             break
         }
@@ -85,6 +97,22 @@ func expandPath(_ path: String) -> String {
         return NSString(string: path).expandingTildeInPath
     }
     return path
+}
+
+/// Parses `HOST:PORT` into a `ProxyConfig`. Splits from the right so an
+/// IPv6 literal keeps its colons.
+func parseProxy(address: String, username: String?, password: String?) -> ProxyConfig {
+    guard let lastColon = address.lastIndex(of: ":") else {
+        print("Invalid proxy '\(address)', expected HOST:PORT")
+        exit(1)
+    }
+    let host = String(address[address.startIndex..<lastColon])
+    let portStr = String(address[address.index(after: lastColon)...])
+    guard let port = UInt16(portStr) else {
+        print("Invalid proxy port '\(portStr)'")
+        exit(1)
+    }
+    return ProxyConfig(host: host, port: port, username: username, password: password)
 }
 
 // MARK: - Argument splitting (shell-like)
@@ -233,6 +261,10 @@ config.apiKey = breezApiKey
 if network == .mainnet {
     config.crossChainConfig = CrossChainConfig()
 }
+let proxy: ProxyConfig? = opts.proxy.map {
+    parseProxy(address: $0, username: opts.proxyUser, password: opts.proxyPassword)
+}
+config.proxy = proxy
 if let lnurlDomain = opts.lnurlDomain {
     config.lnurlDomain = lnurlDomain
 }
@@ -268,7 +300,8 @@ if let passkeyStr = opts.passkey {
         breezApiKey: breezApiKey,
         label: opts.label,
         listLabels: opts.listLabels,
-        storeLabel: opts.storeLabel
+        storeLabel: opts.storeLabel,
+        proxy: proxy
     )
 } else {
     let mnemonic = try persistence.getOrCreateMnemonic()

@@ -4,7 +4,6 @@ import math
 import os
 import time
 
-import breez_sdk_spark
 from breez_sdk_spark import (
     AssetFilter,
     AuthorizeTransferRequest,
@@ -22,6 +21,7 @@ from breez_sdk_spark import (
     FetchConversionLimitsRequest,
     GetInfoRequest,
     GetPaymentRequest,
+    GetSparkStatusRequest,
     GetTokensMetadataRequest,
     InputType,
     ListPaymentsRequest,
@@ -53,6 +53,7 @@ from breez_sdk_spark import (
     TokenTransactionType,
     TransferAuthorization,
     UpdateUserSettingsRequest,
+    get_spark_status,
 )
 
 from breez_cli.serialization import print_value
@@ -1032,7 +1033,7 @@ def _build_get_spark_status_parser():
     return _parser("get-spark-status", "Get Spark network service status")
 
 async def _handle_get_spark_status(_sdk, _token_issuer, _session, _args):
-    result = await breez_sdk_spark.get_spark_status()
+    result = await get_spark_status(request=GetSparkStatusRequest())
     print_value(result)
 
 

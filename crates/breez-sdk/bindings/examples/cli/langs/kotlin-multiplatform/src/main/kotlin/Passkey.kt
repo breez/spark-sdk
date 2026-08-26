@@ -162,8 +162,12 @@ suspend fun resolvePasskeySeed(
     label: String?,
     listLabels: Boolean,
     storeLabel: Boolean,
+    proxy: ProxyConfig?,
 ): Seed {
-    val passkey = PasskeyClient(prfProvider = provider, breezApiKey = breezApiKey, config = null)
+    val sdkPasskeyConfig = proxy?.let {
+        breez_sdk_spark.PasskeyConfig(proxy = it)
+    }
+    val passkey = PasskeyClient(prfProvider = provider, breezApiKey = breezApiKey, config = sdkPasskeyConfig)
 
     // --list-labels: discovery sign-in (no cached label) returns the
     // discovered label set; prompt user to pick.

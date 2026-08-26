@@ -46,6 +46,9 @@ dotnet run --project BreezCli.csproj -- [OPTIONS]
 | `--rpid` | - | Relying party ID for FIDO2 provider (requires `--passkey`) |
 | `--server-mode` | - | Run in server mode (background tasks disabled; drive `sync` manually) |
 | `--lnurl-domain` | network default | LNURL server domain for lightning address registration; accepts a plain domain or an `http://host:port` test server URL |
+| `--proxy` | - | Route connections through a SOCKS5 proxy (`HOST:PORT`, e.g. `127.0.0.1:9050`) |
+| `--proxy-user` | - | SOCKS5 username (requires `--proxy` and `--proxy-password`) |
+| `--proxy-password` | - | SOCKS5 password (requires `--proxy` and `--proxy-user`) |
 
 ### Passkey Support
 

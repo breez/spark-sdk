@@ -15,6 +15,22 @@ import 'serialization.dart';
 import 'stable_balance.dart';
 import 'webhooks.dart';
 
+/// Parses `HOST:PORT` into a [ProxyConfig]. Splits from the right so an IPv6
+/// literal keeps its colons.
+ProxyConfig parseProxy(String address, String? username, String? password) {
+  final lastColon = address.lastIndexOf(':');
+  if (lastColon < 0) {
+    throw FormatException("Invalid proxy '$address', expected HOST:PORT");
+  }
+  final host = address.substring(0, lastColon);
+  final portStr = address.substring(lastColon + 1);
+  final port = int.tryParse(portStr);
+  if (port == null) {
+    throw FormatException("Invalid proxy port '$portStr'");
+  }
+  return ProxyConfig(host: host, port: port, username: username, password: password);
+}
+
 Future<void> runCli({
   required String dataDir,
   required String network,
@@ -27,6 +43,7 @@ Future<void> runCli({
   CliPasskeyConfig? passkeyConfig,
   bool serverMode = false,
   String? lnurlDomain,
+  ProxyConfig? proxy,
 }) async {
   await BreezSdkSparkLib.init(externalLibrary: ExternalLibrary.open(_nativeLibPath()));
 
@@ -65,13 +82,17 @@ Future<void> runCli({
     config = config.copyWith(lnurlDomain: lnurlDomain);
   }
 
+  if (proxy != null) {
+    config = config.copyWith(proxy: proxy);
+  }
+
   if (networkEnum == Network.mainnet) {
     config = config.copyWith(crossChainConfig: CrossChainConfig());
   }
 
   Seed seed;
   if (passkeyConfig != null) {
-    seed = await resolvePasskeySeed(passkeyConfig, dataDir, apiKey);
+    seed = await resolvePasskeySeed(passkeyConfig, dataDir, apiKey, proxy);
   } else {
     final mnemonic = persistence.getOrCreateMnemonic();
     seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);

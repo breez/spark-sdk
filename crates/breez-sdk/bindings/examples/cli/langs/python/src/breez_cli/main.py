@@ -13,6 +13,7 @@ from breez_sdk_spark import (
     CrossChainConfig,
     EventListener,
     Network,
+    ProxyConfig,
     SdkBuilder,
     SdkEvent,
     Seed,
@@ -54,6 +55,19 @@ def expand_path(path: str) -> Path:
     return Path(path)
 
 
+def parse_proxy(address: str, username=None, password=None) -> ProxyConfig:
+    idx = address.rfind(":")
+    if idx < 0:
+        raise click.UsageError(f"Invalid proxy '{address}', expected HOST:PORT")
+    host = address[:idx]
+    port_str = address[idx + 1:]
+    try:
+        port = int(port_str)
+    except ValueError:
+        raise click.UsageError(f"Invalid proxy port '{port_str}'")
+    return ProxyConfig(host=host, port=port, username=username, password=password)
+
+
 @click.command()
 @click.option("-d", "--data-dir", default="./.data", help="Path to the data directory")
 @click.option(
@@ -79,13 +93,20 @@ def expand_path(path: str) -> Path:
 @click.option("--rpid", default=None, help="Relying party ID for FIDO2 provider (requires --passkey)")
 @click.option("--lnurl-domain", default=None,
               help="LNURL server domain for lightning address registration; accepts a plain domain or an http://host:port test server URL")
+@click.option("--proxy", default=None, metavar="HOST:PORT",
+              help="Route every connection through a SOCKS5 proxy (e.g. 127.0.0.1:9050 for a local Tor daemon)")
+@click.option("--proxy-user", default=None,
+              help="Username for SOCKS5 authentication (requires --proxy and --proxy-password)")
+@click.option("--proxy-password", default=None,
+              help="Password for SOCKS5 authentication (requires --proxy and --proxy-user)")
 async def main(data_dir, network, account_number, postgres_connection_string,
                mysql_connection_string,
                stable_balance_tokens, stable_balance_default_active_label,
                stable_balance_threshold,
                server_mode,
                passkey_provider, label, list_labels, store_label, rpid,
-               lnurl_domain):
+               lnurl_domain,
+               proxy, proxy_user, proxy_password):
     """CLI client for Breez SDK with Spark."""
     data_dir = expand_path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -107,6 +128,19 @@ async def main(data_dir, network, account_number, postgres_connection_string,
     if list_labels and (label or store_label):
         raise click.UsageError("--list-labels conflicts with --label and --store-label")
 
+    if proxy_user and not proxy:
+        raise click.UsageError("--proxy-user requires --proxy")
+    if proxy_password and not proxy:
+        raise click.UsageError("--proxy-password requires --proxy")
+    if proxy_user and not proxy_password:
+        raise click.UsageError("--proxy-user requires --proxy-password")
+    if proxy_password and not proxy_user:
+        raise click.UsageError("--proxy-password requires --proxy-user")
+
+    proxy_config = None
+    if proxy:
+        proxy_config = parse_proxy(proxy, proxy_user, proxy_password)
+
     init_logging(log_dir=str(data_dir), app_logger=None, log_filter=None)
 
     persistence = CliPersistence(data_dir)
@@ -119,6 +153,7 @@ async def main(data_dir, network, account_number, postgres_connection_string,
     else:
         config = default_config(network=network_enum)
     config.api_key = breez_api_key
+    config.proxy = proxy_config
     if lnurl_domain is not None:
         config.lnurl_domain = lnurl_domain
     if network_enum == Network.MAINNET:
@@ -143,7 +178,7 @@ async def main(data_dir, network, account_number, postgres_connection_string,
     if passkey_provider:
         provider = create_provider(passkey_provider, data_dir, rpid=rpid)
         seed = await resolve_passkey_seed(
-            provider, breez_api_key, label, list_labels, store_label,
+            provider, breez_api_key, label, list_labels, store_label, proxy_config,
         )
     else:
         mnemonic = persistence.get_or_create_mnemonic()

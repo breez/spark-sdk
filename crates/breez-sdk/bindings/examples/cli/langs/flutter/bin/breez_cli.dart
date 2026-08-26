@@ -45,6 +45,13 @@ Future<void> main(List<String> arguments) async {
           help: 'Run in server mode (background_tasks_enabled=false)',
         )
         ..addOption('lnurl-domain', help: 'LNURL server domain for lightning address registration')
+        ..addOption(
+          'proxy',
+          help: 'Route every connection through a SOCKS5 proxy, as HOST:PORT',
+          valueHelp: 'HOST:PORT',
+        )
+        ..addOption('proxy-user', help: 'Username for SOCKS5 authentication (requires --proxy-password)')
+        ..addOption('proxy-password', help: 'Password for SOCKS5 authentication (requires --proxy-user)')
         ..addFlag('help', abbr: 'h', negatable: false, help: 'Show usage');
 
   final ArgResults results;
@@ -120,6 +127,28 @@ Future<void> main(List<String> arguments) async {
     exit(1);
   }
 
+  // Validate proxy-related flag constraints
+  final proxyAddress = results.option('proxy');
+  final proxyUser = results.option('proxy-user');
+  final proxyPassword = results.option('proxy-password');
+  if (proxyUser != null && proxyAddress == null) {
+    stderr.writeln('Error: --proxy-user requires --proxy');
+    exit(1);
+  }
+  if (proxyPassword != null && proxyAddress == null) {
+    stderr.writeln('Error: --proxy-password requires --proxy');
+    exit(1);
+  }
+  if ((proxyUser != null) != (proxyPassword != null)) {
+    stderr.writeln('Error: --proxy-user and --proxy-password must be specified together');
+    exit(1);
+  }
+
+  ProxyConfig? proxy;
+  if (proxyAddress != null) {
+    proxy = parseProxy(proxyAddress, proxyUser, proxyPassword);
+  }
+
   CliPasskeyConfig? passkeyConfig;
   if (passkeyProvider != null) {
     passkeyConfig = CliPasskeyConfig(
@@ -143,6 +172,7 @@ Future<void> main(List<String> arguments) async {
     passkeyConfig: passkeyConfig,
     serverMode: results.flag('server-mode'),
     lnurlDomain: results.option('lnurl-domain'),
+    proxy: proxy,
   );
 
   // Force exit — the native FFI library may keep background threads alive
