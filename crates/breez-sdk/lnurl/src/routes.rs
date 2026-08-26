@@ -220,7 +220,7 @@ where
             description,
         };
 
-        if let Err(e) = state.db.upsert_user(&user).await {
+        if let Err(e) = state.db.upsert_user(&user, state.registration_limit).await {
             match e {
                 LnurlRepositoryError::NameTaken => {
                     trace!("name already taken: {}", user.name);
@@ -237,6 +237,13 @@ where
                     return Err((
                         StatusCode::CONFLICT,
                         Json(Value::String("name is reserved".into())),
+                    ));
+                }
+                LnurlRepositoryError::RegistrationLimitExceeded => {
+                    debug!("registration limit reached for pubkey {}", user.pubkey);
+                    return Err((
+                        StatusCode::TOO_MANY_REQUESTS,
+                        Json(Value::String("registration limit reached".into())),
                     ));
                 }
                 e => {
@@ -361,10 +368,14 @@ where
                 }
                 // A held name has no owner to transfer it, so the source check
                 // inside the transfer answers first and a transfer never
-                // reports a name as reserved. Matched rather than folded into a
-                // catch-all, so a transfer that starts checking holds has to
-                // answer for the status code here.
-                LnurlRepositoryError::NameReserved | LnurlRepositoryError::General(_) => {
+                // reports a name as reserved. The registration limit binds the
+                // register route only, so a transfer never reports it either.
+                // Matched rather than folded into a catch-all, so a transfer
+                // that starts checking holds or quota has to answer for the
+                // status code here.
+                LnurlRepositoryError::NameReserved
+                | LnurlRepositoryError::RegistrationLimitExceeded
+                | LnurlRepositoryError::General(_) => {
                     error!("failed to execute transfer query: {e}");
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -2018,6 +2029,9 @@ mod tests {
         ) -> Result<u64, LnurlRepositoryError> {
             Ok(0)
         }
+        async fn delete_old_registrations(&self, _: i64) -> Result<u64, LnurlRepositoryError> {
+            Ok(0)
+        }
         async fn get_user_by_name(
             &self,
             _: &str,
@@ -2032,7 +2046,11 @@ mod tests {
         ) -> Result<Option<User>, LnurlRepositoryError> {
             Ok(None)
         }
-        async fn upsert_user(&self, _: &User) -> Result<(), LnurlRepositoryError> {
+        async fn upsert_user(
+            &self,
+            _: &User,
+            _: Option<crate::repository::RegistrationLimit>,
+        ) -> Result<(), LnurlRepositoryError> {
             Ok(())
         }
         async fn name_status(

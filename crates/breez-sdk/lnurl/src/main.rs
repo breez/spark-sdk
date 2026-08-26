@@ -96,6 +96,11 @@ struct Args {
     #[arg(long, default_value = "4000000000")]
     pub max_sendable: u64,
 
+    /// Maximum successful address registrations one pubkey may perform per
+    /// domain in a rolling 24h window. 0 disables the limit.
+    #[arg(long, default_value = "5")]
+    pub max_registrations_per_day: u32,
+
     /// Whether to include the spark address in the invoices generated.
     /// If included this can reduce fees for wallets that support it at the
     /// cost of privacy.
@@ -405,6 +410,9 @@ where
     // a background refresher that keeps them in sync with the database.
     let webhook_config_cache = webhooks::config::start(repository.clone()).await?;
 
+    let registration_limit = (args.max_registrations_per_day > 0)
+        .then(|| repository::RegistrationLimit::daily(args.max_registrations_per_day));
+
     // Start background processors.
     zap::start_background_processor(
         repository.clone(),
@@ -418,7 +426,7 @@ where
         args.webhook_delivery_ttl_days,
         webhook_config_cache,
     );
-    repository::start_claim_cleanup_processor(repository.clone());
+    repository::start_claim_cleanup_processor(repository.clone(), registration_limit);
 
     // Get or create a shared webhook secret persisted in the database.
     // All instances share the same secret so webhooks verify correctly
@@ -445,6 +453,7 @@ where
         scheme: args.scheme,
         min_sendable: args.min_sendable,
         max_sendable: args.max_sendable,
+        registration_limit,
         include_spark_address: {
             #[cfg(feature = "dev")]
             {

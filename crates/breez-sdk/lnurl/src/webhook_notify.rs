@@ -122,12 +122,15 @@ mod shared_tests {
         let domain = "enqueue-test.example.com";
 
         db.add_domain(domain).await.unwrap();
-        db.upsert_user(&crate::user::User {
-            name: "alice".to_string(),
-            pubkey: "enqueue_pubkey".to_string(),
-            domain: domain.to_string(),
-            description: String::new(),
-        })
+        db.upsert_user(
+            &crate::user::User {
+                name: "alice".to_string(),
+                pubkey: "enqueue_pubkey".to_string(),
+                domain: domain.to_string(),
+                description: String::new(),
+            },
+            None,
+        )
         .await
         .unwrap();
 
