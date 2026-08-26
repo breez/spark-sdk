@@ -63,6 +63,9 @@ node src/main.js [OPTIONS]
 | `--rpid` | `keys.breez.technology` | Requires `--passkey`. Relying party ID for FIDO2 provider |
 | `--server-mode` | false | Run in server mode (`background_tasks_enabled=false`) |
 | `--lnurl-domain` | network default | LNURL server domain for lightning address registration; accepts a plain domain or an `http://host:port` test server URL |
+| `--proxy` | - | Route every connection through a SOCKS5 proxy, as `HOST:PORT` |
+| `--proxy-user` | - | Username for SOCKS5 authentication (requires `--proxy` and `--proxy-password`) |
+| `--proxy-password` | - | Password for SOCKS5 authentication (requires `--proxy` and `--proxy-user`) |
 
 ### Examples
 

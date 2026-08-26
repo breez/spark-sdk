@@ -58,6 +58,9 @@ make run-mainnet
     --rpid                              Relying party ID for FIDO2 provider (requires --passkey)
     --server-mode                       Run in server mode (background_tasks_enabled=false)
     --lnurl-domain                      LNURL server domain for lightning address registration
+    --proxy                             Route every connection through a SOCKS5 proxy (HOST:PORT)
+    --proxy-user                        Username for SOCKS5 authentication (requires --proxy-password)
+    --proxy-password                    Password for SOCKS5 authentication (requires --proxy-user)
 -h, --help                              Show usage
 ```
 

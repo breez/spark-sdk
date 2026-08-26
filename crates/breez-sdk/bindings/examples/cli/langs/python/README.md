@@ -59,6 +59,9 @@ make clean            Remove venv and build artifacts
 | `--store-label` | false | Requires `--passkey`. Publish label to NOSTR |
 | `--rpid` | `keys.breez.technology` | Requires `--passkey`. Relying party ID for FIDO2 provider |
 | `--lnurl-domain` | network default | LNURL server domain for lightning address registration; accepts a plain domain or an `http://host:port` test server URL |
+| `--proxy` | - | Route every connection through a SOCKS5 proxy, as `HOST:PORT` (e.g. `127.0.0.1:9050` for a local Tor daemon) |
+| `--proxy-user` | - | Username for SOCKS5 authentication (requires `--proxy` and `--proxy-password`) |
+| `--proxy-password` | - | Password for SOCKS5 authentication (requires `--proxy` and `--proxy-user`) |
 
 ## Environment Variables
 

@@ -66,6 +66,9 @@ make clean            Remove binary
 | `--list-labels` | false | Requires `--passkey`. Select label from Nostr |
 | `--store-label` | false | Requires `--passkey`. Publish label to Nostr |
 | `--rpid` | `keys.breez.technology` | Requires `--passkey`. Relying party ID for FIDO2 provider |
+| `--proxy` | - | Route every connection through a SOCKS5 proxy, as `HOST:PORT` (e.g. `127.0.0.1:9050` for a local Tor daemon) |
+| `--proxy-user` | - | Username for SOCKS5 authentication (requires `--proxy` and `--proxy-password`) |
+| `--proxy-password` | - | Password for SOCKS5 authentication (requires `--proxy` and `--proxy-user`) |
 
 ## Environment Variables
 

@@ -45,7 +45,10 @@ function parseCliArgs() {
     listLabels: false,
     storeLabel: false,
     rpid: undefined,
-    lnurlDomain: undefined
+    lnurlDomain: undefined,
+    proxy: undefined,
+    proxyUser: undefined,
+    proxyPassword: undefined
   }
 
   for (let i = 0; i < args.length; i++) {
@@ -96,6 +99,15 @@ function parseCliArgs() {
       case '--lnurl-domain':
         opts.lnurlDomain = args[++i]
         break
+      case '--proxy':
+        opts.proxy = args[++i]
+        break
+      case '--proxy-user':
+        opts.proxyUser = args[++i]
+        break
+      case '--proxy-password':
+        opts.proxyPassword = args[++i]
+        break
       case '-h':
       case '--help':
         console.log('Usage: node src/main.js [OPTIONS]')
@@ -116,6 +128,9 @@ function parseCliArgs() {
         console.log('  --rpid <id>                                  Relying party ID for FIDO2 provider (requires --passkey)')
         console.log('  --server-mode                                Run in server mode (background_tasks_enabled=false)')
         console.log('  --lnurl-domain <domain>                      LNURL server domain for lightning address registration')
+        console.log('  --proxy <HOST:PORT>                          Route every connection through a SOCKS5 proxy')
+        console.log('  --proxy-user <user>                          Username for SOCKS5 authentication (requires --proxy-password)')
+        console.log('  --proxy-password <password>                  Password for SOCKS5 authentication (requires --proxy-user)')
         console.log('  -h, --help                                   Show this help message')
         process.exit(0)
         break
@@ -160,6 +175,26 @@ function parseCliArgs() {
     process.exit(1)
   }
 
+  if (opts.proxyUser && !opts.proxy) {
+    console.error('--proxy-user requires --proxy')
+    process.exit(1)
+  }
+
+  if (opts.proxyPassword && !opts.proxy) {
+    console.error('--proxy-password requires --proxy')
+    process.exit(1)
+  }
+
+  if (opts.proxyUser && !opts.proxyPassword) {
+    console.error('--proxy-user requires --proxy-password')
+    process.exit(1)
+  }
+
+  if (opts.proxyPassword && !opts.proxyUser) {
+    console.error('--proxy-password requires --proxy-user')
+    process.exit(1)
+  }
+
   return opts
 }
 
@@ -171,6 +206,24 @@ function expandPath(p) {
     return path.join(require('os').homedir(), p.slice(2))
   }
   return p
+}
+
+/**
+ * Parse `HOST:PORT` into a ProxyConfig. Split from the right so an IPv6
+ * literal keeps its colons.
+ */
+function parseProxy(address, username, password) {
+  const idx = address.lastIndexOf(':')
+  if (idx === -1) {
+    throw new Error(`Invalid proxy '${address}', expected HOST:PORT`)
+  }
+  const host = address.slice(0, idx)
+  const portStr = address.slice(idx + 1)
+  const port = parseInt(portStr, 10)
+  if (isNaN(port)) {
+    throw new Error(`Invalid proxy port '${portStr}'`)
+  }
+  return { host, port, username, password }
 }
 
 // ---------------------------------------------------------------------------
@@ -250,6 +303,14 @@ async function main() {
     config.crossChainConfig = {}
   }
 
+  // Proxy
+  const proxy = opts.proxy
+    ? parseProxy(opts.proxy, opts.proxyUser, opts.proxyPassword)
+    : undefined
+  if (proxy) {
+    config.proxy = proxy
+  }
+
   if (opts.lnurlDomain !== undefined) {
     config.lnurlDomain = opts.lnurlDomain
   }
@@ -284,7 +345,8 @@ async function main() {
       breezApiKey,
       opts.label,
       opts.listLabels,
-      opts.storeLabel
+      opts.storeLabel,
+      proxy
     )
   } else {
     const mnemonic = persistence.getOrCreateMnemonic()

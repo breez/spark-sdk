@@ -17,7 +17,9 @@ import {
   type PrfProvider,
   type DeriveSeedsRequest,
   type DeriveSeedsOutput,
+  type ProxyConfig,
   DomainAssociation,
+  PasskeyConfig as SdkPasskeyConfig,
 } from '@breeztech/breez-sdk-spark-react-native'
 import { PasskeyProvider as PlatformPasskeyProvider } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
 
@@ -323,8 +325,10 @@ export async function resolvePasskeySeed(
   label: string | undefined,
   listLabels: boolean,
   storeLabel: boolean,
+  proxy?: ProxyConfig,
 ): Promise<{ seed: SeedType; labels?: string[] }> {
-  const passkey = new PasskeyClient(provider, breezApiKey, undefined)
+  const config = proxy ? SdkPasskeyConfig.create({ proxy }) : undefined
+  const passkey = new PasskeyClient(provider, breezApiKey, config)
 
   // --list-labels: discovery sign-in (no cached label) returns the published
   // label set. App.tsx does not prompt for selection; default to the explicit

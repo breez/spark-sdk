@@ -160,8 +160,15 @@ func resolvePasskeySeed(
 	label *string,
 	listLabels bool,
 	storeLabel bool,
+	proxy *breez_sdk_spark.ProxyConfig,
 ) (breez_sdk_spark.Seed, error) {
-	passkey, err := breez_sdk_spark.NewPasskeyClient(provider, breezAPIKey, nil)
+	var passkeyConfig *breez_sdk_spark.PasskeyConfig
+	if proxy != nil {
+		passkeyConfig = &breez_sdk_spark.PasskeyConfig{
+			Proxy: proxy,
+		}
+	}
+	passkey, err := breez_sdk_spark.NewPasskeyClient(provider, breezAPIKey, passkeyConfig)
 	if err = liftError(err); err != nil {
 		return nil, err
 	}

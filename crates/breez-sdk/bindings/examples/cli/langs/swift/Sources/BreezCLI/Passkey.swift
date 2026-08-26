@@ -192,9 +192,13 @@ func resolvePasskeySeed(
     breezApiKey: String?,
     label: String?,
     listLabels: Bool,
-    storeLabel: Bool
+    storeLabel: Bool,
+    proxy: ProxyConfig?
 ) async throws -> Seed {
-    let passkey = try PasskeyClient(prfProvider: provider, breezApiKey: breezApiKey, config: nil)
+    let sdkPasskeyConfig: BreezSdkSpark.PasskeyConfig? = proxy.map {
+        BreezSdkSpark.PasskeyConfig(proxy: $0)
+    }
+    let passkey = try PasskeyClient(prfProvider: provider, breezApiKey: breezApiKey, config: sdkPasskeyConfig)
 
     // --list-labels: discovery sign-in (no cached label) returns the
     // published label set; prompt the user to pick one.

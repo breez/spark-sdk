@@ -14,6 +14,32 @@ import (
 	"github.com/chzyer/readline"
 )
 
+// parseProxy parses HOST:PORT into a ProxyConfig. Split from the right so an
+// IPv6 literal keeps its colons.
+func parseProxy(address string, username, password *string) (*breez_sdk_spark.ProxyConfig, error) {
+	lastColon := strings.LastIndex(address, ":")
+	if lastColon < 0 {
+		return nil, fmt.Errorf("invalid proxy '%s', expected HOST:PORT", address)
+	}
+	host := address[:lastColon]
+	portStr := address[lastColon+1:]
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		return nil, fmt.Errorf("invalid proxy port '%s'", portStr)
+	}
+	config := &breez_sdk_spark.ProxyConfig{
+		Host: host,
+		Port: uint16(port),
+	}
+	if *username != "" {
+		config.Username = username
+	}
+	if *password != "" {
+		config.Password = password
+	}
+	return config, nil
+}
+
 // expandPath expands a leading ~/ to the user's home directory.
 func expandPath(path string) string {
 	if strings.HasPrefix(path, "~/") {
@@ -91,6 +117,9 @@ func main() {
 	listLabels := flag.Bool("list-labels", false, "List and select from labels published to Nostr (requires --passkey)")
 	storeLabel := flag.Bool("store-label", false, "Publish the label to Nostr (requires --passkey and --label)")
 	_ = flag.String("rpid", "", "Relying party ID for FIDO2 provider (requires --passkey)")
+	proxyAddr := flag.String("proxy", "", "Route every connection through a SOCKS5 proxy, as HOST:PORT (e.g. 127.0.0.1:9050 for a local Tor daemon)")
+	proxyUser := flag.String("proxy-user", "", "Username for SOCKS5 authentication (requires --proxy-password)")
+	proxyPassword := flag.String("proxy-password", "", "Password for SOCKS5 authentication (requires --proxy-user)")
 	flag.Parse()
 
 	resolvedDir := expandPath(*dataDir)
@@ -107,6 +136,16 @@ func main() {
 		networkEnum = breez_sdk_spark.NetworkMainnet
 	default:
 		log.Fatalf("Invalid network. Use 'regtest' or 'mainnet'")
+	}
+
+	// Parse proxy
+	var proxy *breez_sdk_spark.ProxyConfig
+	if *proxyAddr != "" {
+		var err error
+		proxy, err = parseProxy(*proxyAddr, proxyUser, proxyPassword)
+		if err != nil {
+			log.Fatalf("Invalid proxy: %v", err)
+		}
 	}
 
 	// Init logging
@@ -129,6 +168,7 @@ func main() {
 	if *lnurlDomain != "" {
 		config.LnurlDomain = lnurlDomain
 	}
+	config.Proxy = proxy
 
 	// Cross-chain sends are opt-in by the caller and mainnet-only (enabling on
 	// other networks fails config validation). Enable with default slippage so
@@ -182,7 +222,7 @@ func main() {
 		if apiKey != "" {
 			apiKeyPtr = &apiKey
 		}
-		seed, err = resolvePasskeySeed(prfProvider, apiKeyPtr, wn, *listLabels, *storeLabel)
+		seed, err = resolvePasskeySeed(prfProvider, apiKeyPtr, wn, *listLabels, *storeLabel, proxy)
 		if err != nil {
 			log.Fatalf("Passkey seed resolution failed: %v", err)
 		}

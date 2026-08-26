@@ -206,6 +206,7 @@ function promptStdin(prompt) {
  * @param {string|undefined} label - Optional label for seed derivation
  * @param {boolean} listLabels - Whether to list and select from labels on Nostr
  * @param {boolean} storeLabel - Whether to publish the label to Nostr
+ * @param {object|undefined} proxy - Optional ProxyConfig ({host, port, username, password})
  * @returns {Promise<object>} The seed object for use with SdkBuilder
  */
 async function resolvePasskeySeed(
@@ -213,9 +214,11 @@ async function resolvePasskeySeed(
   breezApiKey,
   label,
   listLabels,
-  storeLabel
+  storeLabel,
+  proxy
 ) {
-  const client = new PasskeyClient(provider, breezApiKey, undefined)
+  const config = proxy ? { proxy } : undefined
+  const client = new PasskeyClient(provider, breezApiKey, config)
 
   // --list-labels: discovery sign-in (no cached label) returns the
   // published label set; prompt the user to pick one.

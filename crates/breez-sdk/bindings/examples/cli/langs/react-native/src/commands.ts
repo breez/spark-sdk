@@ -1330,7 +1330,7 @@ async function handleSetUserSettings(sdk: BreezSdkInterface, _tokenIssuer: Token
 // --- get-spark-status ---
 
 async function handleGetSparkStatus(_sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, _args: string[]): Promise<string> {
-  const result = await getSparkStatus()
+  const result = await getSparkStatus({ proxy: undefined })
   return formatValue(result)
 }
 

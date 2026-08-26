@@ -45,6 +45,26 @@ fun splitArgs(line: String): List<String> {
 }
 
 /**
+ * Parses `HOST:PORT` into a [ProxyConfig]. Splits from the right so an IPv6
+ * literal keeps its colons.
+ */
+fun parseProxy(address: String, username: String?, password: String?): ProxyConfig {
+    val lastColon = address.lastIndexOf(':')
+    if (lastColon < 0) {
+        error("Invalid proxy '$address', expected HOST:PORT")
+    }
+    val host = address.substring(0, lastColon)
+    val port = address.substring(lastColon + 1).toUShortOrNull()
+        ?: error("Invalid proxy port '${address.substring(lastColon + 1)}'")
+    return ProxyConfig(
+        host = host,
+        port = port,
+        username = username,
+        password = password,
+    )
+}
+
+/**
  * Expands a leading ~/ to the user's home directory.
  */
 fun expandPath(path: String): String {
@@ -72,6 +92,9 @@ fun main(args: Array<String>) {
     var rpId: String? = null
     var serverMode = false
     var lnurlDomain: String? = null
+    var proxyAddress: String? = null
+    var proxyUser: String? = null
+    var proxyPassword: String? = null
 
     // Simple argument parsing
     var i = 0
@@ -134,6 +157,18 @@ fun main(args: Array<String>) {
                 i++
                 if (i < args.size) lnurlDomain = args[i]
             }
+            "--proxy" -> {
+                i++
+                if (i < args.size) proxyAddress = args[i]
+            }
+            "--proxy-user" -> {
+                i++
+                if (i < args.size) proxyUser = args[i]
+            }
+            "--proxy-password" -> {
+                i++
+                if (i < args.size) proxyPassword = args[i]
+            }
             "--help", "-h" -> {
                 println("Usage: breez-sdk-spark-cli [OPTIONS]")
                 println()
@@ -153,6 +188,9 @@ fun main(args: Array<String>) {
                 println("  --rpid <ID>                                  Relying party ID for FIDO2 provider (requires --passkey)")
                 println("  --server-mode                                Run in server mode (no background tasks)")
                 println("  --lnurl-domain <DOMAIN>                      LNURL server domain for lightning address registration")
+                println("  --proxy <HOST:PORT>                          Route connections through a SOCKS5 proxy")
+                println("  --proxy-user <USER>                          Username for SOCKS5 authentication (requires --proxy-password)")
+                println("  --proxy-password <PASS>                      Password for SOCKS5 authentication (requires --proxy-user)")
                 println("  -h, --help                                   Show this help message")
                 return
             }
@@ -181,6 +219,14 @@ fun main(args: Array<String>) {
     }
     if (postgresConnectionString != null && mysqlConnectionString != null) {
         System.err.println("Error: --postgres-connection-string and --mysql-connection-string are mutually exclusive")
+        return
+    }
+    if (proxyUser != null && (proxyAddress == null || proxyPassword == null)) {
+        System.err.println("Error: --proxy-user requires --proxy and --proxy-password")
+        return
+    }
+    if (proxyPassword != null && (proxyAddress == null || proxyUser == null)) {
+        System.err.println("Error: --proxy-password requires --proxy and --proxy-user")
         return
     }
 
@@ -234,6 +280,8 @@ fun main(args: Array<String>) {
         }
     } else null
 
+    val proxy = proxyAddress?.let { parseProxy(it, proxyUser, proxyPassword) }
+
     runBlocking {
         runInteractiveMode(
             resolvedDir,
@@ -245,6 +293,7 @@ fun main(args: Array<String>) {
             stableBalanceConfig,
             passkeyConfig,
             lnurlDomain,
+            proxy,
         )
     }
 }
@@ -259,6 +308,7 @@ suspend fun runInteractiveMode(
     stableBalanceConfig: StableBalanceConfig?,
     passkeyConfig: PasskeyConfig?,
     lnurlDomain: String?,
+    proxy: ProxyConfig?,
 ) {
     // Init logging
     try {
@@ -282,6 +332,7 @@ suspend fun runInteractiveMode(
         config.apiKey = apiKey
     }
     config.stableBalanceConfig = stableBalanceConfig
+    config.proxy = proxy
     if (network == Network.MAINNET) {
         config.crossChainConfig = CrossChainConfig()
     }
@@ -298,6 +349,7 @@ suspend fun runInteractiveMode(
             passkeyConfig.label,
             passkeyConfig.listLabels,
             passkeyConfig.storeLabel,
+            proxy,
         )
     } else {
         val mnemonic = persistence.getOrCreateMnemonic()

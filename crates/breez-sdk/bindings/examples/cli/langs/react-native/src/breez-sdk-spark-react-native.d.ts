@@ -92,6 +92,9 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export const ConfirmationStatus: any;
   export type ConfirmationStatus = any;
 
+  // --- proxy ---
+  export type ProxyConfig = any;
+
   // --- passkey ---
   // Note: PasskeyProvider (concrete class) ships at the
   // `/passkey-prf-provider` subpath export, declared separately below.
@@ -102,6 +105,9 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
 
   export const PasskeyClient: any;
   export type PasskeyClient = any;
+
+  export const PasskeyConfig: any;
+  export type PasskeyConfig = any;
 
   export const PasskeyCredential: any;
   export type PasskeyCredential = any;

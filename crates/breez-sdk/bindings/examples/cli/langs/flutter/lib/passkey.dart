@@ -88,7 +88,12 @@ class CliPasskeyConfig {
 /// Resolve the seed using a passkey PRF provider.
 ///
 /// Mirrors the Rust CLI's `resolve_passkey_seed` function.
-Future<Seed> resolvePasskeySeed(CliPasskeyConfig config, String dataDir, String? breezApiKey) async {
+Future<Seed> resolvePasskeySeed(
+  CliPasskeyConfig config,
+  String dataDir,
+  String? breezApiKey,
+  ProxyConfig? proxy,
+) async {
   if (config.provider != 'file') {
     throw Exception(
       'Passkey provider "${config.provider}" is not yet supported in the Flutter CLI. '
@@ -97,7 +102,9 @@ Future<Seed> resolvePasskeySeed(CliPasskeyConfig config, String dataDir, String?
   }
 
   final filePrf = FilePrfProvider.create(dataDir);
-  final passkey = PasskeyClientBuilder(breezApiKey: breezApiKey).withPrfProvider(filePrf).build();
+  final passkeyConfig = proxy != null ? PasskeyConfig(proxy: proxy) : null;
+  final passkey =
+      PasskeyClientBuilder(breezApiKey: breezApiKey, config: passkeyConfig).withPrfProvider(filePrf).build();
 
   // --list-labels: discovery sign-in (no cached label) returns the
   // published label set; prompt the user to pick one.

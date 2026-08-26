@@ -195,9 +195,13 @@ public static class PasskeyResolver
         string? breezApiKey,
         string? label,
         bool listLabels,
-        bool storeLabel)
+        bool storeLabel,
+        ProxyConfig? proxy)
     {
-        var passkey = new PasskeyClient(provider, breezApiKey, config: null);
+        PasskeyConfig? sdkPasskeyConfig = proxy != null
+            ? new PasskeyConfig(proxy: proxy)
+            : null;
+        var passkey = new PasskeyClient(provider, breezApiKey, config: sdkPasskeyConfig);
 
         // --list-labels: discovery sign-in (null label) returns the
         // discovered label set; prompt user to pick.
