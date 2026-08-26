@@ -7,8 +7,8 @@ use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use breez_sdk_spark::{
-    CrossChainConfig, EventListener, Network, SdkBuilder, SdkEvent, Seed, StableBalanceConfig,
-    StableBalanceToken, default_config, default_mysql_storage_config,
+    CrossChainConfig, EventListener, Network, ProxyConfig, SdkBuilder, SdkEvent, Seed,
+    StableBalanceConfig, StableBalanceToken, default_config, default_mysql_storage_config,
     default_postgres_storage_config, default_server_config,
 };
 use clap::Parser;
@@ -92,6 +92,39 @@ struct Cli {
     /// (e.g. a local test server).
     #[arg(long)]
     lnurl_domain: Option<String>,
+
+    /// Route every connection through a SOCKS5 proxy, as `HOST:PORT`
+    /// (e.g. `127.0.0.1:9050` for a local Tor daemon).
+    #[arg(long, value_name = "HOST:PORT")]
+    proxy: Option<String>,
+
+    /// Username for SOCKS5 authentication. Requires `--proxy-password`.
+    #[arg(long, requires_all = ["proxy", "proxy_password"])]
+    proxy_user: Option<String>,
+
+    /// Password for SOCKS5 authentication. Requires `--proxy-user`.
+    #[arg(long, requires_all = ["proxy", "proxy_user"])]
+    proxy_password: Option<String>,
+}
+
+/// Parses `HOST:PORT` into a [`ProxyConfig`]. Split from the right so an IPv6
+/// literal keeps its colons.
+fn parse_proxy(
+    address: &str,
+    username: Option<String>,
+    password: Option<String>,
+) -> Result<ProxyConfig> {
+    let (host, port) = address
+        .rsplit_once(':')
+        .ok_or_else(|| anyhow!("Invalid proxy '{address}', expected HOST:PORT"))?;
+    Ok(ProxyConfig {
+        host: host.to_string(),
+        port: port
+            .parse()
+            .map_err(|_| anyhow!("Invalid proxy port '{port}'"))?,
+        username,
+        password,
+    })
 }
 
 fn expand_path(path: &str) -> PathBuf {
@@ -153,6 +186,7 @@ async fn run_interactive_mode(
     stable_balance_config: Option<StableBalanceConfig>,
     passkey_config: Option<PasskeyConfig>,
     lnurl_domain: Option<String>,
+    proxy: Option<ProxyConfig>,
 ) -> Result<()> {
     breez_sdk_spark::init_logging(Some(data_dir.to_string_lossy().into()), None, None)?;
     let persistence = CliPersistence {
@@ -181,6 +215,7 @@ async fn run_interactive_mode(
     };
     config.api_key.clone_from(&breez_api_key);
     config.stable_balance_config = stable_balance_config;
+    config.proxy.clone_from(&proxy);
     if lnurl_domain.is_some() {
         config.lnurl_domain = lnurl_domain;
     }
@@ -202,6 +237,7 @@ async fn run_interactive_mode(
             config.label,
             config.list_labels,
             config.store_label,
+            proxy,
         )
         .await?
     } else {
@@ -340,6 +376,11 @@ async fn main() -> Result<(), anyhow::Error> {
         rpid: cli.rpid,
     });
 
+    let proxy = cli
+        .proxy
+        .map(|address| parse_proxy(&address, cli.proxy_user, cli.proxy_password))
+        .transpose()?;
+
     Box::pin(run_interactive_mode(
         data_dir,
         network,
@@ -350,6 +391,7 @@ async fn main() -> Result<(), anyhow::Error> {
         stable_balance_config,
         passkey_config,
         cli.lnurl_domain,
+        proxy,
     ))
     .await?;
 

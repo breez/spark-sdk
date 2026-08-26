@@ -696,7 +696,20 @@ pub struct Config {
     pub max_concurrent_claims: u32,
     pub spark_config: Option<SparkConfig>,
     pub background_tasks_enabled: bool,
+    /// Routes the connections the SDK opens through a SOCKS5 proxy. Not
+    /// supported on WASM: setting this always fails validation, since the
+    /// browser owns connection setup and exposes no proxy control.
+    pub proxy: Option<ProxyConfig>,
     pub cross_chain_config: Option<CrossChainConfig>,
+}
+
+#[derive(Clone)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ProxyConfig)]
+pub struct ProxyConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: Option<String>,
+    pub password: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainConfig)]

@@ -102,7 +102,7 @@ impl RegtestFaucet {
         info!("Initialized faucet client with URL: {}", config.url);
         Ok(Self {
             config,
-            http_client: DefaultHttpClient::default(),
+            http_client: DefaultHttpClient::new(None).expect("http client"),
         })
     }
 

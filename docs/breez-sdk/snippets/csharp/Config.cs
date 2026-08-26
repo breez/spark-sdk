@@ -159,5 +159,24 @@ namespace BreezSdkSnippets
             // ANCHOR_END: cross-chain-config
             Console.WriteLine($"Config: {config}");
         }
+
+        public void ConfigureProxy()
+        {
+            // ANCHOR: config-proxy
+            // Route the SDK's connections through a SOCKS5 proxy, such as a local
+            // Tor daemon. Set username and password together for proxies that
+            // require RFC 1929 authentication.
+            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            {
+                apiKey = "<breez api key>",
+                proxy = new ProxyConfig(
+                    host: "127.0.0.1",
+                    port: 9050,
+                    username: null,
+                    password: null)
+            };
+            // ANCHOR_END: config-proxy
+            Console.WriteLine($"Config: {config}");
+        }
     }
 }

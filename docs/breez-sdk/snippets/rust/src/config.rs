@@ -160,3 +160,22 @@ pub(crate) fn configure_cross_chain() -> Result<()> {
     info!("Config: {config:?}");
     Ok(())
 }
+
+pub(crate) fn configure_proxy() -> Result<()> {
+    // ANCHOR: config-proxy
+    let mut config = default_config(Network::Mainnet);
+    config.api_key = Some("<breez api key>".to_string());
+
+    // Route the SDK's connections through a SOCKS5 proxy, such as a local Tor
+    // daemon. Set username and password together for proxies that require
+    // RFC 1929 authentication.
+    config.proxy = Some(ProxyConfig {
+        host: "127.0.0.1".to_string(),
+        port: 9050,
+        username: None,
+        password: None,
+    });
+    // ANCHOR_END: config-proxy
+    info!("Config: {config:?}");
+    Ok(())
+}

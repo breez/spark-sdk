@@ -11,7 +11,7 @@ use spark_wallet::{
     InMemorySessionStore, SessionStore, SparkSigner, SparkWallet, SparkWalletConfig,
 };
 use tokio::sync::watch;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use flashnet::{FlashnetConfig, IntegratorConfig};
 
@@ -460,6 +460,32 @@ impl SdkBuilder {
         Ok(config)
     }
 
+    /// Warns when a proxy is configured alongside a caller-supplied service.
+    ///
+    /// Those arrive as trait objects that already own their transport, which
+    /// the SDK cannot inspect or re-route: honouring the proxy is the caller's
+    /// responsibility. `with_rest_chain_service` is not listed, since it builds
+    /// on the context's proxied client.
+    fn warn_about_unproxied_overrides(&self) {
+        if self.config.proxy.is_none() {
+            return;
+        }
+        let overrides = [
+            ("chain service", self.chain_service.is_some()),
+            ("fiat service", self.fiat_service.is_some()),
+            ("LNURL HTTP client", self.lnurl_client.is_some()),
+            ("LNURL server client", self.lnurl_server_client.is_some()),
+        ];
+        for (name, supplied) in overrides {
+            if supplied {
+                warn!(
+                    "A proxy is configured but a custom {name} was supplied. \
+                     The SDK cannot route it: make sure it connects through the proxy itself."
+                );
+            }
+        }
+    }
+
     /// Builds the `BreezSdk` instance from the configured components, reading
     /// top-to-bottom as a sequence of named assembly steps.
     #[allow(clippy::too_many_lines)]
@@ -469,6 +495,7 @@ impl SdkBuilder {
         let background_services_enabled = runtime.starts_background_services();
         validate_server_mode(&self.config, background_services_enabled)?;
 
+        self.warn_about_unproxied_overrides();
         let signers = build_signers(&self.config, self.signer_source)?;
         validate_signer_capabilities(&self.config, signers.ecies.is_some())?;
 
@@ -488,6 +515,28 @@ impl SdkBuilder {
             &context,
             self.config.network,
         );
+
+        // The parser reaches lightning-address and LNURL hosts, and resolves
+        // BIP353 names, so it has to ride the context's clients rather than
+        // build its own.
+        let input_parser = Arc::new(crate::sdk::SdkInputParser::new(
+            breez_sdk_common::dns::Resolver::with_proxy(
+                self.config
+                    .proxy
+                    .as_ref()
+                    .map(platform_utils::ProxyConfig::from)
+                    .as_ref(),
+            )
+            .map_err(|e| SdkError::Generic(format!("Failed to build DNS resolver: {e}")))?,
+            Arc::clone(&context.http_client),
+            Some(
+                self.config
+                    .get_all_external_input_parsers()
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            ),
+        ));
 
         let user_agent = crate::default_user_agent();
         info!("Building sdk with user agent: {}", user_agent);
@@ -566,6 +615,7 @@ impl SdkBuilder {
         let cross_chain_context = build_cross_chain_context(
             &self.config,
             &context.breez_server,
+            &context.http_client,
             &spark_wallet,
             &storage,
             signers.ecies.clone(),
@@ -590,6 +640,7 @@ impl SdkBuilder {
             .await;
 
         let sdk = BreezSdk::init_and_start(BreezSdkParams {
+            input_parser,
             config: self.config,
             storage,
             chain_service,
@@ -761,6 +812,7 @@ async fn resolve_context(
         None => {
             new_shared_sdk_context(SdkContextConfig {
                 api_key: config.api_key.clone(),
+                proxy: config.proxy.clone(),
                 ..SdkContextConfig::new(config.network)
             })
             .await?
@@ -769,6 +821,13 @@ async fn resolve_context(
     if context.network != config.network || context.api_key != config.api_key {
         return Err(SdkError::Generic(
             "SdkContext network/api_key do not match SdkConfig".to_string(),
+        ));
+    }
+    // The context owns the shared HTTP and gRPC clients, so a proxy that
+    // disagrees with the config would leave part of the traffic unproxied.
+    if context.proxy != config.proxy {
+        return Err(SdkError::Generic(
+            "SdkContext proxy does not match SdkConfig proxy".to_string(),
         ));
     }
     Ok(context)
@@ -977,6 +1036,7 @@ async fn maybe_wrap_storage_with_real_time_sync(
                 server_url: server_url.clone(),
                 api_key: config.api_key.clone(),
                 user_agent,
+                proxy: config.proxy.as_ref().map(platform_utils::ProxyConfig::from),
                 signer,
                 storage,
                 shutdown_receiver,
@@ -1043,6 +1103,7 @@ async fn build_stable_balance(
 fn build_cross_chain_context(
     config: &Config,
     breez_server: &Arc<BreezServer>,
+    http_client: &Arc<dyn platform_utils::HttpClient>,
     spark_wallet: &Arc<SparkWallet>,
     storage: &Arc<dyn crate::persist::Storage>,
     ecies: Option<Arc<dyn crate::signer::EciesSigner>>,
@@ -1076,6 +1137,7 @@ fn build_cross_chain_context(
                 Arc::clone(spark_wallet),
                 Arc::clone(storage),
                 Arc::clone(&cached_fiat),
+                Arc::clone(http_client),
                 shutdown_receiver.clone(),
             )),
         );
@@ -1088,6 +1150,7 @@ fn build_cross_chain_context(
         ecies,
         cached_fiat,
         Arc::clone(lightning_sender),
+        config.proxy.as_ref(),
         shutdown_receiver,
     ) {
         Ok(Some(service)) => {
@@ -1539,6 +1602,139 @@ mod tests {
             Err(err) => panic!("expected InvalidInput error, got {err:?}"),
             Ok(_) => panic!("expected server mode with optimization auto_enabled to fail"),
         }
+    }
+
+    // ---- proxy ----
+
+    fn test_proxy() -> crate::ProxyConfig {
+        crate::ProxyConfig {
+            host: "127.0.0.1".to_string(),
+            port: 9050,
+            username: None,
+            password: None,
+        }
+    }
+
+    /// Both cross-chain providers honour the proxy: Orchestra on the shared
+    /// client, Boltz through its own config.
+    #[test]
+    fn validate_accepts_proxy_with_cross_chain_config() {
+        use crate::{CrossChainConfig, default_config};
+        let mut config = default_config(Network::Mainnet);
+        config.proxy = Some(test_proxy());
+        config.cross_chain_config = Some(CrossChainConfig::default());
+
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_half_specified_proxy_credentials() {
+        use crate::{SdkError, default_config};
+        let mut config = default_config(Network::Mainnet);
+        let mut proxy = test_proxy();
+        proxy.username = Some("user".to_string());
+        config.proxy = Some(proxy);
+
+        match config.validate() {
+            Err(SdkError::InvalidInput(m)) => assert!(
+                m.contains("username and password"),
+                "expected credential-pair rejection, got: {m}"
+            ),
+            other => panic!("expected a username without a password to fail, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_rejects_empty_proxy_host_and_zero_port() {
+        use crate::{SdkError, default_config};
+        let mut config = default_config(Network::Mainnet);
+
+        let mut proxy = test_proxy();
+        proxy.host = String::new();
+        config.proxy = Some(proxy);
+        assert!(matches!(config.validate(), Err(SdkError::InvalidInput(_))));
+
+        let mut proxy = test_proxy();
+        proxy.port = 0;
+        config.proxy = Some(proxy);
+        assert!(matches!(config.validate(), Err(SdkError::InvalidInput(_))));
+    }
+
+    /// A host that cannot appear in a URL authority has to be caught at
+    /// connect: the client build downstream would otherwise be the first
+    /// thing to notice, far from the config that caused it.
+    #[test]
+    fn validate_rejects_proxy_host_that_cannot_form_a_url() {
+        use crate::{SdkError, default_config};
+        for host in ["local host", "user@host", "socks5://127.0.0.1", "[::g]"] {
+            let mut config = default_config(Network::Mainnet);
+            let mut proxy = test_proxy();
+            proxy.host = host.to_string();
+            config.proxy = Some(proxy);
+
+            match config.validate() {
+                Err(SdkError::InvalidInput(m)) => {
+                    assert!(m.contains(host), "expected the host in the error, got: {m}");
+                }
+                other => panic!("expected host {host:?} to be rejected, got {other:?}"),
+            }
+        }
+    }
+
+    /// A bare IPv6 literal is bracketed before it reaches a URL, so it stays
+    /// valid rather than tripping the check above.
+    #[test]
+    fn validate_accepts_bare_ipv6_proxy_host() {
+        use crate::default_config;
+        let mut config = default_config(Network::Mainnet);
+        let mut proxy = test_proxy();
+        proxy.host = "::1".to_string();
+        config.proxy = Some(proxy);
+
+        assert!(config.validate().is_ok());
+    }
+
+    /// Balanced operator connections build their own connectors, so a proxy
+    /// there would silently open the extra channels direct.
+    #[tokio::test]
+    async fn shared_context_rejects_proxy_with_balanced_connections() {
+        use crate::{SdkContextConfig, SdkError, new_shared_sdk_context};
+        let result = new_shared_sdk_context(SdkContextConfig {
+            proxy: Some(test_proxy()),
+            connections_per_operator: Some(4),
+            ..SdkContextConfig::new(Network::Regtest)
+        })
+        .await;
+
+        match result.err() {
+            Some(SdkError::InvalidInput(m)) => assert!(
+                m.contains("connections_per_operator"),
+                "expected balanced-connection rejection, got: {m}"
+            ),
+            other => panic!("expected proxy + balanced connections to fail, got {other:?}"),
+        }
+    }
+
+    /// The context owns the shared clients, so a config that disagrees with it
+    /// would leave part of the traffic unproxied.
+    #[tokio::test]
+    async fn resolve_context_errors_on_proxy_mismatch() {
+        use crate::{SdkContextConfig, default_config, new_shared_sdk_context};
+        let mut config = default_config(Network::Regtest);
+        config.proxy = Some(test_proxy());
+
+        let ctx = new_shared_sdk_context(SdkContextConfig::new(Network::Regtest))
+            .await
+            .expect("regtest context");
+
+        let err = super::resolve_context(Some(ctx), &config)
+            .await
+            .err()
+            .expect("expected mismatch error");
+        assert!(
+            err.to_string().contains("proxy does not match"),
+            "unexpected error: {err}"
+        );
     }
 
     /// Regtest + `cross_chain_config` trips the Mainnet-only gate in

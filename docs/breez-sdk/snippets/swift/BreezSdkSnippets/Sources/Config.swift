@@ -90,3 +90,21 @@ func configureCrossChain() {
     // ANCHOR_END: cross-chain-config
     print("Config: \(config)")
 }
+
+func configureProxy() async throws {
+    // ANCHOR: config-proxy
+    var config = defaultConfig(network: Network.mainnet)
+    config.apiKey = "<breez api key>"
+
+    // Route the SDK's connections through a SOCKS5 proxy, such as a local Tor
+    // daemon. Set username and password together for proxies that require
+    // RFC 1929 authentication.
+    config.proxy = ProxyConfig(
+        host: "127.0.0.1",
+        port: 9050,
+        username: nil,
+        password: nil
+    )
+    // ANCHOR_END: config-proxy
+    print("Config: \(config)")
+}

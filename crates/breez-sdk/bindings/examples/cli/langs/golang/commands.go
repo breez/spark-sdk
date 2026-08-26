@@ -1437,7 +1437,7 @@ func handleSetUserSettings(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, 
 // --- get-spark-status ---
 
 func handleGetSparkStatus(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, _ []string) error {
-	result, err := breez_sdk_spark.GetSparkStatus()
+	result, err := breez_sdk_spark.GetSparkStatus(breez_sdk_spark.GetSparkStatusRequest{})
 	if err = liftError(err); err != nil {
 		return err
 	}

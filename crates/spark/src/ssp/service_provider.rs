@@ -16,7 +16,7 @@ use crate::{
         RequestLightningReceiveInput, RequestLightningSendInput, RequestSwapInput,
         ServiceProviderConfig, SparkWalletWebhookEventType, SspAuthHeaderProvider, SspTransfer,
         StaticDepositQuote, WebhookEntry,
-        error::ServiceProviderResult,
+        error::{ServiceProviderError, ServiceProviderResult},
         graphql::{CoopExitRequest, GraphQLClient, LightningReceiveRequest, LightningSendRequest},
     },
 };
@@ -34,21 +34,28 @@ impl ServiceProvider {
     /// auth provider's headers are combined with it on every request — used,
     /// for example, to attach the Breez partner JWT alongside the SSP session
     /// token.
+    ///
+    /// Fails when the client cannot be built, which in practice means a
+    /// `user_agent` on `config` that is not a valid header value.
     pub fn new(
         config: ServiceProviderConfig,
         spark_signer: Arc<dyn SparkSigner>,
         session_store: Arc<dyn SessionStore>,
         extra_header_provider: Option<Arc<dyn HeaderProvider>>,
-    ) -> Self {
+    ) -> ServiceProviderResult<Self> {
         let user_agent = config.user_agent.clone().unwrap_or_else(default_user_agent);
-        let http_client = create_http_client(Some(&user_agent));
-        Self::new_with_client(
+        let http_client =
+            create_http_client(Some(&user_agent)).map_err(|e| ServiceProviderError::Network {
+                reason: e.to_string(),
+                code: None,
+            })?;
+        Ok(Self::new_with_client(
             config,
             spark_signer,
             session_store,
             extra_header_provider,
             http_client,
-        )
+        ))
     }
 
     /// Like [`ServiceProvider::new`], but uses a shared HTTP client so the

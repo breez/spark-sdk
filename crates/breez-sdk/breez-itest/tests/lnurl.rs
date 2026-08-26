@@ -999,7 +999,7 @@ async fn test_09_invoice_expiry_parameter() -> Result<()> {
     let custom_expiry_secs = 600_u32;
 
     // Request invoice WITH custom expiry
-    let http_client = DefaultHttpClient::default();
+    let http_client = DefaultHttpClient::new(None).expect("http client");
     let url_with_expiry = format!("{callback}?amount={amount_msat}&expiry={custom_expiry_secs}");
     let response = http_client
         .get(url_with_expiry.clone(), None)
@@ -1698,7 +1698,8 @@ async fn test_16_client_signing_lnurl_pay_publish_twice() -> Result<()> {
 /// The `nostrPubkey` an address advertises in its LNURL-pay response.
 async fn user_nostr_pubkey(lnurl: &LnurlFixture, username: &str) -> Result<String> {
     let url = format!("{}/lnurlp/{username}", lnurl.http_url());
-    let response = DefaultHttpClient::default()
+    let response = DefaultHttpClient::new(None)
+        .expect("http client")
         .get(url, None)
         .await
         .map_err(|e| anyhow::anyhow!("lnurl-pay request failed: {e:?}"))?;
@@ -1750,7 +1751,8 @@ async fn request_zap_invoice(
         .append_pair("amount", &amount_msat.to_string())
         .append_pair("nostr", &zap_request.as_json());
 
-    let response = DefaultHttpClient::default()
+    let response = DefaultHttpClient::new(None)
+        .expect("http client")
         .get(url.to_string(), None)
         .await
         .map_err(|e| anyhow::anyhow!("invoice request failed: {e:?}"))?;

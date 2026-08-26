@@ -141,4 +141,22 @@ class Config {
         // ANCHOR_END: cross-chain-config
         println("Config: $config")
     }
+
+    fun configureProxy() {
+        // ANCHOR: config-proxy
+        val config = defaultConfig(Network.MAINNET)
+        config.apiKey = "<breez api key>"
+
+        // Route the SDK's connections through a SOCKS5 proxy, such as a local Tor
+        // daemon. Set username and password together for proxies that require
+        // RFC 1929 authentication.
+        config.proxy = ProxyConfig(
+            host = "127.0.0.1",
+            port = 9050u,
+            username = null,
+            password = null,
+        )
+        // ANCHOR_END: config-proxy
+        println("Config: $config")
+    }
 }

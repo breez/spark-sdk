@@ -2,14 +2,14 @@ use std::ops::Not;
 
 use bitcoin::{Address, Denomination, address::NetworkUnchecked};
 use lightning::bolt11_invoice::Bolt11InvoiceDescriptionRef;
+use platform_utils::HttpClient;
 use platform_utils::time::UNIX_EPOCH;
-use platform_utils::{DefaultHttpClient, HttpClient};
 use regex_lite::Regex;
 use spark_wallet::{SparkAddress, SparkAddressPaymentType};
 use tracing::{debug, error, warn};
 
 use crate::{
-    dns::{self, DnsResolver},
+    dns::DnsResolver,
     input::{
         Bip21Extra, ExternalInputParser, LnurlRequestDetails, ParseError, PaymentRequestSource,
         SparkAddressDetails, SparkInvoiceDetails,
@@ -46,19 +46,6 @@ pub fn validate_lightning_address_format(input: &str) -> bool {
         return false;
     }
     url::Url::parse(&format!("https://{domain}")).is_ok()
-}
-
-pub async fn parse(
-    input: &str,
-    external_input_parsers: Option<Vec<ExternalInputParser>>,
-) -> Result<InputType, ParseError> {
-    InputParser::new(
-        dns::Resolver::new(),
-        DefaultHttpClient::default(),
-        external_input_parsers,
-    )
-    .parse(input)
-    .await
 }
 
 pub fn parse_invoice(input: &str) -> Option<Bolt11InvoiceDetails> {

@@ -2,6 +2,7 @@ import logging
 from breez_sdk_spark import (
     default_config,
     CrossChainConfig,
+    ProxyConfig,
     Network,
     LeafOptimizationConfig,
     MaxFee,
@@ -150,4 +151,22 @@ async def configure_cross_chain():
         default_target_overpay_bps=None,
     )
     # ANCHOR_END: cross-chain-config
+    logging.info(f"Config: {config}")
+
+
+def configure_proxy():
+    # ANCHOR: config-proxy
+    config = default_config(network=Network.MAINNET)
+    config.api_key = "<breez api key>"
+
+    # Route the SDK's connections through a SOCKS5 proxy, such as a local Tor
+    # daemon. Set username and password together for proxies that require
+    # RFC 1929 authentication.
+    config.proxy = ProxyConfig(
+        host="127.0.0.1",
+        port=9050,
+        username=None,
+        password=None,
+    )
+    # ANCHOR_END: config-proxy
     logging.info(f"Config: {config}")

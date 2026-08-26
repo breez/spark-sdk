@@ -6,11 +6,44 @@ use std::time::Duration;
 use nostr::nips::nip65;
 use nostr::{Event, Filter, Kind, PublicKey, RelayUrl};
 use nostr_sdk::Client;
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+use nostr_sdk::ClientOptions;
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+use nostr_sdk::client::Connection;
 use platform_utils::tokio;
 use tracing::{info, warn};
 
 use super::derivation::derive_nip42_keypair;
 use super::error::PasskeyError;
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+/// Resolves the proxy to the socket address the relay transport needs.
+///
+/// Only the proxy's own host is looked up here, which is the one name that
+/// cannot be resolved through the proxy. Relay hostnames still go to the proxy.
+///
+/// Relay connections speak plain SOCKS5 with no authentication. Credentials
+/// are already rejected when the client is built; this is the backstop that
+/// keeps them from being silently dropped on the way to the proxy.
+async fn resolve_proxy_addr(
+    proxy: &crate::ProxyConfig,
+) -> Result<std::net::SocketAddr, PasskeyError> {
+    if proxy.username.is_some() || proxy.password.is_some() {
+        return Err(PasskeyError::Generic(
+            "Nostr relay connections do not support proxy authentication".to_string(),
+        ));
+    }
+    // Via `platform_utils` so the one place that knows how to render an
+    // authority (bracketing a bare IPv6 literal) stays the only one.
+    let address = platform_utils::ProxyConfig::from(proxy).address();
+    tokio::net::lookup_host(&address)
+        .await
+        .map_err(|e| PasskeyError::Generic(format!("Failed to resolve proxy address: {e}")))?
+        .next()
+        .ok_or_else(|| {
+            PasskeyError::Generic(format!("Proxy address {address} resolved to nothing"))
+        })
+}
 
 /// Public relays used as fallback when NIP-65 lists cannot be fetched.
 /// The first entry doubles as the preferred read relay for non-API-key users.
@@ -48,6 +81,8 @@ const BREEZ_NIP65_PUBKEY: &str = "0478caf9d25260b7603154c4227d4af5c2e4937092fbdb
 pub struct NostrSaltClient {
     keys: nostr::Keys,
     breez_api_key: Option<String>,
+    /// SOCKS5 proxy carrying every relay connection, when configured.
+    proxy: Option<crate::ProxyConfig>,
     /// Flag ensuring the NIP-65 relay sync is only spawned once per client lifetime.
     relay_sync_triggered: Arc<AtomicBool>,
     /// Server-provided relay list, set once by the relay sync task.
@@ -57,10 +92,17 @@ pub struct NostrSaltClient {
 impl NostrSaltClient {
     /// Create a new Nostr salt client owning the passkey-derived
     /// signing keys and an optional Breez API key.
-    pub fn new(keys: nostr::Keys, breez_api_key: Option<String>) -> Self {
+    ///
+    /// `proxy` routes every relay connection through a SOCKS5 proxy.
+    pub fn new(
+        keys: nostr::Keys,
+        breez_api_key: Option<String>,
+        proxy: Option<crate::ProxyConfig>,
+    ) -> Self {
         Self {
             keys,
             breez_api_key,
+            proxy,
             relay_sync_triggered: Arc::new(AtomicBool::new(false)),
             server_relays: Arc::new(OnceLock::new()),
         }
@@ -119,7 +161,7 @@ impl NostrSaltClient {
         let mut sync_events: Option<Vec<Event>> = None;
 
         for chunk in relays.chunks(2) {
-            let client = self.new_client()?;
+            let client = self.new_client().await?;
             let mut added = 0usize;
             for relay_url in chunk {
                 match client.add_relay(relay_url.as_str()).await {
@@ -401,7 +443,7 @@ impl NostrSaltClient {
         let mut last_err = None;
 
         for chunk in relays.chunks(2) {
-            let client = self.new_client()?;
+            let client = self.new_client().await?;
             let mut added = 0usize;
 
             for relay_url in chunk {
@@ -447,7 +489,7 @@ impl NostrSaltClient {
 
     /// Create a Nostr client connected to all relays for write operations.
     async fn create_write_client(&self) -> Result<Client, PasskeyError> {
-        let client = self.new_client()?;
+        let client = self.new_client().await?;
         let write_relays = self.ensure_server_relays().await;
 
         let mut added = 0usize;
@@ -476,13 +518,36 @@ impl NostrSaltClient {
     /// When an API key is configured, uses API key-derived keys for NIP-42
     /// authentication. Content events are signed manually with the owned
     /// passkey-derived keys via `sign_with_keys()`.
-    fn new_client(&self) -> Result<Client, PasskeyError> {
-        Ok(if let Some(ref api_key) = self.breez_api_key {
-            let auth_keys = derive_nip42_keypair(api_key)?;
-            Client::new(auth_keys)
+    // Only the native proxy path awaits, so on WASM this is async purely to
+    // keep one signature across targets.
+    #[cfg_attr(
+        all(target_family = "wasm", target_os = "unknown"),
+        allow(clippy::unused_async)
+    )]
+    async fn new_client(&self) -> Result<Client, PasskeyError> {
+        let mut builder = Client::builder();
+        builder = if let Some(ref api_key) = self.breez_api_key {
+            builder.signer(derive_nip42_keypair(api_key)?)
         } else {
-            Client::new(self.keys.clone())
-        })
+            builder.signer(self.keys.clone())
+        };
+
+        #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+        if let Some(proxy) = &self.proxy {
+            let addr = resolve_proxy_addr(proxy).await?;
+            builder = builder.opts(ClientOptions::new().connection(Connection::new().proxy(addr)));
+        }
+        // Relay connections run on browser WebSockets here, which cannot be
+        // proxied. Refuse rather than connect directly behind the caller's back.
+        #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+        if self.proxy.is_some() {
+            return Err(PasskeyError::Generic(
+                "a SOCKS5 proxy cannot be honoured on WASM: the browser owns connection setup"
+                    .to_string(),
+            ));
+        }
+
+        Ok(builder.build())
     }
 }
 
@@ -534,21 +599,21 @@ mod tests {
 
     #[macros::test_all]
     fn test_nostr_salt_client_new_default() {
-        let client = NostrSaltClient::new(test_keys(), None);
+        let client = NostrSaltClient::new(test_keys(), None, None);
 
         assert!(client.breez_api_key.is_none());
     }
 
     #[macros::test_all]
     fn test_nostr_salt_client_with_api_key() {
-        let client = NostrSaltClient::new(test_keys(), Some("dGVzdC1hcGkta2V5".to_string()));
+        let client = NostrSaltClient::new(test_keys(), Some("dGVzdC1hcGkta2V5".to_string()), None);
 
         assert!(client.breez_api_key.is_some());
     }
 
     #[macros::test_all]
     fn test_relay_sync_state_shared_across_clones() {
-        let client1 = NostrSaltClient::new(test_keys(), None);
+        let client1 = NostrSaltClient::new(test_keys(), None, None);
         let client2 = client1.clone();
 
         assert!(Arc::ptr_eq(
@@ -574,7 +639,7 @@ mod tests {
 
     #[macros::test_all]
     fn test_read_relay_candidates_without_api_key() {
-        let client = NostrSaltClient::new(test_keys(), None);
+        let client = NostrSaltClient::new(test_keys(), None, None);
         let candidates = client.read_relay_candidates();
 
         assert_eq!(candidates.len(), STATIC_RELAYS.len());
@@ -584,7 +649,7 @@ mod tests {
 
     #[macros::test_all]
     fn test_read_relay_candidates_with_api_key() {
-        let client = NostrSaltClient::new(test_keys(), Some("dGVzdC1hcGkta2V5".to_string()));
+        let client = NostrSaltClient::new(test_keys(), Some("dGVzdC1hcGkta2V5".to_string()), None);
         let candidates = client.read_relay_candidates();
 
         // Breez relay should be first

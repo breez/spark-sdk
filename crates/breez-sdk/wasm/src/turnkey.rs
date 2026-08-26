@@ -33,6 +33,8 @@ pub struct TurnkeyConfig {
     pub identity_public_key: Option<String>,
     pub retry: Option<TurnkeyRetryConfig>,
     pub max_rps: Option<u32>,
+    /// Always rejected here: a SOCKS5 proxy cannot be honoured on WASM.
+    pub proxy: Option<crate::models::ProxyConfig>,
 }
 
 /// Builds the Turnkey-backed signers from `config`, then pass

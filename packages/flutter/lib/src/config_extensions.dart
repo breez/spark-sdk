@@ -25,6 +25,7 @@ extension ConfigCopyWith on Config {
     int? maxConcurrentClaims,
     SparkConfig? sparkConfig,
     bool? backgroundTasksEnabled,
+    ProxyConfig? proxy,
     CrossChainConfig? crossChainConfig,
   }) {
     return Config(
@@ -46,6 +47,7 @@ extension ConfigCopyWith on Config {
       maxConcurrentClaims: maxConcurrentClaims ?? this.maxConcurrentClaims,
       sparkConfig: sparkConfig ?? this.sparkConfig,
       backgroundTasksEnabled: backgroundTasksEnabled ?? this.backgroundTasksEnabled,
+      proxy: proxy ?? this.proxy,
       crossChainConfig: crossChainConfig ?? this.crossChainConfig,
     );
   }

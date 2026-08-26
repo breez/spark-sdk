@@ -1412,7 +1412,7 @@ public static class Commands
 
     private static async Task HandleGetSparkStatus(BreezSdk sdk, Func<string, string?> readline, string[] args)
     {
-        var result = await BreezSdkSparkMethods.GetSparkStatus();
+        var result = await BreezSdkSparkMethods.GetSparkStatus(new GetSparkStatusRequest());
         Serialization.PrintValue(result);
     }
 

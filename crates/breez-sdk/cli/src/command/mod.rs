@@ -1266,7 +1266,10 @@ pub(crate) async fn execute_command(
             Ok(true)
         }
         Command::GetSparkStatus => {
-            let res = breez_sdk_spark::get_spark_status().await?;
+            let res = breez_sdk_spark::get_spark_status(
+                breez_sdk_spark::GetSparkStatusRequest::default(),
+            )
+            .await?;
             print_value(&res)?;
             Ok(true)
         }

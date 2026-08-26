@@ -82,10 +82,11 @@ use nostr_client::{LabelStore, NostrSaltClient};
 type LabelStoreBuilder =
     Arc<dyn Fn(nostr::Keys, Option<String>) -> Arc<dyn LabelStore> + Send + Sync>;
 
-/// Default store builder: a network-backed [`NostrSaltClient`].
-fn default_label_store_builder() -> LabelStoreBuilder {
-    Arc::new(|keys, breez_api_key| {
-        Arc::new(NostrSaltClient::new(keys, breez_api_key)) as Arc<dyn LabelStore>
+/// Default store builder: a network-backed [`NostrSaltClient`] reaching the
+/// relays through `proxy`, when one is configured.
+fn default_label_store_builder(proxy: Option<crate::ProxyConfig>) -> LabelStoreBuilder {
+    Arc::new(move |keys, breez_api_key| {
+        Arc::new(NostrSaltClient::new(keys, breez_api_key, proxy.clone())) as Arc<dyn LabelStore>
     })
 }
 
@@ -142,9 +143,10 @@ impl Passkey {
         prf_provider: Arc<dyn PrfProvider>,
         breez_api_key: Option<String>,
         config: Option<PasskeyConfig>,
-    ) -> Self {
+    ) -> Result<Self, PasskeyError> {
         let config = config.unwrap_or_default();
-        Self {
+        config.validate()?;
+        Ok(Self {
             prf_provider,
             breez_api_key,
             default_label: config
@@ -152,8 +154,8 @@ impl Passkey {
                 .filter(|s| validate_label(s).is_ok())
                 .unwrap_or_else(|| DEFAULT_LABEL.to_string()),
             nostr_client: Arc::new(RwLock::new(None)),
-            store_builder: default_label_store_builder(),
-        }
+            store_builder: default_label_store_builder(config.proxy),
+        })
     }
 
     /// Construct with a custom [`LabelStore`] builder. Tests inject an
@@ -164,11 +166,11 @@ impl Passkey {
         breez_api_key: Option<String>,
         config: Option<PasskeyConfig>,
         store_builder: LabelStoreBuilder,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, PasskeyError> {
+        Ok(Self {
             store_builder,
-            ..Self::new(prf_provider, breez_api_key, config)
-        }
+            ..Self::new(prf_provider, breez_api_key, config)?
+        })
     }
 
     /// Returns a reference to the underlying [`PrfProvider`].
@@ -441,13 +443,74 @@ mod tests {
         let prf_provider = Arc::new(MockPrfProvider::new([0u8; 32]));
         let config = PasskeyConfig::default();
 
-        let _passkey = Passkey::new(prf_provider, None, Some(config));
+        let _passkey = Passkey::new(prf_provider, None, Some(config)).unwrap();
+    }
+
+    fn passkey_proxy(username: Option<&str>, password: Option<&str>) -> crate::ProxyConfig {
+        crate::ProxyConfig {
+            host: "127.0.0.1".to_string(),
+            port: 9050,
+            username: username.map(ToString::to_string),
+            password: password.map(ToString::to_string),
+        }
+    }
+
+    /// The label is a PRF salt the wallet seed derives from, and the relay
+    /// directory is the only copy of it, so an unpublishable label has to
+    /// fail before a wallet exists rather than at the first label op.
+    #[macros::test_all]
+    fn test_passkey_new_rejects_authenticated_proxy() {
+        let prf_provider = Arc::new(MockPrfProvider::new([0u8; 32]));
+        let config = PasskeyConfig {
+            proxy: Some(passkey_proxy(Some("user"), Some("pass"))),
+            ..PasskeyConfig::default()
+        };
+
+        match Passkey::new(prf_provider, None, Some(config)).err() {
+            Some(PasskeyError::InvalidConfig(m)) => {
+                // WASM rejects any proxy before the credentials are looked at.
+                let expected = if cfg!(all(target_family = "wasm", target_os = "unknown")) {
+                    "not supported on WASM"
+                } else {
+                    "proxy authentication"
+                };
+                assert!(m.contains(expected), "expected {expected:?}, got: {m}");
+            }
+            other => panic!("expected an authenticated proxy to be rejected, got {other:?}"),
+        }
+    }
+
+    /// A permanent misconfiguration, not a transient failure: hosts branch
+    /// on `kind()` to decide whether a retry is worth offering.
+    #[macros::test_all]
+    fn test_invalid_config_is_not_retryable() {
+        assert_eq!(
+            PasskeyError::InvalidConfig("x".to_string()).kind(),
+            crate::passkey::ErrorKind::Configuration
+        );
+    }
+
+    #[macros::test_all]
+    fn test_passkey_new_accepts_unauthenticated_proxy() {
+        let prf_provider = Arc::new(MockPrfProvider::new([0u8; 32]));
+        let config = PasskeyConfig {
+            proxy: Some(passkey_proxy(None, None)),
+            ..PasskeyConfig::default()
+        };
+
+        // WASM cannot honour any proxy, so the accept case is native-only.
+        let result = Passkey::new(prf_provider, None, Some(config));
+        if cfg!(all(target_family = "wasm", target_os = "unknown")) {
+            assert!(matches!(result, Err(PasskeyError::InvalidConfig(_))));
+        } else {
+            assert!(result.is_ok());
+        }
     }
 
     #[macros::async_test_all]
     async fn test_check_availability_available() {
         let prf_provider = Arc::new(MockPrfProvider::new([0u8; 32]));
-        let passkey = Passkey::new(prf_provider, None, None);
+        let passkey = Passkey::new(prf_provider, None, None).unwrap();
 
         let availability = passkey.check_availability().await.unwrap();
         assert!(matches!(
@@ -459,7 +522,7 @@ mod tests {
     #[macros::async_test_all]
     async fn test_check_availability_prf_unsupported() {
         let prf_provider = Arc::new(UnavailablePrfProvider);
-        let passkey = Passkey::new(prf_provider, None, None);
+        let passkey = Passkey::new(prf_provider, None, None).unwrap();
 
         let availability = passkey.check_availability().await.unwrap();
         assert!(matches!(availability, PasskeyAvailability::PrfUnsupported));
@@ -470,7 +533,7 @@ mod tests {
         let prf_provider = Arc::new(FailingPrfProvider::new(
             PrfProviderError::AuthenticationFailed("Test error".to_string()),
         ));
-        let passkey = Passkey::new(prf_provider, None, None);
+        let passkey = Passkey::new(prf_provider, None, None).unwrap();
 
         let result = passkey.check_availability().await;
         assert!(result.is_err());
@@ -496,8 +559,8 @@ mod tests {
         let prf_provider1 = Arc::new(MockPrfProvider::new([99u8; 32]));
         let prf_provider2 = Arc::new(MockPrfProvider::new([99u8; 32]));
 
-        let passkey1 = Passkey::new(prf_provider1, None, None);
-        let passkey2 = Passkey::new(prf_provider2, None, None);
+        let passkey1 = Passkey::new(prf_provider1, None, None).unwrap();
+        let passkey2 = Passkey::new(prf_provider2, None, None).unwrap();
 
         let keys1 = passkey1.derive_keys().await.unwrap();
         let keys2 = passkey2.derive_keys().await.unwrap();
@@ -514,8 +577,8 @@ mod tests {
         let prf_provider1 = Arc::new(MockPrfProvider::new([1u8; 32]));
         let prf_provider2 = Arc::new(MockPrfProvider::new([2u8; 32]));
 
-        let passkey1 = Passkey::new(prf_provider1, None, None);
-        let passkey2 = Passkey::new(prf_provider2, None, None);
+        let passkey1 = Passkey::new(prf_provider1, None, None).unwrap();
+        let passkey2 = Passkey::new(prf_provider2, None, None).unwrap();
 
         let keys1 = passkey1.derive_keys().await.unwrap();
         let keys2 = passkey2.derive_keys().await.unwrap();

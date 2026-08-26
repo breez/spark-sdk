@@ -194,7 +194,7 @@ func resolvePasskeySeed(
     listLabels: Bool,
     storeLabel: Bool
 ) async throws -> Seed {
-    let passkey = PasskeyClient(prfProvider: provider, breezApiKey: breezApiKey, config: nil)
+    let passkey = try PasskeyClient(prfProvider: provider, breezApiKey: breezApiKey, config: nil)
 
     // --list-labels: discovery sign-in (no cached label) returns the
     // published label set; prompt the user to pick one.

@@ -23,6 +23,7 @@ pub async fn new_shared_sdk_context(config: SdkContextConfig) -> Result<SdkConte
         network: config.network,
         api_key: config.api_key,
         connections_per_operator: config.connections_per_operator,
+        proxy: config.proxy,
         storage: None,
     })
     .await?;

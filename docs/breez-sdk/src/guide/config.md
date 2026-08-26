@@ -169,6 +169,15 @@ The SDK can convert Bitcoin to a stable token on receive and vice versa on send,
 
 {{#tabs config:stable-balance-config}}
 
+<h2 id="socks5-proxy">
+    <a class="header" href="#socks5-proxy">SOCKS5 proxy</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.ProxyConfig.html">API docs</a>
+</h2>
+
+Routes the connections the SDK opens through a SOCKS5 proxy, such as a local Tor daemon. Hostnames are resolved by the proxy rather than locally, and a connection that cannot be established through it fails rather than falling back to a direct one. Unset (the default) connects directly. Not supported on WASM. See the [SOCKS5 proxy](./proxy.md) page for what is covered and which combinations are rejected.
+
+{{#tabs config:config-proxy}}
+
 <h2 id="send-usdc-usdt">
     <a class="header" href="#send-usdc-usdt">Send USDC/USDT</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.CrossChainConfig.html">API docs</a>

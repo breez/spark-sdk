@@ -10,6 +10,13 @@ use crate::operator::rpc::transport::retry_channel::RetryChannel;
 
 use super::ConnectionManager;
 
+/// Opens several connections per operator and balances requests across them.
+///
+/// This manager cannot be proxied. Balancing goes through
+/// [`Channel::balance_list`], which builds its own connectors and has no
+/// connector-aware variant in any tonic release, so there is nowhere to insert
+/// a SOCKS5 dialer. The SDK rejects a config that asks for both; use
+/// [`DefaultConnectionManager`](super::DefaultConnectionManager) with a proxy.
 pub struct BalancedConnectionManager {
     connections_map: RwLock<HashMap<String, Transport>>,
     connections_per_operator: u32,

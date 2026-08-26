@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use breez_sdk_common::breez_server::{BreezServer, PRODUCTION_BREEZSERVER_URL};
-use platform_utils::{HttpClient, create_http_client};
+use platform_utils::{HttpClient, create_http_client_with_proxy};
 
 use spark_wallet::{BalancedConnectionManager, ConnectionManager, DefaultConnectionManager};
 
 use crate::{
-    Network, SdkError, default_user_agent, jwt_header_provider::BreezJwtHeaderProvider,
-    persist::backend::StorageBackend,
+    Network, ProxyConfig, SdkError, default_user_agent,
+    jwt_header_provider::BreezJwtHeaderProvider, persist::backend::StorageBackend,
 };
 
 /// Process-shared resources that can back many `BreezSdk` instances.
@@ -46,6 +46,11 @@ pub struct SdkContext {
     /// can cross-check against `Config.api_key` and refuse a mismatch.
     pub(crate) api_key: Option<String>,
     pub(crate) connection_manager: Arc<dyn ConnectionManager>,
+    /// The proxy every client in this context was built with. Kept so
+    /// `SdkBuilder::build()` can cross-check against `Config.proxy` and refuse
+    /// a mismatch, and so per-SDK components (DNS, relays) match the shared
+    /// clients.
+    pub(crate) proxy: Option<ProxyConfig>,
     /// The storage backend SDKs built from this context share. `None` when the
     /// context carries no storage; each `SdkBuilder` then supplies its own.
     pub(crate) storage_backend: Option<Arc<dyn StorageBackend>>,
@@ -73,6 +78,12 @@ pub struct SdkContextConfig {
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub connections_per_operator: Option<u32>,
 
+    /// Routes the connections opened by this context's shared clients through
+    /// a SOCKS5 proxy. Must match the `proxy` on the `Config` of every SDK
+    /// built from this context.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub proxy: Option<ProxyConfig>,
+
     /// Shared storage backend for SDKs built from this context. When set,
     /// every SDK built from the context reuses it (and its database
     /// connection pool). Construct via
@@ -95,6 +106,7 @@ impl SdkContextConfig {
             network,
             api_key: None,
             connections_per_operator: None,
+            proxy: None,
             storage: None,
         }
     }
@@ -110,10 +122,21 @@ impl SdkContextConfig {
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 pub async fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkContext>, SdkError> {
     let user_agent = default_user_agent();
-    let http_client = create_http_client(Some(&user_agent));
+    let proxy = config.proxy;
+    if let Some(proxy) = &proxy {
+        proxy.validate()?;
+    }
+    let transport_proxy = proxy.as_ref().map(platform_utils::ProxyConfig::from);
+    let http_client = create_http_client_with_proxy(Some(&user_agent), transport_proxy.as_ref())
+        .map_err(|e| SdkError::InvalidInput(format!("Failed to build proxied HTTP client: {e}")))?;
     let breez_server = Arc::new(
-        BreezServer::new(PRODUCTION_BREEZSERVER_URL, None, &user_agent)
-            .map_err(|e| SdkError::Generic(e.to_string()))?,
+        BreezServer::new(
+            PRODUCTION_BREEZSERVER_URL,
+            None,
+            &user_agent,
+            transport_proxy.as_ref(),
+        )
+        .map_err(|e| SdkError::Generic(e.to_string()))?,
     );
     // The Breez partner JWT is only issued by the mainnet Breez endpoint, and
     // only when an API key is configured. Skip the provider entirely otherwise
@@ -135,8 +158,20 @@ pub async fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkC
     // open multiple connections per operator and balance requests across
     // them; `None` (or `Some(1)`) keeps a single multiplexed connection.
     let connection_manager: Arc<dyn ConnectionManager> = match config.connections_per_operator {
-        Some(n) if n > 1 => Arc::new(BalancedConnectionManager::new(n)),
-        _ => Arc::new(DefaultConnectionManager::new()),
+        Some(n) if n > 1 => {
+            // Balancing builds its own connectors, so there is nowhere to
+            // insert the SOCKS5 dialer. Refuse rather than open the extra
+            // connections unproxied.
+            if proxy.is_some() {
+                return Err(SdkError::InvalidInput(
+                    "A proxy cannot be combined with connections_per_operator > 1: balanced \
+                     operator connections cannot be routed through a proxy."
+                        .to_string(),
+                ));
+            }
+            Arc::new(BalancedConnectionManager::new(n))
+        }
+        _ => Arc::new(DefaultConnectionManager::with_proxy(transport_proxy)),
     };
 
     // Every SDK built from this context shares the one storage backend (and
@@ -150,6 +185,7 @@ pub async fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkC
         network: config.network,
         api_key,
         connection_manager,
+        proxy,
         storage_backend,
     }))
 }

@@ -92,7 +92,8 @@ async fn try_fund_address(address: &str, amount_sats: u64) -> Result<String> {
         add_basic_auth_header(&mut headers, &username, &password);
     }
 
-    let response = DefaultHttpClient::default()
+    let response = DefaultHttpClient::new(None)
+        .expect("http client")
         .post(url, Some(headers), Some(body))
         .await
         .context("faucet request failed")?;

@@ -1085,7 +1085,7 @@ dependencies = [
 [[package]]
 name = "boltz-client"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879#b5f4683aba10efd875d674f2bb9a5800b047a879"
+source = "git+https://github.com/breez/boltz-client?rev=82f55b8059f54e6e06a4a2d0a901743dc8f83949#82f55b8059f54e6e06a4a2d0a901743dc8f83949"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -1100,14 +1100,16 @@ dependencies = [
  "hex",
  "k256",
  "lightning-invoice 0.34.0",
- "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879)",
- "platform-utils 0.1.0 (git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879)",
+ "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=82f55b8059f54e6e06a4a2d0a901743dc8f83949)",
+ "platform-utils 0.1.0 (git+https://github.com/breez/boltz-client?rev=82f55b8059f54e6e06a4a2d0a901743dc8f83949)",
  "serde",
  "serde_json",
  "sha2",
  "thiserror 2.0.17",
  "tiny-keccak",
  "tokio",
+ "tokio-socks",
+ "tokio-tungstenite 0.28.0",
  "tokio-tungstenite-wasm",
  "tracing",
  "url",
@@ -2681,14 +2683,13 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.19"
+version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "727805d60e7938b76b826a6ef209eb70eaa1812794f9424d4a4e2d740662df5f"
+checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
 dependencies = [
  "base64",
  "bytes",
  "futures-channel",
- "futures-core",
  "futures-util",
  "http",
  "http-body",
@@ -3191,7 +3192,7 @@ dependencies = [
 [[package]]
 name = "macros"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879#b5f4683aba10efd875d674f2bb9a5800b047a879"
+source = "git+https://github.com/breez/boltz-client?rev=82f55b8059f54e6e06a4a2d0a901743dc8f83949#82f55b8059f54e6e06a4a2d0a901743dc8f83949"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3585,13 +3586,17 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64",
+ "http",
+ "hyper-util",
  "macros 0.1.0",
  "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
  "tokio",
+ "tokio-socks",
  "tokio_with_wasm",
+ "tower-service",
  "tracing",
  "web-time",
 ]
@@ -3599,11 +3604,11 @@ dependencies = [
 [[package]]
 name = "platform-utils"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879#b5f4683aba10efd875d674f2bb9a5800b047a879"
+source = "git+https://github.com/breez/boltz-client?rev=82f55b8059f54e6e06a4a2d0a901743dc8f83949#82f55b8059f54e6e06a4a2d0a901743dc8f83949"
 dependencies = [
  "async-trait",
  "base64",
- "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879)",
+ "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=82f55b8059f54e6e06a4a2d0a901743dc8f83949)",
  "reqwest",
  "serde",
  "serde_json",
@@ -4884,9 +4889,9 @@ dependencies = [
 
 [[package]]
 name = "system-configuration"
-version = "0.6.1"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c879d448e9d986b661742763247d3693ed13609438cf3d006f51f5368a5ba6b"
+checksum = "a13f3d0daba03132c0aa9767f98351b3488edc2c100cda2d2ec2b04f3d8d3c8b"
 dependencies = [
  "bitflags",
  "core-foundation 0.9.4",

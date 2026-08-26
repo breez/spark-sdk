@@ -113,7 +113,7 @@ func removeEventListener(sdk: BreezSdk, listenerId: String) async {
 
 // ANCHOR: spark-status
 func gettingStartedSparkStatus() async throws {
-    let sparkStatus = try await getSparkStatus()
+    let sparkStatus = try await getSparkStatus(request: GetSparkStatusRequest())
 
     switch sparkStatus.status {
     case .operational:

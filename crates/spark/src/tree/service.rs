@@ -1227,18 +1227,21 @@ mod tests {
             .await
             .unwrap(),
         );
-        let ssp_client = Arc::new(ServiceProvider::new(
-            ServiceProviderConfig {
-                base_url: UNROUTABLE.to_string(),
-                schema_endpoint: None,
-                identity_public_key: identity_pubkey,
-                user_agent: None,
-                retry_config: RetryConfig::default(),
-            },
-            Arc::clone(&spark_signer),
-            session_store,
-            None,
-        ));
+        let ssp_client = Arc::new(
+            ServiceProvider::new(
+                ServiceProviderConfig {
+                    base_url: UNROUTABLE.to_string(),
+                    schema_endpoint: None,
+                    identity_public_key: identity_pubkey,
+                    user_agent: None,
+                    retry_config: RetryConfig::default(),
+                },
+                Arc::clone(&spark_signer),
+                session_store,
+                None,
+            )
+            .unwrap(),
+        );
         let transfer_service = Arc::new(TransferService::new(
             Arc::clone(&spark_signer),
             Network::Regtest,

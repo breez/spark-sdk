@@ -31,7 +31,7 @@ use super::payments::validation::{
     resolve_target_overpay_bps, validate_address_family_against_route, validate_amount,
     validate_recipient_not_contract_address,
 };
-use super::{BreezSdk, helpers::get_deposit_address, parse_input};
+use super::{BreezSdk, helpers::get_deposit_address};
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
@@ -97,7 +97,7 @@ impl BreezSdk {
     }
 
     pub async fn parse(&self, input: &str) -> Result<InputType, SdkError> {
-        parse_input(input, Some(self.external_input_parsers.clone())).await
+        Ok(self.input_parser.parse(input).await?.into())
     }
 
     /// Returns the available cross-chain routes.

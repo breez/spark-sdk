@@ -105,20 +105,21 @@ impl BitcoinChainServiceHandle {
     js_name = "newRestChainService",
     unchecked_return_type = "BitcoinChainService"
 )]
-#[must_use]
 pub async fn new_rest_chain_service(
     url: String,
     network: Network,
     api_type: ChainApiType,
     credentials: Option<Credentials>,
-) -> BitcoinChainServiceHandle {
-    BitcoinChainServiceHandle {
+) -> crate::error::WasmResult<BitcoinChainServiceHandle> {
+    // No proxy option here: a SOCKS5 proxy cannot be honoured on WASM.
+    Ok(BitcoinChainServiceHandle {
         inner: breez_sdk_spark::new_rest_chain_service(
             url,
             network.into(),
             api_type.into(),
             credentials.map(Into::into),
+            breez_sdk_spark::NewRestChainServiceRequest::default(),
         )
-        .await,
-    }
+        .await?,
+    })
 }

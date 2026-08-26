@@ -20,7 +20,8 @@ const connectWithTurnkey = async () => {
     // Set after the first connect to make later signer setup network-free
     identityPublicKey: undefined,
     retry: undefined,
-    maxRps: undefined
+    maxRps: undefined,
+    proxy: undefined
   }
 
   const signers = await createTurnkeySigner(turnkeyConfig)

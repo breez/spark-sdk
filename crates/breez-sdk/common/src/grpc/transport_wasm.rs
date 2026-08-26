@@ -1,7 +1,8 @@
 use std::task::{Context, Poll};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use http::HeaderValue;
+use platform_utils::ProxyConfig;
 use tower_service::Service;
 
 #[derive(Clone)]
@@ -39,7 +40,16 @@ pub struct GrpcClient {
 }
 
 impl GrpcClient {
-    pub fn new(url: &str, user_agent: &str) -> Result<Self> {
+    /// `proxy` must be `None` here: browser fetch offers no proxy control, so a
+    /// proxied channel cannot be built. Callers are expected to have rejected
+    /// the config already; this is the backstop that keeps an unhonoured proxy
+    /// from turning into silent direct traffic.
+    pub fn new(url: &str, user_agent: &str, proxy: Option<&ProxyConfig>) -> Result<Self> {
+        if proxy.is_some() {
+            return Err(anyhow!(
+                "a SOCKS5 proxy cannot be honoured on WASM: fetch exposes no proxy control"
+            ));
+        }
         let user_agent = HeaderValue::from_str(user_agent)?;
         Ok(Self {
             inner: Transport {

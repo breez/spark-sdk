@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use platform_utils::{ProxyConfig, Socks5Connector};
 use tonic::transport::ClientTlsConfig;
 
 use super::retry_channel::RetryChannel;
@@ -13,14 +14,25 @@ pub struct GrpcClient {
 }
 
 impl GrpcClient {
+    /// A lazily-connected channel to the operator, tunnelled through `proxy`
+    /// when one is set.
+    ///
+    /// The proxy only replaces how the TCP connection is opened. Tonic still
+    /// applies the endpoint's TLS config on top, with the SNI name taken from
+    /// `url`, so certificate validation is unchanged either way.
     pub fn new(
         url: String,
         ca_cert: Option<Vec<u8>>,
         user_agent: Option<String>,
+        proxy: Option<&ProxyConfig>,
     ) -> Result<Self, OperatorRpcError> {
         let endpoint = EndpointTemplate::new(url, ca_cert, user_agent).build()?;
+        let channel = match proxy {
+            Some(proxy) => endpoint.connect_with_connector_lazy(Socks5Connector::new(proxy)),
+            None => endpoint.connect_lazy(),
+        };
         Ok(Self {
-            inner: RetryChannel::new(endpoint.connect_lazy()),
+            inner: RetryChannel::new(channel),
         })
     }
 

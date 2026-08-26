@@ -47,7 +47,35 @@ pub struct _Config {
     pub max_concurrent_claims: u32,
     pub spark_config: Option<SparkConfig>,
     pub background_tasks_enabled: bool,
+    /// Routes the connections the SDK opens through a SOCKS5 proxy. Unset connects directly.
+    pub proxy: Option<ProxyConfig>,
     pub cross_chain_config: Option<CrossChainConfig>,
+}
+
+/// A SOCKS5 proxy carrying the connections the SDK opens. Not supported on web.
+#[frb(mirror(ProxyConfig))]
+pub struct _ProxyConfig {
+    pub host: String,
+    pub port: u16,
+    /// Set together with `password` for SOCKS5 authentication. Omit both for none.
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+/// Options for `get_spark_status`.
+#[frb(mirror(GetSparkStatusRequest))]
+pub struct _GetSparkStatusRequest {
+    /// Pass the same proxy as `Config.proxy`: this call runs without an SDK
+    /// instance, so it cannot pick the setting up on its own.
+    pub proxy: Option<ProxyConfig>,
+}
+
+/// Options for `new_rest_chain_service`.
+#[frb(mirror(NewRestChainServiceRequest))]
+pub struct _NewRestChainServiceRequest {
+    /// Pass the same proxy as `Config.proxy`: this service is built outside the
+    /// SDK, so it cannot pick the setting up on its own.
+    pub proxy: Option<ProxyConfig>,
 }
 
 #[frb(mirror(CrossChainConfig))]
@@ -1114,6 +1142,8 @@ pub struct SdkContextConfig {
     pub network: Network,
     pub api_key: Option<String>,
     pub connections_per_operator: Option<u32>,
+    /// Routes the connections opened by this context's shared clients through a SOCKS5 proxy.
+    pub proxy: Option<ProxyConfig>,
 }
 
 #[frb(mirror(Payment))]
@@ -1975,6 +2005,10 @@ pub struct _PasskeyProviderOptions {
 pub struct _PasskeyConfig {
     pub default_label: Option<String>,
     pub provider_options: Option<PasskeyProviderOptions>,
+    /// Routes the Nostr relay connections that store wallet labels through a
+    /// SOCKS5 proxy. Relay connections cannot authenticate to a proxy, so one
+    /// carrying credentials is rejected when the client is built.
+    pub proxy: Option<ProxyConfig>,
 }
 
 #[frb(mirror(PasskeyAvailability))]

@@ -436,7 +436,7 @@ mod persistence_tests {
             token: RwLock::new(None),
             api_key: "test-key".to_string(),
             storage: cell,
-            http_client: create_http_client(Some("jwt-test")),
+            http_client: create_http_client(Some("jwt-test")).expect("http client"),
         }
     }
 

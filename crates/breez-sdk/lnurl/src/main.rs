@@ -263,7 +263,7 @@ where
     let mut spark_config = SparkWalletConfig::default_config(args.network);
     spark_config.service_provider_config.schema_endpoint = Some("graphql/spark/rc".to_string());
     // One HTTP client (one connection pool) shared by all SSP traffic.
-    let ssp_http_client = platform_utils::create_http_client(Some(&default_user_agent()));
+    let ssp_http_client = platform_utils::create_http_client(Some(&default_user_agent()))?;
 
     // Create shared infrastructure components
     let signer = Arc::new(DefaultSigner::new(&auth_seed, args.network)?);

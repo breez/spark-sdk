@@ -133,6 +133,12 @@ pub enum PasskeyError {
         source: PrfProviderError,
     },
 
+    /// The client was configured in a way it cannot honour, so no
+    /// operation would succeed. Not retryable until the integrator
+    /// changes the configuration.
+    #[error("Invalid passkey configuration: {0}")]
+    InvalidConfig(String),
+
     #[error("Passkey error: {0}")]
     Generic(String),
 }
@@ -142,13 +148,16 @@ impl PasskeyError {
     /// reports the classification of the `PrfProviderError` it wraps, so
     /// it is indistinguishable here from the same failure before the
     /// credential existed: match the variant itself to tell them apart.
-    /// The remaining non-Prf variants map to `Internal`, since they stem
-    /// from SDK or network state rather than the authenticator.
+    /// `InvalidConfig` maps to `Configuration`: the integrator has to
+    /// change something before a retry can succeed. The remaining
+    /// non-Prf variants map to `Internal`, since they stem from SDK or
+    /// network state rather than the authenticator.
     #[must_use]
     pub fn kind(&self) -> ErrorKind {
         match self {
             Self::Prf(inner) => inner.kind(),
             Self::CreatedButNotDerived { source, .. } => source.kind(),
+            Self::InvalidConfig(_) => ErrorKind::Configuration,
             _ => ErrorKind::Internal,
         }
     }

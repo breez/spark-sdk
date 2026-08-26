@@ -6,7 +6,6 @@ use tracing::{debug, error, info, trace, warn};
 
 use super::{
     BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncType, deposits::InstantClaimOutcome,
-    parse_input,
 };
 use crate::{
     DepositInfo, Fee, InputType, InstantClaimDeclineReason, InstantClaimStatus, MaxFee,
@@ -84,7 +83,7 @@ impl BreezSdk {
             return;
         }
 
-        let Ok(input) = parse_input(invoice, None).await else {
+        let Ok(input) = self.input_parser.parse(invoice).await.map(InputType::from) else {
             error!(
                 "Failed to parse invoice for lnurl metadata sync: {}",
                 invoice

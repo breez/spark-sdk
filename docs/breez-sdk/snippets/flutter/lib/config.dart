@@ -138,3 +138,21 @@ void configureCrossChain() {
   // ANCHOR_END: cross-chain-config
   print("Config: $config");
 }
+
+Future<void> configureProxy() async {
+  // ANCHOR: config-proxy
+  // Route the SDK's connections through a SOCKS5 proxy, such as a local Tor
+  // daemon. Set username and password together for proxies that require
+  // RFC 1929 authentication.
+  final config = defaultConfig(network: Network.mainnet).copyWith(
+    apiKey: "<breez api key>",
+    proxy: const ProxyConfig(
+      host: "127.0.0.1",
+      port: 9050,
+      username: null,
+      password: null,
+    ),
+  );
+  // ANCHOR_END: config-proxy
+  print("Config: $config");
+}

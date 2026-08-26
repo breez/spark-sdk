@@ -582,6 +582,111 @@ impl FromStr for Network {
     }
 }
 
+/// A SOCKS5 proxy carrying the connections the SDK opens.
+///
+/// Hostnames are resolved by the proxy rather than locally, so a DNS query
+/// never discloses which host is being reached. A connection that cannot be
+/// established through the proxy fails: the SDK never falls back to a direct
+/// one.
+///
+/// Not supported on WASM, where the browser owns connection setup and exposes
+/// no proxy control. In Node, route the SDK by installing a proxy dispatcher
+/// on the global `fetch` instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ProxyConfig {
+    /// Proxy host. An IP address, or a name resolvable locally: reaching the
+    /// proxy is the one lookup that cannot itself go through the proxy.
+    pub host: String,
+    pub port: u16,
+    /// Username for SOCKS5 username/password authentication. Authentication is
+    /// only offered when both this and `password` are set.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub username: Option<String>,
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub password: Option<String>,
+}
+
+impl From<&ProxyConfig> for platform_utils::ProxyConfig {
+    fn from(config: &ProxyConfig) -> Self {
+        Self {
+            host: config.host.clone(),
+            port: config.port,
+            username: config.username.clone(),
+            password: config.password.clone(),
+        }
+    }
+}
+
+impl ProxyConfig {
+    /// A validated HTTP client honouring `proxy`, for the components built
+    /// outside the SDK's shared context. Everything inside it takes the
+    /// context's pooled client instead and never sees a proxy.
+    pub(crate) fn http_client(
+        proxy: Option<&Self>,
+        user_agent: Option<&str>,
+    ) -> Result<std::sync::Arc<dyn platform_utils::HttpClient>, SdkError> {
+        if let Some(proxy) = proxy {
+            proxy.validate()?;
+        }
+        platform_utils::create_http_client_with_proxy(
+            user_agent,
+            proxy.map(platform_utils::ProxyConfig::from).as_ref(),
+        )
+        .map_err(|e| SdkError::InvalidInput(format!("Failed to build proxied HTTP client: {e}")))
+    }
+
+    /// Rejects a proxy the SDK cannot honour end to end. Accepting one it can
+    /// only partly apply would leave some traffic going direct, which is worse
+    /// than refusing outright.
+    pub(crate) fn validate(&self) -> Result<(), SdkError> {
+        if cfg!(all(target_family = "wasm", target_os = "unknown")) {
+            return Err(SdkError::InvalidInput(
+                "A SOCKS5 proxy is not supported on WASM: the browser owns connection setup and \
+                 exposes no proxy control. In Node, install a proxy dispatcher on the global \
+                 fetch instead."
+                    .to_string(),
+            ));
+        }
+        if self.host.is_empty() {
+            return Err(SdkError::InvalidInput(
+                "Proxy host must not be empty".to_string(),
+            ));
+        }
+        if self.port == 0 {
+            return Err(SdkError::InvalidInput(
+                "Proxy port must not be 0".to_string(),
+            ));
+        }
+        if self.username.is_some() != self.password.is_some() {
+            return Err(SdkError::InvalidInput(
+                "Proxy username and password must be set together".to_string(),
+            ));
+        }
+        // The host ends up in a URL authority, so it has to survive being put
+        // there unchanged. Parsing is not enough on its own: a host carrying
+        // `@` parses, but as userinfo, which silently turns part of it into a
+        // username and moves the address. Checked here rather than at client
+        // build time so the error names the config that caused it.
+        let address = platform_utils::ProxyConfig::from(self).address();
+        let intact = url::Url::parse(&format!("socks5h://{address}")).is_ok_and(|url| {
+            url.username().is_empty()
+                && url.password().is_none()
+                && url.port() == Some(self.port)
+                && url.path().is_empty()
+                && url.query().is_none()
+                && url.fragment().is_none()
+        });
+        if !intact {
+            return Err(SdkError::InvalidInput(format!(
+                "Proxy host '{}' cannot be used in a proxy URL",
+                self.host
+            )));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[allow(clippy::struct_excessive_bools)]
@@ -705,6 +810,16 @@ pub struct Config {
     /// must be `None`, and `optimization_config.auto_enabled` must be `false`.
     /// `default_server_config` already sets these compatible values.
     pub background_tasks_enabled: bool,
+
+    /// Routes the connections the SDK opens through a SOCKS5 proxy.
+    ///
+    /// Covers HTTP and gRPC alike, and resolves hostnames at the proxy so no
+    /// DNS query leaks the destination. `None` (default) connects directly.
+    ///
+    /// When an [`SdkContext`](crate::SdkContext) is supplied to the builder,
+    /// its proxy must match this one: the context owns the shared clients, so
+    /// a disagreement would mean part of the traffic bypassed the proxy.
+    pub proxy: Option<ProxyConfig>,
 
     /// Configuration for cross-chain sends via Orchestra and Boltz.
     ///
@@ -1001,6 +1116,8 @@ impl Config {
                 "token optimization target output count must be less than the minimum outputs threshold".to_string(),
             ));
         }
+
+        self.proxy.as_ref().map_or(Ok(()), ProxyConfig::validate)?;
 
         if let Some(cc) = &self.cross_chain_config {
             if self.network != Network::Mainnet {

@@ -4,8 +4,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
-use breez_sdk_spark::Seed;
-use breez_sdk_spark::passkey::{PasskeyClient, PrfProvider, PrfProviderError, SignInRequest};
+use breez_sdk_spark::passkey::{
+    PasskeyClient, PasskeyConfig as SdkPasskeyConfig, PrfProvider, PrfProviderError, SignInRequest,
+};
+use breez_sdk_spark::{ProxyConfig, Seed};
 
 #[cfg(feature = "fido2")]
 pub mod fido2_prf;
@@ -87,8 +89,14 @@ pub async fn resolve_passkey_seed(
     label: Option<String>,
     list_labels: bool,
     store_label: bool,
+    proxy: Option<ProxyConfig>,
 ) -> Result<Seed> {
-    let client = PasskeyClient::new(provider, breez_api_key, None);
+    // The relays storing wallet labels would otherwise connect direct.
+    let config = proxy.map(|proxy| SdkPasskeyConfig {
+        proxy: Some(proxy),
+        ..SdkPasskeyConfig::default()
+    });
+    let client = PasskeyClient::new(provider, breez_api_key, config)?;
 
     // --list-labels: discovery sign-in (no cached label) returns the
     // discovered label set; prompt user to pick.

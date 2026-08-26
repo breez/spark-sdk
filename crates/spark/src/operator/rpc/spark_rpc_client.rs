@@ -805,7 +805,7 @@ mod tests {
     /// The transport is lazy and the test closures never touch the network,
     /// so the URL only has to parse.
     fn test_client(provider: Arc<FlakyProvider>) -> SparkRpcClient {
-        let transport = GrpcClient::new("http://127.0.0.1:1".to_string(), None, None)
+        let transport = GrpcClient::new("http://127.0.0.1:1".to_string(), None, None, None)
             .expect("transport")
             .into_inner();
         SparkRpcClient::new(transport, provider, 0)

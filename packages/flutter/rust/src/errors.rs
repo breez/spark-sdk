@@ -86,5 +86,6 @@ pub enum _PasskeyError {
         credential_id: Vec<u8>,
         source: PrfProviderError,
     },
+    InvalidConfig(String),
     Generic(String),
 }

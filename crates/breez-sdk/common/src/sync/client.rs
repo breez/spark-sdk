@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 
+use platform_utils::ProxyConfig;
 use tonic::{
     Request, Status, Streaming,
     metadata::{Ascii, MetadataValue},
@@ -32,7 +33,12 @@ pub struct BreezSyncerClient {
 
 impl BreezSyncerClient {
     #[allow(unused)]
-    pub fn new(server_url: &str, api_key: Option<&str>, user_agent: &str) -> anyhow::Result<Self> {
+    pub fn new(
+        server_url: &str,
+        api_key: Option<&str>,
+        user_agent: &str,
+        proxy: Option<&ProxyConfig>,
+    ) -> anyhow::Result<Self> {
         let api_key_metadata = match &api_key {
             Some(key) => Some(
                 format!("Bearer {key}")
@@ -43,7 +49,7 @@ impl BreezSyncerClient {
         };
 
         let client = ProtoSyncerClient::with_interceptor(
-            GrpcClient::new(server_url, user_agent)?.into_inner(),
+            GrpcClient::new(server_url, user_agent, proxy)?.into_inner(),
             ApiKeyInterceptor { api_key_metadata },
         );
         Ok(Self { client })

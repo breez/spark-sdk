@@ -4,7 +4,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use bitcoin::secp256k1::PublicKey;
-use platform_utils::create_http_client;
 use spark_wallet::SparkAddress;
 
 use crate::error::SignerError;
@@ -54,7 +53,9 @@ async fn build_client(
 ) -> Result<(Arc<TurnkeyClient>, Network, u32), SignerError> {
     let network = config.network;
     let account = account_number(config);
-    let http = create_http_client(Some("breez-sdk-spark-turnkey"));
+    let http =
+        crate::ProxyConfig::http_client(config.proxy.as_ref(), Some("breez-sdk-spark-turnkey"))
+            .map_err(to_signer_err)?;
     let client = Arc::new(TurnkeyClient::new(config, http).map_err(to_signer_err)?);
     if config.identity_public_key.is_none() {
         client
@@ -163,6 +164,7 @@ mod tests {
             identity_public_key,
             retry: None,
             max_rps: None,
+            proxy: None,
         }
     }
 

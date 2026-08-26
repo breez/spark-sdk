@@ -46,7 +46,7 @@ func (p *CustomPrfProvider) CheckDomainAssociation() (breez_sdk_spark.DomainAsso
 
 func CheckAvailability() {
 	prfProvider := &CustomPrfProvider{}
-	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
+	passkey, _ := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
 
 	// ANCHOR: check-availability
 	availability, err := passkey.CheckAvailability()
@@ -69,17 +69,18 @@ func CheckAvailability() {
 	// ANCHOR_END: check-availability
 }
 
-func SetupPasskeyClient() *breez_sdk_spark.PasskeyClient {
+func SetupPasskeyClient() (*breez_sdk_spark.PasskeyClient, error) {
 	// ANCHOR: setup-client
 	prfProvider := &CustomPrfProvider{}
 	apiKey := "<breez api key>"
+	// Fails when the config carries a proxy the relay transport cannot honour.
 	return breez_sdk_spark.NewPasskeyClient(prfProvider, &apiKey, nil)
 	// ANCHOR_END: setup-client
 }
 
 func ConnectWithPasskey() (*breez_sdk_spark.BreezSdk, error) {
 	prfProvider := &CustomPrfProvider{}
-	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
+	passkey, _ := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
 
 	// ANCHOR: connect-with-passkey
 	// Silent sign-in for a returning user, fall-through to register on a fresh device.
@@ -109,7 +110,7 @@ func ConnectWithPasskey() (*breez_sdk_spark.BreezSdk, error) {
 
 func RegisterNewPasskey() (*breez_sdk_spark.BreezSdk, error) {
 	prfProvider := &CustomPrfProvider{}
-	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
+	passkey, _ := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
 
 	// ANCHOR: register-passkey
 	label := "personal"
@@ -133,7 +134,7 @@ func RegisterNewPasskey() (*breez_sdk_spark.BreezSdk, error) {
 
 func CredentialMetadata() error {
 	prfProvider := &CustomPrfProvider{}
-	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
+	passkey, _ := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
 
 	// ANCHOR: credential-metadata
 	label := "personal"
@@ -177,7 +178,7 @@ func CredentialMetadata() error {
 func ListLabels() ([]string, error) {
 	prfProvider := &CustomPrfProvider{}
 	breezApiKey := "<breez api key>"
-	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, &breezApiKey, nil)
+	passkey, _ := breez_sdk_spark.NewPasskeyClient(prfProvider, &breezApiKey, nil)
 	// ANCHOR: list-labels
 	labels, err := passkey.Labels().List()
 	if err != nil {
@@ -193,7 +194,7 @@ func ListLabels() ([]string, error) {
 func StoreLabel() error {
 	prfProvider := &CustomPrfProvider{}
 	breezApiKey := "<breez api key>"
-	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, &breezApiKey, nil)
+	passkey, _ := breez_sdk_spark.NewPasskeyClient(prfProvider, &breezApiKey, nil)
 	// ANCHOR: store-label
 	err := passkey.Labels().Store("personal")
 	if err != nil {
@@ -229,7 +230,7 @@ func CheckDomain() error {
 
 func RecoverFromAlreadyExists() (*breez_sdk_spark.Wallet, error) {
 	prfProvider := &CustomPrfProvider{}
-	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
+	passkey, _ := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
 
 	// ANCHOR: recover-already-exists
 	label := "personal"
@@ -258,7 +259,7 @@ func RecoverFromAlreadyExists() (*breez_sdk_spark.Wallet, error) {
 
 func HandleTimeout() (*breez_sdk_spark.SignInResponse, error) {
 	prfProvider := &CustomPrfProvider{}
-	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
+	passkey, _ := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
 
 	// ANCHOR: handle-timeout
 	// Biometric inactivity timeout, distinct from a user cancel.

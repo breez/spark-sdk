@@ -143,7 +143,8 @@ impl From<boltz_client::BoltzError> for SdkError {
             | BoltzError::QuoteExpired
             | BoltzError::InvalidQuote(_)
             | BoltzError::QuoteDegradedBeyondSlippage { .. }
-            | BoltzError::DuplicatePreimage => SdkError::InvalidInput(e.to_string()),
+            | BoltzError::DuplicatePreimage
+            | BoltzError::InvalidConfig(_) => SdkError::InvalidInput(e.to_string()),
             _ => SdkError::Generic(format!("Boltz: {e}")),
         }
     }

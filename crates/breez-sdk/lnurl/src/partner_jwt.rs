@@ -787,7 +787,8 @@ mod tests {
             Arc::new(SparkSignerAdapter::new(signer)),
             session_store,
             Some(cache.provider_for("a.com".to_string()) as Arc<dyn HeaderProvider>),
-        );
+        )
+        .unwrap();
 
         let _ = ssp.get_swap_fee_estimate(1000).await;
 

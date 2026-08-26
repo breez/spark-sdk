@@ -72,6 +72,12 @@ pub struct WasmSdkContextConfig {
     /// context store their data in MySQL via the shared pool.
     #[tsify(optional)]
     pub mysql_config: Option<MysqlStorageConfig>,
+
+    /// Routes every connection opened by this context's shared clients
+    /// through a SOCKS5 proxy. Not supported on WASM: setting this always
+    /// fails validation.
+    #[tsify(optional)]
+    pub proxy: Option<crate::models::ProxyConfig>,
 }
 
 /// Constructs a [`WasmSdkContext`] from a `WasmSdkContextConfig`.
@@ -83,6 +89,7 @@ pub async fn new_shared_sdk_context(config: WasmSdkContextConfig) -> WasmResult<
         network: config.network.into(),
         api_key: config.api_key,
         connections_per_operator: config.connections_per_operator,
+        proxy: config.proxy.map(Into::into),
         storage: None,
     })
     .await?;

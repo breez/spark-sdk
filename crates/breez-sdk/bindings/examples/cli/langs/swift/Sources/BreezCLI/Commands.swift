@@ -1142,7 +1142,7 @@ func handleSetUserSettings(_ sdk: BreezSdk, _ args: [String]) async throws {
 // --- get-spark-status ---
 
 func handleGetSparkStatus(_ sdk: BreezSdk, _ args: [String]) async throws {
-    let result = try await getSparkStatus()
+    let result = try await getSparkStatus(request: GetSparkStatusRequest())
     printValue(result)
 }
 

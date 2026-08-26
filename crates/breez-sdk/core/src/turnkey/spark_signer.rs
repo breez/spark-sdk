@@ -1003,6 +1003,7 @@ mod tests {
             identity_public_key: None,
             retry: None,
             max_rps: None,
+            proxy: None,
         };
         Arc::new(TurnkeyClient::new(&config, http).unwrap())
     }

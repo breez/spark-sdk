@@ -1,0 +1,16 @@
+# Every outbound connection must be able to honour `Config.proxy`. A client
+# built straight from reqwest connects direct and cannot be routed, so build
+# new ones through `platform_utils::create_http_client_with_proxy` instead.
+#
+# `platform-utils` itself, and the DoH resolver (which needs binary response
+# bodies the `HttpClient` trait cannot carry), opt out locally with an
+# `#[allow]` carrying the reason.
+#
+# `DefaultHttpClient::default()` cannot be listed here: clippy does not match
+# trait-impl paths. It survives only in test and tooling crates, which are not
+# a leak vector for integrators.
+disallowed-methods = [
+  { path = "reqwest::Client::new", reason = "build clients via platform_utils::create_http_client_with_proxy so they honour Config.proxy" },
+  { path = "reqwest::Client::builder", reason = "build clients via platform_utils::create_http_client_with_proxy so they honour Config.proxy" },
+  { path = "reqwest::ClientBuilder::new", reason = "build clients via platform_utils::create_http_client_with_proxy so they honour Config.proxy" },
+]

@@ -168,10 +168,12 @@ The {{#name connections_per_operator}} setting on {{#name SdkContextConfig}} con
 - `None` — one connection per operator, multiplexed across every SDK sharing this context. The right choice for almost every deployment.
 - `Some(n)` — opens `n` connections per operator and balances requests across them. Worth setting only if the single shared connection has become a bottleneck — for example, latency that climbs with throughput, or operators deployed behind an L7 load balancer where you want client-side fan-out across backend instances.
 
+To route a context's pooled connections through a SOCKS5 proxy, set {{#name proxy}} on {{#name SdkContextConfig}} as well as on each SDK's {{#name Config}}. See [SOCKS5 proxy](./proxy.md).
+
 <div class="warning">
 <h4>Developer note</h4>
 
-All SDK instances sharing an SDK Context must be configured for the same network and operator pool. The user agent of the first SDK to construct the context is reused for all subsequent instances.
+All SDK instances sharing an SDK Context must be configured for the same network and operator pool, and must agree on {{#name proxy}}. The user agent of the first SDK to construct the context is reused for all subsequent instances.
 
 </div>
 

@@ -38,7 +38,7 @@ Future<void> fetchBalance(BreezSdk sdk) async {
 
 // ANCHOR: spark-status
 Future<void> gettingStartedSparkStatus() async {
-  final sparkStatus = await getSparkStatus();
+  final sparkStatus = await getSparkStatus(request: GetSparkStatusRequest());
 
   switch (sparkStatus.status) {
     case ServiceStatus.operational:

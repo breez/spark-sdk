@@ -41,7 +41,7 @@ impl BitcoindRpc {
             rpc_url: bitcoind.rpc_url.clone(),
             rpcuser: bitcoind.rpcuser.clone(),
             rpcpassword: bitcoind.rpcpassword.clone(),
-            http: DefaultHttpClient::default(),
+            http: DefaultHttpClient::new(None).expect("http client"),
         }
     }
 

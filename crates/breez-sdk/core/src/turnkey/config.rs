@@ -110,4 +110,9 @@ pub struct TurnkeyConfig {
     /// greater than 0 when set: 0 is rejected at connect.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub max_rps: Option<u32>,
+    /// Routes Turnkey requests through a SOCKS5 proxy. Pass the same value as
+    /// [`Config::proxy`](crate::Config::proxy): the signer is built before the
+    /// SDK, so it cannot pick the setting up on its own.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub proxy: Option<crate::ProxyConfig>,
 }
