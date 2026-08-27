@@ -138,14 +138,8 @@ pub fn plan_unilateral_exit(
         fee_rate_sat_per_kw,
     };
 
-    let mut selected = evaluate_unilateral_exit_leaf_costs(&tree_nodes, leaf_ids, &params, filter)?;
-    if let Some(settled) = settled {
-        for leaf in &mut selected {
-            let discount = settled.discount(leaf);
-            leaf.cpfp_cost = leaf.cpfp_cost.saturating_sub(discount);
-            leaf.estimated_cost = leaf.estimated_cost.saturating_sub(discount);
-        }
-    }
+    let selected =
+        evaluate_unilateral_exit_leaf_costs(&tree_nodes, leaf_ids, &params, filter, settled)?;
     if selected.is_empty() {
         return Ok(UnilateralExitPlan {
             selected_leaves: vec![],
@@ -187,6 +181,7 @@ pub fn plan_unilateral_exit(
                 &inputs,
                 destination_script_len,
                 fee_rate_sat_per_kw,
+                settled,
             )
             .unwrap_or(driving[0].cpfp_cost)
         } else {
@@ -210,6 +205,7 @@ pub fn plan_unilateral_exit(
                 &tree_nodes,
                 destination_script_len,
                 fee_rate_sat_per_kw,
+                settled,
             )
         })
     {
@@ -292,7 +288,8 @@ pub fn quote_unilateral_exit(
         fee_rate_sat_per_kw,
     };
 
-    let selected = evaluate_unilateral_exit_leaf_costs(tree_nodes, leaf_ids, &params, filter)?;
+    let selected =
+        evaluate_unilateral_exit_leaf_costs(tree_nodes, leaf_ids, &params, filter, None)?;
     if selected.is_empty() {
         return Ok(UnilateralExitQuote {
             selected_leaves: vec![],
@@ -400,12 +397,17 @@ pub fn branch_required_funding(leaf: &UnilateralExitSelectedLeaf, change_dust_li
 /// weight, each chained child on the first input. This is the physical floor
 /// `build_cpfp_child` enforces, independent of the sweep (paid from the swept
 /// value, not the funding UTXO). `None` only when the leaf cannot be costed.
+///
+/// Re-costing reads the tree, which knows nothing of what the chain has already
+/// done, so `settled` is applied again here: without it a half-exited branch is
+/// gated on the price of a fresh one.
 fn first_child_cpfp_floor(
     tree_nodes: &HashMap<TreeNodeId, TreeNode>,
     leaf_id: &TreeNodeId,
     branch_inputs: &[CpfpInput],
     destination_script_len: usize,
     fee_rate_sat_per_kw: u64,
+    settled: Option<&SettledExitSteps>,
 ) -> Option<u64> {
     let first = branch_inputs.first()?;
     let total_input_weight = branch_inputs
@@ -424,6 +426,7 @@ fn first_child_cpfp_floor(
         std::slice::from_ref(leaf_id),
         &params,
         UnilateralExitLeafFilter::All,
+        settled,
     )
     .ok()
     .and_then(|leaves| leaves.into_iter().next())
@@ -559,6 +562,7 @@ pub fn evaluate_unilateral_exit_leaf_costs(
     leaf_ids: &[TreeNodeId],
     params: &UnilateralExitLeafCostParams,
     filter: UnilateralExitLeafFilter,
+    settled: Option<&SettledExitSteps>,
 ) -> Result<Vec<UnilateralExitSelectedLeaf>, ServiceError> {
     let mut leaves: Vec<(&TreeNodeId, &TreeNode)> = Vec::with_capacity(leaf_ids.len());
     for id in leaf_ids {
@@ -660,17 +664,25 @@ pub fn evaluate_unilateral_exit_leaf_costs(
             ))
         };
 
-        let total_marginal_cost = cpfp_cost.saturating_add(sweep_cost);
+        let mut candidate = UnilateralExitSelectedLeaf {
+            id: (*leaf_id).clone(),
+            value: leaf.value,
+            estimated_cost: cpfp_cost.saturating_add(sweep_cost),
+            cpfp_cost,
+            cpfp_node_costs,
+            cpfp_refund_cost,
+        };
+        // Discounted before the profitability test, not after: a half-exited leaf
+        // priced as a fresh exit can look like it costs more than it is worth, and
+        // Auto would drop it for good over work it no longer has to do.
+        if let Some(settled) = settled {
+            let discount = settled.discount(&candidate);
+            candidate.cpfp_cost = candidate.cpfp_cost.saturating_sub(discount);
+            candidate.estimated_cost = candidate.estimated_cost.saturating_sub(discount);
+        }
 
-        if filter == UnilateralExitLeafFilter::All || leaf.value > total_marginal_cost {
-            selected.push(UnilateralExitSelectedLeaf {
-                id: (*leaf_id).clone(),
-                value: leaf.value,
-                estimated_cost: total_marginal_cost,
-                cpfp_cost,
-                cpfp_node_costs,
-                cpfp_refund_cost,
-            });
+        if filter == UnilateralExitLeafFilter::All || candidate.value > candidate.estimated_cost {
+            selected.push(candidate);
             for ancestor in &ancestors {
                 covered_txids.insert(ancestor.node_tx.compute_txid());
             }
@@ -758,6 +770,7 @@ fn assignment_covers_first_child(
     tree_nodes: &HashMap<TreeNodeId, TreeNode>,
     destination_script_len: usize,
     fee_rate_sat_per_kw: u64,
+    settled: Option<&SettledExitSteps>,
 ) -> bool {
     assignment.iter().all(|(leaf_id, branch_inputs)| {
         let Some(first) = branch_inputs.first() else {
@@ -774,6 +787,7 @@ fn assignment_covers_first_child(
             branch_inputs,
             destination_script_len,
             fee_rate_sat_per_kw,
+            settled,
         ) {
             Some(cpfp_cost) => available >= cpfp_cost.saturating_add(dust),
             None => false,
@@ -1362,6 +1376,7 @@ mod tests {
                     fee_rate_sat_per_kw: 250,
                 },
                 UnilateralExitLeafFilter::All,
+                None,
             )
             .unwrap()[0]
                 .cpfp_cost;
@@ -1384,13 +1399,15 @@ mod tests {
                 &four(floor),
                 &nodes,
                 change_len,
-                250
+                250,
+                None
             ));
             assert!(!assignment_covers_first_child(
                 &four(floor - 1),
                 &nodes,
                 change_len,
-                250
+                250,
+                None
             ));
             // A one-input branch is gated on its own weight too: funded above its
             // one-input floor it is covered.
@@ -1405,15 +1422,18 @@ mod tests {
                     fee_rate_sat_per_kw: 250,
                 },
                 UnilateralExitLeafFilter::All,
+                None,
             )
             .unwrap()[0]
                 .cpfp_cost
                 + dust;
             let one = vec![(leaf_id.clone(), vec![cpfp_input(one_floor, 0)])];
-            assert!(assignment_covers_first_child(&one, &nodes, change_len, 250));
+            assert!(assignment_covers_first_child(
+                &one, &nodes, change_len, 250, None
+            ));
             let one_short = vec![(leaf_id.clone(), vec![cpfp_input(one_floor - 1, 0)])];
             assert!(!assignment_covers_first_child(
-                &one_short, &nodes, change_len, 250
+                &one_short, &nodes, change_len, 250, None
             ));
 
             // A single input heavier than the reference kind (a Custom funding kind)
@@ -1426,7 +1446,8 @@ mod tests {
                 &heavy_branch,
                 &nodes,
                 change_len,
-                250
+                250,
+                None
             ));
         }
 
@@ -1566,6 +1587,7 @@ mod tests {
                 std::slice::from_ref(&id),
                 &cost_params(),
                 UnilateralExitLeafFilter::ProfitableOnly,
+                None,
             )
             .unwrap();
             assert_eq!(sel.len(), 1);
@@ -1579,6 +1601,7 @@ mod tests {
                 &[sid],
                 &cost_params(),
                 UnilateralExitLeafFilter::ProfitableOnly,
+                None,
             )
             .unwrap();
             assert!(sel.is_empty());
@@ -1617,6 +1640,7 @@ mod tests {
                     std::slice::from_ref(&id),
                     &cost_params(),
                     UnilateralExitLeafFilter::ProfitableOnly,
+                    None,
                 )
                 .unwrap();
                 assert_eq!(sel.len(), 1, "a {status} leaf must stay exitable");
@@ -1634,6 +1658,7 @@ mod tests {
                 &[pid],
                 &cost_params(),
                 UnilateralExitLeafFilter::All,
+                None,
             )
             .unwrap()[0]
                 .estimated_cost;
@@ -1648,7 +1673,8 @@ mod tests {
                     &at_nodes,
                     &[at_id],
                     &cost_params(),
-                    UnilateralExitLeafFilter::ProfitableOnly
+                    UnilateralExitLeafFilter::ProfitableOnly,
+                    None
                 )
                 .unwrap()
                 .is_empty(),
@@ -1664,6 +1690,7 @@ mod tests {
                 &[above_id],
                 &cost_params(),
                 UnilateralExitLeafFilter::ProfitableOnly,
+                None,
             )
             .unwrap();
             assert_eq!(
@@ -1684,6 +1711,7 @@ mod tests {
                 &[sid],
                 &cost_params(),
                 UnilateralExitLeafFilter::All,
+                None,
             )
             .unwrap();
             assert_eq!(sel.len(), 1);
@@ -1701,7 +1729,8 @@ mod tests {
                     &nodes,
                     std::slice::from_ref(&id),
                     &cost_params(),
-                    UnilateralExitLeafFilter::All
+                    UnilateralExitLeafFilter::All,
+                    None
                 )
                 .is_err()
             );
@@ -1710,6 +1739,7 @@ mod tests {
                 &[id],
                 &cost_params(),
                 UnilateralExitLeafFilter::ProfitableOnly,
+                None,
             )
             .unwrap();
             assert!(sel.is_empty());
@@ -2073,6 +2103,98 @@ mod tests {
         }
 
         #[test_all]
+        fn auto_keeps_a_half_exited_leaf_its_remaining_work_pays_for() {
+            // Worth less than a fresh exit costs, so Auto drops it: but most of that
+            // exit is already on-chain, and what is left is well within its value.
+            let params = cost_params();
+            let probe = leaf_node_n("probe", 1_000_000, 1);
+            let probe_id = probe.id.clone();
+            let probe_nodes: HashMap<TreeNodeId, TreeNode> =
+                [(probe_id.clone(), probe)].into_iter().collect();
+            let fresh_cost = evaluate_unilateral_exit_leaf_costs(
+                &probe_nodes,
+                std::slice::from_ref(&probe_id),
+                &params,
+                UnilateralExitLeafFilter::All,
+                None,
+            )
+            .unwrap()[0]
+                .estimated_cost;
+
+            // Priced as fresh this leaf is not worth exiting, by one satoshi.
+            let leaf = leaf_node_n("leaf", fresh_cost, 1);
+            let leaf_id = leaf.id.clone();
+            let nodes: HashMap<TreeNodeId, TreeNode> =
+                [(leaf_id.clone(), leaf)].into_iter().collect();
+            let ids = std::slice::from_ref(&leaf_id);
+
+            assert!(
+                evaluate_unilateral_exit_leaf_costs(
+                    &nodes,
+                    ids,
+                    &params,
+                    UnilateralExitLeafFilter::ProfitableOnly,
+                    None,
+                )
+                .unwrap()
+                .is_empty(),
+                "priced as a fresh exit it is not worth doing"
+            );
+
+            let settled = SettledExitSteps {
+                nodes: [leaf_id.clone()].into_iter().collect(),
+                refunds: [leaf_id.clone()].into_iter().collect(),
+            };
+            assert_eq!(
+                evaluate_unilateral_exit_leaf_costs(
+                    &nodes,
+                    ids,
+                    &params,
+                    UnilateralExitLeafFilter::ProfitableOnly,
+                    Some(&settled),
+                )
+                .unwrap()
+                .len(),
+                1,
+                "the work it has left is worth doing, so Auto must keep it"
+            );
+        }
+
+        #[test_all]
+        fn a_settled_step_lowers_the_multi_input_floor_too() {
+            // Two inputs put the single-leaf gate through first_child_cpfp_floor,
+            // which re-costs from the tree and so has to be told what is settled
+            // as well: otherwise a half-exited leaf is gated on a fresh price.
+            let a = leaf_node_n("a", 1_000_000, 1);
+            let id_a = a.id.clone();
+            let nodes: HashMap<TreeNodeId, TreeNode> = [(id_a.clone(), a)].into_iter().collect();
+
+            let settled = SettledExitSteps {
+                nodes: [id_a.clone()].into_iter().collect(),
+                ..Default::default()
+            };
+
+            let floor_of = |settled: Option<&SettledExitSteps>| {
+                first_child_cpfp_floor(
+                    &nodes,
+                    &id_a,
+                    &[cpfp_input(10_000, 0), cpfp_input(10_000, 1)],
+                    22,
+                    250,
+                    settled,
+                )
+                .expect("the leaf costs")
+            };
+
+            let fresh = floor_of(None);
+            let discounted = floor_of(Some(&settled));
+            assert!(
+                discounted < fresh,
+                "a settled node lowers the floor: {discounted} vs {fresh}"
+            );
+        }
+
+        #[test_all]
         fn a_fully_settled_exit_takes_no_funding_and_no_fan_out() {
             let a = leaf_node_n("a", 1_000_000, 1);
             let b = leaf_node_n("b", 1_000_000, 3);
@@ -2182,6 +2304,7 @@ mod tests {
                     std::slice::from_ref(&leaf_id),
                     &cost_params(),
                     UnilateralExitLeafFilter::All,
+                    None,
                 )
                 .unwrap()[0]
                     .estimated_cost
