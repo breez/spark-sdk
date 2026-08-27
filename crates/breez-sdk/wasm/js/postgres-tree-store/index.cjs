@@ -396,9 +396,9 @@ class PostgresTreeStore {
   async getVerifiedLeafKeys() {
     try {
       // Project just the two pubkeys out of the JSON, skipping each leaf's
-      // `data` blob (up to five transactions). The filter matches the verified
-      // categories the SDK expects: every reserved leaf plus every Available
-      // one, and nothing non-Available and unreserved.
+      // `data` blob (up to five transactions). Every stored leaf passed the
+      // ownership check on its way in, whatever its status, so all are
+      // projected.
       const result = await this.pool.query(
         `
         SELECT l.id AS id,
@@ -408,7 +408,6 @@ class PostgresTreeStore {
         LEFT JOIN brz_tree_reservations r
           ON l.reservation_id = r.id AND l.user_id = r.user_id
         WHERE l.user_id = $1
-          AND (r.purpose IS NOT NULL OR l.status = 'Available')
       `,
         [this.identity]
       );

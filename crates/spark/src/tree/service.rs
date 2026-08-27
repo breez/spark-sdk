@@ -68,6 +68,20 @@ struct RenewalOutcome {
     any_renewal_landed: bool,
 }
 
+/// Splits a refresh's leaves into the ones worth renewing and the ones already
+/// leaving. A leaf that is on-chain or exited only needs its timelock to outlast
+/// the exit driving it, so renewing asks the operators for a new one on every
+/// refresh until that exit finishes. Both halves are stored: the exiting leaf
+/// keeps its place in the pool, and its chain with it.
+fn partition_renewable(leaves: Vec<TreeNode>) -> (Vec<TreeNode>, Vec<TreeNode>) {
+    leaves.into_iter().partition(|leaf| {
+        !matches!(
+            leaf.status,
+            TreeNodeStatus::OnChain | TreeNodeStatus::Exited
+        )
+    })
+}
+
 /// Notifications buffered per listener before it starts missing them. Each one
 /// says only that the pool grew, so a listener that falls behind loses nothing
 /// a single later notification does not tell it just as well.
@@ -472,11 +486,13 @@ impl TreeService for SynchronousTreeService {
         // A refresh writes no chains, so an already-stored one is left alone
         // rather than rewritten every minute. Collecting the chains of anything
         // newly reported is what the notification below sets off.
+        let (renewable, exiting) = partition_renewable(new_leaves);
         let RenewalOutcome {
             pedigrees,
             any_renewal_landed,
-        } = self.check_renew_nodes(bare_pedigrees(new_leaves)).await?;
-        let renewed_leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
+        } = self.check_renew_nodes(bare_pedigrees(renewable)).await?;
+        let mut renewed_leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
+        renewed_leaves.extend(exiting);
         self.state
             .set_leaves(
                 &renewed_leaves,
@@ -1346,6 +1362,28 @@ mod tests {
                 pedigree
             })
             .collect()
+    }
+
+    #[test]
+    fn a_leaf_on_its_way_out_is_not_offered_for_renewal() {
+        let node = |id, status| create_test_node_with_parent(id, Some("root"), status);
+        let available = node("available", TreeNodeStatus::Available);
+        let on_chain = node("on-chain", TreeNodeStatus::OnChain);
+        let exited = node("exited", TreeNodeStatus::Exited);
+
+        let (renewable, exiting) =
+            partition_renewable(vec![available.clone(), on_chain.clone(), exited.clone()]);
+
+        assert_eq!(
+            renewable.iter().map(|l| l.id.clone()).collect::<Vec<_>>(),
+            vec![available.id],
+            "only a leaf that is staying is worth a new timelock"
+        );
+        assert_eq!(
+            exiting.iter().map(|l| l.id.clone()).collect::<Vec<_>>(),
+            vec![on_chain.id, exited.id],
+            "the ones leaving are still kept, just not renewed"
+        );
     }
 
     #[async_test_all]
