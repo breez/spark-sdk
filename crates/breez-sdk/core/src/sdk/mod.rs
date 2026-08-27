@@ -98,6 +98,9 @@ pub struct BreezSdk {
     pub(crate) runtime: SdkRuntime,
     /// Coordinator for coalescing duplicate sync requests
     pub(crate) sync_coordinator: SyncCoordinator,
+    /// Serialises claim attempts on the same deposit across the sync cascade
+    /// and explicit `claim_deposit` calls.
+    pub(crate) claim_guards: deposits::ClaimGuards,
     pub(crate) initial_synced_watcher: watch::Receiver<bool>,
     /// Parses payment inputs over the SDK's own transports, so lightning-address
     /// and LNURL lookups reuse the pooled HTTP client and honour the proxy.
@@ -234,7 +237,6 @@ pub fn default_config(network: Network) -> Config {
         network,
         sync_interval_secs: 60, // every 1 minute
         max_deposit_claim_fee: Some(crate::MaxFee::Rate { sat_per_vbyte: 1 }),
-        max_instant_deposit_claim_fee_bps: None,
         lnurl_domain,
         prefer_spark_over_lightning: false,
         exit_chain_auto_fetch_enabled: true,

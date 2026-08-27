@@ -144,12 +144,34 @@ pub struct ClaimDepositRequest {
     pub txid: String,
     pub vout: u32,
     pub max_fee: Option<MaxFee>,
-    pub max_instant_fee_bps: Option<u32>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimDepositResponse)]
 pub struct ClaimDepositResponse {
     pub payment: Option<Payment>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FetchClaimDepositQuoteRequest)]
+pub struct FetchClaimDepositQuoteRequest {
+    pub txid: String,
+    pub vout: u32,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimDepositQuote)]
+pub struct ClaimDepositQuote {
+    pub confirmations_required: u32,
+    pub credit_amount_sats: u64,
+    pub fee_sats: u64,
+    pub fee_rate_sat_per_vbyte: u64,
+    pub is_estimate: bool,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FetchClaimDepositQuoteResponse)]
+pub struct FetchClaimDepositQuoteResponse {
+    pub amount_sats: u64,
+    pub confirmations: u32,
+    pub instant: Option<ClaimDepositQuote>,
+    pub mature: ClaimDepositQuote,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::RefundDepositRequest)]
@@ -192,21 +214,16 @@ pub enum DepositClaimError {
     },
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::InstantClaimDeclineReason)]
-pub enum InstantClaimDeclineReason {
-    NoPlan,
-    FeeExceeded {
-        max_bps: u32,
-        quoted_bps: u32,
-        quoted_sats: u64,
-    },
-    SubmissionFailed,
-}
-
 #[macros::extern_wasm_bindgen(breez_sdk_spark::InstantClaimStatus)]
 pub enum InstantClaimStatus {
-    Declined { reason: InstantClaimDeclineReason },
-    Submitted { claim_id: String },
+    Declined {
+        max_fee_sats: Option<u64>,
+        #[serde(default)]
+        confirmations: u32,
+    },
+    Submitted {
+        claim_id: String,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::InputType)]
@@ -677,7 +694,6 @@ pub struct Config {
     pub network: Network,
     pub sync_interval_secs: u32,
     pub max_deposit_claim_fee: Option<MaxFee>,
-    pub max_instant_deposit_claim_fee_bps: Option<u32>,
     pub lnurl_domain: Option<String>,
     pub prefer_spark_over_lightning: bool,
     pub exit_chain_auto_fetch_enabled: bool,

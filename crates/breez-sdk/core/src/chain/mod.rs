@@ -44,6 +44,10 @@ pub trait BitcoinChainService: Send + Sync {
     /// swept refund can still be distinguished from one never broadcast.
     async fn get_address_txos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError>;
     async fn get_transaction_status(&self, txid: String) -> Result<TxStatus, ChainServiceError>;
+    /// Height of the chain tip. Paired with a transaction's
+    /// [`TxStatus::block_height`] it gives that transaction's confirmation count,
+    /// which no single call reports.
+    async fn tip_height(&self) -> Result<u32, ChainServiceError>;
     async fn get_transaction_hex(&self, txid: String) -> Result<String, ChainServiceError>;
     async fn get_outspend(&self, txid: String, vout: u32) -> Result<Outspend, ChainServiceError>;
     async fn broadcast_transaction(&self, tx: String) -> Result<(), ChainServiceError>;

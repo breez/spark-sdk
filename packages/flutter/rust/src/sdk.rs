@@ -267,6 +267,13 @@ impl BreezSdk {
         self.inner.claim_deposit(request).await
     }
 
+    pub async fn fetch_claim_deposit_quote(
+        &self,
+        request: FetchClaimDepositQuoteRequest,
+    ) -> Result<FetchClaimDepositQuoteResponse, SdkError> {
+        self.inner.fetch_claim_deposit_quote(request).await
+    }
+
     pub async fn refund_deposit(
         &self,
         request: RefundDepositRequest,

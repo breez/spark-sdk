@@ -447,6 +447,18 @@ impl BreezSdk {
         Ok(self.sdk.claim_deposit(request.into()).await?.into())
     }
 
+    #[wasm_bindgen(js_name = "fetchClaimDepositQuote")]
+    pub async fn fetch_claim_deposit_quote(
+        &self,
+        request: FetchClaimDepositQuoteRequest,
+    ) -> WasmResult<FetchClaimDepositQuoteResponse> {
+        Ok(self
+            .sdk
+            .fetch_claim_deposit_quote(request.into())
+            .await?
+            .into())
+    }
+
     #[wasm_bindgen(js_name = "refundDeposit")]
     pub async fn refund_deposit(
         &self,

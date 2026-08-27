@@ -671,8 +671,10 @@ pub struct InstantStaticDepositQuote {
     pub quote_signature: String,
 }
 
-/// A fulfillment plan for an instant static deposit claim. `confirmations == 0`
-/// is the 0-conf path.
+/// A fulfillment plan for an instant static deposit claim. `confirmations` is the
+/// depth the SSP credits at. Measured behaviour, which the schema does not state:
+/// it is the SSP's own floor, not this deposit's depth, so a deposit far past it is
+/// still offered a shallow plan (depth 1 quoted at 4 confirmations).
 #[derive(Debug, Clone)]
 #[macros::derive_from(
     CreateInstantStaticDepositQuoteCreateInstantStaticDepositQuoteFulfillmentPlans

@@ -34,6 +34,7 @@ impl BreezSdk {
             exit_chain_trigger: super::exit_chain_downloader::ExitChainTrigger::new(),
             runtime: params.runtime,
             sync_coordinator: params.sync_coordinator,
+            claim_guards: super::deposits::ClaimGuards::default(),
             initial_synced_watcher,
             input_parser: params.input_parser,
             spark_private_mode_initialized: Arc::new(OnceCell::new()),

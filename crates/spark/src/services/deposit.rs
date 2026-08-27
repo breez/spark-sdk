@@ -1091,23 +1091,16 @@ impl DepositService {
         Ok(result)
     }
 
-    /// Claim an instant (0-conf) static deposit. `tx` is the funding
+    /// Claim a static deposit ahead of maturity. `tx` is the funding
     /// transaction: its output at the quote's `output_index` names the static
-    /// deposit address the UTXO paid to, which the signed user statement must
-    /// reference. `plan` must be the 0-conf fulfillment plan.
+    /// deposit address the UTXO paid to, which the 0-conf user statement must
+    /// reference. `plan` selects which statement form the SSP verifies against.
     pub async fn claim_instant_static_deposit(
         &self,
         tx: Transaction,
         quote: InstantStaticDepositQuote,
         plan: InstantStaticDepositPlan,
     ) -> Result<String, ServiceError> {
-        if plan.confirmations != 0 {
-            return Err(ServiceError::Generic(format!(
-                "instant claim supports only 0-conf plans, got {} confirmations",
-                plan.confirmations
-            )));
-        }
-
         // `tx` must be the transaction the quote was issued for: the statement is
         // signed against `tx`'s output, so a mismatched pair would sign the wrong
         // address. (Public API; in-tree the caller always pairs them correctly.)
@@ -1123,28 +1116,44 @@ impl DepositService {
         let quote_signature_bytes = hex::decode(&quote.quote_signature)
             .map_err(|e| ServiceError::Generic(format!("invalid quote signature hex: {e}")))?;
 
-        // The statement names the address the UTXO actually paid to, derived from
-        // the funding output. The wallet's current static address may have rotated
-        // since the deposit landed, so it cannot be regenerated here.
-        let output_index = quote.output_index as usize;
-        let tx_out = tx.output.get(output_index).ok_or_else(|| {
-            ServiceError::Generic(format!("quote output_index {output_index} out of range"))
-        })?;
-        let params: Params = self.network.into();
-        let static_deposit_address = Address::from_script(&tx_out.script_pubkey, &params)
-            .map_err(|e| ServiceError::Generic(format!("invalid static deposit script: {e}")))?
-            .to_string();
+        // The SSP verifies each depth against a different statement: the tagged
+        // instant hash at 0-conf, and the same statement as a normal mature claim
+        // from 1-conf on. Both commit to the quote's credit amount, not the plan's.
+        // Mirrors claimInstantStaticDeposit in buildonspark/spark
+        // (sdks/js/packages/spark-sdk/src/spark-wallet/spark-wallet.ts).
+        let credit_amount_sats = quote.credit_amount.original_value;
+        let user_statement = if plan.confirmations == 0 {
+            // The statement names the address the UTXO actually paid to, derived
+            // from the funding output. The wallet's current static address may have
+            // rotated since the deposit landed, so it cannot be regenerated here.
+            let output_index = quote.output_index as usize;
+            let tx_out = tx.output.get(output_index).ok_or_else(|| {
+                ServiceError::Generic(format!("quote output_index {output_index} out of range"))
+            })?;
+            let params: Params = self.network.into();
+            let static_deposit_address = Address::from_script(&tx_out.script_pubkey, &params)
+                .map_err(|e| ServiceError::Generic(format!("invalid static deposit script: {e}")))?
+                .to_string();
 
-        // Sign the credit of the plan being claimed (equal to the quote credit
-        // today, but unambiguous if the SSP ever offers multiple plans). The
-        // deposit amount is the full UTXO value, which is quote-level.
-        let user_statement = serialize_instant_static_deposit_claim_payload(
-            &self.network.to_string(),
-            plan.amount.original_value,
-            quote.deposit_amount.original_value,
-            &static_deposit_address,
-            &quote_signature_bytes,
-        );
+            serialize_instant_static_deposit_claim_payload(
+                &self.network.to_string(),
+                credit_amount_sats,
+                quote.deposit_amount.original_value,
+                &static_deposit_address,
+                &quote_signature_bytes,
+            )
+        } else {
+            let output_index = u32::try_from(quote.output_index).map_err(|_| {
+                ServiceError::Generic(format!("invalid quote output_index {}", quote.output_index))
+            })?;
+            self.serialize_static_deposit_claim_payload(
+                quote_txid,
+                output_index,
+                UtxoSwapRequestType::Fixed,
+                credit_amount_sats,
+                &quote_signature_bytes,
+            )
+        };
 
         // Sign the user-statement and export the ECIES-encrypted deposit secret
         // the SSP needs to co-sign the claim.
@@ -1152,6 +1161,10 @@ impl DepositService {
             .prepare_encrypted_static_deposit_claim(user_statement)
             .await?;
 
+        // The request carries the quote id but no plan id, so the SSP works out which
+        // of the two statement forms above to verify. If the UTXO gains a confirmation
+        // between signing and verifying, the SSP can pick the other form and the
+        // signature check fails. The deposit then retries at the new depth.
         let resp = self
             .ssp_client
             .claim_instant_static_deposit(CreateClaimInstantStaticDepositInput {
