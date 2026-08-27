@@ -1393,7 +1393,6 @@ fn refund_output_value(
 /// shape of [`UnilateralExitPlan::per_branch_funding`]).
 type BranchFunding = Vec<(TreeNodeId, Vec<CpfpInput>)>;
 
-/// Resolves the fan-out step and the per-branch funding it feeds. A confirmed
 /// The part of a leaf's CPFP bill that is still to be paid. A node or refund the
 /// walk resolved is confirmed on-chain, or is driven by a transaction that pays
 /// its own fee, so neither takes a child. Anything the walk did not resolve is
@@ -1412,6 +1411,7 @@ fn remaining_cpfp_cost(leaf: &UnilateralExitSelectedLeaf, resolved: &ResolvedExi
     }
 }
 
+/// Resolves the fan-out step and the per-branch funding it feeds. A confirmed
 /// fan-out replaces each branch's first input with its real output; a fresh one
 /// is returned unsigned to broadcast first; no fan-out assigns funding directly.
 fn resolve_fan_out_funding(

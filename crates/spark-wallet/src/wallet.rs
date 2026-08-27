@@ -1797,9 +1797,6 @@ impl SparkWallet {
         )?)
     }
 
-    /// Prepares a unilateral exit of the selected leaves: loads the exit tree,
-    /// plans it, and derives each leaf's P2TR refund address. `Auto` keeps only
-    /// profitable leaves; `Specific` exits every requested one.
     /// The leaves an exit would move and the tree behind them, with no funding
     /// considered. Held apart from planning so the chain can be asked what is
     /// already settled first, which is what lets funding be sized to the work
@@ -1833,6 +1830,9 @@ impl SparkWallet {
 
     /// `settled` is what the chain has been observed to have done already; `None`
     /// prices a fresh exit.
+    /// Plans a unilateral exit over an already-loaded context and derives each
+    /// leaf's P2TR refund address. `Auto` keeps only profitable leaves;
+    /// `Specific` exits every requested one.
     pub fn plan_unilateral_exit(
         &self,
         context: &ExitContext,

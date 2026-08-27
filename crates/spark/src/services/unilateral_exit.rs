@@ -75,9 +75,6 @@ pub struct UnilateralExitPlan {
     pub tree_nodes: HashMap<TreeNodeId, TreeNode>,
 }
 
-/// Selects which leaves to exit and maps funding inputs to branches. Never
-/// fetches: works offline as long as `tree_nodes` holds each selected leaf's
-/// full ancestor chain.
 /// The steps an exit no longer has to drive, as the chain shows them. A node or
 /// refund named here is confirmed, or is driven by a transaction paying its own
 /// fee, so it takes no CPFP child and costs the funding nothing.
@@ -114,6 +111,10 @@ impl SettledExitSteps {
     }
 }
 
+/// Selects which leaves to exit and maps funding inputs to branches. Never
+/// fetches: works offline as long as `tree_nodes` holds each selected leaf's
+/// full ancestor chain.
+///
 /// `settled` is what the chain has already been observed to have done. `None`
 /// prices a fresh exit, which is what a caller with no chain access gets.
 pub fn plan_unilateral_exit(
