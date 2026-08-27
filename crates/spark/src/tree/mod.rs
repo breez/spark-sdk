@@ -97,14 +97,41 @@ pub struct VerifiedLeafKeys {
     pub signing_keyshare_public_key: PublicKey,
 }
 
+#[cfg(test)]
+mod verified_leaf_keys_tests {
+    use super::*;
+    use crate::tree::tests::create_test_tree_node;
+
+    #[test]
+    fn a_leaf_part_way_through_an_exit_counts_as_verified() {
+        // It reached the store, so it passed the ownership check. Leaving it out
+        // re-verifies it on every refresh for as long as the exit runs.
+        let exiting = create_test_tree_node("exiting", 1_000);
+        let leaves = Leaves {
+            available: vec![],
+            not_available: vec![exiting.clone()],
+            available_missing_from_operators: vec![],
+            reserved_for_payment: vec![],
+            reserved_for_swap: vec![],
+        };
+        let keys = verified_leaf_keys_from_leaves(&leaves);
+        assert_eq!(
+            keys.get(&exiting.id).map(|k| k.verifying_public_key),
+            Some(exiting.verifying_public_key)
+        );
+    }
+}
+
 /// Projects the verified-leaf categories of `leaves` into the keys keyed by id.
-/// The set mirrors `Leaves::balance` inputs plus payment-reserved leaves: every
-/// category whose leaves passed the ownership check before being stored, and
-/// deliberately excludes `not_available` (never verified).
+/// Every stored leaf passed the ownership check on its way in, whatever its
+/// status, so `not_available` belongs here too: a leaf part-way through an exit
+/// would otherwise be re-verified on every refresh, which costs a remote signer
+/// a round trip per leaf.
 pub fn verified_leaf_keys_from_leaves(leaves: &Leaves) -> HashMap<TreeNodeId, VerifiedLeafKeys> {
     leaves
         .available
         .iter()
+        .chain(&leaves.not_available)
         .chain(&leaves.available_missing_from_operators)
         .chain(&leaves.reserved_for_payment)
         .chain(&leaves.reserved_for_swap)

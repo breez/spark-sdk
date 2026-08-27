@@ -349,9 +349,7 @@ class NodeTreeStore {
           `SELECT l.id AS id,
                   l.verifying_public_key AS verifying,
                   l.signing_public_key AS keyshare
-           FROM brz_tree_leaves l
-           LEFT JOIN brz_tree_reservations r ON l.reservation_id = r.id
-           WHERE r.purpose IS NOT NULL OR l.status = 'Available'`
+           FROM brz_tree_leaves l`
         )
         .all();
       return rows.map((row) => [row.id, row.verifying, row.keyshare]);
