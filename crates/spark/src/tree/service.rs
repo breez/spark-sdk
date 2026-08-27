@@ -68,6 +68,22 @@ struct RenewalOutcome {
     any_renewal_landed: bool,
 }
 
+/// Splits a refresh's leaves into the ones worth renewing and the ones already on
+/// their way out. Only a spendable leaf is renewed: the statuses the exit added
+/// are either part-way out or already locked by the operators, and asking for a
+/// new timelock on one of those is at best refused, while a node that no longer
+/// carries a refund fails the check outright and would take the whole refresh
+/// down with it.
+///
+/// Named as what is kept rather than what is excluded, so a status added later is
+/// left out until someone decides it belongs. Both halves are stored: a leaf on
+/// its way out keeps its place in the pool, and its chain with it.
+fn partition_renewable(leaves: Vec<TreeNode>) -> (Vec<TreeNode>, Vec<TreeNode>) {
+    leaves
+        .into_iter()
+        .partition(|leaf| leaf.status == TreeNodeStatus::Available)
+}
+
 /// Notifications buffered per listener before it starts missing them. Each one
 /// says only that the pool grew, so a listener that falls behind loses nothing
 /// a single later notification does not tell it just as well.
@@ -171,6 +187,18 @@ impl TreeService for SynchronousTreeService {
     }
 
     async fn restore_leaves(&self, leaves: &[LeafPedigree]) -> Result<(), TreeServiceError> {
+        // The only leaves whose data comes from outside the SDK, so the only ones
+        // whose ownership nothing else has established. A refresh will not do it
+        // later either: it skips a leaf whose stored keys match the ones reported,
+        // which an unchecked import satisfies by definition.
+        let owned = self
+            .retain_owned(&leaves.iter().map(|p| &p.leaf).collect::<Vec<_>>())
+            .await?;
+        let leaves: Vec<LeafPedigree> = leaves
+            .iter()
+            .filter(|p| owned.contains(&p.leaf.id))
+            .cloned()
+            .collect();
         let nodes: Vec<TreeNode> = leaves.iter().map(|p| p.leaf.clone()).collect();
         self.state.add_leaves(&nodes).await?;
         // The chains ride in on the backup rather than the leaf lifecycle, so they
@@ -433,26 +461,9 @@ impl TreeService for SynchronousTreeService {
             })
             .collect();
 
-        let signer = &self.spark_signer;
-        let our_pubkeys: Vec<PublicKey> = futures::future::try_join_all(
-            unverified_leaves
-                .iter()
-                .map(|leaf| async move { signer.get_public_key_for_leaf(&leaf.id).await }),
-        )
-        .await?;
-
-        for (leaf, our_node_pubkey) in unverified_leaves.iter().zip(our_pubkeys) {
-            let combined_pubkey = our_node_pubkey
-                .combine(&leaf.signing_keyshare.public_key)
-                .map_err(|_| {
-                    TreeServiceError::Generic("Failed to combine public keys".to_string())
-                })?;
-
-            if combined_pubkey != leaf.verifying_public_key {
-                warn!(
-                    "Leaf {}'s verifying public key does not match the expected value",
-                    leaf.id
-                );
+        let owned = self.retain_owned(&unverified_leaves).await?;
+        for leaf in &unverified_leaves {
+            if !owned.contains(&leaf.id) {
                 ignored_leaves_map.insert(leaf.id.clone(), (*leaf).clone());
             }
         }
@@ -472,11 +483,13 @@ impl TreeService for SynchronousTreeService {
         // A refresh writes no chains, so an already-stored one is left alone
         // rather than rewritten every minute. Collecting the chains of anything
         // newly reported is what the notification below sets off.
+        let (renewable, exiting) = partition_renewable(new_leaves);
         let RenewalOutcome {
             pedigrees,
             any_renewal_landed,
-        } = self.check_renew_nodes(bare_pedigrees(new_leaves)).await?;
-        let renewed_leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
+        } = self.check_renew_nodes(bare_pedigrees(renewable)).await?;
+        let mut renewed_leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
+        renewed_leaves.extend(exiting);
         self.state
             .set_leaves(
                 &renewed_leaves,
@@ -498,6 +511,39 @@ impl TreeService for SynchronousTreeService {
 }
 
 impl SynchronousTreeService {
+    /// The ids of `leaves` this wallet can prove it owns: our signing share plus
+    /// the operators' must come to the leaf's verifying key.
+    async fn retain_owned(
+        &self,
+        leaves: &[&TreeNode],
+    ) -> Result<HashSet<TreeNodeId>, TreeServiceError> {
+        let signer = &self.spark_signer;
+        let our_pubkeys: Vec<PublicKey> = futures::future::try_join_all(
+            leaves
+                .iter()
+                .map(|leaf| async move { signer.get_public_key_for_leaf(&leaf.id).await }),
+        )
+        .await?;
+
+        let mut owned = HashSet::with_capacity(leaves.len());
+        for (leaf, our_node_pubkey) in leaves.iter().zip(our_pubkeys) {
+            let combined = our_node_pubkey
+                .combine(&leaf.signing_keyshare.public_key)
+                .map_err(|_| {
+                    TreeServiceError::Generic("Failed to combine public keys".to_string())
+                })?;
+            if combined == leaf.verifying_public_key {
+                owned.insert(leaf.id.clone());
+            } else {
+                warn!(
+                    "Leaf {}'s verifying public key does not match the expected value",
+                    leaf.id
+                );
+            }
+        }
+        Ok(owned)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         identity_pubkey: PublicKey,
@@ -1351,6 +1397,47 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn a_leaf_on_its_way_out_is_not_offered_for_renewal() {
+        let node = |id, status| create_test_node_with_parent(id, Some("root"), status);
+        let available = node("available", TreeNodeStatus::Available);
+        // Every status but Available, so one added later is held out until
+        // someone decides it belongs.
+        let others: Vec<TreeNode> = [
+            TreeNodeStatus::OnChain,
+            TreeNodeStatus::Exited,
+            TreeNodeStatus::TransferLocked,
+            TreeNodeStatus::SplitLocked,
+            TreeNodeStatus::Splitted,
+            TreeNodeStatus::RenewLocked,
+            TreeNodeStatus::Investigation,
+            TreeNodeStatus::Lost,
+            TreeNodeStatus::Aggregated,
+            TreeNodeStatus::Reimbursed,
+            TreeNodeStatus::ParentExited,
+            TreeNodeStatus::Unknown,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, status)| node(Box::leak(format!("other-{i}").into_boxed_str()), status))
+        .collect();
+
+        let mut all = vec![available.clone()];
+        all.extend(others.iter().cloned());
+        let (renewable, kept) = partition_renewable(all);
+
+        assert_eq!(
+            renewable.iter().map(|l| l.id.clone()).collect::<Vec<_>>(),
+            vec![available.id],
+            "only a spendable leaf is worth a new timelock"
+        );
+        assert_eq!(
+            kept.len(),
+            others.len(),
+            "the rest are kept, just not renewed"
+        );
+    }
+
     #[async_test_all]
     async fn renewing_a_leaf_signals_the_exit_state_changed() {
         let (tx, rx) = tokio::sync::watch::channel(());
@@ -1424,6 +1511,61 @@ mod tests {
         assert!(!rx.has_changed().unwrap());
     }
 
+    /// A leaf this wallet owns: our signing share plus the operators' comes to its
+    /// verifying key, which is what the ownership check asks for.
+    async fn owned_leaf(
+        service: &SynchronousTreeService,
+        id: &str,
+        parent: Option<&str>,
+        status: TreeNodeStatus,
+    ) -> TreeNode {
+        let mut leaf = create_test_node_with_parent(id, parent, status);
+        let ours = service
+            .spark_signer
+            .get_public_key_for_leaf(&leaf.id)
+            .await
+            .unwrap();
+        leaf.verifying_public_key = ours.combine(&leaf.signing_keyshare.public_key).unwrap();
+        leaf
+    }
+
+    /// Import is the one path whose leaves come from outside the SDK, and a
+    /// refresh will not check them later: it skips a leaf whose stored keys match
+    /// the ones reported, which an unchecked import satisfies by definition.
+    #[async_test_all]
+    async fn restore_leaves_keeps_only_the_leaves_this_wallet_owns() {
+        let service = service_over(Arc::new(InMemoryTreeStore::new()), None).await;
+
+        let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+        let ours = owned_leaf(&service, "ours", Some("root"), TreeNodeStatus::Available).await;
+        // Somebody else's: its verifying key is not our share plus the operators'.
+        let theirs =
+            create_test_node_with_parent("theirs", Some("root"), TreeNodeStatus::Available);
+
+        service
+            .restore_leaves(&[
+                LeafPedigree {
+                    leaf: ours,
+                    ancestors: vec![root.clone()],
+                },
+                LeafPedigree {
+                    leaf: theirs,
+                    ancestors: vec![root],
+                },
+            ])
+            .await
+            .unwrap();
+
+        let stored = service.list_leaves().await.unwrap();
+        let ids: Vec<String> = stored
+            .available
+            .iter()
+            .chain(&stored.not_available)
+            .map(|l| l.id.to_string())
+            .collect();
+        assert_eq!(ids, vec!["ours".to_string()]);
+    }
+
     /// Root-to-leaf ids of a stored chain.
     async fn stored_chain(service: &SynchronousTreeService, leaf_id: &str) -> Vec<String> {
         let leaf_id = TreeNodeId::from_str(leaf_id).unwrap();
@@ -1448,9 +1590,8 @@ mod tests {
 
         let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
         let mid = create_test_node_with_parent("mid", Some("root"), TreeNodeStatus::Splitted);
-        let leaf_a = create_test_node_with_parent("leaf-a", Some("mid"), TreeNodeStatus::Available);
-        let leaf_b =
-            create_test_node_with_parent("leaf-b", Some("root"), TreeNodeStatus::Available);
+        let leaf_a = owned_leaf(&service, "leaf-a", Some("mid"), TreeNodeStatus::Available).await;
+        let leaf_b = owned_leaf(&service, "leaf-b", Some("root"), TreeNodeStatus::Available).await;
 
         service
             .restore_leaves(&[LeafPedigree {

@@ -3472,12 +3472,24 @@ mod tests {
         chain_ids(&pedigrees).into_iter().next().unwrap_or_default()
     }
 
-    fn pedigree_owned_by(
+    /// A pedigree this wallet owns: attributed to `owner`, and with a verifying
+    /// key our signing share and the operators' actually come to, which is what
+    /// the import checks.
+    async fn pedigree_owned_by(
+        wallet: &SparkWallet,
         owner: PublicKey,
         mut leaf: TreeNode,
         ancestors: Vec<TreeNode>,
     ) -> LeafPedigree {
         leaf.owner_identity_public_key = Some(owner);
+        if owner == wallet.get_identity_public_key() {
+            let ours = wallet
+                .spark_signer
+                .get_public_key_for_leaf(&leaf.id)
+                .await
+                .unwrap();
+            leaf.verifying_public_key = ours.combine(&leaf.signing_keyshare.public_key).unwrap();
+        }
         LeafPedigree { leaf, ancestors }
     }
 
@@ -3545,13 +3557,26 @@ mod tests {
         node
     }
 
+    /// Marks `leaf` as this wallet's: attributed to our identity, and with a
+    /// verifying key our signing share and the operators' actually come to, which
+    /// is what the import checks.
+    async fn owned_by(wallet: &SparkWallet, mut leaf: TreeNode) -> TreeNode {
+        leaf.owner_identity_public_key = Some(wallet.get_identity_public_key());
+        let ours = wallet
+            .spark_signer
+            .get_public_key_for_leaf(&leaf.id)
+            .await
+            .unwrap();
+        leaf.verifying_public_key = ours.combine(&leaf.signing_keyshare.public_key).unwrap();
+        leaf
+    }
+
     #[macros::async_test_all]
     async fn import_exit_state_keeps_only_leaves_this_wallet_owns() {
         let store = Arc::new(InMemoryTreeStore::new());
         let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
 
-        let mut mine = create_test_tree_node("mine", 1_000);
-        mine.owner_identity_public_key = Some(wallet.get_identity_public_key());
+        let mine = owned_by(&wallet, create_test_tree_node("mine", 1_000)).await;
         let theirs = create_test_tree_node("theirs", 2_000);
         assert_ne!(
             theirs.owner_identity_public_key,
@@ -3594,21 +3619,21 @@ mod tests {
         seed_pedigrees(
             &*store,
             &[pedigree_owned_by(
+                &wallet,
                 owner,
                 renewed.clone(),
                 vec![mid.clone(), root.clone()],
-            )],
+            )
+            .await],
         )
         .await;
 
         let mut before_renewal = child_of("leaf", &mid, TreeNodeStatus::Available);
         before_renewal.refund_tx = Some(refund_tx_at(100));
         let outcome = wallet
-            .import_exit_state(vec![pedigree_owned_by(
-                owner,
-                before_renewal,
-                vec![mid, root],
-            )])
+            .import_exit_state(vec![
+                pedigree_owned_by(&wallet, owner, before_renewal, vec![mid, root]).await,
+            ])
             .await
             .unwrap();
 
@@ -3629,7 +3654,7 @@ mod tests {
         let leaf = child_of("leaf", &mid, TreeNodeStatus::Available);
         seed_pedigrees(
             &*store,
-            &[pedigree_owned_by(owner, leaf, vec![mid, root.clone()])],
+            &[pedigree_owned_by(&wallet, owner, leaf, vec![mid, root.clone()]).await],
         )
         .await;
 
@@ -3639,11 +3664,9 @@ mod tests {
         let split = child_of("split", &parent, TreeNodeStatus::Splitted);
         let elsewhere = child_of("leaf", &split, TreeNodeStatus::Available);
         let outcome = wallet
-            .import_exit_state(vec![pedigree_owned_by(
-                owner,
-                elsewhere,
-                vec![split, parent, root],
-            )])
+            .import_exit_state(vec![
+                pedigree_owned_by(&wallet, owner, elsewhere, vec![split, parent, root]).await,
+            ])
             .await
             .unwrap();
 
@@ -3668,15 +3691,14 @@ mod tests {
         let leaf = child_of("leaf", &mid, TreeNodeStatus::Available);
         seed_pedigrees(
             &*store,
-            &[pedigree_owned_by(
-                owner,
-                leaf.clone(),
-                vec![mid.clone(), gap.clone()],
-            )],
+            &[
+                pedigree_owned_by(&wallet, owner, leaf.clone(), vec![mid.clone(), gap.clone()])
+                    .await,
+            ],
         )
         .await;
 
-        let complete = pedigree_owned_by(owner, leaf, vec![mid, gap, root]);
+        let complete = pedigree_owned_by(&wallet, owner, leaf, vec![mid, gap, root]).await;
         let outcome = wallet
             .import_exit_state(vec![complete.clone()])
             .await
@@ -3717,11 +3739,7 @@ mod tests {
         let leaf_b = child_of("leaf-b", &mid, TreeNodeStatus::Available);
         seed_pedigrees(
             &*store,
-            &[pedigree_owned_by(
-                owner,
-                leaf_b,
-                vec![mid.clone(), root.clone()],
-            )],
+            &[pedigree_owned_by(&wallet, owner, leaf_b, vec![mid.clone(), root.clone()]).await],
         )
         .await;
 
@@ -3731,11 +3749,9 @@ mod tests {
         conflicting_mid.value += 1;
         let leaf_a = child_of("leaf-a", &mid, TreeNodeStatus::Available);
         let outcome = wallet
-            .import_exit_state(vec![pedigree_owned_by(
-                owner,
-                leaf_a,
-                vec![conflicting_mid, root],
-            )])
+            .import_exit_state(vec![
+                pedigree_owned_by(&wallet, owner, leaf_a, vec![conflicting_mid, root]).await,
+            ])
             .await
             .unwrap();
 
@@ -3754,6 +3770,7 @@ mod tests {
     /// and the chain that would complete it, nearest first.
     async fn store_leaf_short_of_a_root(
         store: &InMemoryTreeStore,
+        wallet: &SparkWallet,
         owner: PublicKey,
     ) -> (TreeNode, Vec<TreeNode>) {
         let root = root_node("root");
@@ -3761,7 +3778,7 @@ mod tests {
         let leaf = child_of("leaf", &mid, TreeNodeStatus::Available);
         seed_pedigrees(
             store,
-            &[pedigree_owned_by(owner, leaf.clone(), vec![mid.clone()])],
+            &[pedigree_owned_by(wallet, owner, leaf.clone(), vec![mid.clone()]).await],
         )
         .await;
         (leaf, vec![mid, root])
@@ -3778,7 +3795,7 @@ mod tests {
         let store = Arc::new(InMemoryTreeStore::new());
         let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
         let owner = wallet.get_identity_public_key();
-        store_leaf_short_of_a_root(store.as_ref(), owner).await;
+        store_leaf_short_of_a_root(store.as_ref(), &wallet, owner).await;
 
         // Each reaches a root along transactions that spend one another, and only
         // by revisiting an id: two nodes parenting each other, a node parenting
@@ -3801,7 +3818,9 @@ mod tests {
         ] {
             let cyclic_leaf = child_of("leaf", &parent, TreeNodeStatus::Available);
             let outcome = wallet
-                .import_exit_state(vec![pedigree_owned_by(owner, cyclic_leaf, ancestors)])
+                .import_exit_state(vec![
+                    pedigree_owned_by(&wallet, owner, cyclic_leaf, ancestors).await,
+                ])
                 .await
                 .unwrap();
 
@@ -3819,7 +3838,7 @@ mod tests {
         let store = Arc::new(InMemoryTreeStore::new());
         let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
         let owner = wallet.get_identity_public_key();
-        let (leaf, chain) = store_leaf_short_of_a_root(store.as_ref(), owner).await;
+        let (leaf, chain) = store_leaf_short_of_a_root(store.as_ref(), &wallet, owner).await;
 
         // Names the right parents all the way to a root, but the leaf's
         // transaction spends elsewhere, so broadcasting the chain exits nothing.
@@ -3834,7 +3853,7 @@ mod tests {
         );
 
         let outcome = wallet
-            .import_exit_state(vec![pedigree_owned_by(owner, adrift, chain)])
+            .import_exit_state(vec![pedigree_owned_by(&wallet, owner, adrift, chain).await])
             .await
             .unwrap();
 
@@ -3851,20 +3870,22 @@ mod tests {
         let store = Arc::new(InMemoryTreeStore::new());
         let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
         let owner = wallet.get_identity_public_key();
-        let (leaf, chain) = store_leaf_short_of_a_root(store.as_ref(), owner).await;
+        let (leaf, chain) = store_leaf_short_of_a_root(store.as_ref(), &wallet, owner).await;
 
         let stranger_key = PublicKey::from_slice(&[2; 33]).unwrap();
         assert_ne!(stranger_key, leaf.verifying_public_key);
         let mut richer_chain = chain.clone();
         richer_chain[0].value = leaf.value + 1;
-        let mut rekeyed_leaf = leaf.clone();
-        rekeyed_leaf.verifying_public_key = stranger_key;
+        // Rekeyed after the fixture, which otherwise gives every leaf a verifying
+        // key this wallet can prove.
+        let mut rekeyed = pedigree_owned_by(&wallet, owner, leaf.clone(), chain.clone()).await;
+        rekeyed.leaf.verifying_public_key = stranger_key;
 
-        for (leaf, ancestors) in [(leaf.clone(), richer_chain), (rekeyed_leaf, chain.clone())] {
-            let outcome = wallet
-                .import_exit_state(vec![pedigree_owned_by(owner, leaf, ancestors)])
-                .await
-                .unwrap();
+        for pedigree in [
+            pedigree_owned_by(&wallet, owner, leaf.clone(), richer_chain).await,
+            rekeyed,
+        ] {
+            let outcome = wallet.import_exit_state(vec![pedigree]).await.unwrap();
 
             assert_eq!(outcome.imported_leaves, 0);
             assert_eq!(outcome.skipped_chains, 1);
@@ -3876,7 +3897,7 @@ mod tests {
 
         // The same chain, agreeing with what is stored, is taken.
         let outcome = wallet
-            .import_exit_state(vec![pedigree_owned_by(owner, leaf, chain)])
+            .import_exit_state(vec![pedigree_owned_by(&wallet, owner, leaf, chain).await])
             .await
             .unwrap();
         assert_eq!(outcome.imported_leaves, 1);
@@ -3891,7 +3912,7 @@ mod tests {
         let store = Arc::new(InMemoryTreeStore::new());
         let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
         let owner = wallet.get_identity_public_key();
-        let (held, chain) = store_leaf_short_of_a_root(store.as_ref(), owner).await;
+        let (held, chain) = store_leaf_short_of_a_root(store.as_ref(), &wallet, owner).await;
 
         // A second entry for the same id, on a chain of its own. Weighing the two
         // entries apart would pair one's leaf with the other's chain.
@@ -3902,8 +3923,8 @@ mod tests {
 
         let outcome = wallet
             .import_exit_state(vec![
-                pedigree_owned_by(owner, held.clone(), chain),
-                pedigree_owned_by(owner, other_leaf, vec![other_mid, other_root]),
+                pedigree_owned_by(&wallet, owner, held.clone(), chain).await,
+                pedigree_owned_by(&wallet, owner, other_leaf, vec![other_mid, other_root]).await,
             ])
             .await
             .unwrap();
@@ -3926,7 +3947,7 @@ mod tests {
 
         let root = root_node("root");
         let leaf = child_of("leaf", &root, TreeNodeStatus::Available);
-        let pedigree = pedigree_owned_by(owner, leaf.clone(), vec![root]);
+        let pedigree = pedigree_owned_by(&wallet, owner, leaf.clone(), vec![root]).await;
         seed_pedigrees(&*store, std::slice::from_ref(&pedigree)).await;
         let reservation = store
             .try_reserve_leaves_by_ids(std::slice::from_ref(&leaf.id), ReservationPurpose::Payment)
@@ -3966,9 +3987,15 @@ mod tests {
         // The operators stopped reporting all three, which the store records on
         // the leaf row itself.
         let missing = [
-            pedigree_owned_by(owner, kept.clone(), vec![kept_mid, root.clone()]),
-            pedigree_owned_by(owner, chained.clone(), vec![chained_mid.clone()]),
-            pedigree_owned_by(owner, rewritten.clone(), vec![rewritten_mid.clone()]),
+            pedigree_owned_by(&wallet, owner, kept.clone(), vec![kept_mid, root.clone()]).await,
+            pedigree_owned_by(&wallet, owner, chained.clone(), vec![chained_mid.clone()]).await,
+            pedigree_owned_by(
+                &wallet,
+                owner,
+                rewritten.clone(),
+                vec![rewritten_mid.clone()],
+            )
+            .await,
         ];
         let missing_leaves: Vec<TreeNode> = missing.iter().map(|p| p.leaf.clone()).collect();
         store
@@ -3981,9 +4008,9 @@ mod tests {
         renewed.refund_tx = Some(refund_tx_at(200));
         wallet
             .import_exit_state(vec![
-                pedigree_owned_by(owner, kept, vec![root.clone()]),
-                pedigree_owned_by(owner, chained, vec![chained_mid, root.clone()]),
-                pedigree_owned_by(owner, renewed, vec![rewritten_mid, root]),
+                pedigree_owned_by(&wallet, owner, kept, vec![root.clone()]).await,
+                pedigree_owned_by(&wallet, owner, chained, vec![chained_mid, root.clone()]).await,
+                pedigree_owned_by(&wallet, owner, renewed, vec![rewritten_mid, root]).await,
             ])
             .await
             .unwrap();
@@ -4012,7 +4039,9 @@ mod tests {
         let mid = child_of("mid", &root, TreeNodeStatus::Splitted);
         let leaf = child_of("leaf", &mid, TreeNodeStatus::Available);
         let outcome = wallet
-            .import_exit_state(vec![pedigree_owned_by(owner, leaf, vec![mid])])
+            .import_exit_state(vec![
+                pedigree_owned_by(&wallet, owner, leaf, vec![mid]).await,
+            ])
             .await
             .unwrap();
 
@@ -4039,8 +4068,8 @@ mod tests {
         seed_pedigrees(
             &*source_store,
             &[
-                pedigree_owned_by(owner, leaf_a, vec![mid, root.clone()]),
-                pedigree_owned_by(owner, leaf_b, vec![root]),
+                pedigree_owned_by(&source, owner, leaf_a, vec![mid, root.clone()]).await,
+                pedigree_owned_by(&source, owner, leaf_b, vec![root]).await,
             ],
         )
         .await;
