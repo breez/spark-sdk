@@ -18,6 +18,7 @@ from breez_sdk_spark import (
     CrossChainRouteFilter,
     Fee,
     FeePolicy,
+    FetchClaimDepositQuoteRequest,
     FetchConversionLimitsRequest,
     GetInfoRequest,
     GetPaymentRequest,
@@ -72,6 +73,7 @@ COMMAND_NAMES = [
     "lnurl-auth",
     "claim-htlc-payment",
     "claim-deposit",
+    "fetch-claim-deposit-quote",
     "parse",
     "refund-deposit",
     "list-unclaimed-deposits",
@@ -683,6 +685,21 @@ async def _handle_claim_deposit(sdk, _token_issuer, _session, args):
     print_value(result)
 
 
+# --- fetch-claim-deposit-quote ---
+
+def _build_fetch_claim_deposit_quote_parser():
+    p = _parser("fetch-claim-deposit-quote", "Quote both ways of claiming a deposit")
+    p.add_argument("txid", help="The txid of the deposit")
+    p.add_argument("vout", type=int, help="The vout of the deposit")
+    return p
+
+async def _handle_fetch_claim_deposit_quote(sdk, _token_issuer, _session, args):
+    result = await sdk.fetch_claim_deposit_quote(
+        request=FetchClaimDepositQuoteRequest(txid=args.txid, vout=args.vout)
+    )
+    print_value(result)
+
+
 # --- parse ---
 
 def _build_parse_parser():
@@ -1176,6 +1193,7 @@ def build_command_registry():
         "lnurl-auth": (_build_lnurl_auth_parser(), _handle_lnurl_auth),
         "claim-htlc-payment": (_build_claim_htlc_payment_parser(), _handle_claim_htlc_payment),
         "claim-deposit": (_build_claim_deposit_parser(), _handle_claim_deposit),
+        "fetch-claim-deposit-quote": (_build_fetch_claim_deposit_quote_parser(), _handle_fetch_claim_deposit_quote),
         "parse": (_build_parse_parser(), _handle_parse),
         "refund-deposit": (_build_refund_deposit_parser(), _handle_refund_deposit),
         "list-unclaimed-deposits": (_build_list_unclaimed_deposits_parser(), _handle_list_unclaimed_deposits),

@@ -84,6 +84,7 @@ let commandNames: [String] = [
     "lnurl-auth",
     "claim-htlc-payment",
     "claim-deposit",
+    "fetch-claim-deposit-quote",
     "parse",
     "refund-deposit",
     "list-unclaimed-deposits",
@@ -121,6 +122,7 @@ func buildCommandRegistry() -> [String: CommandEntry] {
         "lnurl-auth":                        CommandEntry(name: "lnurl-auth", description: "Authenticate using LNURL", run: handleLnurlAuth),
         "claim-htlc-payment":                CommandEntry(name: "claim-htlc-payment", description: "Claim an HTLC payment", run: handleClaimHtlcPayment),
         "claim-deposit":                     CommandEntry(name: "claim-deposit", description: "Claim an on-chain deposit", run: handleClaimDeposit),
+        "fetch-claim-deposit-quote":         CommandEntry(name: "fetch-claim-deposit-quote", description: "Quote both ways of claiming a deposit", run: handleFetchClaimDepositQuote),
         "parse":                             CommandEntry(name: "parse", description: "Parse an input (invoice, address, LNURL)", run: handleParse),
         "refund-deposit":                    CommandEntry(name: "refund-deposit", description: "Refund an on-chain deposit", run: handleRefundDeposit),
         "list-unclaimed-deposits":           CommandEntry(name: "list-unclaimed-deposits", description: "List unclaimed on-chain deposits", run: handleListUnclaimedDeposits),
@@ -800,6 +802,24 @@ func handleClaimDeposit(_ sdk: BreezSdk, _ args: [String]) async throws {
         txid: txid,
         vout: vout,
         maxFee: maxFee
+    ))
+    printValue(result)
+}
+
+// --- fetch-claim-deposit-quote ---
+
+func handleFetchClaimDepositQuote(_ sdk: BreezSdk, _ args: [String]) async throws {
+    let fp = FlagParser(args)
+    guard fp.positional.count >= 2,
+          let vout = UInt32(fp.positional[1]) else {
+        print("Usage: fetch-claim-deposit-quote <txid> <vout>")
+        return
+    }
+
+    let txid = fp.positional[0]
+    let result = try await sdk.fetchClaimDepositQuote(request: FetchClaimDepositQuoteRequest(
+        txid: txid,
+        vout: vout
     ))
     printValue(result)
 }

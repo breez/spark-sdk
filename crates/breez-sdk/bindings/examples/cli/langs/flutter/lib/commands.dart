@@ -22,6 +22,7 @@ const commandNames = [
   'lnurl-auth',
   'claim-htlc-payment',
   'claim-deposit',
+  'fetch-claim-deposit-quote',
   'parse',
   'refund-deposit',
   'list-unclaimed-deposits',
@@ -66,6 +67,10 @@ Map<String, CommandEntry> buildCommandRegistry() {
     'lnurl-auth': CommandEntry('Authenticate using LNURL', _handleLnurlAuth),
     'claim-htlc-payment': CommandEntry('Claim an HTLC payment', _handleClaimHtlcPayment),
     'claim-deposit': CommandEntry('Claim an on-chain deposit', _handleClaimDeposit),
+    'fetch-claim-deposit-quote': CommandEntry(
+      'Quote both ways of claiming a deposit',
+      _handleFetchClaimDepositQuote,
+    ),
     'parse': CommandEntry('Parse an input (invoice, address, LNURL)', _handleParse),
     'refund-deposit': CommandEntry('Refund an on-chain deposit', _handleRefundDeposit),
     'list-unclaimed-deposits': CommandEntry('List unclaimed on-chain deposits', _handleListUnclaimedDeposits),
@@ -791,6 +796,26 @@ Future<void> _handleClaimDeposit(BreezSdk sdk, TokenIssuer tokenIssuer, List<Str
   }
 
   final result = await sdk.claimDeposit(request: ClaimDepositRequest(txid: txid, vout: vout, maxFee: maxFee));
+  printValue(result);
+}
+
+// --- fetch-claim-deposit-quote ---
+
+Future<void> _handleFetchClaimDepositQuote(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
+  if (args.isEmpty || args.first == 'help' || args.first == '--help') {
+    print('Usage: fetch-claim-deposit-quote <txid> <vout>');
+    return;
+  }
+  if (args.length < 2) {
+    print('Usage: fetch-claim-deposit-quote <txid> <vout>');
+    return;
+  }
+  final txid = args[0];
+  final vout = int.parse(args[1]);
+
+  final result = await sdk.fetchClaimDepositQuote(
+    request: FetchClaimDepositQuoteRequest(txid: txid, vout: vout),
+  );
   printValue(result);
 }
 

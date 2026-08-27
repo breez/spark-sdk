@@ -28,6 +28,7 @@ const COMMAND_NAMES = [
   'lnurl-auth',
   'claim-htlc-payment',
   'claim-deposit',
+  'fetch-claim-deposit-quote',
   'parse',
   'refund-deposit',
   'list-unclaimed-deposits',
@@ -630,6 +631,19 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
         vout: voutNum,
         maxFee
       })
+      printValue(value)
+    })
+
+  // --- fetch-claim-deposit-quote ---
+  program
+    .command('fetch-claim-deposit-quote')
+    .description('Quote both ways of claiming a deposit')
+    .argument('<txid>', 'The txid of the deposit')
+    .argument('<vout>', 'The vout of the deposit')
+    .action(async (txid, vout) => {
+      const sdk = getSdk()
+      const voutNum = parseInt(vout, 10)
+      const value = await sdk.fetchClaimDepositQuote({ txid, vout: voutNum })
       printValue(value)
     })
 

@@ -3,8 +3,9 @@
  *
  * Mirrors ALL commands from the Rust CLI:
  *   get-info, get-payment, sync, list-payments, receive, pay, pay-batch, lnurl-pay,
- *   lnurl-withdraw, lnurl-auth, claim-htlc-payment, claim-deposit, parse,
- *   refund-deposit, list-unclaimed-deposits, buy-bitcoin, prepare-payment-link,
+ *   lnurl-withdraw, lnurl-auth, claim-htlc-payment, claim-deposit,
+ *   fetch-claim-deposit-quote, parse, refund-deposit, list-unclaimed-deposits,
+ *   buy-bitcoin, prepare-payment-link,
  *   check-lightning-address-available, get-lightning-address,
  *   register-lightning-address, delete-lightning-address, list-fiat-currencies,
  *   list-fiat-rates, recommended-fees, get-tokens-metadata,
@@ -180,6 +181,7 @@ export const COMMAND_NAMES = [
   'lnurl-auth',
   'claim-htlc-payment',
   'claim-deposit',
+  'fetch-claim-deposit-quote',
   'parse',
   'refund-deposit',
   'list-unclaimed-deposits',
@@ -226,6 +228,7 @@ export function buildCommandRegistry(): Map<string, CommandDef> {
     { name: 'lnurl-auth', description: 'Authenticate using LNURL', run: handleLnurlAuth },
     { name: 'claim-htlc-payment', description: 'Claim an HTLC payment', run: handleClaimHtlcPayment },
     { name: 'claim-deposit', description: 'Claim an on-chain deposit', run: handleClaimDeposit },
+    { name: 'fetch-claim-deposit-quote', description: 'Quote both ways of claiming a deposit', run: handleFetchClaimDepositQuote },
     { name: 'parse', description: 'Parse an input (invoice, address, LNURL)', run: handleParse },
     { name: 'refund-deposit', description: 'Refund an on-chain deposit', run: handleRefundDeposit },
     { name: 'list-unclaimed-deposits', description: 'List unclaimed on-chain deposits', run: handleListUnclaimedDeposits },
@@ -982,6 +985,24 @@ async function handleClaimDeposit(sdk: BreezSdkInterface, _tokenIssuer: TokenIss
     vout,
     maxFee,
   })
+  return formatValue(result)
+}
+
+// --- fetch-claim-deposit-quote ---
+
+async function handleFetchClaimDepositQuote(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
+  const positional = positionalArgs(args)
+  if (positional.length < 2) {
+    return 'Usage: fetch-claim-deposit-quote <txid> <vout>'
+  }
+
+  const txid = positional[0]
+  const vout = parseInt(positional[1], 10)
+  if (isNaN(vout)) {
+    return `Invalid vout: ${positional[1]}`
+  }
+
+  const result = await sdk.fetchClaimDepositQuote({ txid, vout })
   return formatValue(result)
 }
 
