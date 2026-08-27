@@ -703,6 +703,10 @@ fn interpret_fan_out(
     else {
         return Ok((None, true));
     };
+    // Every branch, in plan order. A fan-out carries one output per branch for
+    // the life of an exit, settled or not, so this order is what identifies them:
+    // its outputs all pay the same script and position is the only thing telling
+    // them apart.
     let branch_leaf_ids: Vec<TreeNodeId> = plan
         .per_branch_funding
         .iter()
@@ -2627,6 +2631,21 @@ mod interpret_tests {
         }
     }
 
+    /// One branch's slot in a fan-out: the input it would be funded from.
+    fn fan_out_branch_input(vout: u32) -> CpfpInput {
+        CpfpInput {
+            outpoint: OutPoint {
+                txid: Txid::from_byte_array([9u8; 32]),
+                vout,
+            },
+            witness_utxo: TxOut {
+                value: Amount::from_sat(5_000),
+                script_pubkey: leaf_addr().script_pubkey(),
+            },
+            signed_input_weight: 272,
+        }
+    }
+
     fn refund_scan(leaf_id: &TreeNodeId, refund_txid: Txid, value: u64) -> Observation {
         Observation {
             query: ChainQuery::RefundAddress {
@@ -2802,6 +2821,139 @@ mod interpret_tests {
     }
 
     #[test]
+    fn adopting_a_wider_fan_out_keeps_each_branch_its_own_output() {
+        // The fan-out went out when all three branches were driving, so it has an
+        // output each. One has since settled. The two still driving must keep the
+        // outputs they were given, not slide onto the settled one's.
+        let funding_outpoint = OutPoint {
+            txid: Txid::from_byte_array([9u8; 32]),
+            vout: 0,
+        };
+        let funding_script = leaf_addr().script_pubkey();
+        let out = |value| TxOut {
+            value: Amount::from_sat(value),
+            script_pubkey: funding_script.clone(),
+        };
+        let fan_out_tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: funding_outpoint,
+                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+                ..Default::default()
+            }],
+            // Distinct values, so a branch landing on the wrong one is visible.
+            output: vec![out(5_000), out(6_000), out(7_000)],
+        };
+        let fan_out_txid = fan_out_tx.compute_txid();
+        let mut fan_out_psbt = bitcoin::Psbt::from_unsigned_tx(fan_out_tx.clone()).unwrap();
+        fan_out_psbt.inputs[0].witness_utxo = Some(TxOut {
+            value: Amount::from_sat(20_000),
+            script_pubkey: funding_script,
+        });
+
+        let prepared = PreparedUnilateralExit {
+            plan: UnilateralExitPlan {
+                selected_leaves: vec![],
+                fan_out_psbt: Some(fan_out_psbt),
+                // Branch order is the order the fan-out paid them in. The middle
+                // one is finished, so it holds no funding.
+                per_branch_funding: vec![
+                    (id("first"), vec![fan_out_branch_input(0)]),
+                    (id("settled"), vec![]),
+                    (id("last"), vec![fan_out_branch_input(2)]),
+                ],
+                tree_nodes: to_node_map(vec![]),
+            },
+            leaf_refund_addresses: HashMap::new(),
+        };
+
+        let observed = vec![
+            spent(funding_outpoint, fan_out_txid),
+            Observation {
+                query: ChainQuery::Transaction(fan_out_txid),
+                result: ChainResult::Transaction(fan_out_tx),
+            },
+        ];
+        let interp = interpret_chain(&prepared, &observed).expect("the fan-out is ours");
+        let adopted = interp.resolved.fan_out.expect("adopted");
+
+        assert_eq!(
+            adopted.branch_outputs.get(&id("first")).map(|o| o.value),
+            Some(5_000),
+            "the first branch keeps the output it was paid"
+        );
+        assert_eq!(
+            adopted.branch_outputs.get(&id("last")).map(|o| o.value),
+            Some(7_000),
+            "the last branch keeps its own output, not the settled branch's"
+        );
+    }
+
+    #[test]
+    fn a_settled_branch_still_holds_its_place_in_the_fan_out() {
+        // The fan-out keeps an output for a branch that has finished, so the
+        // branches still driving stay where they were. That output is never spent;
+        // it is there to hold the order the outputs are read back in.
+        let funding_outpoint = OutPoint {
+            txid: Txid::from_byte_array([9u8; 32]),
+            vout: 0,
+        };
+        let funding_script = leaf_addr().script_pubkey();
+        let out = |value| TxOut {
+            value: Amount::from_sat(value),
+            script_pubkey: funding_script.clone(),
+        };
+        let fan_out_tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: funding_outpoint,
+                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+                ..Default::default()
+            }],
+            output: vec![out(5_000), out(330), out(7_000)],
+        };
+        let fan_out_txid = fan_out_tx.compute_txid();
+        let mut fan_out_psbt = bitcoin::Psbt::from_unsigned_tx(fan_out_tx.clone()).unwrap();
+        fan_out_psbt.inputs[0].witness_utxo = Some(TxOut {
+            value: Amount::from_sat(20_000),
+            script_pubkey: funding_script,
+        });
+
+        let prepared = PreparedUnilateralExit {
+            plan: UnilateralExitPlan {
+                selected_leaves: vec![],
+                fan_out_psbt: Some(fan_out_psbt),
+                per_branch_funding: vec![
+                    (id("first"), vec![fan_out_branch_input(0)]),
+                    (id("settled"), vec![]),
+                    (id("last"), vec![fan_out_branch_input(2)]),
+                ],
+                tree_nodes: to_node_map(vec![]),
+            },
+            leaf_refund_addresses: HashMap::new(),
+        };
+
+        let observed = vec![
+            spent(funding_outpoint, fan_out_txid),
+            Observation {
+                query: ChainQuery::Transaction(fan_out_txid),
+                result: ChainResult::Transaction(fan_out_tx),
+            },
+        ];
+        let interp = interpret_chain(&prepared, &observed).expect("the fan-out is ours");
+        let adopted = interp.resolved.fan_out.expect("adopted");
+
+        assert_eq!(adopted.branch_outputs.len(), 3, "one output per branch");
+        assert_eq!(
+            adopted.branch_outputs.get(&id("last")).map(|o| o.value),
+            Some(7_000),
+            "the settled branch holding its place is what keeps this one in place"
+        );
+    }
+
+    #[test]
     fn interpret_flags_funding_conflict() {
         let funding_outpoint = OutPoint {
             txid: Txid::from_byte_array([9u8; 32]),
@@ -2838,7 +2990,12 @@ mod interpret_tests {
             plan: UnilateralExitPlan {
                 selected_leaves: vec![],
                 fan_out_psbt: Some(fan_out_psbt),
-                per_branch_funding: vec![(id("a"), vec![]), (id("b"), vec![])],
+                // A fan-out only exists because its branches are funded, so both
+                // carry an input: an empty branch claims no fan-out output.
+                per_branch_funding: vec![
+                    (id("a"), vec![fan_out_branch_input(0)]),
+                    (id("b"), vec![fan_out_branch_input(1)]),
+                ],
                 tree_nodes: to_node_map(vec![]),
             },
             leaf_refund_addresses: HashMap::new(),

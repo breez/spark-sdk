@@ -88,6 +88,17 @@ pub struct SettledExitSteps {
 }
 
 impl SettledExitSteps {
+    /// Whether the chain has settled every step this leaf would drive. Asked of
+    /// the steps themselves, never of what they cost: at a zero fee rate a leaf
+    /// with all its work still ahead of it costs nothing either.
+    fn covers(&self, leaf: &UnilateralExitSelectedLeaf) -> bool {
+        self.refunds.contains(&leaf.id)
+            && leaf
+                .cpfp_node_costs
+                .iter()
+                .all(|(node_id, _)| self.nodes.contains(node_id))
+    }
+
     /// What a leaf's remaining work costs once the settled steps are dropped.
     fn discount(&self, leaf: &UnilateralExitSelectedLeaf) -> u64 {
         leaf.cpfp_node_costs
@@ -156,7 +167,7 @@ pub fn plan_unilateral_exit(
     // never reaches the sweep.
     let driving: Vec<UnilateralExitSelectedLeaf> = selected
         .iter()
-        .filter(|leaf| leaf.cpfp_cost > 0)
+        .filter(|leaf| !settled.is_some_and(|settled| settled.covers(leaf)))
         .cloned()
         .collect();
 
@@ -211,8 +222,29 @@ pub fn plan_unilateral_exit(
     {
         (assignment, None)
     } else {
-        let (psbt, per_leaf) =
-            build_fan_out_psbt(&inputs, &driving, fee_rate_sat_per_kw, change_dust_limit)?;
+        // Fanned out over every branch, not just the driving ones. The fan-out's
+        // outputs all pay the same script, so a branch is recognised on a later
+        // run by its position among them: let that shape follow what is left to
+        // do and the positions shift as branches settle, pointing a resume at
+        // another branch's output. A settled branch needs no fee money, only a
+        // place in the order, so it is sized down to the dust its output must
+        // clear. On a first run nothing has settled and this costs nothing.
+        let fan_out_leaves: Vec<UnilateralExitSelectedLeaf> = selected
+            .iter()
+            .map(|leaf| {
+                let mut leaf = leaf.clone();
+                if settled.is_some_and(|settled| settled.covers(&leaf)) {
+                    leaf.estimated_cost = 0;
+                }
+                leaf
+            })
+            .collect();
+        let (psbt, per_leaf) = build_fan_out_psbt(
+            &inputs,
+            &fan_out_leaves,
+            fee_rate_sat_per_kw,
+            change_dust_limit,
+        )?;
         (
             per_leaf
                 .into_iter()
@@ -2191,6 +2223,116 @@ mod tests {
             assert!(
                 discounted < fresh,
                 "a settled node lowers the floor: {discounted} vs {fresh}"
+            );
+        }
+
+        #[test_all]
+        fn a_free_exit_is_still_an_exit_to_drive() {
+            // At a zero fee rate every step costs nothing, which must not read as
+            // every step being done: the leaf still has its whole exit ahead of it
+            // and still needs the funding its children are built from.
+            let a = leaf_node_n("a", 1_000_000, 1);
+            let id = a.id.clone();
+            let nodes: HashMap<TreeNodeId, TreeNode> = [(id.clone(), a)].into_iter().collect();
+
+            let plan = plan_unilateral_exit(
+                nodes,
+                std::slice::from_ref(&id),
+                UnilateralExitLeafFilter::ProfitableOnly,
+                vec![cpfp_input(10_000, 0)],
+                0,
+                22,
+                Some(&SettledExitSteps::default()),
+            )
+            .unwrap();
+
+            let funded = plan
+                .per_branch_funding
+                .iter()
+                .find(|(leaf_id, _)| *leaf_id == id)
+                .map(|(_, funding)| funding.len())
+                .unwrap_or(0);
+            assert_eq!(
+                funded, 1,
+                "a free exit is still funded, or it builds nothing"
+            );
+        }
+
+        #[test_all]
+        fn a_fan_out_keeps_its_shape_as_branches_settle() {
+            let a = leaf_node_n("a", 1_000_000, 1);
+            let b = leaf_node_n("b", 1_000_000, 3);
+            let c = leaf_node_n("c", 1_000_000, 5);
+            let (ida, idb, idc) = (a.id.clone(), b.id.clone(), c.id.clone());
+            let nodes: HashMap<TreeNodeId, TreeNode> =
+                [(ida.clone(), a), (idb.clone(), b), (idc.clone(), c)]
+                    .into_iter()
+                    .collect();
+            let ids = [ida.clone(), idb.clone(), idc.clone()];
+
+            let plan_with = |settled: Option<&SettledExitSteps>| {
+                plan_unilateral_exit(
+                    nodes.clone(),
+                    &ids,
+                    UnilateralExitLeafFilter::ProfitableOnly,
+                    vec![cpfp_input(40_000, 0)],
+                    250,
+                    22,
+                    settled,
+                )
+                .unwrap()
+            };
+
+            let fresh = plan_with(None);
+            let fresh_outputs = fresh
+                .fan_out_psbt
+                .as_ref()
+                .expect("one utxo, three branches: it fans out")
+                .unsigned_tx
+                .output
+                .len();
+            assert_eq!(fresh_outputs, 3);
+
+            // One branch finishes. The fan-out must still carry an output for it,
+            // or the two still driving would slide onto each other's outputs when
+            // a later run reads them back.
+            let settled = SettledExitSteps {
+                nodes: [idb.clone()].into_iter().collect(),
+                refunds: [idb.clone()].into_iter().collect(),
+            };
+            let resumed = plan_with(Some(&settled));
+            let fan_out = resumed
+                .fan_out_psbt
+                .as_ref()
+                .expect("still fans out")
+                .unsigned_tx
+                .clone();
+            assert_eq!(
+                fan_out.output.len(),
+                3,
+                "the settled branch keeps its place in the order"
+            );
+            assert_eq!(
+                resumed.per_branch_funding.len(),
+                3,
+                "and its branch, so its refund still reaches the sweep"
+            );
+
+            // It drives nothing, so its output only has to clear dust: the money
+            // that would have paid its fees is not asked for again.
+            let dust = fan_out.output[0].script_pubkey.minimal_non_dust().to_sat();
+            let settled_index = ids.iter().position(|id| *id == idb).unwrap();
+            let settled_output = fan_out.output[settled_index].value.to_sat();
+            assert!(
+                settled_output
+                    < fresh.fan_out_psbt.as_ref().unwrap().unsigned_tx.output[settled_index]
+                        .value
+                        .to_sat(),
+                "a settled branch is funded for less than a driving one"
+            );
+            assert!(
+                settled_output >= dust,
+                "but still enough to be a real output: {settled_output} vs {dust}"
             );
         }
 
