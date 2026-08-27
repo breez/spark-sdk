@@ -665,11 +665,29 @@ fn resolve_confirmed_changes(
             .find(|(_, o)| &o.script_pubkey == script)
             && let Ok(vout) = u32::try_from(vout)
         {
+            let outpoint = OutPoint {
+                txid: child_txid,
+                vout,
+            };
+            // Every branch's change pays the one funding script, and funding is
+            // handed out by cost rather than by which branch produced it, so this
+            // change may already have paid for another branch. Left in, the next
+            // child is built over an output that is gone and cannot be broadcast.
+            let spend_query = ChainQuery::Outspend(outpoint);
+            let Some(spend) = observed.get(&spend_query) else {
+                pending.push(spend_query);
+                continue;
+            };
+            match spend {
+                ChainResult::Spend(Some(info)) if info.confirmed => continue,
+                ChainResult::Unavailable => {
+                    unverifiable_confirmed.insert(node_id.clone());
+                    continue;
+                }
+                _ => {}
+            }
             *change = Some(ConfirmedOutput {
-                outpoint: OutPoint {
-                    txid: child_txid,
-                    vout,
-                },
+                outpoint,
                 value: out.value.to_sat(),
             });
         }
@@ -3474,6 +3492,124 @@ mod interpret_tests {
     }
 
     #[test]
+    fn interpret_drops_a_change_another_branch_already_spent() {
+        let anchor = ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]);
+        let funding_script = leaf_addr().script_pubkey();
+        let deposit = OutPoint {
+            txid: Txid::from_byte_array([1u8; 32]),
+            vout: 0,
+        };
+        let root_tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::from_height(1).unwrap(),
+            input: vec![TxIn {
+                previous_output: deposit,
+                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+                ..Default::default()
+            }],
+            output: vec![
+                TxOut {
+                    value: Amount::from_sat(99_000),
+                    script_pubkey: ScriptBuf::new(),
+                },
+                TxOut {
+                    value: Amount::from_sat(0),
+                    script_pubkey: anchor,
+                },
+            ],
+        };
+        let root_txid = root_tx.compute_txid();
+        let root = treenode("root", None, root_tx, 0);
+        let leaf_parent = OutPoint {
+            txid: root_txid,
+            vout: 0,
+        };
+        let leaf = treenode("leaf", Some("root"), tx_spending(leaf_parent, 2), 0);
+        let leaf_id = leaf.id.clone();
+
+        let child_tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::from_height(3).unwrap(),
+            input: vec![TxIn {
+                previous_output: OutPoint {
+                    txid: root_txid,
+                    vout: 1,
+                },
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(88_000),
+                script_pubkey: funding_script.clone(),
+            }],
+        };
+        let child_txid = child_tx.compute_txid();
+
+        let funding_input = CpfpInput {
+            outpoint: OutPoint {
+                txid: Txid::from_byte_array([7u8; 32]),
+                vout: 0,
+            },
+            witness_utxo: TxOut {
+                value: Amount::from_sat(100_000),
+                script_pubkey: funding_script,
+            },
+            signed_input_weight: 272,
+        };
+        let prepared = PreparedUnilateralExit {
+            plan: UnilateralExitPlan {
+                selected_leaves: vec![],
+                fan_out_psbt: None,
+                per_branch_funding: vec![(leaf_id.clone(), vec![funding_input])],
+                tree_nodes: to_node_map(vec![root, leaf]),
+            },
+            leaf_refund_addresses: [(leaf_id.clone(), leaf_addr())].into_iter().collect(),
+        };
+
+        let observed = vec![
+            spent(deposit, root_txid),
+            Observation {
+                query: ChainQuery::Outspend(leaf_parent),
+                result: ChainResult::Spend(None),
+            },
+            spent(
+                OutPoint {
+                    txid: root_txid,
+                    vout: 1,
+                },
+                child_txid,
+            ),
+            Observation {
+                query: ChainQuery::Transaction(child_txid),
+                result: ChainResult::Transaction(child_tx),
+            },
+            // Gone: some other branch's child was funded from it.
+            spent(
+                OutPoint {
+                    txid: child_txid,
+                    vout: 0,
+                },
+                Txid::from_byte_array([8u8; 32]),
+            ),
+            Observation {
+                query: ChainQuery::Outspend(OutPoint {
+                    txid: Txid::from_byte_array([7u8; 32]),
+                    vout: 0,
+                }),
+                result: ChainResult::Spend(None),
+            },
+            no_refund(&leaf_id),
+        ];
+        let interp = interpret_chain(&prepared, &observed).unwrap();
+
+        assert_eq!(
+            interp.resolved.nodes.get(&id("root")),
+            Some(&NodeState::ConfirmedCpfp { change: None }),
+            "a change that is already spent is no funding: the branch falls back \
+             to what it was supplied rather than building over an output that is gone"
+        );
+    }
+
+    #[test]
     fn interpret_resolves_confirmed_node_change() {
         let anchor = ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]);
         let funding_script = leaf_addr().script_pubkey();
@@ -3563,6 +3699,14 @@ mod interpret_tests {
             Observation {
                 query: ChainQuery::Transaction(child_txid),
                 result: ChainResult::Transaction(child_tx),
+            },
+            // The change is still there, so it is the branch's to spend.
+            Observation {
+                query: ChainQuery::Outspend(OutPoint {
+                    txid: child_txid,
+                    vout: 0,
+                }),
+                result: ChainResult::Spend(None),
             },
             Observation {
                 query: ChainQuery::Outspend(OutPoint {
