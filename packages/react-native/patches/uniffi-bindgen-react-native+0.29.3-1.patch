@@ -1,3 +1,18 @@
+diff --git a/node_modules/uniffi-bindgen-react-native/crates/ubrn_bindgen/src/bindings/gen_typescript/templates/TaggedEnumTemplate.ts b/node_modules/uniffi-bindgen-react-native/crates/ubrn_bindgen/src/bindings/gen_typescript/templates/TaggedEnumTemplate.ts
+index 5c0060d..d2ac9d7 100644
+--- a/node_modules/uniffi-bindgen-react-native/crates/ubrn_bindgen/src/bindings/gen_typescript/templates/TaggedEnumTemplate.ts
++++ b/node_modules/uniffi-bindgen-react-native/crates/ubrn_bindgen/src/bindings/gen_typescript/templates/TaggedEnumTemplate.ts
+@@ -76,6 +76,10 @@ export const {{ decl_type_name }} = (() => {
+         }
+         {%-   else %}
+         constructor({%- call ts::field_list_decl(variant, true) -%}) {
++            {%- if is_error %}
++            super("{{ type_name }}", "{{ external_name }}", typeof v0 === "string" ? v0 : undefined);
++            {%- else %}
+             super("{{ type_name }}", "{{ external_name }}");
++            {%- endif %}
+             this.inner = Object.freeze([{%- call ts::field_list(variant, true) -%}]);
+         }
 diff --git a/node_modules/uniffi-bindgen-react-native/crates/ubrn_cli/templates/jsi/android/CMakeLists.txt b/node_modules/uniffi-bindgen-react-native/crates/ubrn_cli/templates/jsi/android/CMakeLists.txt
 index 99baf67..cc4b8f3 100644
 --- a/node_modules/uniffi-bindgen-react-native/crates/ubrn_cli/templates/jsi/android/CMakeLists.txt
@@ -82,3 +97,16 @@ index 3de6fbc..1797e41 100644
    s.vendored_frameworks = "{{ framework }}"
    s.dependency    "uniffi-bindgen-react-native", "{{ self.config.project.ubrn_version() }}"
  
+diff --git a/node_modules/uniffi-bindgen-react-native/fixtures/error-types/tests/bindings/test_error_types.ts b/node_modules/uniffi-bindgen-react-native/fixtures/error-types/tests/bindings/test_error_types.ts
+index dc4dde3..8217f89 100644
+--- a/node_modules/uniffi-bindgen-react-native/fixtures/error-types/tests/bindings/test_error_types.ts
++++ b/node_modules/uniffi-bindgen-react-native/fixtures/error-types/tests/bindings/test_error_types.ts
+@@ -178,7 +178,7 @@ test("oopsEnum 5", (t) => {
+ test("oopsTuple 0 - throws enum variants containing tuples", (t) => {
+   t.assertThrows(
+     (error) => {
+-      t.assertEqual("Error: TupleError.Oops", error.toString());
++      t.assertEqual("Error: TupleError.Oops: oops", error.toString());
+       if (TupleError.Oops.instanceOf(error)) {
+         t.assertEqual("oops", error.inner[0]);
+         return true;
