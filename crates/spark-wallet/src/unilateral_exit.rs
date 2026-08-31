@@ -285,6 +285,66 @@ struct ChainInterpretation {
     fan_out_unverified: bool,
 }
 
+/// What the chain has already done to an exit, as the tree alone shows it.
+/// Resolved before an exit is funded and handed back to the build, which then
+/// needs no chain of its own. Ordered by id so the same chain gives the same
+/// state.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct ExitChainState {
+    pub nodes: Vec<ConfirmedExitNode>,
+    pub refunds: Vec<ExitRefund>,
+    /// Leaves whose cpfp lineage was taken on-chain by a transaction the exit
+    /// cannot continue from.
+    pub stopped_leaves: Vec<TreeNodeId>,
+    /// Nodes whose own lookup failed. Their state is unknown, not absent.
+    pub unverified_nodes: Vec<TreeNodeId>,
+    /// Nodes taken to be confirmed on the operators' word because the chain
+    /// could not be read. Their spend is invisible, so anything built over them
+    /// risks double-spending an output already gone.
+    pub unverifiable_confirmed_nodes: Vec<TreeNodeId>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ConfirmedExitNode {
+    pub node_id: TreeNodeId,
+    pub confirmed_by: ExitNodeConfirmation,
+}
+
+/// Which of a node's two pre-signed spends took it on-chain. The cpfp one is
+/// fee-bumped by a child; the direct one pays its own fee, and a leaf that went
+/// out that way is refunded by its `direct_refund_tx`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ExitNodeConfirmation {
+    Cpfp,
+    Direct,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ExitRefund {
+    pub leaf_id: TreeNodeId,
+    pub state: ExitRefundState,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub enum ExitRefundState {
+    /// On-chain with its output still there to sweep. A sweep sitting unconfirmed
+    /// in the mempool leaves the refund here, so that sweep is rebuilt rather
+    /// than dropped.
+    OnChain {
+        tx: Transaction,
+        vout: u32,
+        value: u64,
+    },
+    /// Spent by a confirmed transaction: the sweep landed.
+    Swept,
+}
+
+/// An [`ExitChainState`] and the lookups still needed to complete it.
+pub struct ExitChainScan {
+    pub state: ExitChainState,
+    pub pending: Vec<ChainQuery>,
+}
+
 /// The exit's on-chain state as the tree alone shows it: which nodes are
 /// confirmed, which refunds landed, which branches can no longer be driven.
 /// Answered without any funding, so it can be resolved before an exit is funded.
@@ -318,6 +378,102 @@ impl<'a> ObservedIndex<'a> {
 
     fn get(&self, query: &ChainQuery) -> Option<&'a ChainResult> {
         self.by_query.get(query).copied()
+    }
+}
+
+/// The address each leaf's refund lands on. Every refund variant pays the leaf's
+/// key, and the leaf's own `refund_tx` is built to pay exactly that, so the
+/// address is read off the tree rather than derived from the signer.
+///
+/// A leaf with no `refund_tx` is unexitable and is left out.
+pub fn leaf_refund_addresses(
+    tree_nodes: &HashMap<TreeNodeId, TreeNode>,
+    leaf_ids: &[TreeNodeId],
+    network: bitcoin::Network,
+) -> HashMap<TreeNodeId, Address> {
+    let mut addresses = HashMap::new();
+    for leaf_id in leaf_ids {
+        let address = tree_nodes
+            .get(leaf_id)
+            .and_then(|node| node.refund_tx.as_ref())
+            .and_then(|tx| tx.output.first())
+            .and_then(|out| Address::from_script(&out.script_pubkey, network).ok());
+        if let Some(address) = address {
+            addresses.insert(leaf_id.clone(), address);
+        }
+    }
+    addresses
+}
+
+/// Reads what the chain has already done to each leaf's branch, with no funding
+/// involved. Drive it like the full walk: perform `pending`, feed the results
+/// back, and repeat until nothing is pending.
+///
+/// A step the lookups could not resolve is left out of the state rather than
+/// guessed, so an unreadable chain reports less progress than there is, never
+/// more.
+pub fn scan_exit_chain(
+    tree_nodes: &HashMap<TreeNodeId, TreeNode>,
+    leaf_ids: &[TreeNodeId],
+    network: bitcoin::Network,
+    observed: &[Observation],
+) -> ExitChainScan {
+    let index = ObservedIndex::new(observed);
+    let addresses = leaf_refund_addresses(tree_nodes, leaf_ids, network);
+    let walk = walk_exit_chain(tree_nodes, leaf_ids, &addresses, &index);
+
+    let mut pending = walk.pending;
+    let mut seen: HashSet<ChainQuery> = HashSet::new();
+    pending.retain(|query| seen.insert(query.clone()));
+
+    let mut nodes: Vec<ConfirmedExitNode> = walk
+        .nodes
+        .into_iter()
+        .map(|(node_id, state)| ConfirmedExitNode {
+            node_id,
+            confirmed_by: match state {
+                NodeState::ConfirmedCpfp { .. } => ExitNodeConfirmation::Cpfp,
+                NodeState::ConfirmedDirect => ExitNodeConfirmation::Direct,
+            },
+        })
+        .collect();
+    nodes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+
+    // DriveDirect is not carried: a leaf drives its direct refund exactly when its
+    // own node is confirmed via the direct spend, which `nodes` already says.
+    let mut refunds: Vec<ExitRefund> = walk
+        .refunds
+        .into_iter()
+        .filter_map(|(leaf_id, state)| {
+            let state = match state {
+                RefundState::Adopted(refund) => ExitRefundState::OnChain {
+                    tx: refund.tx,
+                    vout: refund.outpoint.vout,
+                    value: refund.value,
+                },
+                RefundState::Swept => ExitRefundState::Swept,
+                RefundState::DriveDirect => return None,
+            };
+            Some(ExitRefund { leaf_id, state })
+        })
+        .collect();
+    refunds.sort_by(|a, b| a.leaf_id.cmp(&b.leaf_id));
+
+    let sorted = |ids: HashSet<TreeNodeId>| {
+        let mut ids: Vec<TreeNodeId> = ids.into_iter().collect();
+        ids.sort();
+        ids
+    };
+
+    ExitChainScan {
+        state: ExitChainState {
+            nodes,
+            refunds,
+            stopped_leaves: sorted(walk.stopped),
+            unverified_nodes: sorted(walk.unverified),
+            unverifiable_confirmed_nodes: sorted(walk.unverifiable_confirmed),
+        },
+        pending,
     }
 }
 
@@ -2453,6 +2609,72 @@ mod interpret_tests {
             },
             result: ChainResult::AddressUtxos(vec![]),
         }
+    }
+
+    /// The scan answers what the chain has already done from the tree alone: no
+    /// plan, no funding, and the refund address read off the leaf's own
+    /// refund_tx rather than derived from the signer.
+    #[test]
+    fn scan_reads_a_landed_refund_without_any_funding() {
+        let deposit = OutPoint {
+            txid: Txid::from_byte_array([7u8; 32]),
+            vout: 0,
+        };
+        let root = treenode("root", None, tx_spending(deposit, 1), 0);
+        let root_out = OutPoint {
+            txid: root.node_tx.compute_txid(),
+            vout: 0,
+        };
+        let mut leaf = treenode("leaf", Some("root"), tx_spending(root_out, 2), 0);
+        let leaf_out = OutPoint {
+            txid: leaf.node_tx.compute_txid(),
+            vout: 0,
+        };
+        let mut refund_tx = tx_spending(leaf_out, 3);
+        refund_tx.output[0].script_pubkey = leaf_addr().script_pubkey();
+        leaf.refund_tx = Some(refund_tx.clone());
+        let leaf_id = leaf.id.clone();
+        let refund_txid = refund_tx.compute_txid();
+        let tree = to_node_map(vec![root, leaf]);
+
+        // A refund on-chain and unspent: the three lookups it takes to adopt it.
+        let observed = vec![
+            refund_scan(&leaf_id, refund_txid, 55_000),
+            unspent(OutPoint {
+                txid: refund_txid,
+                vout: 0,
+            }),
+            Observation {
+                query: ChainQuery::Transaction(refund_txid),
+                result: ChainResult::Transaction(refund_tx),
+            },
+        ];
+
+        let scan = scan_exit_chain(
+            &tree,
+            std::slice::from_ref(&leaf_id),
+            bitcoin::Network::Regtest,
+            &observed,
+        );
+        match scan.state.refunds.as_slice() {
+            [refund] => {
+                assert_eq!(refund.leaf_id, leaf_id);
+                assert!(matches!(refund.state, ExitRefundState::OnChain { .. }));
+            }
+            other => panic!("expected one landed refund, got {other:?}"),
+        }
+
+        // Blind, it reports nothing and asks the chain instead, so an unreadable
+        // chain understates what is done rather than overstating it.
+        let blind = scan_exit_chain(
+            &tree,
+            std::slice::from_ref(&leaf_id),
+            bitcoin::Network::Regtest,
+            &[],
+        );
+        assert!(blind.state.refunds.is_empty());
+        assert!(blind.state.nodes.is_empty());
+        assert!(!blind.pending.is_empty());
     }
 
     fn refund_scan(leaf_id: &TreeNodeId, refund_txid: Txid, value: u64) -> Observation {

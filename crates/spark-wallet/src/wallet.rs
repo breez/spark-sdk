@@ -1817,28 +1817,22 @@ impl SparkWallet {
             "prepare_unilateral_exit_plan: planned"
         );
 
-        // Every refund variant pays the leaf's key, and the leaf's own refund_tx
-        // already pays it: its output script is that address, so it is read off
-        // the tree rather than derived, which on a remote signer is a round trip
-        // per leaf on every exit.
-        let network: bitcoin::Network = self.config.network.into();
-        let mut leaf_refund_addresses = HashMap::new();
-        for leaf in &plan.selected_leaves {
-            let Some(address) = plan
-                .tree_nodes
-                .get(&leaf.id)
-                .and_then(|node| node.refund_tx.as_ref())
-                .and_then(|tx| tx.output.first())
-                .and_then(|out| Address::from_script(&out.script_pubkey, network).ok())
-            else {
-                // Selection already drops a leaf with no refund_tx, so this is a
-                // refund paying a script no address describes.
-                return Err(SparkWalletError::Generic(format!(
-                    "leaf {} has no refund address to sweep from",
-                    leaf.id
-                )));
-            };
-            leaf_refund_addresses.insert(leaf.id.clone(), address);
+        let selected_ids: Vec<TreeNodeId> =
+            plan.selected_leaves.iter().map(|l| l.id.clone()).collect();
+        let leaf_refund_addresses = crate::leaf_refund_addresses(
+            &plan.tree_nodes,
+            &selected_ids,
+            self.config.network.into(),
+        );
+        if let Some(leaf) = selected_ids
+            .iter()
+            .find(|id| !leaf_refund_addresses.contains_key(*id))
+        {
+            // Selection already drops a leaf with no refund_tx, so the only way
+            // here is a refund paying a script no address describes.
+            return Err(SparkWalletError::Generic(format!(
+                "leaf {leaf} has no refund address to sweep from"
+            )));
         }
 
         Ok(PreparedUnilateralExit {
