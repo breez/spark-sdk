@@ -448,3 +448,52 @@ fn maybe_apply_fee(amount_sats: u64) -> u64 {
         amount_sats
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitcoin::hashes::Hash;
+
+    /// A leaf's refund address is read off its stored `refund_tx` rather than
+    /// derived from the signer, which this pins: every refund variant pays the
+    /// P2TR of the receiving key, so the output script is that address.
+    #[test]
+    fn a_refund_pays_the_p2tr_of_the_receiving_key() {
+        let secp = Secp256k1::new();
+        let receiving_pubkey = PublicKey::from_secret_key(
+            &secp,
+            &bitcoin::secp256k1::SecretKey::from_slice(&[7u8; 32]).unwrap(),
+        );
+        let node_tx = create_spark_tx(
+            OutPoint {
+                txid: bitcoin::Txid::from_byte_array([1u8; 32]),
+                vout: 0,
+            },
+            Sequence::ENABLE_RBF_NO_LOCKTIME,
+            Amount::from_sat(100_000),
+            ScriptBuf::new(),
+            false,
+            true,
+        );
+
+        let refunds = create_refund_txs(
+            &node_tx,
+            None,
+            Sequence::ENABLE_RBF_NO_LOCKTIME,
+            Sequence::ENABLE_RBF_NO_LOCKTIME,
+            &receiving_pubkey,
+            Network::Regtest,
+        );
+
+        let expected = Address::p2tr(
+            &secp,
+            receiving_pubkey.x_only_public_key().0,
+            None,
+            bitcoin::Network::Regtest,
+        );
+        assert_eq!(
+            refunds.cpfp_tx.output[0].script_pubkey,
+            expected.script_pubkey()
+        );
+    }
+}

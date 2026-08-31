@@ -1817,14 +1817,27 @@ impl SparkWallet {
             "prepare_unilateral_exit_plan: planned"
         );
 
-        // A P2TR address over the leaf's derived key recognizes an on-chain
-        // refund (any variant) and is where the sweep pulls from.
-        let secp = Secp256k1::new();
+        // Every refund variant pays the leaf's key, and the leaf's own refund_tx
+        // already pays it: its output script is that address, so it is read off
+        // the tree rather than derived, which on a remote signer is a round trip
+        // per leaf on every exit.
         let network: bitcoin::Network = self.config.network.into();
         let mut leaf_refund_addresses = HashMap::new();
         for leaf in &plan.selected_leaves {
-            let pubkey = self.spark_signer.get_public_key_for_leaf(&leaf.id).await?;
-            let address = Address::p2tr(&secp, pubkey.x_only_public_key().0, None, network);
+            let Some(address) = plan
+                .tree_nodes
+                .get(&leaf.id)
+                .and_then(|node| node.refund_tx.as_ref())
+                .and_then(|tx| tx.output.first())
+                .and_then(|out| Address::from_script(&out.script_pubkey, network).ok())
+            else {
+                // Selection already drops a leaf with no refund_tx, so this is a
+                // refund paying a script no address describes.
+                return Err(SparkWalletError::Generic(format!(
+                    "leaf {} has no refund address to sweep from",
+                    leaf.id
+                )));
+            };
             leaf_refund_addresses.insert(leaf.id.clone(), address);
         }
 
