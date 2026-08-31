@@ -285,6 +285,21 @@ struct ChainInterpretation {
     fan_out_unverified: bool,
 }
 
+/// The exit's on-chain state as the tree alone shows it: which nodes are
+/// confirmed, which refunds landed, which branches can no longer be driven.
+/// Answered without any funding, so it can be resolved before an exit is funded.
+struct ExitChainWalk {
+    nodes: HashMap<TreeNodeId, NodeState>,
+    refunds: HashMap<TreeNodeId, RefundState>,
+    stopped: HashSet<TreeNodeId>,
+    /// Confirmed cpfp nodes whose CPFP change is still to be resolved. Finding it
+    /// needs the funding script, so it is left to the caller that holds one.
+    needs_change: HashSet<TreeNodeId>,
+    unverified: HashSet<TreeNodeId>,
+    unverifiable_confirmed: HashSet<TreeNodeId>,
+    pending: Vec<ChainQuery>,
+}
+
 /// An index over the observations for O(1) lookup by query, built once per
 /// [`interpret_chain`] pass instead of scanning the growing observation list on
 /// every lookup. The first observation of a query wins, matching the prior scan.
@@ -306,10 +321,63 @@ impl<'a> ObservedIndex<'a> {
     }
 }
 
+/// Walks each leaf's branch and reads back its refund, emitting the lookups still
+/// needed. Reads the tree and nothing else: no funding is consulted, so the answer
+/// holds whatever an exit is later funded with.
+///
+/// The walk follows the confirmed spender down each branch (a non-`node_tx` spend
+/// breaks it); each leaf's refund is recovered independently by an address scan, so
+/// it survives a broken branch.
+fn walk_exit_chain(
+    node_map: &HashMap<TreeNodeId, TreeNode>,
+    leaf_ids: &[TreeNodeId],
+    refund_addresses: &HashMap<TreeNodeId, Address>,
+    observed: &ObservedIndex<'_>,
+) -> ExitChainWalk {
+    let mut walk = ExitChainWalk {
+        nodes: HashMap::new(),
+        refunds: HashMap::new(),
+        stopped: HashSet::new(),
+        needs_change: HashSet::new(),
+        unverified: HashSet::new(),
+        unverifiable_confirmed: HashSet::new(),
+        pending: Vec::new(),
+    };
+
+    for leaf_id in leaf_ids {
+        walk_branch(
+            node_map,
+            leaf_id,
+            observed,
+            &mut walk.nodes,
+            &mut walk.refunds,
+            &mut walk.stopped,
+            &mut walk.needs_change,
+            &mut walk.unverified,
+            &mut walk.unverifiable_confirmed,
+            &mut walk.pending,
+        );
+    }
+
+    // Runs per leaf independently of the walk; an adopted refund overrides it.
+    for (leaf_id, address) in refund_addresses {
+        interpret_refund(
+            leaf_id,
+            address,
+            observed,
+            &mut walk.refunds,
+            &mut walk.unverified,
+            &mut walk.pending,
+        );
+    }
+
+    walk
+}
+
 /// Resolves the exit's on-chain state from `observed`, emitting the lookups still
-/// needed. Pure in `(prepared, observed)`. The walk follows the confirmed spender
-/// down each branch (a non-`node_tx` spend breaks it); each leaf's refund is
-/// recovered independently by an address scan, so it survives a broken branch.
+/// needed. Pure in `(prepared, observed)`. Layers the funding-dependent parts (the
+/// fan-out, each confirmed node's CPFP change, and which supplied inputs are
+/// already spent) over the funding-free [`walk_exit_chain`].
 fn interpret_chain(
     prepared: &PreparedUnilateralExit,
     observed: &[Observation],
@@ -324,25 +392,27 @@ fn interpret_chain(
 
     let (fan_out, fan_out_unverified) = interpret_fan_out(plan, observed, &mut pending)?;
 
-    let mut nodes: HashMap<TreeNodeId, NodeState> = HashMap::new();
-    let mut refunds: HashMap<TreeNodeId, RefundState> = HashMap::new();
-    let mut stopped: HashSet<TreeNodeId> = HashSet::new();
-    let mut needs_change: HashSet<TreeNodeId> = HashSet::new();
-    let mut unverifiable_confirmed: HashSet<TreeNodeId> = HashSet::new();
-    for (leaf_id, _) in &plan.per_branch_funding {
-        walk_branch(
-            node_map,
-            leaf_id,
-            observed,
-            &mut nodes,
-            &mut refunds,
-            &mut stopped,
-            &mut needs_change,
-            &mut unverified,
-            &mut unverifiable_confirmed,
-            &mut pending,
-        );
-    }
+    let leaf_ids: Vec<TreeNodeId> = plan
+        .per_branch_funding
+        .iter()
+        .map(|(leaf_id, _)| leaf_id.clone())
+        .collect();
+    let ExitChainWalk {
+        mut nodes,
+        refunds,
+        stopped,
+        needs_change,
+        unverified: walked_unverified,
+        mut unverifiable_confirmed,
+        pending: walk_pending,
+    } = walk_exit_chain(
+        node_map,
+        &leaf_ids,
+        &prepared.leaf_refund_addresses,
+        observed,
+    );
+    unverified.extend(walked_unverified);
+    pending.extend(walk_pending);
 
     resolve_confirmed_changes(
         node_map,
@@ -360,18 +430,6 @@ fn interpret_chain(
         &unverifiable_confirmed,
         &mut unverified,
     );
-
-    // Runs per leaf independently of the walk; an adopted refund overrides it.
-    for (leaf_id, address) in &prepared.leaf_refund_addresses {
-        interpret_refund(
-            leaf_id,
-            address,
-            observed,
-            &mut refunds,
-            &mut unverified,
-            &mut pending,
-        );
-    }
 
     // Drop supplied inputs a prior run's CPFP child already spent. Only a confirmed
     // spend counts: an unconfirmed spender is our own replaceable child (rebuilt via
