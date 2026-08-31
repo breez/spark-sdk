@@ -921,6 +921,7 @@ pub struct _SendOnchainFeeQuote {
     pub speed_fast: SendOnchainSpeedFeeQuote,
     pub speed_medium: SendOnchainSpeedFeeQuote,
     pub speed_slow: SendOnchainSpeedFeeQuote,
+    pub is_estimate: bool,
 }
 
 #[frb(mirror(SendOnchainSpeedFeeQuote))]

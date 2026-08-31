@@ -928,9 +928,8 @@ pub struct StableBalanceToken {
 /// Configuration for automatic conversion of Bitcoin to stable tokens.
 ///
 /// When configured, the SDK automatically monitors the Bitcoin balance after each
-/// wallet sync. When the balance exceeds the configured threshold plus the reserved
-/// amount, the SDK automatically converts the excess balance (above the reserve)
-/// to the active stable token.
+/// wallet sync. Once the balance reaches the configured threshold, the SDK converts
+/// the whole Bitcoin balance to the active stable token.
 ///
 /// When the balance is held in a stable token, Bitcoin payments can still be sent.
 /// The SDK automatically detects when there's not enough Bitcoin balance to cover a
@@ -1675,11 +1674,20 @@ pub enum SendPaymentMethod {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendOnchainFeeQuote {
+    /// Identifies the quote to the provider when the payment is sent. Empty on
+    /// an estimate, which no provider has issued.
     pub id: String,
+    /// When the quote stops being honoured, as a Unix timestamp in seconds.
+    /// Zero on an estimate.
     pub expires_at: u64,
     pub speed_fast: SendOnchainSpeedFeeQuote,
     pub speed_medium: SendOnchainSpeedFeeQuote,
     pub speed_slow: SendOnchainSpeedFeeQuote,
+    /// Set when the wallet holds no bitcoin and a token conversion will fund the
+    /// send, because the provider will not quote without funds to price against.
+    /// The estimate is an upper bound: the payment quotes for real once the
+    /// conversion lands, and fails rather than spending more than this.
+    pub is_estimate: bool,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

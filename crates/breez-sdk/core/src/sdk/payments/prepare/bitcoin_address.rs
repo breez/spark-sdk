@@ -1,6 +1,6 @@
 use crate::{
     BitcoinAddressDetails, ConversionOptions, ConversionType, FeePolicy, SendOnchainFeeQuote,
-    SendPaymentMethod,
+    SendOnchainSpeedFeeQuote, SendPaymentMethod,
     error::SdkError,
     models::{PrepareSendPaymentRequest, PrepareSendPaymentResponse},
     sdk::BreezSdk,
@@ -8,6 +8,23 @@ use crate::{
     token_conversion::ConversionAmount,
     utils::bitcoin_dust::get_dust_limit_sats,
 };
+
+// A wallet with nothing to price against cannot be quoted by the provider, which
+// is the state a stable-balance wallet is in until its token conversion runs.
+// These constants estimate the fee locally for that case.
+
+/// How far the provider's per-speed rates sit above a high-priority rate,
+/// indexed slow, medium, fast. Measured between 1 and 5 sat/vB, where the
+/// network's block targets converge. Under congestion the provider may price
+/// the speeds off targets further apart than this.
+const ESTIMATE_SPEED_PREMIUM_SAT_PER_VBYTE: [u64; 3] = [1, 2, 3];
+/// Headroom on top, for the rate moving while the conversion runs.
+const ESTIMATE_DRIFT_HEADROOM_SAT_PER_VBYTE: u64 = 1;
+/// The provider prices every withdrawal at this size whatever the input count:
+/// the wallet's funds are spent on the Spark side, not as on-chain inputs.
+const ESTIMATE_VSIZE_VBYTES: u64 = 240;
+/// The provider's flat service fee, the same for every speed and amount.
+const ESTIMATE_USER_FEE_SAT: u64 = 750;
 
 /// Validates a Bitcoin address request and returns the validated amount.
 fn validate_request(request: &PrepareSendPaymentRequest) -> Result<u128, SdkError> {
@@ -113,25 +130,37 @@ async fn prepare_sats_denominated(
         )));
     }
 
-    // When a token→sats conversion will run (either auto-filled by an active
-    // stable balance, or explicitly requested via `ToBitcoin` options), the
-    // destination sats don't exist yet — pass None to skip leaf selection.
+    // A wallet short of the amount funds the send by converting tokens, and the
+    // SSP will not price an exit before that conversion has produced the sats,
+    // so bound the fee locally and quote at send instead.
     let stable_balance_active = match &sdk.stable_balance {
         Some(sb) => sb.get_active_label().await.is_some(),
         None => false,
     };
-    let sats_from_conversion =
-        stable_balance_active || conversion::is_to_bitcoin(request.conversion_options.as_ref());
-    let fee_quote_amount = if sats_from_conversion {
-        None
+    let balance_sats = sdk.spark_wallet.get_balance().await?;
+    let conversion_funds_the_send = sats_from_conversion(
+        stable_balance_active,
+        request.conversion_options.as_ref(),
+        balance_sats,
+        amount_u64,
+    );
+    let fee_quote: SendOnchainFeeQuote = if conversion_funds_the_send && balance_sats == 0 {
+        estimate_coop_exit_fee_quote(sdk).await?
     } else {
-        Some(amount.try_into()?)
+        // Short of the amount but holding something, the wallet still has funds
+        // to price against, and the fee does not vary with what is selected.
+        // Asking for the amount when it cannot cover it is what surfaces
+        // insufficient funds on a send with no conversion behind it.
+        let target_sats = if conversion_funds_the_send {
+            None
+        } else {
+            Some(amount_u64)
+        };
+        sdk.spark_wallet
+            .fetch_coop_exit_fee_quote(&withdrawal_address.address, target_sats)
+            .await?
+            .into()
     };
-    let fee_quote: SendOnchainFeeQuote = sdk
-        .spark_wallet
-        .fetch_coop_exit_fee_quote(&withdrawal_address.address, fee_quote_amount)
-        .await?
-        .into();
 
     // For FeesIncluded, validate the output after fees using the best case
     // (slow/lowest fee). Only reject if even the cheapest option results in dust.
@@ -206,17 +235,20 @@ async fn prepare_token_denominated(
         )));
     }
 
-    // Pass None for amount — the sats don't exist yet (still tokens),
-    // so leaf selection would fail. Get a generic fee estimate instead.
-    let fee_quote: SendOnchainFeeQuote = sdk
-        .spark_wallet
-        .fetch_coop_exit_fee_quote(&withdrawal_address.address, None)
-        .await?
-        .into();
+    // Estimate only when the wallet holds nothing to price against. Any balance
+    // at all, as a send-all wallet holding both tokens and sats has, gives a
+    // real quote: the fee does not vary with what is selected.
+    let fee_quote: SendOnchainFeeQuote = if sdk.spark_wallet.get_balance().await? == 0 {
+        estimate_coop_exit_fee_quote(sdk).await?
+    } else {
+        sdk.spark_wallet
+            .fetch_coop_exit_fee_quote(&withdrawal_address.address, None)
+            .await?
+            .into()
+    };
 
     // Token-denominated converts the input into sats; fees come out of the
-    // converted output, which is the FeesIncluded shape — use the slow tier
-    // as the best case for the post-fee dust check.
+    // converted output, which is the FeesIncluded shape.
     validate_dust(
         total_u64,
         dust_limit_sats,
@@ -235,6 +267,54 @@ async fn prepare_token_denominated(
         conversion_estimate,
         fee_policy,
     })
+}
+
+/// Estimates what a withdrawal will cost at each speed, for a wallet holding
+/// nothing the provider can price against.
+///
+/// Each speed is estimated one rung high, so the estimate bounds the real fee
+/// and the payment can be sized against it.
+fn estimate_from_rate(fastest_fee_sat_per_vbyte: u64) -> SendOnchainFeeQuote {
+    let speed = |premium: u64| SendOnchainSpeedFeeQuote {
+        user_fee_sat: ESTIMATE_USER_FEE_SAT,
+        l1_broadcast_fee_sat: fastest_fee_sat_per_vbyte
+            .saturating_add(premium)
+            .saturating_add(ESTIMATE_DRIFT_HEADROOM_SAT_PER_VBYTE)
+            .saturating_mul(ESTIMATE_VSIZE_VBYTES),
+    };
+    SendOnchainFeeQuote {
+        id: String::new(),
+        expires_at: 0,
+        speed_slow: speed(ESTIMATE_SPEED_PREMIUM_SAT_PER_VBYTE[0]),
+        speed_medium: speed(ESTIMATE_SPEED_PREMIUM_SAT_PER_VBYTE[1]),
+        speed_fast: speed(ESTIMATE_SPEED_PREMIUM_SAT_PER_VBYTE[2]),
+        is_estimate: true,
+    }
+}
+
+async fn estimate_coop_exit_fee_quote(sdk: &BreezSdk) -> Result<SendOnchainFeeQuote, SdkError> {
+    let fees = sdk.chain_service.recommended_fees().await?;
+    Ok(estimate_from_rate(fees.fastest_fee))
+}
+
+/// Whether the sats being sent will have to come from a token conversion.
+///
+/// The provider cannot price a cooperative exit without funds to quote against,
+/// so this decides whether prepare quotes the fee or bounds it locally and
+/// leaves the send to fetch a quote.
+///
+/// A conversion has to be in play, either auto-filled by an active stable
+/// balance or asked for outright with `ToBitcoin` options, *and* the wallet has
+/// to be short of the amount today. A wallet that can already cover it has
+/// funds to quote against, whatever it converts afterwards.
+fn sats_from_conversion(
+    stable_balance_active: bool,
+    conversion_options: Option<&ConversionOptions>,
+    balance_sats: u64,
+    amount_sats: u64,
+) -> bool {
+    (stable_balance_active || conversion::is_to_bitcoin(conversion_options))
+        && balance_sats < amount_sats
 }
 
 /// Validates a Bitcoin send amount against the address dust limit.
@@ -269,8 +349,11 @@ fn validate_dust(
 #[cfg(test)]
 mod tests {
     use super::super::test_helpers::*;
-    use super::{validate_dust, validate_request};
-    use crate::{ConversionOptions, ConversionType, FeePolicy, error::SdkError};
+    use super::{estimate_from_rate, sats_from_conversion, validate_dust, validate_request};
+    use crate::{
+        ConversionOptions, ConversionType, FeePolicy, OnchainConfirmationSpeed,
+        SendOnchainFeeQuote, error::SdkError,
+    };
     use macros::test_all;
 
     #[cfg(feature = "browser-tests")]
@@ -366,6 +449,148 @@ mod tests {
             result.is_err(),
             "Should fail when conversion from Bitcoin is provided"
         );
+    }
+
+    // ============ coop-exit fee estimate ============
+
+    const SPEEDS: [OnchainConfirmationSpeed; 3] = [
+        OnchainConfirmationSpeed::Slow,
+        OnchainConfirmationSpeed::Medium,
+        OnchainConfirmationSpeed::Fast,
+    ];
+
+    fn fee_for(quote: &SendOnchainFeeQuote, speed: &OnchainConfirmationSpeed) -> u64 {
+        match speed {
+            OnchainConfirmationSpeed::Slow => quote.speed_slow.total_fee_sat(),
+            OnchainConfirmationSpeed::Medium => quote.speed_medium.total_fee_sat(),
+            OnchainConfirmationSpeed::Fast => quote.speed_fast.total_fee_sat(),
+        }
+    }
+
+    #[test_all]
+    fn test_estimate_holds_one_rung_over_every_measured_fee() {
+        // Total fees the mainnet provider quoted on 2026-08-28, by the
+        // mempool.space high-priority rate at the time. Written out rather than
+        // recomputed from the constants, so that changing any of them fails
+        // here instead of scaling both sides of the comparison together.
+        let measured: [(u64, [u64; 3]); 4] = [
+            (2, [1470, 1710, 1950]),
+            (3, [1710, 1950, 2190]),
+            (4, [1950, 2190, 2430]),
+            (5, [2190, 2430, 2670]),
+        ];
+
+        for (network_rate, fees) in measured {
+            let quote = estimate_from_rate(network_rate);
+            for (speed, measured_fee) in SPEEDS.iter().zip(fees) {
+                assert_eq!(
+                    fee_for(&quote, speed),
+                    measured_fee.saturating_add(240),
+                    "estimate should sit one rung over the {measured_fee} sat fee \
+                     measured at {network_rate} sat/vB for {speed:?}"
+                );
+            }
+        }
+    }
+
+    #[test_all]
+    fn test_estimate_covers_the_fee_the_production_send_paid() {
+        // The withdrawal that verified this fix paid 1,710 sats at the fast
+        // speed with the network rate at 1 sat/vB.
+        let quote = estimate_from_rate(1);
+        assert_eq!(
+            quote.speed_fast.total_fee_sat(),
+            1710_u64.saturating_add(240)
+        );
+    }
+
+    #[test_all]
+    fn test_estimate_speeds_are_ordered() {
+        let quote = estimate_from_rate(3);
+        assert!(quote.speed_slow.total_fee_sat() < quote.speed_medium.total_fee_sat());
+        assert!(quote.speed_medium.total_fee_sat() < quote.speed_fast.total_fee_sat());
+    }
+
+    #[test_all]
+    fn test_estimate_is_marked_and_carries_no_provider_identity() {
+        // `expires_at` of zero also reads as long expired, so the send refetches.
+        let quote = estimate_from_rate(3);
+        assert!(quote.is_estimate);
+        assert!(quote.id.is_empty());
+        assert_eq!(quote.expires_at, 0);
+    }
+
+    #[test_all]
+    fn test_estimate_saturates() {
+        let quote = estimate_from_rate(u64::MAX);
+        assert!(quote.speed_fast.total_fee_sat() > 0);
+    }
+
+    // ============ sats_from_conversion ============
+
+    // This predicate decides whether the prepare response carries a fee quote:
+    // true means the sats do not exist yet, so the quote is fetched at send.
+
+    fn to_bitcoin() -> ConversionOptions {
+        ConversionOptions {
+            conversion_type: ConversionType::ToBitcoin {
+                from_token_identifier: "token123".to_string(),
+            },
+            max_slippage_bps: None,
+            completion_timeout_secs: None,
+        }
+    }
+
+    #[test_all]
+    fn test_sats_from_conversion_stable_balance_and_short() {
+        // The reported case: stable balance holding no sats at all.
+        assert!(sats_from_conversion(true, None, 0, 10_000));
+    }
+
+    #[test_all]
+    fn test_sats_from_conversion_explicit_to_bitcoin_and_short() {
+        assert!(sats_from_conversion(false, Some(&to_bitcoin()), 0, 10_000));
+    }
+
+    #[test_all]
+    fn test_sats_from_conversion_covered_balance_still_quotes() {
+        // A wallet that can already cover the amount has funds to quote
+        // against, so it keeps its prepare-time fee quote whether or not stable
+        // balance is on or a conversion was asked for.
+        assert!(!sats_from_conversion(true, None, 50_000, 10_000));
+        assert!(!sats_from_conversion(
+            false,
+            Some(&to_bitcoin()),
+            50_000,
+            10_000
+        ));
+    }
+
+    #[test_all]
+    fn test_sats_from_conversion_boundary() {
+        // Exactly covering the amount is covered: the check is `<`.
+        assert!(!sats_from_conversion(true, None, 10_000, 10_000));
+        assert!(sats_from_conversion(true, None, 9_999, 10_000));
+    }
+
+    #[test_all]
+    fn test_sats_from_conversion_needs_a_conversion_in_play() {
+        // Short of the amount with nothing to convert from is insufficient
+        // funds, not a deferred quote.
+        assert!(!sats_from_conversion(false, None, 0, 10_000));
+    }
+
+    #[test_all]
+    fn test_sats_from_conversion_from_bitcoin_is_not_a_source() {
+        // FromBitcoin spends sats to buy tokens, so it does not produce the
+        // sats this send needs. `validate_request` rejects it for this
+        // destination anyway.
+        let options = ConversionOptions {
+            conversion_type: ConversionType::FromBitcoin,
+            max_slippage_bps: None,
+            completion_timeout_secs: None,
+        };
+        assert!(!sats_from_conversion(false, Some(&options), 0, 10_000));
     }
 
     // ============ validate_dust ============

@@ -764,6 +764,10 @@ impl SparkWallet {
             .await?)
     }
 
+    /// `amount_sats` prices the quote against the leaves that would fund a
+    /// withdrawal of that size. `None` prices it against every available leaf.
+    /// Either way the provider requires at least one: it rejects an empty set
+    /// with "No leaves are provided for this coop exit fee request."
     pub async fn fetch_coop_exit_fee_quote(
         &self,
         withdrawal_address: &str,
@@ -780,7 +784,7 @@ impl SparkWallet {
             .require_network(self.config.network.into())
             .map_err(|_| SparkWalletError::InvalidNetwork)?;
 
-        // Selects leaves totaling `amount_sat` if provided, otherwise retrieves all available leaves.
+        // Selects leaves totaling `amount_sats` if provided, otherwise retrieves all available leaves.
         let target_amounts =
             amount_sats.map(|amount| TargetAmounts::new_amount_and_fee(amount, None));
         let reservation = self
