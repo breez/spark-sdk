@@ -80,7 +80,7 @@ Once the app is running, type commands in the text input at the bottom:
 
 **Payments**: `receive`, `pay`, `lnurl-pay`, `lnurl-withdraw`, `lnurl-auth`, `claim-htlc-payment`
 
-**On-chain**: `claim-deposit`, `refund-deposit`, `list-unclaimed-deposits`, `buy-bitcoin`
+**On-chain**: `claim-deposit`, `fetch-claim-deposit-quote`, `refund-deposit`, `list-unclaimed-deposits`, `buy-bitcoin`
 
 **Lightning address**: `get-lightning-address`, `register-lightning-address`, `authorize-lightning-address-transfer`, `claim-lightning-address-transfer`, `delete-lightning-address`, `check-lightning-address-available`
 

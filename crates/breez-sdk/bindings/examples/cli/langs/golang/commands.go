@@ -36,6 +36,7 @@ var CommandNames = []string{
 	"lnurl-auth",
 	"claim-htlc-payment",
 	"claim-deposit",
+	"fetch-claim-deposit-quote",
 	"parse",
 	"refund-deposit",
 	"list-unclaimed-deposits",
@@ -72,6 +73,7 @@ func BuildCommandRegistry() map[string]Command {
 		"lnurl-auth":                           {Name: "lnurl-auth", Description: "Authenticate using LNURL", Run: handleLnurlAuth},
 		"claim-htlc-payment":                   {Name: "claim-htlc-payment", Description: "Claim an HTLC payment", Run: handleClaimHtlcPayment},
 		"claim-deposit":                        {Name: "claim-deposit", Description: "Claim an on-chain deposit", Run: handleClaimDeposit},
+		"fetch-claim-deposit-quote":            {Name: "fetch-claim-deposit-quote", Description: "Quote both ways of claiming a deposit", Run: handleFetchClaimDepositQuote},
 		"parse":                                {Name: "parse", Description: "Parse an input (invoice, address, LNURL)", Run: handleParse},
 		"refund-deposit":                       {Name: "refund-deposit", Description: "Refund an on-chain deposit", Run: handleRefundDeposit},
 		"list-unclaimed-deposits":              {Name: "list-unclaimed-deposits", Description: "List unclaimed on-chain deposits", Run: handleListUnclaimedDeposits},
@@ -954,6 +956,31 @@ func handleClaimDeposit(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, arg
 		req.MaxFee = &maxFee
 	}
 	result, err := sdk.ClaimDeposit(req)
+	if err = liftError(err); err != nil {
+		return err
+	}
+	printValue(result)
+	return nil
+}
+
+// --- fetch-claim-deposit-quote ---
+
+func handleFetchClaimDepositQuote(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []string) error {
+	if len(args) < 2 {
+		fmt.Println("Usage: fetch-claim-deposit-quote <txid> <vout>")
+		return nil
+	}
+
+	txid := args[0]
+	vout, err := strconv.ParseUint(args[1], 10, 32)
+	if err != nil {
+		return fmt.Errorf("invalid vout: %w", err)
+	}
+
+	result, err := sdk.FetchClaimDepositQuote(breez_sdk_spark.FetchClaimDepositQuoteRequest{
+		Txid: txid,
+		Vout: uint32(vout),
+	})
 	if err = liftError(err); err != nil {
 		return err
 	}

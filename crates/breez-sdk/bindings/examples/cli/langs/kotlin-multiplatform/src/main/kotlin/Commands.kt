@@ -27,6 +27,7 @@ val COMMAND_NAMES = listOf(
     "lnurl-auth",
     "claim-htlc-payment",
     "claim-deposit",
+    "fetch-claim-deposit-quote",
     "parse",
     "refund-deposit",
     "list-unclaimed-deposits",
@@ -65,6 +66,7 @@ fun buildCommandRegistry(): Map<String, CliCommand> {
         "lnurl-auth" to CliCommand("lnurl-auth", "Authenticate using LNURL", ::handleLnurlAuth),
         "claim-htlc-payment" to CliCommand("claim-htlc-payment", "Claim an HTLC payment", ::handleClaimHtlcPayment),
         "claim-deposit" to CliCommand("claim-deposit", "Claim an on-chain deposit", ::handleClaimDeposit),
+        "fetch-claim-deposit-quote" to CliCommand("fetch-claim-deposit-quote", "Quote both ways of claiming a deposit", ::handleFetchClaimDepositQuote),
         "parse" to CliCommand("parse", "Parse an input (invoice, address, LNURL)", ::handleParse),
         "refund-deposit" to CliCommand("refund-deposit", "Refund an on-chain deposit", ::handleRefundDeposit),
         "list-unclaimed-deposits" to CliCommand("list-unclaimed-deposits", "List unclaimed on-chain deposits", ::handleListUnclaimedDeposits),
@@ -809,6 +811,32 @@ suspend fun handleClaimDeposit(sdk: BreezSdk, reader: LineReader, args: List<Str
             txid = txid,
             vout = vout,
             maxFee = maxFee,
+        )
+    )
+    printValue(result)
+}
+
+// --- fetch-claim-deposit-quote ---
+
+suspend fun handleFetchClaimDepositQuote(sdk: BreezSdk, reader: LineReader, args: List<String>) {
+    val fp = FlagParser(args)
+
+    if (fp.positional.size < 2) {
+        println("Usage: fetch-claim-deposit-quote <txid> <vout>")
+        return
+    }
+
+    val txid = fp.positional[0]
+    val vout = fp.positional[1].toUIntOrNull()
+    if (vout == null) {
+        println("Invalid vout: ${fp.positional[1]}")
+        return
+    }
+
+    val result = sdk.fetchClaimDepositQuote(
+        FetchClaimDepositQuoteRequest(
+            txid = txid,
+            vout = vout,
         )
     )
     printValue(result)

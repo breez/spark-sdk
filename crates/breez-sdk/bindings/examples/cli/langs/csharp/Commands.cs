@@ -33,6 +33,7 @@ public static class CommandNames
         "lnurl-auth",
         "claim-htlc-payment",
         "claim-deposit",
+        "fetch-claim-deposit-quote",
         "parse",
         "refund-deposit",
         "list-unclaimed-deposits",
@@ -138,6 +139,12 @@ public static class Commands
                 Name = "claim-deposit",
                 Description = "Claim an on-chain deposit",
                 Run = HandleClaimDeposit
+            },
+            ["fetch-claim-deposit-quote"] = new()
+            {
+                Name = "fetch-claim-deposit-quote",
+                Description = "Quote both ways of claiming a deposit",
+                Run = HandleFetchClaimDepositQuote
             },
             ["parse"] = new()
             {
@@ -1019,6 +1026,28 @@ public static class Commands
             txid: txid,
             vout: vout,
             maxFee: maxFee
+        ));
+        Serialization.PrintValue(result);
+    }
+
+    // --- fetch-claim-deposit-quote ---
+
+    private static async Task HandleFetchClaimDepositQuote(BreezSdk sdk, Func<string, string?> readline, string[] args)
+    {
+        var positional = GetPositionalArgs(args);
+
+        if (positional.Length < 2)
+        {
+            Console.WriteLine("Usage: fetch-claim-deposit-quote <txid> <vout>");
+            return;
+        }
+
+        var txid = positional[0];
+        var vout = uint.Parse(positional[1]);
+
+        var result = await sdk.FetchClaimDepositQuote(request: new FetchClaimDepositQuoteRequest(
+            txid: txid,
+            vout: vout
         ));
         Serialization.PrintValue(result);
     }
