@@ -263,9 +263,10 @@ pub struct Observation {
 /// each call re-derives from scratch, so it is order-independent and idempotent.
 pub fn next_chain_queries(
     prepared: &PreparedUnilateralExit,
+    state: &ExitChainState,
     observed: &[Observation],
 ) -> Result<Vec<ChainQuery>, SparkWalletError> {
-    let mut pending = interpret_chain(prepared, observed)?.pending;
+    let mut pending = interpret_chain(prepared, state, observed)?.pending;
     let mut seen: HashSet<ChainQuery> = HashSet::new();
     pending.retain(|query| seen.insert(query.clone()));
     trace!(
@@ -381,6 +382,94 @@ impl<'a> ObservedIndex<'a> {
     }
 }
 
+/// Restores the walk's own reading from an [`ExitChainState`] resolved earlier,
+/// so a build needs no chain of its own for the tree.
+///
+/// `needs_change` is derived rather than carried: the node whose CPFP change
+/// funds what comes next is the deepest one on the branch confirmed via its cpfp
+/// spend. A branch that stopped, or whose leaf went out directly, drives nothing
+/// more and needs none.
+fn restore_exit_chain_walk(
+    state: &ExitChainState,
+    node_map: &HashMap<TreeNodeId, TreeNode>,
+    leaf_ids: &[TreeNodeId],
+) -> ExitChainWalk {
+    let confirmed: HashMap<&TreeNodeId, ExitNodeConfirmation> = state
+        .nodes
+        .iter()
+        .map(|node| (&node.node_id, node.confirmed_by))
+        .collect();
+
+    let nodes: HashMap<TreeNodeId, NodeState> = state
+        .nodes
+        .iter()
+        .map(|node| {
+            let restored = match node.confirmed_by {
+                // Change is funding-dependent, so it is resolved separately, by
+                // the caller that holds a funding script.
+                ExitNodeConfirmation::Cpfp => NodeState::ConfirmedCpfp { change: None },
+                ExitNodeConfirmation::Direct => NodeState::ConfirmedDirect,
+            };
+            (node.node_id.clone(), restored)
+        })
+        .collect();
+
+    let stopped: HashSet<TreeNodeId> = state.stopped_leaves.iter().cloned().collect();
+
+    let mut refunds: HashMap<TreeNodeId, RefundState> = HashMap::new();
+    let mut needs_change: HashSet<TreeNodeId> = HashSet::new();
+    for leaf_id in leaf_ids {
+        if stopped.contains(leaf_id) {
+            continue;
+        }
+        // A leaf taken on-chain by its direct spend is refunded by the self-fee
+        // direct refund, which pays no child and so needs no change.
+        if confirmed.get(leaf_id) == Some(&ExitNodeConfirmation::Direct) {
+            refunds.insert(leaf_id.clone(), RefundState::DriveDirect);
+            continue;
+        }
+        let Some(leaf) = node_map.get(leaf_id) else {
+            continue;
+        };
+        let Ok(chain) = walk_unilateral_exit_chain(node_map, leaf) else {
+            continue;
+        };
+        if let Some(deepest) = chain
+            .iter()
+            .rev()
+            .find(|node| confirmed.get(&node.id) == Some(&ExitNodeConfirmation::Cpfp))
+        {
+            needs_change.insert(deepest.id.clone());
+        }
+    }
+
+    // A refund the chain reports overrides what the branch alone implies.
+    for refund in &state.refunds {
+        let restored = match &refund.state {
+            ExitRefundState::OnChain { tx, vout, value } => RefundState::Adopted(ConfirmedRefund {
+                outpoint: OutPoint {
+                    txid: tx.compute_txid(),
+                    vout: *vout,
+                },
+                tx: tx.clone(),
+                value: *value,
+            }),
+            ExitRefundState::Swept => RefundState::Swept,
+        };
+        refunds.insert(refund.leaf_id.clone(), restored);
+    }
+
+    ExitChainWalk {
+        nodes,
+        refunds,
+        stopped,
+        needs_change,
+        unverified: state.unverified_nodes.iter().cloned().collect(),
+        unverifiable_confirmed: state.unverifiable_confirmed_nodes.iter().cloned().collect(),
+        pending: Vec::new(),
+    }
+}
+
 /// The address each leaf's refund lands on. Every refund variant pays the leaf's
 /// key, and the leaf's own `refund_tx` is built to pay exactly that, so the
 /// address is read off the tree rather than derived from the signer.
@@ -415,12 +504,11 @@ pub fn leaf_refund_addresses(
 pub fn scan_exit_chain(
     tree_nodes: &HashMap<TreeNodeId, TreeNode>,
     leaf_ids: &[TreeNodeId],
-    network: bitcoin::Network,
+    refund_addresses: &HashMap<TreeNodeId, Address>,
     observed: &[Observation],
 ) -> ExitChainScan {
     let index = ObservedIndex::new(observed);
-    let addresses = leaf_refund_addresses(tree_nodes, leaf_ids, network);
-    let walk = walk_exit_chain(tree_nodes, leaf_ids, &addresses, &index);
+    let walk = walk_exit_chain(tree_nodes, leaf_ids, refund_addresses, &index);
 
     let mut pending = walk.pending;
     let mut seen: HashSet<ChainQuery> = HashSet::new();
@@ -530,12 +618,15 @@ fn walk_exit_chain(
     walk
 }
 
-/// Resolves the exit's on-chain state from `observed`, emitting the lookups still
-/// needed. Pure in `(prepared, observed)`. Layers the funding-dependent parts (the
-/// fan-out, each confirmed node's CPFP change, and which supplied inputs are
-/// already spent) over the funding-free [`walk_exit_chain`].
+/// Resolves the exit's on-chain state, emitting the lookups still needed. Pure in
+/// `(prepared, state, observed)`.
+///
+/// The tree was read into `state` before the exit was funded, so only the
+/// funding-dependent parts are left to look up here: the fan-out, each confirmed
+/// node's CPFP change, and which supplied inputs are already spent.
 fn interpret_chain(
     prepared: &PreparedUnilateralExit,
+    state: &ExitChainState,
     observed: &[Observation],
 ) -> Result<ChainInterpretation, SparkWalletError> {
     let plan = &prepared.plan;
@@ -558,17 +649,11 @@ fn interpret_chain(
         refunds,
         stopped,
         needs_change,
-        unverified: walked_unverified,
+        unverified: scanned_unverified,
         mut unverifiable_confirmed,
-        pending: walk_pending,
-    } = walk_exit_chain(
-        node_map,
-        &leaf_ids,
-        &prepared.leaf_refund_addresses,
-        observed,
-    );
-    unverified.extend(walked_unverified);
-    pending.extend(walk_pending);
+        pending: _,
+    } = restore_exit_chain_walk(state, node_map, &leaf_ids);
+    unverified.extend(scanned_unverified);
 
     resolve_confirmed_changes(
         node_map,
@@ -1118,16 +1203,20 @@ fn interpret_refund(
     );
 }
 
-/// Builds a complete unilateral exit from a `prepared` quote and the `observed`
-/// chain state (drive it with [`next_chain_queries`] first; no observations builds
-/// a fresh full exit). Each not-yet-confirmed tx gets an unsigned CPFP child that
-/// pays its fee; confirmed nodes and adopted refunds are emitted without one.
+/// Builds a complete unilateral exit from a `prepared` quote, the `state` a
+/// [`scan_exit_chain`] resolved, and the `observed` lookups the funding needed
+/// (drive those with [`next_chain_queries`] first). A default `state` and no
+/// observations build a fresh full exit.
+///
+/// Each not-yet-confirmed tx gets an unsigned CPFP child that pays its fee;
+/// confirmed nodes and adopted refunds are emitted without one.
 pub fn build_unilateral_exit(
     prepared: &PreparedUnilateralExit,
+    state: &ExitChainState,
     observed: &[Observation],
     fee_rate_sat_per_kw: u64,
 ) -> Result<UnilateralExitBuild, SparkWalletError> {
-    let interpretation = interpret_chain(prepared, observed)?;
+    let interpretation = interpret_chain(prepared, state, observed)?;
     let mut build = build_exit(
         &prepared.plan,
         &interpretation.resolved,
@@ -2650,12 +2739,12 @@ mod interpret_tests {
             },
         ];
 
-        let scan = scan_exit_chain(
+        let addresses = leaf_refund_addresses(
             &tree,
             std::slice::from_ref(&leaf_id),
             bitcoin::Network::Regtest,
-            &observed,
         );
+        let scan = scan_exit_chain(&tree, std::slice::from_ref(&leaf_id), &addresses, &observed);
         match scan.state.refunds.as_slice() {
             [refund] => {
                 assert_eq!(refund.leaf_id, leaf_id);
@@ -2666,15 +2755,45 @@ mod interpret_tests {
 
         // Blind, it reports nothing and asks the chain instead, so an unreadable
         // chain understates what is done rather than overstating it.
-        let blind = scan_exit_chain(
-            &tree,
-            std::slice::from_ref(&leaf_id),
-            bitcoin::Network::Regtest,
-            &[],
-        );
+        let blind = scan_exit_chain(&tree, std::slice::from_ref(&leaf_id), &addresses, &[]);
         assert!(blind.state.refunds.is_empty());
         assert!(blind.state.nodes.is_empty());
         assert!(!blind.pending.is_empty());
+    }
+
+    /// Production scans the tree first and hands the result to the build, so the
+    /// tests interpret the same way: one pass over the observations they set up.
+    fn scan_of(prepared: &PreparedUnilateralExit, observed: &[Observation]) -> ExitChainScan {
+        let leaf_ids: Vec<TreeNodeId> = prepared
+            .plan
+            .per_branch_funding
+            .iter()
+            .map(|(leaf_id, _)| leaf_id.clone())
+            .collect();
+        scan_exit_chain(
+            &prepared.plan.tree_nodes,
+            &leaf_ids,
+            &prepared.leaf_refund_addresses,
+            observed,
+        )
+    }
+
+    fn interpret_chain(
+        prepared: &PreparedUnilateralExit,
+        observed: &[Observation],
+    ) -> Result<ChainInterpretation, SparkWalletError> {
+        super::interpret_chain(prepared, &scan_of(prepared, observed).state, observed)
+    }
+
+    /// Every lookup an exit still needs, across both passes: the scan reads the
+    /// tree, the interpretation reads what the funding touched.
+    fn next_chain_queries(
+        prepared: &PreparedUnilateralExit,
+        observed: &[Observation],
+    ) -> Result<Vec<ChainQuery>, SparkWalletError> {
+        let mut queries = scan_of(prepared, observed).pending;
+        queries.extend(interpret_chain(prepared, observed)?.pending);
+        Ok(queries)
     }
 
     fn refund_scan(leaf_id: &TreeNodeId, refund_txid: Txid, value: u64) -> Observation {

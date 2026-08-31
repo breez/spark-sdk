@@ -12,8 +12,9 @@ use bitcoin::{
 };
 use clap::Subcommand;
 use spark_wallet::{
-    CpfpInput, ExitLeafSelection, ExitTxKind, Network, SparkWallet, SparkWalletError, TreeNodeId,
-    build_unilateral_exit, is_ephemeral_anchor_output, p2wpkh_input_weight,
+    CpfpInput, ExitChainState, ExitLeafSelection, ExitTxKind, Network, SparkWallet,
+    SparkWalletError, TreeNodeId, build_unilateral_exit, is_ephemeral_anchor_output,
+    p2wpkh_input_weight,
 };
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -157,9 +158,14 @@ pub async fn handle_command(
                     34,
                 )
                 .await?;
-            // No chain access here, so pass no observations: the exit resolves to
-            // a fresh full build (nothing recognized as already on-chain).
-            let exit = build_unilateral_exit(&prepared, &[], fee_rate_sat_per_kw)?;
+            // No chain access here, so nothing is known to be on-chain and nothing
+            // is observed: the exit resolves to a fresh full build.
+            let exit = build_unilateral_exit(
+                &prepared,
+                &ExitChainState::default(),
+                &[],
+                fee_rate_sat_per_kw,
+            )?;
 
             if let Some(fan_out) = &exit.fan_out
                 && let Some(psbt) = &fan_out.to_sign
