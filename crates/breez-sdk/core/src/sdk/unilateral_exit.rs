@@ -65,18 +65,34 @@ impl BreezSdk {
         let selection = wallet_selection(request.selection)?;
 
         let (input_weight, output_script) = funding_kind_params(&request.funding_kind)?;
-        let quoted = self
-            .spark_wallet
-            .quote_unilateral_exit(
-                sat_per_kw_from_vbyte(request.fee_rate_sat_per_vbyte),
-                selection,
-                input_weight,
-                output_script.len(),
-                output_script.minimal_non_dust().to_sat(),
-                dest_script_len,
-            )
-            .await?;
-        let quote = quoted.quote;
+        let context = self.spark_wallet.load_exit_context(selection).await?;
+
+        // Ask the chain what these leaves have already done before pricing them,
+        // so a leaf part-way out is quoted on the work it has left rather than on
+        // a fresh exit, and is not dropped as unprofitable over work already
+        // paid for. Every lookup the tree needs happens here.
+        let refund_addresses = leaf_refund_addresses(
+            &context.tree_nodes,
+            &context.leaf_ids,
+            self.config.network.into(),
+        );
+        let exit_chain_state = resolve_exit_chain_state(
+            self.chain_service.as_ref(),
+            &context.tree_nodes,
+            &context.leaf_ids,
+            &refund_addresses,
+        )
+        .await?;
+
+        let quote = self.spark_wallet.quote_unilateral_exit(
+            &context,
+            sat_per_kw_from_vbyte(request.fee_rate_sat_per_vbyte),
+            input_weight,
+            output_script.len(),
+            output_script.minimal_non_dust().to_sat(),
+            dest_script_len,
+            &exit_chain_state,
+        )?;
         // No selected leaves is not an error: return an empty quote.
         let recoverable_value_sat = quote
             .selected_leaves
@@ -109,23 +125,6 @@ impl BreezSdk {
             branches = per_branch_funding.len(),
             "prepare_unilateral_exit: quote ready"
         );
-
-        // Ask the chain what these leaves have already done, so the build does not
-        // have to. Every lookup an exit needs happens here.
-        let selected_ids: Vec<TreeNodeId> =
-            quote.selected_leaves.iter().map(|l| l.id.clone()).collect();
-        let refund_addresses = leaf_refund_addresses(
-            &quoted.tree_nodes,
-            &selected_ids,
-            self.config.network.into(),
-        );
-        let exit_chain_state = resolve_exit_chain_state(
-            self.chain_service.as_ref(),
-            &quoted.tree_nodes,
-            &selected_ids,
-            &refund_addresses,
-        )
-        .await?;
 
         Ok(PrepareUnilateralExitResponse {
             leaves,
@@ -209,15 +208,18 @@ impl BreezSdk {
         // before planning, so the plan is made over what can actually be spent.
         let funding_inputs = resolve_funding(chain, funding_inputs).await?;
         let fee_rate_sat_per_kw = sat_per_kw_from_vbyte(prepared.fee_rate_sat_per_vbyte);
-        let prepared_exit = self
+        let chain_state = exit_chain_state_from_model(&prepared.exit_chain_state)?;
+        let context = self
             .spark_wallet
-            .prepare_unilateral_exit_plan(
-                fee_rate_sat_per_kw,
-                spark_wallet::ExitLeafSelection::Specific(leaf_ids),
-                funding_inputs,
-                dest_script_len,
-            )
+            .load_exit_context(spark_wallet::ExitLeafSelection::Specific(leaf_ids))
             .await?;
+        let prepared_exit = self.spark_wallet.prepare_unilateral_exit_plan(
+            &context,
+            fee_rate_sat_per_kw,
+            funding_inputs,
+            dest_script_len,
+            &chain_state,
+        )?;
         if prepared_exit.plan.selected_leaves.is_empty() {
             debug!("unilateral_exit: plan selected no leaves, returning empty result");
             return Ok(empty_exit_response());
@@ -239,7 +241,6 @@ impl BreezSdk {
             })
             .collect();
 
-        let chain_state = exit_chain_state_from_model(&prepared.exit_chain_state)?;
         let build = build_unilateral_exit(&prepared_exit, &chain_state, fee_rate_sat_per_kw)?;
         let recoverable_value_sat = build.recoverable_value_sat;
         let build_fee_sat = build.total_fee_sat;

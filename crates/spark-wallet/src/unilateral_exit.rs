@@ -3,7 +3,9 @@ use std::collections::{HashMap, HashSet};
 use bitcoin::{Address, OutPoint, Transaction, Txid};
 use spark::{
     services::{
-        CpfpInput, UnilateralExitPlan, build_cpfp_child, csv_timelock, walk_unilateral_exit_chain,
+        ConfirmedExitNode, CpfpInput, ExitChainState, ExitNodeConfirmation, ExitRefund,
+        ExitRefundState, UnilateralExitPlan, build_cpfp_child, csv_timelock,
+        walk_unilateral_exit_chain,
     },
     tree::{LeafPedigree, TreeNode, TreeNodeId, TreeNodeStatus},
 };
@@ -242,60 +244,6 @@ struct ChainInterpretation {
     unverified: HashSet<TreeNodeId>,
 }
 
-/// What the chain has already done to an exit, as the tree alone shows it.
-/// Resolved before an exit is funded and handed back to the build, which then
-/// needs no chain of its own. Ordered by id so the same chain gives the same
-/// state.
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
-pub struct ExitChainState {
-    pub nodes: Vec<ConfirmedExitNode>,
-    pub refunds: Vec<ExitRefund>,
-    /// Leaves whose cpfp lineage was taken on-chain by a transaction the exit
-    /// cannot continue from.
-    pub stopped_leaves: Vec<TreeNodeId>,
-    /// Nodes whose own lookup failed. Their state is unknown, not absent.
-    pub unverified_nodes: Vec<TreeNodeId>,
-    /// Nodes taken to be confirmed on the operators' word because the chain
-    /// could not be read. Their spend is invisible, so anything built over them
-    /// risks double-spending an output already gone.
-    pub unverifiable_confirmed_nodes: Vec<TreeNodeId>,
-}
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct ConfirmedExitNode {
-    pub node_id: TreeNodeId,
-    pub confirmed_by: ExitNodeConfirmation,
-}
-
-/// Which of a node's two pre-signed spends took it on-chain. The cpfp one is
-/// fee-bumped by a child; the direct one pays its own fee, and a leaf that went
-/// out that way is refunded by its `direct_refund_tx`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum ExitNodeConfirmation {
-    Cpfp,
-    Direct,
-}
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct ExitRefund {
-    pub leaf_id: TreeNodeId,
-    pub state: ExitRefundState,
-}
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub enum ExitRefundState {
-    /// On-chain with its output still there to sweep. A sweep sitting unconfirmed
-    /// in the mempool leaves the refund here, so that sweep is rebuilt rather
-    /// than dropped.
-    OnChain {
-        tx: Transaction,
-        vout: u32,
-        value: u64,
-    },
-    /// Spent by a confirmed transaction: the sweep landed.
-    Swept,
-}
-
 /// An [`ExitChainState`] and the lookups still needed to complete it.
 pub struct ExitChainScan {
     pub state: ExitChainState,
@@ -303,7 +251,7 @@ pub struct ExitChainScan {
 }
 
 /// The exit's on-chain state as the tree alone shows it: which nodes are
-/// confirmed, which refunds landed, which branches can no longer be driven.
+/// confirmed, which refunds landed, which branches can no longer be continued.
 /// Answered without any funding, so it can be resolved before an exit is funded.
 struct ExitChainWalk {
     nodes: HashMap<TreeNodeId, NodeState>,
@@ -536,8 +484,9 @@ pub fn scan_exit_chain(
         .collect();
     nodes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
 
-    // DriveDirect is not carried: a leaf drives its direct refund exactly when its
-    // own node is confirmed via the direct spend, which `nodes` already says.
+    // DriveDirect is not carried: a leaf's direct refund is the one to broadcast
+    // exactly when its own node is confirmed via the direct spend, which `nodes`
+    // already says.
     let mut refunds: Vec<ExitRefund> = walk
         .refunds
         .into_iter()
@@ -1837,6 +1786,7 @@ mod exit_build_tests {
                 vec![a, b],
                 FEE_RATE,
                 dest_len,
+                &ExitChainState::default(),
             )
         };
         let one = |total: u64| {
@@ -1849,6 +1799,7 @@ mod exit_build_tests {
                 vec![only],
                 FEE_RATE,
                 dest_len,
+                &ExitChainState::default(),
             )
         };
 
@@ -1915,6 +1866,7 @@ mod exit_build_tests {
             dust,
             FEE_RATE,
             change_len,
+            &ExitChainState::default(),
         )
         .unwrap();
         let half = quote.per_branch_funding[0].1 / 2 + 1;
@@ -1933,6 +1885,7 @@ mod exit_build_tests {
             inputs,
             FEE_RATE,
             change_len,
+            &ExitChainState::default(),
         )
         .unwrap();
         assert!(
@@ -1983,6 +1936,7 @@ mod exit_build_tests {
             two(50_000),
             FEE_RATE,
             change_len,
+            &ExitChainState::default(),
         )
         .unwrap();
         assert!(
