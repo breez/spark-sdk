@@ -11,11 +11,12 @@ use bitcoin::{
 };
 
 use spark_wallet::{
-    AddressUtxo, ChainQuery, ChainResult, CpfpInput, ExitChainState as WalletExitChainState,
-    ExitNodeConfirmation as WalletExitNodeConfirmation, ExitRefundState as WalletExitRefundState,
-    ExitTxKind, ExitTxStatus, Observation, PreparedUnilateralExit, SpendInfo, TreeNode, TreeNodeId,
-    UnilateralExitBuild, build_unilateral_exit, is_ephemeral_anchor_output, next_chain_queries,
-    scan_exit_chain,
+    AddressUtxo, ChainQuery, ChainResult, ConfirmedExitNode as WalletConfirmedExitNode, CpfpInput,
+    ExitChainState as WalletExitChainState, ExitNodeConfirmation as WalletExitNodeConfirmation,
+    ExitRefund as WalletExitRefund, ExitRefundState as WalletExitRefundState, ExitTxKind,
+    ExitTxStatus, Observation, PreparedUnilateralExit, SpendInfo, TreeNode, TreeNodeId,
+    UnilateralExitBuild, build_unilateral_exit, is_ephemeral_anchor_output, leaf_refund_addresses,
+    next_chain_queries, scan_exit_chain,
 };
 
 use tracing::{debug, trace, warn};
@@ -61,24 +62,7 @@ impl BreezSdk {
             .map_err(|e| SdkError::InvalidInput(format!("Address network mismatch: {e}")))?;
         let dest_script_len = destination.script_pubkey().len();
 
-        // Leaf auto-resolution lives in the wallet.
-        let selection = match request.selection {
-            ExitLeafSelection::Auto => spark_wallet::ExitLeafSelection::Auto,
-            ExitLeafSelection::Specific { leaf_ids } => {
-                if leaf_ids.is_empty() {
-                    return Err(SdkError::InvalidInput("No leaves to exit".to_string()));
-                }
-                let ids = leaf_ids
-                    .iter()
-                    .map(|s| {
-                        TreeNodeId::from_str(s).map_err(|e| {
-                            SdkError::InvalidInput(format!("Invalid leaf id {s}: {e}"))
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                spark_wallet::ExitLeafSelection::Specific(ids)
-            }
-        };
+        let selection = wallet_selection(request.selection)?;
 
         let (input_weight, output_script) = funding_kind_params(&request.funding_kind)?;
         let quoted = self
@@ -130,11 +114,16 @@ impl BreezSdk {
         // have to. Every lookup an exit needs happens here.
         let selected_ids: Vec<TreeNodeId> =
             quote.selected_leaves.iter().map(|l| l.id.clone()).collect();
+        let refund_addresses = leaf_refund_addresses(
+            &quoted.tree_nodes,
+            &selected_ids,
+            self.config.network.into(),
+        );
         let exit_chain_state = resolve_exit_chain_state(
             self.chain_service.as_ref(),
             &quoted.tree_nodes,
             &selected_ids,
-            self.config.network.into(),
+            &refund_addresses,
         )
         .await?;
 
@@ -245,8 +234,12 @@ impl BreezSdk {
             })
             .collect();
 
-        let observed = resolve_exit_observations(chain, &prepared_exit).await?;
-        let build = build_unilateral_exit(&prepared_exit, &observed, fee_rate_sat_per_kw)?;
+        // The tree was read while preparing; only what the funding touched is
+        // still to be looked up here.
+        let chain_state = exit_chain_state_from_model(&prepared.exit_chain_state)?;
+        let observed = resolve_exit_observations(chain, &prepared_exit, &chain_state).await?;
+        let build =
+            build_unilateral_exit(&prepared_exit, &chain_state, &observed, fee_rate_sat_per_kw)?;
         let recoverable_value_sat = build.recoverable_value_sat;
         let build_fee_sat = build.total_fee_sat;
         // Captured before the loop below consumes `build.branches`.
@@ -551,11 +544,11 @@ async fn resolve_exit_chain_state(
     chain: &dyn BitcoinChainService,
     tree_nodes: &HashMap<TreeNodeId, TreeNode>,
     leaf_ids: &[TreeNodeId],
-    network: bitcoin::Network,
+    refund_addresses: &HashMap<TreeNodeId, Address>,
 ) -> Result<WalletExitChainState, SdkError> {
     let mut observed: Vec<Observation> = Vec::new();
     loop {
-        let scan = scan_exit_chain(tree_nodes, leaf_ids, network, &observed);
+        let scan = scan_exit_chain(tree_nodes, leaf_ids, refund_addresses, &observed);
         if scan.pending.is_empty() {
             debug!(
                 nodes = scan.state.nodes.len(),
@@ -572,6 +565,80 @@ async fn resolve_exit_chain_state(
             observed.push(Observation { query, result });
         }
     }
+}
+
+/// Leaf auto-resolution lives in the wallet, so a selection only has to be
+/// restated in its terms.
+fn wallet_selection(
+    selection: ExitLeafSelection,
+) -> Result<spark_wallet::ExitLeafSelection, SdkError> {
+    match selection {
+        ExitLeafSelection::Auto => Ok(spark_wallet::ExitLeafSelection::Auto),
+        ExitLeafSelection::Specific { leaf_ids } => {
+            if leaf_ids.is_empty() {
+                return Err(SdkError::InvalidInput("No leaves to exit".to_string()));
+            }
+            Ok(spark_wallet::ExitLeafSelection::Specific(node_ids(
+                &leaf_ids,
+            )?))
+        }
+    }
+}
+
+/// Reads back the state a caller carried over from `prepare_unilateral_exit`.
+fn exit_chain_state_from_model(
+    state: &ModelExitChainState,
+) -> Result<WalletExitChainState, SdkError> {
+    Ok(WalletExitChainState {
+        nodes: state
+            .confirmed_nodes
+            .iter()
+            .map(|node| {
+                Ok(WalletConfirmedExitNode {
+                    node_id: node_id(&node.node_id)?,
+                    confirmed_by: match node.confirmed_by {
+                        ExitNodeConfirmation::Cpfp => WalletExitNodeConfirmation::Cpfp,
+                        ExitNodeConfirmation::Direct => WalletExitNodeConfirmation::Direct,
+                    },
+                })
+            })
+            .collect::<Result<_, SdkError>>()?,
+        refunds: state
+            .refunds
+            .iter()
+            .map(|refund| {
+                let restored = match &refund.state {
+                    ExitRefundState::OnChain {
+                        tx_hex,
+                        vout,
+                        value_sat,
+                    } => WalletExitRefundState::OnChain {
+                        tx: deserialize_hex(tx_hex).map_err(|e| {
+                            SdkError::InvalidInput(format!("Invalid refund transaction: {e}"))
+                        })?,
+                        vout: *vout,
+                        value: *value_sat,
+                    },
+                    ExitRefundState::Swept => WalletExitRefundState::Swept,
+                };
+                Ok(WalletExitRefund {
+                    leaf_id: node_id(&refund.leaf_id)?,
+                    state: restored,
+                })
+            })
+            .collect::<Result<_, SdkError>>()?,
+        stopped_leaves: node_ids(&state.stopped_leaf_ids)?,
+        unverified_nodes: node_ids(&state.unverified_node_ids)?,
+        unverifiable_confirmed_nodes: node_ids(&state.unverifiable_confirmed_node_ids)?,
+    })
+}
+
+fn node_id(id: &str) -> Result<TreeNodeId, SdkError> {
+    TreeNodeId::from_str(id).map_err(|e| SdkError::InvalidInput(format!("Invalid id {id}: {e}")))
+}
+
+fn node_ids(ids: &[String]) -> Result<Vec<TreeNodeId>, SdkError> {
+    ids.iter().map(|id| node_id(id)).collect()
 }
 
 /// Restates the wallet's on-chain reading in the API's own types: ids as strings
@@ -623,11 +690,12 @@ fn ids(ids: Vec<TreeNodeId>) -> Vec<String> {
 async fn resolve_exit_observations(
     chain: &dyn BitcoinChainService,
     prepared: &PreparedUnilateralExit,
+    state: &WalletExitChainState,
 ) -> Result<Vec<Observation>, SdkError> {
     let mut observed: Vec<Observation> = Vec::new();
     let mut round = 0u32;
     loop {
-        let queries = next_chain_queries(prepared, &observed)?;
+        let queries = next_chain_queries(prepared, state, &observed)?;
         if queries.is_empty() {
             break;
         }
