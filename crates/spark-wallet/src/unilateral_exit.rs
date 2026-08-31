@@ -382,6 +382,88 @@ impl<'a> ObservedIndex<'a> {
     }
 }
 
+/// The funding an exit can spend, and the lookups still needed to know it.
+pub struct FundingScan {
+    pub inputs: Vec<CpfpInput>,
+    pub pending: Vec<ChainQuery>,
+}
+
+/// Resolves what the supplied funding is worth now. A UTXO a prior run already
+/// spent is replaced by what that spend produced, so a caller can hand back the
+/// outpoint it was given and still be funded from the fan-out outputs or CPFP
+/// change it turned into.
+///
+/// Only a descendant paying the same script is followed: it came from money the
+/// caller offered and pays a script the caller controls, which is what makes it
+/// theirs to spend. Anything the spend paid elsewhere is somebody else's.
+///
+/// Drive it like the other scans: perform `pending`, feed the results back, and
+/// repeat until nothing is pending. An outpoint whose spend cannot be read is
+/// kept, not being known to be spent; one known spent by a transaction that
+/// cannot be read is dropped, since building over it would double-spend.
+pub fn scan_funding(supplied: &[CpfpInput], observed: &[Observation]) -> FundingScan {
+    let index = ObservedIndex::new(observed);
+    let mut inputs: HashMap<OutPoint, CpfpInput> = HashMap::new();
+    let mut pending: Vec<ChainQuery> = Vec::new();
+    let mut visited: HashSet<OutPoint> = HashSet::new();
+    let mut frontier: Vec<CpfpInput> = supplied.to_vec();
+
+    while let Some(input) = frontier.pop() {
+        if !visited.insert(input.outpoint) {
+            continue;
+        }
+        let query = ChainQuery::Outspend(input.outpoint);
+        let Some(result) = index.get(&query) else {
+            pending.push(query);
+            inputs.insert(input.outpoint, input);
+            continue;
+        };
+        let spender = match result {
+            // Spent only by an unconfirmed transaction: our own child, which a
+            // rebuild replaces, so the outpoint is still ours to spend.
+            ChainResult::Spend(Some(info)) if info.confirmed => info.spender_txid,
+            _ => {
+                inputs.insert(input.outpoint, input);
+                continue;
+            }
+        };
+
+        let tx_query = ChainQuery::Transaction(spender);
+        let Some(ChainResult::Transaction(tx)) = index.get(&tx_query) else {
+            if index.get(&tx_query).is_none() {
+                pending.push(tx_query);
+            }
+            continue;
+        };
+        for (vout, out) in tx.output.iter().enumerate() {
+            if out.script_pubkey != input.witness_utxo.script_pubkey {
+                continue;
+            }
+            let Ok(vout) = u32::try_from(vout) else {
+                continue;
+            };
+            frontier.push(CpfpInput {
+                outpoint: OutPoint {
+                    txid: spender,
+                    vout,
+                },
+                witness_utxo: out.clone(),
+                // The same script signs the same way, so the bound the caller
+                // gave for its own UTXO holds for what it turned into.
+                signed_input_weight: input.signed_input_weight,
+            });
+        }
+    }
+
+    let mut inputs: Vec<CpfpInput> = inputs.into_values().collect();
+    inputs.sort_by_key(|input| (input.outpoint.txid, input.outpoint.vout));
+
+    let mut seen: HashSet<ChainQuery> = HashSet::new();
+    pending.retain(|query| seen.insert(query.clone()));
+
+    FundingScan { inputs, pending }
+}
+
 /// Restores the walk's own reading from an [`ExitChainState`] resolved earlier,
 /// so a build needs no chain of its own for the tree.
 ///
@@ -2678,6 +2760,156 @@ mod interpret_tests {
             },
             leaf_refund_addresses: [(leaf_id, leaf_addr())].into_iter().collect(),
         }
+    }
+
+    fn funding(outpoint: OutPoint, value: u64, script: ScriptBuf) -> CpfpInput {
+        CpfpInput {
+            outpoint,
+            witness_utxo: TxOut {
+                value: Amount::from_sat(value),
+                script_pubkey: script,
+            },
+            signed_input_weight: 272,
+        }
+    }
+
+    /// A caller can hand back the outpoint it was given, spent or not: what the
+    /// spend produced at the same script is theirs, and is what funds the rest.
+    #[test]
+    fn scan_funding_follows_a_spend_to_what_it_produced() {
+        let script = leaf_addr().script_pubkey();
+        let original = OutPoint {
+            txid: Txid::from_byte_array([1u8; 32]),
+            vout: 0,
+        };
+        let elsewhere = ScriptBuf::from(vec![0x51]);
+        let fan_out = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: original,
+                ..Default::default()
+            }],
+            output: vec![
+                TxOut {
+                    value: Amount::from_sat(5_000),
+                    script_pubkey: script.clone(),
+                },
+                TxOut {
+                    value: Amount::from_sat(6_000),
+                    script_pubkey: script.clone(),
+                },
+                // Paid away: not the caller's to spend.
+                TxOut {
+                    value: Amount::from_sat(7_000),
+                    script_pubkey: elsewhere,
+                },
+            ],
+        };
+        let fan_out_txid = fan_out.compute_txid();
+        let branch = |vout| OutPoint {
+            txid: fan_out_txid,
+            vout,
+        };
+
+        let observed = vec![
+            spent(original, fan_out_txid),
+            Observation {
+                query: ChainQuery::Transaction(fan_out_txid),
+                result: ChainResult::Transaction(fan_out),
+            },
+            unspent(branch(0)),
+            unspent(branch(1)),
+        ];
+
+        let scan = scan_funding(
+            std::slice::from_ref(&funding(original, 20_000, script.clone())),
+            &observed,
+        );
+
+        assert!(scan.pending.is_empty());
+        let outpoints: Vec<OutPoint> = scan.inputs.iter().map(|i| i.outpoint).collect();
+        assert!(
+            !outpoints.contains(&original),
+            "the spent outpoint is gone: {outpoints:?}"
+        );
+        assert_eq!(outpoints.len(), 2, "one per output paying our script");
+        assert!(outpoints.contains(&branch(0)) && outpoints.contains(&branch(1)));
+        assert!(
+            scan.inputs.iter().all(|i| i.signed_input_weight == 272),
+            "a descendant signs the way its ancestor did"
+        );
+    }
+
+    /// The same UTXO reached twice, once given and once traced, is one input.
+    #[test]
+    fn scan_funding_counts_a_utxo_once() {
+        let script = leaf_addr().script_pubkey();
+        let original = OutPoint {
+            txid: Txid::from_byte_array([2u8; 32]),
+            vout: 0,
+        };
+        let child = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: original,
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(9_000),
+                script_pubkey: script.clone(),
+            }],
+        };
+        let child_txid = child.compute_txid();
+        let change = OutPoint {
+            txid: child_txid,
+            vout: 0,
+        };
+
+        let observed = vec![
+            spent(original, child_txid),
+            Observation {
+                query: ChainQuery::Transaction(child_txid),
+                result: ChainResult::Transaction(child),
+            },
+            unspent(change),
+        ];
+
+        let scan = scan_funding(
+            &[
+                funding(original, 20_000, script.clone()),
+                funding(change, 9_000, script),
+            ],
+            &observed,
+        );
+
+        assert_eq!(
+            scan.inputs.len(),
+            1,
+            "the traced change and the given one are the same UTXO: {:?}",
+            scan.inputs
+        );
+        assert_eq!(scan.inputs[0].outpoint, change);
+    }
+
+    /// Blind, it asks rather than guesses, and holds on to what it was given.
+    #[test]
+    fn scan_funding_keeps_what_it_cannot_read() {
+        let script = leaf_addr().script_pubkey();
+        let original = OutPoint {
+            txid: Txid::from_byte_array([3u8; 32]),
+            vout: 0,
+        };
+
+        let scan = scan_funding(
+            std::slice::from_ref(&funding(original, 20_000, script)),
+            &[],
+        );
+
+        assert_eq!(scan.pending, vec![ChainQuery::Outspend(original)]);
+        assert_eq!(scan.inputs.len(), 1);
+        assert_eq!(scan.inputs[0].outpoint, original);
     }
 
     fn spent(outpoint: OutPoint, spender: Txid) -> Observation {
