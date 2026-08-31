@@ -827,20 +827,17 @@ impl TreeStore for SqliteTreeStore {
         &self,
     ) -> Result<HashMap<TreeNodeId, VerifiedLeafKeys>, TreeServiceError> {
         let conn = self.get_connection()?;
-        let available = status_json(TreeNodeStatus::Available)?;
-        // Project the two pubkey columns, skipping each leaf's `data` blob. Covers
-        // the same categories as `verified_leaf_keys_from_leaves`: every reserved
-        // leaf plus every Available one, never a non-Available unreserved leaf.
+        // Project the two pubkey columns, skipping each leaf's `data` blob. Every
+        // stored leaf passed the ownership check on its way in, whatever its
+        // status, so all of them are projected.
         let mut stmt = conn
             .prepare(
                 "SELECT l.id, l.verifying_public_key, l.signing_public_key
-                 FROM brz_tree_leaves l
-                 LEFT JOIN brz_tree_reservations r ON l.reservation_id = r.id
-                 WHERE r.purpose IS NOT NULL OR l.status = ?1",
+                 FROM brz_tree_leaves l",
             )
             .map_err(|e| generic("prepare verified leaf keys", e))?;
         let rows = stmt
-            .query_map(params![available], |row| {
+            .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,

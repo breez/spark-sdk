@@ -11,8 +11,8 @@ use bitcoin::{
 
 use spark_wallet::{
     AddressUtxo, ChainQuery, ChainResult, CpfpInput, ExitTxKind, ExitTxStatus, Observation,
-    PreparedUnilateralExit, SpendInfo, TreeNodeId, UnilateralExitBuild, build_unilateral_exit,
-    is_ephemeral_anchor_output, next_chain_queries,
+    PreparedUnilateralExit, SettledExitSteps, SpendInfo, TreeNodeId, UnilateralExitBuild,
+    build_unilateral_exit, is_ephemeral_anchor_output, next_chain_queries, scan_settlement,
 };
 
 use tracing::{debug, trace, warn};
@@ -197,15 +197,21 @@ impl BreezSdk {
         }
 
         let fee_rate_sat_per_kw = sat_per_kw_from_vbyte(prepared.fee_rate_sat_per_vbyte);
-        let prepared_exit = self
+        // Ask the chain what the exit has already done before sizing its funding:
+        // a step that is settled takes no CPFP child, and pricing one anyway can
+        // reject a nearly-finished exit at any amount its remaining work justifies.
+        let context = self
             .spark_wallet
-            .prepare_unilateral_exit_plan(
-                fee_rate_sat_per_kw,
-                spark_wallet::ExitLeafSelection::Specific(leaf_ids),
-                funding_inputs,
-                dest_script_len,
-            )
+            .load_exit_context(spark_wallet::ExitLeafSelection::Specific(leaf_ids))
             .await?;
+        let (settled, settlement_observations) = resolve_settled_steps(chain, &context).await?;
+        let prepared_exit = self.spark_wallet.plan_unilateral_exit(
+            &context,
+            fee_rate_sat_per_kw,
+            funding_inputs,
+            dest_script_len,
+            Some(&settled),
+        )?;
         if prepared_exit.plan.selected_leaves.is_empty() {
             debug!("unilateral_exit: plan selected no leaves, returning empty result");
             return Ok(empty_exit_response());
@@ -227,7 +233,8 @@ impl BreezSdk {
             })
             .collect();
 
-        let observed = resolve_exit_observations(chain, &prepared_exit).await?;
+        let observed =
+            resolve_exit_observations(chain, &prepared_exit, settlement_observations).await?;
         let build = build_unilateral_exit(&prepared_exit, &observed, fee_rate_sat_per_kw)?;
         let recoverable_value_sat = build.recoverable_value_sat;
         let build_fee_sat = build.total_fee_sat;
@@ -304,10 +311,31 @@ impl BreezSdk {
             }
         }
 
-        // A sweep over zero inputs would error: return without one when no refund
-        // is on-chain yet. A later run sweeps any refund that surfaces.
+        // Nothing left to sweep means one of two opposite things: no refund has
+        // reached the chain yet, or every refund was already swept. Report a sweep
+        // that landed, so the caller reads a finished exit as finished instead of
+        // as one that never started.
         if build.refund_outputs.is_empty() {
-            debug!("unilateral_exit: no refund outputs to sweep, omitting the sweep");
+            for sweep in &build.confirmed_sweeps {
+                transactions.push(UnilateralExitTransaction {
+                    kind: UnilateralExitTxKind::Sweep,
+                    node_id: None,
+                    txid: sweep.compute_txid().to_string(),
+                    tx_hex: serialize_hex(sweep),
+                    cpfp_tx_hex: None,
+                    csv_timelock_blocks: None,
+                    depends_on: sweep
+                        .input
+                        .iter()
+                        .map(|i| i.previous_output.txid.to_string())
+                        .collect(),
+                    status: ConfirmationStatus::Confirmed,
+                });
+            }
+            debug!(
+                confirmed_sweeps = build.confirmed_sweeps.len(),
+                "unilateral_exit: nothing left to sweep"
+            );
             return Ok(UnilateralExitResponse {
                 recoverable_value_sat,
                 total_fee_sat: build_fee_sat,
@@ -526,14 +554,49 @@ fn parse_xonly(pubkey: &str) -> Result<XOnlyPublicKey, SdkError> {
     Ok(pk.x_only_public_key().0)
 }
 
+/// Drives the settlement scan to completion. Same shape as
+/// [`resolve_exit_observations`], but reads only what the chain has already done,
+/// so it can run before any funding is planned.
+/// Returns its observations alongside the answer so the full walk that follows
+/// can start from them: it asks a superset of these same questions, and would
+/// otherwise fetch every one of them a second time.
+async fn resolve_settled_steps(
+    chain: &dyn BitcoinChainService,
+    context: &spark_wallet::ExitContext,
+) -> Result<(SettledExitSteps, Vec<Observation>), SdkError> {
+    let mut observed: Vec<Observation> = Vec::new();
+    loop {
+        let scan = scan_settlement(
+            &context.tree_nodes,
+            &context.leaf_ids,
+            &context.leaf_refund_addresses,
+            &observed,
+        );
+        if scan.pending.is_empty() {
+            debug!(
+                settled_nodes = scan.settled.nodes.len(),
+                settled_refunds = scan.settled.refunds.len(),
+                observations = observed.len(),
+                "resolve_settled_steps: what the chain has already done"
+            );
+            return Ok((scan.settled, observed));
+        }
+        for query in scan.pending {
+            let result = execute_chain_query(chain, &query).await;
+            observed.push(Observation { query, result });
+        }
+    }
+}
+
 /// Drives the wallet's pure resolver to completion: it reports which chain
 /// lookups the exit needs, core performs them, and the results are fed back until
 /// nothing more is needed. Core never interprets the exit tree itself.
 async fn resolve_exit_observations(
     chain: &dyn BitcoinChainService,
     prepared: &PreparedUnilateralExit,
+    seed: Vec<Observation>,
 ) -> Result<Vec<Observation>, SdkError> {
-    let mut observed: Vec<Observation> = Vec::new();
+    let mut observed = seed;
     let mut round = 0u32;
     loop {
         let queries = next_chain_queries(prepared, &observed)?;

@@ -147,18 +147,18 @@ pub async fn handle_command(
             } else {
                 ExitLeafSelection::Specific(leaf_ids)
             };
-            let prepared = wallet
-                .prepare_unilateral_exit_plan(
-                    fee_rate_sat_per_kw,
-                    selection,
-                    inputs,
-                    // Sweep destination is a P2TR address (34-byte scriptPubKey);
-                    // only used here to size the fan-out fee.
-                    34,
-                )
-                .await?;
-            // No chain access here, so pass no observations: the exit resolves to
-            // a fresh full build (nothing recognized as already on-chain).
+            let context = wallet.load_exit_context(selection).await?;
+            // No chain access here, so nothing is settled and no observations are
+            // passed: the exit is priced and resolved as a fresh full build.
+            let prepared = wallet.plan_unilateral_exit(
+                &context,
+                fee_rate_sat_per_kw,
+                inputs,
+                // Sweep destination is a P2TR address (34-byte scriptPubKey);
+                // only used here to size the fan-out fee.
+                34,
+                None,
+            )?;
             let exit = build_unilateral_exit(&prepared, &[], fee_rate_sat_per_kw)?;
 
             if let Some(fan_out) = &exit.fan_out

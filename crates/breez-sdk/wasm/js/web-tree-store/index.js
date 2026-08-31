@@ -522,31 +522,18 @@ class WebTreeStore {
 
   async getVerifiedLeafKeys() {
     try {
+      // Every stored leaf passed the ownership check on its way in, whatever
+      // its status, so all of them are projected.
       return await this._txRun(
-        [STORE_LEAVES, STORE_RESERVATIONS],
+        [STORE_LEAVES],
         "readonly",
-        [
-          { name: "leaves", store: STORE_LEAVES },
-          { name: "reservations", store: STORE_RESERVATIONS },
-        ],
-        (res) => {
-          const resIds = new Set(res.reservations.map((r) => r.id));
-          const out = [];
-          for (const row of res.leaves) {
-            const hasReservation =
-              row.reservation_id != null && resIds.has(row.reservation_id);
-            // Every reserved leaf plus every Available one; nothing that is
-            // neither reserved nor Available.
-            if (hasReservation || row.status === "Available") {
-              out.push([
-                row.id,
-                row.verifying_public_key,
-                row.signing_public_key,
-              ]);
-            }
-          }
-          return out;
-        }
+        [{ name: "leaves", store: STORE_LEAVES }],
+        (res) =>
+          res.leaves.map((row) => [
+            row.id,
+            row.verifying_public_key,
+            row.signing_public_key,
+          ])
       );
     } catch (error) {
       if (error instanceof TreeStoreError) throw error;

@@ -669,16 +669,16 @@ async fn test_full_exit_and_sweep(#[case] backend: SignerBackend) -> Result<()> 
     Ok(())
 }
 
-/// Re-running a completed exit re-drives nothing. `Auto` drops the exited leaf
-/// from the available set once the exit is mined, but it is still sourceable by
-/// id, so forcing it back in with `Specific` runs the build rather than the
-/// empty-plan early return. Its refund address is then funded with no unspent
-/// output, so the exit resolves the refund as already-swept: it rebuilds no
-/// refund and re-attempts no sweep. Under the pre-fix behavior the empty address
-/// scan would re-drive the refund (with a fresh CPFP child) and rebuild the sweep.
+/// Re-running a completed exit re-drives nothing, and says so rather than going
+/// quiet. `Auto` drops the exited leaf from the available set once the exit is
+/// mined, but it is still sourceable by id, so forcing it back in with `Specific`
+/// runs the build rather than the empty-plan early return. The refund and the
+/// sweep that spent it come back `Confirmed` and carry no CPFP child: there is
+/// nothing left to broadcast. Reporting them is what lets a caller tell a
+/// finished exit from one that never started, rather than inferring it from
+/// their absence.
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
-#[ignore = "resume needs the leaf in local storage, but a refresh deletes it once no operator reports it Available; fix by querying the operators for more statuses, or by not deleting leaves absent from a refresh"]
 async fn test_completed_exit_rerun_redrives_nothing(#[case] backend: SignerBackend) -> Result<()> {
     let sdk = new_local_sdk(backend).await?;
     deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
@@ -741,13 +741,24 @@ async fn test_completed_exit_rerun_redrives_nothing(#[case] backend: SignerBacke
         rerun.recoverable_value_sat, recoverable,
         "the forced-in leaf is re-selected, so the build runs the swept-refund path"
     );
-    assert!(
-        rerun.transactions.iter().all(|t| !matches!(
-            t.kind,
-            UnilateralExitTxKind::Refund | UnilateralExitTxKind::Sweep
-        )),
-        "a completed exit rebuilds no refund and re-attempts no sweep"
-    );
+    for kind in [UnilateralExitTxKind::Refund, UnilateralExitTxKind::Sweep] {
+        let reported: Vec<_> = rerun
+            .transactions
+            .iter()
+            .filter(|t| t.kind == kind)
+            .collect();
+        assert!(
+            !reported.is_empty(),
+            "a completed exit still reports its {kind:?}, so its caller can tell \
+             it finished"
+        );
+        assert!(
+            reported
+                .iter()
+                .all(|t| t.status == ConfirmationStatus::Confirmed),
+            "and reports it confirmed, not as work to redo"
+        );
+    }
     assert!(
         rerun.transactions.iter().all(|t| t.cpfp_tx_hex.is_none()),
         "no fresh CPFP child: nothing needs broadcasting on a completed exit"
@@ -759,7 +770,6 @@ async fn test_completed_exit_rerun_redrives_nothing(#[case] backend: SignerBacke
 /// with no CPFP child, while later entries stay unconfirmed with their children.
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
-#[ignore = "resume needs the leaf in local storage, but a refresh deletes it once no operator reports it Available; fix by querying the operators for more statuses, or by not deleting leaves absent from a refresh"]
 async fn test_first_package_confirmed_resumes(#[case] backend: SignerBackend) -> Result<()> {
     let sdk = new_local_sdk(backend).await?;
     deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
@@ -841,7 +851,6 @@ async fn test_first_package_confirmed_resumes(#[case] backend: SignerBackend) ->
 /// this would fail if the sweep inputs fell back to the default (non-RBF) sequence.
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
-#[ignore = "resume needs the leaf in local storage, but a refresh deletes it once no operator reports it Available; fix by querying the operators for more statuses, or by not deleting leaves absent from a refresh"]
 async fn test_sweep_is_rbf_replaceable(#[case] backend: SignerBackend) -> Result<()> {
     let sdk = new_local_sdk(backend).await?;
     deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
@@ -1269,6 +1278,428 @@ async fn test_importing_another_wallets_state_takes_nothing(
         quote.leaves.is_empty(),
         "another wallet's leaf must not become exitable here"
     );
+    Ok(())
+}
+
+/// A single leaf carried to a confirmed refund, then resumed. Nothing is left to
+/// drive, so the resume asks for no fee money at all and goes straight to the
+/// sweep: the leaf's own steps come back confirmed and carry no child. The gate
+/// that would have priced a fresh exit is the one a nearly-finished exit used to
+/// be rejected by.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn test_settled_single_branch_needs_no_further_funding(
+    #[case] backend: SignerBackend,
+) -> Result<()> {
+    let sdk = new_local_sdk(backend).await?;
+    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+    let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(CPFP_SATS)).await?;
+    let dest = cpfp.address.clone();
+
+    let quote = sdk
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: dest.to_string(),
+            selection: ExitLeafSelection::Auto,
+        })
+        .await?;
+    let leaf_ids: Vec<String> = quote.leaves.iter().map(|l| l.leaf_id.clone()).collect();
+    let built = sdk
+        .sdk
+        .unilateral_exit(
+            UnilateralExitRequest {
+                prepared: quote,
+                funding_inputs: vec![cpfp_input(&cpfp)],
+            },
+            signer_for(&cpfp.secret_key.secret_bytes())?,
+        )
+        .await?;
+
+    // Everything but the sweep: the refund lands, so the branch is finished while
+    // the money is still sitting in the refund output.
+    for entry in built
+        .transactions
+        .iter()
+        .filter(|t| t.kind != UnilateralExitTxKind::Sweep)
+    {
+        if entry.cpfp_tx_hex.is_some() {
+            broadcast_and_mine(&sdk, entry).await?;
+        } else {
+            // A step that pays its own fee goes out on its own.
+            let tx = decode_tx(&entry.tx_hex)?;
+            sdk.fixtures.bitcoind.broadcast_transaction(&tx).await?;
+            sdk.fixtures.bitcoind.generate_blocks(1).await?;
+        }
+    }
+
+    // A tiny UTXO, far below what a fresh exit of this leaf would cost. The resume
+    // has no children left to build, so it must not be asked for the difference.
+    let dust_funding = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(p2tr_dust() + 1)).await?;
+    let resumed_quote = sdk
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: dest.to_string(),
+            selection: ExitLeafSelection::Specific { leaf_ids },
+        })
+        .await?;
+    let resumed = sdk
+        .sdk
+        .unilateral_exit(
+            UnilateralExitRequest {
+                prepared: resumed_quote,
+                funding_inputs: vec![cpfp_input(&dust_funding)],
+            },
+            signer_for(&dust_funding.secret_key.secret_bytes())?,
+        )
+        .await?;
+
+    assert!(
+        resumed
+            .transactions
+            .iter()
+            .filter(|t| t.kind != UnilateralExitTxKind::Sweep)
+            .all(|t| t.status == ConfirmationStatus::Confirmed && t.cpfp_tx_hex.is_none()),
+        "every step but the sweep is already on-chain and needs nothing sent"
+    );
+    let sweep = resumed
+        .transactions
+        .iter()
+        .find(|t| t.kind == UnilateralExitTxKind::Sweep)
+        .expect("the refund is on-chain and unspent, so there is a sweep to make");
+    assert_eq!(sweep.status, ConfirmationStatus::Unconfirmed);
+
+    // It is a real transaction the dust funding paid for: it lands, and the
+    // leaf's value arrives at the destination.
+    let tx = decode_tx(&sweep.tx_hex)?;
+    let sweep_txid = sdk.fixtures.bitcoind.broadcast_transaction(&tx).await?;
+    sdk.fixtures.bitcoind.generate_blocks(1).await?;
+    let mined = sdk.fixtures.bitcoind.get_transaction(&sweep_txid).await?;
+    assert!(
+        mined
+            .output
+            .iter()
+            .any(|o| o.script_pubkey == dest.script_pubkey()),
+        "the sweep pays the destination"
+    );
+    Ok(())
+}
+
+/// Several funding UTXOs put the affordability gate through a re-cost from the
+/// tree, which knows nothing of the chain. A branch part-way through its exit
+/// must be gated on the children it still builds: priced as a fresh exit, a
+/// resume is turned away over work that is already paid for.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn test_partly_exited_branch_gated_on_what_it_still_builds(
+    #[case] backend: SignerBackend,
+) -> Result<()> {
+    let sdk = new_local_sdk(backend).await?;
+    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+    let key = fixed_key(0x2a);
+    let bitcoind = &sdk.fixtures.bitcoind;
+    let u1 = fund_p2tr_utxo_with_key(bitcoind, Amount::from_sat(CPFP_SATS), &key).await?;
+    let dest = u1.address.clone();
+
+    let quote = sdk
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: dest.to_string(),
+            selection: ExitLeafSelection::Auto,
+        })
+        .await?;
+    let leaf_ids: Vec<String> = quote.leaves.iter().map(|l| l.leaf_id.clone()).collect();
+    let built = sdk
+        .sdk
+        .unilateral_exit(
+            UnilateralExitRequest {
+                prepared: quote,
+                funding_inputs: vec![cpfp_input_for(&u1)],
+            },
+            signer_for(&key.secret_bytes())?,
+        )
+        .await?;
+
+    // The tree goes on-chain; the refund is still ahead of it.
+    for entry in built
+        .transactions
+        .iter()
+        .filter(|t| t.kind == UnilateralExitTxKind::Node && t.cpfp_tx_hex.is_some())
+    {
+        broadcast_and_mine(&sdk, entry).await?;
+    }
+
+    // Two small UTXOs, which is what routes the gate through the re-cost. Between
+    // them they cover the refund's child and no more: enough for the work left,
+    // short of what a fresh exit of this leaf would have been quoted.
+    let a = fund_p2tr_utxo_with_key(bitcoind, Amount::from_sat(p2tr_dust() + 400), &key).await?;
+    let b = fund_p2tr_utxo_with_key(bitcoind, Amount::from_sat(p2tr_dust() + 400), &key).await?;
+    let resumed_quote = sdk
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: dest.to_string(),
+            selection: ExitLeafSelection::Specific { leaf_ids },
+        })
+        .await?;
+    let resumed = sdk
+        .sdk
+        .unilateral_exit(
+            UnilateralExitRequest {
+                prepared: resumed_quote,
+                funding_inputs: vec![cpfp_input_for(&a), cpfp_input_for(&b)],
+            },
+            signer_for(&key.secret_bytes())?,
+        )
+        .await?;
+
+    // It was accepted, and what it built is real: the refund and its child land.
+    for entry in resumed
+        .transactions
+        .iter()
+        .filter(|t| t.status == ConfirmationStatus::Unconfirmed)
+    {
+        match entry.kind {
+            UnilateralExitTxKind::Node | UnilateralExitTxKind::Refund => {
+                broadcast_and_mine(&sdk, entry).await?;
+            }
+            _ => {
+                let tx = decode_tx(&entry.tx_hex)?;
+                sdk.fixtures.bitcoind.broadcast_transaction(&tx).await?;
+                sdk.fixtures.bitcoind.generate_blocks(1).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A leaf whose nodes are on-chain is rebuilt for what it has left, not for a
+/// fresh exit: `unilateral_exit` reads the chain, so the steps already mined cost
+/// nothing and the fee it reports drops to match. The quote is not asserted here:
+/// it works from the operators' reported node state rather than a chain lookup,
+/// so it moves only once they have seen those blocks.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn test_partly_exited_leaf_is_rebuilt_for_what_is_left(
+    #[case] backend: SignerBackend,
+) -> Result<()> {
+    let sdk = new_local_sdk(backend).await?;
+    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+    let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(CPFP_SATS)).await?;
+    let dest = cpfp.address.clone();
+
+    let quote = sdk
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: dest.to_string(),
+            selection: ExitLeafSelection::Auto,
+        })
+        .await?;
+    let leaf_ids: Vec<String> = quote.leaves.iter().map(|l| l.leaf_id.clone()).collect();
+    let fresh_fee = quote.total_fee_sat;
+    let built = sdk
+        .sdk
+        .unilateral_exit(
+            UnilateralExitRequest {
+                prepared: quote,
+                funding_inputs: vec![cpfp_input(&cpfp)],
+            },
+            signer_for(&cpfp.secret_key.secret_bytes())?,
+        )
+        .await?;
+
+    // Put the tree on-chain but stop before the refund.
+    for entry in built
+        .transactions
+        .iter()
+        .filter(|t| t.kind == UnilateralExitTxKind::Node && t.cpfp_tx_hex.is_some())
+    {
+        broadcast_and_mine(&sdk, entry).await?;
+    }
+
+    let resumed_quote = sdk
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: dest.to_string(),
+            selection: ExitLeafSelection::Specific { leaf_ids },
+        })
+        .await?;
+    assert_eq!(resumed_quote.leaves.len(), 1, "the leaf is still worth exiting");
+
+    let more_funding = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(CPFP_SATS)).await?;
+    let resumed = sdk
+        .sdk
+        .unilateral_exit(
+            UnilateralExitRequest {
+                prepared: resumed_quote,
+                funding_inputs: vec![cpfp_input(&more_funding)],
+            },
+            signer_for(&more_funding.secret_key.secret_bytes())?,
+        )
+        .await?;
+    assert!(
+        resumed.total_fee_sat < fresh_fee,
+        "a resume is built for less than a fresh exit: {} vs {fresh_fee}",
+        resumed.total_fee_sat
+    );
+    assert!(
+        resumed
+            .transactions
+            .iter()
+            .filter(|t| t.kind == UnilateralExitTxKind::Node)
+            .all(|t| t.status == ConfirmationStatus::Confirmed && t.cpfp_tx_hex.is_none()),
+        "the nodes already mined are reported confirmed and cost nothing to redo"
+    );
+    Ok(())
+}
+
+/// One branch is driven all the way to a swept refund while the other is left
+/// untouched, then the exit is resumed. The branch that finished is reported
+/// confirmed rather than dropped, and the branch still going is funded from the
+/// fan-out output it was given at the start: its own, not the finished branch's.
+/// The fan-out keeps an output per branch for exactly this reason, so the order
+/// the outputs are read back in does not shift as branches settle.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn test_one_settled_branch_leaves_the_other_on_its_own_output(
+    #[case] backend: SignerBackend,
+) -> Result<()> {
+    let sdk = new_local_sdk(backend).await?;
+    for _ in 0..3 {
+        deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+    }
+    let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(CPFP_SATS * 6)).await?;
+    let funding = vec![cpfp_input(&cpfp)];
+    let key = cpfp.secret_key.secret_bytes();
+    let dest = cpfp.address.to_string();
+
+    let quote = sdk
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: dest.clone(),
+            selection: ExitLeafSelection::Auto,
+        })
+        .await?;
+    let leaf_ids: Vec<String> = quote.leaves.iter().map(|l| l.leaf_id.clone()).collect();
+    // Three, so settling one still leaves two driving and the exit keeps fanning
+    // out. With two, one settling drops it to a single branch, which takes a
+    // different path entirely.
+    assert_eq!(leaf_ids.len(), 3, "three leaves, so the exit fans out");
+    let built = sdk
+        .sdk
+        .unilateral_exit(
+            UnilateralExitRequest {
+                prepared: quote,
+                funding_inputs: funding.clone(),
+            },
+            signer_for(&key)?,
+        )
+        .await?;
+    let fan_out_txid = confirm_fan_out(&sdk, &built).await?;
+
+    // Drive one branch only, node then refund, leaving the other where it is.
+    let settled_leaf = leaf_ids[0].clone();
+    for entry in built
+        .transactions
+        .iter()
+        .filter(|t| t.node_id.as_deref() == Some(settled_leaf.as_str()))
+    {
+        if entry.cpfp_tx_hex.is_some() {
+            broadcast_and_mine(&sdk, entry).await?;
+        } else {
+            let tx = decode_tx(&entry.tx_hex)?;
+            sdk.fixtures.bitcoind.broadcast_transaction(&tx).await?;
+            sdk.fixtures.bitcoind.generate_blocks(1).await?;
+        }
+    }
+
+    let resumed_quote = sdk
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: dest.clone(),
+            selection: ExitLeafSelection::Specific {
+                leaf_ids: leaf_ids.clone(),
+            },
+        })
+        .await?;
+    let resumed = sdk
+        .sdk
+        .unilateral_exit(
+            UnilateralExitRequest {
+                prepared: resumed_quote,
+                funding_inputs: funding,
+            },
+            signer_for(&key)?,
+        )
+        .await?;
+
+    // The fan-out is recognised, not rebuilt: proof the resume read its own
+    // outputs rather than treating them as a stranger's spend.
+    let adopted = resumed
+        .transactions
+        .iter()
+        .find(|t| matches!(t.kind, UnilateralExitTxKind::FanOut))
+        .expect("the confirmed fan-out is still reported");
+    assert_eq!(adopted.txid, fan_out_txid, "adopted, not rebuilt");
+    assert!(matches!(adopted.status, ConfirmationStatus::Confirmed));
+
+    // What the settled branch already did comes back confirmed and needs nothing
+    // broadcast; the branch left alone still has work with a child to pay for it.
+    let settled: Vec<_> = resumed
+        .transactions
+        .iter()
+        .filter(|t| t.node_id.as_deref() == Some(settled_leaf.as_str()))
+        .collect();
+    assert!(!settled.is_empty(), "the driven branch is still reported");
+    assert!(
+        settled
+            .iter()
+            .all(|t| t.status == ConfirmationStatus::Confirmed && t.cpfp_tx_hex.is_none()),
+        "a branch already on-chain is confirmed, with nothing left to send"
+    );
+    for untouched in &leaf_ids[1..] {
+        assert!(
+            resumed
+                .transactions
+                .iter()
+                .filter(|t| t.node_id.as_deref() == Some(untouched.as_str()))
+                .any(|t| t.status == ConfirmationStatus::Unconfirmed),
+            "an untouched branch still has work to do"
+        );
+    }
+
+    // And they can be driven from here: each was handed real funding, which it
+    // would not have been had it been pointed at another branch's output.
+    for entry in resumed
+        .transactions
+        .iter()
+        .filter(|t| t.status == ConfirmationStatus::Unconfirmed)
+    {
+        match entry.kind {
+            UnilateralExitTxKind::Node | UnilateralExitTxKind::Refund => {
+                broadcast_and_mine(&sdk, entry).await?;
+            }
+            _ => {
+                let tx = decode_tx(&entry.tx_hex)?;
+                sdk.fixtures.bitcoind.broadcast_transaction(&tx).await?;
+                sdk.fixtures.bitcoind.generate_blocks(1).await?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -2438,7 +2869,6 @@ async fn test_custom_funding_input(#[case] backend: SignerBackend) -> Result<()>
 /// the refund's CPFP resumes off the last confirmed node's on-chain change.
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
-#[ignore = "resume needs the leaf in local storage, but a refresh deletes it once no operator reports it Available; fix by querying the operators for more statuses, or by not deleting leaves absent from a refresh"]
 async fn test_all_nodes_confirmed_resumes_at_refund(#[case] backend: SignerBackend) -> Result<()> {
     let sdk = new_local_sdk(backend).await?;
     deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
@@ -2753,7 +3183,6 @@ async fn assert_resumed_all_mined(
 /// of the "not ours" path.
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
-#[ignore = "resume needs the leaf in local storage, but a refresh deletes it once no operator reports it Available; fix by querying the operators for more statuses, or by not deleting leaves absent from a refresh"]
 async fn test_node_confirmed_by_foreign_cpfp_resumes(#[case] backend: SignerBackend) -> Result<()> {
     let sdk = new_local_sdk(backend).await?;
     deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
@@ -2869,7 +3298,6 @@ async fn test_node_confirmed_by_foreign_cpfp_resumes(#[case] backend: SignerBack
 /// coverage.
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
-#[ignore = "resume needs the leaf in local storage, but a refresh deletes it once no operator reports it Available; fix by querying the operators for more statuses, or by not deleting leaves absent from a refresh"]
 async fn test_refund_confirmed_by_foreign_cpfp_is_adopted(
     #[case] backend: SignerBackend,
 ) -> Result<()> {

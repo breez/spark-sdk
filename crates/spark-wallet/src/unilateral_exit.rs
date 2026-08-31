@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use bitcoin::{Address, Amount, OutPoint, ScriptBuf, Transaction, TxOut, Txid};
 use spark::{
     services::{
-        CpfpInput, ServiceError, UnilateralExitPlan, build_cpfp_child, csv_timelock,
-        walk_unilateral_exit_chain,
+        CpfpInput, ServiceError, SettledExitSteps, UnilateralExitPlan, UnilateralExitSelectedLeaf,
+        build_cpfp_child, csv_timelock, walk_unilateral_exit_chain,
     },
     tree::{LeafPedigree, TreeNode, TreeNodeId, TreeNodeStatus},
     utils::transactions::is_ephemeral_anchor_output,
@@ -98,8 +98,10 @@ pub(crate) enum RefundState {
     /// Leaf went out via `direct_tx`; drive the self-fee `direct_refund_tx` as-is
     /// (pays its own fee, no CPFP child).
     DriveDirect,
-    /// Refund confirmed and already swept: nothing to drive or sweep.
-    Swept,
+    /// Refund confirmed and already swept: nothing left to drive, but both it and
+    /// the sweep that spent it are still reported so the caller can see the exit
+    /// finished rather than infer it from their absence.
+    Swept(SweptRefund),
 }
 
 /// An already-confirmed fan-out adopted in place of building a fresh one.
@@ -122,6 +124,14 @@ pub(crate) struct ConfirmedRefund {
     pub tx: Transaction,
     pub outpoint: bitcoin::OutPoint,
     pub value: u64,
+}
+
+/// A refund whose output a confirmed transaction already spent, with that
+/// spender: the sweep this exit was driving towards.
+#[derive(Clone, Debug)]
+pub(crate) struct SweptRefund {
+    pub refund: ConfirmedRefund,
+    pub sweep: Transaction,
 }
 
 /// One unilateral-exit transaction and, when it still needs fee-bumping, the
@@ -187,6 +197,9 @@ pub struct UnilateralExitBuild {
     /// CPFP-package fees of the txs built plus a fresh fan-out's fee; excludes the
     /// sweep fee (the caller adds that).
     pub total_fee_sat: u64,
+    /// Sweeps already on-chain, which is what an exit with nothing left to sweep
+    /// has to report so its caller can tell finished from not yet started.
+    pub confirmed_sweeps: Vec<Transaction>,
 }
 
 /// A refund output sitting on-chain after a unilateral exit.
@@ -274,6 +287,80 @@ pub fn next_chain_queries(
         "next_chain_queries"
     );
     Ok(pending)
+}
+
+/// What the chain shows an exit has already done, answered without reference to
+/// any funding. Drive it like the full walk: perform `pending`, feed the results
+/// back, and repeat until nothing is pending.
+///
+/// This exists so funding can be planned against the work that is actually left.
+/// The full walk cannot answer it, because it reads a plan the funding is part of.
+pub struct SettlementScan {
+    pub settled: SettledExitSteps,
+    pub pending: Vec<ChainQuery>,
+}
+
+/// A step is reported settled only when the chain said so. One the lookups could
+/// not resolve is left out, so an unreadable chain can only overstate the work
+/// remaining, never understate it.
+pub fn scan_settlement(
+    tree_nodes: &HashMap<TreeNodeId, TreeNode>,
+    leaf_ids: &[TreeNodeId],
+    refund_addresses: &HashMap<TreeNodeId, Address>,
+    observed: &[Observation],
+) -> SettlementScan {
+    let index = ObservedIndex::new(observed);
+    let observed = &index;
+
+    let mut pending: Vec<ChainQuery> = Vec::new();
+    let mut nodes: HashMap<TreeNodeId, NodeState> = HashMap::new();
+    let mut refunds: HashMap<TreeNodeId, RefundState> = HashMap::new();
+    let mut stopped: HashSet<TreeNodeId> = HashSet::new();
+    let mut needs_change: HashSet<TreeNodeId> = HashSet::new();
+    let mut unverified: HashSet<TreeNodeId> = HashSet::new();
+    let mut unverifiable_confirmed: HashSet<TreeNodeId> = HashSet::new();
+
+    for leaf_id in leaf_ids {
+        walk_branch(
+            tree_nodes,
+            leaf_id,
+            observed,
+            &mut nodes,
+            &mut refunds,
+            &mut stopped,
+            &mut needs_change,
+            &mut unverified,
+            &mut unverifiable_confirmed,
+            &mut pending,
+        );
+    }
+    for (leaf_id, address) in refund_addresses {
+        interpret_refund(
+            leaf_id,
+            address,
+            observed,
+            &mut refunds,
+            &mut unverified,
+            &mut pending,
+        );
+    }
+
+    let mut seen: HashSet<ChainQuery> = HashSet::new();
+    pending.retain(|query| seen.insert(query.clone()));
+
+    SettlementScan {
+        settled: SettledExitSteps {
+            nodes: nodes
+                .into_keys()
+                .filter(|id| !unverified.contains(id) && !unverifiable_confirmed.contains(id))
+                .collect(),
+            refunds: refunds
+                .into_keys()
+                .filter(|id| !unverified.contains(id))
+                .collect(),
+        },
+        pending,
+    }
 }
 
 /// The outcome of interpreting the observations: resolved state plus the lookups
@@ -578,11 +665,29 @@ fn resolve_confirmed_changes(
             .find(|(_, o)| &o.script_pubkey == script)
             && let Ok(vout) = u32::try_from(vout)
         {
+            let outpoint = OutPoint {
+                txid: child_txid,
+                vout,
+            };
+            // Every branch's change pays the one funding script, and funding is
+            // handed out by cost rather than by which branch produced it, so this
+            // change may already have paid for another branch. Left in, the next
+            // child is built over an output that is gone and cannot be broadcast.
+            let spend_query = ChainQuery::Outspend(outpoint);
+            let Some(spend) = observed.get(&spend_query) else {
+                pending.push(spend_query);
+                continue;
+            };
+            match spend {
+                ChainResult::Spend(Some(info)) if info.confirmed => continue,
+                ChainResult::Unavailable => {
+                    unverifiable_confirmed.insert(node_id.clone());
+                    continue;
+                }
+                _ => {}
+            }
             *change = Some(ConfirmedOutput {
-                outpoint: OutPoint {
-                    txid: child_txid,
-                    vout,
-                },
+                outpoint,
                 value: out.value.to_sat(),
             });
         }
@@ -616,6 +721,10 @@ fn interpret_fan_out(
     else {
         return Ok((None, true));
     };
+    // Every branch, in plan order. A fan-out carries one output per branch for
+    // the life of an exit, settled or not, so this order is what identifies them:
+    // its outputs all pay the same script and position is the only thing telling
+    // them apart.
     let branch_leaf_ids: Vec<TreeNodeId> = plan
         .per_branch_funding
         .iter()
@@ -864,21 +973,17 @@ fn interpret_refund(
         pending.push(outspend_query);
         return;
     };
-    match spend {
-        // Spent by a confirmed tx: the sweep landed, nothing to drive or sweep.
-        ChainResult::Spend(Some(info)) if info.confirmed => {
-            trace!(%leaf_id, txid = %txo.txid, "interpret_chain: refund swept");
-            refunds.insert(leaf_id.clone(), RefundState::Swept);
-            return;
-        }
+    let swept_by = match spend {
+        // Spent by a confirmed tx: the sweep landed.
+        ChainResult::Spend(Some(info)) if info.confirmed => Some(info.spender_txid),
         ChainResult::Unavailable => {
             unverified.insert(leaf_id.clone());
             return;
         }
         // Unspent, or spent only by an unconfirmed sweep: adopt so the sweep is
         // (re)built.
-        _ => {}
-    }
+        _ => None,
+    };
 
     let tx_query = ChainQuery::Transaction(txo.txid);
     let Some(result) = observed.get(&tx_query) else {
@@ -893,14 +998,36 @@ fn interpret_refund(
         }
         _ => return,
     };
-    trace!(%leaf_id, txid = %txo.txid, value = txo.value, "interpret_chain: adopting on-chain refund");
+    let refund = ConfirmedRefund {
+        tx,
+        outpoint: refund_outpoint,
+        value: txo.value,
+    };
+
+    let Some(sweep_txid) = swept_by else {
+        trace!(%leaf_id, txid = %txo.txid, value = txo.value, "interpret_chain: adopting on-chain refund");
+        refunds.insert(leaf_id.clone(), RefundState::Adopted(refund));
+        return;
+    };
+
+    // The sweep's own body, so it can be reported like any other confirmed step.
+    let sweep_query = ChainQuery::Transaction(sweep_txid);
+    let Some(result) = observed.get(&sweep_query) else {
+        pending.push(sweep_query);
+        return;
+    };
+    let sweep = match result {
+        ChainResult::Transaction(tx) => tx.clone(),
+        ChainResult::Unavailable => {
+            unverified.insert(leaf_id.clone());
+            return;
+        }
+        _ => return,
+    };
+    trace!(%leaf_id, txid = %txo.txid, sweep = %sweep_txid, "interpret_chain: refund swept");
     refunds.insert(
         leaf_id.clone(),
-        RefundState::Adopted(ConfirmedRefund {
-            tx,
-            outpoint: refund_outpoint,
-            value: txo.value,
-        }),
+        RefundState::Swept(SweptRefund { refund, sweep }),
     );
 }
 
@@ -958,6 +1085,8 @@ pub(crate) fn build_exit(
     let mut emitted: HashSet<Txid> = HashSet::new();
     let mut branches = Vec::with_capacity(per_branch_funding.len());
     let mut refund_outputs: Vec<RefundOutput> = Vec::new();
+    // Sweeps that already landed, keyed by txid: several leaves share one.
+    let mut swept_sweeps: HashMap<Txid, Transaction> = HashMap::new();
     let mut cpfp_change_inputs: Vec<CpfpChangeInput> = Vec::new();
     let mut cpfp_fee_sat: u64 = 0;
 
@@ -1134,7 +1263,19 @@ pub(crate) fn build_exit(
                     status: ExitTxStatus::Unconfirmed,
                 });
             }
-            Some(RefundState::Swept) => {}
+            Some(RefundState::Swept(swept)) => {
+                swept_sweeps.insert(swept.sweep.compute_txid(), swept.sweep.clone());
+                txs.push(ExitTx {
+                    kind: ExitTxKind::Refund,
+                    node_id: Some(leaf_id.clone()),
+                    txid: swept.refund.outpoint.txid,
+                    csv_timelock_blocks: csv_timelock(&swept.refund.tx),
+                    base_tx: swept.refund.tx.clone(),
+                    to_sign: None,
+                    depends_on: vec![],
+                    status: ExitTxStatus::Confirmed,
+                });
+            }
             // Drive the cpfp refund with a fresh child; skipped on a stopped branch.
             None if !stopped => {
                 let refund_tx = leaf.refund_tx.clone().ok_or_else(|| {
@@ -1198,6 +1339,7 @@ pub(crate) fn build_exit(
         "build_unilateral_exit: assembled"
     );
     Ok(UnilateralExitBuild {
+        confirmed_sweeps: swept_sweeps.into_values().collect(),
         fan_out,
         branches,
         refund_outputs,
@@ -1251,6 +1393,24 @@ fn refund_output_value(
 /// shape of [`UnilateralExitPlan::per_branch_funding`]).
 type BranchFunding = Vec<(TreeNodeId, Vec<CpfpInput>)>;
 
+/// The part of a leaf's CPFP bill that is still to be paid. A node or refund the
+/// walk resolved is confirmed on-chain, or is driven by a transaction that pays
+/// its own fee, so neither takes a child. Anything the walk did not resolve is
+/// absent from `resolved` and stays charged.
+fn remaining_cpfp_cost(leaf: &UnilateralExitSelectedLeaf, resolved: &ResolvedExitState) -> u64 {
+    let nodes: u64 = leaf
+        .cpfp_node_costs
+        .iter()
+        .filter(|(node_id, _)| !resolved.nodes.contains_key(node_id))
+        .map(|(_, fee)| *fee)
+        .sum();
+    if resolved.refunds.contains_key(&leaf.id) {
+        nodes
+    } else {
+        nodes.saturating_add(leaf.cpfp_refund_cost)
+    }
+}
+
 /// Resolves the fan-out step and the per-branch funding it feeds. A confirmed
 /// fan-out replaces each branch's first input with its real output; a fresh one
 /// is returned unsigned to broadcast first; no fan-out assigns funding directly.
@@ -1294,12 +1454,14 @@ fn resolve_fan_out_funding(
         };
         // Dust from the branch's own funding script, not the plan's change_dust_limit.
         let dust = first.witness_utxo.script_pubkey.minimal_non_dust().to_sat();
-        // Gate on the physical CPFP floor (cpfp_cost), not the quote's estimated_cost:
-        // the sweep is paid from the swept value, not this output, so its sweep-fee
-        // headroom must not reject a higher-rate resume the CPFP fees can afford.
-        let required = leaf_by_id
-            .get(leaf_id)
-            .map_or(dust, |leaf| leaf.cpfp_cost.saturating_add(dust));
+        // Gate on the physical CPFP floor, not the quote's estimated_cost: the sweep
+        // is paid from the swept value, not this output, so its sweep-fee headroom
+        // must not reject a higher-rate resume the CPFP fees can afford. Only the
+        // steps still to be driven count: a step the walk found settled needs no
+        // child, and one it could not read is absent here and so still charged.
+        let required = leaf_by_id.get(leaf_id).map_or(dust, |leaf| {
+            remaining_cpfp_cost(leaf, resolved).saturating_add(dust)
+        });
         if adopted.value < required {
             return Err(SparkWalletError::ServiceError(
                 ServiceError::InsufficientCpfpBudget {
@@ -1438,11 +1600,27 @@ mod exit_build_tests {
                 value: 100_000,
                 estimated_cost: 2_000,
                 cpfp_cost: 2_000,
+                cpfp_node_costs: Vec::new(),
+                cpfp_refund_cost: 2_000,
             }],
             fan_out_psbt: None,
             per_branch_funding: vec![(leaf.id.clone(), vec![funding(100_000)])],
             tree_nodes: to_node_map(vec![root, leaf]),
         }
+    }
+
+    fn swept_state() -> RefundState {
+        RefundState::Swept(SweptRefund {
+            refund: ConfirmedRefund {
+                tx: anchor_tx(9),
+                outpoint: OutPoint {
+                    txid: anchor_tx(9).compute_txid(),
+                    vout: 0,
+                },
+                value: 10_000,
+            },
+            sweep: anchor_tx(10),
+        })
     }
 
     fn id(s: &str) -> TreeNodeId {
@@ -1473,6 +1651,57 @@ mod exit_build_tests {
         assert_eq!(build.cpfp_change_inputs.len(), 1);
     }
 
+    /// A leaf whose refund is already on-chain takes no refund child, so the
+    /// funding floor must not still charge for one. The watchtower drives its own
+    /// copy of a refund once the timelock matures, so this is the ordinary way a
+    /// resumed exit finds its refunds settled, not an edge case.
+    #[test]
+    fn a_settled_refund_is_not_charged_for_a_child_it_never_needs() {
+        let leaf = UnilateralExitSelectedLeaf {
+            id: id("leaf"),
+            value: 200_000,
+            estimated_cost: 6_000,
+            cpfp_cost: 5_339,
+            cpfp_node_costs: vec![(id("node"), 3_339)],
+            cpfp_refund_cost: 2_000,
+        };
+
+        let fresh = ResolvedExitState::default();
+        assert_eq!(remaining_cpfp_cost(&leaf, &fresh), 5_339);
+
+        let refund_settled = ResolvedExitState {
+            refunds: [(id("leaf"), swept_state())].into_iter().collect(),
+            ..Default::default()
+        };
+        assert_eq!(remaining_cpfp_cost(&leaf, &refund_settled), 3_339);
+
+        let all_settled = ResolvedExitState {
+            refunds: [(id("leaf"), swept_state())].into_iter().collect(),
+            nodes: [(id("node"), NodeState::ConfirmedDirect)]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        assert_eq!(remaining_cpfp_cost(&leaf, &all_settled), 0);
+    }
+
+    /// A step the walk could not read is absent from `resolved`, so it stays
+    /// charged: an unreadable chain must not lower the floor.
+    #[test]
+    fn a_step_the_walk_could_not_read_stays_charged() {
+        let leaf = UnilateralExitSelectedLeaf {
+            id: id("leaf"),
+            value: 200_000,
+            estimated_cost: 6_000,
+            cpfp_cost: 5_339,
+            cpfp_node_costs: vec![(id("node"), 3_339)],
+            cpfp_refund_cost: 2_000,
+        };
+        assert_eq!(
+            remaining_cpfp_cost(&leaf, &ResolvedExitState::default()),
+            leaf.cpfp_cost
+        );
+    }
     #[test]
     fn build_adopts_confirmed_refund() {
         let adopted_outpoint = OutPoint {
@@ -1643,6 +1872,8 @@ mod exit_build_tests {
                 value: 100_000,
                 estimated_cost: 2_000,
                 cpfp_cost: 2_000,
+                cpfp_node_costs: Vec::new(),
+                cpfp_refund_cost: 2_000,
             }],
             fan_out_psbt: Some(fan_out_psbt),
             per_branch_funding: vec![(leaf.id.clone(), vec![branch_output.clone()])],
@@ -1808,7 +2039,7 @@ mod exit_build_tests {
     }
 
     #[test]
-    fn build_omits_swept_leaf_refund() {
+    fn build_reports_a_swept_leaf_as_confirmed() {
         let resolved = ResolvedExitState {
             nodes: [
                 (id("root"), NodeState::ConfirmedCpfp { change: None }),
@@ -1816,7 +2047,7 @@ mod exit_build_tests {
             ]
             .into_iter()
             .collect(),
-            refunds: [(id("leaf"), RefundState::Swept)].into_iter().collect(),
+            refunds: [(id("leaf"), swept_state())].into_iter().collect(),
             ..Default::default()
         };
         let build = build_exit(&single_leaf_plan(), &resolved, FEE_RATE).unwrap();
@@ -1824,12 +2055,20 @@ mod exit_build_tests {
             build.refund_outputs.is_empty(),
             "a swept leaf yields no refund output to sweep"
         );
-        assert!(
-            !build.branches[0]
-                .txs
-                .iter()
-                .any(|t| t.kind == ExitTxKind::Refund),
-            "a swept leaf emits no refund tx"
+        let refund = build.branches[0]
+            .txs
+            .iter()
+            .find(|t| t.kind == ExitTxKind::Refund)
+            .expect("a swept leaf still reports its refund");
+        assert_eq!(
+            refund.status,
+            ExitTxStatus::Confirmed,
+            "a swept refund is reported confirmed, not omitted"
+        );
+        assert_eq!(
+            build.confirmed_sweeps.len(),
+            1,
+            "the sweep that spent it is carried out of the build"
         );
         assert!(build.cpfp_change_inputs.is_empty());
     }
@@ -1846,12 +2085,16 @@ mod exit_build_tests {
                     value: 100_000,
                     estimated_cost: 2_000,
                     cpfp_cost: 2_000,
+                    cpfp_node_costs: Vec::new(),
+                    cpfp_refund_cost: 2_000,
                 },
                 UnilateralExitSelectedLeaf {
                     id: leaf_b.id.clone(),
                     value: 100_000,
                     estimated_cost: 2_000,
                     cpfp_cost: 2_000,
+                    cpfp_node_costs: Vec::new(),
+                    cpfp_refund_cost: 2_000,
                 },
             ],
             fan_out_psbt: None,
@@ -1931,12 +2174,16 @@ mod exit_build_tests {
                     value: 100_000,
                     estimated_cost: 2_000,
                     cpfp_cost: 2_000,
+                    cpfp_node_costs: Vec::new(),
+                    cpfp_refund_cost: 2_000,
                 },
                 UnilateralExitSelectedLeaf {
                     id: leaf_b.id.clone(),
                     value: 100_000,
                     estimated_cost: 2_000,
                     cpfp_cost: 2_000,
+                    cpfp_node_costs: Vec::new(),
+                    cpfp_refund_cost: 2_000,
                 },
             ],
             fan_out_psbt: Some(fan_out_psbt),
@@ -2003,6 +2250,7 @@ mod exit_build_tests {
             },
         };
         let mut build = UnilateralExitBuild {
+            confirmed_sweeps: vec![],
             fan_out: None,
             branches: vec![ExitBranch {
                 leaf_id: id("leaf"),
@@ -2134,6 +2382,7 @@ mod exit_build_tests {
                 vec![a, b],
                 FEE_RATE,
                 dest_len,
+                None,
             )
         };
         let one = |total: u64| {
@@ -2146,6 +2395,7 @@ mod exit_build_tests {
                 vec![only],
                 FEE_RATE,
                 dest_len,
+                None,
             )
         };
 
@@ -2230,6 +2480,7 @@ mod exit_build_tests {
             inputs,
             FEE_RATE,
             change_len,
+            None,
         )
         .unwrap();
         assert!(
@@ -2280,6 +2531,7 @@ mod exit_build_tests {
             two(50_000),
             FEE_RATE,
             change_len,
+            None,
         )
         .unwrap();
         assert!(
@@ -2397,6 +2649,21 @@ mod interpret_tests {
         }
     }
 
+    /// One branch's slot in a fan-out: the input it would be funded from.
+    fn fan_out_branch_input(vout: u32) -> CpfpInput {
+        CpfpInput {
+            outpoint: OutPoint {
+                txid: Txid::from_byte_array([9u8; 32]),
+                vout,
+            },
+            witness_utxo: TxOut {
+                value: Amount::from_sat(5_000),
+                script_pubkey: leaf_addr().script_pubkey(),
+            },
+            signed_input_weight: 272,
+        }
+    }
+
     fn refund_scan(leaf_id: &TreeNodeId, refund_txid: Txid, value: u64) -> Observation {
         Observation {
             query: ChainQuery::RefundAddress {
@@ -2427,6 +2694,67 @@ mod interpret_tests {
                 confirmed: false,
             })),
         }
+    }
+
+    /// The scan answers what is already done without being handed any funding.
+    /// That is the whole point of it: funding can then be planned against the
+    /// work that is left, instead of against a fresh exit's price.
+    #[test]
+    fn scan_settlement_needs_no_funding_to_report_a_settled_refund() {
+        let deposit = OutPoint {
+            txid: Txid::from_byte_array([7u8; 32]),
+            vout: 0,
+        };
+        let root = treenode("root", None, tx_spending(deposit, 1), 0);
+        let leaf = treenode(
+            "leaf",
+            Some("root"),
+            tx_spending(
+                OutPoint {
+                    txid: root.node_tx.compute_txid(),
+                    vout: 0,
+                },
+                2,
+            ),
+            0,
+        );
+        let leaf_id = leaf.id.clone();
+        let leaf_out = OutPoint {
+            txid: leaf.node_tx.compute_txid(),
+            vout: 0,
+        };
+        let tree = to_node_map(vec![root, leaf]);
+        let addresses: HashMap<TreeNodeId, Address> =
+            [(leaf_id.clone(), leaf_addr())].into_iter().collect();
+
+        // A refund on-chain, unspent: the three lookups the walk needs to adopt it.
+        let refund_tx = tx_spending(leaf_out, 3);
+        let refund_txid = refund_tx.compute_txid();
+        let observed = vec![
+            refund_scan(&leaf_id, refund_txid, 55_000),
+            unspent(OutPoint {
+                txid: refund_txid,
+                vout: 0,
+            }),
+            Observation {
+                query: ChainQuery::Transaction(refund_txid),
+                result: ChainResult::Transaction(refund_tx),
+            },
+        ];
+
+        let scan = scan_settlement(&tree, std::slice::from_ref(&leaf_id), &addresses, &observed);
+        assert!(
+            scan.settled.refunds.contains(&leaf_id),
+            "a refund already on-chain is settled: {:?}",
+            scan.settled.refunds
+        );
+
+        // With nothing observed it settles nothing and asks the chain instead, so
+        // an unreadable chain can only overstate the work left, never understate it.
+        let blind = scan_settlement(&tree, std::slice::from_ref(&leaf_id), &addresses, &[]);
+        assert!(blind.settled.refunds.is_empty());
+        assert!(blind.settled.nodes.is_empty());
+        assert!(!blind.pending.is_empty());
     }
 
     #[test]
@@ -2511,6 +2839,139 @@ mod interpret_tests {
     }
 
     #[test]
+    fn adopting_a_wider_fan_out_keeps_each_branch_its_own_output() {
+        // The fan-out went out when all three branches were driving, so it has an
+        // output each. One has since settled. The two still driving must keep the
+        // outputs they were given, not slide onto the settled one's.
+        let funding_outpoint = OutPoint {
+            txid: Txid::from_byte_array([9u8; 32]),
+            vout: 0,
+        };
+        let funding_script = leaf_addr().script_pubkey();
+        let out = |value| TxOut {
+            value: Amount::from_sat(value),
+            script_pubkey: funding_script.clone(),
+        };
+        let fan_out_tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: funding_outpoint,
+                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+                ..Default::default()
+            }],
+            // Distinct values, so a branch landing on the wrong one is visible.
+            output: vec![out(5_000), out(6_000), out(7_000)],
+        };
+        let fan_out_txid = fan_out_tx.compute_txid();
+        let mut fan_out_psbt = bitcoin::Psbt::from_unsigned_tx(fan_out_tx.clone()).unwrap();
+        fan_out_psbt.inputs[0].witness_utxo = Some(TxOut {
+            value: Amount::from_sat(20_000),
+            script_pubkey: funding_script,
+        });
+
+        let prepared = PreparedUnilateralExit {
+            plan: UnilateralExitPlan {
+                selected_leaves: vec![],
+                fan_out_psbt: Some(fan_out_psbt),
+                // Branch order is the order the fan-out paid them in. The middle
+                // one is finished, so it holds no funding.
+                per_branch_funding: vec![
+                    (id("first"), vec![fan_out_branch_input(0)]),
+                    (id("settled"), vec![]),
+                    (id("last"), vec![fan_out_branch_input(2)]),
+                ],
+                tree_nodes: to_node_map(vec![]),
+            },
+            leaf_refund_addresses: HashMap::new(),
+        };
+
+        let observed = vec![
+            spent(funding_outpoint, fan_out_txid),
+            Observation {
+                query: ChainQuery::Transaction(fan_out_txid),
+                result: ChainResult::Transaction(fan_out_tx),
+            },
+        ];
+        let interp = interpret_chain(&prepared, &observed).expect("the fan-out is ours");
+        let adopted = interp.resolved.fan_out.expect("adopted");
+
+        assert_eq!(
+            adopted.branch_outputs.get(&id("first")).map(|o| o.value),
+            Some(5_000),
+            "the first branch keeps the output it was paid"
+        );
+        assert_eq!(
+            adopted.branch_outputs.get(&id("last")).map(|o| o.value),
+            Some(7_000),
+            "the last branch keeps its own output, not the settled branch's"
+        );
+    }
+
+    #[test]
+    fn a_settled_branch_still_holds_its_place_in_the_fan_out() {
+        // The fan-out keeps an output for a branch that has finished, so the
+        // branches still driving stay where they were. That output is never spent;
+        // it is there to hold the order the outputs are read back in.
+        let funding_outpoint = OutPoint {
+            txid: Txid::from_byte_array([9u8; 32]),
+            vout: 0,
+        };
+        let funding_script = leaf_addr().script_pubkey();
+        let out = |value| TxOut {
+            value: Amount::from_sat(value),
+            script_pubkey: funding_script.clone(),
+        };
+        let fan_out_tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: funding_outpoint,
+                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+                ..Default::default()
+            }],
+            output: vec![out(5_000), out(330), out(7_000)],
+        };
+        let fan_out_txid = fan_out_tx.compute_txid();
+        let mut fan_out_psbt = bitcoin::Psbt::from_unsigned_tx(fan_out_tx.clone()).unwrap();
+        fan_out_psbt.inputs[0].witness_utxo = Some(TxOut {
+            value: Amount::from_sat(20_000),
+            script_pubkey: funding_script,
+        });
+
+        let prepared = PreparedUnilateralExit {
+            plan: UnilateralExitPlan {
+                selected_leaves: vec![],
+                fan_out_psbt: Some(fan_out_psbt),
+                per_branch_funding: vec![
+                    (id("first"), vec![fan_out_branch_input(0)]),
+                    (id("settled"), vec![]),
+                    (id("last"), vec![fan_out_branch_input(2)]),
+                ],
+                tree_nodes: to_node_map(vec![]),
+            },
+            leaf_refund_addresses: HashMap::new(),
+        };
+
+        let observed = vec![
+            spent(funding_outpoint, fan_out_txid),
+            Observation {
+                query: ChainQuery::Transaction(fan_out_txid),
+                result: ChainResult::Transaction(fan_out_tx),
+            },
+        ];
+        let interp = interpret_chain(&prepared, &observed).expect("the fan-out is ours");
+        let adopted = interp.resolved.fan_out.expect("adopted");
+
+        assert_eq!(adopted.branch_outputs.len(), 3, "one output per branch");
+        assert_eq!(
+            adopted.branch_outputs.get(&id("last")).map(|o| o.value),
+            Some(7_000),
+            "the settled branch holding its place is what keeps this one in place"
+        );
+    }
+
+    #[test]
     fn interpret_flags_funding_conflict() {
         let funding_outpoint = OutPoint {
             txid: Txid::from_byte_array([9u8; 32]),
@@ -2547,7 +3008,12 @@ mod interpret_tests {
             plan: UnilateralExitPlan {
                 selected_leaves: vec![],
                 fan_out_psbt: Some(fan_out_psbt),
-                per_branch_funding: vec![(id("a"), vec![]), (id("b"), vec![])],
+                // A fan-out only exists because its branches are funded, so both
+                // carry an input: an empty branch claims no fan-out output.
+                per_branch_funding: vec![
+                    (id("a"), vec![fan_out_branch_input(0)]),
+                    (id("b"), vec![fan_out_branch_input(1)]),
+                ],
                 tree_nodes: to_node_map(vec![]),
             },
             leaf_refund_addresses: HashMap::new(),
@@ -2761,11 +3227,22 @@ mod interpret_tests {
             vout: 0,
         };
         // The refund is confirmed and spent by a confirmed sweep: fully done.
+        let sweep_tx = tx_spending(refund_outpoint, 7);
+        let sweep_txid = sweep_tx.compute_txid();
+        let refund_tx = tx_spending(leaf_parent_out, 5);
         let observed = vec![
             spent(deposit, root_txid),
             spent(leaf_parent_out, leaf_cpfp_txid),
             refund_scan(&leaf_id, refund_txid, 42_000),
-            spent(refund_outpoint, Txid::from_byte_array([7u8; 32])),
+            spent(refund_outpoint, sweep_txid),
+            Observation {
+                query: ChainQuery::Transaction(refund_txid),
+                result: ChainResult::Transaction(refund_tx),
+            },
+            Observation {
+                query: ChainQuery::Transaction(sweep_txid),
+                result: ChainResult::Transaction(sweep_tx),
+            },
         ];
         let interp = interpret_chain(&prepared, &observed).unwrap();
 
@@ -2773,7 +3250,7 @@ mod interpret_tests {
         assert!(
             matches!(
                 interp.resolved.refunds.get(&leaf_id),
-                Some(RefundState::Swept)
+                Some(RefundState::Swept(_))
             ),
             "a refund spent by a confirmed sweep is swept"
         );
@@ -3015,6 +3492,124 @@ mod interpret_tests {
     }
 
     #[test]
+    fn interpret_drops_a_change_another_branch_already_spent() {
+        let anchor = ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]);
+        let funding_script = leaf_addr().script_pubkey();
+        let deposit = OutPoint {
+            txid: Txid::from_byte_array([1u8; 32]),
+            vout: 0,
+        };
+        let root_tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::from_height(1).unwrap(),
+            input: vec![TxIn {
+                previous_output: deposit,
+                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+                ..Default::default()
+            }],
+            output: vec![
+                TxOut {
+                    value: Amount::from_sat(99_000),
+                    script_pubkey: ScriptBuf::new(),
+                },
+                TxOut {
+                    value: Amount::from_sat(0),
+                    script_pubkey: anchor,
+                },
+            ],
+        };
+        let root_txid = root_tx.compute_txid();
+        let root = treenode("root", None, root_tx, 0);
+        let leaf_parent = OutPoint {
+            txid: root_txid,
+            vout: 0,
+        };
+        let leaf = treenode("leaf", Some("root"), tx_spending(leaf_parent, 2), 0);
+        let leaf_id = leaf.id.clone();
+
+        let child_tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::from_height(3).unwrap(),
+            input: vec![TxIn {
+                previous_output: OutPoint {
+                    txid: root_txid,
+                    vout: 1,
+                },
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(88_000),
+                script_pubkey: funding_script.clone(),
+            }],
+        };
+        let child_txid = child_tx.compute_txid();
+
+        let funding_input = CpfpInput {
+            outpoint: OutPoint {
+                txid: Txid::from_byte_array([7u8; 32]),
+                vout: 0,
+            },
+            witness_utxo: TxOut {
+                value: Amount::from_sat(100_000),
+                script_pubkey: funding_script,
+            },
+            signed_input_weight: 272,
+        };
+        let prepared = PreparedUnilateralExit {
+            plan: UnilateralExitPlan {
+                selected_leaves: vec![],
+                fan_out_psbt: None,
+                per_branch_funding: vec![(leaf_id.clone(), vec![funding_input])],
+                tree_nodes: to_node_map(vec![root, leaf]),
+            },
+            leaf_refund_addresses: [(leaf_id.clone(), leaf_addr())].into_iter().collect(),
+        };
+
+        let observed = vec![
+            spent(deposit, root_txid),
+            Observation {
+                query: ChainQuery::Outspend(leaf_parent),
+                result: ChainResult::Spend(None),
+            },
+            spent(
+                OutPoint {
+                    txid: root_txid,
+                    vout: 1,
+                },
+                child_txid,
+            ),
+            Observation {
+                query: ChainQuery::Transaction(child_txid),
+                result: ChainResult::Transaction(child_tx),
+            },
+            // Gone: some other branch's child was funded from it.
+            spent(
+                OutPoint {
+                    txid: child_txid,
+                    vout: 0,
+                },
+                Txid::from_byte_array([8u8; 32]),
+            ),
+            Observation {
+                query: ChainQuery::Outspend(OutPoint {
+                    txid: Txid::from_byte_array([7u8; 32]),
+                    vout: 0,
+                }),
+                result: ChainResult::Spend(None),
+            },
+            no_refund(&leaf_id),
+        ];
+        let interp = interpret_chain(&prepared, &observed).unwrap();
+
+        assert_eq!(
+            interp.resolved.nodes.get(&id("root")),
+            Some(&NodeState::ConfirmedCpfp { change: None }),
+            "a change that is already spent is no funding: the branch falls back \
+             to what it was supplied rather than building over an output that is gone"
+        );
+    }
+
+    #[test]
     fn interpret_resolves_confirmed_node_change() {
         let anchor = ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]);
         let funding_script = leaf_addr().script_pubkey();
@@ -3104,6 +3699,14 @@ mod interpret_tests {
             Observation {
                 query: ChainQuery::Transaction(child_txid),
                 result: ChainResult::Transaction(child_tx),
+            },
+            // The change is still there, so it is the branch's to spend.
+            Observation {
+                query: ChainQuery::Outspend(OutPoint {
+                    txid: child_txid,
+                    vout: 0,
+                }),
+                result: ChainResult::Spend(None),
             },
             Observation {
                 query: ChainQuery::Outspend(OutPoint {

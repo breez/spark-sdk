@@ -424,10 +424,9 @@ impl TreeStore for PostgresTreeStore {
         let client = self.pool.get().await.map_err(map_err)?;
 
         // Project just the two pubkeys straight out of the JSON, skipping the
-        // per-leaf `data` blob (up to five transactions). The filter mirrors the
-        // verified categories in `verified_leaf_keys_from_leaves`: every
-        // reserved leaf plus every Available one, and nothing non-Available and
-        // unreserved (never verified).
+        // per-leaf `data` blob (up to five transactions). Every stored leaf
+        // passed the ownership check on its way in, whatever its status, so all
+        // of them are projected: see `verified_leaf_keys_from_leaves`.
         let rows = client
             .query(
                 r"
@@ -438,7 +437,6 @@ impl TreeStore for PostgresTreeStore {
                 LEFT JOIN brz_tree_reservations r
                   ON l.reservation_id = r.id AND l.user_id = r.user_id
                 WHERE l.user_id = $1
-                  AND (r.purpose IS NOT NULL OR l.status = 'Available')
                 ",
                 &[&self.identity],
             )
