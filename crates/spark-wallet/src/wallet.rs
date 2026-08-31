@@ -44,10 +44,10 @@ use spark::{
         },
     },
     services::{
-        CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpInput, DepositService, ExitSpeed,
-        Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription, LightningReceivePayment,
-        LightningSendPayment, LightningService, PayLightningResult, Preimage,
-        PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
+        CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpInput, DepositService,
+        ExitChainState, ExitSpeed, Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription,
+        LightningReceivePayment, LightningSendPayment, LightningService, PayLightningResult,
+        Preimage, PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
         QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap, TimelockManager,
         TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
         TransferTokenOutput, TransferType, UnilateralExitLeafFilter, Utxo,
@@ -326,10 +326,11 @@ macro_rules! with_leafs_spent_retry {
     }};
 }
 
-/// A quote and the exit tree it was priced from, which the caller needs to ask
-/// the chain what those leaves have already done.
-pub struct UnilateralExitQuoteWithTree {
-    pub quote: spark::services::UnilateralExitQuote,
+/// The leaves an exit would move and the tree behind them, before any funding or
+/// chain state is considered.
+pub struct ExitContext {
+    pub leaf_ids: Vec<TreeNodeId>,
+    pub filter: UnilateralExitLeafFilter,
     pub tree_nodes: HashMap<TreeNodeId, TreeNode>,
 }
 
@@ -1770,52 +1771,67 @@ impl SparkWallet {
         })
     }
 
-    /// Quotes the funding needed for a unilateral exit of the selected leaves.
-    pub async fn quote_unilateral_exit(
+    /// The leaves an exit would move and the tree behind them. Held apart from
+    /// quoting and planning so the chain can be asked what those leaves have
+    /// already done first, which is what lets both be priced on the work left.
+    pub async fn load_exit_context(
         &self,
-        fee_rate_sat_per_kw: u64,
         selection: ExitLeafSelection,
+    ) -> Result<ExitContext, SparkWalletError> {
+        self.refresh_before_exit().await;
+        let (leaf_ids, filter) = self.resolve_leaf_selection(selection).await?;
+        let tree_nodes = self.load_exit_tree_nodes(&leaf_ids).await?;
+        Ok(ExitContext {
+            leaf_ids,
+            filter,
+            tree_nodes,
+        })
+    }
+
+    /// Quotes the funding needed for a unilateral exit of the context's leaves.
+    #[allow(clippy::too_many_arguments)]
+    pub fn quote_unilateral_exit(
+        &self,
+        context: &ExitContext,
+        fee_rate_sat_per_kw: u64,
         funding_input_weight: u64,
         funding_output_script_len: usize,
         change_dust_limit: u64,
         destination_script_len: usize,
-    ) -> Result<UnilateralExitQuoteWithTree, SparkWalletError> {
-        self.refresh_before_exit().await;
-        let (leaf_ids, filter) = self.resolve_leaf_selection(selection).await?;
-        let tree_nodes = self.load_exit_tree_nodes(&leaf_ids).await?;
-        let quote = spark::services::quote_unilateral_exit(
-            &tree_nodes,
-            &leaf_ids,
-            filter,
+        on_chain: &ExitChainState,
+    ) -> Result<spark::services::UnilateralExitQuote, SparkWalletError> {
+        Ok(spark::services::quote_unilateral_exit(
+            &context.tree_nodes,
+            &context.leaf_ids,
+            context.filter,
             funding_input_weight,
             funding_output_script_len,
             change_dust_limit,
             fee_rate_sat_per_kw,
             destination_script_len,
-        )?;
-        Ok(UnilateralExitQuoteWithTree { quote, tree_nodes })
+            on_chain,
+        )?)
     }
 
-    /// Prepares a unilateral exit of the selected leaves: loads the exit tree,
-    /// plans it, and derives each leaf's P2TR refund address. `Auto` keeps only
-    /// profitable leaves; `Specific` exits every requested one.
-    pub async fn prepare_unilateral_exit_plan(
+    /// Plans a unilateral exit over an already-loaded context and derives each
+    /// leaf's refund address. `Auto` keeps only profitable leaves; `Specific`
+    /// exits every requested one.
+    pub fn prepare_unilateral_exit_plan(
         &self,
+        context: &ExitContext,
         fee_rate_sat_per_kw: u64,
-        selection: ExitLeafSelection,
         inputs: Vec<CpfpInput>,
         destination_script_len: usize,
+        on_chain: &ExitChainState,
     ) -> Result<PreparedUnilateralExit, SparkWalletError> {
-        self.refresh_before_exit().await;
-        let (leaf_ids, filter) = self.resolve_leaf_selection(selection).await?;
-        let tree_nodes = self.load_exit_tree_nodes(&leaf_ids).await?;
         let plan = spark::services::plan_unilateral_exit(
-            tree_nodes,
-            &leaf_ids,
-            filter,
+            context.tree_nodes.clone(),
+            &context.leaf_ids,
+            context.filter,
             inputs,
             fee_rate_sat_per_kw,
             destination_script_len,
+            on_chain,
         )?;
         debug!(
             fee_rate_sat_per_kw,
