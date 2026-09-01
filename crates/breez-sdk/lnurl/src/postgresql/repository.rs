@@ -872,10 +872,12 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             "SELECT i.payment_hash, i.user_pubkey, i.invoice, i.preimage, i.amount_received_sat,
                     u.name, u.domain,
                     sc.sender_comment,
-                    i.domain
+                    i.domain,
+                    z.zap_request
              FROM invoices i
              LEFT JOIN users u ON u.pubkey = i.user_pubkey AND u.domain = i.domain
              LEFT JOIN sender_comments sc ON sc.payment_hash = i.payment_hash
+             LEFT JOIN zaps z ON z.payment_hash = i.payment_hash
              WHERE i.payment_hash = ANY($1)
                AND i.domain IS NOT NULL
                AND i.preimage IS NOT NULL",
@@ -901,6 +903,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     lightning_address,
                     sender_comment: row.try_get(7)?,
                     domain: row.try_get(8)?,
+                    nostr_zap_request: row.try_get(9)?,
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;

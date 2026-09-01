@@ -71,6 +71,7 @@ All payloads use a `{ "template": "...", "data": { ... } }` envelope. Currently 
     "user_pubkey": "02abc123...",
     "lightning_address": "alice@yourdomain.com",
     "sender_comment": "Thanks!",
+    "nostr_zap_request": "{\"id\":\"...\", \"kind\":9734, ...}",
     "timestamp": 1711929600000
   }
 }
@@ -85,6 +86,7 @@ All payloads use a `{ "template": "...", "data": { ... } }` envelope. Currently 
 | `user_pubkey` | `string` | The Spark identity public key of the user who received the payment |
 | `lightning_address` | `string \| null` | The Lightning Address that received the payment (e.g. `alice@yourdomain.com`) |
 | `sender_comment` | `string \| null` | Comment attached by the sender, if any |
+| `nostr_zap_request` | `string \| null` | The raw Nostr Zap Request (Kind 9734) JSON string, if the payment was a Nostr Zap |
 | `timestamp` | `number` | Milliseconds since Unix epoch when the webhook was enqueued |
 
 ## Retries
