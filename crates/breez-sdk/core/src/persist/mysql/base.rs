@@ -60,8 +60,9 @@ pub struct MysqlStorageConfig {
     pub recycle_timeout_secs: Option<u64>,
 
     /// Custom CA certificate(s) in PEM format for server verification.
-    /// Only used when the connection string requests TLS
-    /// (`ssl-mode=verify_ca` or `ssl-mode=verify_identity`).
+    /// If unset, Mozilla's root certificate store is used. Applies to every
+    /// verifying `ssl-mode` (`preferred`, `required`, `verify_ca`,
+    /// `verify_identity`).
     pub root_ca_pem: Option<String>,
 
     /// Whether the SDK should run schema migrations on startup.

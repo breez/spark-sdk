@@ -9,6 +9,7 @@ use crate::{
     lnurl::{
         LnurlErrorDetails,
         error::{LnurlError, LnurlResult},
+        security,
     },
     network::BitcoinNetwork,
     utils::default_true,
@@ -30,6 +31,7 @@ pub async fn validate_lnurl_pay<C: HttpClient + ?Sized>(
     pay_request: &LnurlPayRequestDetails,
     network: BitcoinNetwork,
     validate_success_action_url: Option<bool>,
+    dns_preflight: bool,
 ) -> LnurlResult<ValidatedCallbackResponse> {
     validate_user_input(
         user_amount_msat,
@@ -40,6 +42,14 @@ pub async fn validate_lnurl_pay<C: HttpClient + ?Sized>(
     )?;
 
     let callback_url = build_pay_callback_url(user_amount_msat, comment, pay_request)?;
+    let trust = security::callback_trust(&pay_request.url);
+    let validated = security::validate_callback_url(&callback_url, trust)?;
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+    if dns_preflight && trust != security::CallbackTrust::Loopback {
+        security::ensure_host_resolves_public(&validated).await?;
+    }
+    #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+    let _ = (dns_preflight, &validated);
     let response = http_client.get(callback_url, None).await?;
     if let Ok(err) = response.json::<LnurlErrorDetails>() {
         return Ok(ValidatedCallbackResponse::EndpointError { data: err });
@@ -440,6 +450,43 @@ pub(crate) mod tests {
             nostr_pubkey: None,
             url: "http://localhost:8080/pay".into(),
             address: None,
+        }
+    }
+
+    /// A public endpoint's server-chosen callback must be https to a public
+    /// host; the request must be rejected before any HTTP call is made (the
+    /// mock client has no queued response, so a call would error differently).
+    #[macros::async_test_all]
+    async fn test_lnurl_pay_public_endpoint_rejects_unsafe_callbacks() {
+        use crate::test_utils::mock_rest_client::MockRestClient;
+
+        let mock = MockRestClient::new();
+        for callback in [
+            "http://service.com/cb",
+            "https://127.0.0.1:8332/cb",
+            "https://192.168.1.1/cb",
+            "https://169.254.169.254/latest/meta-data/",
+            "https://user:pass@service.com/cb",
+            "https://localhost/cb",
+        ] {
+            let mut pay_req = get_test_pay_req_data(0, 100_000, 0);
+            pay_req.url = "https://service.com/lnurlp/user".into();
+            pay_req.callback = callback.into();
+            let result = validate_lnurl_pay(
+                &mock,
+                1000,
+                &None,
+                &pay_req,
+                crate::network::BitcoinNetwork::Bitcoin,
+                None,
+                false,
+            )
+            .await;
+            let err = result.err();
+            assert!(
+                matches!(err, Some(LnurlError::InvalidUri(_))),
+                "{callback}: {err:?}"
+            );
         }
     }
 

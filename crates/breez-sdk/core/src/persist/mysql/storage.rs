@@ -546,6 +546,14 @@ impl MysqlStorage {
                  WHERE LOWER(CAST(instant_claim_status AS CHAR)) LIKE '%declined%'"
                     .to_string(),
             )],
+            // Migration 23: Track how far a refund has got towards the network as a
+            // JSON-encoded RefundState. NULL on refunds created before this column
+            // existed, which is read as BroadcastPending.
+            vec![Migration::AddColumn {
+                table: "brz_unclaimed_deposits",
+                column: "refund_state",
+                definition: "JSON NULL",
+            }],
         ]
     }
 }
@@ -1390,7 +1398,7 @@ impl Storage for MysqlStorage {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         let rows: Vec<Row> = conn
             .exec(
-                "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status FROM brz_unclaimed_deposits WHERE user_id = ?",
+                "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status, refund_state FROM brz_unclaimed_deposits WHERE user_id = ?",
                 (self.identity.clone(),),
             )
             .await
@@ -1418,6 +1426,7 @@ impl Storage for MysqlStorage {
                 refund_tx: get_opt_str(row, 5),
                 refund_tx_id: get_opt_str(row, 6),
                 instant_claim_status: from_json_string_opt(get_opt_str(row, 7))?,
+                refund_state: from_json_string_opt(get_opt_str(row, 8))?,
             });
         }
         Ok(deposits)
@@ -1435,7 +1444,7 @@ impl Storage for MysqlStorage {
                 let error_json = serde_json::to_string(&error)
                     .map_err(|e| StorageError::Serialization(e.to_string()))?;
                 conn.exec_drop(
-                    "UPDATE brz_unclaimed_deposits SET claim_error = ?, refund_tx = NULL, refund_tx_id = NULL WHERE user_id = ? AND txid = ? AND vout = ?",
+                    "UPDATE brz_unclaimed_deposits SET claim_error = ? WHERE user_id = ? AND txid = ? AND vout = ?",
                     (error_json, self.identity.clone(), txid, i32::try_from(vout)?),
                 )
                 .await
@@ -1444,10 +1453,13 @@ impl Storage for MysqlStorage {
             UpdateDepositPayload::Refund {
                 refund_txid,
                 refund_tx,
+                state,
             } => {
+                let state_json = serde_json::to_string(&state)
+                    .map_err(|e| StorageError::Serialization(e.to_string()))?;
                 conn.exec_drop(
-                    "UPDATE brz_unclaimed_deposits SET refund_tx = ?, refund_tx_id = ?, claim_error = NULL WHERE user_id = ? AND txid = ? AND vout = ?",
-                    (refund_tx, refund_txid, self.identity.clone(), txid, i32::try_from(vout)?),
+                    "UPDATE brz_unclaimed_deposits SET refund_tx = ?, refund_tx_id = ?, refund_state = ?, claim_error = NULL WHERE user_id = ? AND txid = ? AND vout = ?",
+                    (refund_tx, refund_txid, state_json, self.identity.clone(), txid, i32::try_from(vout)?),
                 )
                 .await
                 .map_err(map_db_error)?;
@@ -1458,6 +1470,22 @@ impl Storage for MysqlStorage {
                 conn.exec_drop(
                     "UPDATE brz_unclaimed_deposits SET instant_claim_status = ? WHERE user_id = ? AND txid = ? AND vout = ?",
                     (status_json, self.identity.clone(), txid, i32::try_from(vout)?),
+                )
+                .await
+                .map_err(map_db_error)?;
+            }
+            UpdateDepositPayload::RefundState { refund_txid, state } => {
+                let state_json = serde_json::to_string(&state)
+                    .map_err(|e| StorageError::Serialization(e.to_string()))?;
+                conn.exec_drop(
+                    "UPDATE brz_unclaimed_deposits SET refund_state = ? WHERE user_id = ? AND txid = ? AND vout = ? AND refund_tx_id = ?",
+                    (
+                        state_json,
+                        self.identity.clone(),
+                        txid,
+                        i32::try_from(vout)?,
+                        refund_txid,
+                    ),
                 )
                 .await
                 .map_err(map_db_error)?;
@@ -3022,7 +3050,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(22), "migration version must advance to 22");
+        assert_eq!(version, Some(23), "migration version must advance to 23");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())
@@ -3294,7 +3322,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(22), "migration must advance to 22");
+        assert_eq!(version, Some(23), "migration must advance to 23");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())

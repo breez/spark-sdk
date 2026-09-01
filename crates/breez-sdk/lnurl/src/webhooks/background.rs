@@ -5,6 +5,7 @@ use tokio::sync::{Mutex, Semaphore};
 use tracing::{debug, error, warn};
 
 use bitcoin::hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256};
+use platform_utils::read_capped_text;
 
 use super::config::WebhookConfigCache;
 use super::repository::{WebhookDelivery, WebhookRepository};
@@ -22,6 +23,15 @@ const MAX_CONCURRENT_PER_DOMAIN: usize = 20;
 
 /// Maximum length of error response body to store.
 const MAX_ERROR_BODY_LEN: usize = 512;
+
+/// Maximum error response body to read before truncating it for storage.
+///
+/// Sits above [`MAX_ERROR_BODY_LEN`] so an endpoint answering with a little
+/// more than the stored length still yields a usable diagnostic. Anything past
+/// it is dropped rather than buffered: the URL is partner-supplied, so the
+/// body is attacker-sized, and truncating only after the whole body is in
+/// memory would cap the stored string without bounding the allocation.
+const MAX_ERROR_BODY_READ: usize = 64 * 1024;
 
 /// Webhook request timeout in seconds.
 const WEBHOOK_TIMEOUT_SECS: u64 = 30;
@@ -292,8 +302,7 @@ async fn send_webhook(
         return Ok(());
     }
 
-    let body = response
-        .text()
+    let body = read_capped_text(response, MAX_ERROR_BODY_READ)
         .await
         .ok()
         .map(|b| truncate_string(&b, MAX_ERROR_BODY_LEN));
@@ -686,6 +695,54 @@ mod tests {
             body.ends_with("..."),
             "truncated body should end with '...'"
         );
+    }
+
+    /// Serves `body` on `/hook` with a 500 and returns the delivery error.
+    ///
+    /// Drives `send_webhook` directly: the cap is in the response read, so this
+    /// needs no database or background worker.
+    async fn error_from_hook_returning(body: String) -> WebhookError {
+        let router = Router::new().route(
+            "/hook",
+            post(move || {
+                let body = body.clone();
+                async move { (axum::http::StatusCode::INTERNAL_SERVER_ERROR, body) }
+            }),
+        );
+        let base_url = start_mock_server(router).await;
+        send_webhook(
+            &reqwest::Client::new(),
+            &format!("{base_url}/hook"),
+            "{}",
+            TEST_SECRET,
+        )
+        .await
+        .expect_err("a 500 should be reported as a delivery error")
+    }
+
+    #[tokio::test]
+    async fn oversized_error_body_is_dropped_rather_than_buffered() {
+        let huge = "x".repeat(MAX_ERROR_BODY_READ.saturating_mul(4));
+        let err = error_from_hook_returning(huge).await;
+
+        assert_eq!(err.status_code, Some(500));
+        assert!(
+            err.body.is_none(),
+            "an oversized body should be dropped, got {:?} chars",
+            err.body.map(|b| b.len())
+        );
+    }
+
+    #[tokio::test]
+    async fn error_body_past_the_stored_length_still_yields_a_diagnostic() {
+        // Between MAX_ERROR_BODY_LEN and MAX_ERROR_BODY_READ: still truncated
+        // for storage rather than refused.
+        let body = "x".repeat(MAX_ERROR_BODY_LEN.saturating_mul(4));
+        let err = error_from_hook_returning(body).await;
+
+        let stored = err.body.expect("body within the read cap should be kept");
+        assert!(stored.ends_with("..."), "expected a truncated body");
+        assert!(stored.len() <= MAX_ERROR_BODY_LEN.saturating_add(3));
     }
 
     #[tokio::test]

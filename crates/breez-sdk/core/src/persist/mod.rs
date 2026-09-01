@@ -29,7 +29,7 @@ use thiserror::Error;
 use crate::{
     AssetFilter, Contact, ConversionInfo, ConversionStatus, DepositClaimError, DepositInfo,
     InstantClaimStatus, LightningAddressInfo, ListContactsRequest, ListPaymentsRequest,
-    LnurlPayInfo, LnurlWithdrawInfo, PaymentDetailsFilter, PaymentStatus, PaymentType,
+    LnurlPayInfo, LnurlWithdrawInfo, PaymentDetailsFilter, PaymentStatus, PaymentType, RefundState,
     SparkHtlcStatus, TokenBalance, TokenMetadata, TokenTransactionType,
     models::Payment,
     sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
@@ -72,9 +72,18 @@ pub enum UpdateDepositPayload {
     Refund {
         refund_txid: String,
         refund_tx: String,
+        state: RefundState,
     },
     InstantClaim {
         status: InstantClaimStatus,
+    },
+    /// Moves an existing refund between states without touching the refund
+    /// itself or the last claim error. Applies only while `refund_txid` is still
+    /// the stored refund, so a state decided against one refund cannot land on a
+    /// newer one.
+    RefundState {
+        refund_txid: String,
+        state: RefundState,
     },
 }
 
@@ -672,6 +681,12 @@ impl ObjectCacheRepository {
             )
             .await?;
         Ok(())
+    }
+
+    pub(crate) async fn delete_tx(&self, txid: &str) -> Result<(), StorageError> {
+        self.storage
+            .delete_cached_item(format!("{TX_CACHE_KEY}-{txid}"))
+            .await
     }
 
     pub(crate) async fn fetch_tx(&self, txid: &str) -> Result<Option<CachedTx>, StorageError> {

@@ -10,7 +10,7 @@ use rusqlite_migration::{M, Migrations, SchemaVersion};
 use crate::{
     AssetFilter, Contact, ConversionDetails, ConversionInfo, ConversionStatus, DepositInfo,
     InstantClaimStatus, ListContactsRequest, LnurlPayInfo, LnurlReceiveMetadata, LnurlWithdrawInfo,
-    PaymentDetails, PaymentMethod, PaymentStatus, SparkHtlcDetails, SparkHtlcStatus,
+    PaymentDetails, PaymentMethod, PaymentStatus, RefundState, SparkHtlcDetails, SparkHtlcStatus,
     TokenTransactionType,
     error::DepositClaimError,
     persist::{
@@ -386,6 +386,10 @@ impl SqliteStorage {
             // claim is still settling.
             "UPDATE unclaimed_deposits SET instant_claim_status = NULL \
              WHERE LOWER(instant_claim_status) LIKE '%declined%';",
+            // Track how far a refund has got towards the network as a JSON-encoded
+            // RefundState. NULL on refunds created before this column existed, which
+            // is read as BroadcastPending.
+            "ALTER TABLE unclaimed_deposits ADD COLUMN refund_state TEXT;",
         ]
     }
 }
@@ -991,7 +995,7 @@ impl Storage for SqliteStorage {
     async fn list_deposits(&self) -> Result<Vec<DepositInfo>, StorageError> {
         let connection = self.get_connection()?;
         let mut stmt =
-            connection.prepare("SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status FROM unclaimed_deposits")?;
+            connection.prepare("SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status, refund_state FROM unclaimed_deposits")?;
         let rows = stmt.query_map(params![], |row| {
             Ok(DepositInfo {
                 txid: row.get(0)?,
@@ -1002,6 +1006,7 @@ impl Storage for SqliteStorage {
                 refund_tx: row.get(5)?,
                 refund_tx_id: row.get(6)?,
                 instant_claim_status: row.get(7)?,
+                refund_state: row.get(8)?,
             })
         })?;
         let mut deposits = Vec::new();
@@ -1021,23 +1026,30 @@ impl Storage for SqliteStorage {
         match payload {
             UpdateDepositPayload::ClaimError { error } => {
                 connection.execute(
-                    "UPDATE unclaimed_deposits SET claim_error = ?, refund_tx = NULL, refund_tx_id = NULL WHERE txid = ? AND vout = ?",
+                    "UPDATE unclaimed_deposits SET claim_error = ? WHERE txid = ? AND vout = ?",
                     params![error, txid, vout],
                 )?;
             }
             UpdateDepositPayload::Refund {
                 refund_txid,
                 refund_tx,
+                state,
             } => {
                 connection.execute(
-                    "UPDATE unclaimed_deposits SET refund_tx = ?, refund_tx_id = ?, claim_error = NULL WHERE txid = ? AND vout = ?",
-                    params![refund_tx, refund_txid, txid, vout],
+                    "UPDATE unclaimed_deposits SET refund_tx = ?, refund_tx_id = ?, refund_state = ?, claim_error = NULL WHERE txid = ? AND vout = ?",
+                    params![refund_tx, refund_txid, state, txid, vout],
                 )?;
             }
             UpdateDepositPayload::InstantClaim { status } => {
                 connection.execute(
                     "UPDATE unclaimed_deposits SET instant_claim_status = ? WHERE txid = ? AND vout = ?",
                     params![status, txid, vout],
+                )?;
+            }
+            UpdateDepositPayload::RefundState { refund_txid, state } => {
+                connection.execute(
+                    "UPDATE unclaimed_deposits SET refund_state = ? WHERE txid = ? AND vout = ? AND refund_tx_id = ?",
+                    params![state, txid, vout, refund_txid],
                 )?;
             }
         }
@@ -1841,6 +1853,18 @@ impl ToSql for DepositClaimError {
 }
 
 impl FromSql for DepositClaimError {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        from_sql_json(value)
+    }
+}
+
+impl ToSql for RefundState {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        to_sql_json(self)
+    }
+}
+
+impl FromSql for RefundState {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
         from_sql_json(value)
     }

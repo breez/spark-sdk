@@ -23,8 +23,9 @@ pub use auth::{
     ContentType, add_basic_auth_header, add_content_type_header, make_basic_auth_header,
 };
 pub use http::{
-    DefaultHttpClient, HttpClient, HttpError, HttpResponse, create_http_client,
-    create_http_client_with_proxy,
+    DefaultHttpClient, HttpClient, HttpError, HttpResponse, MAX_RESPONSE_BYTES, REQUEST_TIMEOUT,
+    RedirectFilter, create_http_client, create_http_client_with_proxy,
+    create_http_client_with_redirect_filter, read_capped_bytes, read_capped_text,
 };
 pub use proxy::ProxyConfig;
 

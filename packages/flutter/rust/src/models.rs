@@ -222,6 +222,12 @@ pub enum _InstantClaimStatus {
     Submitted { claim_id: String },
 }
 
+#[frb(mirror(RefundState))]
+pub enum _RefundState {
+    BroadcastPending { last_error: Option<String> },
+    Broadcast,
+}
+
 #[frb(mirror(DepositInfo))]
 pub struct _DepositInfo {
     pub txid: String,
@@ -232,6 +238,7 @@ pub struct _DepositInfo {
     pub refund_tx_id: Option<String>,
     pub claim_error: Option<DepositClaimError>,
     pub instant_claim_status: Option<InstantClaimStatus>,
+    pub refund_state: Option<RefundState>,
 }
 
 #[frb(mirror(MaxFee))]
@@ -1511,6 +1518,7 @@ pub struct _LnurlWithdrawRequestDetails {
     pub default_description: String,
     pub min_withdrawable: u64,
     pub max_withdrawable: u64,
+    pub url: String,
 }
 
 #[frb(mirror(SilentPaymentAddressDetails))]

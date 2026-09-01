@@ -5,19 +5,24 @@ use std::{
     time::Duration,
 };
 
-use bitcoin::{consensus::serialize, hex::DisplayHex};
+use bitcoin::{
+    Transaction,
+    consensus::{encode::deserialize_hex, serialize},
+    hex::DisplayHex,
+};
 use platform_utils::tokio;
 use spark_wallet::{
-    InstantStaticDepositPlan, InstantStaticDepositQuoteResult, ListTransfersRequest, TransferId,
-    WalletTransfer,
+    InstantStaticDepositPlan, InstantStaticDepositQuoteResult, ListTransfersRequest,
+    MIN_RELAY_FEE_SAT_PER_VBYTE, TransferId, WalletTransfer,
 };
 use tracing::{error, info, trace, warn};
 
 use crate::{
-    ClaimDepositQuote, ClaimDepositRequest, ClaimDepositResponse, Fee,
+    ClaimDepositQuote, ClaimDepositRequest, ClaimDepositResponse, DepositInfo, Fee,
     FetchClaimDepositQuoteRequest, FetchClaimDepositQuoteResponse, InstantClaimStatus,
     ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, MaxFee, Network,
-    RefundDepositRequest, RefundDepositResponse,
+    RefundDepositRequest, RefundDepositResponse, RefundState,
+    chain::Outspend,
     error::SdkError,
     models::Payment,
     persist::UpdateDepositPayload,
@@ -191,6 +196,19 @@ impl BreezSdk {
             CachedUtxoFetcher::new(self.chain_service.clone(), self.storage.clone())
                 .fetch_detailed_utxo(&request.txid, request.vout)
                 .await?;
+
+        let existing = self
+            .storage
+            .list_deposits()
+            .await?
+            .into_iter()
+            .find(|d| d.txid == detailed_utxo.txid.to_string() && d.vout == detailed_utxo.vout);
+        // Nothing stored means no refund to outbid.
+        let fee_to_outbid = match &existing {
+            Some(deposit) => self.refund_fee_to_outbid(&detailed_utxo, deposit).await?,
+            None => None,
+        };
+
         let tx = self
             .spark_wallet
             .refund_static_deposit(
@@ -203,21 +221,60 @@ impl BreezSdk {
         let tx_hex = serialize(&tx).as_hex().to_string();
         let tx_id = tx.compute_txid().as_raw_hash().to_string();
 
-        // Store the refund transaction details separately
-        self.storage
-            .update_deposit(
-                detailed_utxo.txid.to_string(),
-                detailed_utxo.vout,
-                UpdateDepositPayload::Refund {
-                    refund_tx: tx_hex.clone(),
-                    refund_txid: tx_id.clone(),
-                },
-            )
-            .await?;
+        check_replacement_fee(&tx, detailed_utxo.value, fee_to_outbid)?;
 
-        self.chain_service
+        // `store_refund` only ever updates, so the row has to exist: without one the
+        // refund would be broadcast, persisted nowhere and never rebroadcast. A
+        // refund can be asked for before the background sync has inserted the row.
+        // Insert it only once the operators have signed, so a txid and vout they do
+        // not recognise leaves nothing behind.
+        if existing.is_none() {
+            // Mature: the operators only sign a refund once the deposit has enough
+            // confirmations.
+            self.storage
+                .add_deposit(
+                    detailed_utxo.txid.to_string(),
+                    detailed_utxo.vout,
+                    detailed_utxo.value,
+                    true,
+                )
+                .await?;
+        }
+
+        // Store before broadcasting: a signed refund that is only in flight is
+        // lost if the process dies, and the rebroadcast on sync needs it.
+        self.store_refund(
+            &detailed_utxo,
+            &tx_hex,
+            &tx_id,
+            RefundState::BroadcastPending { last_error: None },
+        )
+        .await?;
+
+        let broadcast_error = self
+            .chain_service
             .broadcast_transaction(tx_hex.clone())
-            .await?;
+            .await
+            .err();
+        // Record why the broadcast was refused before returning, so the deposit
+        // carries the reason rather than waiting for the next sync to retry.
+        let state = match &broadcast_error {
+            None => RefundState::Broadcast,
+            Some(e) => RefundState::BroadcastPending {
+                last_error: Some(e.to_string()),
+            },
+        };
+
+        if let Err(e) = self
+            .store_refund(&detailed_utxo, &tx_hex, &tx_id, state)
+            .await
+        {
+            error!("Failed to record refund state: {e:?}");
+        }
+
+        if let Some(e) = broadcast_error {
+            return Err(e.into());
+        }
         Ok(RefundDepositResponse { tx_id, tx_hex })
     }
 
@@ -277,6 +334,90 @@ impl BreezSdk {
 
         Err(last_error
             .unwrap_or_else(|| SdkError::Generic("transfer not found after claim".to_string())))
+    }
+
+    async fn store_refund(
+        &self,
+        detailed_utxo: &DetailedUtxo,
+        tx_hex: &str,
+        tx_id: &str,
+        state: RefundState,
+    ) -> Result<(), SdkError> {
+        self.storage
+            .update_deposit(
+                detailed_utxo.txid.to_string(),
+                detailed_utxo.vout,
+                UpdateDepositPayload::Refund {
+                    refund_tx: tx_hex.to_string(),
+                    refund_txid: tx_id.to_string(),
+                    state,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Fee in sats that a new refund has to outbid, or `None` when there is
+    /// nothing to outbid. `None` while the deposit output is unspent: a refund
+    /// that never reached the network conflicts with nothing, so re-creating it
+    /// at a lower fee has to stay possible.
+    async fn refund_fee_to_outbid(
+        &self,
+        detailed_utxo: &DetailedUtxo,
+        deposit: &DepositInfo,
+    ) -> Result<Option<PendingRefund>, SdkError> {
+        let Some(refund_tx) = deposit.refund_tx.as_ref() else {
+            return Ok(None);
+        };
+        // A refund that cannot be decoded is no basis for holding a new one back.
+        let Ok(tx) = deserialize_hex::<Transaction>(refund_tx) else {
+            warn!(
+                "Stored refund of deposit {}:{} does not decode, not requiring a fee bump",
+                detailed_utxo.txid, detailed_utxo.vout
+            );
+            return Ok(None);
+        };
+        let stored = refund_fee_sats(&tx, detailed_utxo.value).map(|fee_sats| PendingRefund {
+            fee_sats,
+            vsize: tx.vsize().try_into().unwrap_or(u64::MAX),
+        });
+
+        let outspend = self
+            .chain_service
+            .get_outspend(detailed_utxo.txid.to_string(), detailed_utxo.vout)
+            .await;
+        match outspend {
+            Ok(Outspend::Unspent) => Ok(None),
+            Ok(Outspend::Spent { txid, status, .. }) if status.confirmed => {
+                Err(SdkError::InvalidInput(format!(
+                    "Deposit {}:{} was already spent by {txid}",
+                    detailed_utxo.txid, detailed_utxo.vout
+                )))
+            }
+            // A conflicting transaction is on the network. The floor is the stored
+            // refund's fee, which is the spender whenever this wallet made it. If
+            // something else did, an underpriced replacement is refused by the
+            // network rather than by this check.
+            Ok(Outspend::Spent { .. }) => Ok(stored),
+            // The outpoint cannot be read, so ask whether the stored refund itself
+            // reached the network. That is authoritative, unlike the recorded state,
+            // which a lost write can leave stale. Gating on a refund that never
+            // landed would raise the bar on every retry, since each attempt stores
+            // its own fee before broadcasting.
+            Err(_) => {
+                let Some(refund_txid) = deposit.refund_tx_id.clone() else {
+                    return Ok(None);
+                };
+                match self.chain_service.get_transaction_status(refund_txid).await {
+                    Ok(status) if status.confirmed => Err(SdkError::InvalidInput(format!(
+                        "Deposit {}:{} was already refunded",
+                        detailed_utxo.txid, detailed_utxo.vout
+                    ))),
+                    Ok(_) => Ok(stored),
+                    Err(_) => Ok(None),
+                }
+            }
+        }
     }
 
     /// Confirmations on the deposit transaction, 0 while it is unconfirmed. Needs
@@ -695,6 +836,71 @@ fn select_instant_claim_plan(
     }
 }
 
+/// The refund a replacement has to displace. Its size matters as well as its
+/// fee: the replacement has to beat its feerate, not just its total.
+#[derive(Clone, Copy)]
+struct PendingRefund {
+    fee_sats: u64,
+    vsize: u64,
+}
+
+/// Rejects a refund that cannot displace one already on the network. A
+/// replacement only relays if it outbids the refund it conflicts with, and
+/// overwriting the stored transaction with one that cannot relay would leave the
+/// deposit with no way out.
+fn check_replacement_fee(
+    tx: &Transaction,
+    deposit_value_sats: u64,
+    pending: Option<PendingRefund>,
+) -> Result<(), SdkError> {
+    let Some(pending) = pending else {
+        return Ok(());
+    };
+    let pending_fee_sats = pending.fee_sats;
+    let required_fee_sats =
+        replacement_min_fee_sats(&pending, tx.vsize().try_into().unwrap_or(u64::MAX));
+    let fee_sats = refund_fee_sats(tx, deposit_value_sats).ok_or_else(|| {
+        SdkError::Generic("refund pays out more than the deposit holds".to_string())
+    })?;
+    if fee_sats < required_fee_sats {
+        return Err(SdkError::RefundReplacementFeeTooLow {
+            pending_fee_sats,
+            required_fee_sats,
+        });
+    }
+    Ok(())
+}
+
+/// Fee a refund pays, from the deposit output it spends. `None` if the refund
+/// pays out more than the deposit holds.
+fn refund_fee_sats(refund_tx: &Transaction, deposit_value_sats: u64) -> Option<u64> {
+    let out_sats: u64 = refund_tx.output.iter().map(|o| o.value.to_sat()).sum();
+    deposit_value_sats.checked_sub(out_sats)
+}
+
+/// Minimum fee a replacement must pay to displace a refund already on the
+/// network: more than that refund pays, plus the relay cost of its own size.
+fn replacement_min_fee_sats(pending: &PendingRefund, replacement_vsize: u64) -> u64 {
+    // Cover the pending fee plus the replacement's own relay bandwidth.
+    let bandwidth = pending
+        .fee_sats
+        .saturating_add(replacement_vsize.saturating_mul(MIN_RELAY_FEE_SAT_PER_VBYTE));
+    // And beat its feerate outright, which only bites when the replacement is the
+    // larger transaction, as it is when the destination widens to taproot. The
+    // comparison is made on feerates truncated to whole sat/kvB, so a fee that is
+    // higher as an exact rational can still land in the same bucket and be refused.
+    let pending_per_kvb = pending
+        .fee_sats
+        .saturating_mul(1000)
+        .checked_div(pending.vsize)
+        .unwrap_or(u64::MAX);
+    let feerate = pending_per_kvb
+        .saturating_add(1)
+        .saturating_mul(replacement_vsize)
+        .div_ceil(1000);
+    bandwidth.max(feerate)
+}
+
 /// Serialises claim attempts on the same deposit within this process.
 ///
 /// A claim spends several seconds fetching a quote, transferring and signing
@@ -745,13 +951,19 @@ impl Drop for ClaimGuard {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ClaimGuards, InstantClaimPlan, TxOutput, claim_deposit_quote,
-        is_pending_confirmation_error, select_instant_claim_plan,
+    use bitcoin::{
+        Amount, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, absolute::LockTime,
+        transaction::Version,
     };
     use spark_wallet::{
         CurrencyAmount, InstantStaticDepositPlan, InstantStaticDepositQuote,
         InstantStaticDepositQuoteResult,
+    };
+
+    use super::{
+        ClaimGuards, InstantClaimPlan, PendingRefund, SdkError, TxOutput, check_replacement_fee,
+        claim_deposit_quote, is_pending_confirmation_error, refund_fee_sats,
+        replacement_min_fee_sats, select_instant_claim_plan,
     };
 
     fn sats(value: u64) -> CurrencyAmount {
@@ -1029,6 +1241,21 @@ mod tests {
         }
     }
 
+    fn refund_paying_out(out_sats: u64) -> Transaction {
+        Transaction {
+            version: Version::non_standard(3),
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(out_sats),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        }
+    }
+
     #[test]
     fn a_second_attempt_on_the_same_outpoint_is_refused() {
         let guards = ClaimGuards::default();
@@ -1044,5 +1271,108 @@ mod tests {
         let guards = ClaimGuards::default();
         let _first = guards.try_acquire(outpoint(0));
         assert!(guards.try_acquire(outpoint(1)).is_some());
+    }
+
+    #[test]
+    fn fee_is_what_the_refund_leaves_behind() {
+        assert_eq!(
+            refund_fee_sats(&refund_paying_out(99_889), 100_000),
+            Some(111)
+        );
+        assert_eq!(
+            refund_fee_sats(&refund_paying_out(100_000), 100_000),
+            Some(0)
+        );
+        // A refund cannot pay out more than the deposit holds.
+        assert_eq!(refund_fee_sats(&refund_paying_out(100_001), 100_000), None);
+    }
+
+    #[test]
+    fn replacement_must_cover_the_pending_fee_and_its_own_relay() {
+        // Displacing a 111 sat refund with a 111 vbyte replacement costs 222,
+        // not 112: the replacement also pays to relay its own bytes.
+        let pending = PendingRefund {
+            fee_sats: 111,
+            vsize: 111,
+        };
+        assert_eq!(replacement_min_fee_sats(&pending, 111), 222);
+        let free = PendingRefund {
+            fee_sats: 0,
+            vsize: 111,
+        };
+        assert_eq!(replacement_min_fee_sats(&free, 111), 111);
+    }
+
+    #[test]
+    fn a_larger_replacement_must_beat_the_pending_feerate_too() {
+        // Covering the pending fee plus the replacement's own bandwidth is not
+        // enough when the replacement is bigger: 3000 sats over 99 vB is 30.3
+        // sat/vB, and 3111 over 111 vB would be 28.0, which the network refuses.
+        let pending = PendingRefund {
+            fee_sats: 3_000,
+            vsize: 99,
+        };
+        let required = replacement_min_fee_sats(&pending, 111);
+        assert_eq!(required, 3_364);
+        assert!(
+            required * pending.vsize > pending.fee_sats * 111,
+            "a replacement has to beat the pending feerate outright"
+        );
+
+        // Same size, so paying the bandwidth is all it takes.
+        assert_eq!(replacement_min_fee_sats(&pending, 99), 3_099);
+
+        // Truncation to whole sat/kvB: 1045 over 111 vB and 932 over 99 both come
+        // to 9414, which is a tie and refused, so the floor has to be 1046.
+        let tie = PendingRefund {
+            fee_sats: 932,
+            vsize: 99,
+        };
+        assert_eq!(replacement_min_fee_sats(&tie, 111), 1_046);
+
+        // A small pending fee never reaches the feerate rule.
+        let small = PendingRefund {
+            fee_sats: 300,
+            vsize: 99,
+        };
+        assert_eq!(replacement_min_fee_sats(&small, 111), 411);
+    }
+
+    #[test]
+    fn replacement_is_rejected_until_it_outbids_the_pending_refund() {
+        let deposit = 100_000u64;
+        let pending = 500u64;
+        let vsize = refund_paying_out(0).vsize() as u64;
+        let required = replacement_min_fee_sats(
+            &PendingRefund {
+                fee_sats: pending,
+                vsize,
+            },
+            vsize,
+        );
+
+        // Nothing on the network to outbid, so any fee is fine.
+        assert!(check_replacement_fee(&refund_paying_out(deposit - 1), deposit, None).is_ok());
+
+        let pending_refund = PendingRefund {
+            fee_sats: pending,
+            vsize,
+        };
+
+        // A single sat short of the floor is not enough, even though it pays
+        // more than the refund it is trying to displace.
+        let short = refund_paying_out(deposit - required + 1);
+        assert!(refund_fee_sats(&short, deposit).unwrap() > pending);
+        assert!(matches!(
+            check_replacement_fee(&short, deposit, Some(pending_refund)),
+            Err(SdkError::RefundReplacementFeeTooLow {
+                pending_fee_sats,
+                required_fee_sats,
+            }) if pending_fee_sats == pending && required_fee_sats == required
+        ));
+
+        // Paying exactly the floor is accepted.
+        let exact = refund_paying_out(deposit - required);
+        assert!(check_replacement_fee(&exact, deposit, Some(pending_refund)).is_ok());
     }
 }

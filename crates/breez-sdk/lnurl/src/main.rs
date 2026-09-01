@@ -147,6 +147,32 @@ struct Args {
     pub webhook_delivery_ttl_days: u32,
 }
 
+/// Fetches the comma-separated certificate revocation list at `url`.
+async fn fetch_crl(url: &str) -> Result<HashSet<String>, anyhow::Error> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| anyhow!("failed to build crl http client: {e:?}"))?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| anyhow!("failed to fetch crl from {url}: {e:?}"))?;
+    // Guard against parsing an error page (404/500 body) as revocation entries.
+    let response = response
+        .error_for_status()
+        .map_err(|e| anyhow!("crl fetch from {url} returned an error status: {e:?}"))?;
+    let body = platform_utils::read_capped_text(response, platform_utils::MAX_RESPONSE_BYTES)
+        .await
+        .map_err(|e| anyhow!("failed to read crl response body: {e:?}"))?;
+    Ok(body
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     let matches = Args::command().get_matches();
@@ -359,31 +385,9 @@ where
         })
         .transpose()?;
 
-    let crl: HashSet<String> = if let Some(url) = &args.crl_url {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .map_err(|e| anyhow!("failed to build crl http client: {e:?}"))?;
-        let response = client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| anyhow!("failed to fetch crl from {url}: {e:?}"))?;
-        // Guard against parsing an error page (404/500 body) as revocation entries.
-        let response = response
-            .error_for_status()
-            .map_err(|e| anyhow!("crl fetch from {url} returned an error status: {e:?}"))?;
-        let body = response
-            .text()
-            .await
-            .map_err(|e| anyhow!("failed to read crl response body: {e:?}"))?;
-        body.split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .collect()
-    } else {
-        HashSet::new()
+    let crl: HashSet<String> = match &args.crl_url {
+        Some(url) => fetch_crl(url).await?,
+        None => HashSet::new(),
     };
 
     let nostr_keys = args
@@ -584,6 +588,59 @@ fn register_webhook(service_provider: Arc<ServiceProvider>, webhook_url: String,
 
 #[cfg(test)]
 mod tests {
+
+    /// Serves `body` once and returns what `fetch_crl` makes of it.
+    async fn crl_from_body(
+        status: axum::http::StatusCode,
+        body: String,
+    ) -> Result<std::collections::HashSet<String>, anyhow::Error> {
+        use axum::{Router, routing::get};
+        let app = Router::new().route(
+            "/crl",
+            get(move || {
+                let body = body.clone();
+                async move { (status, body) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        super::fetch_crl(&format!("http://{addr}/crl")).await
+    }
+
+    #[tokio::test]
+    async fn crl_parses_a_comma_separated_list() {
+        let crl = crl_from_body(axum::http::StatusCode::OK, " a , b ,, c ".to_string())
+            .await
+            .expect("a 200 should parse");
+        assert_eq!(crl.len(), 3);
+        assert!(crl.contains("a") && crl.contains("b") && crl.contains("c"));
+    }
+
+    #[tokio::test]
+    async fn crl_rejects_an_error_page_instead_of_parsing_it() {
+        let err = crl_from_body(
+            axum::http::StatusCode::NOT_FOUND,
+            "<html>nope</html>".to_string(),
+        )
+        .await
+        .expect_err("a 404 body must not become revocation entries");
+        assert!(format!("{err:?}").contains("error status"));
+    }
+
+    #[tokio::test]
+    async fn crl_refuses_an_oversized_body() {
+        // The list is fetched from an operator-supplied URL, so it is bounded
+        // rather than trusted to be small.
+        let huge = "a,".repeat(platform_utils::MAX_RESPONSE_BYTES);
+        let err = crl_from_body(axum::http::StatusCode::OK, huge)
+            .await
+            .expect_err("an oversized list should be refused");
+        assert!(
+            format!("{err:?}").contains("byte limit"),
+            "expected the body-limit error, got {err:?}"
+        );
+    }
     use super::{Args, explicit_cli_overrides, parse_auth_seed, resolve_default_api_key};
     use clap::{CommandFactory, FromArgMatches};
     use figment::{Figment, providers::Serialized};

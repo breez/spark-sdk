@@ -147,6 +147,7 @@ pub(crate) async fn init_sdk_postgres() -> Result<BreezSdk> {
     // Configure PostgreSQL backend
     // Connection string format: "host=localhost user=postgres password=secret dbname=spark"
     // Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
+    // TLS: "sslmode=require" encrypts and verifies the server certificate
     let mut postgres_config =
         default_postgres_storage_config("host=localhost user=postgres dbname=spark".to_string());
     // Optionally pool settings can be adjusted. Some examples:
@@ -184,13 +185,14 @@ pub(crate) async fn init_sdk_mysql() -> Result<BreezSdk> {
     // Configure MySQL backend (MySQL 8.0+).
     // Connection string format (URL only):
     //   "mysql://user:password@host:3306/dbname?ssl-mode=required"
+    // TLS: "ssl-mode=required" encrypts and verifies the server certificate
     let mut mysql_config =
         default_mysql_storage_config("mysql://user:password@localhost:3306/spark".to_string());
     // Optionally pool settings can be adjusted. Some examples:
     mysql_config.max_pool_size = 8; // Max connections in pool
     mysql_config.recycle_timeout_secs = Some(60); // Recycle idle connections after this many seconds
 
-    // Provide a custom CA certificate when using ssl-mode=verify_ca or verify_identity:
+    // Provide a custom CA certificate when the server uses a private CA:
     // mysql_config.root_ca_pem = Some("-----BEGIN CERTIFICATE-----\n...".to_string());
 
     // Build the SDK with the MySQL storage backend (storage, tree store, and

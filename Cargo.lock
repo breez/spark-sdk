@@ -561,7 +561,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1320,7 +1320,7 @@ dependencies = [
 [[package]]
 name = "boltz-client"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=82f55b8059f54e6e06a4a2d0a901743dc8f83949#82f55b8059f54e6e06a4a2d0a901743dc8f83949"
+source = "git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5#aea35af1628d1fb259ebf85266f96215cfdabcb5"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -1335,8 +1335,8 @@ dependencies = [
  "hex",
  "k256",
  "lightning-invoice 0.34.0",
- "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=82f55b8059f54e6e06a4a2d0a901743dc8f83949)",
- "platform-utils 0.1.0 (git+https://github.com/breez/boltz-client?rev=82f55b8059f54e6e06a4a2d0a901743dc8f83949)",
+ "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5)",
+ "platform-utils 0.1.0 (git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5)",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2530,7 +2530,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2748,7 +2748,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3720,7 +3720,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -4338,7 +4338,7 @@ dependencies = [
 [[package]]
 name = "macros"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=82f55b8059f54e6e06a4a2d0a901743dc8f83949#82f55b8059f54e6e06a4a2d0a901743dc8f83949"
+source = "git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5#aea35af1628d1fb259ebf85266f96215cfdabcb5"
 dependencies = [
  "proc-macro2",
  "quote 1.0.45",
@@ -4660,7 +4660,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5076,9 +5076,13 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "encoding_rs",
+ "futures",
  "http",
  "hyper-util",
+ "js-sys",
  "macros 0.1.0",
+ "mime",
  "reqwest",
  "serde",
  "serde_json",
@@ -5088,17 +5092,24 @@ dependencies = [
  "tokio_with_wasm",
  "tower-service",
  "tracing",
+ "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
  "web-time",
 ]
 
 [[package]]
 name = "platform-utils"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=82f55b8059f54e6e06a4a2d0a901743dc8f83949#82f55b8059f54e6e06a4a2d0a901743dc8f83949"
+source = "git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5#aea35af1628d1fb259ebf85266f96215cfdabcb5"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
- "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=82f55b8059f54e6e06a4a2d0a901743dc8f83949)",
+ "encoding_rs",
+ "futures",
+ "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5)",
+ "mime",
  "reqwest",
  "serde",
  "serde_json",
@@ -5446,7 +5457,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -5483,9 +5494,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5742,6 +5753,7 @@ dependencies = [
  "bytes",
  "encoding_rs",
  "futures-core",
+ "futures-util",
  "h2",
  "hickory-resolver",
  "http",
@@ -5766,12 +5778,14 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
  "tower 0.5.3",
  "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams",
  "web-sys",
  "webpki-roots 1.0.7",
 ]
@@ -6009,7 +6023,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6703,7 +6717,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7133,7 +7147,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

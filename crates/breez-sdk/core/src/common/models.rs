@@ -414,6 +414,13 @@ pub struct LnurlWithdrawRequestDetails {
     pub min_withdrawable: u64,
     /// The maximum amount, in millisats, that this LNURL-withdraw endpoint accepts
     pub max_withdrawable: u64,
+    /// The URL of the LNURL-withdraw endpoint these details were fetched from.
+    /// Set when the details come from parsing an input; determines how far the
+    /// withdraw flow trusts the endpoint-chosen `callback`. Absent or empty
+    /// means no exemption: the callback is held to the public-host rules.
+    #[serde(default)]
+    #[cfg_attr(feature = "uniffi", uniffi(default = ""))]
+    pub url: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -603,4 +610,27 @@ pub struct UrlSuccessActionData {
     ///
     /// See <https://github.com/lnurl/luds/blob/luds/09.md>
     pub matches_callback_domain: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LnurlWithdrawRequestDetails;
+
+    /// Withdraw details stored by older SDK versions carry no `url`; they must
+    /// keep deserializing, with the empty url falling back to strict callback
+    /// rules.
+    #[test]
+    fn withdraw_details_deserialize_without_url() {
+        let details: LnurlWithdrawRequestDetails = serde_json::from_str(
+            r#"{
+                "callback": "https://service.com/cb",
+                "k1": "abc",
+                "defaultDescription": "d",
+                "minWithdrawable": 1000,
+                "maxWithdrawable": 2000
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(details.url, "");
+    }
 }

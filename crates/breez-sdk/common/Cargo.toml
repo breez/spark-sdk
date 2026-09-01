@@ -44,6 +44,7 @@ url.workspace = true
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 dnssec-prover = { workspace = true, features = ["std", "tokio", "validation"] }
+tokio = { workspace = true, features = ["net"] }
 prost.workspace = true
 tonic = { workspace = true, features = [
     "channel",
@@ -71,6 +72,10 @@ getrandom = { version = "0.2", features = ["js"] }
 [dev-dependencies]
 rand.workspace = true
 mockall = "0.12.1"
+
+# The DoH tests serve an oversized body from a local socket.
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread"] }
 
 [build-dependencies]
 tonic-build = { workspace = true }

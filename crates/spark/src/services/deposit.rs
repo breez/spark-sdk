@@ -57,7 +57,7 @@ const STATIC_DEPOSIT_KEY_INDEX: u32 = 0;
 /// Bitcoin Core's default minimum relay fee rate. The refund fee floor is this
 /// rate applied to the real signed size of the refund transaction, which varies
 /// with the refund address type.
-const MIN_RELAY_FEE_SAT_PER_VBYTE: u64 = 1;
+pub const MIN_RELAY_FEE_SAT_PER_VBYTE: u64 = 1;
 
 /// Witness vbytes for a single Schnorr signature: ceil(66 witness bytes / 4)
 /// Witness structure: 1 (stack items) + 1 (sig length varint) + 64 (signature) = 66 bytes

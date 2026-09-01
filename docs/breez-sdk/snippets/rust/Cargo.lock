@@ -1051,7 +1051,7 @@ dependencies = [
 [[package]]
 name = "boltz-client"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879#b5f4683aba10efd875d674f2bb9a5800b047a879"
+source = "git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5#aea35af1628d1fb259ebf85266f96215cfdabcb5"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -1066,14 +1066,16 @@ dependencies = [
  "hex",
  "k256",
  "lightning-invoice 0.34.0",
- "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879)",
- "platform-utils 0.1.0 (git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879)",
+ "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5)",
+ "platform-utils 0.1.0 (git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5)",
  "serde",
  "serde_json",
  "sha2",
  "thiserror 2.0.17",
  "tiny-keccak",
  "tokio",
+ "tokio-socks",
+ "tokio-tungstenite 0.28.0",
  "tokio-tungstenite-wasm",
  "tracing",
  "url",
@@ -3283,7 +3285,7 @@ dependencies = [
 [[package]]
 name = "macros"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879#b5f4683aba10efd875d674f2bb9a5800b047a879"
+source = "git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5#aea35af1628d1fb259ebf85266f96215cfdabcb5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3778,9 +3780,12 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64",
+ "encoding_rs",
+ "futures",
  "http",
  "hyper-util",
  "macros 0.1.0",
+ "mime",
  "reqwest",
  "serde",
  "serde_json",
@@ -3790,17 +3795,21 @@ dependencies = [
  "tokio_with_wasm",
  "tower-service",
  "tracing",
+ "url",
  "web-time",
 ]
 
 [[package]]
 name = "platform-utils"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879#b5f4683aba10efd875d674f2bb9a5800b047a879"
+source = "git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5#aea35af1628d1fb259ebf85266f96215cfdabcb5"
 dependencies = [
  "async-trait",
  "base64",
- "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=b5f4683aba10efd875d674f2bb9a5800b047a879)",
+ "encoding_rs",
+ "futures",
+ "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5)",
+ "mime",
  "reqwest",
  "serde",
  "serde_json",
@@ -4312,6 +4321,7 @@ dependencies = [
  "bytes",
  "encoding_rs",
  "futures-core",
+ "futures-util",
  "h2",
  "http",
  "http-body",
@@ -4333,12 +4343,14 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
  "tower 0.5.2",
  "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams",
  "web-sys",
  "webpki-roots 1.0.7",
 ]

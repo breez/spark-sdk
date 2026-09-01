@@ -77,6 +77,7 @@ const exampleWithPostgresStorage = async () => {
   // Configure PostgreSQL backend
   // Connection string format: "host=localhost user=postgres password=secret dbname=spark"
   // Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
+  // TLS: "sslmode=require" encrypts and verifies the server certificate
   const pgConfig = defaultPostgresStorageConfig('host=localhost user=postgres dbname=spark')
   // Optionally pool settings can be adjusted. Some examples:
   pgConfig.maxPoolSize = 8 // Max connections in pool
@@ -107,11 +108,15 @@ const exampleWithMysqlStorage = async () => {
   // Configure MySQL backend (MySQL 8.0+).
   // Connection string format (URL only):
   //   "mysql://user:password@host:3306/dbname?ssl-mode=required"
+  // TLS: "ssl-mode=required" encrypts and verifies the server certificate
   const mysqlConfig = defaultMysqlStorageConfig('mysql://user:password@localhost:3306/spark')
   // Optionally pool settings can be adjusted. Some examples:
   mysqlConfig.maxPoolSize = 8 // Max connections in pool
   mysqlConfig.createTimeoutSecs = 30 // Timeout for establishing a new connection
   mysqlConfig.recycleTimeoutSecs = 60 // Recycle idle connections after this many seconds
+
+  // To trust a private CA, add it to Node's trust store
+  // (e.g. via the NODE_EXTRA_CA_CERTS environment variable)
 
   // Build the SDK with the MySQL storage backend (storage, tree store, and
   // token store). Per-tenant scoping (rows isolated by seed identity) is

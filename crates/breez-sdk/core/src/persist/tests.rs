@@ -4,8 +4,8 @@ use chrono::Utc;
 
 use crate::{
     DepositClaimError, InstantClaimStatus, LnurlWithdrawInfo, Payment, PaymentDetails,
-    PaymentMetadata, PaymentMethod, PaymentStatus, PaymentType, SparkHtlcDetails, SparkHtlcStatus,
-    Storage, TokenMetadata, TokenTransactionType, UpdateDepositPayload,
+    PaymentMetadata, PaymentMethod, PaymentStatus, PaymentType, RefundState, SparkHtlcDetails,
+    SparkHtlcStatus, Storage, TokenMetadata, TokenTransactionType, UpdateDepositPayload,
     persist::{ObjectCacheRepository, StorageListPaymentsRequest},
     sync_storage::{Record, RecordId, UnversionedRecordChange},
 };
@@ -1371,6 +1371,137 @@ pub async fn test_unclaimed_deposits_crud(storage: Box<dyn Storage>) {
     assert_eq!(deposits.len(), 0);
 }
 
+/// A refund state change comes from the sync path, which must not disturb the
+/// refund itself or the last claim error the way a fresh refund does.
+async fn assert_refund_state_keeps_claim_error(storage: &dyn Storage) {
+    // The sync path moves the state on its own, so record a claim error first
+    // and check the narrow update leaves it, and the refund, untouched.
+    storage
+        .update_deposit(
+            "test_tx_123".to_string(),
+            0,
+            UpdateDepositPayload::ClaimError {
+                error: DepositClaimError::Generic {
+                    message: "claim failed before the refund".to_string(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+    storage
+        .update_deposit(
+            "test_tx_123".to_string(),
+            0,
+            UpdateDepositPayload::Refund {
+                refund_txid: "refund_tx_id_456".to_string(),
+                refund_tx: "0200000001abcd1234...".to_string(),
+                state: RefundState::Broadcast,
+            },
+        )
+        .await
+        .unwrap();
+    storage
+        .update_deposit(
+            "test_tx_123".to_string(),
+            0,
+            UpdateDepositPayload::ClaimError {
+                error: DepositClaimError::Generic {
+                    message: "kept across a state change".to_string(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+    storage
+        .update_deposit(
+            "test_tx_123".to_string(),
+            0,
+            UpdateDepositPayload::RefundState {
+                refund_txid: "refund_tx_id_456".to_string(),
+                state: RefundState::BroadcastPending {
+                    last_error: Some("evicted".to_string()),
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let deposits = storage.list_deposits().await.unwrap();
+    assert_eq!(
+        deposits[0].refund_state,
+        Some(RefundState::BroadcastPending {
+            last_error: Some("evicted".to_string())
+        })
+    );
+    assert!(
+        deposits[0].claim_error.is_some(),
+        "a refund state change must not clear the claim error"
+    );
+
+    // The sync path decides a state from a deposit it read earlier, so a state
+    // meant for a refund that has since been replaced must not land on the new one.
+    storage
+        .update_deposit(
+            "test_tx_123".to_string(),
+            0,
+            UpdateDepositPayload::RefundState {
+                refund_txid: "a_refund_that_was_replaced".to_string(),
+                state: RefundState::Broadcast,
+            },
+        )
+        .await
+        .unwrap();
+    let deposits = storage.list_deposits().await.unwrap();
+    assert_eq!(
+        deposits[0].refund_state,
+        Some(RefundState::BroadcastPending {
+            last_error: Some("evicted".to_string())
+        }),
+        "a state decided for a superseded refund must not apply"
+    );
+
+    // Leave the refund back in its recorded state for the caller.
+    storage
+        .update_deposit(
+            "test_tx_123".to_string(),
+            0,
+            UpdateDepositPayload::Refund {
+                refund_txid: "refund_tx_id_456".to_string(),
+                refund_tx: "0200000001abcd1234...".to_string(),
+                state: RefundState::Broadcast,
+            },
+        )
+        .await
+        .unwrap();
+}
+
+/// A claim failure is a diagnostic. The refund is what the wallet rebroadcasts to
+/// get out of the deposit. Recording the first must never destroy the second.
+async fn assert_claim_error_keeps_refund(storage: &dyn Storage) {
+    storage
+        .update_deposit(
+            "test_tx_123".to_string(),
+            0,
+            UpdateDepositPayload::ClaimError {
+                error: DepositClaimError::Generic {
+                    message: "Test error".to_string(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let deposits = storage.list_deposits().await.unwrap();
+    assert!(deposits[0].claim_error.is_some());
+    assert_eq!(
+        deposits[0].refund_tx,
+        Some("0200000001abcd1234...".to_string())
+    );
+    assert_eq!(
+        deposits[0].refund_tx_id,
+        Some("refund_tx_id_456".to_string())
+    );
+    assert_eq!(deposits[0].refund_state, Some(RefundState::Broadcast));
+}
+
 pub async fn test_deposit_refunds(storage: Box<dyn Storage>) {
     // Add the initial deposit
     storage
@@ -1384,6 +1515,9 @@ pub async fn test_deposit_refunds(storage: Box<dyn Storage>) {
     assert_eq!(deposits[0].amount_sats, 100_000);
     assert!(deposits[0].claim_error.is_none());
 
+    // A deposit with no refund has no refund state.
+    assert_eq!(deposits[0].refund_state, None);
+
     // Update the deposit refund information
     storage
         .update_deposit(
@@ -1392,6 +1526,7 @@ pub async fn test_deposit_refunds(storage: Box<dyn Storage>) {
             UpdateDepositPayload::Refund {
                 refund_txid: "refund_tx_id_456".to_string(),
                 refund_tx: "0200000001abcd1234...".to_string(),
+                state: RefundState::BroadcastPending { last_error: None },
             },
         )
         .await
@@ -1412,6 +1547,53 @@ pub async fn test_deposit_refunds(storage: Box<dyn Storage>) {
         deposits[0].refund_tx,
         Some("0200000001abcd1234...".to_string())
     );
+    assert_eq!(
+        deposits[0].refund_state,
+        Some(RefundState::BroadcastPending { last_error: None })
+    );
+
+    // A failed broadcast records its reason on the state.
+    storage
+        .update_deposit(
+            "test_tx_123".to_string(),
+            0,
+            UpdateDepositPayload::Refund {
+                refund_txid: "refund_tx_id_456".to_string(),
+                refund_tx: "0200000001abcd1234...".to_string(),
+                state: RefundState::BroadcastPending {
+                    last_error: Some("min relay fee not met".to_string()),
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let deposits = storage.list_deposits().await.unwrap();
+    assert_eq!(
+        deposits[0].refund_state,
+        Some(RefundState::BroadcastPending {
+            last_error: Some("min relay fee not met".to_string())
+        })
+    );
+
+    // A successful broadcast overwrites the state, dropping the stale reason.
+    storage
+        .update_deposit(
+            "test_tx_123".to_string(),
+            0,
+            UpdateDepositPayload::Refund {
+                refund_txid: "refund_tx_id_456".to_string(),
+                refund_tx: "0200000001abcd1234...".to_string(),
+                state: RefundState::Broadcast,
+            },
+        )
+        .await
+        .unwrap();
+    let deposits = storage.list_deposits().await.unwrap();
+    assert_eq!(deposits[0].refund_state, Some(RefundState::Broadcast));
+
+    assert_refund_state_keeps_claim_error(storage.as_ref()).await;
+
+    assert_claim_error_keeps_refund(storage.as_ref()).await;
 }
 
 pub async fn test_instant_claim_status(storage: Box<dyn Storage>) {

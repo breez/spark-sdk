@@ -3,14 +3,21 @@ name = "platform-utils"
 version.workspace = true
 edition = "2024"
 
+[features]
+browser-tests = []
+
 [lints]
 workspace = true
 
 [dependencies]
 async-trait.workspace = true
 base64.workspace = true
+encoding_rs.workspace = true
+futures.workspace = true
 macros.workspace = true
+mime.workspace = true
 reqwest.workspace = true
+url.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -36,4 +43,12 @@ tokio_with_wasm = { version = "0.8.7", features = [
 ] }
 
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread"] }
+
+# The wasm tests drive a Node-side HTTP fixture, so they are the only place the
+# browser-decoded body path (and with it the compression case) can be exercised.
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
+js-sys.workspace = true
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+wasm-bindgen-test.workspace = true

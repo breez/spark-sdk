@@ -1247,9 +1247,116 @@ class MysqlTokenStore {
   }
 }
 
+/**
+ * Translates the `ssl-mode` URL parameter into mysql2's `ssl` option.
+ * mysql2 does not understand `ssl-mode`, so it is stripped from the URI here.
+ *
+ * Spellings mirror the Rust SDK:
+ * - absent or `disabled`: no TLS
+ * - `preferred` / `required` / `verify_identity`: TLS with certificate chain
+ *   and hostname verification
+ * - `verify_ca`: chain verification only
+ * - `no-verify`: TLS without certificate verification (explicit opt-in)
+ *
+ * An unrecognized value throws rather than silently downgrading to plaintext.
+ * Pin a private CA with `ssl-ca=<path>` (required for `verify_ca`); for the
+ * hostname-verified modes, adding the CA to Node's trust store
+ * (e.g. NODE_EXTRA_CA_CERTS) also works, though it extends the store rather
+ * than pinning.
+ */
+function extractSslMode(connectionString) {
+  const queryIndex = connectionString.indexOf("?");
+  if (queryIndex === -1) {
+    return { connectionString, ssl: undefined };
+  }
+  const base = connectionString.slice(0, queryIndex);
+  const retained = [];
+  let sslMode;
+  let sslCaPath;
+  for (const param of connectionString.slice(queryIndex + 1).split("&")) {
+    const eq = param.indexOf("=");
+    const key = (eq === -1 ? param : param.slice(0, eq)).toLowerCase();
+    if (
+      eq !== -1 &&
+      (key === "ssl-mode" || key === "ssl_mode" || key === "sslmode")
+    ) {
+      sslMode = param.slice(eq + 1).toLowerCase();
+    } else if (
+      eq !== -1 &&
+      (key === "ssl-ca" || key === "ssl_ca" || key === "sslca")
+    ) {
+      sslCaPath = decodeURIComponent(param.slice(eq + 1));
+    } else {
+      retained.push(param);
+    }
+  }
+  if (sslMode === undefined && sslCaPath === undefined) {
+    return { connectionString, ssl: undefined };
+  }
+  const rebuilt = retained.length ? `${base}?${retained.join("&")}` : base;
+  if (sslMode === undefined) {
+    // ssl-ca alone is stripped (mysql2 would reject it as an unknown option)
+    // but has no effect without an ssl-mode.
+    return { connectionString: rebuilt, ssl: undefined };
+  }
+  const ca =
+    sslCaPath === undefined
+      ? undefined
+      : require("fs").readFileSync(sslCaPath).toString();
+  return { connectionString: rebuilt, ssl: sslOptionForMode(sslMode, ca) };
+}
+
+function sslOptionForMode(mode, ca) {
+  switch (mode) {
+    case "disabled":
+    case "disable":
+      return undefined;
+    case "preferred":
+    case "prefer":
+    case "required":
+    case "require":
+    case "verify_identity":
+    case "verify-identity":
+    case "verifyidentity":
+    case "verify-full":
+    case "verify_full":
+      // mysql2 checks the hostname only when verifyIdentity is set;
+      // rejectUnauthorized alone verifies just the chain.
+      return {
+        rejectUnauthorized: true,
+        verifyIdentity: true,
+        ...(ca !== undefined && { ca }),
+      };
+    case "verify_ca":
+    case "verify-ca":
+    case "verifyca":
+      // Without a pinned CA, chain-only verification accepts a certificate
+      // from any trusted CA for any host, which authenticates nothing.
+      if (ca === undefined) {
+        throw new TokenStoreError(
+          "ssl-mode=verify_ca requires ssl-ca=<path>; supply the CA to pin, " +
+            "or use ssl-mode=required / verify_identity for " +
+            "hostname-verified TLS"
+        );
+      }
+      return { rejectUnauthorized: true, ca };
+    case "no-verify":
+    case "no_verify":
+    case "noverify":
+      return { rejectUnauthorized: false };
+    default:
+      throw new TokenStoreError(
+        `Unrecognized ssl-mode value \`${mode}\`; expected one of: ` +
+          "disabled, preferred, required, verify_ca, verify_identity, no-verify"
+      );
+  }
+}
+
 function createMysqlPool(config) {
+  const { connectionString, ssl } = extractSslMode(config.connectionString);
   return mysql.createPool({
-    uri: config.connectionString,
+    uri: connectionString,
+    ...(ssl !== undefined && { ssl }),
     connectionLimit: config.maxPoolSize,
     connectTimeout: (config.createTimeoutSecs || 0) * 1000 || 10000,
     idleTimeout: (config.recycleTimeoutSecs || 0) * 1000 || 10000,

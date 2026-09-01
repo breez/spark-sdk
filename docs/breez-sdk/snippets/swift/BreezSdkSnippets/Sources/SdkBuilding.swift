@@ -123,6 +123,7 @@ func initSdkPostgres() async throws -> BreezSdk {
     // Configure PostgreSQL backend
     // Connection string format: "host=localhost user=postgres password=secret dbname=spark"
     // Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
+    // TLS: "sslmode=require" encrypts and verifies the server certificate
     var postgresConfig = defaultPostgresStorageConfig(
         connectionString: "host=localhost user=postgres dbname=spark"
     )
@@ -157,13 +158,14 @@ func initSdkMysql() async throws -> BreezSdk {
     // Configure MySQL backend (MySQL 8.0+).
     // Connection string format (URL only):
     //   "mysql://user:password@host:3306/dbname?ssl-mode=required"
+    // TLS: "ssl-mode=required" encrypts and verifies the server certificate
     var mysqlConfig = defaultMysqlStorageConfig(
         connectionString: "mysql://user:password@localhost:3306/spark"
     )
     // Optionally pool settings can be adjusted. Some examples:
     mysqlConfig.maxPoolSize = UInt32(8) // Max connections in pool
     mysqlConfig.recycleTimeoutSecs = UInt64(60) // Recycle idle connections after this many seconds
-    // Provide a custom CA certificate when using ssl-mode=verify_ca or verify_identity:
+    // Provide a custom CA certificate when the server uses a private CA:
     // mysqlConfig.rootCaPem = "-----BEGIN CERTIFICATE-----\n..."
 
     // Build the SDK with the MySQL storage backend (storage, tree store, and

@@ -1122,3 +1122,20 @@ async fn test_lnurl_domain_is_lowercased() {
         other => panic!("Expected LnurlPay, got: {other:?}"),
     }
 }
+
+#[macros::test_all]
+fn test_is_local_domain_requires_exact_match() {
+    use super::is_local_domain;
+    for host in ["localhost", "localhost:8080", "127.0.0.1", "127.0.0.1:8080"] {
+        assert!(is_local_domain(host), "{host}");
+    }
+    for host in [
+        "localhost.evil.com",
+        "127.0.0.1.evil.com",
+        "127.0.0.12",
+        "mylocalhost",
+        "localhost.com",
+    ] {
+        assert!(!is_local_domain(host), "{host}");
+    }
+}

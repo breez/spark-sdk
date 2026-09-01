@@ -578,6 +578,12 @@ class MysqlMigrationManager {
              WHERE LOWER(CAST(instant_claim_status AS CHAR)) LIKE '%declined%'`,
         ],
       },
+      {
+        name: "Add refund state to brz_unclaimed_deposits",
+        sql: [
+          `ALTER TABLE brz_unclaimed_deposits ADD COLUMN refund_state JSON NULL`,
+        ],
+      },
     ];
   }
 }

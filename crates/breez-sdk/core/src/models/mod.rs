@@ -1238,6 +1238,20 @@ pub enum InstantClaimStatus {
     Submitted { claim_id: String },
 }
 
+/// State of the deposit refund broadcast.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum RefundState {
+    /// The refund is signed and stored but has not been seen on the network.
+    /// `last_error` carries the reason the most recent broadcast was refused,
+    /// unset while none has been refused. A refund whose fee is under the
+    /// network's current minimum stays here until it is re-created at a higher
+    /// fee.
+    BroadcastPending { last_error: Option<String> },
+    /// The refund has been accepted by the network and is waiting to confirm.
+    Broadcast,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct DepositInfo {
@@ -1253,6 +1267,9 @@ pub struct DepositInfo {
     pub refund_tx: Option<String>,
     /// Transaction id of the refund, once one has been created.
     pub refund_tx_id: Option<String>,
+    /// How far the refund has got towards the network. Unset when no refund has
+    /// been created, and on refunds created before this field existed.
+    pub refund_state: Option<RefundState>,
     /// Why the last claim attempt failed. Unset while none has failed.
     pub claim_error: Option<DepositClaimError>,
     /// Unset when no instant claim has been attempted.

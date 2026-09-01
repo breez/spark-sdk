@@ -2609,9 +2609,12 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64",
+ "encoding_rs",
+ "futures",
  "http",
  "hyper-util",
  "macros",
+ "mime",
  "reqwest",
  "serde",
  "serde_json",
@@ -2621,6 +2624,7 @@ dependencies = [
  "tokio_with_wasm",
  "tower-service",
  "tracing",
+ "url",
  "web-time",
 ]
 
@@ -2965,6 +2969,7 @@ dependencies = [
  "bytes",
  "encoding_rs",
  "futures-core",
+ "futures-util",
  "h2",
  "http",
  "http-body",
@@ -2986,12 +2991,14 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
  "tower 0.5.2",
  "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams",
  "web-sys",
  "webpki-roots 1.0.7",
 ]

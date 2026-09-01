@@ -43,6 +43,8 @@ If your service owns the database schema and applies SDK-compatible migrations e
 <div class="warning">
 <h4>Developer note</h4>
 
+TLS is controlled by the `sslmode` connection-string parameter. For production, set `sslmode=require`: it encrypts the connection and verifies the server certificate. `verify-ca` and `verify-full` are also supported, and `no-verify` is the explicit opt-in for TLS without certificate verification (for example, a self-signed certificate you cannot add to a trust store). When `sslmode` is absent, TLS is used when the server supports it and is always verified; the exception is JavaScript/TypeScript on Node.js, where an absent `sslmode` means no TLS. Servers using a private CA are trusted via {{#name root_ca_pem}} on the storage config, or on Node.js via the `sslrootcert=<path>` URI parameter or Node's trust store (for example, the `NODE_EXTRA_CA_CERTS` environment variable). `verify-ca` performs chain verification without a hostname check and requires a pinned CA: {{#name root_ca_pem}} on the storage config, or on Node.js the `sslrootcert=<path>` URI parameter. Use it when hostname verification cannot succeed, such as connecting to the server by IP address.
+
 Sharing the same PostgreSQL database with multiple SDK instances is incompatible with real-time sync. See [Real-time sync server URL](./config.md#real-time-sync-server-url) for how to disable it.
 
 The PostgreSQL tree store can use the same or a separate PostgreSQL database as the PostgreSQL storage. The tree store uses its own set of tables prefixed with `tree_`.
@@ -65,7 +67,7 @@ If your service owns the database schema and applies SDK-compatible migrations e
 <div class="warning">
 <h4>Developer note</h4>
 
-MySQL only accepts URL-form connection strings (`mysql://user:password@host:3306/dbname`); the key=value form supported by PostgreSQL is not available. TLS is enabled by appending `?ssl-mode=required` (or `verify_ca` / `verify_identity`); when using `verify_ca` or `verify_identity` you can supply a custom `root_ca_pem`.
+MySQL only accepts URL-form connection strings (`mysql://user:password@host:3306/dbname`); the key=value form supported by PostgreSQL is not available. TLS is controlled by the `ssl-mode` URL parameter, with the same spellings on every platform: `required` (recommended for production) and `verify_identity` verify the server certificate chain and hostname, `verify_ca` verifies the chain only, and `no-verify` is the explicit opt-in for TLS without certificate verification. An absent `ssl-mode` means no TLS. Servers using a private CA are trusted via {{#name root_ca_pem}} on the storage config, or on JavaScript/TypeScript (Node.js) via the `ssl-ca=<path>` URL parameter or Node's trust store (for example, the `NODE_EXTRA_CA_CERTS` environment variable). `verify_ca` performs chain verification without a hostname check and requires a pinned CA: {{#name root_ca_pem}} on the storage config, or on Node.js the `ssl-ca=<path>` URL parameter. Use it when hostname verification cannot succeed, such as connecting to the server by IP address.
 
 Sharing the same MySQL database with multiple SDK instances is incompatible with real-time sync. See [Real-time sync server URL](./config.md#real-time-sync-server-url) for how to disable it.
 

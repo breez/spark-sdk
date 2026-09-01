@@ -37,6 +37,13 @@ use wasm_bindgen::prelude::*;
 #[serde(rename_all = "camelCase")]
 pub struct PostgresStorageConfig {
     /// PostgreSQL connection string (URI format).
+    ///
+    /// TLS is controlled by the `sslmode` query parameter: `prefer`,
+    /// `require`, and `verify-full` require TLS and verify the server
+    /// certificate chain and hostname; `verify-ca` verifies the chain only;
+    /// `no-verify` encrypts without verification; absent or `disable` means
+    /// no TLS. An unrecognized value fails instead of silently changing the
+    /// TLS level.
     pub connection_string: String,
     /// Maximum number of connections in the pool.
     pub max_pool_size: u32,
@@ -99,6 +106,12 @@ pub enum MysqlForeignKeyMode {
 #[serde(rename_all = "camelCase")]
 pub struct MysqlStorageConfig {
     /// MySQL connection URL (e.g. `mysql://user:pass@host:3306/dbname`).
+    ///
+    /// TLS is controlled by the `ssl-mode` query parameter: `required` and
+    /// `verify_identity` verify the server certificate chain and hostname,
+    /// `verify_ca` verifies the chain only, `no-verify` encrypts without
+    /// verification, and absent or `disabled` means no TLS. An unrecognized
+    /// value fails instead of silently downgrading.
     pub connection_string: String,
     /// Maximum number of connections in the pool.
     pub max_pool_size: u32,

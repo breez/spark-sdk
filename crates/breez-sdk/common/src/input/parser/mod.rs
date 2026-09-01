@@ -14,7 +14,9 @@ use crate::{
         Bip21Extra, ExternalInputParser, LnurlRequestDetails, ParseError, PaymentRequestSource,
         SparkAddressDetails, SparkInvoiceDetails,
     },
-    lnurl::{auth, error::LnurlError, pay::LnurlPayRequestDetails},
+    lnurl::{
+        auth, error::LnurlError, pay::LnurlPayRequestDetails, withdraw::LnurlWithdrawRequestDetails,
+    },
 };
 
 use super::percent_encode;
@@ -223,10 +225,7 @@ where
         let (user, domain) = (user.to_lowercase(), domain.to_lowercase());
 
         // Use http:// for Tor or local domains (latter being commonly used for testing)
-        let scheme = if has_extension(&domain, "onion")
-            || domain.starts_with("127.0.0.1")
-            || domain.starts_with("localhost")
-        {
+        let scheme = if has_extension(&domain, "onion") || is_local_domain(&domain) {
             "http://"
         } else {
             "https://"
@@ -376,7 +375,10 @@ where
                 })
             }
             LnurlRequestDetails::WithdrawRequest { withdraw_request } => {
-                InputType::LnurlWithdraw(withdraw_request)
+                InputType::LnurlWithdraw(LnurlWithdrawRequestDetails {
+                    url: url.to_string(),
+                    ..withdraw_request
+                })
             }
             LnurlRequestDetails::AuthRequest { auth_request } => InputType::LnurlAuth(auth_request),
             LnurlRequestDetails::Error {
@@ -453,9 +455,16 @@ fn has_extension(input: &str, extension: &str) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case(extension))
 }
 
-/// Check if the domain is a local domain (for testing purposes)
+/// Check if the domain is a local domain (for testing purposes): exactly
+/// `localhost` or `127.0.0.1`, optionally with a port. Look-alikes such as
+/// `localhost.evil.com` or `127.0.0.12` are not local and must not get the
+/// plaintext-http treatment.
 fn is_local_domain(host: &str) -> bool {
-    host.starts_with("127.0.0.1") || host.starts_with("localhost")
+    let host = match host.rsplit_once(':') {
+        Some((h, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => h,
+        _ => host,
+    };
+    host == "localhost" || host == "127.0.0.1"
 }
 
 fn has_lightning_prefix(input: &str) -> bool {

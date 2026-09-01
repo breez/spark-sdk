@@ -534,6 +534,12 @@ class PostgresMigrationManager {
              WHERE LOWER(instant_claim_status::text) LIKE '%declined%'`,
         ],
       },
+      {
+        name: "Add refund state to brz_unclaimed_deposits",
+        sql: [
+          `ALTER TABLE brz_unclaimed_deposits ADD COLUMN refund_state JSONB`,
+        ],
+      },
     ];
   }
 }

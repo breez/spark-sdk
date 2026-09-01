@@ -4,6 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 use base64::Engine;
+use platform_utils::read_capped_text;
 use spark::header_provider::{HeaderProvider, HeaderProviderError};
 use tokio::sync::RwLock;
 use tracing::warn;
@@ -24,6 +25,10 @@ const SERVE_SKEW_SECS: u64 = 30;
 const HYDRATE_INTERVAL: Duration = Duration::from_secs(30);
 /// Bound on a single JWT fetch, so a slow endpoint can't stall the hydrator.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Maximum JWT response body to buffer. The payload is a single-field JSON
+/// object wrapping one token.
+const MAX_JWT_RESPONSE_BYTES: usize = 64 * 1024;
 /// Cap on the per-target fetch backoff.
 const BACKOFF_MAX_SECS: u64 = 5 * 60;
 
@@ -367,8 +372,7 @@ async fn fetch_jwt(http: &reqwest::Client, url: &str, api_key: &str) -> Result<S
     if !resp.status().is_success() {
         return Err(format!("unexpected status {}", resp.status()));
     }
-    let body = resp
-        .text()
+    let body = read_capped_text(resp, MAX_JWT_RESPONSE_BYTES)
         .await
         .map_err(|e| format!("body read failed: {e}"))?;
     let parsed: JwtResponse =
@@ -643,6 +647,36 @@ mod tests {
 
         assert_eq!(served(&cache, "a.com").await, Some(token.clone()));
         assert_eq!(store.load_all().await, vec![("a.com".to_string(), token)]);
+    }
+
+    #[tokio::test]
+    async fn an_oversized_jwt_response_is_refused() {
+        use axum::{Router, routing::get};
+
+        // A JWT endpoint answering with far more than a token wrapper.
+        let huge = "x".repeat(MAX_JWT_RESPONSE_BYTES.saturating_mul(4));
+        let app = Router::new().route(
+            "/api/jwt",
+            get(move || {
+                let huge = huge.clone();
+                async move { huge }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let err = fetch_jwt(
+            &reqwest::Client::new(),
+            &format!("http://{addr}/api/jwt"),
+            "key-a",
+        )
+        .await
+        .expect_err("an oversized body should be refused");
+        assert!(
+            err.contains("byte limit"),
+            "expected the body-limit error, got {err}"
+        );
     }
 
     #[tokio::test]

@@ -33,6 +33,7 @@ what to do next.
 | {{#name is_mature}} | Whether the deposit has enough confirmations to be claimed. |
 | {{#name claim_error}} | Why the last claim attempt failed. Set on {{#enum SdkEvent::UnclaimedDeposits}}. |
 | {{#name refund_tx}}, {{#name refund_tx_id}} | The refund transaction, once one has been created. |
+| {{#name refund_state}} | How far the refund has got towards the network. Read it through {{#name list_unclaimed_deposits}}: a refunded deposit no longer appears in these events. See [tracking a refund](onchain_claims.md#tracking-a-refund). |
 | {{#name instant_claim_status}} | State of an instant (0-conf) claim attempt. Unset when none was attempted. |
 
 <h2 id="add-event-listener">

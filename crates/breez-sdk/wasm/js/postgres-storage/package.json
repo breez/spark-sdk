@@ -11,7 +11,8 @@
   },
   "scripts": {
     "lint": "eslint *.cjs",
-    "lint:fix": "eslint *.cjs --fix"
+    "lint:fix": "eslint *.cjs --fix",
+    "test": "node --test tests/ssl-mode.test.cjs"
   },
   "dependencies": {
     "pg": "^8.18.0"

@@ -46,6 +46,10 @@ pub enum _SdkError {
         tx: String,
         vout: u32,
     },
+    RefundReplacementFeeTooLow {
+        pending_fee_sats: u64,
+        required_fee_sats: u64,
+    },
     LnurlError(String),
     Signer(String),
     OptimizationAlreadyRunning,

@@ -1268,6 +1268,112 @@ class PostgresTokenStore {
 }
 
 /**
+ * Translates the `sslmode` URI parameter into pg's `ssl` option.
+ * The pinned `pg` maps `require` to verified TLS but warns that pg v9 reverts
+ * it to libpq semantics (no verification); handling `sslmode` here keeps the
+ * documented guarantees stable across driver versions. The parameter (and the
+ * `ssl`/`sslcert`/`sslkey`/`sslrootcert` parameters folded into the option)
+ * are stripped from the URI because a connection string's ssl settings
+ * override the explicit option.
+ *
+ * Spellings mirror the Rust SDK where pg has an equivalent:
+ * - absent or `disable`: no TLS
+ * - `prefer` / `require` / `verify-full`: TLS with certificate chain and
+ *   hostname verification (pg cannot fall back to plaintext, so `prefer`
+ *   behaves like `require`)
+ * - `verify-ca`: chain verification only, hostname not checked
+ * - `no-verify`: TLS without certificate verification (explicit opt-in)
+ *
+ * An unrecognized value throws rather than silently changing the TLS level.
+ * Pin a private CA with `sslrootcert=<path>` (required for `verify-ca`); for
+ * the hostname-verified modes, adding the CA to Node's trust store
+ * (e.g. NODE_EXTRA_CA_CERTS) also works, though it extends the store rather
+ * than pinning.
+ */
+function extractSslMode(connectionString) {
+  if (
+    !connectionString.startsWith("postgres://") &&
+    !connectionString.startsWith("postgresql://")
+  ) {
+    return { connectionString, ssl: undefined };
+  }
+  const queryIndex = connectionString.indexOf("?");
+  if (queryIndex === -1) {
+    return { connectionString, ssl: undefined };
+  }
+  const params = connectionString.slice(queryIndex + 1).split("&");
+  if (!params.some((param) => param.startsWith("sslmode="))) {
+    return { connectionString, ssl: undefined };
+  }
+
+  const base = connectionString.slice(0, queryIndex);
+  const retained = [];
+  const files = {};
+  let sslMode;
+  for (const param of params) {
+    const eq = param.indexOf("=");
+    const key = eq === -1 ? param : param.slice(0, eq);
+    const value = eq === -1 ? "" : decodeURIComponent(param.slice(eq + 1));
+    if (key === "sslmode") {
+      sslMode = value;
+    } else if (key === "sslcert" || key === "sslkey" || key === "sslrootcert") {
+      files[key] = value;
+    } else if (key === "ssl") {
+      // consumed: sslmode governs TLS when present
+    } else {
+      retained.push(param);
+    }
+  }
+  const rebuilt = retained.length ? `${base}?${retained.join("&")}` : base;
+  return { connectionString: rebuilt, ssl: sslOptionForMode(sslMode, files) };
+}
+
+function sslOptionForMode(mode, files) {
+  let ssl;
+  switch (mode) {
+    case "disable":
+      return false;
+    case "prefer":
+    case "require":
+    case "verify-full":
+      ssl = { rejectUnauthorized: true };
+      break;
+    case "verify-ca":
+      // Without a pinned CA, chain-only verification accepts a certificate
+      // from any trusted CA for any host, which authenticates nothing.
+      if (!files.sslrootcert) {
+        throw new TokenStoreError(
+          "sslmode=verify-ca requires sslrootcert=<path>; supply the CA to " +
+            "pin, or use sslmode=require / verify-full for " +
+            "hostname-verified TLS"
+        );
+      }
+      ssl = { rejectUnauthorized: true, checkServerIdentity: () => undefined };
+      break;
+    case "no-verify":
+      ssl = { rejectUnauthorized: false };
+      break;
+    default:
+      throw new TokenStoreError(
+        `Unrecognized sslmode value \`${mode}\`; expected one of: ` +
+          "disable, prefer, require, verify-ca, verify-full, no-verify"
+      );
+  }
+  const fs =
+    files.sslcert || files.sslkey || files.sslrootcert ? require("fs") : null;
+  if (files.sslcert) {
+    ssl.cert = fs.readFileSync(files.sslcert).toString();
+  }
+  if (files.sslkey) {
+    ssl.key = fs.readFileSync(files.sslkey).toString();
+  }
+  if (files.sslrootcert) {
+    ssl.ca = fs.readFileSync(files.sslrootcert).toString();
+  }
+  return ssl;
+}
+
+/**
  * Create a PostgresTokenStore instance from a config object.
  *
  * @param {object} config - PostgreSQL configuration
@@ -1280,8 +1386,10 @@ class PostgresTokenStore {
  * @returns {Promise<PostgresTokenStore>}
  */
 async function createPostgresTokenStore(config, identity, logger = null) {
+  const { connectionString, ssl } = extractSslMode(config.connectionString);
   const pool = new pg.Pool({
-    connectionString: config.connectionString,
+    connectionString,
+    ...(ssl !== undefined && { ssl }),
     max: config.maxPoolSize,
     connectionTimeoutMillis: config.createTimeoutSecs * 1000,
     idleTimeoutMillis: config.recycleTimeoutSecs * 1000,

@@ -124,6 +124,7 @@ class SdkBuilding {
         // Configure PostgreSQL backend
         // Connection string format: "host=localhost user=postgres password=secret dbname=spark"
         // Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
+        // TLS: "sslmode=require" encrypts and verifies the server certificate
         val postgresConfig = defaultPostgresStorageConfig("host=localhost user=postgres dbname=spark")
         // Optionally pool settings can be adjusted. Some examples:
         postgresConfig.maxPoolSize = 8u // Max connections in pool
@@ -157,10 +158,14 @@ class SdkBuilding {
         // Configure MySQL backend (MySQL 8.0+).
         // Connection string format (URL only):
         //   "mysql://user:password@host:3306/dbname?ssl-mode=required"
+        // TLS: "ssl-mode=required" encrypts and verifies the server certificate
         val mysqlConfig = defaultMysqlStorageConfig("mysql://user:password@localhost:3306/spark")
         // Optionally pool settings can be adjusted. Some examples:
         mysqlConfig.maxPoolSize = 8u // Max connections in pool
         mysqlConfig.recycleTimeoutSecs = 60u // Recycle idle connections after this many seconds
+
+        // Provide a custom CA certificate when the server uses a private CA:
+        // mysqlConfig.rootCaPem = "-----BEGIN CERTIFICATE-----\n..."
 
         try {
             // Build the SDK with the MySQL storage backend (storage, tree

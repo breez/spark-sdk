@@ -17,7 +17,7 @@ use tracing::warn;
 use crate::{
     AssetFilter, Contact, ConversionDetails, ConversionInfo, ConversionStatus, DepositInfo,
     InstantClaimStatus, ListContactsRequest, LnurlPayInfo, LnurlReceiveMetadata, LnurlWithdrawInfo,
-    PaymentDetails, PaymentMethod, PaymentStatus, SparkHtlcDetails, SparkHtlcStatus,
+    PaymentDetails, PaymentMethod, PaymentStatus, RefundState, SparkHtlcDetails, SparkHtlcStatus,
     error::DepositClaimError,
     persist::{
         Payment, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,
@@ -189,11 +189,12 @@ impl PostgresStorage {
     ///
     /// # Supported `sslmode` values
     ///
-    /// - `disable` - No TLS (default if not specified)
-    /// - `prefer` - Try TLS, fall back to plaintext if unavailable
-    /// - `require` - TLS required, but accept any server certificate
+    /// - `disable` - No TLS
+    /// - `prefer` - TLS when the server supports it, verified (default if not specified)
+    /// - `require` - TLS required, certificate chain and hostname verified
     /// - `verify-ca` - TLS required, verify server certificate is signed by a trusted CA
     /// - `verify-full` - TLS required, verify CA and that server hostname matches certificate
+    /// - `no-verify` - TLS required, but accept any server certificate (explicit opt-in)
     ///
     /// # Returns
     ///
@@ -481,6 +482,10 @@ impl PostgresStorage {
                  WHERE LOWER(instant_claim_status::text) LIKE '%declined%'"
                     .to_string(),
             ],
+            // Migration 22: Track how far a refund has got towards the network as a
+            // JSON-encoded RefundState. NULL on refunds created before this column
+            // existed, which is read as BroadcastPending.
+            vec!["ALTER TABLE brz_unclaimed_deposits ADD COLUMN refund_state JSONB".to_string()],
         ]
     }
 }
@@ -1272,7 +1277,7 @@ impl Storage for PostgresStorage {
         let client = self.pool.get().await.map_err(map_pool_error)?;
         let rows = client
             .query(
-                "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status FROM brz_unclaimed_deposits WHERE user_id = $1",
+                "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status, refund_state FROM brz_unclaimed_deposits WHERE user_id = $1",
                 &[&self.identity],
             )
             .await?;
@@ -1284,6 +1289,8 @@ impl Storage for PostgresStorage {
             let instant_claim_status_json: Option<serde_json::Value> = row.get(7);
             let instant_claim_status: Option<InstantClaimStatus> =
                 from_json_opt(instant_claim_status_json)?;
+            let refund_state_json: Option<serde_json::Value> = row.get(8);
+            let refund_state: Option<RefundState> = from_json_opt(refund_state_json)?;
 
             deposits.push(DepositInfo {
                 txid: row.get(0),
@@ -1298,6 +1305,7 @@ impl Storage for PostgresStorage {
                 refund_tx: row.get(5),
                 refund_tx_id: row.get(6),
                 instant_claim_status,
+                refund_state,
             });
         }
         Ok(deposits)
@@ -1316,7 +1324,7 @@ impl Storage for PostgresStorage {
                     .map_err(|e| StorageError::Serialization(e.to_string()))?;
                 client
                     .execute(
-                        "UPDATE brz_unclaimed_deposits SET claim_error = $1, refund_tx = NULL, refund_tx_id = NULL WHERE user_id = $2 AND txid = $3 AND vout = $4",
+                        "UPDATE brz_unclaimed_deposits SET claim_error = $1 WHERE user_id = $2 AND txid = $3 AND vout = $4",
                         &[&error_json, &self.identity, &txid, &i32::try_from(vout)?],
                     )
                     .await?;
@@ -1324,11 +1332,14 @@ impl Storage for PostgresStorage {
             UpdateDepositPayload::Refund {
                 refund_txid,
                 refund_tx,
+                state,
             } => {
+                let state_json = serde_json::to_value(&state)
+                    .map_err(|e| StorageError::Serialization(e.to_string()))?;
                 client
                     .execute(
-                        "UPDATE brz_unclaimed_deposits SET refund_tx = $1, refund_tx_id = $2, claim_error = NULL WHERE user_id = $3 AND txid = $4 AND vout = $5",
-                        &[&refund_tx, &refund_txid, &self.identity, &txid, &i32::try_from(vout)?],
+                        "UPDATE brz_unclaimed_deposits SET refund_tx = $1, refund_tx_id = $2, refund_state = $3, claim_error = NULL WHERE user_id = $4 AND txid = $5 AND vout = $6",
+                        &[&refund_tx, &refund_txid, &state_json, &self.identity, &txid, &i32::try_from(vout)?],
                     )
                     .await?;
             }
@@ -1339,6 +1350,16 @@ impl Storage for PostgresStorage {
                     .execute(
                         "UPDATE brz_unclaimed_deposits SET instant_claim_status = $1 WHERE user_id = $2 AND txid = $3 AND vout = $4",
                         &[&status_json, &self.identity, &txid, &i32::try_from(vout)?],
+                    )
+                    .await?;
+            }
+            UpdateDepositPayload::RefundState { refund_txid, state } => {
+                let state_json = serde_json::to_value(&state)
+                    .map_err(|e| StorageError::Serialization(e.to_string()))?;
+                client
+                    .execute(
+                        "UPDATE brz_unclaimed_deposits SET refund_state = $1 WHERE user_id = $2 AND txid = $3 AND vout = $4 AND refund_tx_id = $5",
+                        &[&state_json, &self.identity, &txid, &i32::try_from(vout)?, &refund_txid],
                     )
                     .await?;
             }
@@ -3221,7 +3242,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 21, "migration version must advance to 21");
+        assert_eq!(version, 22, "migration version must advance to 22");
 
         // Seed payment row is preserved on the renamed table — proves the
         // table + PK constraint rename worked and the columns line up.
@@ -3517,7 +3538,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 21, "migration must advance to 21");
+        assert_eq!(version, 22, "migration must advance to 22");
 
         // Seed data preserved (multi-tenant backfilled user_id to current tenant).
         let payment_count: i64 = client

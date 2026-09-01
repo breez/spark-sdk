@@ -127,6 +127,12 @@ pub struct ConnectRequest {
     pub storage_dir: String,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RefundState)]
+pub enum RefundState {
+    BroadcastPending { last_error: Option<String> },
+    Broadcast,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::DepositInfo)]
 pub struct DepositInfo {
     pub txid: String,
@@ -137,6 +143,7 @@ pub struct DepositInfo {
     pub refund_tx_id: Option<String>,
     pub claim_error: Option<DepositClaimError>,
     pub instant_claim_status: Option<InstantClaimStatus>,
+    pub refund_state: Option<RefundState>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimDepositRequest)]
@@ -447,6 +454,12 @@ pub struct LnurlWithdrawRequestDetails {
     pub default_description: String,
     pub min_withdrawable: u64,
     pub max_withdrawable: u64,
+    /// The URL of the LNURL-withdraw endpoint these details were fetched from.
+    /// Set when the details come from parsing an input; determines how far the
+    /// withdraw flow trusts the endpoint-chosen `callback`. Absent or empty
+    /// means no exemption: the callback is held to the public-host rules.
+    #[serde(default)]
+    pub url: String,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlErrorDetails)]
@@ -1589,9 +1602,14 @@ pub enum UpdateDepositPayload {
     Refund {
         refund_txid: String,
         refund_tx: String,
+        state: RefundState,
     },
     InstantClaim {
         status: InstantClaimStatus,
+    },
+    RefundState {
+        refund_txid: String,
+        state: RefundState,
     },
 }
 

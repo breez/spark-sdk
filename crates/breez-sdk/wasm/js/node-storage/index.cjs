@@ -700,7 +700,7 @@ class SqliteStorage {
   listDeposits() {
     try {
       const stmt = this.db.prepare(`
-                SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status
+                SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status, refund_state
                 FROM unclaimed_deposits
             `);
 
@@ -717,6 +717,7 @@ class SqliteStorage {
           instantClaimStatus: row.instant_claim_status
             ? JSON.parse(row.instant_claim_status)
             : null,
+          refundState: row.refund_state ? JSON.parse(row.refund_state) : null,
         }))
       );
     } catch (error) {
@@ -731,7 +732,7 @@ class SqliteStorage {
       if (payload.type === "claimError") {
         const stmt = this.db.prepare(`
           UPDATE unclaimed_deposits 
-          SET claim_error = ?, refund_tx = NULL, refund_tx_id = NULL 
+          SET claim_error = ?
           WHERE txid = ? AND vout = ?
         `);
 
@@ -739,11 +740,17 @@ class SqliteStorage {
       } else if (payload.type === "refund") {
         const stmt = this.db.prepare(`
           UPDATE unclaimed_deposits
-          SET refund_tx = ?, refund_tx_id = ?, claim_error = NULL
+          SET refund_tx = ?, refund_tx_id = ?, refund_state = ?, claim_error = NULL
           WHERE txid = ? AND vout = ?
         `);
 
-        stmt.run(payload.refundTx, payload.refundTxid, txid, vout);
+        stmt.run(
+          payload.refundTx,
+          payload.refundTxid,
+          JSON.stringify(payload.state),
+          txid,
+          vout
+        );
       } else if (payload.type === "instantClaim") {
         const stmt = this.db.prepare(`
           UPDATE unclaimed_deposits
@@ -752,6 +759,14 @@ class SqliteStorage {
         `);
 
         stmt.run(JSON.stringify(payload.status), txid, vout);
+      } else if (payload.type === "refundState") {
+        const stmt = this.db.prepare(`
+          UPDATE unclaimed_deposits
+          SET refund_state = ?
+          WHERE txid = ? AND vout = ? AND refund_tx_id = ?
+        `);
+
+        stmt.run(JSON.stringify(payload.state), txid, vout, payload.refundTxid);
       } else {
         return Promise.reject(
           new StorageError(`Unknown payload type: ${payload.type}`)

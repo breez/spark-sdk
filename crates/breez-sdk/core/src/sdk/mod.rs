@@ -103,7 +103,8 @@ pub struct BreezSdk {
     pub(crate) claim_guards: deposits::ClaimGuards,
     pub(crate) initial_synced_watcher: watch::Receiver<bool>,
     /// Parses payment inputs over the SDK's own transports, so lightning-address
-    /// and LNURL lookups reuse the pooled HTTP client and honour the proxy.
+    /// and LNURL lookups honour the proxy and ride the redirect-validating
+    /// LNURL client (their hosts are chosen by remote parties).
     pub(crate) input_parser: Arc<SdkInputParser>,
     pub(crate) spark_private_mode_initialized: Arc<OnceCell<()>>,
     pub(crate) token_converter: Arc<dyn TokenConverter>,

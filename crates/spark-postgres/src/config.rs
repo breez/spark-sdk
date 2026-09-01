@@ -70,8 +70,9 @@ pub struct PostgresStorageConfig {
     pub queue_mode: PoolQueueMode,
 
     /// Custom CA certificate(s) in PEM format for server verification.
-    /// If `None`, uses Mozilla's root certificate store (via webpki-roots).
-    /// Only used with `sslmode=verify-ca` or `sslmode=verify-full`.
+    /// If unset, Mozilla's root certificate store is used (via webpki-roots).
+    /// Applies to every verifying `sslmode` (`prefer`, `require`, `verify-ca`,
+    /// `verify-full`).
     pub root_ca_pem: Option<String>,
 
     /// Whether the SDK should run schema migrations on startup.

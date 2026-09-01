@@ -62,6 +62,16 @@ pub enum SdkError {
     #[error("Deposit claim already in progress: {tx}:{vout}")]
     DepositClaimInProgress { tx: String, vout: u32 },
 
+    /// A refund for this deposit is already on the network, and the requested
+    /// replacement does not pay enough to displace it.
+    #[error(
+        "A refund is already pending at {pending_fee_sats} sats: a replacement must pay at least {required_fee_sats} sats"
+    )]
+    RefundReplacementFeeTooLow {
+        pending_fee_sats: u64,
+        required_fee_sats: u64,
+    },
+
     #[error("Lnurl error: {0}")]
     LnurlError(String),
 

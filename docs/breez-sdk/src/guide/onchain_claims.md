@@ -52,12 +52,25 @@ When a deposit cannot be successfully claimed you can refund it to an external B
 
 The [recommended fees](#recommended-fees) API is useful for determining appropriate fee levels for refund transactions.
 
+A deposit can only be refunded once it has enough confirmations. Calling {{#name refund_deposit}} earlier fails, reporting the deposit as unknown while it is unconfirmed and as having too few confirmations for a block or so after that. Nothing is signed or stored when this happens, so retry after a few more blocks.
+
 {{#tabs refunding_payments:refund-deposit}}
 
 <div class="warning">
 <h4>Developer note</h4>
-The total fee must cover at least 1 sat/vB of the refund transaction so it can be relayed by the Bitcoin network. The exact minimum depends on the size of the transaction, which varies with the destination address type (around 111 sats for a taproot address). If the fee is lower, the refund request is rejected and the error states the required minimum.
+The total fee must cover at least 1 sat/vB of the refund transaction so it can be relayed by the Bitcoin network. The exact minimum depends on the size of the transaction, which varies with the destination address type: around 99 sats to a native segwit address and 111 sats to a taproot one. If the fee is lower, the refund request is rejected and the error states the required minimum.
 </div>
+
+### Tracking a refund
+
+{{#name refund_state}} on {{#name DepositInfo}} reports how far the refund has got:
+
+- **{{#enum RefundState::BroadcastPending}}**: the refund is signed and stored but has not been seen on the network. The SDK rebroadcasts it on every sync until the deposit is spent, so a refund that failed to send because of a temporary network problem recovers on its own.
+- **{{#enum RefundState::Broadcast}}**: the network has accepted the refund and it is waiting to confirm. The deposit disappears from {{#name list_unclaimed_deposits}} once it does.
+
+A refund created near the 1 sat/vB minimum can stay at {{#enum RefundState::BroadcastPending}} indefinitely if the network's minimum relay fee later rises above what it pays. Rebroadcasting cannot fix this, because the network keeps refusing the same transaction. Read {{#name last_error}} for the reason the network gave, then call {{#name refund_deposit}} again at a higher fee to replace it.
+
+Replacing a refund that is already on the network costs more than the original fee, because the replacement also pays to relay its own size. When the fee offered is too low, the call is rejected and the error states the minimum required.
 
 ## Implementing a custom claim logic
 

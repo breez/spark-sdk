@@ -1444,6 +1444,7 @@ class IndexedDBStorage {
           refundTx: existing?.refundTx ?? null,
           refundTxId: existing?.refundTxId ?? null,
           instantClaimStatus: existing?.instantClaimStatus ?? null,
+          refundState: existing?.refundState ?? null,
         };
 
         const putRequest = store.put(depositToStore);
@@ -1519,6 +1520,7 @@ class IndexedDBStorage {
           instantClaimStatus: row.instantClaimStatus
             ? JSON.parse(row.instantClaimStatus)
             : null,
+          refundState: row.refundState ? JSON.parse(row.refundState) : null,
         }));
         resolve(deposits);
       };
@@ -1562,14 +1564,18 @@ class IndexedDBStorage {
 
         if (payload.type === "claimError") {
           updatedDeposit.claimError = JSON.stringify(payload.error);
-          updatedDeposit.refundTx = null;
-          updatedDeposit.refundTxId = null;
         } else if (payload.type === "refund") {
           updatedDeposit.refundTx = payload.refundTx;
           updatedDeposit.refundTxId = payload.refundTxid;
+          updatedDeposit.refundState = JSON.stringify(payload.state);
           updatedDeposit.claimError = null;
         } else if (payload.type === "instantClaim") {
           updatedDeposit.instantClaimStatus = JSON.stringify(payload.status);
+        } else if (payload.type === "refundState") {
+          // Only while this is still the stored refund.
+          if (existingDeposit.refundTxId === payload.refundTxid) {
+            updatedDeposit.refundState = JSON.stringify(payload.state);
+          }
         } else {
           reject(new StorageError(`Unknown payload type: ${payload.type}`));
           return;

@@ -143,6 +143,7 @@ namespace BreezSdkSnippets
             // Configure PostgreSQL backend
             // Connection string format: "host=localhost user=postgres password=secret dbname=spark"
             // Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
+            // TLS: "sslmode=require" encrypts and verifies the server certificate
             var postgresConfig = BreezSdkSparkMethods.DefaultPostgresStorageConfig(
                 connectionString: "host=localhost user=postgres dbname=spark"
             );
@@ -182,6 +183,7 @@ namespace BreezSdkSnippets
             // Configure MySQL backend (MySQL 8.0+).
             // Connection string format (URL only):
             //   "mysql://user:password@host:3306/dbname?ssl-mode=required"
+            // TLS: "ssl-mode=required" encrypts and verifies the server certificate
             var mysqlConfig = BreezSdkSparkMethods.DefaultMysqlStorageConfig(
                 connectionString: "mysql://user:password@localhost:3306/spark"
             );
@@ -191,6 +193,9 @@ namespace BreezSdkSnippets
                 maxPoolSize = 8u,             // Max connections in pool
                 recycleTimeoutSecs = 60ul     // Recycle idle connections after this many seconds
             };
+
+            // Provide a custom CA certificate when the server uses a private CA:
+            // mysqlConfig = mysqlConfig with { rootCaPem = "-----BEGIN CERTIFICATE-----\n..." };
 
             // Build the SDK with the MySQL storage backend (storage, tree
             // store, and token store). Per-tenant scoping (rows isolated by

@@ -75,13 +75,22 @@ impl From<reqwest::Error> for HttpError {
 
 mod client;
 
-pub use client::ReqwestHttpClient;
+pub use client::{ReqwestHttpClient, read_capped_bytes, read_capped_text};
 
 /// Default HTTP client type.
 pub type DefaultHttpClient = ReqwestHttpClient;
 
 /// Default request timeout in seconds.
 pub const REQUEST_TIMEOUT: u64 = 60;
+
+/// Maximum response body the client will buffer.
+///
+/// A response is refused once it passes this, so a hostile peer cannot drive an
+/// unbounded allocation by streaming quickly enough to stay inside
+/// [`REQUEST_TIMEOUT`]. Sized for the largest response the SDK legitimately
+/// asks for: esplora's `/tx/{txid}/hex` serves hex, so a max-size mined
+/// transaction arrives as roughly 8 MB.
+pub const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 
 /// Response from an HTTP request.
 #[derive(Debug, Clone)]
@@ -199,5 +208,27 @@ pub fn create_http_client_with_proxy(
     Ok(Arc::new(ReqwestHttpClient::with_proxy(
         user_agent.map(String::from),
         proxy,
+    )?))
+}
+
+/// Decides whether a redirect hop may be followed. Receives the hop target
+/// and the original request URL (so the decision can depend on where the
+/// request started), and returns the refusal reason otherwise.
+pub type RedirectFilter = Arc<dyn Fn(&url::Url, &url::Url) -> Result<(), String> + Send + Sync>;
+
+/// Like [`create_http_client_with_proxy`], but every redirect hop must pass
+/// `filter` before it is followed (no effect on WASM, where the platform
+/// `fetch` always follows). For requests to hosts chosen by untrusted remote
+/// parties, where an unvalidated redirect would bypass the checks done on the
+/// original URL.
+pub fn create_http_client_with_redirect_filter(
+    user_agent: Option<&str>,
+    proxy: Option<&crate::proxy::ProxyConfig>,
+    filter: RedirectFilter,
+) -> Result<Arc<dyn HttpClient>, HttpError> {
+    Ok(Arc::new(ReqwestHttpClient::with_proxy_and_redirect_filter(
+        user_agent.map(String::from),
+        proxy,
+        filter,
     )?))
 }

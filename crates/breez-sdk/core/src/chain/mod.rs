@@ -10,6 +10,9 @@ use crate::{
 };
 
 pub mod rest_client;
+mod validating;
+
+pub(crate) use validating::ValidatingChainService;
 
 #[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]

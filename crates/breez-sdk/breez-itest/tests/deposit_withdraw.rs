@@ -445,9 +445,108 @@ async fn test_deposit_fee_refund(#[future] bob_no_fee_sdk: Result<SdkInstance>) 
         .find(|d| d.txid == dep.txid && d.vout == dep.vout)
     {
         assert_eq!(updated.refund_tx_id.as_deref(), Some(refund.tx_id.as_str()));
+        // The broadcast succeeded, so the refund is recorded as on the network
+        // rather than still pending.
+        assert_eq!(updated.refund_state, Some(RefundState::Broadcast));
     } else {
         // already removed (confirmed); acceptable
     }
+
+    // The rest exercises replacing that refund, which only applies while it is
+    // still unconfirmed. Once it confirms there is nothing left to replace.
+    let mempool = MempoolClient::new()?;
+    if mempool.get_transaction(&refund.tx_id).await.is_err() {
+        info!(
+            "Refund {} already left the mempool, skipping replacement",
+            refund.tx_id
+        );
+        return Ok(());
+    }
+
+    // An underpriced replacement is rejected before it can overwrite the stored
+    // refund, which is still the wallet's way out of this deposit.
+    let cheaper = bob
+        .sdk
+        .refund_deposit(RefundDepositRequest {
+            txid: dep.txid.clone(),
+            vout: dep.vout,
+            destination_address: addr.clone(),
+            fee: Fee::Fixed { amount: 600 },
+        })
+        .await;
+    match cheaper {
+        Err(SdkError::RefundReplacementFeeTooLow {
+            pending_fee_sats,
+            required_fee_sats,
+        }) => {
+            assert_eq!(pending_fee_sats, 500);
+            assert!(
+                required_fee_sats > 600,
+                "600 sats was accepted against a required {required_fee_sats}"
+            );
+        }
+        other => panic!("Expected RefundReplacementFeeTooLow, got {other:?}"),
+    }
+    let unchanged = bob
+        .sdk
+        .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
+        .await?
+        .deposits
+        .into_iter()
+        .find(|d| d.txid == dep.txid && d.vout == dep.vout)
+        .expect("deposit dropped after a rejected replacement");
+    assert_eq!(
+        unchanged.refund_tx_id.as_deref(),
+        Some(refund.tx_id.as_str())
+    );
+
+    // A replacement that outbids it is accepted. The refund is a v3 (TRUC)
+    // transaction, so it is replaceable even though it does not signal BIP125.
+    let replacement = bob
+        .sdk
+        .refund_deposit(RefundDepositRequest {
+            txid: dep.txid.clone(),
+            vout: dep.vout,
+            destination_address: addr.clone(),
+            fee: Fee::Fixed { amount: 3_000 },
+        })
+        .await?;
+    assert_ne!(replacement.tx_id, refund.tx_id);
+    info!(
+        "Replaced refund {} with {}",
+        refund.tx_id, replacement.tx_id
+    );
+
+    let replaced = bob
+        .sdk
+        .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
+        .await?
+        .deposits
+        .into_iter()
+        .find(|d| d.txid == dep.txid && d.vout == dep.vout)
+        .expect("deposit dropped after a successful replacement");
+    assert_eq!(
+        replaced.refund_tx_id.as_deref(),
+        Some(replacement.tx_id.as_str())
+    );
+    assert_eq!(replaced.refund_state, Some(RefundState::Broadcast));
+
+    // The replacement is on the network and the refund it displaced is gone,
+    // allowing for propagation to the mempool API.
+    let mut evicted = false;
+    for _ in 0..10 {
+        let has_replacement = mempool.get_transaction(&replacement.tx_id).await.is_ok();
+        if has_replacement && mempool.get_transaction(&refund.tx_id).await.is_err() {
+            evicted = true;
+            break;
+        }
+        sleep(Duration::from_secs(2)).await;
+    }
+    assert!(
+        evicted,
+        "replacement {} did not displace {}",
+        replacement.tx_id, refund.tx_id
+    );
 
     Ok(())
 }

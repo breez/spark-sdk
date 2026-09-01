@@ -525,6 +525,9 @@ async fn query_lnurl_invoice(
         &request.pay_request.clone().into(),
         sdk.config.network.into(),
         request.validate_success_action_url,
+        // DNS preflight of the callback host runs only when unproxied: with a
+        // proxy the lookup would run outside it and leak hostnames.
+        sdk.config.proxy.is_none(),
     )
     .await?;
     match response {

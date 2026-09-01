@@ -285,11 +285,13 @@ impl CoopExitService {
             .await;
         let transfer = match (&transfer_id, res) {
             (_, Ok(t)) => t,
+            // The transfer can commit server-side and still lose its response. Bind
+            // the recovered transfer rather than returning it: the exit is only
+            // finished once complete_coop_exit tells the SSP to broadcast the payout.
             (Some(transfer_id), Err(e)) => {
-                return self
-                    .transfer_service
+                self.transfer_service
                     .recover_transfer_on_rpc_connection_error(transfer_id, e)
-                    .await;
+                    .await?
             }
             (None, Err(e)) => return Err(e),
         };

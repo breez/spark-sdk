@@ -496,6 +496,10 @@ class MigrationManager {
              WHERE LOWER(instant_claim_status) LIKE '%declined%'`,
         ],
       },
+      {
+        name: "Add refund state to unclaimed_deposits",
+        sql: [`ALTER TABLE unclaimed_deposits ADD COLUMN refund_state TEXT`],
+      },
     ];
   }
 }

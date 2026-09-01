@@ -18,7 +18,7 @@ use flashnet::{FlashnetConfig, IntegratorConfig};
 use crate::{
     Credentials, EventEmitter, FiatService, FiatServiceWrapper, Network, Seed,
     chain::{
-        BitcoinChainService,
+        BitcoinChainService, ValidatingChainService,
         rest_client::{BasicAuth, ChainApiType, RestClientChainService},
     },
     error::SdkError,
@@ -516,19 +516,32 @@ impl SdkBuilder {
             self.config.network,
         );
 
-        // The parser reaches lightning-address and LNURL hosts, and resolves
-        // BIP353 names, so it has to ride the context's clients rather than
-        // build its own.
-        let input_parser = Arc::new(crate::sdk::SdkInputParser::new(
-            breez_sdk_common::dns::Resolver::with_proxy(
-                self.config
-                    .proxy
-                    .as_ref()
-                    .map(platform_utils::ProxyConfig::from)
-                    .as_ref(),
+        let user_agent = crate::default_user_agent();
+        info!("Building sdk with user agent: {}", user_agent);
+
+        let transport_proxy = self
+            .config
+            .proxy
+            .as_ref()
+            .map(platform_utils::ProxyConfig::from);
+        // LNURL and lightning-address hosts are chosen by remote parties, so
+        // their traffic gets a client that revalidates every redirect hop:
+        // an unvalidated redirect would bypass the checks done on the
+        // original URL. It shares the shared client's user agent and proxy,
+        // and reqwest pools per host, so nothing is lost by keeping it
+        // separate.
+        let lnurl_http_client: Arc<dyn platform_utils::HttpClient> =
+            platform_utils::create_http_client_with_redirect_filter(
+                Some(&user_agent),
+                transport_proxy.as_ref(),
+                breez_sdk_common::lnurl::security::lnurl_redirect_filter(),
             )
-            .map_err(|e| SdkError::Generic(format!("Failed to build DNS resolver: {e}")))?,
-            Arc::clone(&context.http_client),
+            .map_err(|e| SdkError::Generic(format!("Failed to build LNURL HTTP client: {e}")))?;
+
+        let input_parser = Arc::new(crate::sdk::SdkInputParser::new(
+            breez_sdk_common::dns::Resolver::with_proxy(transport_proxy.as_ref())
+                .map_err(|e| SdkError::Generic(format!("Failed to build DNS resolver: {e}")))?,
+            Arc::clone(&lnurl_http_client),
             Some(
                 self.config
                     .get_all_external_input_parsers()
@@ -538,16 +551,13 @@ impl SdkBuilder {
             ),
         ));
 
-        let user_agent = crate::default_user_agent();
-        info!("Building sdk with user agent: {}", user_agent);
-
         let fiat_service: Arc<dyn breez_sdk_common::fiat::FiatService> = match self.fiat_service {
             Some(service) => Arc::new(FiatServiceWrapper::new(service)),
             None => context.breez_server.clone(),
         };
         let lnurl_client: Arc<dyn platform_utils::HttpClient> = self
             .lnurl_client
-            .unwrap_or_else(|| context.http_client.clone());
+            .unwrap_or_else(|| Arc::clone(&lnurl_http_client));
 
         let spark_wallet_config =
             finalize_spark_wallet_config(&self.config, &user_agent, background_services_enabled)?;
@@ -864,17 +874,18 @@ async fn resolve_storage(
 
 /// Resolves the chain service: caller-supplied override → REST config → network
 /// default (mempool.space on mainnet, a hosted mempool instance on regtest).
+/// Whichever backend is resolved is wrapped in a [`ValidatingChainService`],
+/// so every transaction it serves is rebound to the requested txid.
 fn resolve_chain_service(
     supplied: Option<Arc<dyn BitcoinChainService>>,
     rest_config: Option<RestChainServiceConfig>,
     context: &SdkContext,
     network: Network,
 ) -> Arc<dyn BitcoinChainService> {
-    if let Some(service) = supplied {
-        return service;
-    }
-    if let Some(cfg) = rest_config {
-        return Arc::new(RestClientChainService::new(
+    let inner: Arc<dyn BitcoinChainService> = if let Some(service) = supplied {
+        service
+    } else if let Some(cfg) = rest_config {
+        Arc::new(RestClientChainService::new(
             cfg.url,
             network,
             5,
@@ -882,36 +893,38 @@ fn resolve_chain_service(
             cfg.credentials
                 .map(|c| BasicAuth::new(c.username, c.password)),
             cfg.api_type,
-        ));
-    }
-    let inner_client: Arc<dyn platform_utils::HttpClient> = context.http_client.clone();
-    match network {
-        Network::Mainnet => Arc::new(RestClientChainService::new(
-            "https://mempool.space/api".to_string(),
-            network,
-            5,
-            inner_client,
-            None,
-            ChainApiType::MempoolSpace,
-        )),
-        Network::Regtest => Arc::new(RestClientChainService::new(
-            "https://regtest-mempool.us-west-2.sparkinfra.net/api".to_string(),
-            network,
-            5,
-            inner_client,
-            match (
-                std::env::var("CHAIN_SERVICE_USERNAME"),
-                std::env::var("CHAIN_SERVICE_PASSWORD"),
-            ) {
-                (Ok(username), Ok(password)) => Some(BasicAuth::new(username, password)),
-                _ => Some(BasicAuth::new(
-                    "spark-sdk".to_string(),
-                    "mCMk1JqlBNtetUNy".to_string(),
-                )),
-            },
-            ChainApiType::MempoolSpace,
-        )),
-    }
+        ))
+    } else {
+        let inner_client: Arc<dyn platform_utils::HttpClient> = context.http_client.clone();
+        match network {
+            Network::Mainnet => Arc::new(RestClientChainService::new(
+                "https://mempool.space/api".to_string(),
+                network,
+                5,
+                inner_client,
+                None,
+                ChainApiType::MempoolSpace,
+            )),
+            Network::Regtest => Arc::new(RestClientChainService::new(
+                "https://regtest-mempool.us-west-2.sparkinfra.net/api".to_string(),
+                network,
+                5,
+                inner_client,
+                match (
+                    std::env::var("CHAIN_SERVICE_USERNAME"),
+                    std::env::var("CHAIN_SERVICE_PASSWORD"),
+                ) {
+                    (Ok(username), Ok(password)) => Some(BasicAuth::new(username, password)),
+                    _ => Some(BasicAuth::new(
+                        "spark-sdk".to_string(),
+                        "mCMk1JqlBNtetUNy".to_string(),
+                    )),
+                },
+                ChainApiType::MempoolSpace,
+            )),
+        }
+    };
+    Arc::new(ValidatingChainService::new(inner))
 }
 
 /// Builds the full [`SparkWalletConfig`] with user-agent and SDK-level

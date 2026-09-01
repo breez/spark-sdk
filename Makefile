@@ -53,7 +53,7 @@ cargo-test:
 lnurl-test:
 	cargo test --manifest-path crates/breez-sdk/lnurl/Cargo.toml
 
-wasm-test: wasm-test-browser wasm-test-node wasm-test-mysql-timezone
+wasm-test: wasm-test-browser wasm-test-node wasm-test-mysql-timezone wasm-test-js-ssl-mode
 
 wasm-test-browser:
 	cargo xtask wasm-test
@@ -69,6 +69,13 @@ wasm-test-node:
 wasm-test-mysql-timezone: wasm-test-node
 	cd crates/breez-sdk/wasm/js/mysql-token-store && npm test
 	cd crates/breez-sdk/wasm/js/mysql-tree-store && npm test
+
+# Unit tests for the JS storage TLS translation: `ssl-mode` in createMysqlPool
+# and `sslmode` in createPostgresPool. Pure unit tests: they need `npm install`
+# in the package dirs, but no database.
+wasm-test-js-ssl-mode:
+	cd crates/breez-sdk/wasm/js/mysql-storage && npm install && npm test
+	cd crates/breez-sdk/wasm/js/postgres-storage && npm install && npm test
 
 flutter-check:
 	cargo xtask flutter-check

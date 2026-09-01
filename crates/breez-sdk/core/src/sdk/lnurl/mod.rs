@@ -87,6 +87,14 @@ impl BreezSdk {
             ));
         }
 
+        // Reject an unsafe callback now, before an invoice is created and
+        // metadata stored for a withdraw that cannot proceed. The execute
+        // step revalidates (and adds the DNS preflight).
+        lnurl::security::validate_callback_url(
+            &withdraw_request.callback,
+            lnurl::security::callback_trust(&withdraw_request.url),
+        )?;
+
         // Generate a Lightning invoice for the withdraw, keeping the SSP-side
         // receive id for the targeted wait below.
         let receive = self
@@ -121,6 +129,9 @@ impl BreezSdk {
             self.lnurl_client.as_ref(),
             &withdraw_request,
             &payment_request,
+            // DNS preflight of the callback host runs only when unproxied:
+            // with a proxy the lookup would run outside it and leak hostnames.
+            self.config.proxy.is_none(),
         )
         .await?;
         if let lnurl::withdraw::ValidatedCallbackResponse::EndpointError { data } =
