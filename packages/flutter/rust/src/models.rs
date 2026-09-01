@@ -402,6 +402,7 @@ pub struct _UnilateralExitResponse {
     pub total_fee_sat: u64,
     pub leaves: Vec<UnilateralExitLeaf>,
     pub transactions: Vec<UnilateralExitTransaction>,
+    pub funding_inputs: Vec<CpfpInput>,
 }
 
 #[frb(mirror(ExportUnilateralExitStateResponse))]
