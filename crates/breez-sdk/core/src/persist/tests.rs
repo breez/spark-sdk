@@ -1416,7 +1416,7 @@ async fn assert_refund_state_keeps_claim_error(storage: &dyn Storage) {
         .update_deposit(
             "test_tx_123".to_string(),
             0,
-            UpdateDepositPayload::RefundState {
+            UpdateDepositPayload::RefundBroadcastState {
                 refund_txid: "refund_tx_id_456".to_string(),
                 state: RefundState::BroadcastPending {
                     last_error: Some("evicted".to_string()),
@@ -1443,7 +1443,7 @@ async fn assert_refund_state_keeps_claim_error(storage: &dyn Storage) {
         .update_deposit(
             "test_tx_123".to_string(),
             0,
-            UpdateDepositPayload::RefundState {
+            UpdateDepositPayload::RefundBroadcastState {
                 refund_txid: "a_refund_that_was_replaced".to_string(),
                 state: RefundState::Broadcast,
             },

@@ -1607,7 +1607,7 @@ pub enum UpdateDepositPayload {
     InstantClaim {
         status: InstantClaimStatus,
     },
-    RefundState {
+    RefundBroadcastState {
         refund_txid: String,
         state: RefundState,
     },

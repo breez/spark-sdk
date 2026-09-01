@@ -783,7 +783,7 @@ class PostgresStorage {
            WHERE user_id = $2 AND txid = $3 AND vout = $4`,
           [JSON.stringify(payload.status), this.identity, txid, vout]
         );
-      } else if (payload.type === "refundState") {
+      } else if (payload.type === "refundBroadcastState") {
         await this.pool.query(
           `UPDATE brz_unclaimed_deposits
            SET refund_state = $1

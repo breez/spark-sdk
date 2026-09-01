@@ -855,7 +855,7 @@ class MysqlStorage {
            WHERE user_id = ? AND txid = ? AND vout = ?`,
           [JSON.stringify(payload.status), this.identity, txid, vout]
         );
-      } else if (payload.type === "refundState") {
+      } else if (payload.type === "refundBroadcastState") {
         await this.pool.query(
           `UPDATE brz_unclaimed_deposits
            SET refund_state = ?

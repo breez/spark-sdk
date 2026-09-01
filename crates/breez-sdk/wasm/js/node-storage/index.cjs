@@ -759,7 +759,7 @@ class SqliteStorage {
         `);
 
         stmt.run(JSON.stringify(payload.status), txid, vout);
-      } else if (payload.type === "refundState") {
+      } else if (payload.type === "refundBroadcastState") {
         const stmt = this.db.prepare(`
           UPDATE unclaimed_deposits
           SET refund_state = ?

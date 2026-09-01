@@ -81,7 +81,7 @@ pub enum UpdateDepositPayload {
     /// itself or the last claim error. Applies only while `refund_txid` is still
     /// the stored refund, so a state decided against one refund cannot land on a
     /// newer one.
-    RefundState {
+    RefundBroadcastState {
         refund_txid: String,
         state: RefundState,
     },

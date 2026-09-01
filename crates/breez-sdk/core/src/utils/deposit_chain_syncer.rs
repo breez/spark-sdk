@@ -281,7 +281,7 @@ impl DepositChainSyncer {
             .update_deposit(
                 deposit.txid.clone(),
                 deposit.vout,
-                UpdateDepositPayload::RefundState { refund_txid, state },
+                UpdateDepositPayload::RefundBroadcastState { refund_txid, state },
             )
             .await
         {

@@ -1353,7 +1353,7 @@ impl Storage for PostgresStorage {
                     )
                     .await?;
             }
-            UpdateDepositPayload::RefundState { refund_txid, state } => {
+            UpdateDepositPayload::RefundBroadcastState { refund_txid, state } => {
                 let state_json = serde_json::to_value(&state)
                     .map_err(|e| StorageError::Serialization(e.to_string()))?;
                 client

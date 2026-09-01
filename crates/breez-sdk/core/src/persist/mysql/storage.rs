@@ -1474,7 +1474,7 @@ impl Storage for MysqlStorage {
                 .await
                 .map_err(map_db_error)?;
             }
-            UpdateDepositPayload::RefundState { refund_txid, state } => {
+            UpdateDepositPayload::RefundBroadcastState { refund_txid, state } => {
                 let state_json = serde_json::to_string(&state)
                     .map_err(|e| StorageError::Serialization(e.to_string()))?;
                 conn.exec_drop(

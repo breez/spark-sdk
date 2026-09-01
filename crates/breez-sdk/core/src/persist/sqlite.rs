@@ -1046,7 +1046,7 @@ impl Storage for SqliteStorage {
                     params![status, txid, vout],
                 )?;
             }
-            UpdateDepositPayload::RefundState { refund_txid, state } => {
+            UpdateDepositPayload::RefundBroadcastState { refund_txid, state } => {
                 connection.execute(
                     "UPDATE unclaimed_deposits SET refund_state = ? WHERE txid = ? AND vout = ? AND refund_tx_id = ?",
                     params![state, txid, vout, refund_txid],

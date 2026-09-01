@@ -1571,7 +1571,7 @@ class IndexedDBStorage {
           updatedDeposit.claimError = null;
         } else if (payload.type === "instantClaim") {
           updatedDeposit.instantClaimStatus = JSON.stringify(payload.status);
-        } else if (payload.type === "refundState") {
+        } else if (payload.type === "refundBroadcastState") {
           // Only while this is still the stored refund.
           if (existingDeposit.refundTxId === payload.refundTxid) {
             updatedDeposit.refundState = JSON.stringify(payload.state);
