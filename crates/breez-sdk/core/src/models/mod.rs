@@ -480,7 +480,7 @@ pub struct SparkInvoicePaymentDetails {
     pub invoice: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SparkHtlcDetails {
     /// The payment hash of the HTLC
@@ -491,6 +491,17 @@ pub struct SparkHtlcDetails {
     pub expiry_time: u64,
     /// The HTLC status
     pub status: SparkHtlcStatus,
+}
+
+impl fmt::Debug for SparkHtlcDetails {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SparkHtlcDetails")
+            .field("payment_hash", &self.payment_hash)
+            .field("preimage", &self.preimage.as_ref().map(|_| "<redacted>"))
+            .field("expiry_time", &self.expiry_time)
+            .field("status", &self.status)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]

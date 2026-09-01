@@ -79,17 +79,19 @@ impl BreezSdk {
 
         let Ok(input) = self.input_parser.parse(invoice).await.map(InputType::from) else {
             error!(
-                "Failed to parse invoice for lnurl metadata sync: {}",
-                invoice
+                "Failed to parse invoice for lnurl metadata sync of payment {}",
+                payment.id
             );
+            debug!("Unparseable invoice: {invoice}");
             return;
         };
 
         let InputType::Bolt11Invoice(details) = input else {
             error!(
-                "Input is not a Bolt11 invoice for lnurl metadata sync: {}",
-                invoice
+                "Input is not a Bolt11 invoice for lnurl metadata sync of payment {}",
+                payment.id
             );
+            debug!("Non-Bolt11 input: {invoice}");
             return;
         };
 
@@ -116,7 +118,10 @@ impl BreezSdk {
         // because this function is called from the sync loop's event handler,
         // which would deadlock waiting for itself to process the trigger.
         if let Err(e) = self.sync_lnurl_metadata().await {
-            error!("Failed to sync lnurl metadata for invoice {invoice}: {e}");
+            error!(
+                "Failed to sync lnurl metadata for payment {}: {e}",
+                payment.id
+            );
             return;
         }
 
@@ -434,7 +439,11 @@ impl BreezSdk {
             }
         }
 
-        info!("background claim completed, unclaimed deposits: {unclaimed_deposits:?}");
+        info!(
+            "background claim completed, unclaimed deposits: {}",
+            unclaimed_deposits.len()
+        );
+        debug!("unclaimed deposits: {unclaimed_deposits:?}");
 
         if !unclaimed_deposits.is_empty() {
             self.event_emitter

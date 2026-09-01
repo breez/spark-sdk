@@ -61,7 +61,7 @@ pub(crate) async fn get_payment_and_emit_event(
                 payment
             }
         };
-    info!("Emitting payment event: {payment:?}");
+    debug!("Emitting payment event: {payment:?}");
     event_emitter.emit(&SdkEvent::from_payment(payment)).await;
 }
 
@@ -260,11 +260,13 @@ pub(crate) async fn update_balances(
         .await?;
     let save_dt = t.elapsed();
 
-    let identity_public_key = spark_wallet.get_identity_public_key();
+    debug!(
+        "Balance updated for identity {}",
+        spark_wallet.get_identity_public_key()
+    );
     info!(
-        "Balance updated successfully {} for identity {} (total: {:?}, get_balance: {:?}, get_token_balances[{}]: {:?}, save_account_info: {:?})",
+        "Balance updated successfully {} (total: {:?}, get_balance: {:?}, get_token_balances[{}]: {:?}, save_account_info: {:?})",
         balance_sats,
-        identity_public_key,
         total_start.elapsed(),
         get_balance_dt,
         token_balances_count,

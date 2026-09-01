@@ -165,7 +165,7 @@ impl FromStr for ConversionStatus {
 ///   Orchestra (Spark → external chain).
 /// - [`ConversionInfo::Boltz`] for sats → stable-coin reverse swaps via Boltz.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum ConversionInfo {
     /// AMM (Flashnet pool-based) conversion — Spark ↔ Spark token swaps.
@@ -314,6 +314,109 @@ pub enum ConversionInfo {
         #[serde(default)]
         asset_contract: Option<String>,
     },
+}
+
+impl fmt::Debug for ConversionInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConversionInfo::Amm {
+                pool_id,
+                conversion_id,
+                status,
+                fee,
+                purpose,
+                amount_adjustment,
+                degradation,
+            } => f
+                .debug_struct("Amm")
+                .field("pool_id", pool_id)
+                .field("conversion_id", conversion_id)
+                .field("status", status)
+                .field("fee", fee)
+                .field("purpose", purpose)
+                .field("amount_adjustment", amount_adjustment)
+                .field("degradation", degradation)
+                .finish(),
+            ConversionInfo::Orchestra {
+                order_id,
+                quote_id,
+                read_token,
+                chain,
+                chain_id,
+                asset,
+                recipient_address,
+                asset_amount_in,
+                estimated_out,
+                delivered_amount,
+                status,
+                fee_amount,
+                service_fee_amount,
+                service_fee_asset,
+                asset_decimals,
+                asset_contract,
+            } => f
+                .debug_struct("Orchestra")
+                .field("order_id", order_id)
+                .field("quote_id", quote_id)
+                .field("read_token", &read_token.as_ref().map(|_| "<redacted>"))
+                .field("chain", chain)
+                .field("chain_id", chain_id)
+                .field("asset", asset)
+                .field("recipient_address", recipient_address)
+                .field("asset_amount_in", asset_amount_in)
+                .field("estimated_out", estimated_out)
+                .field("delivered_amount", delivered_amount)
+                .field("status", status)
+                .field("fee_amount", fee_amount)
+                .field("service_fee_amount", service_fee_amount)
+                .field("service_fee_asset", service_fee_asset)
+                .field("asset_decimals", asset_decimals)
+                .field("asset_contract", asset_contract)
+                .finish(),
+            ConversionInfo::Boltz {
+                swap_id,
+                invoice,
+                invoice_amount_sats,
+                bridge_ref,
+                max_slippage_bps,
+                quote_degraded,
+                chain,
+                chain_id,
+                asset,
+                recipient_address,
+                estimated_out,
+                delivered_amount,
+                status,
+                asset_amount_in,
+                fee_amount,
+                service_fee_amount,
+                service_fee_asset,
+                asset_decimals,
+                asset_contract,
+            } => f
+                .debug_struct("Boltz")
+                .field("swap_id", swap_id)
+                .field("invoice", invoice)
+                .field("invoice_amount_sats", invoice_amount_sats)
+                .field("bridge_ref", bridge_ref)
+                .field("max_slippage_bps", max_slippage_bps)
+                .field("quote_degraded", quote_degraded)
+                .field("chain", chain)
+                .field("chain_id", chain_id)
+                .field("asset", asset)
+                .field("recipient_address", recipient_address)
+                .field("estimated_out", estimated_out)
+                .field("delivered_amount", delivered_amount)
+                .field("status", status)
+                .field("asset_amount_in", asset_amount_in)
+                .field("fee_amount", fee_amount)
+                .field("service_fee_amount", service_fee_amount)
+                .field("service_fee_asset", service_fee_asset)
+                .field("asset_decimals", asset_decimals)
+                .field("asset_contract", asset_contract)
+                .finish(),
+        }
+    }
 }
 
 impl ConversionInfo {

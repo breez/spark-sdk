@@ -101,10 +101,8 @@ impl BreezSdk {
         if envelope.identity_public_key != self.spark_wallet.get_identity_public_key().to_string() {
             // Not a rejection: the wallet filters leaf by leaf and reports what
             // it dropped.
-            warn!(
-                "Importing an exit state exported by another wallet: {}",
-                envelope.identity_public_key
-            );
+            warn!("Importing an exit state exported by another wallet");
+            debug!("Exporting wallet: {}", envelope.identity_public_key);
         }
 
         let imported = self

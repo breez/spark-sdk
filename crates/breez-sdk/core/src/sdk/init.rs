@@ -1,7 +1,7 @@
 use platform_utils::tokio;
 use std::sync::Arc;
 use tokio::sync::{OnceCell, watch};
-use tracing::{Instrument, error, info};
+use tracing::{Instrument, debug, error, info};
 
 use crate::{Network, error::SdkError, persist::ObjectCacheRepository};
 
@@ -73,20 +73,26 @@ impl BreezSdk {
     pub(crate) fn try_recover_lightning_address(&self) {
         let sdk = self.clone();
         let span = tracing::Span::current();
-        tokio::spawn(async move {
-            if sdk.config.lnurl_domain.is_none() {
-                return;
-            }
+        tokio::spawn(
+            async move {
+                if sdk.config.lnurl_domain.is_none() {
+                    return;
+                }
 
-            match sdk.recover_lightning_address().await {
-                Ok(None) => info!("no lightning address to recover on startup"),
-                Ok(Some(value)) => info!(
-                    "recovered lightning address on startup: address: {}, lnurl url: {}, lnurl bech32: {}",
-                    value.lightning_address, value.lnurl.url, value.lnurl.bech32
-                ),
-                Err(e) => error!("Failed to recover lightning address on startup: {e:?}"),
+                match sdk.recover_lightning_address().await {
+                    Ok(None) => info!("no lightning address to recover on startup"),
+                    Ok(Some(value)) => {
+                        info!("recovered lightning address on startup");
+                        debug!(
+                            "address: {}, lnurl url: {}, lnurl bech32: {}",
+                            value.lightning_address, value.lnurl.url, value.lnurl.bech32
+                        );
+                    }
+                    Err(e) => error!("Failed to recover lightning address on startup: {e:?}"),
+                }
             }
-        }.instrument(span));
+            .instrument(span),
+        );
     }
 
     pub(super) async fn maybe_ensure_spark_private_mode_initialized(&self) -> Result<(), SdkError> {
