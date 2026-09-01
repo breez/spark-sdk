@@ -147,6 +147,19 @@ To re-broadcast the same leaves at a higher fee, quote again with the same {{#en
 
 Confirmed *CPFP* transactions hold funds the same way: once one confirms, your funds sit in its change output. To raise the fee beyond what a confirmed output covers, supply that output back in as a funding UTXO alongside the extra funding — list the confirmed output(s) first, then the new UTXO — so the rebuild spends the confirmed CPFP outputs together with the new funding rather than being capped by them. (Supplying the remaining unspent outputs yourself works too.)
 
+## Follow an exit you started
+
+Keep the {{#name UnilateralExitResponse}} you got back. {{#name check_unilateral_exit}} reads it against the chain and hands you the same exit with every transaction's status brought up to date, so store the one it returns in place of the one you kept.
+
+It needs neither your leaves nor a signer, so an exit can be followed from that response alone, on a device that has lost everything else.
+
+Its {{#name verdict}} says what to do next:
+
+- {{#enum UnilateralExitVerdict::Valid}}: the exit still holds. Broadcast the transactions whose dependencies are confirmed and whose timelocks have matured. Re-broadcasting one you already sent is harmless.
+- {{#enum UnilateralExitVerdict::Done}}: every transaction is confirmed, the sweep included. The funds have arrived.
+- {{#enum UnilateralExitVerdict::Redo}}: the exit cannot be finished as it stands, and {{#name reason}} says why. Quote and build it again with {{#name prepare_unilateral_exit}} and {{#name unilateral_exit}}, passing back the funding UTXOs you were given.
+
+
 ## Back up the exit data
 
 The transactions an exit is built from are held in the SDK's local storage. While the operators are reachable they can be fetched again, so a wallet restored from its seed rebuilds them on its own. When that storage is gone and the operators are unreachable, they cannot be recovered from anywhere, and the leaves they cover cannot be exited.

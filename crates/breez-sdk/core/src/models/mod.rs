@@ -3029,7 +3029,7 @@ pub struct UnilateralExitRequest {
 
 /// Result of `unilateral_exit`: a cost summary plus the complete, signed exit
 /// path.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct UnilateralExitResponse {
     /// Total value of the selected leaves, in satoshis.
@@ -3047,6 +3047,50 @@ pub struct UnilateralExitResponse {
     /// they have since become, so an outpoint an earlier attempt already spent
     /// still funds the rest.
     pub funding_inputs: Vec<CpfpInput>,
+}
+
+/// Request for `check_unilateral_exit`: the exit you kept from a previous
+/// `unilateral_exit`, as you last stored it.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CheckUnilateralExitRequest {
+    pub exit: UnilateralExitResponse,
+}
+
+/// Result of `check_unilateral_exit`: the same exit, read back against the
+/// chain.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CheckUnilateralExitResponse {
+    /// The exit with each transaction's status brought up to date. Store it in
+    /// place of the copy you passed in.
+    pub exit: UnilateralExitResponse,
+    pub verdict: UnilateralExitVerdict,
+}
+
+/// What to do with an exit that has been read back against the chain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum UnilateralExitVerdict {
+    /// The exit still holds. Broadcast the transactions whose dependencies are
+    /// confirmed and whose timelocks have matured.
+    Valid,
+    /// Every transaction is confirmed, the sweep included. The funds have
+    /// arrived and there is nothing left to send.
+    Done,
+    /// The exit cannot be finished as it stands. Quote and build it again.
+    Redo { reason: UnilateralExitRedoReason },
+}
+
+/// Why an exit has to be built again.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum UnilateralExitRedoReason {
+    /// The chain no longer matches the exit: something that is not one of its
+    /// own transactions took an outpoint it still needs. A different refund, a
+    /// fee bump from elsewhere, or funding spent on something else all land
+    /// here.
+    OnChainStateDiverged,
 }
 
 /// Result of `export_unilateral_exit_state`: a self-contained copy of the
