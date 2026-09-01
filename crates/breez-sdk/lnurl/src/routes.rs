@@ -977,6 +977,21 @@ where
         None => None,
     };
 
+    // Logged because a null amount_sat in the outgoing webhook is otherwise
+    // unattributable after the fact. Kept unmodelled rather than projected onto
+    // known fields, so fields SSP adds later still show up. The preimage is
+    // stripped: it is proof of payment, and logs leave the database's trust
+    // boundary.
+    if amount_received_sat.is_none() {
+        let mut redacted: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+        if let Some(object) = redacted.as_object_mut() {
+            object.remove("payment_preimage");
+        }
+        debug!("no usable htlc_amount for {payment_hash}, payload: {redacted}");
+    } else {
+        trace!("htlc_amount present in webhook payload for {payment_hash}");
+    }
+
     // Handle the invoice paid event
     if let Err(e) = handle_invoice_paid(
         db,
