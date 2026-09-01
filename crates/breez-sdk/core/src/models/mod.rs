@@ -3042,6 +3042,11 @@ pub struct UnilateralExitResponse {
     /// The full signed transaction set, in valid topological (broadcast) order
     /// with shared ancestors appearing once and the sweep last.
     pub transactions: Vec<UnilateralExitTransaction>,
+    /// The funding UTXOs this exit was built from, as you supplied them. Hand
+    /// them back when you build the exit again and they are followed to whatever
+    /// they have since become, so an outpoint an earlier attempt already spent
+    /// still funds the rest.
+    pub funding_inputs: Vec<CpfpInput>,
 }
 
 /// Result of `export_unilateral_exit_state`: a self-contained copy of the

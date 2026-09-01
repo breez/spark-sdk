@@ -160,6 +160,7 @@ impl BreezSdk {
             prepared,
             funding_inputs,
         } = request;
+        let supplied_funding = funding_inputs.clone();
         debug!(
             leaves = prepared.leaves.len(),
             funding_inputs = funding_inputs.len(),
@@ -324,6 +325,7 @@ impl BreezSdk {
                 total_fee_sat: build_fee_sat,
                 leaves,
                 transactions,
+                funding_inputs: supplied_funding,
             });
         }
 
@@ -371,6 +373,7 @@ impl BreezSdk {
             total_fee_sat,
             leaves,
             transactions,
+            funding_inputs: supplied_funding,
         })
     }
 }
@@ -828,6 +831,7 @@ fn empty_exit_response() -> UnilateralExitResponse {
         total_fee_sat: 0,
         leaves: Vec::new(),
         transactions: Vec::new(),
+        funding_inputs: Vec::new(),
     }
 }
 

@@ -969,6 +969,7 @@ pub struct UnilateralExitResponse {
     pub total_fee_sat: u64,
     pub leaves: Vec<UnilateralExitLeaf>,
     pub transactions: Vec<UnilateralExitTransaction>,
+    pub funding_inputs: Vec<CpfpInput>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ExportUnilateralExitStateResponse)]
