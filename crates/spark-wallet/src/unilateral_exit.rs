@@ -372,6 +372,166 @@ pub fn scan_funding(supplied: &[CpfpInput], observed: &[Observation]) -> Funding
     FundingScan { inputs, pending }
 }
 
+/// One transaction of an exit a caller kept, as the check reads it back.
+pub struct ExitCheckInput {
+    pub tx: Transaction,
+    /// The CPFP child that pays its fee, where it has one.
+    pub cpfp: Option<Transaction>,
+    /// Txids of the transactions that must be in a block before this one can be.
+    pub depends_on: Vec<Txid>,
+    /// Whether the caller last recorded it in a block. Where the check starts,
+    /// not what it concludes.
+    pub confirmed: bool,
+}
+
+/// What the chain says about an exit a caller kept.
+pub struct ExitCheck {
+    /// The transactions now in a block.
+    pub confirmed: HashSet<Txid>,
+    /// Whether the chain no longer matches: something other than this exit's own
+    /// transaction took an outpoint it still needs.
+    pub diverged: bool,
+    pub pending: Vec<ChainQuery>,
+}
+
+/// Reads back an exit a caller kept, saying which of its transactions are in a
+/// block and whether the chain still matches it. Drive it like the other scans:
+/// perform `pending`, feed the results back, and repeat until nothing is
+/// pending.
+///
+/// It asks as little as it can. Transactions are checked deepest first, and one
+/// in a block settles everything it depends on, so a finished exit costs a
+/// lookup or two rather than one per transaction. Only where the answer is no,
+/// and only at the frontier, does it ask what took the outpoint instead: below an
+/// unconfirmed transaction there is no outpoint yet for anything to take.
+#[must_use]
+pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> ExitCheck {
+    let index = ObservedIndex::new(observed);
+    let mut pending: Vec<ChainQuery> = Vec::new();
+    let mut confirmed: HashSet<Txid> = HashSet::new();
+    let mut settled: HashSet<Txid> = HashSet::new();
+    let mut diverged = false;
+
+    let by_txid: HashMap<Txid, &ExitCheckInput> =
+        txs.iter().map(|t| (t.tx.compute_txid(), t)).collect();
+
+    // Deepest first, so a transaction in a block spares every lookup above it.
+    for input in txs.iter().rev() {
+        let txid = input.tx.compute_txid();
+        if settled.contains(&txid) {
+            continue;
+        }
+        // Only what the caller saw in a block is worth asking about: the rest was
+        // never there, and the frontier pass below covers it.
+        if !input.confirmed {
+            continue;
+        }
+        let query = ChainQuery::TxConfirmed(txid);
+        match index.get(&query) {
+            Some(ChainResult::Confirmed(true)) => {
+                confirmed.insert(txid);
+                mark_settled(&by_txid, txid, &mut confirmed, &mut settled);
+            }
+            // Not in a block: whether a reorg undid it or it never landed, the
+            // frontier pass below asks what is there instead.
+            Some(ChainResult::Confirmed(false)) => {
+                settled.insert(txid);
+            }
+            // Unreadable: nothing is known, and asking again next time is all
+            // that can be done.
+            Some(_) => {
+                settled.insert(txid);
+            }
+            None => pending.push(query),
+        }
+    }
+
+    if pending.is_empty() {
+        // Forward, so a transaction found in a block here opens the one below it
+        // in the same pass: the list is in the order the exit was built.
+        for input in txs {
+            let txid = input.tx.compute_txid();
+            if confirmed.contains(&txid) {
+                continue;
+            }
+            // Not reachable: something it needs is not in a block, so its own
+            // inputs do not exist yet and nothing can have taken them.
+            if !input.depends_on.iter().all(|dep| confirmed.contains(dep)) {
+                continue;
+            }
+            // One input answers for a transaction with several (the sweep): they
+            // are all spent by it or none of them are.
+            let Some(spent_outpoint) = input.tx.input.first().map(|i| i.previous_output) else {
+                continue;
+            };
+            let mut outpoints = vec![spent_outpoint];
+            // The anchor its own child would bump, where it has one.
+            if let Some(cpfp) = &input.cpfp {
+                outpoints.extend(
+                    cpfp.input
+                        .iter()
+                        .map(|i| i.previous_output)
+                        .filter(|o| o.txid == txid),
+                );
+            }
+
+            for outpoint in outpoints {
+                let query = ChainQuery::Outspend(outpoint);
+                match index.get(&query) {
+                    Some(ChainResult::Spend(Some(info))) if info.confirmed => {
+                        if info.spender_txid == txid {
+                            confirmed.insert(txid);
+                        } else if !ours(input, info.spender_txid) {
+                            warn!(%outpoint, spender = %info.spender_txid, "check: outpoint taken");
+                            diverged = true;
+                        }
+                    }
+                    None => pending.push(query),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let mut seen: HashSet<ChainQuery> = HashSet::new();
+    pending.retain(|query| seen.insert(query.clone()));
+
+    ExitCheck {
+        confirmed,
+        diverged,
+        pending,
+    }
+}
+
+/// Whether `spender` is this exit's own transaction for that outpoint.
+fn ours(input: &ExitCheckInput, spender: Txid) -> bool {
+    spender == input.tx.compute_txid()
+        || input
+            .cpfp
+            .as_ref()
+            .is_some_and(|cpfp| cpfp.compute_txid() == spender)
+}
+
+/// Marks `txid` and everything it depends on, transitively, as answered: a
+/// transaction in a block puts every one it spends from in a block too.
+fn mark_settled(
+    by_txid: &HashMap<Txid, &ExitCheckInput>,
+    txid: Txid,
+    confirmed: &mut HashSet<Txid>,
+    settled: &mut HashSet<Txid>,
+) {
+    let mut stack = vec![txid];
+    while let Some(txid) = stack.pop() {
+        if !settled.insert(txid) {
+            continue;
+        }
+        confirmed.insert(txid);
+        if let Some(input) = by_txid.get(&txid) {
+            stack.extend(input.depends_on.iter().copied());
+        }
+    }
+}
+
 /// Restores the walk's own reading from an [`ExitChainState`] resolved earlier,
 /// so a build needs no chain of its own for the tree.
 fn restore_exit_chain_walk(state: &ExitChainState, leaf_ids: &[TreeNodeId]) -> ExitChainWalk {
@@ -2312,6 +2472,175 @@ mod interpret_tests {
             },
             result: ChainResult::AddressUtxos(vec![]),
         }
+    }
+
+    /// A chain of three, the last one in a block. One lookup settles all three:
+    /// a transaction in a block puts every one it spends from in a block too.
+    #[test]
+    fn check_settles_a_chain_from_its_deepest_confirmed() {
+        let mut chain = exit_chain_of_three();
+        // The caller last saw the whole chain in a block.
+        for tx in &mut chain {
+            tx.confirmed = true;
+        }
+        let deepest = chain[2].tx.compute_txid();
+
+        let observed = vec![Observation {
+            query: ChainQuery::TxConfirmed(deepest),
+            result: ChainResult::Confirmed(true),
+        }];
+        let check = check_exit_chain(&chain, &observed);
+
+        assert!(check.pending.is_empty(), "{:?}", check.pending);
+        assert!(!check.diverged);
+        assert_eq!(check.confirmed.len(), 3, "everything above it too");
+    }
+
+    /// A transaction that landed since the caller last looked is found, and the
+    /// one below it opens in the same pass.
+    #[test]
+    fn check_finds_what_landed_since_the_caller_last_looked() {
+        let chain = exit_chain_of_three();
+        let first = chain[0].tx.compute_txid();
+        let second = chain[1].tx.compute_txid();
+
+        let observed = vec![
+            Observation {
+                query: ChainQuery::TxConfirmed(first),
+                result: ChainResult::Confirmed(true),
+            },
+            // Broadcast and confirmed since; the caller still has it as pending.
+            spent(chain[1].tx.input[0].previous_output, second),
+            unspent(chain[2].tx.input[0].previous_output),
+        ];
+        let check = check_exit_chain(&chain, &observed);
+
+        assert!(check.pending.is_empty(), "{:?}", check.pending);
+        assert!(!check.diverged);
+        assert!(
+            check.confirmed.contains(&second),
+            "the one that landed is found"
+        );
+    }
+
+    /// A frontier whose own input was taken by somebody else: the exit no longer
+    /// matches the chain.
+    #[test]
+    fn check_reports_an_outpoint_taken_by_another_transaction() {
+        let chain = exit_chain_of_three();
+        let first = chain[0].tx.compute_txid();
+        let frontier_input = chain[1].tx.input[0].previous_output;
+        let stranger = Txid::from_byte_array([0xaa; 32]);
+
+        let observed = vec![
+            Observation {
+                query: ChainQuery::TxConfirmed(first),
+                result: ChainResult::Confirmed(true),
+            },
+            spent(frontier_input, stranger),
+        ];
+        let check = check_exit_chain(&chain[..2], &observed);
+
+        assert!(check.diverged, "a stranger holds the outpoint it needs");
+    }
+
+    /// A frontier whose anchor a foreign child already bumped: our own child
+    /// conflicts with what is there.
+    #[test]
+    fn check_reports_an_anchor_bumped_by_another_child() {
+        let mut chain = exit_chain_of_three();
+        let first = chain[0].tx.compute_txid();
+        let frontier = chain[1].tx.compute_txid();
+        let anchor = OutPoint {
+            txid: frontier,
+            vout: 1,
+        };
+        chain[1].cpfp = Some(tx_spending(anchor, 99));
+        let stranger = Txid::from_byte_array([0xbb; 32]);
+
+        let observed = vec![
+            Observation {
+                query: ChainQuery::TxConfirmed(first),
+                result: ChainResult::Confirmed(true),
+            },
+            unspent(chain[1].tx.input[0].previous_output),
+            spent(anchor, stranger),
+        ];
+        let check = check_exit_chain(&chain[..2], &observed);
+
+        assert!(check.diverged, "somebody else bumped the anchor");
+    }
+
+    /// Below an unconfirmed transaction there is no outpoint yet for anything to
+    /// take, so nothing there is asked about.
+    #[test]
+    fn check_asks_nothing_below_the_frontier() {
+        let chain = exit_chain_of_three();
+        let first = chain[0].tx.compute_txid();
+
+        let observed = vec![Observation {
+            query: ChainQuery::TxConfirmed(first),
+            result: ChainResult::Confirmed(true),
+        }];
+        let check = check_exit_chain(&chain, &observed);
+
+        let asked: Vec<OutPoint> = check
+            .pending
+            .iter()
+            .filter_map(|q| match q {
+                ChainQuery::Outspend(outpoint) => Some(*outpoint),
+                _ => None,
+            })
+            .collect();
+        let deepest_input = chain[2].tx.input[0].previous_output;
+        assert!(
+            !asked.contains(&deepest_input),
+            "the one below the frontier was asked about: {asked:?}"
+        );
+    }
+
+    /// Three transactions, each spending the one before, the first recorded in a
+    /// block and the rest not.
+    fn exit_chain_of_three() -> Vec<ExitCheckInput> {
+        let deposit = OutPoint {
+            txid: Txid::from_byte_array([5u8; 32]),
+            vout: 0,
+        };
+        let first = tx_spending(deposit, 1);
+        let second = tx_spending(
+            OutPoint {
+                txid: first.compute_txid(),
+                vout: 0,
+            },
+            2,
+        );
+        let third = tx_spending(
+            OutPoint {
+                txid: second.compute_txid(),
+                vout: 0,
+            },
+            3,
+        );
+        vec![
+            ExitCheckInput {
+                depends_on: vec![],
+                cpfp: None,
+                confirmed: true,
+                tx: first.clone(),
+            },
+            ExitCheckInput {
+                depends_on: vec![first.compute_txid()],
+                cpfp: None,
+                confirmed: false,
+                tx: second.clone(),
+            },
+            ExitCheckInput {
+                depends_on: vec![second.compute_txid()],
+                cpfp: None,
+                confirmed: false,
+                tx: third,
+            },
+        ]
     }
 
     /// The deepest node the operators label on-chain is where the walk picks up,
