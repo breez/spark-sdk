@@ -337,6 +337,7 @@ pub struct WebhookPayloadData {
     pub lightning_address: Option<String>,
     pub sender_comment: Option<String>,
     pub domain: String,
+    pub nostr_zap_request: Option<String>,
 }
 
 /// Tests for the domain-attribution repository methods, generic over the

@@ -20,6 +20,7 @@ pub enum WebhookPayload {
         lightning_address: Option<String>,
         sender_comment: Option<String>,
         timestamp: i64,
+        nostr_zap_request: Option<String>,
     },
 }
 
@@ -50,6 +51,7 @@ where
             lightning_address: item.lightning_address,
             sender_comment: item.sender_comment,
             timestamp: now,
+            nostr_zap_request: item.nostr_zap_request,
         };
 
         let json = serde_json::to_string(&payload).map_err(|e| {
