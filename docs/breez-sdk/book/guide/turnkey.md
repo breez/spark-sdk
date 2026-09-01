@@ -1,0 +1,304 @@
+# Using Turnkey
+
+[Turnkey](https://www.turnkey.com/) keeps the wallet's keys inside a secure enclave. The SDK ships Turnkey-backed signers, so a server can run wallets without holding any signing key material: signing happens inside Turnkey, and what the server holds is an API credential whose permissions you control with Turnkey policies.
+
+Turnkey is meant for server deployments (see [Server mode](server_mode.md)). Depending on the policy you attach to the server's credential, it supports two ways of sending payments: the server signs everything itself, or each payment is approved by the end user via [Client signing](client_signing.md).
+
+The SDK connects to an existing Spark wallet in your Turnkey organization or sub-organization. Creating the wallet itself is done with Turnkey directly and is out of the SDK's scope (see [Turnkey's Spark support](https://docs.turnkey.com/features/networks/spark) for creating the wallet account).
+
+## Connecting
+
+API docs: https://breez.github.io/spark-sdk/breez_sdk_spark/turnkey/fn.create_turnkey_signer.html
+
+Create the signers with `create_turnkey_signer` and connect with `connect_with_signer`, the same way as any [external signer](external_signer.md):
+
+### Rust
+
+```rust
+let turnkey_config = TurnkeyConfig {
+    base_url: None,
+    organization_id: "<turnkey sub-organization id>".to_string(),
+    api_public_key: "<api public key hex>".to_string(),
+    api_private_key: "<api private key hex>".to_string(),
+    wallet_id: "<turnkey wallet id>".to_string(),
+    network: Network::Mainnet,
+    account_number: None,
+    // Set after the first connect to make later signer setup network-free
+    identity_public_key: None,
+    retry: None,
+    max_rps: None,
+};
+
+let signers = create_turnkey_signer(turnkey_config).await?;
+
+let mut config = default_config(Network::Mainnet);
+config.api_key = Some("<breez api key>".to_string());
+
+let sdk = connect_with_signer(ConnectWithSignerRequest {
+    config,
+    breez_signer: signers.breez_signer,
+    spark_signer: signers.spark_signer,
+    storage_dir: "./.data".to_string(),
+})
+.await?;
+```
+
+### Swift
+
+```swift
+let turnkeyConfig = TurnkeyConfig(
+    baseUrl: nil,
+    organizationId: "<turnkey sub-organization id>",
+    apiPublicKey: "<api public key hex>",
+    apiPrivateKey: "<api private key hex>",
+    walletId: "<turnkey wallet id>",
+    network: Network.mainnet,
+    accountNumber: nil,
+    // Set after the first connect to make later signer setup network-free
+    identityPublicKey: nil,
+    retry: nil,
+    maxRps: nil
+)
+
+let signers = try await createTurnkeySigner(config: turnkeyConfig)
+
+var config = defaultConfig(network: Network.mainnet)
+config.apiKey = "<breez api key>"
+
+let sdk = try await BreezSdkSpark.connectWithSigner(request: ConnectWithSignerRequest(
+    config: config,
+    breezSigner: signers.breezSigner,
+    sparkSigner: signers.sparkSigner,
+    storageDir: "./.data"
+))
+```
+
+### Kotlin
+
+```kotlin
+val turnkeyConfig = TurnkeyConfig(
+    baseUrl = null,
+    organizationId = "<turnkey sub-organization id>",
+    apiPublicKey = "<api public key hex>",
+    apiPrivateKey = "<api private key hex>",
+    walletId = "<turnkey wallet id>",
+    network = Network.MAINNET,
+    accountNumber = null,
+    // Set after the first connect to make later signer setup network-free
+    identityPublicKey = null,
+    retry = null,
+    maxRps = null
+)
+
+try {
+    val signers = createTurnkeySigner(turnkeyConfig)
+
+    val config = defaultConfig(Network.MAINNET)
+    config.apiKey = "<breez api key>"
+
+    val sdk = connectWithSigner(ConnectWithSignerRequest(
+        config = config,
+        breezSigner = signers.breezSigner,
+        sparkSigner = signers.sparkSigner,
+        storageDir = "./.data"
+    ))
+} catch (e: Exception) {
+    // handle error
+}
+```
+
+### C#
+
+```csharp
+var turnkeyConfig = new TurnkeyConfig(
+    baseUrl: null,
+    organizationId: "<turnkey sub-organization id>",
+    apiPublicKey: "<api public key hex>",
+    apiPrivateKey: "<api private key hex>",
+    walletId: "<turnkey wallet id>",
+    network: Network.Mainnet,
+    accountNumber: null,
+    // Set after the first connect to make later signer setup network-free
+    identityPublicKey: null,
+    retry: null,
+    maxRps: null
+);
+
+var signers = await BreezSdkSparkMethods.CreateTurnkeySigner(turnkeyConfig);
+
+var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+{
+    apiKey = "<breez api key>"
+};
+
+var sdk = await BreezSdkSparkMethods.ConnectWithSigner(new ConnectWithSignerRequest(
+    config: config,
+    breezSigner: signers.breezSigner,
+    sparkSigner: signers.sparkSigner,
+    storageDir: "./.data"
+));
+```
+
+### Javascript (Wasm)
+
+```typescript
+const turnkeyConfig: TurnkeyConfig = {
+  baseUrl: undefined,
+  organizationId: '<turnkey sub-organization id>',
+  apiPublicKey: '<api public key hex>',
+  apiPrivateKey: '<api private key hex>',
+  walletId: '<turnkey wallet id>',
+  network: 'mainnet',
+  accountNumber: undefined,
+  // Set after the first connect to make later signer setup network-free
+  identityPublicKey: undefined,
+  retry: undefined,
+  maxRps: undefined
+}
+
+const signers = await createTurnkeySigner(turnkeyConfig)
+
+const config = defaultConfig('mainnet')
+config.apiKey = '<breez api key>'
+
+const sdk = await connectWithSigner(
+  config,
+  signers.breezSigner,
+  signers.sparkSigner,
+  'breez_spark_db' // For WASM, this is the IndexedDB database name
+)
+```
+
+### React Native
+
+```typescript
+const turnkeyConfig: TurnkeyConfig = {
+  baseUrl: undefined,
+  organizationId: '<turnkey sub-organization id>',
+  apiPublicKey: '<api public key hex>',
+  apiPrivateKey: '<api private key hex>',
+  walletId: '<turnkey wallet id>',
+  network: Network.Mainnet,
+  accountNumber: undefined,
+  // Set after the first connect to make later signer setup network-free
+  identityPublicKey: undefined,
+  retry: undefined,
+  maxRps: undefined
+}
+
+const signers = await createTurnkeySigner(turnkeyConfig)
+
+const config = defaultConfig(Network.Mainnet)
+config.apiKey = '<breez api key>'
+
+const sdk = await connectWithSigner({
+  config,
+  breezSigner: signers.breezSigner,
+  sparkSigner: signers.sparkSigner,
+  storageDir: `${RNFS.DocumentDirectoryPath}/data`
+})
+```
+
+### Python
+
+```python
+turnkey_config = TurnkeyConfig(
+    base_url=None,
+    organization_id="<turnkey sub-organization id>",
+    api_public_key="<api public key hex>",
+    api_private_key="<api private key hex>",
+    wallet_id="<turnkey wallet id>",
+    network=Network.MAINNET,
+    account_number=None,
+    # Set after the first connect to make later signer setup network-free
+    identity_public_key=None,
+    retry=None,
+    max_rps=None,
+)
+
+signers = await create_turnkey_signer(config=turnkey_config)
+
+config = default_config(Network.MAINNET)
+config.api_key = "<breez api key>"
+
+sdk = await connect_with_signer(ConnectWithSignerRequest(
+    config=config,
+    breez_signer=signers.breez_signer,
+    spark_signer=signers.spark_signer,
+    storage_dir="./.data"
+))
+```
+
+### Go
+
+```go
+turnkeyConfig := breez_sdk_spark.TurnkeyConfig{
+	BaseUrl:        nil,
+	OrganizationId: "<turnkey sub-organization id>",
+	ApiPublicKey:   "<api public key hex>",
+	ApiPrivateKey:  "<api private key hex>",
+	WalletId:       "<turnkey wallet id>",
+	Network:        breez_sdk_spark.NetworkMainnet,
+	AccountNumber:  nil,
+	// Set after the first connect to make later signer setup network-free
+	IdentityPublicKey: nil,
+	Retry:             nil,
+	MaxRps:            nil,
+}
+
+signers, err := breez_sdk_spark.CreateTurnkeySigner(turnkeyConfig)
+if err != nil {
+	return nil, err
+}
+
+config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+apiKey := "<breez api key>"
+config.ApiKey = &apiKey
+
+sdk, err := breez_sdk_spark.ConnectWithSigner(breez_sdk_spark.ConnectWithSignerRequest{
+	Config:      config,
+	BreezSigner: signers.BreezSigner,
+	SparkSigner: signers.SparkSigner,
+	StorageDir:  "./.data",
+})
+if err != nil {
+	return nil, err
+}
+```
+
+
+
+A few notes on the configuration:
+
+- `api_private_key` is a server secret. It authenticates every Turnkey request; keep it out of client code and logs.
+- The API key pair can be secp256k1 or P-256 (Turnkey's console default). All published bindings support both. If you use the Rust crate directly, enable the `turnkey` cargo feature, plus `turnkey-p256` for P-256 keys.
+- `max_rps` paces requests to Turnkey. Unset uses Turnkey's documented limit of 10 requests per second per sub-organization; set it if your account has a different limit.
+
+### Reconnecting without network calls
+
+Server deployments often build a fresh SDK instance per request. Setting `identity_public_key` makes the signer setup network-free. Obtain it once from a freshly built signer with `get_identity_public_key` (available right after `create_turnkey_signer`, no connect needed), or from `identity_pubkey` on `get_info` if you already have a connected SDK. Store it alongside the wallet and pass it in the config on later connects. It is a stable, non-secret value, but it must belong to the same wallet.
+
+### Wallets under a deny-export policy
+
+`create_turnkey_signer` keeps every Spark key in the enclave, but exports one dedicated non-Spark key on first use for local encryption operations. If your Turnkey policy forbids any key export, use `create_turnkey_signing_only_signer` instead: no key is ever exported. Connect its signers as described in [Signers Without Local ECIES/HMAC Support](external_signer.md#signers-without-local-ecieshmac-support), which also lists the trade-offs of a signing-only signer.
+
+## Signing models
+
+How payments are authorized is decided by the Turnkey policy attached to each credential, not by SDK code. Configure the policies in Turnkey; see the [Turnkey policy documentation](https://docs.turnkey.com/concepts/policies/overview) for the mechanics and [Turnkey's Spark operations](https://docs.turnkey.com/features/networks/spark#supported-operations) for the activity names the policy scopes.
+
+### Server-side signing
+
+The server's API credential is allowed to run all Spark signing activities. Every SDK flow then works exactly as documented, starting with [Sending payments](send_payment.md): the server prepares, signs and sends on its own. Use this when the server is trusted to send payments autonomously.
+
+### User-approved payments
+
+The policy allows the server's credential to run everything except the transfer approval activity (`SPARK_PREPARE_TRANSFER`), which requires the end user's own Turnkey credential (for example a passkey registered with Turnkey). The server then drives the send with the [Client signing](client_signing.md) flow: it prepares the payment and builds the package, the user approves and signs the one item that needs their credential, and the server publishes it. The rest of the signing (`SPARK_SIGN_FROST`) stays with the server under policy, so a payment can never be sent without the user, and no key leaves Turnkey on either side.
+
+## Availability
+
+- Turnkey signers are available on all platforms except Flutter, which does not support external signers (see [Using an External Signer](external_signer.md)).
+- In the Rust crate the integration is behind the `turnkey` cargo feature. The published bindings ship with it enabled.
+
+---
+
+Identifier casing: `get_info` here is `getInfo` in Swift, Kotlin, JavaScript, React Native and Flutter, and `GetInfo` in Go and C#. Enum variants: `SdkEvent::Synced` is `SdkEvent.SYNCED` in Python, `SdkEvent.synced` in Swift, `SdkEventSynced` in Go, and `SdkEvent.Synced` elsewhere.
