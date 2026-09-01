@@ -660,6 +660,60 @@ fn flag_unverifiable_confirmation_branches(
     }
 }
 
+/// Where to start walking a branch, and what it proves.
+///
+/// The operators label a node they believe on-chain, so the deepest such node is
+/// where the walk can pick up: a node's `node_tx` spends its parent's, so one in
+/// a block puts every one above it in a block too, and by that same spend each
+/// was confirmed via its cpfp transaction rather than any other way.
+///
+/// The label is only where to look. A block can be reorganised out, so the node
+/// itself is checked, and the walk steps up to its parent for as long as the
+/// answer is no.
+fn resume_point(
+    chain_nodes: &[&TreeNode],
+    observed: &ObservedIndex<'_>,
+    pending: &mut Vec<ChainQuery>,
+) -> ResumePoint {
+    let mut candidates = chain_nodes
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, node)| node.status == TreeNodeStatus::OnChain);
+
+    for (index, node) in candidates.by_ref() {
+        let query = ChainQuery::TxConfirmed(node.node_tx.compute_txid());
+        match observed.get(&query) {
+            Some(ChainResult::Confirmed(true)) => {
+                trace!(node = %node.id, "walk: resuming below the deepest confirmed node");
+                return ResumePoint::Below(index);
+            }
+            // Not in a block: a label that was never true, or one a reorg undid.
+            // Its parent is the next place to look.
+            Some(ChainResult::Confirmed(false)) => {}
+            // Unreadable, so nothing is known. Start from the deposit, where the
+            // walk's own fallbacks apply.
+            Some(_) => return ResumePoint::Deposit,
+            None => {
+                pending.push(query);
+                return ResumePoint::Awaiting;
+            }
+        }
+    }
+    ResumePoint::Deposit
+}
+
+/// Where [`resume_point`] says a branch walk should begin.
+enum ResumePoint {
+    /// Start below the node at this index, which is confirmed, along with every
+    /// node above it.
+    Below(usize),
+    /// Nothing is known to be on-chain: start at the deposit.
+    Deposit,
+    /// A lookup is outstanding; nothing to do until it is answered.
+    Awaiting,
+}
+
 /// Follows the confirmed spender from the deposit down one branch, classifying
 /// each node into `nodes`/`refunds`. Stops (emitting the next lookup into
 /// `pending`) at the first output whose spender is not yet observed.
@@ -690,9 +744,29 @@ fn walk_branch(
         return;
     };
 
+    let resume = resume_point(&chain_nodes, observed, pending);
+    let start = match resume {
+        ResumePoint::Awaiting => return,
+        ResumePoint::Deposit => 0,
+        ResumePoint::Below(index) => {
+            for node in &chain_nodes[..=index] {
+                nodes.insert(node.id.clone(), NodeState::ConfirmedCpfp);
+            }
+            // The leaf itself was the confirmed one, so its refund is all that is
+            // left, and that is read separately.
+            if index + 1 >= chain_nodes.len() {
+                return;
+            }
+            index + 1
+        }
+    };
+
     // Confirmed parent's node_tx txid; `None` at the root (spends the deposit).
-    let mut prev_confirmed_txid: Option<Txid> = None;
-    for node in &chain_nodes {
+    let mut prev_confirmed_txid: Option<Txid> = match start {
+        0 => None,
+        i => Some(chain_nodes[i - 1].node_tx.compute_txid()),
+    };
+    for node in &chain_nodes[start..] {
         let is_leaf = &node.id == leaf_id;
         let live_outpoint = match prev_confirmed_txid {
             Some(txid) => OutPoint {
@@ -2240,6 +2314,125 @@ mod interpret_tests {
         }
     }
 
+    /// The deepest node the operators label on-chain is where the walk picks up,
+    /// once it has checked that node itself. Everything above it is in a block by
+    /// the same spend chain, so it costs no lookups at all.
+    #[test]
+    fn scan_resumes_below_the_deepest_confirmed_node() {
+        let deposit = OutPoint {
+            txid: Txid::from_byte_array([7u8; 32]),
+            vout: 0,
+        };
+        let root = treenode("root", None, tx_spending(deposit, 1), 0);
+        let root_out = OutPoint {
+            txid: root.node_tx.compute_txid(),
+            vout: 0,
+        };
+        let mut mid = treenode("mid", Some("root"), tx_spending(root_out, 2), 0);
+        mid.status = TreeNodeStatus::OnChain;
+        let mid_txid = mid.node_tx.compute_txid();
+        let mid_out = OutPoint {
+            txid: mid_txid,
+            vout: 0,
+        };
+        let leaf = treenode("leaf", Some("mid"), tx_spending(mid_out, 3), 0);
+        let leaf_id = leaf.id.clone();
+        let tree = to_node_map(vec![root, mid, leaf]);
+        let addresses = HashMap::new();
+
+        let confirmed = |txid, yes| Observation {
+            query: ChainQuery::TxConfirmed(txid),
+            result: ChainResult::Confirmed(yes),
+        };
+
+        let observed = vec![confirmed(mid_txid, true), unspent(mid_out)];
+        let scan = scan_exit_chain(&tree, std::slice::from_ref(&leaf_id), &addresses, &observed);
+
+        assert!(scan.pending.is_empty(), "{:?}", scan.pending);
+        let confirmed_ids: Vec<String> = scan
+            .state
+            .nodes
+            .iter()
+            .map(|n| n.node_id.to_string())
+            .collect();
+        assert_eq!(
+            confirmed_ids,
+            vec!["mid".to_string(), "root".to_string()],
+            "the node checked and everything above it"
+        );
+        // The deposit was never probed: one node in a block puts every one above
+        // it in a block too.
+        assert!(!observed_contains(
+            &observed,
+            &ChainQuery::Outspend(deposit)
+        ));
+    }
+
+    /// A label a reorg undid sends the walk up to the parent, and on up for as
+    /// long as the answer is no.
+    #[test]
+    fn scan_steps_up_when_the_deepest_confirmed_node_is_gone() {
+        let deposit = OutPoint {
+            txid: Txid::from_byte_array([8u8; 32]),
+            vout: 0,
+        };
+        let mut root = treenode("root", None, tx_spending(deposit, 1), 0);
+        root.status = TreeNodeStatus::OnChain;
+        let root_txid = root.node_tx.compute_txid();
+        let root_out = OutPoint {
+            txid: root_txid,
+            vout: 0,
+        };
+        let mut mid = treenode("mid", Some("root"), tx_spending(root_out, 2), 0);
+        mid.status = TreeNodeStatus::OnChain;
+        let mid_txid = mid.node_tx.compute_txid();
+        let leaf = treenode(
+            "leaf",
+            Some("mid"),
+            tx_spending(
+                OutPoint {
+                    txid: mid_txid,
+                    vout: 0,
+                },
+                3,
+            ),
+            0,
+        );
+        let leaf_id = leaf.id.clone();
+        let tree = to_node_map(vec![root, mid, leaf]);
+        let addresses = HashMap::new();
+
+        let confirmed = |txid, yes| Observation {
+            query: ChainQuery::TxConfirmed(txid),
+            result: ChainResult::Confirmed(yes),
+        };
+
+        // mid is labelled on-chain but is not in a block; root still is.
+        let observed = vec![
+            confirmed(mid_txid, false),
+            confirmed(root_txid, true),
+            unspent(root_out),
+        ];
+        let scan = scan_exit_chain(&tree, std::slice::from_ref(&leaf_id), &addresses, &observed);
+
+        assert!(scan.pending.is_empty(), "{:?}", scan.pending);
+        let confirmed_ids: Vec<String> = scan
+            .state
+            .nodes
+            .iter()
+            .map(|n| n.node_id.to_string())
+            .collect();
+        assert_eq!(
+            confirmed_ids,
+            vec!["root".to_string()],
+            "only what is still in a block"
+        );
+    }
+
+    fn observed_contains(observed: &[Observation], query: &ChainQuery) -> bool {
+        observed.iter().any(|o| &o.query == query)
+    }
+
     /// The scan answers what the chain has already done from the tree alone: no
     /// plan, no funding, and the refund address read off the leaf's own
     /// refund_tx rather than derived from the signer.
@@ -2759,6 +2952,12 @@ mod interpret_tests {
         let prepared = prepared_of(root, leaf);
 
         let observed = vec![
+            // The chain cannot be read at all, the resume probe included, so the
+            // walk starts at the deposit and its own fallback applies.
+            Observation {
+                query: ChainQuery::TxConfirmed(root_txid),
+                result: ChainResult::Unavailable,
+            },
             Observation {
                 query: ChainQuery::Outspend(deposit),
                 result: ChainResult::Unavailable,
@@ -2799,6 +2998,12 @@ mod interpret_tests {
         let prepared = prepared_of(root, leaf);
 
         let observed = vec![
+            // The chain cannot be read at all, the resume probe included, so the
+            // walk starts at the deposit and its own fallback applies.
+            Observation {
+                query: ChainQuery::TxConfirmed(root_txid),
+                result: ChainResult::Unavailable,
+            },
             Observation {
                 query: ChainQuery::Outspend(deposit),
                 result: ChainResult::Unavailable,
