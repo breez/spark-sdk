@@ -28,7 +28,7 @@ This points a subdomain like pay.yourdomain.com to the LNURL server.
 * **Type**: CNAME
 * **Value/Target**: breez.tips
 
-[Send us](mailto:contact@breez.technology) your domain name (e.g., yourdomain.com or pay.yourdomain.com).
+[Send us](mailto:contact@breez.technology) your domain name (e.g., yourdomain.com or pay.yourdomain.com), together with the Breez API key you want the LNURL payments on that domain to be associated with.
 
 We will verify and add it to our list of allowed domains.
 
