@@ -2791,6 +2791,23 @@ pub enum CpfpFundingKind {
     },
 }
 
+/// How many UTXOs fund an exit, and which of its transactions each pays for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum CpfpFundingShape {
+    /// One UTXO per branch. Each of a branch's CPFP children after the first
+    /// spends the previous child's change, so a branch needs one UTXO however
+    /// deep it is, and ends with one change output.
+    #[default]
+    PerBranch,
+    /// One UTXO for every transaction the exit fee-bumps: each tree node, and
+    /// each leaf's refund. No CPFP child spends another child's output, so every
+    /// child can be signed without knowing the fee rate any other child will be
+    /// broadcast at. It costs one more non-dust change output per transaction,
+    /// and those are left on your funding script rather than swept.
+    PerNode,
+}
+
 /// Which leaves to exit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -2810,8 +2827,9 @@ pub enum ExitLeafSelection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum UnilateralExitTxKind {
-    /// Splits the caller's funding into one output per branch. Present only
-    /// when the funding couldn't be matched one-to-one to branches.
+    /// Splits the caller's funding into one output per branch, or one per
+    /// transaction under per-node funding. Present only when the funding
+    /// couldn't be matched to them one-to-one.
     FanOut,
     /// A tree node transaction (root, intermediate, or leaf node).
     Node,
@@ -2878,6 +2896,10 @@ pub struct PrepareUnilateralExitRequest {
     /// The Bitcoin address the swept funds are sent to.
     pub destination: String,
     pub selection: ExitLeafSelection,
+    /// How the exit's funding UTXOs map to the transactions they pay for. Unset
+    /// funds one UTXO per branch.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub funding_shape: Option<CpfpFundingShape>,
 }
 
 /// How much to fund one branch of the exit to avoid a fan-out.
@@ -2887,6 +2909,21 @@ pub struct PerBranchFunding {
     /// The leaf whose branch this funds.
     pub leaf_id: String,
     /// Fund a UTXO of at least this many satoshis for this branch.
+    pub funding_sat: u64,
+}
+
+/// How much to fund one transaction of the exit when funding per node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PerNodeFunding {
+    /// The leaf whose branch this transaction belongs to.
+    pub leaf_id: String,
+    /// The tree node it belongs to, which is the leaf itself for a refund.
+    pub node_id: String,
+    /// Which of the exit's transactions this pays the fee of: always `Node` or
+    /// `Refund`.
+    pub kind: UnilateralExitTxKind,
+    /// Fund a UTXO of at least this many satoshis for this transaction.
     pub funding_sat: u64,
 }
 
@@ -2904,14 +2941,23 @@ pub struct PrepareUnilateralExitResponse {
     /// tree quotes a lower fee than a fresh one.
     pub total_fee_sat: u64,
     /// The part of `total_fee_sat` paid for the fan-out transaction. Funding one
-    /// UTXO per branch (`per_branch_funding`) avoids it. Zero for a single
-    /// branch (no fan-out).
+    /// UTXO per `per_branch_funding` entry (or per `per_node_funding` entry, when
+    /// that is the shape quoted) avoids it. Zero when there is only one thing to
+    /// fund.
     pub fanout_fee_sat: u64,
     /// Fund a single UTXO of at least this many satoshis to exit with a fan-out.
     pub single_utxo_funding_sat: u64,
     /// To skip the fan-out, fund one UTXO per branch of at least the given
-    /// amount (one entry per selected leaf).
+    /// amount (one entry per selected leaf). Empty when the quote is for
+    /// `PerNode`, which funds per `per_node_funding` instead.
     pub per_branch_funding: Vec<PerBranchFunding>,
+    /// The funding shape this quote was computed for.
+    #[serde(default)]
+    pub funding_shape: CpfpFundingShape,
+    /// Empty unless `funding_shape` is `PerNode`: to skip the fan-out, fund one
+    /// UTXO per entry of at least the given amount.
+    #[serde(default)]
+    pub per_node_funding: Vec<PerNodeFunding>,
     /// The fee rate this quote was computed at, in sat/vByte.
     pub fee_rate_sat_per_vbyte: u64,
     pub destination: String,
@@ -2925,8 +2971,12 @@ pub struct PrepareUnilateralExitResponse {
 pub struct UnilateralExitRequest {
     /// The quote returned by `prepare_unilateral_exit`, naming the leaves to exit.
     pub prepared: PrepareUnilateralExitResponse,
-    /// The funding UTXOs that pay the exit's on-chain fees, meeting the quote's
-    /// `single_utxo_funding_sat` (one UTXO) or `per_branch_funding` (one per branch).
+    /// The funding UTXOs that pay the exit's on-chain fees. Fund the quote's
+    /// `single_utxo_funding_sat` as one UTXO, or, under the shape the quote was
+    /// computed for, `per_branch_funding` (one per branch) or `per_node_funding`
+    /// (one per transaction). Supplied in the order the quote names them, each
+    /// UTXO is pinned to its transaction at any fee rate; in any other order they
+    /// are matched to the named amounts by size.
     pub funding_inputs: Vec<CpfpInput>,
 }
 
@@ -2983,4 +3033,32 @@ pub struct ImportUnilateralExitStateResponse {
     /// incomplete, the wallet's own copy can already back an exit, or the leaf
     /// was named more than once. The leaf itself is in the wallet either way.
     pub skipped_chains: u32,
+}
+
+#[cfg(test)]
+mod unilateral_exit_quote_tests {
+    use super::*;
+
+    #[test]
+    fn a_quote_stored_before_the_funding_shape_existed_still_reads() {
+        // A quote is held across the days its funding takes to gather and
+        // confirm, so one serialized by an earlier release has to survive the
+        // upgrade and keep meaning what it meant: funded one UTXO per branch.
+        let legacy = r#"{
+            "fee_rate_sat_per_vbyte": 1,
+            "funding_kind": {"type": "p2tr"},
+            "destination": "bcrt1p0000000000000000000000000000000000000000000000000000000000",
+            "leaves": [],
+            "recoverable_value_sat": 0,
+            "total_fee_sat": 0,
+            "single_utxo_funding_sat": 0,
+            "fanout_fee_sat": 0,
+            "per_branch_funding": []
+        }"#;
+        let quote: PrepareUnilateralExitResponse =
+            serde_json::from_str(legacy).expect("a pre-funding-shape quote deserializes");
+        assert_eq!(quote.funding_shape, CpfpFundingShape::PerBranch);
+        assert!(quote.per_node_funding.is_empty());
+        assert_eq!(CpfpFundingShape::default(), CpfpFundingShape::PerBranch);
+    }
 }

@@ -841,6 +841,14 @@ pub enum CpfpFundingKind {
     },
 }
 
+#[derive(Clone, Copy, Default)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CpfpFundingShape)]
+pub enum CpfpFundingShape {
+    #[default]
+    PerBranch,
+    PerNode,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ExitLeafSelection)]
 pub enum ExitLeafSelection {
     Auto,
@@ -886,12 +894,21 @@ pub struct PerBranchFunding {
     pub funding_sat: u64,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PerNodeFunding)]
+pub struct PerNodeFunding {
+    pub leaf_id: String,
+    pub node_id: String,
+    pub kind: UnilateralExitTxKind,
+    pub funding_sat: u64,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareUnilateralExitRequest)]
 pub struct PrepareUnilateralExitRequest {
     pub fee_rate_sat_per_vbyte: u64,
     pub funding_kind: CpfpFundingKind,
     pub destination: String,
     pub selection: ExitLeafSelection,
+    pub funding_shape: Option<CpfpFundingShape>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareUnilateralExitResponse)]
@@ -902,6 +919,10 @@ pub struct PrepareUnilateralExitResponse {
     pub fanout_fee_sat: u64,
     pub single_utxo_funding_sat: u64,
     pub per_branch_funding: Vec<PerBranchFunding>,
+    #[serde(default)]
+    pub funding_shape: CpfpFundingShape,
+    #[serde(default)]
+    pub per_node_funding: Vec<PerNodeFunding>,
     pub fee_rate_sat_per_vbyte: u64,
     pub destination: String,
 }

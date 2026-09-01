@@ -280,6 +280,12 @@ pub enum _CpfpFundingKind {
     },
 }
 
+#[frb(mirror(CpfpFundingShape))]
+pub enum _CpfpFundingShape {
+    PerBranch,
+    PerNode,
+}
+
 #[frb(mirror(ExitLeafSelection))]
 pub enum _ExitLeafSelection {
     Auto,
@@ -325,12 +331,21 @@ pub struct _PerBranchFunding {
     pub funding_sat: u64,
 }
 
+#[frb(mirror(PerNodeFunding))]
+pub struct _PerNodeFunding {
+    pub leaf_id: String,
+    pub node_id: String,
+    pub kind: UnilateralExitTxKind,
+    pub funding_sat: u64,
+}
+
 #[frb(mirror(PrepareUnilateralExitRequest))]
 pub struct _PrepareUnilateralExitRequest {
     pub fee_rate_sat_per_vbyte: u64,
     pub funding_kind: CpfpFundingKind,
     pub destination: String,
     pub selection: ExitLeafSelection,
+    pub funding_shape: Option<CpfpFundingShape>,
 }
 
 #[frb(mirror(PrepareUnilateralExitResponse))]
@@ -341,6 +356,8 @@ pub struct _PrepareUnilateralExitResponse {
     pub fanout_fee_sat: u64,
     pub single_utxo_funding_sat: u64,
     pub per_branch_funding: Vec<PerBranchFunding>,
+    pub funding_shape: CpfpFundingShape,
+    pub per_node_funding: Vec<PerNodeFunding>,
     pub fee_rate_sat_per_vbyte: u64,
     pub destination: String,
 }
