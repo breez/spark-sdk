@@ -709,9 +709,8 @@ impl FlashnetTokenConverter {
         let pools = pools.into_values().collect::<Vec<_>>();
 
         if pools.is_empty() {
-            warn!(
-                "No conversion pools available: in address {asset_in_address}, out address {asset_out_address}",
-            );
+            warn!("No conversion pools available");
+            debug!("Pool addresses: in {asset_in_address}, out {asset_out_address}");
             return Err(ConversionError::NoPoolsAvailable);
         }
 

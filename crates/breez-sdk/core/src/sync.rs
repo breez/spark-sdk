@@ -4,7 +4,7 @@ use spark_wallet::{
     ListTokenTransactionsRequest, ListTransfersRequest, Order, PagingFilter, SparkWallet,
     TransferId,
 };
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::{
     EventEmitter, Payment, PaymentDetails, PaymentStatus, SdkError, Storage,
@@ -106,7 +106,7 @@ impl SparkSyncService {
                 if payment.status == PaymentStatus::Pending {
                     pending_payments = pending_payments.saturating_add(1);
                 }
-                info!("Synced payment: {payment:?}");
+                debug!("Synced payment: {payment:?}");
             }
 
             // Check if we have more transfers to fetch
@@ -401,7 +401,7 @@ impl SparkSyncService {
             // Emit events for new payment statuses after initial sync, or even before initial sync if the payment is pending
             let should_emit = initial_sync_complete || payment.status == PaymentStatus::Pending;
 
-            info!("Syncing token payment: {payment:?}");
+            debug!("Syncing token payment: {payment:?}");
             record_payment_update(
                 &self.storage,
                 &self.event_emitter,

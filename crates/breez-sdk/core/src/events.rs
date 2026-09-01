@@ -73,30 +73,30 @@ impl fmt::Display for SdkEvent {
         match self {
             SdkEvent::Synced => write!(f, "Synced"),
             SdkEvent::UnclaimedDeposits { unclaimed_deposits } => {
-                write!(f, "UnclaimedDeposits: {unclaimed_deposits:?}")
+                write!(f, "UnclaimedDeposits[{}]", unclaimed_deposits.len())
             }
             SdkEvent::ClaimedDeposits { claimed_deposits } => {
-                write!(f, "ClaimedDeposits: {claimed_deposits:?}")
+                write!(f, "ClaimedDeposits[{}]", claimed_deposits.len())
             }
             SdkEvent::PaymentSucceeded { payment } => {
-                write!(f, "PaymentSucceeded: {payment:?}")
+                write!(f, "PaymentSucceeded({})", payment.id)
             }
             SdkEvent::PaymentPending { payment } => {
-                write!(f, "PaymentPending: {payment:?}")
+                write!(f, "PaymentPending({})", payment.id)
             }
             SdkEvent::PaymentFailed { payment } => {
-                write!(f, "PaymentFailed: {payment:?}")
+                write!(f, "PaymentFailed({})", payment.id)
             }
             SdkEvent::AutoOptimization {
                 optimization_event: event,
             } => {
                 write!(f, "AutoOptimization: {event:?}")
             }
-            SdkEvent::LightningAddressChanged { lightning_address } => {
-                write!(f, "LightningAddressChanged: {lightning_address:?}")
+            SdkEvent::LightningAddressChanged { .. } => {
+                write!(f, "LightningAddressChanged")
             }
             SdkEvent::NewDeposits { new_deposits } => {
-                write!(f, "NewDeposits: {new_deposits:?}")
+                write!(f, "NewDeposits[{}]", new_deposits.len())
             }
             SdkEvent::UnilateralExitStateChanged => write!(f, "UnilateralExitStateChanged"),
         }

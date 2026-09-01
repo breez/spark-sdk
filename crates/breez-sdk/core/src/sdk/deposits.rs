@@ -15,7 +15,7 @@ use spark_wallet::{
     InstantStaticDepositPlan, InstantStaticDepositQuoteResult, ListTransfersRequest,
     MIN_RELAY_FEE_SAT_PER_VBYTE, TransferId, WalletTransfer,
 };
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     ClaimDepositQuote, ClaimDepositRequest, ClaimDepositResponse, DepositInfo, Fee,
@@ -661,9 +661,10 @@ impl BreezSdk {
             .fetch_instant_static_deposit_quote(detailed_utxo.tx.clone(), Some(detailed_utxo.vout))
             .await?;
         info!(
-            "Instant quote for {}:{} ({} sats, ceiling {} sats): {quote_result:?}",
+            "Instant quote for {}:{} ({} sats, ceiling {} sats)",
             detailed_utxo.txid, detailed_utxo.vout, detailed_utxo.value, max_fee_sats
         );
+        debug!("Instant quote: {quote_result:?}");
         // Price the spread against the on-chain UTXO value we already hold, not the
         // SSP-reported deposit amount, so the fee gate does not depend on the quote.
         match select_instant_claim_plan(

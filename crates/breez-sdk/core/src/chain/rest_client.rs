@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::chain::RecommendedFees;
 use crate::{
@@ -184,7 +184,7 @@ impl RestClientChainServiceInner {
         path: &str,
     ) -> Result<T, ChainServiceError> {
         let url = format!("{}{}", self.base_url, path);
-        info!("Fetching response json from {}", url);
+        debug!("Fetching response json from {}", url);
         let (response, _) = self.get_with_retry(&url, self.client.as_ref()).await?;
 
         let response: T = serde_json::from_str(&response)
@@ -195,7 +195,7 @@ impl RestClientChainServiceInner {
 
     async fn get_response_text(&self, path: &str) -> Result<String, ChainServiceError> {
         let url = format!("{}{}", self.base_url, path);
-        info!("Fetching response text from {}", url);
+        debug!("Fetching response text from {}", url);
         let (response, _) = self.get_with_retry(&url, self.client.as_ref()).await?;
         Ok(response)
     }
@@ -238,11 +238,11 @@ impl RestClientChainServiceInner {
         if let Some(basic_auth) = &self.basic_auth {
             add_basic_auth_header(&mut headers, &basic_auth.username, &basic_auth.password);
         }
-        info!(
-            "Posting to {} with body {} and headers {:?}",
+        info!("Posting to {}", url);
+        debug!(
+            "Posting to {} with body {}",
             url,
-            body.clone().unwrap_or_default(),
-            headers
+            body.clone().unwrap_or_default()
         );
         let HttpResponse { body, status, .. } = self
             .client

@@ -699,9 +699,8 @@ pub fn parse_spark_address(input: &str, source: &PaymentRequestSource) -> Option
             let token_identifier = match &payment_type {
                 SparkAddressPaymentType::TokensPayment(tp) => {
                     let Some(token_identifier) = &tp.token_identifier else {
-                        warn!(
-                            "Tried parsing Spark token invoice without token identifier: {input}"
-                        );
+                        warn!("Tried parsing Spark token invoice without token identifier");
+                        debug!("Invoice: {input}");
                         return None;
                     };
                     Some(token_identifier.clone())
