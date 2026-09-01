@@ -1,0 +1,131 @@
+# Breez SDK - Spark: Python
+
+> End-to-end SDK for instant, non-custodial bitcoin and stablecoin payments. This edition carries every example in Python, with identifiers in that language's naming convention. The same pages carrying all nine languages are under `/guide/`.
+
+## About Breez SDK - Spark
+
+- [About Breez SDK - Spark](/llms/python/guide/about_breez_sdk_spark.md)
+
+## Getting started
+
+- [Getting started](/llms/python/guide/getting_started.md)
+- [Installing the SDK](/llms/python/guide/install.md)
+- [iOS/Swift](/llms/python/guide/install_ios_swift.md)
+- [Android/Kotlin](/llms/python/guide/install_android_kotlin.md)
+- [Kotlin Multiplatform](/llms/python/guide/install_kotlin_multiplatform.md)
+- [Javascript/Typescript (Wasm)](/llms/python/guide/install_javascript.md)
+- [React Native/Expo](/llms/python/guide/install_react_native.md)
+- [Rust](/llms/python/guide/install_rust.md)
+- [Flutter](/llms/python/guide/install_flutter.md)
+- [Go](/llms/python/guide/install_go.md)
+- [Python](/llms/python/guide/install_python.md)
+- [C#](/llms/python/guide/install_csharp.md)
+- [Testing and development](/llms/python/guide/testing.md)
+- [Initializing the SDK](/llms/python/guide/initializing.md)
+- [Customizing the SDK](/llms/python/guide/customizing.md)
+- [Getting the SDK info](/llms/python/guide/get_info.md)
+- [Listening to events](/llms/python/guide/events.md)
+- [Adding logging](/llms/python/guide/logging.md)
+- [Spark status](/llms/python/guide/spark_status.md)
+
+## Payment fundamentals
+
+- [Payment fundamentals](/llms/python/guide/payments.md)
+- [Parsing inputs](/llms/python/guide/parse.md)
+- [Receiving payments](/llms/python/guide/receive_payment.md)
+- [Sending payments](/llms/python/guide/send_payment.md)
+- [Listing payments](/llms/python/guide/list_payments.md)
+- [Claiming on-chain deposits](/llms/python/guide/onchain_claims.md)
+
+## Using LNURL and Lightning addresses
+
+- [Using LNURL and Lightning addresses](/llms/python/guide/lnurl.md)
+- [Sending payments using LNURL-Pay/Lightning address](/llms/python/guide/lnurl_pay.md)
+- [Managing contacts](/llms/python/guide/contacts.md)
+- [Receiving payments using LNURL-Pay/Lightning address](/llms/python/guide/receive_lnurl_pay.md)
+- [Lightning Address payment notifications](/llms/python/guide/lnurl_webhooks.md)
+- [Receiving payments using LNURL-Withdraw](/llms/python/guide/lnurl_withdraw.md)
+- [Using LNURL-Auth](/llms/python/guide/lnurl_auth.md)
+
+## Passkey login
+
+- [Passkey login](/llms/python/guide/passkey.md)
+- [Setup](/llms/python/guide/passkey_setup.md)
+- [Onboarding](/llms/python/guide/passkey_onboarding.md)
+- [Credential metadata](/llms/python/guide/passkey_credential_metadata.md)
+- [Managing labels](/llms/python/guide/passkey_labels.md)
+- [PRF providers](/llms/python/guide/passkey_prf_providers.md)
+
+## Stable balance
+
+- [Stable balance](/llms/python/guide/stable_balance.md)
+
+## User settings
+
+- [User settings](/llms/python/guide/user_settings.md)
+
+## Signing and verifying messages
+
+- [Signing and verifying messages](/llms/python/guide/messages.md)
+
+## Supporting fiat currencies
+
+- [Supporting fiat currencies](/llms/python/guide/fiat_currencies.md)
+
+## Fiat on-ramps
+
+- [Fiat on-ramps](/llms/python/guide/fiat_onramps.md)
+- [Buying Bitcoin](/llms/python/guide/buy_bitcoin.md)
+- [Prepare Payment Link](/llms/python/guide/prepare_payment_link.md)
+
+## End-user fees
+
+- [End-user fees](/llms/python/guide/end-user_fees.md)
+
+## Handling tokens
+
+- [Handling tokens](/llms/python/guide/tokens.md)
+- [Token payments](/llms/python/guide/token_payments.md)
+- [Sending to multiple recipients](/llms/python/guide/batch_send.md)
+- [Converting tokens](/llms/python/guide/token_conversion.md)
+- [Issuing tokens](/llms/python/guide/issuing_tokens.md)
+
+## Advanced features
+
+- [Advanced features](/llms/python/guide/advanced.md)
+- [Custom configuration](/llms/python/guide/config.md)
+- [SOCKS5 proxy](/llms/python/guide/proxy.md)
+- [Custom leaf optimization](/llms/python/guide/optimize.md)
+- [Conditional Payments](/llms/python/guide/htlcs.md)
+- [Using an External Signer](/llms/python/guide/external_signer.md)
+- [Managing webhooks](/llms/python/guide/webhooks.md)
+- [Server mode](/llms/python/guide/server_mode.md)
+- [Client signing](/llms/python/guide/client_signing.md)
+- [Using Turnkey](/llms/python/guide/turnkey.md)
+- [Send USDC/USDT](/llms/python/guide/cross_chain.md)
+- [Unilateral exit](/llms/python/guide/unilateral_exit.md)
+
+## Moving to production
+
+- [Moving to production](/llms/python/guide/moving_to_production.md)
+
+## Overview
+
+- [Overview](/llms/python/guide/uxguide.md)
+
+## Login & backup
+
+- [Login & backup](/llms/python/guide/uxguide_login.md)
+
+## Displaying payments
+
+- [Displaying payments](/llms/python/guide/uxguide_display.md)
+
+## Receiving payments
+
+- [Receiving payments](/llms/python/guide/uxguide_receive.md)
+
+## Sending payments
+
+- [Sending payments](/llms/python/guide/uxguide_send.md)
+

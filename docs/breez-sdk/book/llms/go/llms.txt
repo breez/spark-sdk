@@ -1,0 +1,131 @@
+# Breez SDK - Spark: Go
+
+> End-to-end SDK for instant, non-custodial bitcoin and stablecoin payments. This edition carries every example in Go, with identifiers in that language's naming convention. The same pages carrying all nine languages are under `/guide/`.
+
+## About Breez SDK - Spark
+
+- [About Breez SDK - Spark](/llms/go/guide/about_breez_sdk_spark.md)
+
+## Getting started
+
+- [Getting started](/llms/go/guide/getting_started.md)
+- [Installing the SDK](/llms/go/guide/install.md)
+- [iOS/Swift](/llms/go/guide/install_ios_swift.md)
+- [Android/Kotlin](/llms/go/guide/install_android_kotlin.md)
+- [Kotlin Multiplatform](/llms/go/guide/install_kotlin_multiplatform.md)
+- [Javascript/Typescript (Wasm)](/llms/go/guide/install_javascript.md)
+- [React Native/Expo](/llms/go/guide/install_react_native.md)
+- [Rust](/llms/go/guide/install_rust.md)
+- [Flutter](/llms/go/guide/install_flutter.md)
+- [Go](/llms/go/guide/install_go.md)
+- [Python](/llms/go/guide/install_python.md)
+- [C#](/llms/go/guide/install_csharp.md)
+- [Testing and development](/llms/go/guide/testing.md)
+- [Initializing the SDK](/llms/go/guide/initializing.md)
+- [Customizing the SDK](/llms/go/guide/customizing.md)
+- [Getting the SDK info](/llms/go/guide/get_info.md)
+- [Listening to events](/llms/go/guide/events.md)
+- [Adding logging](/llms/go/guide/logging.md)
+- [Spark status](/llms/go/guide/spark_status.md)
+
+## Payment fundamentals
+
+- [Payment fundamentals](/llms/go/guide/payments.md)
+- [Parsing inputs](/llms/go/guide/parse.md)
+- [Receiving payments](/llms/go/guide/receive_payment.md)
+- [Sending payments](/llms/go/guide/send_payment.md)
+- [Listing payments](/llms/go/guide/list_payments.md)
+- [Claiming on-chain deposits](/llms/go/guide/onchain_claims.md)
+
+## Using LNURL and Lightning addresses
+
+- [Using LNURL and Lightning addresses](/llms/go/guide/lnurl.md)
+- [Sending payments using LNURL-Pay/Lightning address](/llms/go/guide/lnurl_pay.md)
+- [Managing contacts](/llms/go/guide/contacts.md)
+- [Receiving payments using LNURL-Pay/Lightning address](/llms/go/guide/receive_lnurl_pay.md)
+- [Lightning Address payment notifications](/llms/go/guide/lnurl_webhooks.md)
+- [Receiving payments using LNURL-Withdraw](/llms/go/guide/lnurl_withdraw.md)
+- [Using LNURL-Auth](/llms/go/guide/lnurl_auth.md)
+
+## Passkey login
+
+- [Passkey login](/llms/go/guide/passkey.md)
+- [Setup](/llms/go/guide/passkey_setup.md)
+- [Onboarding](/llms/go/guide/passkey_onboarding.md)
+- [Credential metadata](/llms/go/guide/passkey_credential_metadata.md)
+- [Managing labels](/llms/go/guide/passkey_labels.md)
+- [PRF providers](/llms/go/guide/passkey_prf_providers.md)
+
+## Stable balance
+
+- [Stable balance](/llms/go/guide/stable_balance.md)
+
+## User settings
+
+- [User settings](/llms/go/guide/user_settings.md)
+
+## Signing and verifying messages
+
+- [Signing and verifying messages](/llms/go/guide/messages.md)
+
+## Supporting fiat currencies
+
+- [Supporting fiat currencies](/llms/go/guide/fiat_currencies.md)
+
+## Fiat on-ramps
+
+- [Fiat on-ramps](/llms/go/guide/fiat_onramps.md)
+- [Buying Bitcoin](/llms/go/guide/buy_bitcoin.md)
+- [Prepare Payment Link](/llms/go/guide/prepare_payment_link.md)
+
+## End-user fees
+
+- [End-user fees](/llms/go/guide/end-user_fees.md)
+
+## Handling tokens
+
+- [Handling tokens](/llms/go/guide/tokens.md)
+- [Token payments](/llms/go/guide/token_payments.md)
+- [Sending to multiple recipients](/llms/go/guide/batch_send.md)
+- [Converting tokens](/llms/go/guide/token_conversion.md)
+- [Issuing tokens](/llms/go/guide/issuing_tokens.md)
+
+## Advanced features
+
+- [Advanced features](/llms/go/guide/advanced.md)
+- [Custom configuration](/llms/go/guide/config.md)
+- [SOCKS5 proxy](/llms/go/guide/proxy.md)
+- [Custom leaf optimization](/llms/go/guide/optimize.md)
+- [Conditional Payments](/llms/go/guide/htlcs.md)
+- [Using an External Signer](/llms/go/guide/external_signer.md)
+- [Managing webhooks](/llms/go/guide/webhooks.md)
+- [Server mode](/llms/go/guide/server_mode.md)
+- [Client signing](/llms/go/guide/client_signing.md)
+- [Using Turnkey](/llms/go/guide/turnkey.md)
+- [Send USDC/USDT](/llms/go/guide/cross_chain.md)
+- [Unilateral exit](/llms/go/guide/unilateral_exit.md)
+
+## Moving to production
+
+- [Moving to production](/llms/go/guide/moving_to_production.md)
+
+## Overview
+
+- [Overview](/llms/go/guide/uxguide.md)
+
+## Login & backup
+
+- [Login & backup](/llms/go/guide/uxguide_login.md)
+
+## Displaying payments
+
+- [Displaying payments](/llms/go/guide/uxguide_display.md)
+
+## Receiving payments
+
+- [Receiving payments](/llms/go/guide/uxguide_receive.md)
+
+## Sending payments
+
+- [Sending payments](/llms/go/guide/uxguide_send.md)
+
