@@ -396,6 +396,29 @@ pub struct _UnilateralExitRequest {
     pub funding_inputs: Vec<CpfpInput>,
 }
 
+#[frb(mirror(CheckUnilateralExitRequest))]
+pub struct _CheckUnilateralExitRequest {
+    pub exit: UnilateralExitResponse,
+}
+
+#[frb(mirror(CheckUnilateralExitResponse))]
+pub struct _CheckUnilateralExitResponse {
+    pub exit: UnilateralExitResponse,
+    pub verdict: UnilateralExitVerdict,
+}
+
+#[frb(mirror(UnilateralExitVerdict))]
+pub enum _UnilateralExitVerdict {
+    Valid,
+    Done,
+    Redo { reason: UnilateralExitRedoReason },
+}
+
+#[frb(mirror(UnilateralExitRedoReason))]
+pub enum _UnilateralExitRedoReason {
+    OnChainStateDiverged,
+}
+
 #[frb(mirror(UnilateralExitResponse))]
 pub struct _UnilateralExitResponse {
     pub recoverable_value_sat: u64,

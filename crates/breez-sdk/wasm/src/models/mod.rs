@@ -963,6 +963,29 @@ pub struct UnilateralExitRequest {
     pub funding_inputs: Vec<CpfpInput>,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CheckUnilateralExitRequest)]
+pub struct CheckUnilateralExitRequest {
+    pub exit: UnilateralExitResponse,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CheckUnilateralExitResponse)]
+pub struct CheckUnilateralExitResponse {
+    pub exit: UnilateralExitResponse,
+    pub verdict: UnilateralExitVerdict,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitVerdict)]
+pub enum UnilateralExitVerdict {
+    Valid,
+    Done,
+    Redo { reason: UnilateralExitRedoReason },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitRedoReason)]
+pub enum UnilateralExitRedoReason {
+    OnChainStateDiverged,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitResponse)]
 pub struct UnilateralExitResponse {
     pub recoverable_value_sat: u64,

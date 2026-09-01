@@ -268,6 +268,14 @@ impl BreezSdk {
             .into())
     }
 
+    #[wasm_bindgen(js_name = "checkUnilateralExit")]
+    pub async fn check_unilateral_exit(
+        &self,
+        request: CheckUnilateralExitRequest,
+    ) -> WasmResult<CheckUnilateralExitResponse> {
+        Ok(self.sdk.check_unilateral_exit(request.into()).await?.into())
+    }
+
     #[wasm_bindgen(js_name = "exportUnilateralExitState")]
     pub async fn export_unilateral_exit_state(
         &self,

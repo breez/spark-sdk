@@ -12,11 +12,11 @@ use bitcoin::{
 
 use spark_wallet::{
     AddressUtxo, ChainQuery, ChainResult, ConfirmedExitNode as WalletConfirmedExitNode, CpfpInput,
-    ExitChainState as WalletExitChainState, ExitNodeConfirmation as WalletExitNodeConfirmation,
-    ExitRefund as WalletExitRefund, ExitRefundState as WalletExitRefundState, ExitTxKind,
-    ExitTxStatus, Observation, SpendInfo, TreeNode, TreeNodeId, UnilateralExitBuild,
-    build_unilateral_exit, is_ephemeral_anchor_output, leaf_refund_addresses, scan_exit_chain,
-    scan_funding,
+    ExitChainState as WalletExitChainState, ExitCheck, ExitCheckInput,
+    ExitNodeConfirmation as WalletExitNodeConfirmation, ExitRefund as WalletExitRefund,
+    ExitRefundState as WalletExitRefundState, ExitTxKind, ExitTxStatus, Observation, SpendInfo,
+    TreeNode, TreeNodeId, UnilateralExitBuild, build_unilateral_exit, check_exit_chain,
+    is_ephemeral_anchor_output, leaf_refund_addresses, scan_exit_chain, scan_funding,
 };
 
 use tracing::{debug, trace, warn};
@@ -25,11 +25,13 @@ use crate::{
     chain::{BitcoinChainService, Outspend},
     error::SdkError,
     models::{
-        ConfirmationStatus, ConfirmedExitNode, CpfpFundingKind, CpfpInput as ModelCpfpInput,
+        CheckUnilateralExitRequest, CheckUnilateralExitResponse, ConfirmationStatus,
+        ConfirmedExitNode, CpfpFundingKind, CpfpInput as ModelCpfpInput,
         ExitChainState as ModelExitChainState, ExitLeafSelection, ExitNodeConfirmation, ExitRefund,
         ExitRefundState, PerBranchFunding, PrepareUnilateralExitRequest,
-        PrepareUnilateralExitResponse, UnilateralExitLeaf, UnilateralExitRequest,
-        UnilateralExitResponse, UnilateralExitTransaction, UnilateralExitTxKind,
+        PrepareUnilateralExitResponse, UnilateralExitLeaf, UnilateralExitRedoReason,
+        UnilateralExitRequest, UnilateralExitResponse, UnilateralExitTransaction,
+        UnilateralExitTxKind, UnilateralExitVerdict,
     },
     signer::CpfpSigner,
 };
@@ -149,6 +151,55 @@ impl BreezSdk {
     /// already on-chain (recognized by the leaf's refund address, so any refund
     /// variant counts) is swept directly. Re-running after partial progress
     /// therefore resumes rather than restarts.
+    /// Reads an exit you kept back against the chain: which of its transactions
+    /// are now in a block, and whether it can still be finished as it stands.
+    ///
+    /// Needs neither the wallet's leaves nor a signer, so an exit can be followed
+    /// from the response alone. Store the response in place of the one you passed
+    /// in, and broadcast what its statuses leave to send.
+    pub async fn check_unilateral_exit(
+        &self,
+        request: CheckUnilateralExitRequest,
+    ) -> Result<CheckUnilateralExitResponse, SdkError> {
+        let mut exit = request.exit;
+        debug!(
+            transactions = exit.transactions.len(),
+            "check_unilateral_exit: reading back"
+        );
+
+        let inputs = exit
+            .transactions
+            .iter()
+            .map(exit_check_input)
+            .collect::<Result<Vec<_>, SdkError>>()?;
+        let check = resolve_exit_check(self.chain_service.as_ref(), &inputs).await?;
+
+        for tx in &mut exit.transactions {
+            let txid = Txid::from_str(&tx.txid)
+                .map_err(|e| SdkError::InvalidInput(format!("Invalid txid {}: {e}", tx.txid)))?;
+            if check.confirmed.contains(&txid) {
+                tx.status = ConfirmationStatus::Confirmed;
+            }
+        }
+
+        let all_confirmed = exit
+            .transactions
+            .iter()
+            .all(|tx| matches!(tx.status, ConfirmationStatus::Confirmed));
+        let verdict = if check.diverged {
+            UnilateralExitVerdict::Redo {
+                reason: UnilateralExitRedoReason::OnChainStateDiverged,
+            }
+        } else if all_confirmed && !exit.transactions.is_empty() {
+            UnilateralExitVerdict::Done
+        } else {
+            UnilateralExitVerdict::Valid
+        };
+        debug!(?verdict, "check_unilateral_exit: read back");
+
+        Ok(CheckUnilateralExitResponse { exit, verdict })
+    }
+
     #[allow(clippy::too_many_lines)]
     pub async fn unilateral_exit(
         &self,
@@ -686,6 +737,53 @@ fn exit_chain_state_model(state: WalletExitChainState) -> ModelExitChainState {
 
 fn ids(ids: Vec<TreeNodeId>) -> Vec<String> {
     ids.into_iter().map(|id| id.to_string()).collect()
+}
+
+/// Decodes one kept transaction into what the check reads.
+fn exit_check_input(tx: &UnilateralExitTransaction) -> Result<ExitCheckInput, SdkError> {
+    let decode = |hex: &str| {
+        deserialize_hex::<Transaction>(hex)
+            .map_err(|e| SdkError::InvalidInput(format!("Invalid transaction: {e}")))
+    };
+    Ok(ExitCheckInput {
+        tx: decode(&tx.tx_hex)?,
+        cpfp: tx.cpfp_tx_hex.as_deref().map(decode).transpose()?,
+        depends_on: tx
+            .depends_on
+            .iter()
+            .map(|txid| {
+                Txid::from_str(txid)
+                    .map_err(|e| SdkError::InvalidInput(format!("Invalid txid {txid}: {e}")))
+            })
+            .collect::<Result<_, SdkError>>()?,
+        confirmed: matches!(tx.status, ConfirmationStatus::Confirmed),
+    })
+}
+
+/// Drives [`check_exit_chain`] to completion.
+async fn resolve_exit_check(
+    chain: &dyn BitcoinChainService,
+    inputs: &[ExitCheckInput],
+) -> Result<ExitCheck, SdkError> {
+    let mut observed: Vec<Observation> = Vec::new();
+    loop {
+        let check = check_exit_chain(inputs, &observed);
+        if check.pending.is_empty() {
+            debug!(
+                confirmed = check.confirmed.len(),
+                diverged = check.diverged,
+                observations = observed.len(),
+                "resolve_exit_check: read back"
+            );
+            return Ok(check);
+        }
+        // Each query is answered exactly once (a failed lookup records
+        // `Unavailable`), so the loop always progresses and terminates.
+        for query in check.pending {
+            let result = execute_chain_query(chain, &query).await;
+            observed.push(Observation { query, result });
+        }
+    }
 }
 
 /// Follows the supplied funding to what it is worth now, driving
