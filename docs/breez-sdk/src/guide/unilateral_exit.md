@@ -155,7 +155,7 @@ It needs neither your leaves nor a signer, so an exit can be followed from that 
 
 Its {{#name verdict}} says what to do next:
 
-- {{#enum UnilateralExitVerdict::Valid}}: the exit still holds. Broadcast the transactions whose dependencies are confirmed and whose timelocks have matured. Re-broadcasting one you already sent is harmless.
+- {{#enum UnilateralExitVerdict::Valid}}: the exit still holds. Broadcast the transactions whose {{#name dependencies_met}} is set and whose {{#name csv_timelock_blocks}} has matured against the chain tip. Re-broadcasting one you already sent is harmless.
 - {{#enum UnilateralExitVerdict::Done}}: every transaction is confirmed, the sweep included. The funds have arrived.
 - {{#enum UnilateralExitVerdict::Redo}}: the exit cannot be finished as it stands, and {{#name reason}} says why. Quote and build it again with {{#name prepare_unilateral_exit}} and {{#name unilateral_exit}}, passing back the funding UTXOs you were given.
 

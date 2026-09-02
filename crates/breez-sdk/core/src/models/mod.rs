@@ -2883,6 +2883,10 @@ pub struct UnilateralExitTransaction {
     /// Txids of other entries in this list that must be confirmed before this
     /// one can be broadcast.
     pub depends_on: Vec<String>,
+    /// Whether every transaction in `depends_on` is confirmed. A `csv_timelock_blocks`
+    /// that has yet to mature still holds this one back, which is yours to check
+    /// against the chain tip.
+    pub dependencies_met: bool,
     pub status: ConfirmationStatus,
 }
 
