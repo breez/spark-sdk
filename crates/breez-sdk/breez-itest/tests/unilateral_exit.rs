@@ -1041,6 +1041,24 @@ async fn test_multi_leaf_fan_out_and_sweep(#[case] backend: SignerBackend) -> Re
         "a single funding input across two branches must produce a fan-out"
     );
 
+    // Only the fan-out can go out first: everything else waits on it, or on the
+    // node above it, so nothing else has its dependencies met yet.
+    let met: Vec<&UnilateralExitTransaction> = built
+        .transactions
+        .iter()
+        .filter(|t| t.dependencies_met)
+        .collect();
+    assert_eq!(met.len(), 1, "one transaction to send first, not several");
+    assert_eq!(met[0].kind, UnilateralExitTxKind::FanOut);
+    assert!(
+        built
+            .transactions
+            .iter()
+            .filter(|t| !t.dependencies_met)
+            .all(|t| !t.depends_on.is_empty()),
+        "everything held back is held back by something it names"
+    );
+
     // Drive the whole set on-chain: the fan-out, both branches (each node and its
     // refund with a CPFP child), and the single sweep that folds both leaves.
     assert_all_mined(&sdk, &built, &destination).await?;

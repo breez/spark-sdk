@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -182,6 +182,8 @@ impl BreezSdk {
             }
         }
 
+        mark_dependencies_met(&mut exit.transactions);
+
         let all_confirmed = exit
             .transactions
             .iter()
@@ -328,6 +330,7 @@ impl BreezSdk {
                 cpfp_tx_hex: None,
                 csv_timelock_blocks: fan_out.csv_timelock_blocks,
                 depends_on: fan_out.depends_on.iter().map(ToString::to_string).collect(),
+                dependencies_met: false,
                 status: confirmation_status(fan_out.status),
             });
         }
@@ -363,6 +366,7 @@ impl BreezSdk {
                     cpfp_tx_hex,
                     csv_timelock_blocks: tx.csv_timelock_blocks,
                     depends_on: tx.depends_on.iter().map(ToString::to_string).collect(),
+                    dependencies_met: false,
                     status: confirmation_status(tx.status),
                 });
             }
@@ -371,6 +375,7 @@ impl BreezSdk {
         // A sweep over zero inputs would error: return without one when no refund
         // is on-chain yet. A later run sweeps any refund that surfaces.
         if build.refund_outputs.is_empty() {
+            mark_dependencies_met(&mut transactions);
             debug!("unilateral_exit: no refund outputs to sweep, omitting the sweep");
             return Ok(UnilateralExitResponse {
                 recoverable_value_sat,
@@ -413,9 +418,11 @@ impl BreezSdk {
             cpfp_tx_hex: None,
             csv_timelock_blocks: None,
             depends_on: refund_txids,
+            dependencies_met: false,
             status: sweep_status,
         });
 
+        mark_dependencies_met(&mut transactions);
         debug!(
             transactions = transactions.len(),
             recoverable_value_sat, total_fee_sat, "unilateral_exit: complete"
@@ -737,6 +744,28 @@ fn exit_chain_state_model(state: WalletExitChainState) -> ModelExitChainState {
 
 fn ids(ids: Vec<TreeNodeId>) -> Vec<String> {
     ids.into_iter().map(|id| id.to_string()).collect()
+}
+
+/// Marks which transactions have every transaction they depend on confirmed.
+/// Derived from the whole list, so it is set once the list is complete rather
+/// than as each entry is built.
+fn mark_dependencies_met(transactions: &mut [UnilateralExitTransaction]) {
+    let confirmed: HashSet<&str> = transactions
+        .iter()
+        .filter(|tx| matches!(tx.status, ConfirmationStatus::Confirmed))
+        .map(|tx| tx.txid.as_str())
+        .collect();
+    let met: Vec<bool> = transactions
+        .iter()
+        .map(|tx| {
+            tx.depends_on
+                .iter()
+                .all(|dep| confirmed.contains(dep.as_str()))
+        })
+        .collect();
+    for (tx, met) in transactions.iter_mut().zip(met) {
+        tx.dependencies_met = met;
+    }
 }
 
 /// Decodes one kept transaction into what the check reads.

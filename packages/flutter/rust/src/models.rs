@@ -317,6 +317,7 @@ pub struct _UnilateralExitTransaction {
     pub cpfp_tx_hex: Option<String>,
     pub csv_timelock_blocks: Option<u32>,
     pub depends_on: Vec<String>,
+    pub dependencies_met: bool,
     pub status: ConfirmationStatus,
 }
 
