@@ -47,6 +47,33 @@ Future<void> buildExit(BreezSdk sdk, PrepareUnilateralExitResponse quote) async 
   // ANCHOR_END: unilateral-exit
 }
 
+Future<void> checkExit(BreezSdk sdk, UnilateralExitResponse stored) async {
+  // ANCHOR: check-unilateral-exit
+  CheckUnilateralExitResponse checked = await sdk.checkUnilateralExit(
+    request: CheckUnilateralExitRequest(exit: stored),
+  );
+
+  // Store this one in place of the one you had.
+  UnilateralExitResponse exit = checked.exit;
+
+  UnilateralExitVerdict verdict = checked.verdict;
+  if (verdict is UnilateralExitVerdict_Valid) {
+    for (UnilateralExitTransaction tx in exit.transactions) {
+      if (tx.dependenciesMet && tx.status != ConfirmationStatus.confirmed) {
+        // Also wait out csvTimelockBlocks before broadcasting.
+        print("ready to broadcast: ${tx.txid}");
+      }
+    }
+  } else if (verdict is UnilateralExitVerdict_Done) {
+    print("The exit finished: ${exit.recoverableValueSat} sats recovered");
+  } else if (verdict is UnilateralExitVerdict_Redo) {
+    // Quote and build again, naming the same leaves. Pass exit.fundingInputs
+    // back and the SDK follows them to whatever they have become.
+    print("Build the exit again: ${verdict.reason}");
+  }
+  // ANCHOR_END: check-unilateral-exit
+}
+
 Future<String> exportExitState(BreezSdk sdk) async {
   // ANCHOR: export-unilateral-exit-state
   ExportUnilateralExitStateResponse exported = await sdk.exportUnilateralExitState();
