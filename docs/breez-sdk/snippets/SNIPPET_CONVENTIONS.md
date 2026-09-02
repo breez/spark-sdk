@@ -30,7 +30,7 @@ Rules:
 - Anchor names: **kebab-case**, identical across all languages
 - Opening: `// ANCHOR: name` (colon after ANCHOR)
 - Closing: `// ANCHOR_END: name` (underscore, no colon)
-- Python uses `//` for anchors (not `#`) for tooling compatibility
+- Python uses `#`, its own comment marker, which is what the snippets processor looks for there
 
 ## Function Signatures
 

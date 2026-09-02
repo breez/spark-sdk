@@ -18,10 +18,13 @@ Three things are important to know before you build an exit:
 
 Your balance is held in a tree of pre-signed Bitcoin transactions. Each leaf is a portion of the balance. To move a leaf on-chain you broadcast the chain of transactions from the tree down to that leaf, then a refund transaction, then a final sweep to your destination address. Because the pre-signed transactions pay no fee on their own, each one is broadcast together with a CPFP child that pays its fee.
 
-The exit is two calls:
+The exit is three calls, and you will use all three:
 
 1. {{#name prepare_unilateral_exit}} quotes the exit: it picks which leaves to exit and reports the exact fee and how much to fund, without needing any funding UTXOs yet.
-2. {{#name unilateral_exit}} takes that quote plus your funding UTXOs and a signer, and returns the complete, signed set of transactions to broadcast.
+2. {{#name unilateral_exit}} takes that quote plus your funding UTXOs and a signer, and returns the complete, signed set of transactions to broadcast. **Store what it returns.**
+3. {{#name check_unilateral_exit}} takes what you stored and tells you where the exit has got to and what to send next. **Store what it returns, in place of what you had.**
+
+An exit runs for days, so you will call the third one many times: after each broadcast, and whenever you want to know how far along it is.
 
 ### A single leaf
 
@@ -74,7 +77,7 @@ If nothing is selected (under {{#enum ExitLeafSelection::Auto}} no leaf is worth
 
 Gather funding that meets the quote, then call {{#name unilateral_exit}} with the quote, your real {{#name CpfpInput}} funding UTXOs, and a signer. It returns a {{#name UnilateralExitResponse}} with the actual {{#name total_fee_sat}} and the full transaction set.
 
-If the funding is below what the exit needs it returns {{#enum SdkError::InsufficientCpfpFunds}}. A funding UTXO an earlier attempt already spent is not an error: it is followed to what that spend produced at the same script, so passing back the outpoint you were given still funds the exit. Only if that came to nothing is the exit short, and it says how much it needs.
+If the funding is below what the exit needs it returns {{#enum SdkError::InsufficientCpfpFunds}}, naming the amount. A UTXO an earlier attempt already spent is not an error: see [Funding a second attempt](#funding-a-second-attempt).
 
 A very thin-margin exit can fail even when the funding is sufficient: if the recoverable value net of fees would leave the swept output below the destination address's dust limit, the sweep cannot be built and the exit fails. Exit higher-value leaves with {{#enum ExitLeafSelection::Specific}}, lower the {{#name fee_rate_sat_per_vbyte}}, or wait for a cheaper fee rate.
 
@@ -97,9 +100,15 @@ Whichever signer you use, the funding inputs must be **native SegWit** (a witnes
 Flutter cannot pass a foreign <code>CpfpSigner</code>, so it exposes two exit calls. <code>unilateralExit</code> takes the funding secret key bytes and uses the built-in single-key signer. <code>unilateralExitWithSigner</code> takes a <code>signPsbt</code> callback that receives the serialized PSBT, signs the inputs that are not already finalized (any scheme), and returns the serialized signed PSBT.
 </div>
 
+## Store the response
+
+Store the whole {{#name UnilateralExitResponse}} as soon as you get it, before you broadcast anything. It is the only record of the exit: the signed transactions, the leaves they recover, and the funding you paid with. Losing it means losing the ability to follow or finish the exit, even though the money is still recoverable.
+
+Store the one {{#name check_unilateral_exit}} returns in its place each time you call it. Nothing else needs keeping alongside it.
+
 ## Broadcast the transactions
 
-The SDK does not broadcast anything. {{#name transactions}} is the complete, signed set in valid broadcast order, and it is yours to send to the network over time. Persist it, then broadcast each transaction once it is ready. A transaction is ready when every txid in its {{#name depends_on}} has confirmed and its {{#name csv_timelock_blocks}} relative timelock has matured. Because of those timelocks, a full exit can span several days.
+The SDK does not broadcast anything. {{#name transactions}} is the complete, signed set in valid broadcast order, and it is yours to send to the network over time. Broadcast each transaction once it is ready: {{#name dependencies_met}} is set, and its {{#name csv_timelock_blocks}} relative timelock has matured against the current block height. Because of those timelocks, a full exit can span several days.
 
 ### Broadcast each package together
 
@@ -109,7 +118,7 @@ Most steps come as a pair: a tree transaction and its {{#name cpfp_tx_hex}} CPFP
 bitcoin-cli submitpackage '["<tx_hex>", "<cpfp_tx_hex>"]'
 ```
 
-The **fan-out** and the **sweep** are the exceptions: each pays its own fee and has no CPFP child ({{#name cpfp_tx_hex}} is unset), so you broadcast it **alone**, as an ordinary transaction, anywhere — including a public endpoint such as `POST https://mempool.space/api/tx`. Most public broadcast APIs, including mempool.space, accept only one transaction at a time and cannot submit a package, so they reject the zero-fee tree transactions; use a package-relay-capable node (or service) for the pairs.
+The **fan-out** and the **sweep** are the exceptions: each pays its own fee and has no CPFP child ({{#name cpfp_tx_hex}} is unset), so you broadcast it **alone**, as an ordinary transaction, anywhere, including a public endpoint such as `POST https://mempool.space/api/tx`. Most public broadcast APIs, including mempool.space, accept only one transaction at a time and cannot submit a package, so they reject the zero-fee tree transactions; use a package-relay-capable node (or service) for the pairs.
 
 ### Wait for each step to confirm
 
@@ -119,7 +128,7 @@ Within a branch you broadcast one package, wait for it to confirm, then broadcas
 
 Follow {{#name depends_on}} to order the set: a transaction can go out as soon as the transactions it lists have confirmed. With a single leaf this is one straight line, top to bottom. With several leaves the branches are largely independent, so to finish faster you can broadcast them in parallel and serialize only where {{#name depends_on}} actually links them:
 
-1. **The fan-out first, and alone.** It pays its own fee and has no CPFP child, so it is an ordinary single-transaction broadcast. Wait for it to confirm before any branch package — every branch's first package depends on it.
+1. **The fan-out first, and alone.** It pays its own fee and has no CPFP child, so it is an ordinary single-transaction broadcast. Wait for it to confirm before any branch package: every branch's first package depends on it.
 2. **Then the branch packages, each node transaction with its CPFP child.** A shared ancestor appears once, listed in the {{#name depends_on}} of every branch that needs it, so you broadcast it a single time. Within a branch, send one package, wait for it to confirm, then the next (the 1P1C limit above); across branches you can work in parallel.
 3. **The sweep last, and alone,** once every refund in its {{#name depends_on}} has confirmed.
 
@@ -133,32 +142,47 @@ Each {{#name UnilateralExitTransaction}} in {{#name transactions}} carries:
 - {{#name cpfp_tx_hex}}: its signed CPFP child, to broadcast alongside {{#name tx_hex}} as a package. Unset for the fan-out and the sweep, and for a step that is already confirmed.
 - {{#name csv_timelock_blocks}}: the relative timelock, in blocks, that must mature before the transaction can confirm.
 - {{#name depends_on}}: the txids of other transactions in the set that must confirm first.
+- {{#name dependencies_met}}: whether all of those have confirmed. It does not account for {{#name csv_timelock_blocks}}, which you check against the current block height yourself.
 - {{#name status}}: whether the transaction is already on-chain. {{#enum ConfirmationStatus::Confirmed}} means it is done and can be skipped; {{#enum ConfirmationStatus::Unconfirmed}} is the normal state of a step that is not yet on-chain and that you must broadcast; {{#enum ConfirmationStatus::Unverified}} means its on-chain status could not be determined (see the troubleshooting table).
 
-## Resuming and increasing the fee
+## Follow the exit
 
-{{#name unilateral_exit}} is safe to call again. It reads confirmed on-chain state on every call, so any step already confirmed comes back as {{#enum ConfirmationStatus::Confirmed}}, and an interrupted exit resumes from where it stopped instead of starting over. You never re-supply a previously built exit transaction: the SDK re-discovers the confirmed steps — including a confirmed fan-out — from chain state itself. The only thing you ever pass back in is a confirmed fan-out's *outputs*, and only as fresh funding UTXOs when a higher fee rate needs more than they provide (as described just below).
+An exit takes days, and you are broadcasting it yourself, so you need a way to ask how far it has got. That is {{#name check_unilateral_exit}}: hand it the response you stored, and it hands the same exit back with every transaction's status brought up to date. Store that one in place of what you had.
 
-For the most reliable resume, re-quote with {{#enum ExitLeafSelection::Specific}} naming the same leaves as your original quote, rather than {{#enum ExitLeafSelection::Auto}}, then call {{#name unilateral_exit}} again. Persist the leaf ids from that first quote so you can name them. Naming the leaves explicitly is the most dependable way to pick up an interrupted exit, including a leaf still waiting out its refund timelock.
-
-The reported fee reflects on-chain progress. {{#name unilateral_exit}}'s {{#name total_fee_sat}} is the actual fee of only the transactions it still returns, so a resume costs less than a fresh exit — already-confirmed steps are free. {{#name prepare_unilateral_exit}} reads the chain too, so a partially-exited leaf quotes only what it still has to build, and its {{#name per_branch_funding}} drops to match. A leaf far enough along stays worth exiting under {{#enum ExitLeafSelection::Auto}} even when a fresh exit of it would not be, since what is left costs less than the whole.
-
-To re-broadcast the same leaves at a higher fee, quote again with the same {{#enum ExitLeafSelection::Specific}} leaves and a higher {{#name fee_rate_sat_per_vbyte}}, then call {{#name unilateral_exit}} again. The not-yet-confirmed transactions are rebuilt at the higher fee and replace the earlier ones by RBF; confirmed steps are left as they are. Once a fan-out has confirmed its outputs are fixed at the fee they were built with, so if the higher rate needs more than they provide the call returns {{#enum SdkError::InsufficientCpfpFunds}}; because those outputs pay to your own funding script, you recover by quoting again and passing them back in as funding UTXOs, together with any extra funding needed.
-
-Confirmed *CPFP* transactions hold funds the same way: once one confirms, your funds sit in its change output. To raise the fee beyond what a confirmed output covers, supply that output back in as a funding UTXO alongside the extra funding — list the confirmed output(s) first, then the new UTXO — so the rebuild spends the confirmed CPFP outputs together with the new funding rather than being capped by them. (Supplying the remaining unspent outputs yourself works too.)
-
-## Follow an exit you started
-
-Keep the {{#name UnilateralExitResponse}} you got back. {{#name check_unilateral_exit}} reads it against the chain and hands you the same exit with every transaction's status brought up to date, so store the one it returns in place of the one you kept.
-
-It needs neither your leaves nor a signer, so an exit can be followed from that response alone, on a device that has lost everything else.
+Call it after each broadcast, and whenever you want to show progress. It reads the chain and nothing else: no wallet, no leaves, no signer, no funding. An exit can be followed on a device that has lost everything but the stored response.
 
 Its {{#name verdict}} says what to do next:
 
-- {{#enum UnilateralExitVerdict::Valid}}: the exit still holds. Broadcast the transactions whose {{#name dependencies_met}} is set and whose {{#name csv_timelock_blocks}} has matured against the chain tip. Re-broadcasting one you already sent is harmless.
-- {{#enum UnilateralExitVerdict::Done}}: every transaction is confirmed, the sweep included. The funds have arrived.
-- {{#enum UnilateralExitVerdict::Redo}}: the exit cannot be finished as it stands, and {{#name reason}} says why. Quote and build it again with {{#name prepare_unilateral_exit}} and {{#name unilateral_exit}}, passing back the funding UTXOs you were given.
+- {{#enum UnilateralExitVerdict::Valid}}: the exit is on track. Broadcast the transactions whose {{#name dependencies_met}} is set and whose {{#name csv_timelock_blocks}} has matured. Sending one you already sent is harmless, so you never have to remember what you broadcast.
+- {{#enum UnilateralExitVerdict::Done}}: every transaction has confirmed, the sweep included. The money is at your destination address and there is nothing left to do.
+- {{#enum UnilateralExitVerdict::Redo}}: this exit cannot finish as it stands. See [Starting over](#starting-over).
 
+{{#enum UnilateralExitVerdict::Redo}} means something on-chain no longer matches the transactions you hold: a different refund for the same leaf confirmed, someone fee-bumped a step in a way yours cannot follow, or funding you were counting on went elsewhere. Your money is not lost, and the fix is always the same: quote and build again.
+
+{{#tabs unilateral_exit:check-unilateral-exit}}
+
+## Funding a second attempt
+
+Whenever you call {{#name unilateral_exit}} again, you have to give it funding. Two options, and the first is simpler:
+
+- **Fresh UTXOs.** Fund the amount the new quote asks for and pass those. Nothing to keep track of.
+- **The same UTXOs as last time.** Pass back the {{#name funding_inputs}} the stored response carries. An earlier attempt will have spent them, and that is fine: the SDK follows each outpoint to what your money became, whether that is a fan-out output, the change of a fee-bumping transaction, or several steps of both. Only what came from money you supplied, and still pays a script you control, is used.
+
+Either way you can add more: pass the old funding *and* a fresh UTXO when the exit needs more than what is left.
+
+The exit is short only when what you gave it, once followed, cannot cover what remains. Then it returns {{#enum SdkError::InsufficientCpfpFunds}} with the amount it needs.
+
+## Starting over
+
+Two things send you back to {{#name prepare_unilateral_exit}} and {{#name unilateral_exit}}. In both cases you build the exit again from scratch: you never hand a previously built transaction back to the SDK.
+
+**You want to pay a higher fee rate.** On-chain fees rise, and an exit already under way stops confirming. Quote again at the higher {{#name fee_rate_sat_per_vbyte}}, naming the same leaves with {{#enum ExitLeafSelection::Specific}}, and build again. Whatever has already confirmed stays as it is and costs nothing to keep; only what has not yet confirmed is rebuilt at the higher rate, and it replaces the earlier version on the network (RBF). The fee you are quoted is for the part that is left, so it is less than a fresh exit of the same leaves.
+
+**{{#name check_unilateral_exit}} returned {{#enum UnilateralExitVerdict::Redo}}.** The chain no longer matches the exit you hold, so those transactions cannot finish. Quote and build again the same way. Your funds are not lost: they are still in the tree, or already in an output you control, and the new exit picks up from wherever they are.
+
+Name the leaves with {{#enum ExitLeafSelection::Specific}} rather than {{#enum ExitLeafSelection::Auto}} both times, taking the ids from your stored response. This is the dependable way to pick an exit back up, including a leaf still waiting out its refund timelock.
+
+Both calls read the chain, so both price only what is left. A leaf far enough along stays worth exiting under {{#enum ExitLeafSelection::Auto}} even when a fresh exit of it would not be.
 
 ## Back up the exit data
 
@@ -187,13 +211,15 @@ An out of date value can restore leaves that have since been spent, so the balan
 | Problem | Cause | Solution |
 |---------|-------|----------|
 | {{#name prepare_unilateral_exit}} returns no {{#name leaves}} | Under {{#enum ExitLeafSelection::Auto}}, no leaf is worth exiting at the current rate | Lower {{#name fee_rate_sat_per_vbyte}} or wait for cheaper on-chain fees (this is not an error) |
-| A leaf you are mid-exit on is missing from a resumed {{#enum ExitLeafSelection::Auto}} quote | The resume reselected leaves with {{#enum ExitLeafSelection::Auto}} instead of naming them | Re-quote with {{#enum ExitLeafSelection::Specific}}, naming the leaves from your original quote |
+| A leaf you are mid-exit on is missing from a new {{#enum ExitLeafSelection::Auto}} quote | The new quote reselected leaves instead of naming them | Quote with {{#enum ExitLeafSelection::Specific}}, naming the leaves from your stored response |
+| {{#name check_unilateral_exit}} returns {{#enum UnilateralExitVerdict::Redo}} | Something on-chain no longer matches the transactions you hold | Quote and build again, naming the same leaves; see [Starting over](#starting-over) |
+| The exit has stopped confirming | On-chain fees rose above what its transactions pay | Quote and build again at a higher {{#name fee_rate_sat_per_vbyte}}; see [Starting over](#starting-over) |
 | {{#name total_fee_sat}} is close to or above {{#name recoverable_value_sat}} | The shared fan-out fee makes a single-UTXO multi-leaf exit uneconomical | Fund one UTXO per branch ({{#name per_branch_funding}}) to drop the fan-out fee, exit fewer leaves with {{#enum ExitLeafSelection::Specific}}, or wait for a lower fee rate |
 | The build/sweep fails with a "below the dust limit" error | The recoverable value net of fees is below the destination's dust limit | Exit higher-value leaves with {{#enum ExitLeafSelection::Specific}}, lower the {{#name fee_rate_sat_per_vbyte}}, or wait for a cheaper fee rate |
-| {{#enum SdkError::InsufficientCpfpFunds}} | Funding is below what the exit needs | Fund at least {{#name single_utxo_funding_sat}}, or the amount in each {{#name PerBranchFunding}} |
+| {{#enum SdkError::InsufficientCpfpFunds}} | The funding you gave, once followed to what it became, is below what the exit needs | Fund at least {{#name single_utxo_funding_sat}}, or the amount in each {{#name PerBranchFunding}}; you can pass fresh UTXOs alongside the old ones |
 | "min relay fee not met" when broadcasting | The package fee is too low for the network | Increase {{#name fee_rate_sat_per_vbyte}}, rebuild, and re-broadcast (RBF) |
 | "mandatory-script-verify-flag-failed" | A CPFP child was not signed correctly | Ensure your {{#name CpfpSigner}} signs every non-finalized input |
 | "non-BIP68-final" | A relative timelock has not matured | Wait the required {{#name csv_timelock_blocks}} after the parent confirms |
 | A tree transaction is rejected on its own | The zero-fee parent was broadcast without its child | Broadcast the parent and its {{#name cpfp_tx_hex}} together as a package |
-| The sweep is rejected | Not every refund it spends has confirmed | Wait for all of the sweep's {{#name depends_on}} to confirm first |
-| A transaction's {{#name status}} is {{#enum ConfirmationStatus::Unverified}} | The chain service was unavailable or rate-limited, so the SDK could not tell whether that step is already on-chain | Retry, or use a more reliable chain service (see [Customizing the SDK](customizing.md#with-chain-service)); calling {{#name unilateral_exit}} again re-checks |
+| The sweep is rejected | Not every refund it spends has confirmed | Wait until {{#name check_unilateral_exit}} reports its {{#name dependencies_met}} |
+| A transaction's {{#name status}} is {{#enum ConfirmationStatus::Unverified}} | The chain service was unavailable or rate-limited, so the SDK could not tell whether that step is already on-chain | Retry, or use a more reliable chain service (see [Customizing the SDK](customizing.md#with-chain-service)); {{#name check_unilateral_exit}} re-checks |

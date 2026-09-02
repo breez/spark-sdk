@@ -1,6 +1,8 @@
 import logging
 from breez_sdk_spark import (
     BreezSdk,
+    CheckUnilateralExitRequest,
+    ConfirmationStatus,
     CpfpFundingKind,
     CpfpInput,
     CpfpSigner,
@@ -9,6 +11,8 @@ from breez_sdk_spark import (
     PrepareUnilateralExitRequest,
     PrepareUnilateralExitResponse,
     UnilateralExitRequest,
+    UnilateralExitResponse,
+    UnilateralExitVerdict,
     single_key_cpfp_signer,
 )
 
@@ -64,6 +68,33 @@ async def build_exit(sdk: BreezSdk, quote: PrepareUnilateralExitResponse):
                     f"{tx.txid}: wait {tx.csv_timelock_blocks} blocks after its parents confirm"
                 )
         # ANCHOR_END: unilateral-exit
+    except Exception as error:
+        logging.error(error)
+        raise
+
+
+async def check_exit(sdk: BreezSdk, stored: UnilateralExitResponse):
+    try:
+        # ANCHOR: check-unilateral-exit
+        checked = await sdk.check_unilateral_exit(
+            request=CheckUnilateralExitRequest(exit=stored)
+        )
+
+        # Store this one in place of the one you had.
+        exit = checked.exit
+
+        if isinstance(checked.verdict, UnilateralExitVerdict.VALID):
+            for tx in exit.transactions:
+                if tx.dependencies_met and tx.status != ConfirmationStatus.CONFIRMED:
+                    # Also wait out csv_timelock_blocks before broadcasting.
+                    logging.debug(f"ready to broadcast: {tx.txid}")
+        elif isinstance(checked.verdict, UnilateralExitVerdict.DONE):
+            logging.debug(f"The exit finished: {exit.recoverable_value_sat} sats recovered")
+        elif isinstance(checked.verdict, UnilateralExitVerdict.REDO):
+            # Quote and build again, naming the same leaves. Pass exit.funding_inputs
+            # back and the SDK follows them to whatever they have become.
+            logging.debug(f"Build the exit again: {checked.verdict.reason}")
+        # ANCHOR_END: check-unilateral-exit
     except Exception as error:
         logging.error(error)
         raise

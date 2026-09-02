@@ -1,12 +1,15 @@
 import type {
   BreezSdk,
-  PrepareUnilateralExitResponse
+  PrepareUnilateralExitResponse,
+  UnilateralExitResponse
 } from '@breeztech/breez-sdk-spark-react-native'
 import {
   singleKeyCpfpSigner,
   CpfpFundingKind,
   CpfpInput,
-  ExitLeafSelection
+  ExitLeafSelection,
+  ConfirmationStatus,
+  UnilateralExitVerdict_Tags
 } from '@breeztech/breez-sdk-spark-react-native'
 
 const exampleQuoteExit = async (sdk: BreezSdk): Promise<PrepareUnilateralExitResponse> => {
@@ -56,6 +59,36 @@ const exampleBuildExit = async (sdk: BreezSdk, quote: PrepareUnilateralExitRespo
     }
   }
   // ANCHOR_END: unilateral-exit
+}
+
+const exampleCheckExit = async (sdk: BreezSdk, stored: UnilateralExitResponse) => {
+  // ANCHOR: check-unilateral-exit
+  const checked = await sdk.checkUnilateralExit({ exit: stored })
+
+  // Store this one in place of the one you had.
+  const exit = checked.exit
+
+  switch (checked.verdict.tag) {
+    case UnilateralExitVerdict_Tags.Valid:
+      for (const tx of exit.transactions) {
+        if (tx.dependenciesMet && tx.status !== ConfirmationStatus.Confirmed) {
+          // Also wait out csvTimelockBlocks before broadcasting.
+          console.log(`ready to broadcast: ${tx.txid}`)
+        }
+      }
+      break
+    case UnilateralExitVerdict_Tags.Done:
+      console.log(`The exit finished: ${exit.recoverableValueSat} sats recovered`)
+      break
+    case UnilateralExitVerdict_Tags.Redo: {
+      // Quote and build again, naming the same leaves. Pass exit.fundingInputs
+      // back and the SDK follows them to whatever they have become.
+      const { reason } = checked.verdict.inner
+      console.log(`Build the exit again: ${reason}`)
+      break
+    }
+  }
+  // ANCHOR_END: check-unilateral-exit
 }
 
 const exampleExportExitState = async (sdk: BreezSdk): Promise<string> => {
