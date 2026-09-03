@@ -59,8 +59,7 @@ Future<void> checkExit(BreezSdk sdk, UnilateralExitResponse stored) async {
   UnilateralExitVerdict verdict = checked.verdict;
   if (verdict is UnilateralExitVerdict_Valid) {
     for (UnilateralExitTransaction tx in exit.transactions) {
-      if (tx.dependenciesMet && tx.status is! ConfirmationStatus_Confirmed) {
-        // Also wait out csvTimelockBlocks before broadcasting.
+      if (tx.status is ExitTransactionStatus_Ready) {
         print("ready to broadcast: ${tx.txid}");
       }
     }

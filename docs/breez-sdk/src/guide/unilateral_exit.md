@@ -81,7 +81,7 @@ If the funding is below what the exit needs it returns {{#enum SdkError::Insuffi
 
 A very thin-margin exit can fail even when the funding is sufficient: if the recoverable value net of fees would leave the swept output below the destination address's dust limit, the sweep cannot be built and the exit fails. Exit higher-value leaves with {{#enum ExitLeafSelection::Specific}}, lower the {{#name fee_rate_sat_per_vbyte}}, or wait for a cheaper fee rate.
 
-The set it builds depends on what is already on-chain. Because each CPFP child spends the previous one, the exit is one connected chain, so to continue it correctly the SDK reads confirmed on-chain state through its chain service: a step already confirmed comes back as {{#enum ConfirmationStatus::Confirmed}} and is not rebuilt. If the chain service cannot resolve a step, the SDK falls back to the status the operators reported: a node the operators already consider on-chain is left as-is rather than fee-bumped (bumping an already-confirmed node would invalidate the rest of the chain), and any node whose state still cannot be determined comes back as {{#enum ConfirmationStatus::Unverified}} and is treated as not yet confirmed rather than failing the build. You still get the full set back; broadcasting an already-confirmed transaction is harmless, and re-running once the chain service recovers resolves the status. For a more reliable source you can supply your own chain service (see [Customizing the SDK](customizing.md#with-chain-service)).
+The set it builds depends on what is already on-chain. Because each CPFP child spends the previous one, the exit is one connected chain, so to continue it correctly the SDK reads confirmed on-chain state through its chain service: a step already confirmed comes back as {{#enum ExitTransactionStatus::Confirmed}} and is not rebuilt. If the chain service cannot resolve a step, the SDK falls back to the status the operators reported: a node the operators already consider on-chain is left as-is rather than fee-bumped (bumping an already-confirmed node would invalidate the rest of the chain), and any node whose state still cannot be determined comes back as {{#enum ExitTransactionStatus::Unverified}} and is treated as not yet confirmed rather than failing the build. You still get the full set back; broadcasting an already-confirmed transaction is harmless, and re-running once the chain service recovers resolves the status. For a more reliable source you can supply your own chain service (see [Customizing the SDK](customizing.md#with-chain-service)).
 
 {{#tabs unilateral_exit:unilateral-exit}}
 
@@ -108,7 +108,7 @@ Store the one {{#name check_unilateral_exit}} returns in its place each time you
 
 ## Broadcast the transactions
 
-The SDK does not broadcast anything. {{#name transactions}} is the complete, signed set in valid broadcast order, and it is yours to send to the network over time. Broadcast each transaction once it is ready: {{#name dependencies_met}} is set, and its {{#name csv_timelock_blocks}} relative timelock has matured against the current block height. Because of those timelocks, a full exit can span several days.
+The SDK does not broadcast anything. {{#name transactions}} is the complete, signed set in valid broadcast order, and it is yours to send to the network over time. Broadcast each transaction whose {{#name status}} is {{#enum ExitTransactionStatus::Ready}}, and leave the rest until a later {{#name check_unilateral_exit}} reports them ready. Because of the timelocks in the tree, a full exit can span several days.
 
 ### Broadcast each package together
 
@@ -142,8 +142,7 @@ Each {{#name UnilateralExitTransaction}} in {{#name transactions}} carries:
 - {{#name cpfp_tx_hex}}: its signed CPFP child, to broadcast alongside {{#name tx_hex}} as a package. Unset for the fan-out and the sweep, and for a step that is already confirmed.
 - {{#name csv_timelock_blocks}}: the relative timelock, in blocks, that must mature before the transaction can confirm.
 - {{#name depends_on}}: the txids of other transactions in the set that must confirm first.
-- {{#name dependencies_met}}: whether all of those have confirmed. It does not account for {{#name csv_timelock_blocks}}, which you check against the current block height yourself.
-- {{#name status}}: whether the transaction is already on-chain. {{#enum ConfirmationStatus::Confirmed}} means it is done and can be skipped, and carries the {{#name block_height}} it landed at, which is what a {{#name csv_timelock_blocks}} on its child counts from; {{#enum ConfirmationStatus::Unconfirmed}} is the normal state of a step that is not yet on-chain and that you must broadcast; {{#enum ConfirmationStatus::Unverified}} means its on-chain status could not be determined (see the troubleshooting table).
+- {{#name status}}: where the transaction stands. {{#enum ExitTransactionStatus::Confirmed}} means it is done and can be skipped, and carries the {{#name block_height}} it landed at, which is what a {{#name csv_timelock_blocks}} on its child counts from. {{#enum ExitTransactionStatus::Ready}} means broadcast it now. {{#enum ExitTransactionStatus::WaitingForDependencies}} means something in {{#name depends_on}} has yet to confirm. {{#enum ExitTransactionStatus::WaitingForTimelock}} means its inputs are confirmed but its {{#name csv_timelock_blocks}} has not matured, and reports the {{#name spendable_at_height}} block it can first be mined in. {{#enum ExitTransactionStatus::Unverified}} means its on-chain status could not be determined (see the troubleshooting table). The SDK reads the chain tip to tell these apart, so you do not have to.
 
 ## Follow the exit
 
@@ -153,7 +152,7 @@ Call it after each broadcast, and whenever you want to show progress. It reads t
 
 Its {{#name verdict}} says what to do next:
 
-- {{#enum UnilateralExitVerdict::Valid}}: the exit is on track. Broadcast the transactions whose {{#name dependencies_met}} is set and whose {{#name csv_timelock_blocks}} has matured. Sending one you already sent is harmless, so you never have to remember what you broadcast.
+- {{#enum UnilateralExitVerdict::Valid}}: the exit is on track. Broadcast the transactions whose {{#name status}} is {{#enum ExitTransactionStatus::Ready}}. Sending one you already sent is harmless, so you never have to remember what you broadcast.
 - {{#enum UnilateralExitVerdict::Done}}: every transaction has confirmed, the sweep included. The money is at your destination address and there is nothing left to do.
 - {{#enum UnilateralExitVerdict::Redo}}: this exit cannot finish as it stands. See [Starting over](#starting-over).
 
@@ -219,7 +218,7 @@ An out of date value can restore leaves that have since been spent, so the balan
 | {{#enum SdkError::InsufficientCpfpFunds}} | The funding you gave, once followed to what it became, is below what the exit needs | Fund at least {{#name single_utxo_funding_sat}}, or the amount in each {{#name PerBranchFunding}}; you can pass fresh UTXOs alongside the old ones |
 | "min relay fee not met" when broadcasting | The package fee is too low for the network | Increase {{#name fee_rate_sat_per_vbyte}}, rebuild, and re-broadcast (RBF) |
 | "mandatory-script-verify-flag-failed" | A CPFP child was not signed correctly | Ensure your {{#name CpfpSigner}} signs every non-finalized input |
-| "non-BIP68-final" | A relative timelock has not matured | Wait the required {{#name csv_timelock_blocks}} after the parent confirms |
+| "non-BIP68-final" | A relative timelock has not matured | Wait until {{#name status}} leaves {{#enum ExitTransactionStatus::WaitingForTimelock}} |
 | A tree transaction is rejected on its own | The zero-fee parent was broadcast without its child | Broadcast the parent and its {{#name cpfp_tx_hex}} together as a package |
-| The sweep is rejected | Not every refund it spends has confirmed | Wait until {{#name check_unilateral_exit}} reports its {{#name dependencies_met}} |
-| A transaction's {{#name status}} is {{#enum ConfirmationStatus::Unverified}} | The chain service was unavailable or rate-limited, so the SDK could not tell whether that step is already on-chain | Retry, or use a more reliable chain service (see [Customizing the SDK](customizing.md#with-chain-service)); {{#name check_unilateral_exit}} re-checks |
+| The sweep is rejected | Not every refund it spends has confirmed | Wait until {{#name check_unilateral_exit}} reports it {{#enum ExitTransactionStatus::Ready}} |
+| A transaction's {{#name status}} is {{#enum ExitTransactionStatus::Unverified}} | The chain service was unavailable or rate-limited, so the SDK could not tell whether that step is already on-chain | Retry, or use a more reliable chain service (see [Customizing the SDK](customizing.md#with-chain-service)); {{#name check_unilateral_exit}} re-checks |

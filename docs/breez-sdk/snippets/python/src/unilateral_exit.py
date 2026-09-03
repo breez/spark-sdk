@@ -2,11 +2,11 @@ import logging
 from breez_sdk_spark import (
     BreezSdk,
     CheckUnilateralExitRequest,
-    ConfirmationStatus,
     CpfpFundingKind,
     CpfpInput,
     CpfpSigner,
     ExitLeafSelection,
+    ExitTransactionStatus,
     ImportUnilateralExitStateRequest,
     PrepareUnilateralExitRequest,
     PrepareUnilateralExitResponse,
@@ -85,9 +85,7 @@ async def check_exit(sdk: BreezSdk, stored: UnilateralExitResponse):
 
         if isinstance(checked.verdict, UnilateralExitVerdict.VALID):
             for tx in exit.transactions:
-                confirmed = isinstance(tx.status, ConfirmationStatus.CONFIRMED)
-                if tx.dependencies_met and not confirmed:
-                    # Also wait out csv_timelock_blocks before broadcasting.
+                if isinstance(tx.status, ExitTransactionStatus.READY):
                     logging.debug(f"ready to broadcast: {tx.txid}")
         elif isinstance(checked.verdict, UnilateralExitVerdict.DONE):
             logging.debug(f"The exit finished: {exit.recoverable_value_sat} sats recovered")

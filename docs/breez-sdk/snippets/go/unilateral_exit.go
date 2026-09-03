@@ -76,9 +76,7 @@ func CheckExit(sdk *breez_sdk_spark.BreezSdk, stored breez_sdk_spark.UnilateralE
 	switch verdict := checked.Verdict.(type) {
 	case breez_sdk_spark.UnilateralExitVerdictValid:
 		for _, tx := range exit.Transactions {
-			_, confirmed := tx.Status.(breez_sdk_spark.ConfirmationStatusConfirmed)
-			if tx.DependenciesMet && !confirmed {
-				// Also wait out CsvTimelockBlocks before broadcasting.
+			if _, ready := tx.Status.(breez_sdk_spark.ExitTransactionStatusReady); ready {
 				log.Printf("ready to broadcast: %s", tx.Txid)
 			}
 		}

@@ -10,7 +10,7 @@ import {
   CpfpFundingKind,
   CpfpInput,
   ExitLeafSelection,
-  ConfirmationStatus_Tags,
+  ExitTransactionStatus_Tags,
 } from '@breeztech/breez-sdk-spark-react-native'
 import type {
   BreezSdkInterface,
@@ -208,7 +208,7 @@ async function handleUnilateralExit(sdk: BreezSdkInterface, args: string[]): Pro
       : ''
     lines.push(`  [${i}] ${tx.kind} status=${tx.status} txid=${tx.txid}${after}${csv}`)
 
-    if (tx.status.tag === ConfirmationStatus_Tags.Confirmed) {
+    if (tx.status.tag === ExitTransactionStatus_Tags.Confirmed) {
       lines.push('      (already confirmed, nothing to broadcast)')
       continue
     }

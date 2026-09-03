@@ -89,8 +89,8 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export type CpfpInput = any;
   export const ExitLeafSelection: any;
   export type ExitLeafSelection = any;
-  export const ConfirmationStatus_Tags: any;
-  export type ConfirmationStatus = any;
+  export const ExitTransactionStatus_Tags: any;
+  export type ExitTransactionStatus = any;
 
   // --- proxy ---
   export type ProxyConfig = any;

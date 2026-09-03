@@ -8,7 +8,7 @@ import {
   CpfpFundingKind,
   CpfpInput,
   ExitLeafSelection,
-  ConfirmationStatus_Tags,
+  ExitTransactionStatus_Tags,
   UnilateralExitVerdict_Tags
 } from '@breeztech/breez-sdk-spark-react-native'
 
@@ -71,8 +71,7 @@ const exampleCheckExit = async (sdk: BreezSdk, stored: UnilateralExitResponse) =
   switch (checked.verdict.tag) {
     case UnilateralExitVerdict_Tags.Valid:
       for (const tx of exit.transactions) {
-        if (tx.dependenciesMet && tx.status.tag !== ConfirmationStatus_Tags.Confirmed) {
-          // Also wait out csvTimelockBlocks before broadcasting.
+        if (tx.status.tag === ExitTransactionStatus_Tags.Ready) {
           console.log(`ready to broadcast: ${tx.txid}`)
         }
       }

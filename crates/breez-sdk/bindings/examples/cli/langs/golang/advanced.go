@@ -285,7 +285,7 @@ func printExitTransactions(response breez_sdk_spark.UnilateralExitResponse) {
 		}
 		fmt.Printf("  [%d] %v status=%v txid=%s%s%s\n",
 			i, tx.Kind, tx.Status, tx.Txid, after, csv)
-		if _, ok := tx.Status.(breez_sdk_spark.ConfirmationStatusConfirmed); ok {
+		if _, ok := tx.Status.(breez_sdk_spark.ExitTransactionStatusConfirmed); ok {
 			fmt.Println("      (already confirmed, nothing to broadcast)")
 			continue
 		}

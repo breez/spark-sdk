@@ -868,10 +868,12 @@ pub enum UnilateralExitTxKind {
     Sweep,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::ConfirmationStatus)]
-pub enum ConfirmationStatus {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ExitTransactionStatus)]
+pub enum ExitTransactionStatus {
     Confirmed { block_height: Option<u32> },
-    Unconfirmed,
+    Ready,
+    WaitingForDependencies,
+    WaitingForTimelock { spendable_at_height: Option<u32> },
     Unverified,
 }
 
@@ -884,8 +886,7 @@ pub struct UnilateralExitTransaction {
     pub cpfp_tx_hex: Option<String>,
     pub csv_timelock_blocks: Option<u32>,
     pub depends_on: Vec<String>,
-    pub dependencies_met: bool,
-    pub status: ConfirmationStatus,
+    pub status: ExitTransactionStatus,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitLeaf)]

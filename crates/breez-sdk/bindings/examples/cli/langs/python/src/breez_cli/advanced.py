@@ -1,10 +1,10 @@
 import argparse
 
 from breez_sdk_spark import (
-    ConfirmationStatus,
     CpfpFundingKind,
     CpfpInput,
     ExitLeafSelection,
+    ExitTransactionStatus,
     ImportUnilateralExitStateRequest,
     PrepareUnilateralExitRequest,
     UnilateralExitRequest,
@@ -75,7 +75,7 @@ def _print_exit_transactions(response):
         if tx.csv_timelock_blocks is not None:
             csv = f", csv {tx.csv_timelock_blocks} blocks"
         print(f"  [{i}] {tx.kind} status={tx.status} txid={tx.txid}{after}{csv}")
-        if isinstance(tx.status, ConfirmationStatus.CONFIRMED):
+        if isinstance(tx.status, ExitTransactionStatus.CONFIRMED):
             print("      (already confirmed, nothing to broadcast)")
             continue
         if tx.cpfp_tx_hex is not None:

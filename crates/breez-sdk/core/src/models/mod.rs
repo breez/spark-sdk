@@ -2849,21 +2849,32 @@ pub enum UnilateralExitTxKind {
     Sweep,
 }
 
-/// Whether a transaction in the exit path is already on-chain.
+/// Where a transaction in the exit path stands: on-chain, ready to send, or
+/// waiting for something.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum ConfirmationStatus {
-    /// This transaction is confirmed in a block, at `block_height` where the
-    /// chain service reported one. It needs no action.
+pub enum ExitTransactionStatus {
+    /// Confirmed in a block, at `block_height` where the chain service reported
+    /// one. It needs no action.
     ///
     /// A relative `csv_timelock_blocks` counts from the height of the
     /// transaction it spends, so this is what tells you when a child of this one
     /// can go out, without fetching it again.
     Confirmed { block_height: Option<u32> },
-    /// This transaction is not yet confirmed. Mempool state is not consulted.
-    Unconfirmed,
-    /// The on-chain status could not be determined (the chain service errored).
-    /// Broadcasting may fail if a conflicting transaction already landed.
+    /// Not on-chain, and nothing is holding it back. Broadcast it, with its
+    /// `cpfp_tx_hex` where it has one.
+    Ready,
+    /// A transaction in `depends_on` has yet to confirm. A relative timelock
+    /// only starts counting once it does.
+    WaitingForDependencies,
+    /// Every input is confirmed, but a relative timelock has yet to mature.
+    /// `spendable_at_height` is the first block that can include this
+    /// transaction, and is unset when the height it counts from could not be
+    /// read from the chain.
+    WaitingForTimelock { spendable_at_height: Option<u32> },
+    /// The on-chain status could not be determined (the chain service errored),
+    /// which also leaves what it is waiting for unknown. Broadcasting may fail
+    /// if a conflicting transaction already landed.
     Unverified,
 }
 
@@ -2888,11 +2899,10 @@ pub struct UnilateralExitTransaction {
     /// Txids of other entries in this list that must be confirmed before this
     /// one can be broadcast.
     pub depends_on: Vec<String>,
-    /// Whether every transaction in `depends_on` is confirmed. A `csv_timelock_blocks`
-    /// that has yet to mature still holds this one back, which is yours to check
-    /// against the chain tip.
-    pub dependencies_met: bool,
-    pub status: ConfirmationStatus,
+    /// Whether this transaction is on-chain, can go out now, or is waiting on
+    /// something. Resolved against the chain tip, so it accounts for
+    /// `csv_timelock_blocks` as well as `depends_on`.
+    pub status: ExitTransactionStatus,
 }
 
 /// A leaf selected for exit, with its value.
@@ -2942,7 +2952,7 @@ pub struct ExitChainState {
     pub stopped_leaf_ids: Vec<String>,
     /// Nodes a chain lookup could not read, so their state is unknown rather
     /// than absent. Transactions depending on them come back
-    /// `ConfirmationStatus::Unverified`.
+    /// `ExitTransactionStatus::Unverified`.
     pub unverified_node_ids: Vec<String>,
     /// Nodes taken to be on-chain on the operators' word, the chain itself being
     /// unreadable. Their spend is invisible, so anything built over them risks

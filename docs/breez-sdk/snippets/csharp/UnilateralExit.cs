@@ -69,10 +69,8 @@ namespace BreezSdkSnippets
                 case UnilateralExitVerdict.Valid:
                     foreach (var tx in exit.transactions)
                     {
-                        if (tx.dependenciesMet
-                            && tx.status is not ConfirmationStatus.Confirmed)
+                        if (tx.status is ExitTransactionStatus.Ready)
                         {
-                            // Also wait out csvTimelockBlocks before broadcasting.
                             Console.WriteLine($"ready to broadcast: {tx.txid}");
                         }
                     }
