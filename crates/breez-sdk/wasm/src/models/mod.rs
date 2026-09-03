@@ -907,6 +907,43 @@ pub struct PrepareUnilateralExitRequest {
     pub selection: ExitLeafSelection,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ExitChainState)]
+pub struct ExitChainState {
+    pub confirmed_nodes: Vec<ConfirmedExitNode>,
+    pub refunds: Vec<ExitRefund>,
+    pub stopped_leaf_ids: Vec<String>,
+    pub unverified_node_ids: Vec<String>,
+    pub unverifiable_confirmed_node_ids: Vec<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConfirmedExitNode)]
+pub struct ConfirmedExitNode {
+    pub node_id: String,
+    pub confirmed_by: ExitNodeConfirmation,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ExitNodeConfirmation)]
+pub enum ExitNodeConfirmation {
+    Cpfp,
+    Direct,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ExitRefund)]
+pub struct ExitRefund {
+    pub leaf_id: String,
+    pub state: ExitRefundState,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ExitRefundState)]
+pub enum ExitRefundState {
+    OnChain {
+        tx_hex: String,
+        vout: u32,
+        value_sat: u64,
+    },
+    Swept,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareUnilateralExitResponse)]
 pub struct PrepareUnilateralExitResponse {
     pub leaves: Vec<UnilateralExitLeaf>,
@@ -917,6 +954,7 @@ pub struct PrepareUnilateralExitResponse {
     pub per_branch_funding: Vec<PerBranchFunding>,
     pub fee_rate_sat_per_vbyte: u64,
     pub destination: String,
+    pub exit_chain_state: ExitChainState,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitRequest)]

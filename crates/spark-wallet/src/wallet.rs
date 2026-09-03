@@ -326,6 +326,13 @@ macro_rules! with_leafs_spent_retry {
     }};
 }
 
+/// A quote and the exit tree it was priced from, which the caller needs to ask
+/// the chain what those leaves have already done.
+pub struct UnilateralExitQuoteWithTree {
+    pub quote: spark::services::UnilateralExitQuote,
+    pub tree_nodes: HashMap<TreeNodeId, TreeNode>,
+}
+
 pub struct SparkWallet {
     /// Sender held for lifetime management when no external cancellation token
     /// was provided to the builder. Dropping it cancels the receiver clones in
@@ -1772,11 +1779,11 @@ impl SparkWallet {
         funding_output_script_len: usize,
         change_dust_limit: u64,
         destination_script_len: usize,
-    ) -> Result<spark::services::UnilateralExitQuote, SparkWalletError> {
+    ) -> Result<UnilateralExitQuoteWithTree, SparkWalletError> {
         self.refresh_before_exit().await;
         let (leaf_ids, filter) = self.resolve_leaf_selection(selection).await?;
         let tree_nodes = self.load_exit_tree_nodes(&leaf_ids).await?;
-        Ok(spark::services::quote_unilateral_exit(
+        let quote = spark::services::quote_unilateral_exit(
             &tree_nodes,
             &leaf_ids,
             filter,
@@ -1785,7 +1792,8 @@ impl SparkWallet {
             change_dust_limit,
             fee_rate_sat_per_kw,
             destination_script_len,
-        )?)
+        )?;
+        Ok(UnilateralExitQuoteWithTree { quote, tree_nodes })
     }
 
     /// Prepares a unilateral exit of the selected leaves: loads the exit tree,
