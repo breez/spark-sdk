@@ -303,7 +303,7 @@ pub enum _UnilateralExitTxKind {
 
 #[frb(mirror(ConfirmationStatus))]
 pub enum _ConfirmationStatus {
-    Confirmed,
+    Confirmed { block_height: Option<u32> },
     Unconfirmed,
     Unverified,
 }
@@ -354,6 +354,7 @@ pub struct _ExitChainState {
 pub struct _ConfirmedExitNode {
     pub node_id: String,
     pub confirmed_by: ExitNodeConfirmation,
+    pub block_height: Option<u32>,
 }
 
 #[frb(mirror(ExitNodeConfirmation))]
@@ -374,6 +375,7 @@ pub enum _ExitRefundState {
         tx_hex: String,
         vout: u32,
         value_sat: u64,
+        block_height: Option<u32>,
     },
     Swept,
 }

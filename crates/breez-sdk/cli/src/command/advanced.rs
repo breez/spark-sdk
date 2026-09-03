@@ -208,8 +208,13 @@ fn print_exit_transactions(response: &UnilateralExitResponse) {
             "  [{i}] {:?} status={:?} txid={}{after}{csv}",
             tx.kind, tx.status, tx.txid,
         );
-        if tx.status == ConfirmationStatus::Confirmed {
-            println!("      (already confirmed, nothing to broadcast)");
+        if let ConfirmationStatus::Confirmed { block_height } = tx.status {
+            match block_height {
+                Some(height) => {
+                    println!("      (confirmed in block {height}, nothing to broadcast)");
+                }
+                None => println!("      (already confirmed, nothing to broadcast)"),
+            }
             continue;
         }
         let package = match &tx.cpfp_tx_hex {

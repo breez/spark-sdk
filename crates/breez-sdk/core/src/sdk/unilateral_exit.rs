@@ -177,8 +177,10 @@ impl BreezSdk {
         for tx in &mut exit.transactions {
             let txid = Txid::from_str(&tx.txid)
                 .map_err(|e| SdkError::InvalidInput(format!("Invalid txid {}: {e}", tx.txid)))?;
-            if check.confirmed.contains(&txid) {
-                tx.status = ConfirmationStatus::Confirmed;
+            if let Some(block_height) = check.confirmed.get(&txid) {
+                tx.status = ConfirmationStatus::Confirmed {
+                    block_height: *block_height,
+                };
             }
         }
 
@@ -187,7 +189,7 @@ impl BreezSdk {
         let all_confirmed = exit
             .transactions
             .iter()
-            .all(|tx| matches!(tx.status, ConfirmationStatus::Confirmed));
+            .all(|tx| matches!(tx.status, ConfirmationStatus::Confirmed { .. }));
         let verdict = if check.diverged {
             UnilateralExitVerdict::Redo {
                 reason: UnilateralExitRedoReason::OnChainStateDiverged,
@@ -657,6 +659,7 @@ fn exit_chain_state_from_model(
             .iter()
             .map(|node| {
                 Ok(WalletConfirmedExitNode {
+                    block_height: node.block_height,
                     node_id: node_id(&node.node_id)?,
                     confirmed_by: match node.confirmed_by {
                         ExitNodeConfirmation::Cpfp => WalletExitNodeConfirmation::Cpfp,
@@ -674,7 +677,9 @@ fn exit_chain_state_from_model(
                         tx_hex,
                         vout,
                         value_sat,
+                        block_height,
                     } => WalletExitRefundState::OnChain {
+                        block_height: *block_height,
                         tx: deserialize_hex(tx_hex).map_err(|e| {
                             SdkError::InvalidInput(format!("Invalid refund transaction: {e}"))
                         })?,
@@ -717,6 +722,7 @@ fn exit_chain_state_model(state: WalletExitChainState) -> ModelExitChainState {
                     WalletExitNodeConfirmation::Cpfp => ExitNodeConfirmation::Cpfp,
                     WalletExitNodeConfirmation::Direct => ExitNodeConfirmation::Direct,
                 },
+                block_height: node.block_height,
             })
             .collect(),
         refunds: state
@@ -725,13 +731,17 @@ fn exit_chain_state_model(state: WalletExitChainState) -> ModelExitChainState {
             .map(|refund| ExitRefund {
                 leaf_id: refund.leaf_id.to_string(),
                 state: match refund.state {
-                    WalletExitRefundState::OnChain { tx, vout, value } => {
-                        ExitRefundState::OnChain {
-                            tx_hex: serialize_hex(&tx),
-                            vout,
-                            value_sat: value,
-                        }
-                    }
+                    WalletExitRefundState::OnChain {
+                        tx,
+                        vout,
+                        value,
+                        block_height,
+                    } => ExitRefundState::OnChain {
+                        tx_hex: serialize_hex(&tx),
+                        vout,
+                        value_sat: value,
+                        block_height,
+                    },
                     WalletExitRefundState::Swept => ExitRefundState::Swept,
                 },
             })
@@ -752,7 +762,7 @@ fn ids(ids: Vec<TreeNodeId>) -> Vec<String> {
 fn mark_dependencies_met(transactions: &mut [UnilateralExitTransaction]) {
     let confirmed: HashSet<&str> = transactions
         .iter()
-        .filter(|tx| matches!(tx.status, ConfirmationStatus::Confirmed))
+        .filter(|tx| matches!(tx.status, ConfirmationStatus::Confirmed { .. }))
         .map(|tx| tx.txid.as_str())
         .collect();
     let met: Vec<bool> = transactions
@@ -785,7 +795,7 @@ fn exit_check_input(tx: &UnilateralExitTransaction) -> Result<ExitCheckInput, Sd
                     .map_err(|e| SdkError::InvalidInput(format!("Invalid txid {txid}: {e}")))
             })
             .collect::<Result<_, SdkError>>()?,
-        confirmed: matches!(tx.status, ConfirmationStatus::Confirmed),
+        confirmed: matches!(tx.status, ConfirmationStatus::Confirmed { .. }),
     })
 }
 
@@ -850,7 +860,10 @@ async fn execute_chain_query(chain: &dyn BitcoinChainService, query: &ChainQuery
     match query {
         ChainQuery::TxConfirmed(txid) => match chain.get_transaction_status(txid.to_string()).await
         {
-            Ok(status) => ChainResult::Confirmed(status.confirmed),
+            Ok(status) => ChainResult::Confirmed {
+                confirmed: status.confirmed,
+                block_height: status.block_height,
+            },
             Err(e) => {
                 warn!(%txid, error = %e, "chain lookup failed: transaction status");
                 ChainResult::Unavailable
@@ -867,6 +880,7 @@ async fn execute_chain_query(chain: &dyn BitcoinChainService, query: &ChainQuery
                         ChainResult::Spend(Some(SpendInfo {
                             spender_txid,
                             confirmed: status.confirmed,
+                            block_height: status.block_height,
                         }))
                     }
                     Err(e) => {
@@ -911,6 +925,7 @@ async fn execute_chain_query(chain: &dyn BitcoinChainService, query: &ChainQuery
                                 vout: u.vout,
                                 value: u.value,
                                 confirmed: u.status.confirmed,
+                                block_height: u.status.block_height,
                             }),
                             Err(e) => {
                                 warn!("skipping refund txo {} for leaf {leaf_id}: {e}", u.txid);
@@ -937,7 +952,7 @@ async fn execute_chain_query(chain: &dyn BitcoinChainService, query: &ChainQuery
 
 fn confirmation_status(status: ExitTxStatus) -> ConfirmationStatus {
     match status {
-        ExitTxStatus::Confirmed => ConfirmationStatus::Confirmed,
+        ExitTxStatus::Confirmed { block_height } => ConfirmationStatus::Confirmed { block_height },
         ExitTxStatus::Unconfirmed => ConfirmationStatus::Unconfirmed,
         ExitTxStatus::Unverified => ConfirmationStatus::Unverified,
     }

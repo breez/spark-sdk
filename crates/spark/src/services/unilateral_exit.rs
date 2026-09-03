@@ -100,6 +100,11 @@ pub struct ExitChainState {
 pub struct ConfirmedExitNode {
     pub node_id: TreeNodeId,
     pub confirmed_by: ExitNodeConfirmation,
+    /// The block it is in, where that is known. A relative timelock counts from
+    /// this height, so a caller holding it can tell when a child of this node
+    /// can go out. Unknown for a node put in a block by a descendant's
+    /// confirmation rather than read directly.
+    pub block_height: Option<u32>,
 }
 
 /// Which of a node's two pre-signed spends took it on-chain. The cpfp one is
@@ -126,6 +131,7 @@ pub enum ExitRefundState {
         tx: Transaction,
         vout: u32,
         value: u64,
+        block_height: Option<u32>,
     },
     /// Spent by a confirmed transaction: the sweep landed.
     Swept,
@@ -1635,6 +1641,7 @@ mod tests {
                     .map(|node_id| ConfirmedExitNode {
                         node_id: node_id.clone(),
                         confirmed_by: ExitNodeConfirmation::Cpfp,
+                        block_height: None,
                     })
                     .collect(),
                 refunds: refunds

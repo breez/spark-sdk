@@ -65,7 +65,7 @@ class UnilateralExit {
         when (val verdict = checked.verdict) {
             is UnilateralExitVerdict.Valid -> {
                 for (tx in exit.transactions) {
-                    if (tx.dependenciesMet && tx.status != ConfirmationStatus.CONFIRMED) {
+                    if (tx.dependenciesMet && tx.status !is ConfirmationStatus.Confirmed) {
                         // Also wait out csvTimelockBlocks before broadcasting.
                         // Log.v("Breez", "ready to broadcast: ${tx.txid}")
                     }

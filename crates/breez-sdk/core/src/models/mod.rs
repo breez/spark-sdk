@@ -2853,8 +2853,13 @@ pub enum UnilateralExitTxKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ConfirmationStatus {
-    /// This transaction is confirmed in a block. It needs no action.
-    Confirmed,
+    /// This transaction is confirmed in a block, at `block_height` where the
+    /// chain service reported one. It needs no action.
+    ///
+    /// A relative `csv_timelock_blocks` counts from the height of the
+    /// transaction it spends, so this is what tells you when a child of this one
+    /// can go out, without fetching it again.
+    Confirmed { block_height: Option<u32> },
     /// This transaction is not yet confirmed. Mempool state is not consulted.
     Unconfirmed,
     /// The on-chain status could not be determined (the chain service errored).
@@ -2951,6 +2956,9 @@ pub struct ExitChainState {
 pub struct ConfirmedExitNode {
     pub node_id: String,
     pub confirmed_by: ExitNodeConfirmation,
+    /// The block it is in, where that is known. Unset for a node put in a block
+    /// by a descendant's confirmation rather than read directly.
+    pub block_height: Option<u32>,
 }
 
 /// Which of a node's two pre-signed spends took it on-chain.
@@ -2982,6 +2990,7 @@ pub enum ExitRefundState {
         tx_hex: String,
         vout: u32,
         value_sat: u64,
+        block_height: Option<u32>,
     },
     /// Spent by a confirmed transaction: the sweep landed.
     Swept,

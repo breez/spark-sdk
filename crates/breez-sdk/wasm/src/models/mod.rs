@@ -870,7 +870,7 @@ pub enum UnilateralExitTxKind {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConfirmationStatus)]
 pub enum ConfirmationStatus {
-    Confirmed,
+    Confirmed { block_height: Option<u32> },
     Unconfirmed,
     Unverified,
 }
@@ -921,6 +921,7 @@ pub struct ExitChainState {
 pub struct ConfirmedExitNode {
     pub node_id: String,
     pub confirmed_by: ExitNodeConfirmation,
+    pub block_height: Option<u32>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ExitNodeConfirmation)]
@@ -941,6 +942,7 @@ pub enum ExitRefundState {
         tx_hex: String,
         vout: u32,
         value_sat: u64,
+        block_height: Option<u32>,
     },
     Swept,
 }
