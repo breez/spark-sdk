@@ -285,7 +285,7 @@ public static class AdvancedCommands
             Console.WriteLine(
                 $"  [{i}] {tx.kind} status={tx.status} txid={tx.txid}{after}{csv}");
 
-            if (tx.status is ConfirmationStatus.Confirmed)
+            if (tx.status is ExitTransactionStatus.Confirmed)
             {
                 Console.WriteLine("      (already confirmed, nothing to broadcast)");
                 continue;

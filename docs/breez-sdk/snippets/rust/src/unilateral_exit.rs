@@ -65,9 +65,7 @@ async fn check_exit(sdk: &BreezSdk, stored: UnilateralExitResponse) -> Result<()
     match checked.verdict {
         UnilateralExitVerdict::Valid => {
             for tx in &exit.transactions {
-                let confirmed = matches!(tx.status, ConfirmationStatus::Confirmed { .. });
-                if tx.dependencies_met && !confirmed {
-                    // Also wait out csv_timelock_blocks before broadcasting.
+                if matches!(tx.status, ExitTransactionStatus::Ready) {
                     println!("ready to broadcast: {}", tx.txid);
                 }
             }

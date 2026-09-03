@@ -246,7 +246,7 @@ fun printExitTransactions(response: UnilateralExitResponse) {
         }
         val csv = tx.csvTimelockBlocks?.let { ", csv $it blocks" } ?: ""
         println("  [$i] ${tx.kind} status=${tx.status} txid=${tx.txid}$after$csv")
-        if (tx.status is ConfirmationStatus.Confirmed) {
+        if (tx.status is ExitTransactionStatus.Confirmed) {
             println("      (already confirmed, nothing to broadcast)")
             continue
         }
