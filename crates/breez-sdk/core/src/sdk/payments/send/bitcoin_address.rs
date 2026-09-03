@@ -238,10 +238,11 @@ fn affordable_speed(
         OnchainConfirmationSpeed::Slow => &[OnchainConfirmationSpeed::Slow],
     };
 
-    for (stepped_down, candidate) in candidates.iter().enumerate() {
+    for (index, candidate) in candidates.iter().enumerate() {
         let fee_sats = fee_for_speed(refreshed, candidate);
         if fee_sats <= budget_sats {
-            if stepped_down > 0 {
+            let stepped_down = index > 0;
+            if stepped_down {
                 info!(
                     "Onchain fee rose past the {budget_sats} sats quoted for {selected:?}, \
                      withdrawing at {candidate:?} for {fee_sats} sats instead"

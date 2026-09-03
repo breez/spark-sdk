@@ -36,7 +36,7 @@ If the invoice also contains a Spark address, the payment can be sent directly v
 
 For Bitcoin addresses, the amount must be set in the request. The prepare response includes fee quotes for three payment speeds: Slow, Medium, and Fast.
 
-The quote's {{#name is_estimate}} flag is set when your bitcoin balance is zero and a token conversion will fund the payment, which happens automatically when [Stable Balance](./stable_balance.md) is active. With no bitcoin to price the withdrawal against, the fees shown are derived from current on-chain rates and the real ones may differ. They are an upper bound: the SDK fetches a real quote once the conversion completes, and fails rather than spending more than it estimated. Present this as an estimate if you show it.
+The quote's {{#name is_estimate}} flag is set when your bitcoin balance is zero and a token conversion will fund the payment, which happens automatically when [Stable Balance](./stable_balance.md) is active. The fees shown are then derived from current on-chain rates rather than quoted by the provider, so the real ones may differ. They are an upper bound: the SDK fetches a real quote once the conversion completes, and fails rather than spending more than it estimated. Present this as an estimate if you show it.
 
 Fee quotes are short lived. If one is close to expiry by the time you send, the SDK fetches a fresh quote for you. It will not spend more than the payment allows, so a fee that rises beyond that fails the send and asks you to prepare again.
 
