@@ -309,9 +309,6 @@ struct ExitChainWalk {
     nodes: HashMap<TreeNodeId, NodeState>,
     refunds: HashMap<TreeNodeId, RefundState>,
     stopped: HashSet<TreeNodeId>,
-    /// Confirmed cpfp nodes whose CPFP change is still to be resolved. Finding it
-    /// needs the funding script, so it is left to the caller that holds one.
-    needs_change: HashSet<TreeNodeId>,
     unverified: HashSet<TreeNodeId>,
     unverifiable_confirmed: HashSet<TreeNodeId>,
     pending: Vec<ChainQuery>,
@@ -422,16 +419,7 @@ pub fn scan_funding(supplied: &[CpfpInput], observed: &[Observation]) -> Funding
 
 /// Restores the walk's own reading from an [`ExitChainState`] resolved earlier,
 /// so a build needs no chain of its own for the tree.
-///
-/// `needs_change` is derived rather than carried: the node whose CPFP change
-/// funds what comes next is the deepest one on the branch confirmed via its cpfp
-/// spend. A branch that stopped, or whose leaf went out directly, drives nothing
-/// more and needs none.
-fn restore_exit_chain_walk(
-    state: &ExitChainState,
-    node_map: &HashMap<TreeNodeId, TreeNode>,
-    leaf_ids: &[TreeNodeId],
-) -> ExitChainWalk {
+fn restore_exit_chain_walk(state: &ExitChainState, leaf_ids: &[TreeNodeId]) -> ExitChainWalk {
     let confirmed: HashMap<&TreeNodeId, ExitNodeConfirmation> = state
         .nodes
         .iter()
@@ -454,30 +442,14 @@ fn restore_exit_chain_walk(
 
     let stopped: HashSet<TreeNodeId> = state.stopped_leaves.iter().cloned().collect();
 
+    // A leaf taken on-chain by its direct spend is refunded by the self-fee
+    // direct refund, which pays its own fee.
     let mut refunds: HashMap<TreeNodeId, RefundState> = HashMap::new();
-    let mut needs_change: HashSet<TreeNodeId> = HashSet::new();
     for leaf_id in leaf_ids {
-        if stopped.contains(leaf_id) {
-            continue;
-        }
-        // A leaf taken on-chain by its direct spend is refunded by the self-fee
-        // direct refund, which pays no child and so needs no change.
-        if confirmed.get(leaf_id) == Some(&ExitNodeConfirmation::Direct) {
-            refunds.insert(leaf_id.clone(), RefundState::DriveDirect);
-            continue;
-        }
-        let Some(leaf) = node_map.get(leaf_id) else {
-            continue;
-        };
-        let Ok(chain) = walk_unilateral_exit_chain(node_map, leaf) else {
-            continue;
-        };
-        if let Some(deepest) = chain
-            .iter()
-            .rev()
-            .find(|node| confirmed.get(&node.id) == Some(&ExitNodeConfirmation::Cpfp))
+        if !stopped.contains(leaf_id)
+            && confirmed.get(leaf_id) == Some(&ExitNodeConfirmation::Direct)
         {
-            needs_change.insert(deepest.id.clone());
+            refunds.insert(leaf_id.clone(), RefundState::DriveDirect);
         }
     }
 
@@ -501,7 +473,6 @@ fn restore_exit_chain_walk(
         nodes,
         refunds,
         stopped,
-        needs_change,
         unverified: state.unverified_nodes.iter().cloned().collect(),
         unverifiable_confirmed: state.unverifiable_confirmed_nodes.iter().cloned().collect(),
         pending: Vec::new(),
@@ -620,7 +591,6 @@ fn walk_exit_chain(
         nodes: HashMap::new(),
         refunds: HashMap::new(),
         stopped: HashSet::new(),
-        needs_change: HashSet::new(),
         unverified: HashSet::new(),
         unverifiable_confirmed: HashSet::new(),
         pending: Vec::new(),
@@ -634,7 +604,6 @@ fn walk_exit_chain(
             &mut walk.nodes,
             &mut walk.refunds,
             &mut walk.stopped,
-            &mut walk.needs_change,
             &mut walk.unverified,
             &mut walk.unverifiable_confirmed,
             &mut walk.pending,
@@ -675,11 +644,10 @@ fn interpret_chain(
         nodes,
         refunds,
         stopped,
-        needs_change: _,
         mut unverified,
         unverifiable_confirmed,
         pending: _,
-    } = restore_exit_chain_walk(state, node_map, &leaf_ids);
+    } = restore_exit_chain_walk(state, &leaf_ids);
 
     flag_unverifiable_confirmation_branches(
         node_map,
@@ -747,8 +715,6 @@ fn walk_branch(
     nodes: &mut HashMap<TreeNodeId, NodeState>,
     refunds: &mut HashMap<TreeNodeId, RefundState>,
     stopped: &mut HashSet<TreeNodeId>,
-    // Confirmed cpfp nodes whose CPFP change is resolved afterwards.
-    needs_change: &mut HashSet<TreeNodeId>,
     unverified: &mut HashSet<TreeNodeId>,
     // Confirmed nodes whose on-chain spend `spent_funding` can't see (here: the
     // operator-OnChain fallback, when the chain lookup was unavailable).
@@ -770,7 +736,6 @@ fn walk_branch(
 
     // Confirmed parent's node_tx txid; `None` at the root (spends the deposit).
     let mut prev_confirmed_txid: Option<Txid> = None;
-    let mut prev_confirmed_id: Option<TreeNodeId> = None;
     for node in &chain_nodes {
         let is_leaf = &node.id == leaf_id;
         let live_outpoint = match prev_confirmed_txid {
@@ -792,9 +757,6 @@ fn walk_branch(
             // its on-chain CPFP change.
             ChainResult::Spend(None) => {
                 trace!(%leaf_id, node = %node.id, "walk: frontier reached (output unspent), driving fresh");
-                if let Some(id) = prev_confirmed_id {
-                    needs_change.insert(id);
-                }
                 return;
             }
             ChainResult::Unavailable => {
@@ -811,18 +773,13 @@ fn walk_branch(
                     nodes.insert(node.id.clone(), NodeState::ConfirmedCpfp);
                     unverifiable_confirmed.insert(node.id.clone());
                     if is_leaf {
-                        needs_change.insert(node.id.clone());
                         return;
                     }
                     prev_confirmed_txid = Some(node.node_tx.compute_txid());
-                    prev_confirmed_id = Some(node.id.clone());
                     continue;
                 }
                 trace!(%leaf_id, node = %node.id, "walk: lookup unavailable, node unverified");
                 unverified.insert(node.id.clone());
-                if let Some(id) = prev_confirmed_id {
-                    needs_change.insert(id);
-                }
                 return;
             }
             _ => return,
@@ -835,20 +792,14 @@ fn walk_branch(
             // the child is (re)built.
             if !info.confirmed {
                 trace!(%leaf_id, node = %node.id, "walk: node_tx in mempool (unconfirmed), frontier");
-                if let Some(id) = prev_confirmed_id {
-                    needs_change.insert(id);
-                }
                 return;
             }
             trace!(%leaf_id, node = %node.id, is_leaf, "walk: confirmed via cpfp node_tx");
             nodes.insert(node.id.clone(), NodeState::ConfirmedCpfp);
             if is_leaf {
-                // The refund's CPFP child is funded from this leaf's own change.
-                needs_change.insert(node.id.clone());
                 return;
             }
             prev_confirmed_txid = Some(node_txid);
-            prev_confirmed_id = Some(node.id.clone());
         } else if is_leaf && direct_txid == Some(info.spender_txid) {
             // A leaf is terminal, so its own direct spend is recoverable via the
             // direct refund, if held.
