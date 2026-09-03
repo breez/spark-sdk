@@ -55,7 +55,7 @@ The quote returns a {{#name PrepareUnilateralExitResponse}}. Its fields tell you
 
 So you do not have to guess how much to send or how many UTXOs to prepare: the quote tells you both.
 
-Preparing also reads the chain, and {{#name exit_chain_state}} carries back what it found: which steps of this exit are already on-chain. Treat it as opaque and pass the whole {{#name PrepareUnilateralExitResponse}} to {{#name unilateral_exit}} unchanged, so the build covers only the steps still left.
+Preparing also reads the chain, and {{#name exit_chain_state}} carries back what it found: which nodes are already on-chain, which refunds landed, and which of those have been swept. Pass the whole {{#name PrepareUnilateralExitResponse}} to {{#name unilateral_exit}} unchanged, so the build covers only the steps still left. You can read it yourself to show how far an exit has got.
 
 Under {{#enum ExitLeafSelection::Auto}} a leaf is kept when its value exceeds its own exit cost, measured per leaf. That per-leaf measure does not include the shared {{#name fanout_fee_sat}}, which the single-UTXO path pays once for the whole exit. So when you fund a multi-leaf exit from a **single** UTXO, the fan-out fee can push the total above what you recover, even though every leaf looked profitable on its own.
 
@@ -74,7 +74,7 @@ If nothing is selected (under {{#enum ExitLeafSelection::Auto}} no leaf is worth
 
 Gather funding that meets the quote, then call {{#name unilateral_exit}} with the quote, your real {{#name CpfpInput}} funding UTXOs, and a signer. It returns a {{#name UnilateralExitResponse}} with the actual {{#name total_fee_sat}} and the full transaction set.
 
-If the funding is below what the exit needs it returns {{#enum SdkError::InsufficientCpfpFunds}}. If one of the funding UTXOs has already been spent (for example by an earlier attempt) it returns {{#enum SdkError::FundingUtxoConflict}}, which names the conflicting outpoint so you can supply fresh funding.
+If the funding is below what the exit needs it returns {{#enum SdkError::InsufficientCpfpFunds}}. A funding UTXO an earlier attempt already spent is not an error: it is followed to what that spend produced at the same script, so passing back the outpoint you were given still funds the exit. Only if that came to nothing is the exit short, and it says how much it needs.
 
 A very thin-margin exit can fail even when the funding is sufficient: if the recoverable value net of fees would leave the swept output below the destination address's dust limit, the sweep cannot be built and the exit fails. Exit higher-value leaves with {{#enum ExitLeafSelection::Specific}}, lower the {{#name fee_rate_sat_per_vbyte}}, or wait for a cheaper fee rate.
 
@@ -178,7 +178,6 @@ An out of date value can restore leaves that have since been spent, so the balan
 | {{#name total_fee_sat}} is close to or above {{#name recoverable_value_sat}} | The shared fan-out fee makes a single-UTXO multi-leaf exit uneconomical | Fund one UTXO per branch ({{#name per_branch_funding}}) to drop the fan-out fee, exit fewer leaves with {{#enum ExitLeafSelection::Specific}}, or wait for a lower fee rate |
 | The build/sweep fails with a "below the dust limit" error | The recoverable value net of fees is below the destination's dust limit | Exit higher-value leaves with {{#enum ExitLeafSelection::Specific}}, lower the {{#name fee_rate_sat_per_vbyte}}, or wait for a cheaper fee rate |
 | {{#enum SdkError::InsufficientCpfpFunds}} | Funding is below what the exit needs | Fund at least {{#name single_utxo_funding_sat}}, or the amount in each {{#name PerBranchFunding}} |
-| {{#enum SdkError::FundingUtxoConflict}} | A funding UTXO was already spent (e.g. a previous attempt) | Supply fresh, unspent funding; the error names the conflicting outpoint |
 | "min relay fee not met" when broadcasting | The package fee is too low for the network | Increase {{#name fee_rate_sat_per_vbyte}}, rebuild, and re-broadcast (RBF) |
 | "mandatory-script-verify-flag-failed" | A CPFP child was not signed correctly | Ensure your {{#name CpfpSigner}} signs every non-finalized input |
 | "non-BIP68-final" | A relative timelock has not matured | Wait the required {{#name csv_timelock_blocks}} after the parent confirms |

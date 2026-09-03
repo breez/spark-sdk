@@ -1269,12 +1269,33 @@ async fn test_importing_another_wallets_state_takes_nothing(
     Ok(())
 }
 
-/// Re-preparing at the same fee rate after a fan-out confirms adopts that
-/// fan-out in place (same txid, `Confirmed`, no child) rather than rebuilding
-/// it, and both leaves remain exitable through its outputs.
+/// Whether any CPFP child of `exit` spends an output of `txid`, which is how a
+/// resume shows it is funded from what an earlier run produced.
+fn funded_from(exit: &UnilateralExitResponse, txid: &str) -> Result<bool> {
+    let txid = Txid::from_str(txid)?;
+    for entry in &exit.transactions {
+        let Some(hex) = entry.cpfp_tx_hex.as_ref() else {
+            continue;
+        };
+        if decode_tx(hex)?
+            .input
+            .iter()
+            .any(|i| i.previous_output.txid == txid)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Re-preparing at the same fee rate after a fan-out confirms funds the branches
+/// from that fan-out's outputs, found by following the outpoint the caller was
+/// given. No second fan-out is built, and both leaves remain exitable.
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
-async fn test_confirmed_fan_out_is_adopted(#[case] backend: SignerBackend) -> Result<()> {
+async fn test_a_confirmed_fan_outs_outputs_fund_the_resume(
+    #[case] backend: SignerBackend,
+) -> Result<()> {
     let sdk = new_local_sdk(backend).await?;
     deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
     deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
@@ -1325,25 +1346,18 @@ async fn test_confirmed_fan_out_is_adopted(#[case] backend: SignerBackend) -> Re
             signer_for(&key)?,
         )
         .await?;
-    let adopted = second
-        .transactions
-        .iter()
-        .find(|t| matches!(t.kind, UnilateralExitTxKind::FanOut))
-        .expect("the confirmed fan-out must still appear");
-    assert_eq!(
-        adopted.txid, fan_out_txid,
-        "adopts the confirmed fan-out, not a fresh one"
-    );
-    assert!(matches!(adopted.status, ConfirmationStatus::Confirmed));
     assert!(
-        adopted.cpfp_tx_hex.is_none(),
-        "a fan-out carries no CPFP child"
+        !second
+            .transactions
+            .iter()
+            .any(|t| matches!(t.kind, UnilateralExitTxKind::FanOut)),
+        "one fan-out is enough: its outputs are one per branch already"
     );
-    assert_eq!(
-        second.leaves.len(),
-        2,
-        "both leaves remain exitable through the adopted fan-out"
+    assert!(
+        funded_from(&second, &fan_out_txid)?,
+        "the branches are funded from the confirmed fan-out's outputs"
     );
+    assert_eq!(second.leaves.len(), 2, "both leaves remain exitable");
     Ok(())
 }
 
@@ -1685,10 +1699,10 @@ async fn test_two_leaves_subset_assignment_no_fanout(#[case] backend: SignerBack
 }
 
 /// A generously-funded fan-out carries per-branch headroom, so re-preparing at a
-/// higher rate re-adopts the confirmed fan-out (no re-funding needed).
+/// higher rate is still funded from its outputs, with no re-funding needed.
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
-async fn test_higher_rate_reuses_fan_out_within_headroom(
+async fn test_higher_rate_is_funded_from_the_fan_out_within_headroom(
     #[case] backend: SignerBackend,
 ) -> Result<()> {
     let sdk = new_local_sdk(backend).await?;
@@ -1740,13 +1754,17 @@ async fn test_higher_rate_reuses_fan_out_within_headroom(
             signer_for(&key)?,
         )
         .await?;
-    let fan = second
-        .transactions
-        .iter()
-        .find(|t| matches!(t.kind, UnilateralExitTxKind::FanOut))
-        .expect("the confirmed fan-out is reused");
-    assert_eq!(fan.txid, fan_out_txid, "adopts the same confirmed fan-out");
-    assert!(matches!(fan.status, ConfirmationStatus::Confirmed));
+    assert!(
+        !second
+            .transactions
+            .iter()
+            .any(|t| matches!(t.kind, UnilateralExitTxKind::FanOut)),
+        "the headroom is in the outputs already there; no second fan-out"
+    );
+    assert!(
+        funded_from(&second, &fan_out_txid)?,
+        "the higher rate is paid out of the confirmed fan-out's outputs"
+    );
     assert_eq!(second.leaves.len(), 2);
     Ok(())
 }
