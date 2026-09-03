@@ -55,6 +55,8 @@ The quote returns a {{#name PrepareUnilateralExitResponse}}. Its fields tell you
 
 So you do not have to guess how much to send or how many UTXOs to prepare: the quote tells you both.
 
+Preparing also reads the chain, and {{#name exit_chain_state}} carries back what it found: which steps of this exit are already on-chain. Treat it as opaque and pass the whole {{#name PrepareUnilateralExitResponse}} to {{#name unilateral_exit}} unchanged, so the build covers only the steps still left.
+
 Under {{#enum ExitLeafSelection::Auto}} a leaf is kept when its value exceeds its own exit cost, measured per leaf. That per-leaf measure does not include the shared {{#name fanout_fee_sat}}, which the single-UTXO path pays once for the whole exit. So when you fund a multi-leaf exit from a **single** UTXO, the fan-out fee can push the total above what you recover, even though every leaf looked profitable on its own.
 
 Two rules keep an exit from ever costing more than it returns:

@@ -2918,6 +2918,71 @@ pub struct PerBranchFunding {
     pub funding_sat: u64,
 }
 
+/// What the chain has already done to an exit's leaves, as
+/// `prepare_unilateral_exit` found it. Pass it back to `unilateral_exit`, which
+/// builds only the steps it does not cover.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ExitChainState {
+    /// Nodes whose transaction is on-chain.
+    pub confirmed_nodes: Vec<ConfirmedExitNode>,
+    /// Leaves whose refund reached the chain.
+    pub refunds: Vec<ExitRefund>,
+    /// Leaves whose lineage was taken on-chain by a transaction the exit cannot
+    /// continue from. Nothing further can be driven for them.
+    pub stopped_leaf_ids: Vec<String>,
+    /// Nodes a chain lookup could not read, so their state is unknown rather
+    /// than absent. Transactions depending on them come back
+    /// `ConfirmationStatus::Unverified`.
+    pub unverified_node_ids: Vec<String>,
+    /// Nodes taken to be on-chain on the operators' word, the chain itself being
+    /// unreadable. Their spend is invisible, so anything built over them risks
+    /// double-spending an output that is already gone.
+    pub unverifiable_confirmed_node_ids: Vec<String>,
+}
+
+/// A node of the exit tree that is already on-chain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ConfirmedExitNode {
+    pub node_id: String,
+    pub confirmed_by: ExitNodeConfirmation,
+}
+
+/// Which of a node's two pre-signed spends took it on-chain.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ExitNodeConfirmation {
+    /// The CPFP transaction, whose fee a child paid.
+    Cpfp,
+    /// The direct transaction, which pays its own fee. A leaf that went out this
+    /// way is refunded by its direct refund transaction.
+    Direct,
+}
+
+/// A leaf's refund as the chain shows it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ExitRefund {
+    pub leaf_id: String,
+    pub state: ExitRefundState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ExitRefundState {
+    /// On-chain with its output still there, which is what the sweep pulls from.
+    /// A sweep sitting unconfirmed in the mempool leaves the refund here, so
+    /// that sweep is rebuilt rather than dropped.
+    OnChain {
+        tx_hex: String,
+        vout: u32,
+        value_sat: u64,
+    },
+    /// Spent by a confirmed transaction: the sweep landed.
+    Swept,
+}
+
 /// Response from `prepare_unilateral_exit`: which leaves would exit, the exact
 /// fee at the requested rate, and how much to fund.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2943,6 +3008,10 @@ pub struct PrepareUnilateralExitResponse {
     /// The fee rate this quote was computed at, in sat/vByte.
     pub fee_rate_sat_per_vbyte: u64,
     pub destination: String,
+    /// What the chain has already done to these leaves, read while preparing.
+    /// Pass it back to `unilateral_exit`, which builds only the steps it does
+    /// not already cover.
+    pub exit_chain_state: ExitChainState,
 }
 
 /// Request for `unilateral_exit`: a `prepare_unilateral_exit` quote plus the

@@ -67,7 +67,7 @@ pub use spark::{
     },
 };
 pub use unilateral_exit::*;
-pub use wallet::{SendPackagePreparation, SparkWallet};
+pub use wallet::{SendPackagePreparation, SparkWallet, UnilateralExitQuoteWithTree};
 pub use wallet_builder::WalletBuilder;
 
 #[cfg(feature = "test-utils")]
