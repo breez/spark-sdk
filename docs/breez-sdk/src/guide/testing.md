@@ -31,7 +31,7 @@ The Regtest Network doesn't have a developed Lightning Network, so test Lightnin
 The stablecoin assets are only available on Mainnet:
 
 - **USDB** is the Spark-native stablecoin behind [Stable Balance](./stable_balance.md).
-- **USDC** and **USDT** are cross-chain assets. Use [Send USDC/USDT](./cross_chain.md) to pay recipients on their native chains. The cross-chain providers operate against live external networks and have no testnet equivalent.
+- **USDC** and **USDT** are cross-chain assets. Use [USDC/USDT](./cross_chain.md) to pay recipients on their native chains or receive from them. The cross-chain providers operate against live external networks and have no testnet equivalent.
 
 Test these integrations on Mainnet with small amounts.
 

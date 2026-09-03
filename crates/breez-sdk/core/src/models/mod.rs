@@ -847,15 +847,15 @@ pub struct Config {
 pub struct CrossChainConfig {
     /// Default maximum slippage in basis points used when
     /// [`PaymentRequest::CrossChain::max_slippage_bps`] is not set on the
-    /// prepare request. Must be in `10..=500`. Falls back to 100 bps (1%)
-    /// when this field is `None`.
+    /// prepare request. Must be in 10 to 500. Falls back to 100 bps (1%)
+    /// when this field is unset.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub default_slippage_bps: Option<u32>,
     /// Default target-overpay pad in basis points applied to the user's
     /// destination amount on `FeesExcluded` conversion sends. Bumps the
     /// target upward before quoting so the recipient lands at or above the
-    /// requested amount despite provider slippage. Must be in `0..=500`.
-    /// Falls back to 15 bps when `None`.
+    /// requested amount despite provider slippage. Must be in 0 to 500.
+    /// Falls back to 15 bps when unset.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub default_target_overpay_bps: Option<u32>,
 }
@@ -1612,6 +1612,38 @@ pub enum ReceivePaymentMethod {
         /// If absent, the connected wallet's identity public key is used.
         receiver_identity_public_key: Option<String>,
     },
+    CrossChain {
+        /// The selected cross-chain route in the receive direction.
+        route: crate::cross_chain::CrossChainRoutePair,
+        /// The amount, in the source asset's base units (`route.decimals`).
+        /// USD-stable sources are at parity, so `1 USD = 10^route.decimals`
+        /// (e.g. `1_000_000` for 6-decimal USDC/USDT, `10^18` for 18-decimal
+        /// BSC USDC).
+        ///
+        /// - `FeesExcluded` (default): what the receiver ends up with, sized
+        ///   as if `amount` source units were converted to the Spark-side
+        ///   destination at parity (USDB) or the live BTC/USD rate (Bitcoin).
+        /// - `FeesIncluded`: what the sender deposits. The receiver ends up
+        ///   with that amount minus provider fees.
+        amount: u128,
+        /// Spark-side asset the receiver wants delivered. When absent, the
+        /// SDK auto-selects: the wallet's active stable-balance token if
+        /// the route supports it, otherwise Bitcoin (sats). When set, the
+        /// value must appear in the route's `accepted_assets`.
+        destination: Option<crate::cross_chain::SparkAsset>,
+        /// How `amount` should be interpreted. When absent, defaults to
+        /// `FeesExcluded`.
+        fee_mode: Option<crate::cross_chain::CrossChainFeeMode>,
+        /// Maximum slippage in basis points. When absent, the SDK default
+        /// (100 bps) is used.
+        max_slippage_bps: Option<u32>,
+        /// Per-request override for the overpay buffer applied to the
+        /// sender's deposit when `fee_mode == FeesExcluded`. Range 0 to 500.
+        /// When absent, falls back to `CrossChainConfig::default_target_overpay_bps`
+        /// then the built-in default (15 bps). Ignored when `fee_mode`
+        /// is `FeesIncluded`.
+        target_overpay_bps: Option<u32>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1718,6 +1750,8 @@ pub struct ReceivePaymentResponse {
     /// Fee to pay to receive the payment
     /// Denominated in sats or token base units
     pub fee: u128,
+    /// Optional information populated only for cross-chain receives.
+    pub cross_chain_info: Option<crate::cross_chain::CrossChainReceiveInfo>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -1907,15 +1941,15 @@ pub enum PaymentRequest {
         address: String,
         route: CrossChainRoutePair,
         /// Maximum slippage tolerance in basis points (1/100 of a percent)
-        /// for the cross-chain quote. Must be in `10..=500`. Falls back to
-        /// [`Config::default_slippage_bps`] when `None`, which itself
-        /// defaults to 100 bps (1%) when unset.
+        /// for the cross-chain quote. Must be in 10 to 500. Falls back to
+        /// [`Config::default_slippage_bps`] when unset, which itself
+        /// defaults to 100 bps (1%).
         max_slippage_bps: Option<u32>,
         /// Target-overpay pad in basis points applied on `FeesExcluded`
         /// conversion sends. Inflates the destination target before quoting
         /// so the recipient lands at or above the user's requested amount
-        /// despite provider slippage. Must be in `0..=500`. Falls back to
-        /// [`CrossChainConfig::default_target_overpay_bps`] when `None`,
+        /// despite provider slippage. Must be in 0 to 500. Falls back to
+        /// [`CrossChainConfig::default_target_overpay_bps`] when unset,
         /// which itself defaults to 15 bps.
         target_overpay_bps: Option<u32>,
     },

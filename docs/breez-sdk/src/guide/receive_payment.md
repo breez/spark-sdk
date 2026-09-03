@@ -3,7 +3,7 @@
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.receive_payment">API docs</a>
 </h1>
 
-Once the SDK is initialized, you can directly begin receiving payments. The SDK currently supports three methods of receiving: Lightning, Bitcoin and Spark.
+Once the SDK is initialized, you can directly begin receiving payments. The SDK supports receiving via Lightning, Bitcoin, Spark, and USDC/USDT into Spark from a supported external chain.
 
 ## Lightning
 
@@ -55,6 +55,33 @@ Spark invoices are single-use and may impose restrictions on the payment, such a
 
 {{#tabs receive_payment:receive-payment-spark-invoice}}
 
+<h2 id="usdc-usdt">
+    <a class="header" href="#usdc-usdt">USDC/USDT</a>
+</h2>
+
+Cross-chain receive is supported only via the Orchestra provider. Receive USDC or USDT from a sender on one of several supported chains: Ethereum-family chains (Arbitrum, Base, and similar EVM networks), Solana, and Tron. The receiver lands either BTC sats or [USDB](./stable_balance.md) (a 6-decimal USD-pegged token on Spark) on the Spark side. This feature must be enabled in [the SDK configuration](./config.md#usdc-usdt) before using. See [USDC/USDT](./cross_chain.md) for provider details and the status lifecycle.
+
+Call {{#name get_cross_chain_routes}} with {{#enum CrossChainRouteFilter::Receive}} to discover supported source assets. Each {{#name CrossChainRoutePair}} names the provider, source chain and asset, decimals, optional token contract address, and the Spark-side destinations the route lands ({{#name CrossChainRoutePair.accepted_assets}}).
+
+{{#tabs cross_chain:cross-chain-get-receive-routes}}
+
+Build {{#enum ReceivePaymentMethod::CrossChain}} with the chosen route and an `amount`.
+
+The {{#name amount}} on {{#name ReceivePaymentMethod::CrossChain}} is in the source asset's base units, per the route's {{#name CrossChainRoutePair.decimals}}. USD-stable sources sit at USD parity, so `1_000_000` is 1 USDC (6 decimals), about $1.
+
+{{#name fee_mode}} controls what the amount means:
+
+- {{#enum CrossChainFeeMode::FeesExcluded}} (default): `amount` is the receiver's target on Spark. The SDK pads the sender's deposit to cover provider fees plus an overpay buffer.
+- {{#enum CrossChainFeeMode::FeesIncluded}}: `amount` is the deposit the sender pays. The receiver lands `amount - fees`.
+
+{{#name destination}} picks which Spark-side asset the receiver wants delivered. Left unset, the SDK auto-picks the wallet's active stable-balance token if the route supports it, otherwise BTC (converted from the USD amount via the live BTC/USD rate).
+
+{{#name max_slippage_bps}} (10 to 500) bounds the price movement tolerated between quote and delivery. {{#name target_overpay_bps}} (0 to 500) sets the FeesExcluded overpay buffer. Left unset, the SDK defaults apply.
+
+The {{#name payment_request}} field carries an EIP-681 URI for EVM routes and the bare deposit address for Solana and Tron. The {{#name cross_chain_info}} block surfaces the bare deposit address, deposit amount, expected receive amount, destination denomination, and quote {{#name expires_at}}. The receiver pays no fee; the sender's deposit covers it.
+
+{{#tabs cross_chain:cross-chain-receive}}
+
 ## Event Flows
 
 Once a receive payment is initiated, you can follow and react to the different payment events using the guide below for each payment method. See [listening to events](/guide/events.md) for how to subscribe to events. 
@@ -86,3 +113,12 @@ The following events are emitted in order during the deposit lifecycle. See [Lis
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
 | **PaymentPending**   | The Spark transfer was detected and the claim process will start. For Spark HTLC payments, the claim will only start once the HTLC is claimed. For more details see [Spark HTLC payments](htlcs.md). | Show payment as pending.                         |
 | **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete.                                                                                                                                           | Show the payment as complete and call {{#name get_info}} to read the updated balance. The SDK refreshes the cached balance before emitting this event. See [fetching the balance](/guide/get_info.md). |
+
+<h4 id="usdc-usdt-1">
+    <a class="header" href="#usdc-usdt-1">USDC/USDT</a>
+</h4>
+
+| Event                | Description                                                                                          | UX Suggestion                                    |
+| -------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| **PaymentPending**   | The sender's deposit was detected and the inbound Spark transfer claim is in progress.               | Show payment as pending.                         |
+| **PaymentSucceeded** | The inbound Spark transfer is claimed and the payment is complete.                                   | Show the payment as complete and call {{#name get_info}} to read the updated balance. The SDK refreshes the cached balance before emitting this event. See [fetching the balance](/guide/get_info.md). |

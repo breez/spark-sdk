@@ -71,3 +71,57 @@ Future<SendPaymentResponse> sendPaymentCrossChain(
   // ANCHOR_END: cross-chain-send
   return response;
 }
+
+Future<List<CrossChainRoutePair>> getCrossChainReceiveRoutes(BreezSdk sdk) async {
+  // ANCHOR: cross-chain-get-receive-routes
+  List<CrossChainRoutePair> routes = await sdk.getCrossChainRoutes(
+    filter: CrossChainRouteFilter.receive(contractAddress: null),
+  );
+
+  for (var route in routes) {
+    print(
+      "Route via ${route.provider}: ${route.chain}/${route.asset} -> Spark",
+    );
+  }
+  // ANCHOR_END: cross-chain-get-receive-routes
+  return routes;
+}
+
+Future<ReceivePaymentResponse> receivePaymentCrossChain(
+  BreezSdk sdk,
+  CrossChainRoutePair route,
+) async {
+  // ANCHOR: cross-chain-receive
+  // amount is in the route's source-asset base units (USD-stable parity:
+  // 1_000_000 = $1 on 6-decimal routes). See the guide for feeMode,
+  // destination, and the slippage/overpay overrides.
+  final amount = BigInt.from(1000000);
+  SparkAsset? optionalDestination;
+  int? optionalMaxSlippageBps = 100;
+  int? optionalTargetOverpayBps;
+  CrossChainFeeMode? optionalFeeMode;
+
+  final request = ReceivePaymentRequest(
+    paymentMethod: ReceivePaymentMethod.crossChain(
+      route: route,
+      amount: amount,
+      destination: optionalDestination,
+      feeMode: optionalFeeMode,
+      maxSlippageBps: optionalMaxSlippageBps,
+      targetOverpayBps: optionalTargetOverpayBps,
+    ),
+  );
+  final response = await sdk.receivePayment(request: request);
+
+  print("Payment request: ${response.paymentRequest}");
+  final info = response.crossChainInfo;
+  if (info != null) {
+    final denom = info.tokenIdentifier != null ? "USDB" : "BTC";
+    print("Deposit address: ${info.depositAddress}");
+    print("Deposit amount: ${info.depositAmount}");
+    print("Expected received: ${info.expectedReceivedAmount} $denom");
+    print("Expires at: ${info.expiresAt}");
+  }
+  // ANCHOR_END: cross-chain-receive
+  return response;
+}

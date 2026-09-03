@@ -11,8 +11,8 @@ use crate::{
     ConversionOptions, ConversionType, CrossChainRouteFilter, CrossChainRoutePair, FeePolicy,
     SparkInvoiceDetails,
     cross_chain::{
-        DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS, DEFAULT_TARGET_OVERPAY_BPS, MAX_CROSS_CHAIN_SLIPPAGE_BPS,
-        MAX_TARGET_OVERPAY_BPS, MIN_CROSS_CHAIN_SLIPPAGE_BPS, MIN_TARGET_OVERPAY_BPS,
+        DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS, MAX_CROSS_CHAIN_SLIPPAGE_BPS,
+        MIN_CROSS_CHAIN_SLIPPAGE_BPS,
     },
     error::SdkError,
     sdk::BreezSdk,
@@ -198,43 +198,12 @@ pub(in crate::sdk) fn resolve_slippage_bps(
     {
         return Err(SdkError::InvalidInput(format!(
             "max_slippage_bps {bps} must be in \
-             {MIN_CROSS_CHAIN_SLIPPAGE_BPS}..={MAX_CROSS_CHAIN_SLIPPAGE_BPS}",
+             {MIN_CROSS_CHAIN_SLIPPAGE_BPS} to {MAX_CROSS_CHAIN_SLIPPAGE_BPS}",
         )));
     }
     Ok(requested
         .or(config_default)
         .unwrap_or(DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS))
-}
-
-/// Resolves the target-overpay bps to apply on `FeesExcluded` orders.
-///
-/// Same precedence as slippage: caller-supplied value (bounds-checked here),
-/// then the config default, then the built-in default. Config defaults are
-/// validated at SDK startup in `Config::validate`.
-pub(in crate::sdk) fn resolve_target_overpay_bps(
-    requested: Option<u32>,
-    config_default: Option<u32>,
-) -> Result<u32, SdkError> {
-    if let Some(bps) = requested
-        && !(MIN_TARGET_OVERPAY_BPS..=MAX_TARGET_OVERPAY_BPS).contains(&bps)
-    {
-        return Err(SdkError::InvalidInput(format!(
-            "target_overpay_bps {bps} must be in \
-             {MIN_TARGET_OVERPAY_BPS}..={MAX_TARGET_OVERPAY_BPS}",
-        )));
-    }
-    Ok(requested
-        .or(config_default)
-        .unwrap_or(DEFAULT_TARGET_OVERPAY_BPS))
-}
-
-/// Inflates a destination amount by `overpay_bps` so the recipient lands at
-/// or above target despite provider slippage. `overpay_bps == 0` is identity.
-pub(in crate::sdk) fn inflate_target_amount(amount: u128, overpay_bps: u32) -> u128 {
-    if overpay_bps == 0 {
-        return amount;
-    }
-    amount.saturating_add(amount.saturating_mul(u128::from(overpay_bps)) / 10_000)
 }
 
 /// Pads a sats-denominated order for `FeesExcluded` so the recipient lands at
@@ -251,13 +220,13 @@ pub(in crate::sdk) fn resolve_direct_overpay_amount(
     if overpay_bps == 0 || !matches!(fee_policy, FeePolicy::FeesExcluded) {
         return amount;
     }
-    inflate_target_amount(amount, overpay_bps)
+    crate::cross_chain::inflate_target_amount(amount, overpay_bps)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CrossChainProvider, SourceAsset, SourceChain};
+    use crate::{CrossChainProvider, DeliveryMethod, SparkAsset};
     use macros::test_all;
 
     #[cfg(feature = "browser-tests")]
@@ -381,60 +350,6 @@ mod tests {
         ));
     }
 
-    // ---- resolve_target_overpay_bps ----
-
-    #[test_all]
-    fn resolve_overpay_uses_request_when_in_range() {
-        assert_eq!(resolve_target_overpay_bps(Some(50), Some(75)).unwrap(), 50);
-    }
-
-    #[test_all]
-    fn resolve_overpay_falls_back_to_config_when_request_none() {
-        assert_eq!(resolve_target_overpay_bps(None, Some(75)).unwrap(), 75);
-    }
-
-    #[test_all]
-    fn resolve_overpay_falls_back_to_built_in_when_both_none() {
-        assert_eq!(
-            resolve_target_overpay_bps(None, None).unwrap(),
-            DEFAULT_TARGET_OVERPAY_BPS
-        );
-    }
-
-    #[test_all]
-    fn resolve_overpay_accepts_zero_to_opt_out() {
-        assert_eq!(resolve_target_overpay_bps(Some(0), Some(50)).unwrap(), 0);
-    }
-
-    #[test_all]
-    fn resolve_overpay_rejects_above_max() {
-        let too_high = MAX_TARGET_OVERPAY_BPS + 1;
-        assert!(matches!(
-            resolve_target_overpay_bps(Some(too_high), None),
-            Err(SdkError::InvalidInput(_))
-        ));
-    }
-
-    // ---- inflate_target_amount ----
-
-    #[test_all]
-    fn inflate_target_amount_zero_bps_is_identity() {
-        assert_eq!(inflate_target_amount(1_000_000, 0), 1_000_000);
-    }
-
-    #[test_all]
-    fn inflate_target_amount_applies_bps_pad() {
-        // 25 bps on 1_000_000 -> 1_000_000 + 2_500 = 1_002_500.
-        assert_eq!(inflate_target_amount(1_000_000, 25), 1_002_500);
-    }
-
-    #[test_all]
-    fn inflate_target_amount_truncates_sub_unit_pad() {
-        // 25 bps on 100 -> 100 + (100 * 25 / 10_000) = 100 + 0 (integer floor).
-        // Acceptable: pad is sub-unit for tiny amounts.
-        assert_eq!(inflate_target_amount(100, 25), 100);
-    }
-
     #[test_all]
     fn resolve_direct_overpay_pads_only_fees_excluded() {
         // FeesExcluded pads; FeesIncluded and zero-bps are identity.
@@ -463,8 +378,8 @@ mod tests {
             contract_address: contract.map(str::to_string),
             decimals: 6,
             exact_out_eligible: false,
-            supported_sources: vec![SourceAsset::Bitcoin],
-            supported_source_chains: vec![SourceChain::Spark],
+            accepted_assets: vec![SparkAsset::Bitcoin],
+            delivery_methods: vec![DeliveryMethod::Spark],
         }
     }
 

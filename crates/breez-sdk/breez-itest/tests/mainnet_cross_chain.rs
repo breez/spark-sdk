@@ -1,34 +1,92 @@
-//! Mainnet cross-chain send itests (env-gated).
+//! Mainnet cross-chain itests (env-gated).
 //!
-//! Performs a real cross-chain send from the funded test account ("Alice") to a
-//! **deterministic EVM address derived from the test mnemonic**, then verifies
-//! receipt *independently* by reading the recipient's ERC-20 balance over
-//! JSON-RPC. This exercises the fees-excluded / target-overpay guarantee: the
-//! recipient should land at or above the requested target.
+//! Exercises both directions against the funded test account ("Alice") on Spark
+//! and a **deterministic EVM wallet derived from the same test mnemonic** at
+//! `m/44'/60'/0'/0/0`. All tests target **Arbitrum One**, the only chain
+//! offering USD-stable assets on both providers.
 //!
-//! Target chain is **Arbitrum One**, the only chain offering a USD-stable asset
-//! on both providers: Orchestra `USDB→USDC` (exercises the USD-stable
-//! target-overpay path) and Boltz `BTC→USDT`.
+//! ## Send tests (Alice → EVM)
 //!
-//! Funds are **not** swept back (the SDK has no Spark-inbound path from EVM).
-//! They accumulate at the deterministic recipient, recoverable by importing the
-//! mnemonic at `m/44'/60'/0'/0/0`; each run logs the address + balance. Keep the
-//! source-amount overrides below small to bound accumulation.
+//! - `test_cross_chain_01_usdt_send_fees_excluded_evm`: BTC (sats) → USDT.
+//!   Provider is selectable via `MAINNET_TEST_CROSS_CHAIN_SEND_USDT_PROVIDER`
+//!   (`orchestra` default, `boltz` alternative) so the USDT stash keeps
+//!   getting produced when one provider is temporarily down.
+//! - `test_cross_chain_02_orchestra_send_fees_excluded_evm`: USDB → USDC via Orchestra.
 //!
-//! NOTE: the cross-chain `amount` is denominated in the **source** asset, not the
-//! destination: USDB base units for the Orchestra case, **sats** for the Boltz
-//! (BTC source) case. The two are sized via separate env vars accordingly.
+//! Verifies receipt independently by reading the EVM recipient's ERC-20 balance
+//! over JSON-RPC. Both exercise the fees-excluded / target-overpay guarantee.
+//!
+//! ## Receive tests (EVM → Alice)
+//!
+//! Each receive test is paired with a send test so the pool an itest pass
+//! drains gets refilled by its counterpart, keeping Alice's Spark-side
+//! balances roughly conservative across runs:
+//!
+//! - `test_cross_chain_03_orchestra_receive_fees_excluded_evm`: **USDT → BTC
+//!   (sats)**. Alice targets a small USD amount (in USDB base units). The SDK
+//!   converts it to sats via the live BTC/USD rate before sizing the USDT
+//!   deposit. Counters test 01 so the sats Alice spent to build the USDT
+//!   stash come back here. Also exercises the receive branch where the USDB
+//!   rounding margin is NOT applied (BTC destination).
+//! - `test_cross_chain_04_orchestra_receive_fees_excluded_usdb_evm`: **USDC →
+//!   USDB**, fees-excluded. Alice targets a small USD amount. The SDK sizes
+//!   the USDC deposit with the USDB rounding margin so delivered lands at or
+//!   above target. This is the receive branch where the rounding margin IS
+//!   applied.
+//! - `test_cross_chain_05_orchestra_receive_fees_included_evm`: **USDC →
+//!   USDB**. Sweep the EVM wallet's remaining USDC balance back into Alice's
+//!   Spark wallet as USDB. Counters test 02 so the USDB Alice spent to build
+//!   the USDC stash comes back here.
+//!
+//! Receive tests need Arbitrum ETH at the deterministic EVM address to pay gas
+//! for the ERC-20 transfer. The tests read the balance and skip loudly (never
+//! hard-fail) if it's below the threshold. Roadmap: when a second cross-chain
+//! receive provider ships, one of these should switch to that provider so both
+//! providers get exercised in a single run.
+//!
+//! ## Test ordering
+//!
+//! Tests are name-prefixed `01_`…`05_` and run in that order under
+//! `--test-threads=1` (libtest sorts tests alphabetically). Ordering matters:
+//! each send test deposits its destination asset at the EVM recipient, and
+//! the three receive tests then consume those balances. Test 03 uses the USDT
+//! from test 01. Tests 04 and 05 share the USDC pool from test 02: test 04
+//! takes a $1 slice first, then test 05 sweeps whatever's left.
+//!
+//! NOTE: the cross-chain `amount` semantics depend on both the fee mode and
+//! the test direction. See [`ReceivePaymentMethod::CrossChain::amount`] and
+//! [`PaymentRequest::CrossChain::amount`] for the full contract.
 //!
 //! # Required environment variables
-//! - `MAINNET_TEST_MNEMONIC` — mnemonic of the funded test account. Primary gate.
-//! - `BREEZ_API_KEY` — API key the mainnet SDK requires.
+//! - `MAINNET_TEST_MNEMONIC`: mnemonic of the funded test account. Primary gate.
+//! - `BREEZ_API_KEY`: API key the mainnet SDK requires.
 //!
 //! # Optional
-//! - `MAINNET_TEST_TOKEN_ID` — USD-stable source token; defaults to USDB.
-//! - `MAINNET_TEST_CROSS_CHAIN_USDB` — Orchestra source in USDB base units
-//!   (6-decimals); defaults to 1_000_000 (= 1.00 USDB, ~1.00 USDC delivered).
-//! - `MAINNET_TEST_CROSS_CHAIN_SATS` — Boltz source in **sats** (BTC source);
-//!   defaults to 1_600. The recipient lands the fiat-equivalent in USDT.
+//! - `MAINNET_TEST_TOKEN_ID`: USD-stable source token. Defaults to USDB.
+//! - `MAINNET_TEST_CROSS_CHAIN_SEND_USDB`: Orchestra send source in USDB base
+//!   units (6-decimals). Defaults to 2_500_000 (2.50 USDB, ~$2.50 USDC
+//!   delivered). Sized to feed both test 04 (fees-excluded slice) and test
+//!   05 (sweep) off a single pool.
+//! - `MAINNET_TEST_CROSS_CHAIN_SEND_SATS`: BTC → USDT send source in **sats**.
+//!   Defaults to 1_500 (~$1.50 USDT delivered). Sized to leave a bit above
+//!   what the fees-excluded receive test consumes each pass.
+//! - `MAINNET_TEST_CROSS_CHAIN_RECEIVE_USDB_TARGET`: fees-excluded receive
+//!   target in USDB base units (6dp). Applies to tests 03 and 04.
+//!   Defaults to `1_000_000` ($1). For test 03 (BTC destination) the SDK
+//!   converts USD to sats at prepare time via the live BTC/USD rate.
+//! - `MAINNET_TEST_CROSS_CHAIN_RECEIVE_USDC_MAX`: cap for the fees-included
+//!   USDC sweep, in USDC base units. Unset by default (sweep the full
+//!   balance).
+//! - `MAINNET_TEST_CROSS_CHAIN_SEND_USDT_PROVIDER`: selects the provider for
+//!   the BTC → USDT send in test 01. `orchestra` (default) exercises the
+//!   Spark-funded direct transfer. `boltz` exercises the Lightning-funded
+//!   reverse swap. Values are case-insensitive. Unknown values fall back to
+//!   Orchestra with a warning.
+//!
+//! # Precondition for the receive tests
+//! The EVM address at `m/44'/60'/0'/0/0` needs a small Arbitrum ETH balance for
+//! gas (~0.00005 ETH is plenty for a single ERC-20 transfer). Top up manually
+//! when needed. Tests skip when it's short.
 //!
 //! # Run locally
 //! ```bash
@@ -43,13 +101,13 @@ use breez_sdk_itest::*;
 use breez_sdk_spark::*;
 use tracing::{debug, info, warn};
 
-/// Destination chain for both tests: Arbitrum One. Matched on `chain_id` (the
+/// Target chain for all tests: Arbitrum One. Matched on `chain_id` (the
 /// decimal EVM chainId), since providers spell the chain *name* differently
-/// (Orchestra reports `"arbitrum"`, Boltz reports `"Arbitrum One"`); `chain_id`
+/// (Orchestra reports `"arbitrum"`, Boltz reports `"Arbitrum One"`). `chain_id`
 /// is the stable cross-provider key.
 const TARGET_CHAIN_ID: &str = "42161";
 
-/// Whether a route's destination is Arbitrum One. Prefers `chain_id`; falls back
+/// Whether a route's destination is Arbitrum One. Prefers `chain_id`. Falls back
 /// to the normalized chain name for the (documented) case where a provider
 /// doesn't surface a chainId. The name set is exact (not a prefix) so sibling
 /// chains like "Arbitrum Nova" (chainId 42170) don't match.
@@ -63,21 +121,30 @@ fn is_target_chain(route: &CrossChainRoutePair) -> bool {
     )
 }
 
-// IMPORTANT: the cross-chain `amount` is in the **source** asset's units, not the
-// destination's. For the Orchestra (USDB token) case that's USDB base units; for
-// the Boltz (BTC) case that's **sats**. They are sized and asserted separately.
+// SEND-side note: `amount` on `PaymentRequest::CrossChain` is denominated in
+// the **source** asset's units. Token-source sends use token base units (USDB
+// for test 02). BTC-source sends use **sats** (test 01). Sized and asserted
+// separately.
 
-/// Orchestra source budget in USDB base units (6-decimals), so 1_000_000 = 1.00
+/// Orchestra source budget in USDB base units (6-decimals), so 2_500_000 = 2.50
 /// USDB. USDB↔USDC are ~1:1, so this also approximates the USDC the recipient
-/// lands. Override via `MAINNET_TEST_CROSS_CHAIN_USDB`. A too-small value (below
+/// lands. Override via `MAINNET_TEST_CROSS_CHAIN_SEND_USDB`. A too-small value (below
 /// the route minimum) makes `prepare` error (loudly).
-const DEFAULT_ORCHESTRA_SOURCE_USDB: u128 = 1_000_000;
+///
+/// Sized to feed BOTH downstream receive tests off a single USDC pool: test
+/// 04 (fees-excluded, ~$1.05 deposit for a $1 target) then test 05 (sweep,
+/// $1 minimum). ~$2.50 delivered leaves headroom for both plus dust.
+const DEFAULT_ORCHESTRA_SEND_USDB: u128 = 2_500_000;
 
-/// Boltz source budget in **sats** (BTC source). Override via
-/// `MAINNET_TEST_CROSS_CHAIN_SATS`. Note this is sats, NOT a USD amount: the
-/// recipient lands the fiat-equivalent in USDT. A value below the route minimum
-/// makes `prepare` error (loudly).
-const DEFAULT_BOLTZ_SOURCE_SATS: u128 = 1_600;
+/// BTC → USDT send source budget in **sats**. Override via
+/// `MAINNET_TEST_CROSS_CHAIN_SEND_SATS`. Note this is sats, NOT a USD amount:
+/// the recipient lands the fiat-equivalent in USDT. A value below the route
+/// minimum makes `prepare` error (loudly).
+///
+/// Sized to leave a small amount of USDT headroom at the deterministic
+/// recipient beyond what the fees-excluded receive test (test 03) consumes
+/// per pass (~$1.10 deposit for a $1 target).
+const DEFAULT_USDT_SEND_SATS: u128 = 1_500;
 
 /// Tolerance (bps) allowed between the SDK-reported `delivered_amount` and the
 /// balance actually observed on-chain, to absorb rounding / settlement timing.
@@ -97,6 +164,32 @@ const SETTLE_TIMEOUT_SECS: u64 = 600;
 
 /// Poll interval while waiting on the SDK's conversion status to go terminal.
 const STATUS_POLL_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Minimum Arbitrum ETH balance (in wei) the deterministic recipient needs to
+/// broadcast an ERC-20 transfer. Set at 0.00005 ETH: an ERC-20 transfer on
+/// Arbitrum costs a fraction of that at typical fees, so this is a generous
+/// skip gate (not a tuning knob).
+const MIN_ARBITRUM_ETH_WEI: u128 = 50_000_000_000_000;
+
+/// Default receive target in the route's source-asset base units (6-decimal
+/// for the USDC/USDT routes exercised here, so `1_000_000 = $1`). USD-stable
+/// parity holds. The SDK translates to sats or USDB on the Spark side at
+/// prepare time.
+const DEFAULT_RECEIVE_USDB_TARGET: u128 = 1_000_000;
+
+/// Minimum stable-source balance (base units, 6-decimal) needed at the
+/// deterministic recipient to run the fees-excluded receive test. Sized to
+/// cover the $1 USDB target plus Orchestra fees + external overhead.
+const MIN_STABLE_FEES_EXCLUDED: u128 = 1_100_000;
+
+/// Minimum stable-source balance (base units, 6-decimal) needed to run the
+/// fees-included sweep test. Set at Orchestra's route minimum of $1.
+const MIN_STABLE_SWEEP: u128 = 1_000_000;
+
+/// Timeout for `eth_getTransactionReceipt` polling. An Arbitrum transaction
+/// lands in a few seconds under normal conditions. Give it 5 minutes so a
+/// public-endpoint latency spike doesn't fail the test.
+const TX_CONFIRM_TIMEOUT_SECS: u64 = 300;
 
 fn env_amount_or(var: &str, default: u128) -> u128 {
     std::env::var(var)
@@ -130,8 +223,9 @@ async fn alice_balances(alice: &SdkInstance, token_id: &str) -> Result<(u64, u12
     Ok((info.balance_sats, tokens))
 }
 
-/// Log Alice's net sats/token movement over a test — the cross-chain flow is
-/// Alice → external chain, so her drain (plus any setup conversion) is the cost.
+/// Log Alice's net sats/token movement over a test as a per-test cost
+/// breadcrumb. Direction depends on the test: on send her balances drain,
+/// on receive they gain. The raw deltas surface both.
 fn log_cost(label: &str, token_id: &str, pre: (u64, u128), post: (u64, u128)) {
     let sats_delta = i128::from(post.0) - i128::from(pre.0);
     let token_delta =
@@ -142,20 +236,20 @@ fn log_cost(label: &str, token_id: &str, pre: (u64, u128), post: (u64, u128)) {
 /// Orchestra: USD-stable token (USDB) → USDC on Arbitrum, fees-excluded. This is
 /// the case that exercises target-overpay (USD-stable source→destination).
 #[test_log::test(tokio::test)]
-async fn test_cross_chain_orchestra_fees_excluded_evm() -> Result<()> {
+async fn test_cross_chain_02_orchestra_send_fees_excluded_evm() -> Result<()> {
     let Some((mut alice, token_id, mnemonic)) = mainnet_cross_chain_setup().await? else {
         return Ok(());
     };
-    info!("=== Starting test_cross_chain_orchestra_fees_excluded_evm ===");
+    info!("=== Starting test_cross_chain_02_orchestra_send_fees_excluded_evm ===");
     let pre = alice_balances(&alice, &token_id).await?;
 
     // Source budget in USDB base units (USD-stable, ~1:1 with the USDC delivered).
     let usdb_amount = env_amount_or(
-        "MAINNET_TEST_CROSS_CHAIN_USDB",
-        DEFAULT_ORCHESTRA_SOURCE_USDB,
+        "MAINNET_TEST_CROSS_CHAIN_SEND_USDB",
+        DEFAULT_ORCHESTRA_SEND_USDB,
     );
 
-    // Alice needs USDB to spend; ensure she holds ~1.3x the source amount (to
+    // Alice needs USDB to spend. Ensure she holds ~1.3x the source amount (to
     // cover the send plus fees with a little headroom), topping up from her own
     // sats if short.
     let required_usdb = usdb_amount.saturating_mul(13) / 10;
@@ -200,24 +294,30 @@ async fn test_cross_chain_orchestra_fees_excluded_evm() -> Result<()> {
     Ok(())
 }
 
-/// Boltz: BTC (Alice's sats) → USDT on Arbitrum, fees-excluded. Exercises a
-/// different asset + provider than the Orchestra case, on the same chain.
+/// BTC (Alice's sats) → USDT on Arbitrum, fees-excluded. The provider is
+/// selectable via `MAINNET_TEST_CROSS_CHAIN_SEND_USDT_PROVIDER` (`orchestra`
+/// default, `boltz` alternative) so downstream receive tests keep their USDT
+/// stash when one provider is temporarily broken. Orchestra funds over Spark
+/// (direct transfer). Boltz funds over Lightning (reverse swap).
 #[test_log::test(tokio::test)]
-async fn test_cross_chain_boltz_fees_excluded_evm() -> Result<()> {
+async fn test_cross_chain_01_usdt_send_fees_excluded_evm() -> Result<()> {
     let Some((mut alice, token_id, mnemonic)) = mainnet_cross_chain_setup().await? else {
         return Ok(());
     };
-    info!("=== Starting test_cross_chain_boltz_fees_excluded_evm ===");
+    let provider = usdt_send_provider();
+    info!(
+        "=== Starting test_cross_chain_01_usdt_send_fees_excluded_evm (provider={provider:?}) ==="
+    );
     let pre = alice_balances(&alice, &token_id).await?;
 
     // Source budget in SATS (BTC source). The recipient lands the fiat-equivalent
     // in USDT, so there's no parity unit to assert against the sats amount.
-    let sats_amount = env_amount_or("MAINNET_TEST_CROSS_CHAIN_SATS", DEFAULT_BOLTZ_SOURCE_SATS);
+    let sats_amount = env_amount_or("MAINNET_TEST_CROSS_CHAIN_SEND_SATS", DEFAULT_USDT_SEND_SATS);
     let (recipient, _signer) = mainnet_evm_recipient(&mnemonic)?;
     run_cross_chain_evm_send(
         &mut alice,
         &recipient,
-        CrossChainProvider::Boltz,
+        provider,
         "USDT",
         None, // BTC source
         None, // no conversion: amount is sats
@@ -227,10 +327,162 @@ async fn test_cross_chain_boltz_fees_excluded_evm() -> Result<()> {
     .await?;
 
     log_cost(
-        "boltz",
+        match provider {
+            CrossChainProvider::Orchestra => "orchestra-usdt",
+            CrossChainProvider::Boltz => "boltz-usdt",
+        },
         &token_id,
         pre,
         alice_balances(&alice, &token_id).await?,
+    );
+    Ok(())
+}
+
+/// Reads `MAINNET_TEST_CROSS_CHAIN_SEND_USDT_PROVIDER` (`orchestra` default,
+/// `boltz` alternative) for the BTC → USDT send in test 01.
+/// Case-insensitive. Unknown values fall back to Orchestra with a warning.
+fn usdt_send_provider() -> CrossChainProvider {
+    match std::env::var("MAINNET_TEST_CROSS_CHAIN_SEND_USDT_PROVIDER")
+        .ok()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        None | Some("") | Some("orchestra") => CrossChainProvider::Orchestra,
+        Some("boltz") => CrossChainProvider::Boltz,
+        Some(other) => {
+            warn!("Unknown MAINNET_TEST_CROSS_CHAIN_SEND_USDT_PROVIDER={other:?}, using orchestra");
+            CrossChainProvider::Orchestra
+        }
+    }
+}
+
+/// Orchestra: USDT on Arbitrum → BTC (sats) on Spark, fees-excluded. Alice
+/// specifies a target in USDB base units (6dp). The SDK converts to sats
+/// internally via the live BTC/USD rate at prepare time, then sizes the USDT
+/// deposit. The deterministic EVM wallet signs & broadcasts it.
+///
+/// Landing as BTC (not USDB) is the counterpart to test 01 (BTC → USDT):
+/// the send drains Alice's sats to fund the EVM wallet's USDT. This receive
+/// returns those sats. Also exercises the receive branch where the USDB
+/// rounding margin is not applied (BTC destination).
+#[test_log::test(tokio::test)]
+async fn test_cross_chain_03_orchestra_receive_fees_excluded_evm() -> Result<()> {
+    let Some((mut alice, usdb_token_id, mnemonic)) = mainnet_cross_chain_setup().await? else {
+        return Ok(());
+    };
+    info!("=== Starting test_cross_chain_03_orchestra_receive_fees_excluded_evm ===");
+    let pre = alice_balances(&alice, &usdb_token_id).await?;
+
+    let target_usdb = env_amount_or(
+        "MAINNET_TEST_CROSS_CHAIN_RECEIVE_USDB_TARGET",
+        DEFAULT_RECEIVE_USDB_TARGET,
+    );
+
+    run_cross_chain_evm_receive(
+        &mut alice,
+        &mnemonic,
+        &usdb_token_id,
+        "USDT",
+        SparkAsset::Bitcoin,
+        ReceiveTestPlan::FeesExcluded {
+            target: target_usdb,
+            min_source: MIN_STABLE_FEES_EXCLUDED,
+        },
+    )
+    .await?;
+
+    log_cost(
+        "orchestra-receive-excluded",
+        &usdb_token_id,
+        pre,
+        alice_balances(&alice, &usdb_token_id).await?,
+    );
+    Ok(())
+}
+
+/// Orchestra: USDC on Arbitrum → USDB on Spark, fees-excluded. Alice targets
+/// a $1 delivery (in USDB base units). The SDK sizes the USDC deposit with
+/// the USDB rounding margin so delivery lands at or above target. Consumes
+/// ~$1.05 from the USDC pool. The sweep test (05) picks up the remainder.
+///
+/// This is the receive branch where the USDB rounding margin IS applied, so
+/// regressions in the probe-time inflation or the reported-value shave
+/// surface as a delivery below the parity floor.
+#[test_log::test(tokio::test)]
+async fn test_cross_chain_04_orchestra_receive_fees_excluded_usdb_evm() -> Result<()> {
+    let Some((mut alice, usdb_token_id, mnemonic)) = mainnet_cross_chain_setup().await? else {
+        return Ok(());
+    };
+    info!("=== Starting test_cross_chain_04_orchestra_receive_fees_excluded_usdb_evm ===");
+    let pre = alice_balances(&alice, &usdb_token_id).await?;
+
+    let target_usdb = env_amount_or(
+        "MAINNET_TEST_CROSS_CHAIN_RECEIVE_USDB_TARGET",
+        DEFAULT_RECEIVE_USDB_TARGET,
+    );
+
+    run_cross_chain_evm_receive(
+        &mut alice,
+        &mnemonic,
+        &usdb_token_id,
+        "USDC",
+        SparkAsset::Token {
+            token_identifier: usdb_token_id.clone(),
+        },
+        ReceiveTestPlan::FeesExcluded {
+            target: target_usdb,
+            min_source: MIN_STABLE_FEES_EXCLUDED,
+        },
+    )
+    .await?;
+
+    log_cost(
+        "orchestra-receive-excluded-usdb",
+        &usdb_token_id,
+        pre,
+        alice_balances(&alice, &usdb_token_id).await?,
+    );
+    Ok(())
+}
+
+/// Orchestra: sweep the deterministic EVM wallet's remaining USDC (Arbitrum)
+/// balance back into Alice's Spark wallet as USDB, fees-included. USDC is
+/// the counterpart to the Orchestra USDB → USDC send test, so sweeping it
+/// back closes the loop and drains the dust each pass. Alice lands whatever's
+/// left after Orchestra's fees + external overhead.
+#[test_log::test(tokio::test)]
+async fn test_cross_chain_05_orchestra_receive_fees_included_evm() -> Result<()> {
+    let Some((mut alice, usdb_token_id, mnemonic)) = mainnet_cross_chain_setup().await? else {
+        return Ok(());
+    };
+    info!("=== Starting test_cross_chain_05_orchestra_receive_fees_included_evm ===");
+    let pre = alice_balances(&alice, &usdb_token_id).await?;
+
+    let cap = std::env::var("MAINNET_TEST_CROSS_CHAIN_RECEIVE_USDC_MAX")
+        .ok()
+        .and_then(|s| s.trim().parse::<u128>().ok())
+        .filter(|v| *v > 0);
+
+    run_cross_chain_evm_receive(
+        &mut alice,
+        &mnemonic,
+        &usdb_token_id,
+        "USDC",
+        SparkAsset::Token {
+            token_identifier: usdb_token_id.clone(),
+        },
+        ReceiveTestPlan::FeesIncludedSweep {
+            min_source: MIN_STABLE_SWEEP,
+            cap,
+        },
+    )
+    .await?;
+
+    log_cost(
+        "orchestra-receive-included",
+        &usdb_token_id,
+        pre,
+        alice_balances(&alice, &usdb_token_id).await?,
     );
     Ok(())
 }
@@ -402,14 +654,14 @@ async fn run_cross_chain_evm_send(
     // 8. Verify delivery (all in destination base units).
     //
     // `delivered_amount` (SDK-reported, per-payment) is the source of truth for
-    // "how much this send delivered"; the on-chain read is independent
+    // "how much this send delivered". The on-chain read is independent
     // corroboration that those funds actually landed. Anchoring the pass
     // criterion on `delivered_amount` (not the raw balance delta) is what keeps
     // standing funds from prior runs at this reused address from masking a
     // genuine shortfall — a short delivery shows up in `delivered_amount`, and
     // stale funds can only ever help the on-chain floor be met sooner.
     // (A fresh recipient per run would fully isolate runs, but conflicts with
-    // the deterministic-recovery design; the residual is a narrow window where
+    // the deterministic-recovery design. The residual is a narrow window where
     // the SDK over-reports AND stale funds happen to cover it.)
     //
     // For a parity (USD-stable) source, also assert the fees-excluded guarantee:
@@ -425,7 +677,7 @@ async fn run_cross_chain_evm_send(
 
     // Minimum increase we require to observe on-chain.
     let onchain_floor = match (delivered, parity_min_out) {
-        // Trust the SDK's per-payment delivered amount; confirm it landed.
+        // Trust the SDK's per-payment delivered amount. Confirm it landed.
         (Some(d), _) => reduce_by_bps(d, ONCHAIN_TOLERANCE_BPS),
         // delivered unknown (terminal reached before the amount was recorded)
         // but we have a parity target: require ~that amount, slippage-adjusted.
@@ -458,8 +710,343 @@ async fn run_cross_chain_evm_send(
     Ok(())
 }
 
+/// How a receive test decides on the source amount and the min-out assertion.
+enum ReceiveTestPlan {
+    /// Alice targets a specific delivery amount, always in USDB base units
+    /// (6dp, `1_000_000 = $1`) regardless of the destination asset. The SDK
+    /// translates internally to destination-native units (sats for BTC
+    /// destinations via the live BTC/USD rate). EVM wallet needs at least
+    /// `min_source` in the source token + gas ETH.
+    FeesExcluded { target: u128, min_source: u128 },
+    /// Sweep the EVM wallet's source-token balance (optionally capped by
+    /// `cap`). Amount passed to the SDK is the source balance numerically:
+    /// safe because Arbitrum USDC is 6dp, same as USDB.
+    FeesIncludedSweep { min_source: u128, cap: Option<u128> },
+}
+
+/// Shared flow for the three receive tests: discover the Arbitrum
+/// source-asset receive route (`source_asset` is the external-chain ticker,
+/// e.g. `"USDT"` or `"USDC"`), gate on ETH-for-gas and source-token balance,
+/// call `receive_payment`, sign + broadcast the source-token deposit from
+/// the EVM wallet, wait for both the tx to confirm and Alice's Spark-side
+/// balance (BTC sats or USDB, per `destination`) to increase.
+///
+/// Skips (warn + `Ok`) when no matching route, the EVM wallet lacks ETH for
+/// gas, or its source-token balance is below the plan's minimum.
+async fn run_cross_chain_evm_receive(
+    alice: &mut SdkInstance,
+    mnemonic: &str,
+    usdb_token_id: &str,
+    source_asset: &str,
+    destination: SparkAsset,
+    plan: ReceiveTestPlan,
+) -> Result<()> {
+    let (recipient, signer) = mainnet_evm_recipient(mnemonic)?;
+    let dest_label = spark_asset_label(&destination, usdb_token_id);
+    info!(
+        "Cross-chain receive: Arbitrum {source_asset} → {dest_label}. Sender EVM wallet \
+         {recipient} (m/44'/60'/0'/0/0)"
+    );
+
+    // 1. Discover the Orchestra {source_asset}-on-Arbitrum receive route.
+    let routes = alice
+        .sdk
+        .get_cross_chain_routes(&CrossChainRouteFilter::Receive {
+            contract_address: None,
+        })
+        .await?;
+    let Some(route) = routes.into_iter().find(|r| {
+        r.provider == CrossChainProvider::Orchestra
+            && is_target_chain(r)
+            && r.asset.eq_ignore_ascii_case(source_asset)
+    }) else {
+        warn!("No Orchestra {source_asset} receive route on Arbitrum One; skipping");
+        return Ok(());
+    };
+    let source_contract = route
+        .contract_address
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("{source_asset} receive route has no contract address"))?;
+    let Some(rpc_url) = evm_rpc_url(&route.chain) else {
+        warn!("No JSON-RPC endpoint for chain {}; skipping", route.chain);
+        return Ok(());
+    };
+    info!(
+        "Selected receive route: {source_asset} on {} ({source_contract})",
+        route.chain
+    );
+
+    // Confirm the route lands the requested destination.
+    if !route.accepted_assets.contains(&destination) {
+        warn!(
+            "Route {source_asset}→Arbitrum does not offer {dest_label} destination \
+             (accepted_assets={:?}); skipping",
+            route.accepted_assets
+        );
+        return Ok(());
+    }
+
+    // 2. Gas-for-broadcast check.
+    let eth_balance = evm_native_balance(&rpc_url, &recipient).await?;
+    if eth_balance < MIN_ARBITRUM_ETH_WEI {
+        warn!(
+            "Recipient {recipient} has {eth_balance} wei on Arbitrum \
+             (< {MIN_ARBITRUM_ETH_WEI} needed to pay gas); skipping"
+        );
+        return Ok(());
+    }
+    info!("Recipient ETH balance: {eth_balance} wei");
+
+    // 3. Source-balance check + plan resolution.
+    let source_balance = evm_erc20_balance(&rpc_url, &source_contract, &recipient).await?;
+    info!("Recipient {source_asset} balance: {source_balance}");
+    let (fee_mode, amount, parity_min_out): (CrossChainFeeMode, u128, Option<u128>) = match &plan {
+        ReceiveTestPlan::FeesExcluded { target, min_source } => {
+            if source_balance < *min_source {
+                warn!(
+                    "Recipient {source_asset} balance {source_balance} below fees-excluded \
+                     minimum {min_source}; skipping"
+                );
+                return Ok(());
+            }
+            // Parity assertion needs target and delivered in matching units.
+            // USDB destinations do. BTC destinations land sats and would need
+            // a BTC/USD conversion (skipped for the signal it adds).
+            let parity = match &destination {
+                SparkAsset::Token { .. } => Some(*target),
+                SparkAsset::Bitcoin => None,
+            };
+            (CrossChainFeeMode::FeesExcluded, *target, parity)
+        }
+        ReceiveTestPlan::FeesIncludedSweep { min_source, cap } => {
+            if source_balance < *min_source {
+                warn!(
+                    "Recipient {source_asset} balance {source_balance} below sweep minimum \
+                     {min_source}; skipping"
+                );
+                return Ok(());
+            }
+            let sweep = cap.map(|c| c.min(source_balance)).unwrap_or(source_balance);
+            info!("Sweep amount: {sweep} (from balance {source_balance}, cap {cap:?})");
+            (CrossChainFeeMode::FeesIncluded, sweep, None)
+        }
+    };
+
+    // 4. Baseline Alice's destination-side balance (sats for BTC, token base
+    //    units for USDB).
+    let (baseline_sats, baseline_usdb) = alice_balances(alice, usdb_token_id).await?;
+    let baseline: u128 = match &destination {
+        SparkAsset::Bitcoin => u128::from(baseline_sats),
+        SparkAsset::Token { .. } => baseline_usdb,
+    };
+    info!("Alice baseline {dest_label}: {baseline}");
+
+    // On BTC destinations, one cent of Orchestra rounding is ~100 bps of a $1
+    // sat target (cent quantum ÷ $1 = 1%), which sits right on the SDK's
+    // default drift threshold and flakes over integer rounding. Widen the
+    // budget for this test class only. USDB destinations already survive the
+    // default because the SDK compensates via the USDB rounding margin.
+    let max_slippage_bps = match &destination {
+        SparkAsset::Bitcoin => Some(200),
+        SparkAsset::Token { .. } => None,
+    };
+
+    // 5. Ask the SDK to prepare the cross-chain receive.
+    let response = alice
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::CrossChain {
+                route: route.clone(),
+                amount,
+                destination: Some(destination.clone()),
+                fee_mode: Some(fee_mode),
+                max_slippage_bps,
+                target_overpay_bps: None,
+            },
+        })
+        .await?;
+    let info = response
+        .cross_chain_info
+        .ok_or_else(|| anyhow::anyhow!("receive_payment returned no cross_chain_info"))?;
+    info!(
+        "Receive prepared: deposit_address={} deposit_amount={} expected_received={} \
+         service_fee_amount={} service_fee_asset={:?} expires_at={}",
+        info.deposit_address,
+        info.deposit_amount,
+        info.expected_received_amount,
+        info.service_fee_amount,
+        info.service_fee_asset,
+        info.expires_at
+    );
+    // Locks the fee-wiring plumbing in place: `service_fee_amount` is
+    // Orchestra's `total_fee_amount` and is always populated on a receive
+    // quote. `service_fee_asset` is `Some(fee_asset)` unless the quote reports
+    // BTC as the fee unit, which none of these USD-stable-source routes does.
+    assert!(
+        info.service_fee_amount > 0,
+        "cross-chain receive {source_asset}→{dest_label}: expected nonzero \
+         service_fee_amount, got 0",
+    );
+    assert!(
+        info.service_fee_asset.is_some(),
+        "cross-chain receive {source_asset}→{dest_label}: expected some \
+         service_fee_asset for a USD-stable source, got None",
+    );
+
+    // Prepare-time reconciliation for eyeballing in the log. Meaningful only
+    // when deposit and expected share units (USDB destination). For BTC
+    // destinations `deposit_amount` is in source-asset units and
+    // `expected_received_amount` is in sats, so the delta is nonsense and
+    // labeled as such.
+    let implied_fee_from_prepare = i128::try_from(info.deposit_amount).unwrap_or(i128::MAX)
+        - i128::try_from(info.expected_received_amount).unwrap_or(i128::MAX);
+    let reconciliation_scope = match &destination {
+        SparkAsset::Token { .. } => {
+            "matched-units: implied_fee = service_fee + external bridge/gas cost"
+        }
+        SparkAsset::Bitcoin => "unmatched-units: source USDC vs sats, implied_fee not comparable",
+    };
+    info!(
+        "[cross-chain-fee-check] {source_asset}→{dest_label} fee_mode={fee_mode:?} \
+         deposit={} expected={} service_fee={} {:?} implied_fee={implied_fee_from_prepare} \
+         ({reconciliation_scope})",
+        info.deposit_amount,
+        info.expected_received_amount,
+        info.service_fee_amount,
+        info.service_fee_asset,
+    );
+
+    // 6. Confirm the EVM wallet holds enough source-token for the SDK-sized
+    //    deposit. Only meaningful for fees-excluded (sweep case has
+    //    `deposit_amount == source_balance` by construction).
+    if source_balance < info.deposit_amount {
+        warn!(
+            "Recipient {source_asset} balance {source_balance} < SDK-computed deposit {} \
+             (fees + overpay pushed it over the balance); skipping",
+            info.deposit_amount
+        );
+        return Ok(());
+    }
+
+    // 7. Broadcast the ERC-20 transfer.
+    let tx_hash = evm_send_erc20(
+        &rpc_url,
+        &signer,
+        &source_contract,
+        &info.deposit_address,
+        info.deposit_amount,
+    )
+    .await?;
+    wait_for_evm_tx_confirmation(&rpc_url, &tx_hash, TX_CONFIRM_TIMEOUT_SECS).await?;
+    info!("{source_asset} deposit confirmed on Arbitrum: {tx_hash}");
+
+    // 8. Wait for the delivered amount to land on Alice's Spark side.
+    //    Orchestra's background monitor reconciles once bridging completes.
+    let final_balance: u128 = match &destination {
+        SparkAsset::Bitcoin => u128::from(
+            wait_for_balance(
+                &alice.sdk,
+                Some(
+                    u64::try_from(baseline)
+                        .unwrap_or(u64::MAX)
+                        .saturating_add(1),
+                ),
+                None,
+                SETTLE_TIMEOUT_SECS,
+            )
+            .await?,
+        ),
+        SparkAsset::Token { .. } => {
+            wait_for_token_balance_increase(
+                &alice.sdk,
+                usdb_token_id,
+                baseline,
+                SETTLE_TIMEOUT_SECS,
+            )
+            .await?
+        }
+    };
+    let delivered = final_balance.saturating_sub(baseline);
+    info!(
+        "Alice {dest_label} delivered: {delivered} (baseline {baseline} → final {final_balance})"
+    );
+
+    // Cost decomposition:
+    //   `expected_received - delivered`: how much reality fell BELOW the SDK's
+    //     prepare-time estimate. On USDB destinations the estimate is already
+    //     shaved by the rounding margin, so any negative delta signals under-
+    //     delivery beyond the expected margin. Meaningful across both kinds.
+    //   `total_spread = deposit - delivered`: single-number cost, only
+    //     meaningful for stable-to-stable routes where deposit and delivery
+    //     share units. Omitted for BTC destinations (source is 6dp USD-stable,
+    //     delivery is sats).
+    let expected_vs_delivered = i128::try_from(delivered).unwrap_or(i128::MAX)
+        - i128::try_from(info.expected_received_amount).unwrap_or(i128::MAX);
+    match &destination {
+        SparkAsset::Token { .. } => {
+            let total_spread = info.deposit_amount.saturating_sub(delivered);
+            info!(
+                "[cross-chain-breakdown] {source_asset} → USDB: deposit={} expected={} \
+                 delivered={} total_spread={total_spread} \
+                 expected_vs_delivered={expected_vs_delivered}",
+                info.deposit_amount, info.expected_received_amount, delivered
+            );
+        }
+        SparkAsset::Bitcoin => {
+            info!(
+                "[cross-chain-breakdown] {source_asset} → BTC: deposit={} (source units) \
+                 expected={} sats delivered={} sats expected_vs_delivered={expected_vs_delivered}",
+                info.deposit_amount, info.expected_received_amount, delivered
+            );
+        }
+    }
+
+    // 10. Assert the fees-excluded contract when a parity target is set.
+    if let Some(target) = parity_min_out {
+        let floor = reduce_by_bps(target, SLIPPAGE_TOLERANCE_BPS);
+        assert!(
+            delivered >= floor,
+            "fees-excluded receive: delivered {delivered} should be >= {floor} \
+             (target {target} less {SLIPPAGE_TOLERANCE_BPS} bps)"
+        );
+    } else {
+        assert!(
+            delivered > 0,
+            "sweep receive: expected some {dest_label} delivered, got {delivered}"
+        );
+        let deposit_pct = delivered.saturating_mul(10_000) / amount.max(1);
+        info!(
+            "Sweep receive: {delivered} {dest_label} delivered for {amount} {source_asset} \
+             deposit ({deposit_pct} bps of source, i.e. {}%)",
+            deposit_pct / 100
+        );
+    }
+
+    log_evm_recovery_balance(&rpc_url, &source_contract, &recipient, source_asset).await;
+    Ok(())
+}
+
+/// Short label for a receive destination, used in log lines. Distinguishes
+/// BTC (sats) from USDB by matching the token identifier against Alice's
+/// active USDB token id. Any other token identifier renders as
+/// `Token(...prefix)` for debuggability.
+fn spark_asset_label(destination: &SparkAsset, usdb_token_id: &str) -> String {
+    match destination {
+        SparkAsset::Bitcoin => "BTC".to_string(),
+        SparkAsset::Token { token_identifier } if token_identifier == usdb_token_id => {
+            "USDB".to_string()
+        }
+        SparkAsset::Token { token_identifier } => {
+            format!(
+                "Token({}...)",
+                &token_identifier[..token_identifier.len().min(12)]
+            )
+        }
+    }
+}
+
 /// Whether Alice can cover the source leg of a cross-chain send. For a token
-/// source she needs `amount_in` token base units plus the sats transfer fee; for
+/// source she needs `amount_in` token base units plus the sats transfer fee. For
 /// a BTC source she needs `amount_in + source_transfer_fee_sats` sats.
 async fn alice_can_cover(
     alice: &SdkInstance,
@@ -535,7 +1122,7 @@ fn describe_conversion(info: &ConversionInfo) -> String {
 }
 
 /// Poll the payment until its cross-chain `ConversionInfo` reaches a terminal
-/// state. Returns `delivered_amount` on `Completed`; errors on a failed/refunded
+/// state. Returns `delivered_amount` on `Completed`. Errors on a failed/refunded
 /// outcome or timeout. Logs the provider handles once and every status change,
 /// so a debugging run has a trail to correlate against the provider/explorer.
 async fn wait_for_cross_chain_completion(
@@ -621,7 +1208,7 @@ async fn wait_for_cross_chain_completion(
                  {payment_id} (last status {last_status:?})"
             );
         }
-        // The status update arrives via the background monitor; nudge a sync so
+        // The status update arrives via the background monitor. Nudge a sync so
         // the locally-read payment reflects it promptly.
         let _ = sdk.sync_wallet(SyncWalletRequest {}).await;
         tokio::time::sleep(STATUS_POLL_INTERVAL).await;

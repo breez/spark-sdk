@@ -8,6 +8,7 @@ pub(crate) mod boltz_event_listener;
 pub(crate) mod boltz_storage_adapter;
 mod cached_fiat;
 mod orchestra;
+mod orchestra_storage_adapter;
 
 pub(crate) use boltz::BoltzService;
 pub(crate) use cached_fiat::{CachedFiatService, DEFAULT_FIAT_CACHE_TTL};
@@ -32,14 +33,14 @@ pub(crate) const MAX_CROSS_CHAIN_SLIPPAGE_BPS: u32 = 500;
 pub(crate) const DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS: u32 = 100;
 
 /// Bounds for the target-overpay pad applied to the user's destination amount
-/// on `FeesExcluded` conversion sends. `0` opts out; `500` caps at 5% (matches
+/// on `FeesExcluded` conversion sends. `0` opts out. `500` caps at 5% (matches
 /// the slippage upper bound).
 pub(crate) const MIN_TARGET_OVERPAY_BPS: u32 = 0;
 pub(crate) const MAX_TARGET_OVERPAY_BPS: u32 = 500;
 /// Default pad applied when neither the request nor
 /// [`crate::CrossChainConfig::default_target_overpay_bps`] specifies one.
-/// Calibrated to the observed Orchestra delivery drift; tune per provider as
-/// real-world data accrues.
+/// Calibrated to the observed Orchestra delivery drift. Tune per provider
+/// as real-world data accrues.
 pub(crate) const DEFAULT_TARGET_OVERPAY_BPS: u32 = 15;
 /// Tickers treated as $1-pegged for par-value rescaling. Adding a non-USD
 /// ticker would silently misreport `fee_amount` for routes using it.
@@ -138,30 +139,29 @@ impl std::fmt::Display for CrossChainProvider {
     }
 }
 
-/// The source asset a cross-chain route accepts as input on the Spark side.
+/// The asset a cross-chain route accepts on the Spark side.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum SourceAsset {
+pub enum SparkAsset {
     /// Native BTC (sats).
     Bitcoin,
     /// A Spark token, identified by its bech32m `token_identifier` (e.g. `btkn1...`).
     Token { token_identifier: String },
 }
 
-/// The chain a cross-chain route is funded from, orthogonal to the
-/// [`SourceAsset`] that moves.
+/// The rail a cross-chain payment is delivered over.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum SourceChain {
-    /// Paid over Spark, using a Bitcoin or token source asset.
+pub enum DeliveryMethod {
+    /// Delivered over the Spark network.
     Spark,
-    /// Paid over Lightning, using a Bitcoin source asset.
+    /// Delivered over Lightning.
     Lightning,
-    /// Paid on-chain to Bitcoin (L1), using a Bitcoin source asset.
+    /// Delivered on-chain over Bitcoin.
     Bitcoin,
 }
 
-impl std::fmt::Display for SourceChain {
+impl std::fmt::Display for DeliveryMethod {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Spark => f.write_str("Spark"),
@@ -221,13 +221,13 @@ pub enum CrossChainRouteFilter {
 pub struct CrossChainRoutePair {
     /// Which provider offers this route.
     pub provider: CrossChainProvider,
-    /// Destination blockchain (e.g. `"base"`, `"solana"`, `"tron"`).
+    /// External blockchain (e.g. `"base"`, `"solana"`, `"tron"`).
     pub chain: String,
-    /// Stable chain identifier (e.g. EVM `chainId` as a decimal string).
+    /// External chain identifier (e.g. EVM `chainId` as a decimal string).
     /// `None` for non-EVM chains that don't expose one, or when the
     /// provider doesn't surface it.
     pub chain_id: Option<String>,
-    /// Destination asset symbol (e.g. `"USDC"`, `"USDT"`).
+    /// External asset symbol (e.g. `"USDC"`, `"USDT"`).
     pub asset: String,
     /// Token contract / mint address on the destination chain.
     pub contract_address: Option<String>,
@@ -235,19 +235,11 @@ pub struct CrossChainRoutePair {
     pub decimals: u8,
     /// Whether the route supports exact-out mode.
     pub exact_out_eligible: bool,
-    /// The source assets this route accepts on the Spark side.
-    ///
-    /// Boltz routes accept `[SourceAsset::Bitcoin]`. Orchestra routes accept
-    /// one or more of `Bitcoin` / `Token(...)` (a given destination endpoint
-    /// may be fronted by multiple source variants on Orchestra).
-    pub supported_sources: Vec<SourceAsset>,
-    /// The chains this route can be paid over, orthogonal to
-    /// `supported_sources` (the asset moved).
-    ///
-    /// This is the actual funding rail, which differs by provider: Boltz routes
-    /// are always paid over Lightning. Orchestra send routes report Spark, and
-    /// Orchestra payment-link routes report Lightning.
-    pub supported_source_chains: Vec<SourceChain>,
+    /// Spark-side assets this route accepts.
+    pub accepted_assets: Vec<SparkAsset>,
+    /// Rails this route can be delivered over, orthogonal to
+    /// `accepted_assets` (the asset moved vs the rail moved on).
+    pub delivery_methods: Vec<DeliveryMethod>,
 }
 
 impl CrossChainRoutePair {
@@ -334,10 +326,49 @@ pub enum CrossChainProviderContext {
     },
 }
 
+/// Prepared cross-chain receive: the payment request to hand to the sender
+/// and the receive-quote details. The provider row is already persisted by
+/// the time this returns.
+#[derive(Debug, Clone)]
+pub(crate) struct CrossChainReceivePrepared {
+    /// Canonical cross-chain URI the sender can paste or scan to pay.
+    pub payment_request: String,
+    pub info: CrossChainReceiveInfo,
+}
+
+/// Information about the cross-chain receive quote.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CrossChainReceiveInfo {
+    /// Bare external deposit address the sender pays to.
+    pub deposit_address: String,
+    /// Amount the sender must deposit, in source-asset base units
+    /// (`route.decimals`). On `FeesExcluded` this may differ from the
+    /// request's `amount` because the SDK inflates the deposit to absorb
+    /// provider fees. Render this value to the sender.
+    pub deposit_amount: u128,
+    /// Amount the receiver will see, net of provider fees, in
+    /// destination-asset base units. Sats when receiving BTC into Spark,
+    /// or token base units when receiving a Spark token (e.g. USDB). The
+    /// final delivered amount may move within the slippage tolerance.
+    pub expected_received_amount: u128,
+    /// Spark token identifier when the destination is a token. Absent when
+    /// the destination is BTC and the receiver will see sats.
+    pub token_identifier: Option<String>,
+    /// Provider-quoted total fee for this receive, in `service_fee_asset`
+    /// units.
+    pub service_fee_amount: u128,
+    /// Ticker for `service_fee_amount`. Absent when the fee is denominated
+    /// in sats.
+    pub service_fee_asset: Option<String>,
+    /// Quote expiry as a unix timestamp in seconds.
+    pub expires_at: u64,
+}
+
 /// Data stashed on the prepared send payment so the provider can resume
 /// the send stage without re-quoting.
 #[derive(Debug, Clone)]
-pub(crate) struct CrossChainPrepared {
+pub(crate) struct CrossChainSendPrepared {
     pub amount_in: u128,
     /// `amount_in` expressed in the cross-chain (destination) asset's base
     /// units, via the fiat rate or decimal rescale the SDK used at prepare
@@ -381,6 +412,7 @@ pub(crate) struct CrossChainPrepared {
 ///
 /// Each implementation owns its own client, caching, and background monitoring.
 /// The SDK dispatches to the provider via this trait.
+#[allow(clippy::too_many_arguments)]
 #[macros::async_trait]
 pub(crate) trait CrossChainService: Send + Sync {
     /// Returns the available cross-chain route pairs.
@@ -394,22 +426,49 @@ pub(crate) trait CrossChainService: Send + Sync {
     ) -> Result<Vec<CrossChainRoutePair>, SdkError>;
 
     /// Fetch a quote for a cross-chain send or Lightning onramp. `amount` is
-    /// always in the source-leg sats/token base units; the caller converts any
-    /// USD intent to sats first. `source_chain` selects the funding chain;
-    /// `None` uses the provider's default ([`SourceChain::Spark`] for Orchestra).
-    /// `source_token_identifier` is only meaningful for a Spark source
-    /// (`None` = BTC sats, `Some` = a token).
+    /// always in the source-leg sats/token base units. The caller converts any
+    /// USD intent to sats first. `delivery_method` selects the rail the wallet
+    /// dispatches over. `None` uses the provider's default
+    /// ([`DeliveryMethod::Spark`] for Orchestra). `source_token_identifier`
+    /// is only meaningful for a Spark source (`None` = BTC sats, `Some` = a
+    /// token).
     #[allow(clippy::too_many_arguments)]
-    async fn prepare(
+    async fn prepare_send(
         &self,
         recipient_address: &str,
         route: &CrossChainRoutePair,
         amount: u128,
-        source_chain: Option<SourceChain>,
+        delivery_method: Option<DeliveryMethod>,
         source_token_identifier: Option<String>,
         max_slippage_bps: u32,
         fee_mode: CrossChainFeeMode,
-    ) -> Result<CrossChainPrepared, SdkError>;
+    ) -> Result<CrossChainSendPrepared, SdkError>;
+
+    /// Fetch a quote for a cross-chain receive.
+    ///
+    /// `amount` is the caller's raw ask, always:
+    /// - `FeesExcluded`: net amount the receiver wants to land on the Spark
+    ///   side, in `destination`'s base units (sats for BTC, token base units
+    ///   for tokens). The provider inflates by `target_overpay_bps` when
+    ///   sizing the deposit but drift-checks against `amount` itself, so the
+    ///   overpay gives Orchestra headroom without tightening the accept
+    ///   threshold beyond what the user asked for.
+    /// - `FeesIncluded`: the deposit the sender will pay, in the route's
+    ///   source-asset base units. The receiver lands `amount - fees`.
+    ///   `target_overpay_bps` is ignored.
+    async fn prepare_receive(
+        &self,
+        route: &CrossChainRoutePair,
+        recipient_address: &str,
+        amount: u128,
+        max_slippage_bps: u32,
+        // Pre-validated Spark-side destination: the SDK dispatch has
+        // checked this against `route.accepted_assets` and resolved any
+        // wallet-level defaults (e.g. active stable balance).
+        destination: &SparkAsset,
+        fee_mode: CrossChainFeeMode,
+        target_overpay_bps: u32,
+    ) -> Result<CrossChainReceivePrepared, SdkError>;
 
     /// Execute the send: transfer funds to the deposit address, submit to
     /// the provider, persist metadata, monitor to terminal, and return the
@@ -428,7 +487,7 @@ pub(crate) trait CrossChainService: Send + Sync {
     /// SDK dispatcher does not wrap this with an additional wait.
     async fn send(
         &self,
-        prepared: &CrossChainPrepared,
+        prepared: &CrossChainSendPrepared,
         idempotency_key: Option<String>,
     ) -> Result<crate::Payment, SdkError>;
 }
@@ -477,10 +536,68 @@ pub(crate) fn convert_sats_to_destination_amount(
     Ok(target as u128)
 }
 
+/// Converts a source-asset amount (base units at `src_decimals`) to sats
+/// via `fiat_per_btc`. Assumes the source is denominated 1:1 in the same
+/// fiat as the rate. Inverse of [`convert_sats_to_destination_amount`].
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+pub(crate) fn convert_source_amount_to_sats(
+    src_base_units: u128,
+    src_decimals: u32,
+    fiat_per_btc: f64,
+) -> Result<u128, SdkError> {
+    let src_scale = 10f64.powi(i32::try_from(src_decimals).unwrap_or(i32::MAX));
+    let sats = (src_base_units as f64) * 100_000_000f64 / (src_scale * fiat_per_btc);
+    if !sats.is_finite() || sats < 0.0 {
+        return Err(SdkError::Generic(format!(
+            "Cross-chain: invalid stable→sats conversion result: {sats}"
+        )));
+    }
+    Ok(sats as u128)
+}
+
 pub(crate) fn is_usd_stable_asset(asset: &str) -> bool {
     USD_STABLE_ASSETS
         .iter()
         .any(|a| asset.eq_ignore_ascii_case(a))
+}
+
+/// Builds the payment-request URI a sender pays to for a cross-chain
+/// receive. EVM destinations get an EIP-681 URI so wallets like `MetaMask`
+/// auto-fill recipient/token/chain/amount. Solana and Tron destinations
+/// fall back to the bare `deposit_address` because current wallets don't
+/// honor those schemes' parameters reliably (see
+/// [`breez_sdk_common::input::format_cross_chain_uri`]).
+pub(crate) fn build_receive_payment_request(
+    deposit_address: &str,
+    chain: &str,
+    chain_id: Option<&str>,
+    contract_address: Option<&str>,
+    amount: u128,
+) -> Result<String, SdkError> {
+    let family =
+        breez_sdk_common::input::detect_address_family(deposit_address).ok_or_else(|| {
+            SdkError::Generic(format!(
+                "Cross-chain provider returned unrecognised deposit address: {deposit_address}",
+            ))
+        })?;
+    // Guard against a provider returning an address that belongs to a
+    // different chain family than the route we requested.
+    if !family.matches_chain(chain, contract_address) {
+        return Err(SdkError::Generic(format!(
+            "Cross-chain provider returned {family:?} deposit address for {chain} route"
+        )));
+    }
+    Ok(breez_sdk_common::input::format_cross_chain_uri(
+        family,
+        deposit_address,
+        contract_address,
+        chain_id,
+        amount,
+    ))
 }
 
 /// Best-available fee: realized `asset_amount_in − delivered_amount` on
@@ -553,6 +670,39 @@ pub(crate) fn convert_destination_amount_to_sats(
     Ok(sats as u128)
 }
 
+/// Resolves the target-overpay bps to apply on `FeesExcluded` cross-chain
+/// preparations (send and receive). Same precedence as slippage:
+/// caller-supplied value (bounds-checked here), then the config default, then
+/// the built-in default. Config defaults are validated at SDK startup in
+/// `Config::validate`.
+pub(crate) fn resolve_target_overpay_bps(
+    requested: Option<u32>,
+    config_default: Option<u32>,
+) -> Result<u32, SdkError> {
+    if let Some(bps) = requested
+        && !(MIN_TARGET_OVERPAY_BPS..=MAX_TARGET_OVERPAY_BPS).contains(&bps)
+    {
+        return Err(SdkError::InvalidInput(format!(
+            "target_overpay_bps {bps} must be in \
+             {MIN_TARGET_OVERPAY_BPS} to {MAX_TARGET_OVERPAY_BPS}",
+        )));
+    }
+    Ok(requested
+        .or(config_default)
+        .unwrap_or(DEFAULT_TARGET_OVERPAY_BPS))
+}
+
+/// Inflates a target amount by `overpay_bps` so the realized delivery lands at
+/// or above target despite provider slippage. `overpay_bps == 0` is identity.
+/// Used on both directions: send pads the destination target, receive pads
+/// the source-asset deposit.
+pub(crate) fn inflate_target_amount(amount: u128, overpay_bps: u32) -> u128 {
+    if overpay_bps == 0 {
+        return amount;
+    }
+    amount.saturating_add(amount.saturating_mul(u128::from(overpay_bps)) / 10_000)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,10 +712,10 @@ mod tests {
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
     #[test_all]
-    fn source_chain_display_is_human_readable() {
-        assert_eq!(SourceChain::Spark.to_string(), "Spark");
-        assert_eq!(SourceChain::Lightning.to_string(), "Lightning");
-        assert_eq!(SourceChain::Bitcoin.to_string(), "Bitcoin");
+    fn delivery_method_display_is_human_readable() {
+        assert_eq!(DeliveryMethod::Spark.to_string(), "Spark");
+        assert_eq!(DeliveryMethod::Lightning.to_string(), "Lightning");
+        assert_eq!(DeliveryMethod::Bitcoin.to_string(), "Bitcoin");
     }
 
     #[test_all]
@@ -760,7 +910,7 @@ mod tests {
 
     /// Regression: `CrossChainProviderContext::Boltz.invoice_amount_sats` must
     /// be the source of truth for the LN-leg amount, distinct from
-    /// `CrossChainPrepared::amount_in` (which can carry a user-facing display
+    /// `CrossChainSendPrepared::amount_in` (which can carry a user-facing display
     /// value such as token base units after the dispatcher's conversion-path
     /// override). Conflating the two persisted USDB base units into the
     /// `invoice_amount_sats` field of `ConversionInfo::Boltz`, showing a
@@ -817,7 +967,7 @@ mod tests {
 
     /// Same invariant for Orchestra: `deposit_amount` is the source of truth
     /// for the deposit transfer size and is distinct from
-    /// `CrossChainPrepared::amount_in`.
+    /// `CrossChainSendPrepared::amount_in`.
     #[test_all]
     fn orchestra_provider_context_deposit_amount_is_independent_of_amount_in() {
         let ctx = CrossChainProviderContext::Orchestra {
@@ -928,5 +1078,186 @@ mod tests {
             out.details,
             Some(PaymentDetails::Withdraw { tx_id }) if tx_id == "tx1"
         ));
+    }
+
+    // ---- resolve_target_overpay_bps ----
+
+    #[test_all]
+    fn resolve_target_overpay_uses_request_when_in_range() {
+        assert_eq!(resolve_target_overpay_bps(Some(50), Some(75)).unwrap(), 50);
+    }
+
+    #[test_all]
+    fn resolve_target_overpay_falls_back_to_config_default() {
+        assert_eq!(resolve_target_overpay_bps(None, Some(75)).unwrap(), 75);
+    }
+
+    #[test_all]
+    fn resolve_target_overpay_falls_back_to_built_in_default() {
+        assert_eq!(
+            resolve_target_overpay_bps(None, None).unwrap(),
+            DEFAULT_TARGET_OVERPAY_BPS
+        );
+    }
+
+    #[test_all]
+    fn resolve_target_overpay_request_zero_opts_out() {
+        assert_eq!(resolve_target_overpay_bps(Some(0), Some(50)).unwrap(), 0);
+    }
+
+    #[test_all]
+    fn resolve_target_overpay_rejects_out_of_range_request() {
+        let too_high = MAX_TARGET_OVERPAY_BPS + 1;
+        assert!(matches!(
+            resolve_target_overpay_bps(Some(too_high), None),
+            Err(SdkError::InvalidInput(_))
+        ));
+    }
+
+    // ---- inflate_target_amount ----
+
+    #[test_all]
+    fn inflate_target_amount_zero_bps_is_identity() {
+        assert_eq!(inflate_target_amount(1_000_000, 0), 1_000_000);
+    }
+
+    #[test_all]
+    fn inflate_target_amount_applies_bps_pad() {
+        // 25 bps on 1_000_000 → 2_500 pad.
+        assert_eq!(inflate_target_amount(1_000_000, 25), 1_002_500);
+    }
+
+    #[test_all]
+    fn inflate_target_amount_truncates_sub_unit_pad() {
+        // 25 bps on 100 → 0.25 pad, truncates to 0.
+        assert_eq!(inflate_target_amount(100, 25), 100);
+    }
+
+    // ---- convert_source_amount_to_sats ----
+
+    #[test_all]
+    fn convert_stable_to_sats_at_par_6dp() {
+        // BTC/USD = 100_000, 1 USD = 1000 sats. 1_000_000 (6dp) = $1 = 1000 sats.
+        assert_eq!(
+            convert_source_amount_to_sats(1_000_000, 6, 100_000.0).unwrap(),
+            1000
+        );
+    }
+
+    #[test_all]
+    fn convert_stable_to_sats_at_a_different_rate() {
+        // BTC/USD = 50_000, $1 = 2000 sats.
+        assert_eq!(
+            convert_source_amount_to_sats(1_000_000, 6, 50_000.0).unwrap(),
+            2000
+        );
+    }
+
+    #[test_all]
+    fn convert_stable_to_sats_matches_across_decimals_at_same_usd_value() {
+        // $1 at 6dp and at 18dp must produce the same sats.
+        let sats_6 = convert_source_amount_to_sats(1_000_000, 6, 100_000.0).unwrap();
+        let sats_18 =
+            convert_source_amount_to_sats(1_000_000_000_000_000_000, 18, 100_000.0).unwrap();
+        assert_eq!(sats_6, sats_18);
+        assert_eq!(sats_6, 1000);
+    }
+
+    #[test_all]
+    fn convert_stable_to_sats_zero_input_is_zero() {
+        assert_eq!(convert_source_amount_to_sats(0, 6, 100_000.0).unwrap(), 0);
+    }
+
+    #[test_all]
+    fn convert_stable_to_sats_rejects_nan_rate() {
+        // Infinity is intentionally allowed (produces 0 sats, a finite result);
+        // NaN is the pathological input we guard against.
+        assert!(matches!(
+            convert_source_amount_to_sats(1_000_000, 6, f64::NAN),
+            Err(SdkError::Generic(_))
+        ));
+    }
+
+    #[test_all]
+    fn convert_stable_to_sats_rejects_negative_rate() {
+        assert!(matches!(
+            convert_source_amount_to_sats(1_000_000, 6, -100_000.0),
+            Err(SdkError::Generic(_))
+        ));
+    }
+
+    // ---- build_receive_payment_request ----
+
+    /// EVM destinations produce an EIP-681 URI (with `chain_id` and token
+    /// contract when present) so wallets like `MetaMask` auto-fill.
+    #[test_all]
+    fn build_receive_payment_request_evm_emits_eip_681_uri() {
+        let uri = build_receive_payment_request(
+            "0x00Df20df75800ca8f40080505a7a802331C1321c",
+            "arbitrum",
+            Some("42161"),
+            Some("0xaf88d065e77c8cC2239327C5EDb3A432268e5831"),
+            1_000_000,
+        )
+        .unwrap();
+        assert!(uri.starts_with("ethereum:"), "got {uri}");
+        assert!(uri.contains("42161"), "chain_id must appear: {uri}");
+        assert!(
+            uri.contains("0xaf88d065e77c8cC2239327C5EDb3A432268e5831"),
+            "token contract must appear: {uri}"
+        );
+        assert!(uri.contains("1000000"), "amount must appear: {uri}");
+    }
+
+    /// Solana falls back to the bare deposit address: current wallets don't
+    /// honor solana: URI parameters reliably.
+    #[test_all]
+    fn build_receive_payment_request_solana_returns_bare_address() {
+        let addr = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+        let out = build_receive_payment_request(addr, "solana", None, None, 1_000_000).unwrap();
+        assert_eq!(out, addr);
+    }
+
+    /// Tron falls back to the bare deposit address for the same reason.
+    #[test_all]
+    fn build_receive_payment_request_tron_returns_bare_address() {
+        let addr = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
+        let out = build_receive_payment_request(addr, "tron", None, None, 1_000_000).unwrap();
+        assert_eq!(out, addr);
+    }
+
+    /// An unrecognized address surfaces a Generic error rather than silently
+    /// returning something usable.
+    #[test_all]
+    fn build_receive_payment_request_rejects_unrecognized_address() {
+        let err =
+            build_receive_payment_request("not-an-address", "arbitrum", None, None, 1_000_000)
+                .unwrap_err();
+        assert!(matches!(err, SdkError::Generic(_)));
+    }
+
+    /// An EVM-looking deposit address for a Solana route must be rejected:
+    /// a provider that miswires chains cannot silently redirect funds by
+    /// returning an EVM address where a Solana address was expected.
+    #[test_all]
+    fn build_receive_payment_request_rejects_family_chain_mismatch() {
+        let evm_addr = "0x00Df20df75800ca8f40080505a7a802331C1321c";
+        let err =
+            build_receive_payment_request(evm_addr, "solana", None, None, 1_000_000).unwrap_err();
+        match err {
+            SdkError::Generic(msg) => {
+                assert!(
+                    msg.contains("Evm") && msg.contains("solana"),
+                    "unexpected message: {msg}"
+                );
+            }
+            other => panic!("expected Generic mismatch error, got {other:?}"),
+        }
+
+        let solana_addr = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+        assert!(
+            build_receive_payment_request(solana_addr, "tron", None, None, 1_000_000).is_err(),
+            "solana address must not be accepted for tron route",
+        );
     }
 }

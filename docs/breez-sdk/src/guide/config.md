@@ -170,12 +170,12 @@ Routes the connections the SDK opens through a SOCKS5 proxy, such as a local Tor
 
 {{#tabs config:config-proxy}}
 
-<h2 id="send-usdc-usdt">
-    <a class="header" href="#send-usdc-usdt">Send USDC/USDT</a>
+<h2 id="usdc-usdt">
+    <a class="header" href="#usdc-usdt">USDC/USDT</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.CrossChainConfig.html">API docs</a>
 </h2>
 
-USDC/USDT sends require explicit opt-in: {{#name default_config}} leaves {{#name cross_chain_config}} unset. Set it to a default {{#name CrossChainConfig}} to enable the feature, or to your own to override the slippage default. The SDK only returns routes whose destination is USDC or USDT on a supported chain.
+USDC/USDT (send and receive) requires explicit opt-in: {{#name default_config}} leaves {{#name cross_chain_config}} unset. Set it to a default {{#name CrossChainConfig}} to enable the feature, or to your own to override the slippage default. The SDK only returns routes whose destination is USDC or USDT on a supported chain.
 
 Constraints:
 
@@ -186,4 +186,4 @@ Constraints:
 
 The {{#name default_slippage_bps}} field sets the per-instance slippage default applied when the per-request {{#name max_slippage_bps}} is unset. It must be in the 10 to 500 basis-point range; when {{#name default_slippage_bps}} itself is unset, the SDK falls back to a built-in default of 100 bps (1%).
 
-See [Send USDC/USDT](./cross_chain.md) for the provider lineup, status lifecycle, retry-safety semantics, and limitations.
+See [USDC/USDT](./cross_chain.md) for the provider lineup, status lifecycle, retry-safety semantics, and limitations.

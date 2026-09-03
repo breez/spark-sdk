@@ -6,11 +6,11 @@ use tracing::{debug, info};
 
 use crate::{
     BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
-    CrossChainProvider, CrossChainRouteFilter, CrossChainRoutePair, GetTokensMetadataRequest,
-    GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse, ListFiatRatesResponse,
-    Network, OptimizationMode, OptimizeLeavesRequest, OptimizeLeavesResponse,
-    PreparePaymentLinkRequest, PreparePaymentLinkResponse, RegisterWebhookRequest,
-    RegisterWebhookResponse, SignMessageRequest, SignMessageResponse, SourceChain,
+    CrossChainProvider, CrossChainRouteFilter, CrossChainRoutePair, DeliveryMethod,
+    GetTokensMetadataRequest, GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse,
+    ListFiatRatesResponse, Network, OptimizationMode, OptimizeLeavesRequest,
+    OptimizeLeavesResponse, PreparePaymentLinkRequest, PreparePaymentLinkResponse,
+    RegisterWebhookRequest, RegisterWebhookResponse, SignMessageRequest, SignMessageResponse,
     UnregisterWebhookRequest, UpdateUserSettingsRequest, UserSettings, Webhook,
     chain::RecommendedFees,
     cross_chain::{
@@ -28,7 +28,7 @@ use crate::{
 
 use super::payments::validation::{
     known_token_contracts, resolve_direct_overpay_amount, resolve_slippage_bps,
-    resolve_target_overpay_bps, validate_address_family_against_route, validate_amount,
+    validate_address_family_against_route, validate_amount,
     validate_recipient_not_contract_address,
 };
 use super::{BreezSdk, helpers::get_deposit_address};
@@ -490,9 +490,9 @@ impl BreezSdk {
 
         // Cash App funds the deposit over Lightning. Fail fast before quoting if
         // the route can't be funded that way. Rejecting an empty
-        // `supported_source_chains` stops a hand-built route from reaching
+        // `delivery_methods` stops a hand-built route from reaching
         // `prepare` and committing provider state it can't fund.
-        if !route_supports_source_chain(&route, SourceChain::Lightning) {
+        if !route_supports_source_chain(&route, DeliveryMethod::Lightning) {
             return Err(SdkError::InvalidInput(
                 "The selected route can't be funded over Lightning".to_string(),
             ));
@@ -541,7 +541,7 @@ impl BreezSdk {
         // lands at or above target despite provider slippage. The pad comes from
         // config (no per-request override on a payment link).
         let fee_policy = fee_policy.unwrap_or_default();
-        let overpay_bps = resolve_target_overpay_bps(
+        let overpay_bps = crate::cross_chain::resolve_target_overpay_bps(
             None,
             self.config
                 .cross_chain_config
@@ -551,11 +551,11 @@ impl BreezSdk {
         let source_sats = resolve_direct_overpay_amount(source_sats, fee_policy, overpay_bps);
 
         let prepared = service
-            .prepare(
+            .prepare_send(
                 &recipient.address,
                 &route,
                 source_sats,
-                Some(SourceChain::Lightning),
+                Some(DeliveryMethod::Lightning),
                 None,
                 slippage_bps,
                 fee_policy.into(),
@@ -588,10 +588,10 @@ impl BreezSdk {
 }
 
 /// Whether `route` advertises `required` as a fundable source chain. An empty
-/// `supported_source_chains` (e.g. a hand-built route) matches nothing and is
+/// `delivery_methods` (e.g. a hand-built route) matches nothing and is
 /// rejected.
-fn route_supports_source_chain(route: &CrossChainRoutePair, required: SourceChain) -> bool {
-    route.supported_source_chains.contains(&required)
+fn route_supports_source_chain(route: &CrossChainRoutePair, required: DeliveryMethod) -> bool {
+    route.delivery_methods.contains(&required)
 }
 
 /// Verifies the provider's deposit `target` is a BOLT11 invoice requesting
@@ -630,7 +630,7 @@ fn deposit_target(context: &CrossChainProviderContext) -> String {
     }
 }
 
-/// Maps a [`crate::cross_chain::CrossChainPrepared`] + funding `url` to a
+/// Maps a [`crate::cross_chain::CrossChainSendPrepared`] + funding `url` to a
 /// [`PreparePaymentLinkResponse`].
 ///
 /// `estimated_out` is in the destination `asset`'s base units. The fee mirrors
@@ -638,7 +638,7 @@ fn deposit_target(context: &CrossChainProviderContext) -> String {
 /// base units, where `None` means sats (Boltz denominates its fee in sats;
 /// Orchestra in the stablecoin).
 fn prepare_payment_link_response(
-    prepared: crate::cross_chain::CrossChainPrepared,
+    prepared: crate::cross_chain::CrossChainSendPrepared,
     url: String,
     amount_sats: u64,
 ) -> PreparePaymentLinkResponse {
@@ -705,8 +705,8 @@ mod tests {
         CashAppProvider, SdkError, deposit_target, parse_compressed_public_key,
         prepare_payment_link_response, reject_reserved_namespace, route_supports_source_chain,
     };
-    use crate::cross_chain::{CrossChainPrepared, CrossChainProviderContext};
-    use crate::{CrossChainFeeMode, CrossChainProvider, CrossChainRoutePair, SourceChain};
+    use crate::cross_chain::{CrossChainProviderContext, CrossChainSendPrepared};
+    use crate::{CrossChainFeeMode, CrossChainProvider, CrossChainRoutePair, DeliveryMethod};
     use macros::test_all;
 
     #[cfg(feature = "browser-tests")]
@@ -720,7 +720,7 @@ mod tests {
         }
     }
 
-    fn route_with_source_chains(chains: Vec<SourceChain>) -> CrossChainRoutePair {
+    fn route_with_source_chains(chains: Vec<DeliveryMethod>) -> CrossChainRoutePair {
         CrossChainRoutePair {
             provider: CrossChainProvider::Orchestra,
             chain: "base".to_string(),
@@ -729,35 +729,39 @@ mod tests {
             contract_address: None,
             decimals: 6,
             exact_out_eligible: false,
-            supported_sources: vec![],
-            supported_source_chains: chains,
+            accepted_assets: vec![],
+            delivery_methods: chains,
         }
     }
 
     #[test_all]
     fn route_supports_source_chain_checks_membership() {
-        let lightning_only = route_with_source_chains(vec![SourceChain::Lightning]);
+        let lightning_only = route_with_source_chains(vec![DeliveryMethod::Lightning]);
         // Cash App (Lightning) is supported; MoonPay (Bitcoin) is not.
         assert!(route_supports_source_chain(
             &lightning_only,
-            SourceChain::Lightning
+            DeliveryMethod::Lightning
         ));
         assert!(!route_supports_source_chain(
             &lightning_only,
-            SourceChain::Bitcoin
+            DeliveryMethod::Bitcoin
         ));
 
-        let both = route_with_source_chains(vec![SourceChain::Lightning, SourceChain::Bitcoin]);
-        assert!(route_supports_source_chain(&both, SourceChain::Bitcoin));
+        let both =
+            route_with_source_chains(vec![DeliveryMethod::Lightning, DeliveryMethod::Bitcoin]);
+        assert!(route_supports_source_chain(&both, DeliveryMethod::Bitcoin));
 
         // An empty list matches nothing: a route must advertise its rails, so a
         // hand-built route can't slip a bad rail through to `prepare`.
         let empty = route_with_source_chains(vec![]);
-        assert!(!route_supports_source_chain(&empty, SourceChain::Bitcoin));
+        assert!(!route_supports_source_chain(
+            &empty,
+            DeliveryMethod::Bitcoin
+        ));
     }
 
-    fn prepared(provider_context: CrossChainProviderContext) -> CrossChainPrepared {
-        CrossChainPrepared {
+    fn prepared(provider_context: CrossChainProviderContext) -> CrossChainSendPrepared {
+        CrossChainSendPrepared {
             amount_in: 5000,
             asset_amount_in: 6_500_000,
             estimated_out: 6_450_000,
@@ -775,8 +779,8 @@ mod tests {
                 contract_address: None,
                 decimals: 6,
                 exact_out_eligible: false,
-                supported_sources: vec![],
-                supported_source_chains: vec![],
+                accepted_assets: vec![],
+                delivery_methods: vec![],
             },
             recipient_address: "0xabc".to_string(),
             token_identifier: None,

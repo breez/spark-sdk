@@ -10,7 +10,7 @@ use tracing::debug;
 
 use super::models::{
     EstimateRequest, EstimateResponse, QuoteRequest, QuoteResponse, Route, RoutesResponse,
-    StatusResponse, SubmitRequestSpark, SubmitResponse,
+    StatusResponse, SubmitRequest, SubmitResponse,
 };
 use crate::cache::CacheStore;
 use crate::config::OrchestraConfig;
@@ -133,30 +133,28 @@ impl OrchestraClient {
             .await
     }
 
-    /// Submit an already-sent deposit tx hash for an existing quote, returning
-    /// the processing order id. Send the deposit with
-    /// [`Self::transfer_to_deposit`] first. The idempotency key is derived from
-    /// the quote id, so retries are safe.
+    /// Submit a quote.
     ///
-    /// Accepted after the quote expires, which is what lets a failed submit be
-    /// retried later, though the rate is requoted at that point.
-    ///
-    /// The response carries the `read_token` that authorises reading the order,
-    /// and this is the only call that returns one. Orchestra detects the deposit
-    /// on the address whether or not this is called, so a failure costs the
-    /// ability to observe the order rather than the deposit itself, and
-    /// resubmitting is how that ability is regained.
-    pub async fn submit_spark(
+    /// `idempotency_key` is sent as `X-Idempotency-Key`. Reusing a key
+    /// replays the cached response, so a caller that expects Orchestra state
+    /// to advance between calls must vary the key. The caller picks the
+    /// policy (deterministic to collide retries, or fresh per call).
+    pub async fn submit(
         &self,
-        request: SubmitRequestSpark,
+        request: SubmitRequest,
+        idempotency_key: String,
     ) -> Result<SubmitResponse, FlashnetError> {
-        let idem = derive_idempotency_key("submit", &request.quote_id);
         debug!(
             "Orchestra: POST /v1/orchestration/submit quoteId={} idem={}",
-            request.quote_id, idem
+            request.quote_id, idempotency_key
         );
-        self.post("v1/orchestration/submit", &request, true, Some(idem))
-            .await
+        self.post(
+            "v1/orchestration/submit",
+            &request,
+            true,
+            Some(idempotency_key),
+        )
+        .await
     }
 
     /// Send `amount_in` sats (or tokens) to the Orchestra-provided `deposit_address`
@@ -353,7 +351,7 @@ impl OrchestraClient {
 
 /// Build a deterministic idempotency key so that retrying the same logical
 /// request (same endpoint + scope) is safe.
-fn derive_idempotency_key(scope: &str, key_input: &str) -> String {
+pub fn derive_idempotency_key(scope: &str, key_input: &str) -> String {
     let hash = sha256::Hash::hash(format!("orchestra:{scope}:{key_input}").as_bytes());
     hash.to_string()
 }
@@ -371,4 +369,29 @@ fn extract_error_message(body: &str) -> String {
                 .map(String::from)
         })
         .unwrap_or_else(|| body.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Same scope + same input must always produce the same key.
+    #[test]
+    fn derive_idempotency_key_is_deterministic() {
+        let a = derive_idempotency_key("submit", "q_abc");
+        let b = derive_idempotency_key("submit", "q_abc");
+        assert_eq!(a, b);
+    }
+
+    /// Different inputs (or scopes) must produce different keys: a single
+    /// collision would conflate two logically distinct requests.
+    #[test]
+    fn derive_idempotency_key_disambiguates_inputs_and_scopes() {
+        let by_input = derive_idempotency_key("submit", "q_abc");
+        let other_input = derive_idempotency_key("submit", "q_xyz");
+        assert_ne!(by_input, other_input);
+
+        let other_scope = derive_idempotency_key("refund", "q_abc");
+        assert_ne!(by_input, other_scope);
+    }
 }

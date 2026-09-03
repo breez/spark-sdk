@@ -9,4 +9,4 @@ The SDK supports advanced features that may be useful in specific use cases:
 - **[Server mode](server_mode.md)** is the SDK profile for multi-tenant server deployments where each request builds an ephemeral SDK and the host orchestrates sync, claiming, and event delivery explicitly
 - **[Client signing](client_signing.md)** lets a server drive payments while the key that approves them stays with the user, who reviews and signs each payment on their side
 - **[Using Turnkey](turnkey.md)** runs the wallet's signing inside a Turnkey secure enclave, so a server can operate wallets without holding key material
-- **[Send USDC/USDT](cross_chain.md)** to a recipient on an external chain
+- **[USDC/USDT payments](cross_chain.md)** between Spark and a supported external chain (Ethereum-family, Solana, Tron)
