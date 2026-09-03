@@ -721,6 +721,14 @@ async fn resolve_funding(
 /// rather than treating it as confirmed or absent.
 async fn execute_chain_query(chain: &dyn BitcoinChainService, query: &ChainQuery) -> ChainResult {
     match query {
+        ChainQuery::TxConfirmed(txid) => match chain.get_transaction_status(txid.to_string()).await
+        {
+            Ok(status) => ChainResult::Confirmed(status.confirmed),
+            Err(e) => {
+                warn!(%txid, error = %e, "chain lookup failed: transaction status");
+                ChainResult::Unavailable
+            }
+        },
         ChainQuery::Outspend(outpoint) => {
             match chain
                 .get_outspend(outpoint.txid.to_string(), outpoint.vout)
