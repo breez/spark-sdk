@@ -160,12 +160,8 @@ pub async fn handle_command(
                 .await?;
             // No chain access here, so nothing is known to be on-chain and nothing
             // is observed: the exit resolves to a fresh full build.
-            let exit = build_unilateral_exit(
-                &prepared,
-                &ExitChainState::default(),
-                &[],
-                fee_rate_sat_per_kw,
-            )?;
+            let exit =
+                build_unilateral_exit(&prepared, &ExitChainState::default(), fee_rate_sat_per_kw)?;
 
             if let Some(fan_out) = &exit.fan_out
                 && let Some(psbt) = &fan_out.to_sign

@@ -14,9 +14,9 @@ use spark_wallet::{
     AddressUtxo, ChainQuery, ChainResult, ConfirmedExitNode as WalletConfirmedExitNode, CpfpInput,
     ExitChainState as WalletExitChainState, ExitNodeConfirmation as WalletExitNodeConfirmation,
     ExitRefund as WalletExitRefund, ExitRefundState as WalletExitRefundState, ExitTxKind,
-    ExitTxStatus, Observation, PreparedUnilateralExit, SpendInfo, TreeNode, TreeNodeId,
-    UnilateralExitBuild, build_unilateral_exit, is_ephemeral_anchor_output, leaf_refund_addresses,
-    next_chain_queries, scan_exit_chain,
+    ExitTxStatus, Observation, SpendInfo, TreeNode, TreeNodeId, UnilateralExitBuild,
+    build_unilateral_exit, is_ephemeral_anchor_output, leaf_refund_addresses, scan_exit_chain,
+    scan_funding,
 };
 
 use tracing::{debug, trace, warn};
@@ -203,6 +203,10 @@ impl BreezSdk {
             ));
         }
 
+        // A prior run spends the funding it was given, so what the caller hands
+        // back may name outputs that are gone. Follow them to what they became
+        // before planning, so the plan is made over what can actually be spent.
+        let funding_inputs = resolve_funding(chain, funding_inputs).await?;
         let fee_rate_sat_per_kw = sat_per_kw_from_vbyte(prepared.fee_rate_sat_per_vbyte);
         let prepared_exit = self
             .spark_wallet
@@ -234,12 +238,8 @@ impl BreezSdk {
             })
             .collect();
 
-        // The tree was read while preparing; only what the funding touched is
-        // still to be looked up here.
         let chain_state = exit_chain_state_from_model(&prepared.exit_chain_state)?;
-        let observed = resolve_exit_observations(chain, &prepared_exit, &chain_state).await?;
-        let build =
-            build_unilateral_exit(&prepared_exit, &chain_state, &observed, fee_rate_sat_per_kw)?;
+        let build = build_unilateral_exit(&prepared_exit, &chain_state, fee_rate_sat_per_kw)?;
         let recoverable_value_sat = build.recoverable_value_sat;
         let build_fee_sat = build.total_fee_sat;
         // Captured before the loop below consumes `build.branches`.
@@ -684,40 +684,31 @@ fn ids(ids: Vec<TreeNodeId>) -> Vec<String> {
     ids.into_iter().map(|id| id.to_string()).collect()
 }
 
-/// Drives the wallet's pure resolver to completion: it reports which chain
-/// lookups the exit needs, core performs them, and the results are fed back until
-/// nothing more is needed. Core never interprets the exit tree itself.
-async fn resolve_exit_observations(
+/// Follows the supplied funding to what it is worth now, driving
+/// [`scan_funding`] to completion. The only chain reading a build does: the tree
+/// was read while preparing.
+async fn resolve_funding(
     chain: &dyn BitcoinChainService,
-    prepared: &PreparedUnilateralExit,
-    state: &WalletExitChainState,
-) -> Result<Vec<Observation>, SdkError> {
+    supplied: Vec<CpfpInput>,
+) -> Result<Vec<CpfpInput>, SdkError> {
     let mut observed: Vec<Observation> = Vec::new();
-    let mut round = 0u32;
     loop {
-        let queries = next_chain_queries(prepared, state, &observed)?;
-        if queries.is_empty() {
-            break;
+        let scan = scan_funding(&supplied, &observed);
+        if scan.pending.is_empty() {
+            debug!(
+                supplied = supplied.len(),
+                resolved = scan.inputs.len(),
+                "resolve_funding: what the supplied funding is worth now"
+            );
+            return Ok(scan.inputs);
         }
-        round = round.saturating_add(1);
-        trace!(
-            round,
-            queries = queries.len(),
-            "resolve_exit_observations: round"
-        );
         // Each query is answered exactly once (a failed lookup records
         // `Unavailable`), so the loop always progresses and terminates.
-        for query in queries {
+        for query in scan.pending {
             let result = execute_chain_query(chain, &query).await;
             observed.push(Observation { query, result });
         }
     }
-    debug!(
-        rounds = round,
-        observations = observed.len(),
-        "resolve_exit_observations: on-chain state resolved"
-    );
-    Ok(observed)
 }
 
 /// Performs one [`ChainQuery`], translating this crate's chain types into the
