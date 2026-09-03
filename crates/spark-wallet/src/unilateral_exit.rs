@@ -78,10 +78,10 @@ pub(crate) struct ResolvedExitState {
 pub(crate) enum NodeState {
     /// Confirmed via the cpfp `node_tx`, its fee paid by a child. What that child
     /// left over is funding like any other, and reaches the build as an input.
-    ConfirmedCpfp,
+    ConfirmedCpfp { block_height: Option<u32> },
     /// Confirmed via the self-fee `direct_tx`. Only ever a leaf: an intermediate's
     /// children spend its cpfp output, which a direct spend never creates.
-    ConfirmedDirect,
+    ConfirmedDirect { block_height: Option<u32> },
 }
 
 /// How a leaf's refund was resolved on-chain (absent = drive its cpfp `refund_tx`).
@@ -102,6 +102,7 @@ pub(crate) struct ConfirmedRefund {
     pub tx: Transaction,
     pub outpoint: bitcoin::OutPoint,
     pub value: u64,
+    pub block_height: Option<u32>,
 }
 
 /// One unilateral-exit transaction and, when it still needs fee-bumping, the
@@ -135,8 +136,11 @@ pub enum ExitTxKind {
 /// A built exit tx's on-chain state, resolved from the chain observations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExitTxStatus {
-    /// On-chain and confirmed (or an adopted, already-confirmed output).
-    Confirmed,
+    /// On-chain and confirmed (or an adopted, already-confirmed output), in the
+    /// block at this height where that is known.
+    Confirmed {
+        block_height: Option<u32>,
+    },
     Unconfirmed,
     /// A chain lookup this tx depended on failed, so its state is unknown.
     Unverified,
@@ -213,8 +217,13 @@ pub enum ChainQuery {
 pub enum ChainResult {
     /// `None` if unspent.
     Spend(Option<SpendInfo>),
-    /// Whether the transaction is in a block.
-    Confirmed(bool),
+    /// Whether the transaction is in a block, and which one. The height is what
+    /// a relative timelock counts from, so a caller that has it need not fetch
+    /// the transaction again to work out when a child of it can go out.
+    Confirmed {
+        confirmed: bool,
+        block_height: Option<u32>,
+    },
     Transaction(Transaction),
     /// Every output ever paid to the address, spent or not.
     AddressUtxos(Vec<AddressUtxo>),
@@ -226,6 +235,8 @@ pub enum ChainResult {
 pub struct SpendInfo {
     pub spender_txid: Txid,
     pub confirmed: bool,
+    /// The block the spender is in, when it is in one.
+    pub block_height: Option<u32>,
 }
 
 /// An output found at a refund address, spent or not.
@@ -235,6 +246,8 @@ pub struct AddressUtxo {
     pub vout: u32,
     pub value: u64,
     pub confirmed: bool,
+    /// The block it is in, when it is in one.
+    pub block_height: Option<u32>,
 }
 
 /// A performed [`ChainQuery`] paired with its [`ChainResult`].
@@ -386,8 +399,9 @@ pub struct ExitCheckInput {
 
 /// What the chain says about an exit a caller kept.
 pub struct ExitCheck {
-    /// The transactions now in a block.
-    pub confirmed: HashSet<Txid>,
+    /// The transactions now in a block, against the height of that block where
+    /// the chain reported one.
+    pub confirmed: HashMap<Txid, Option<u32>>,
     /// Whether the chain no longer matches: something other than this exit's own
     /// transaction took an outpoint it still needs.
     pub diverged: bool,
@@ -408,7 +422,7 @@ pub struct ExitCheck {
 pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> ExitCheck {
     let index = ObservedIndex::new(observed);
     let mut pending: Vec<ChainQuery> = Vec::new();
-    let mut confirmed: HashSet<Txid> = HashSet::new();
+    let mut confirmed: HashMap<Txid, Option<u32>> = HashMap::new();
     let mut settled: HashSet<Txid> = HashSet::new();
     let mut diverged = false;
 
@@ -428,13 +442,18 @@ pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> Exi
         }
         let query = ChainQuery::TxConfirmed(txid);
         match index.get(&query) {
-            Some(ChainResult::Confirmed(true)) => {
-                confirmed.insert(txid);
+            Some(ChainResult::Confirmed {
+                confirmed: true,
+                block_height,
+            }) => {
+                confirmed.insert(txid, *block_height);
                 mark_settled(&by_txid, txid, &mut confirmed, &mut settled);
             }
             // Not in a block: whether a reorg undid it or it never landed, the
             // frontier pass below asks what is there instead.
-            Some(ChainResult::Confirmed(false)) => {
+            Some(ChainResult::Confirmed {
+                confirmed: false, ..
+            }) => {
                 settled.insert(txid);
             }
             // Unreadable: nothing is known, and asking again next time is all
@@ -451,12 +470,16 @@ pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> Exi
         // in the same pass: the list is in the order the exit was built.
         for input in txs {
             let txid = input.tx.compute_txid();
-            if confirmed.contains(&txid) {
+            if confirmed.contains_key(&txid) {
                 continue;
             }
             // Not reachable: something it needs is not in a block, so its own
             // inputs do not exist yet and nothing can have taken them.
-            if !input.depends_on.iter().all(|dep| confirmed.contains(dep)) {
+            if !input
+                .depends_on
+                .iter()
+                .all(|dep| confirmed.contains_key(dep))
+            {
                 continue;
             }
             // One input answers for a transaction with several (the sweep): they
@@ -480,7 +503,7 @@ pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> Exi
                 match index.get(&query) {
                     Some(ChainResult::Spend(Some(info))) if info.confirmed => {
                         if info.spender_txid == txid {
-                            confirmed.insert(txid);
+                            confirmed.insert(txid, info.block_height);
                         } else if !ours(input, info.spender_txid) {
                             warn!(%outpoint, spender = %info.spender_txid, "check: outpoint taken");
                             diverged = true;
@@ -517,7 +540,7 @@ fn ours(input: &ExitCheckInput, spender: Txid) -> bool {
 fn mark_settled(
     by_txid: &HashMap<Txid, &ExitCheckInput>,
     txid: Txid,
-    confirmed: &mut HashSet<Txid>,
+    confirmed: &mut HashMap<Txid, Option<u32>>,
     settled: &mut HashSet<Txid>,
 ) {
     let mut stack = vec![txid];
@@ -525,7 +548,8 @@ fn mark_settled(
         if !settled.insert(txid) {
             continue;
         }
-        confirmed.insert(txid);
+        // In a block by the same spend chain, but which one was never asked.
+        confirmed.entry(txid).or_insert(None);
         if let Some(input) = by_txid.get(&txid) {
             stack.extend(input.depends_on.iter().copied());
         }
@@ -548,8 +572,12 @@ fn restore_exit_chain_walk(state: &ExitChainState, leaf_ids: &[TreeNodeId]) -> E
             let restored = match node.confirmed_by {
                 // Change is funding-dependent, so it is resolved separately, by
                 // the caller that holds a funding script.
-                ExitNodeConfirmation::Cpfp => NodeState::ConfirmedCpfp,
-                ExitNodeConfirmation::Direct => NodeState::ConfirmedDirect,
+                ExitNodeConfirmation::Cpfp => NodeState::ConfirmedCpfp {
+                    block_height: node.block_height,
+                },
+                ExitNodeConfirmation::Direct => NodeState::ConfirmedDirect {
+                    block_height: node.block_height,
+                },
             };
             (node.node_id.clone(), restored)
         })
@@ -571,13 +599,19 @@ fn restore_exit_chain_walk(state: &ExitChainState, leaf_ids: &[TreeNodeId]) -> E
     // A refund the chain reports overrides what the branch alone implies.
     for refund in &state.refunds {
         let restored = match &refund.state {
-            ExitRefundState::OnChain { tx, vout, value } => RefundState::Adopted(ConfirmedRefund {
+            ExitRefundState::OnChain {
+                tx,
+                vout,
+                value,
+                block_height,
+            } => RefundState::Adopted(ConfirmedRefund {
                 outpoint: OutPoint {
                     txid: tx.compute_txid(),
                     vout: *vout,
                 },
                 tx: tx.clone(),
                 value: *value,
+                block_height: *block_height,
             }),
             ExitRefundState::Swept => RefundState::Swept,
         };
@@ -644,8 +678,12 @@ pub fn scan_exit_chain(
         .map(|(node_id, state)| ConfirmedExitNode {
             node_id,
             confirmed_by: match state {
-                NodeState::ConfirmedCpfp => ExitNodeConfirmation::Cpfp,
-                NodeState::ConfirmedDirect => ExitNodeConfirmation::Direct,
+                NodeState::ConfirmedCpfp { .. } => ExitNodeConfirmation::Cpfp,
+                NodeState::ConfirmedDirect { .. } => ExitNodeConfirmation::Direct,
+            },
+            block_height: match state {
+                NodeState::ConfirmedCpfp { block_height }
+                | NodeState::ConfirmedDirect { block_height } => block_height,
             },
         })
         .collect();
@@ -660,6 +698,7 @@ pub fn scan_exit_chain(
         .filter_map(|(leaf_id, state)| {
             let state = match state {
                 RefundState::Adopted(refund) => ExitRefundState::OnChain {
+                    block_height: refund.block_height,
                     tx: refund.tx,
                     vout: refund.outpoint.vout,
                     value: refund.value,
@@ -844,13 +883,21 @@ fn resume_point(
     for (index, node) in candidates.by_ref() {
         let query = ChainQuery::TxConfirmed(node.node_tx.compute_txid());
         match observed.get(&query) {
-            Some(ChainResult::Confirmed(true)) => {
+            Some(ChainResult::Confirmed {
+                confirmed: true,
+                block_height,
+            }) => {
                 trace!(node = %node.id, "walk: resuming below the deepest confirmed node");
-                return ResumePoint::Below(index);
+                return ResumePoint::Below {
+                    index,
+                    block_height: *block_height,
+                };
             }
             // Not in a block: a label that was never true, or one a reorg undid.
             // Its parent is the next place to look.
-            Some(ChainResult::Confirmed(false)) => {}
+            Some(ChainResult::Confirmed {
+                confirmed: false, ..
+            }) => {}
             // Unreadable, so nothing is known. Start from the deposit, where the
             // walk's own fallbacks apply.
             Some(_) => return ResumePoint::Deposit,
@@ -867,7 +914,12 @@ fn resume_point(
 enum ResumePoint {
     /// Start below the node at this index, which is confirmed, along with every
     /// node above it.
-    Below(usize),
+    Below {
+        index: usize,
+        /// The block the node at `index` is in. The nodes above it are in a block
+        /// too, by the same spend chain, but which one was never asked.
+        block_height: Option<u32>,
+    },
     /// Nothing is known to be on-chain: start at the deposit.
     Deposit,
     /// A lookup is outstanding; nothing to do until it is answered.
@@ -908,9 +960,18 @@ fn walk_branch(
     let start = match resume {
         ResumePoint::Awaiting => return,
         ResumePoint::Deposit => 0,
-        ResumePoint::Below(index) => {
-            for node in &chain_nodes[..=index] {
-                nodes.insert(node.id.clone(), NodeState::ConfirmedCpfp);
+        ResumePoint::Below {
+            index,
+            block_height,
+        } => {
+            for (i, node) in chain_nodes[..=index].iter().enumerate() {
+                nodes.insert(
+                    node.id.clone(),
+                    NodeState::ConfirmedCpfp {
+                        // Only the node that was checked has a known height.
+                        block_height: if i == index { block_height } else { None },
+                    },
+                );
             }
             // The leaf itself was the confirmed one, so its refund is all that is
             // left, and that is read separately.
@@ -960,7 +1021,10 @@ fn walk_branch(
                         %leaf_id, node = %node.id,
                         "walk: chain lookup failed, operators report OnChain; assuming cpfp-confirmed"
                     );
-                    nodes.insert(node.id.clone(), NodeState::ConfirmedCpfp);
+                    nodes.insert(
+                        node.id.clone(),
+                        NodeState::ConfirmedCpfp { block_height: None },
+                    );
                     unverifiable_confirmed.insert(node.id.clone());
                     if is_leaf {
                         return;
@@ -985,7 +1049,12 @@ fn walk_branch(
                 return;
             }
             trace!(%leaf_id, node = %node.id, is_leaf, "walk: confirmed via cpfp node_tx");
-            nodes.insert(node.id.clone(), NodeState::ConfirmedCpfp);
+            nodes.insert(
+                node.id.clone(),
+                NodeState::ConfirmedCpfp {
+                    block_height: info.block_height,
+                },
+            );
             if is_leaf {
                 return;
             }
@@ -995,7 +1064,12 @@ fn walk_branch(
             // direct refund, if held.
             if node.direct_refund_tx.is_some() {
                 trace!(%leaf_id, node = %node.id, "walk: leaf went direct, driving direct refund");
-                nodes.insert(node.id.clone(), NodeState::ConfirmedDirect);
+                nodes.insert(
+                    node.id.clone(),
+                    NodeState::ConfirmedDirect {
+                        block_height: info.block_height,
+                    },
+                );
                 refunds.insert(leaf_id.clone(), RefundState::DriveDirect);
             } else {
                 trace!(%leaf_id, node = %node.id, "walk: leaf went direct but no direct refund held; branch stopped");
@@ -1099,6 +1173,7 @@ fn interpret_refund(
             tx,
             outpoint: refund_outpoint,
             value: txo.value,
+            block_height: txo.block_height,
         }),
     );
 }
@@ -1204,7 +1279,7 @@ pub(crate) fn build_exit(
         if !stopped {
             for node in chain {
                 let node_state = resolved.nodes.get(&node.id);
-                let base_tx = if node_state == Some(&NodeState::ConfirmedDirect) {
+                let base_tx = if matches!(node_state, Some(NodeState::ConfirmedDirect { .. })) {
                     node.direct_tx.clone().ok_or_else(|| {
                         SparkWalletError::Generic(format!(
                             "Node {} resolved as direct but has no direct_tx",
@@ -1243,7 +1318,12 @@ pub(crate) fn build_exit(
                         }
                     };
                     let status = match node_state {
-                        Some(_) => ExitTxStatus::Confirmed,
+                        Some(
+                            NodeState::ConfirmedCpfp { block_height }
+                            | NodeState::ConfirmedDirect { block_height },
+                        ) => ExitTxStatus::Confirmed {
+                            block_height: *block_height,
+                        },
                         None => ExitTxStatus::Unconfirmed,
                     };
                     txs.push(ExitTx {
@@ -1278,7 +1358,9 @@ pub(crate) fn build_exit(
                     base_tx: adopted.tx.clone(),
                     to_sign: None,
                     depends_on: vec![],
-                    status: ExitTxStatus::Confirmed,
+                    status: ExitTxStatus::Confirmed {
+                        block_height: adopted.block_height,
+                    },
                 });
             }
             Some(RefundState::DriveDirect) => {
@@ -1580,6 +1662,7 @@ mod exit_build_tests {
             refunds: [(
                 id("leaf"),
                 RefundState::Adopted(ConfirmedRefund {
+                    block_height: None,
                     tx: anchor_tx(9),
                     outpoint: adopted_outpoint,
                     value: 55_000,
@@ -1609,7 +1692,7 @@ mod exit_build_tests {
     #[test]
     fn build_skips_confirmed_node() {
         let resolved = ResolvedExitState {
-            nodes: [(id("root"), NodeState::ConfirmedCpfp)]
+            nodes: [(id("root"), NodeState::ConfirmedCpfp { block_height: None })]
                 .into_iter()
                 .collect(),
             ..Default::default()
@@ -1619,7 +1702,7 @@ mod exit_build_tests {
         let root = &txs[0];
         assert_eq!(root.node_id.as_ref(), Some(&id("root")));
         assert!(root.to_sign.is_none(), "a confirmed node carries no child");
-        assert_eq!(root.status, ExitTxStatus::Confirmed);
+        assert_eq!(root.status, ExitTxStatus::Confirmed { block_height: None });
         assert!(
             txs.iter().skip(1).all(|t| t.to_sign.is_some()),
             "nodes below the confirmed one are still driven"
@@ -1630,8 +1713,11 @@ mod exit_build_tests {
     fn build_drives_direct_refund() {
         let resolved = ResolvedExitState {
             nodes: [
-                (id("root"), NodeState::ConfirmedCpfp),
-                (id("leaf"), NodeState::ConfirmedDirect),
+                (id("root"), NodeState::ConfirmedCpfp { block_height: None }),
+                (
+                    id("leaf"),
+                    NodeState::ConfirmedDirect { block_height: None },
+                ),
             ]
             .into_iter()
             .collect(),
@@ -1688,6 +1774,7 @@ mod exit_build_tests {
             refunds: [(
                 id("leaf"),
                 RefundState::Adopted(ConfirmedRefund {
+                    block_height: None,
                     tx: anchor_tx(9),
                     outpoint: adopted_outpoint,
                     value: 40_000,
@@ -1706,8 +1793,8 @@ mod exit_build_tests {
     fn build_omits_swept_leaf_refund() {
         let resolved = ResolvedExitState {
             nodes: [
-                (id("root"), NodeState::ConfirmedCpfp),
-                (id("leaf"), NodeState::ConfirmedCpfp),
+                (id("root"), NodeState::ConfirmedCpfp { block_height: None }),
+                (id("leaf"), NodeState::ConfirmedCpfp { block_height: None }),
             ]
             .into_iter()
             .collect(),
@@ -1892,7 +1979,7 @@ mod exit_build_tests {
             csv_timelock_blocks: None,
             depends_on: vec![],
             status: if nonce == 1 {
-                ExitTxStatus::Confirmed
+                ExitTxStatus::Confirmed { block_height: None }
             } else {
                 ExitTxStatus::Unconfirmed
             },
@@ -1917,7 +2004,7 @@ mod exit_build_tests {
         let txs = &build.branches[0].txs;
         assert_eq!(
             txs[0].status,
-            ExitTxStatus::Confirmed,
+            ExitTxStatus::Confirmed { block_height: None },
             "a confirmed downstream tx is not downgraded"
         );
         assert_eq!(
@@ -1967,7 +2054,7 @@ mod exit_build_tests {
         let all_driven =
             build_exit(&single_leaf_plan(), &ResolvedExitState::default(), FEE_RATE).unwrap();
         let resolved = ResolvedExitState {
-            nodes: [(id("root"), NodeState::ConfirmedCpfp)]
+            nodes: [(id("root"), NodeState::ConfirmedCpfp { block_height: None })]
                 .into_iter()
                 .collect(),
             ..Default::default()
@@ -2460,6 +2547,7 @@ mod interpret_tests {
             result: ChainResult::Spend(Some(SpendInfo {
                 spender_txid: spender,
                 confirmed: true,
+                block_height: None,
             })),
         }
     }
@@ -2487,7 +2575,10 @@ mod interpret_tests {
 
         let observed = vec![Observation {
             query: ChainQuery::TxConfirmed(deepest),
-            result: ChainResult::Confirmed(true),
+            result: ChainResult::Confirmed {
+                confirmed: true,
+                block_height: None,
+            },
         }];
         let check = check_exit_chain(&chain, &observed);
 
@@ -2507,7 +2598,10 @@ mod interpret_tests {
         let observed = vec![
             Observation {
                 query: ChainQuery::TxConfirmed(first),
-                result: ChainResult::Confirmed(true),
+                result: ChainResult::Confirmed {
+                    confirmed: true,
+                    block_height: None,
+                },
             },
             // Broadcast and confirmed since; the caller still has it as pending.
             spent(chain[1].tx.input[0].previous_output, second),
@@ -2518,9 +2612,45 @@ mod interpret_tests {
         assert!(check.pending.is_empty(), "{:?}", check.pending);
         assert!(!check.diverged);
         assert!(
-            check.confirmed.contains(&second),
+            check.confirmed.contains_key(&second),
             "the one that landed is found"
         );
+    }
+
+    /// The height a transaction confirmed at reaches the caller. A relative
+    /// timelock counts from it, so without it every caller fetches the
+    /// transaction again to work out when its child can go out.
+    #[test]
+    fn check_reports_the_height_a_transaction_confirmed_at() {
+        let chain = exit_chain_of_three();
+        let first = chain[0].tx.compute_txid();
+        let second = chain[1].tx.compute_txid();
+
+        let observed = vec![
+            Observation {
+                query: ChainQuery::TxConfirmed(first),
+                result: ChainResult::Confirmed {
+                    confirmed: true,
+                    block_height: Some(880_000),
+                },
+            },
+            // Landed since the caller last looked, so its height comes from the
+            // outspend that found it rather than from a TxConfirmed.
+            Observation {
+                query: ChainQuery::Outspend(chain[1].tx.input[0].previous_output),
+                result: ChainResult::Spend(Some(SpendInfo {
+                    spender_txid: second,
+                    confirmed: true,
+                    block_height: Some(880_002),
+                })),
+            },
+            unspent(chain[2].tx.input[0].previous_output),
+        ];
+        let check = check_exit_chain(&chain, &observed);
+
+        assert!(check.pending.is_empty(), "{:?}", check.pending);
+        assert_eq!(check.confirmed.get(&first), Some(&Some(880_000)));
+        assert_eq!(check.confirmed.get(&second), Some(&Some(880_002)));
     }
 
     /// A frontier whose own input was taken by somebody else: the exit no longer
@@ -2535,7 +2665,10 @@ mod interpret_tests {
         let observed = vec![
             Observation {
                 query: ChainQuery::TxConfirmed(first),
-                result: ChainResult::Confirmed(true),
+                result: ChainResult::Confirmed {
+                    confirmed: true,
+                    block_height: None,
+                },
             },
             spent(frontier_input, stranger),
         ];
@@ -2561,7 +2694,10 @@ mod interpret_tests {
         let observed = vec![
             Observation {
                 query: ChainQuery::TxConfirmed(first),
-                result: ChainResult::Confirmed(true),
+                result: ChainResult::Confirmed {
+                    confirmed: true,
+                    block_height: None,
+                },
             },
             unspent(chain[1].tx.input[0].previous_output),
             spent(anchor, stranger),
@@ -2580,7 +2716,10 @@ mod interpret_tests {
 
         let observed = vec![Observation {
             query: ChainQuery::TxConfirmed(first),
-            result: ChainResult::Confirmed(true),
+            result: ChainResult::Confirmed {
+                confirmed: true,
+                block_height: None,
+            },
         }];
         let check = check_exit_chain(&chain, &observed);
 
@@ -2671,7 +2810,10 @@ mod interpret_tests {
 
         let confirmed = |txid, yes| Observation {
             query: ChainQuery::TxConfirmed(txid),
-            result: ChainResult::Confirmed(yes),
+            result: ChainResult::Confirmed {
+                confirmed: yes,
+                block_height: None,
+            },
         };
 
         let observed = vec![confirmed(mid_txid, true), unspent(mid_out)];
@@ -2733,7 +2875,10 @@ mod interpret_tests {
 
         let confirmed = |txid, yes| Observation {
             query: ChainQuery::TxConfirmed(txid),
-            result: ChainResult::Confirmed(yes),
+            result: ChainResult::Confirmed {
+                confirmed: yes,
+                block_height: None,
+            },
         };
 
         // mid is labelled on-chain but is not in a block; root still is.
@@ -2867,6 +3012,7 @@ mod interpret_tests {
                 vout: 0,
                 value,
                 confirmed: true,
+                block_height: None,
             }]),
         }
     }
@@ -2884,6 +3030,7 @@ mod interpret_tests {
             result: ChainResult::Spend(Some(SpendInfo {
                 spender_txid: spender,
                 confirmed: false,
+                block_height: None,
             })),
         }
     }
@@ -2955,12 +3102,12 @@ mod interpret_tests {
 
         assert_eq!(
             interp.resolved.nodes.get(&id("root")),
-            Some(&NodeState::ConfirmedCpfp),
+            Some(&NodeState::ConfirmedCpfp { block_height: None }),
             "the leaf went direct, so the root's cpfp change is never resolved"
         );
         assert_eq!(
             interp.resolved.nodes.get(&leaf_id),
-            Some(&NodeState::ConfirmedDirect)
+            Some(&NodeState::ConfirmedDirect { block_height: None })
         );
         assert!(matches!(
             interp.resolved.refunds.get(&leaf_id),
@@ -3298,11 +3445,11 @@ mod interpret_tests {
 
         assert_eq!(
             interp.resolved.nodes.get(&id("root")),
-            Some(&NodeState::ConfirmedCpfp)
+            Some(&NodeState::ConfirmedCpfp { block_height: None })
         );
         assert_eq!(
             interp.resolved.nodes.get(&leaf_id),
-            Some(&NodeState::ConfirmedCpfp)
+            Some(&NodeState::ConfirmedCpfp { block_height: None })
         );
     }
 
@@ -3347,7 +3494,7 @@ mod interpret_tests {
 
         assert_eq!(
             interp.resolved.nodes.get(&id("root")),
-            Some(&NodeState::ConfirmedCpfp),
+            Some(&NodeState::ConfirmedCpfp { block_height: None }),
             "root confirmed via the operator fallback"
         );
         assert!(
@@ -3391,7 +3538,7 @@ mod interpret_tests {
 
         assert_eq!(
             interp.resolved.nodes.get(&id("root")),
-            Some(&NodeState::ConfirmedCpfp),
+            Some(&NodeState::ConfirmedCpfp { block_height: None }),
             "root is chain-confirmed but its change is unresolved"
         );
         assert!(

@@ -143,7 +143,7 @@ Each {{#name UnilateralExitTransaction}} in {{#name transactions}} carries:
 - {{#name csv_timelock_blocks}}: the relative timelock, in blocks, that must mature before the transaction can confirm.
 - {{#name depends_on}}: the txids of other transactions in the set that must confirm first.
 - {{#name dependencies_met}}: whether all of those have confirmed. It does not account for {{#name csv_timelock_blocks}}, which you check against the current block height yourself.
-- {{#name status}}: whether the transaction is already on-chain. {{#enum ConfirmationStatus::Confirmed}} means it is done and can be skipped; {{#enum ConfirmationStatus::Unconfirmed}} is the normal state of a step that is not yet on-chain and that you must broadcast; {{#enum ConfirmationStatus::Unverified}} means its on-chain status could not be determined (see the troubleshooting table).
+- {{#name status}}: whether the transaction is already on-chain. {{#enum ConfirmationStatus::Confirmed}} means it is done and can be skipped, and carries the {{#name block_height}} it landed at, which is what a {{#name csv_timelock_blocks}} on its child counts from; {{#enum ConfirmationStatus::Unconfirmed}} is the normal state of a step that is not yet on-chain and that you must broadcast; {{#enum ConfirmationStatus::Unverified}} means its on-chain status could not be determined (see the troubleshooting table).
 
 ## Follow the exit
 

@@ -58,7 +58,8 @@ func checkExit(sdk: BreezSdk, stored: UnilateralExitResponse) async throws {
     switch checked.verdict {
     case .valid:
         for tx in exit.transactions {
-            if tx.dependenciesMet && tx.status != .confirmed {
+            if case .confirmed = tx.status { continue }
+            if tx.dependenciesMet {
                 // Also wait out csvTimelockBlocks before broadcasting.
                 print("ready to broadcast: \(tx.txid)")
             }

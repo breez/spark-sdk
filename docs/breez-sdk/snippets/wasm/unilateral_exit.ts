@@ -58,7 +58,7 @@ const exampleCheckExit = async (sdk: BreezSdk, stored: UnilateralExitResponse) =
   switch (checked.verdict.type) {
     case 'valid': {
       for (const tx of exit.transactions) {
-        if (tx.dependenciesMet && tx.status !== 'confirmed') {
+        if (tx.dependenciesMet && tx.status.type !== 'confirmed') {
           // Also wait out csvTimelockBlocks before broadcasting.
           console.log(`ready to broadcast: ${tx.txid}`)
         }

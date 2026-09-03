@@ -769,7 +769,7 @@ async fn test_completed_exit_rerun_builds_nothing(#[case] backend: SignerBackend
             .exit
             .transactions
             .iter()
-            .all(|t| t.status == ConfirmationStatus::Confirmed),
+            .all(|t| matches!(t.status, ConfirmationStatus::Confirmed { .. })),
         "every step of it, the sweep included"
     );
     Ok(())
@@ -838,7 +838,10 @@ async fn test_first_package_confirmed_resumes(#[case] backend: SignerBackend) ->
         .iter()
         .find(|t| t.txid == confirmed_txid)
         .expect("the confirmed package must still appear");
-    assert!(matches!(resumed.status, ConfirmationStatus::Confirmed));
+    assert!(matches!(
+        resumed.status,
+        ConfirmationStatus::Confirmed { .. }
+    ));
     assert!(
         resumed.cpfp_tx_hex.is_none(),
         "a confirmed step carries no CPFP child"
@@ -1408,7 +1411,8 @@ async fn test_settled_single_branch_needs_no_further_funding(
             .transactions
             .iter()
             .filter(|t| t.kind != UnilateralExitTxKind::Sweep)
-            .all(|t| t.status == ConfirmationStatus::Confirmed && t.cpfp_tx_hex.is_none()),
+            .all(|t| matches!(t.status, ConfirmationStatus::Confirmed { .. })
+                && t.cpfp_tx_hex.is_none()),
         "every step but the sweep is already on-chain and needs nothing sent"
     );
     let sweep = resumed
@@ -1610,7 +1614,8 @@ async fn test_partly_exited_leaf_is_rebuilt_for_what_is_left(
             .transactions
             .iter()
             .filter(|t| t.kind == UnilateralExitTxKind::Node)
-            .all(|t| t.status == ConfirmationStatus::Confirmed && t.cpfp_tx_hex.is_none()),
+            .all(|t| matches!(t.status, ConfirmationStatus::Confirmed { .. })
+                && t.cpfp_tx_hex.is_none()),
         "the nodes already mined are reported confirmed and cost nothing to redo"
     );
     Ok(())
@@ -1723,7 +1728,8 @@ async fn test_one_settled_branch_leaves_the_other_on_its_own_output(
     assert!(
         settled
             .iter()
-            .all(|t| t.status == ConfirmationStatus::Confirmed && t.cpfp_tx_hex.is_none()),
+            .all(|t| matches!(t.status, ConfirmationStatus::Confirmed { .. })
+                && t.cpfp_tx_hex.is_none()),
         "a branch already on-chain is confirmed, with nothing left to send"
     );
     for untouched in &leaf_ids[1..] {
@@ -2991,7 +2997,7 @@ async fn test_all_nodes_confirmed_resumes_at_refund(#[case] backend: SignerBacke
             .find(|t| &t.txid == txid)
             .expect("the confirmed node must still appear");
         assert!(
-            matches!(node.status, ConfirmationStatus::Confirmed),
+            matches!(node.status, ConfirmationStatus::Confirmed { .. }),
             "node {txid} should be confirmed"
         );
         assert!(
@@ -3187,13 +3193,13 @@ async fn assert_resumed_all_mined(
     for entry in &built.transactions {
         match entry.kind {
             UnilateralExitTxKind::Node | UnilateralExitTxKind::Refund => {
-                if matches!(entry.status, ConfirmationStatus::Confirmed) {
+                if matches!(entry.status, ConfirmationStatus::Confirmed { .. }) {
                     continue;
                 }
                 broadcast_and_mine(sdk, entry).await?;
             }
             UnilateralExitTxKind::FanOut => {
-                if matches!(entry.status, ConfirmationStatus::Confirmed) {
+                if matches!(entry.status, ConfirmationStatus::Confirmed { .. }) {
                     continue;
                 }
                 let tx = decode_tx(&entry.tx_hex)?;
@@ -3312,7 +3318,7 @@ async fn test_node_confirmed_by_foreign_cpfp_resumes(#[case] backend: SignerBack
         .find(|t| t.txid == node_txid)
         .expect("the foreign-confirmed node must still appear");
     assert!(
-        matches!(resumed_node.status, ConfirmationStatus::Confirmed),
+        matches!(resumed_node.status, ConfirmationStatus::Confirmed { .. }),
         "the node confirmed by a foreign CPFP resumes as Confirmed"
     );
     assert!(
@@ -3437,7 +3443,7 @@ async fn test_refund_confirmed_by_foreign_cpfp_is_adopted(
         .find(|t| matches!(t.kind, UnilateralExitTxKind::Refund))
         .expect("a refund entry");
     assert!(
-        matches!(resumed_refund.status, ConfirmationStatus::Confirmed),
+        matches!(resumed_refund.status, ConfirmationStatus::Confirmed { .. }),
         "the foreign-confirmed refund resumes as Confirmed"
     );
     assert_eq!(

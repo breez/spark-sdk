@@ -233,7 +233,7 @@ void _printExitTransactions(UnilateralExitResponse response) {
     final after = tx.dependsOn.isEmpty ? '' : ', after ${tx.dependsOn.join(",")}';
     final csv = tx.csvTimelockBlocks != null ? ', csv ${tx.csvTimelockBlocks} blocks' : '';
     print('  [$i] ${tx.kind} status=${tx.status} txid=${tx.txid}$after$csv');
-    if (tx.status == ConfirmationStatus.confirmed) {
+    if (tx.status is ConfirmationStatus_Confirmed) {
       print('      (already confirmed, nothing to broadcast)');
       continue;
     }

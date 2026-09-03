@@ -85,7 +85,8 @@ async def check_exit(sdk: BreezSdk, stored: UnilateralExitResponse):
 
         if isinstance(checked.verdict, UnilateralExitVerdict.VALID):
             for tx in exit.transactions:
-                if tx.dependencies_met and tx.status != ConfirmationStatus.CONFIRMED:
+                confirmed = isinstance(tx.status, ConfirmationStatus.CONFIRMED)
+                if tx.dependencies_met and not confirmed:
                     # Also wait out csv_timelock_blocks before broadcasting.
                     logging.debug(f"ready to broadcast: {tx.txid}")
         elif isinstance(checked.verdict, UnilateralExitVerdict.DONE):
