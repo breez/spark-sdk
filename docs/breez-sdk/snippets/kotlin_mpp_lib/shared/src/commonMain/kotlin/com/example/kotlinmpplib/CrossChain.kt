@@ -90,4 +90,57 @@ class CrossChain {
         }
         // ANCHOR_END: cross-chain-send
     }
+
+    suspend fun getCrossChainReceiveRoutes(sdk: BreezSdk) {
+        // ANCHOR: cross-chain-get-receive-routes
+        try {
+            val routes = sdk.getCrossChainRoutes(
+                CrossChainRouteFilter.Receive(contractAddress = null)
+            )
+
+            for (route in routes) {
+                println("Route via ${route.provider}: ${route.chain}/${route.asset} -> Spark")
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: cross-chain-get-receive-routes
+    }
+
+    suspend fun receivePaymentCrossChain(sdk: BreezSdk, route: CrossChainRoutePair) {
+        // ANCHOR: cross-chain-receive
+        // amount is in the route's source-asset base units (USD-stable parity:
+        // 1_000_000 = $1 on 6-decimal routes). See the guide for feeMode,
+        // destination, and the slippage/overpay overrides.
+        val amount = BigInteger.fromLong(1_000_000L)
+        val optionalDestination: SparkAsset? = null
+        val optionalMaxSlippageBps: UInt? = 100u
+        val optionalTargetOverpayBps: UInt? = null
+        val optionalFeeMode: CrossChainFeeMode? = null
+        try {
+            val req = ReceivePaymentRequest(
+                paymentMethod = ReceivePaymentMethod.CrossChain(
+                    route = route,
+                    amount = amount,
+                    destination = optionalDestination,
+                    feeMode = optionalFeeMode,
+                    maxSlippageBps = optionalMaxSlippageBps,
+                    targetOverpayBps = optionalTargetOverpayBps,
+                ),
+            )
+            val response = sdk.receivePayment(req)
+            println("Payment request: ${response.paymentRequest}")
+            val info = response.crossChainInfo
+            if (info != null) {
+                val denom = if (info.tokenIdentifier != null) "USDB" else "BTC"
+                println("Deposit address: ${info.depositAddress}")
+                println("Deposit amount: ${info.depositAmount}")
+                println("Expected received: ${info.expectedReceivedAmount} $denom")
+                println("Expires at: ${info.expiresAt}")
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: cross-chain-receive
+    }
 }

@@ -72,3 +72,62 @@ const exampleSendPaymentCrossChain = async (
   console.debug('Payment:', payment)
   // ANCHOR_END: cross-chain-send
 }
+
+const exampleGetCrossChainReceiveRoutes = async (sdk: BreezSdk) => {
+  // ANCHOR: cross-chain-get-receive-routes
+  const routes = await sdk.getCrossChainRoutes({
+    type: 'receive',
+    contractAddress: undefined
+  })
+
+  for (const route of routes) {
+    console.debug(
+      `Route via ${route.provider}: ${route.chain}/${route.asset} -> Spark`
+    )
+  }
+  // ANCHOR_END: cross-chain-get-receive-routes
+}
+
+const exampleReceivePaymentCrossChain = async (
+  sdk: BreezSdk,
+  route: CrossChainRoutePair
+) => {
+  // ANCHOR: cross-chain-receive
+  // amount is in the route's source-asset base units (USD-stable parity:
+  // 1_000_000 = $1 on 6-decimal routes). See the guide for feeMode,
+  // destination, and the slippage/overpay overrides.
+  const amount = '1000000'
+  const optionalDestination = undefined
+  const optionalMaxSlippageBps = 100
+  const optionalTargetOverpayBps = undefined
+  const optionalFeeMode = undefined
+
+  const response = await sdk.receivePayment({
+    paymentMethod: {
+      type: 'crossChain',
+      route,
+      amount,
+      destination: optionalDestination,
+      feeMode: optionalFeeMode,
+      maxSlippageBps: optionalMaxSlippageBps,
+      targetOverpayBps: optionalTargetOverpayBps
+    }
+  })
+
+  console.debug(`Payment request: ${response.paymentRequest}`)
+  if (response.crossChainInfo !== undefined) {
+    const {
+      depositAddress,
+      depositAmount,
+      expectedReceivedAmount,
+      tokenIdentifier,
+      expiresAt
+    } = response.crossChainInfo
+    const denom = tokenIdentifier !== undefined ? 'USDB' : 'BTC'
+    console.debug(`Deposit address: ${depositAddress}`)
+    console.debug(`Deposit amount: ${depositAmount}`)
+    console.debug(`Expected received: ${expectedReceivedAmount} ${denom}`)
+    console.debug(`Expires at: ${expiresAt}`)
+  }
+  // ANCHOR_END: cross-chain-receive
+}

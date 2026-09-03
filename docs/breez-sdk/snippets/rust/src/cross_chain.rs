@@ -85,3 +85,60 @@ async fn send_payment_cross_chain(
     // ANCHOR_END: cross-chain-send
     Ok(())
 }
+
+async fn get_cross_chain_receive_routes(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: cross-chain-get-receive-routes
+    let routes = sdk
+        .get_cross_chain_routes(&CrossChainRouteFilter::Receive {
+            contract_address: None,
+        })
+        .await?;
+
+    for route in &routes {
+        info!(
+            "Route via {:?}: {}/{} -> Spark",
+            route.provider, route.chain, route.asset
+        );
+    }
+    // ANCHOR_END: cross-chain-get-receive-routes
+    Ok(())
+}
+
+async fn receive_payment_cross_chain(sdk: &BreezSdk, route: CrossChainRoutePair) -> Result<()> {
+    // ANCHOR: cross-chain-receive
+    // amount is in the route's source-asset base units (USD-stable parity:
+    // 1_000_000 = $1 on 6-decimal routes). See the guide for fee_mode,
+    // destination, and the slippage/overpay overrides.
+    let amount = 1_000_000u128;
+    let optional_destination: Option<SparkAsset> = None;
+    let optional_max_slippage_bps = Some(100);
+    let optional_target_overpay_bps: Option<u32> = None;
+    let optional_fee_mode: Option<CrossChainFeeMode> = None;
+
+    let response = sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::CrossChain {
+                route,
+                amount,
+                destination: optional_destination,
+                fee_mode: optional_fee_mode,
+                max_slippage_bps: optional_max_slippage_bps,
+                target_overpay_bps: optional_target_overpay_bps,
+            },
+        })
+        .await?;
+
+    info!("Payment request: {}", response.payment_request);
+    if let Some(info) = response.cross_chain_info {
+        info!("Deposit address: {}", info.deposit_address);
+        info!("Deposit amount: {}", info.deposit_amount);
+        let denom = if info.token_identifier.is_some() { "USDB" } else { "BTC" };
+        info!(
+            "Expected received: {} {denom}",
+            info.expected_received_amount
+        );
+        info!("Expires at: {}", info.expires_at);
+    }
+    // ANCHOR_END: cross-chain-receive
+    Ok(())
+}

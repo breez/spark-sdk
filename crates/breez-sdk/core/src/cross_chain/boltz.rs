@@ -26,8 +26,8 @@ use tokio::{select, sync::watch, time::sleep};
 use tracing::{debug, error, info, warn};
 
 use super::{
-    CrossChainFeeMode, CrossChainPrepared, CrossChainProvider, CrossChainProviderContext,
-    CrossChainRouteFilter, CrossChainRoutePair, CrossChainService, SourceAsset, SourceChain,
+    CrossChainFeeMode, CrossChainProvider, CrossChainProviderContext, CrossChainRouteFilter,
+    CrossChainRoutePair, CrossChainSendPrepared, CrossChainService, DeliveryMethod, SparkAsset,
     boltz_storage_adapter::PROVIDER_TAG_BOLTZ, derive_btc_leg_transfer_id,
     payment_with_conversion_info,
 };
@@ -211,7 +211,7 @@ impl BoltzService {
     /// `FeesExcluded`: `amount_sats` is the recipient's USD-equivalent intent.
     /// Convert to a destination-units target via the BTC/USD rate, then ask
     /// Boltz for the inflated `invoice_amount_sats` via its exact-out API.
-    async fn prepare_fees_excluded(
+    async fn prepare_send_fees_excluded(
         &self,
         recipient_address: &str,
         route: &CrossChainRoutePair,
@@ -219,14 +219,14 @@ impl BoltzService {
         asset: Asset,
         amount_sats: u64,
         max_slippage_bps: Option<u32>,
-    ) -> Result<CrossChainPrepared, SdkError> {
+    ) -> Result<CrossChainSendPrepared, SdkError> {
         debug!(
             chain = %route.chain,
             asset = %route.asset,
             recipient = %recipient_address,
             amount_sats,
             slippage_bps = ?max_slippage_bps,
-            "Boltz prepare(FeesExcluded): start"
+            "Boltz prepare_send(FeesExcluded): start"
         );
 
         let btc_usd = super::fetch_btc_usd_rate(self.fiat_service.as_ref()).await?;
@@ -242,11 +242,11 @@ impl BoltzService {
         })?;
         debug!(
             btc_usd,
-            target_dest, "Boltz prepare(FeesExcluded): fiat-derived target_dest"
+            target_dest, "Boltz prepare_send(FeesExcluded): fiat-derived target_dest"
         );
 
         let (prepared, created) = self
-            .create_swap_target_output(
+            .create_reverse_swap_target_output(
                 recipient_address,
                 chain,
                 asset,
@@ -260,7 +260,7 @@ impl BoltzService {
             estimated_onchain_amount = prepared.estimated_onchain_amount,
             output_amount = prepared.output_amount,
             boltz_slippage_bps = prepared.slippage_bps,
-            "Boltz prepare(FeesExcluded): swap created"
+            "Boltz prepare_send(FeesExcluded): swap created"
         );
 
         let ln_fee_sats = self.fetch_ln_fee(&created.invoice).await?;
@@ -276,10 +276,10 @@ impl BoltzService {
             swap_id = %created.swap_id,
             ln_fee_sats,
             asset_amount_in,
-            "Boltz prepare(FeesExcluded): complete"
+            "Boltz prepare_send(FeesExcluded): complete"
         );
 
-        Ok(Self::build_prepared(
+        Ok(Self::build_send_prepared(
             route,
             recipient_address,
             &prepared,
@@ -295,7 +295,7 @@ impl BoltzService {
     /// `total_sats - ln_fee_probe_sats` so the wallet doesn't blow its budget.
     /// Phase 1 uses boltz-client's probe-invoice API (no HD index burn / DB
     /// row / WS subscription); the probed fee is the budget enforced at send.
-    async fn prepare_fees_included(
+    async fn prepare_send_fees_included(
         &self,
         recipient_address: &str,
         route: &CrossChainRoutePair,
@@ -303,14 +303,14 @@ impl BoltzService {
         asset: Asset,
         total_sats: u64,
         max_slippage_bps: Option<u32>,
-    ) -> Result<CrossChainPrepared, SdkError> {
+    ) -> Result<CrossChainSendPrepared, SdkError> {
         debug!(
             chain = %route.chain,
             asset = %route.asset,
             recipient = %recipient_address,
             total_sats,
             slippage_bps = ?max_slippage_bps,
-            "Boltz prepare(FeesIncluded): start"
+            "Boltz prepare_send(FeesIncluded): start"
         );
 
         // Phase 1: throwaway probe invoice at `total_sats` to probe LN fee.
@@ -328,7 +328,7 @@ impl BoltzService {
         let real_invoice_sats = fees_included_real_invoice_sats(total_sats, ln_fee_probe_sats)?;
         debug!(
             ln_fee_probe_sats,
-            real_invoice_sats, "Boltz prepare(FeesIncluded): probe done"
+            real_invoice_sats, "Boltz prepare_send(FeesIncluded): probe done"
         );
 
         // Phase 2: real invoice sized to leave room for the probed fee.
@@ -373,12 +373,12 @@ impl BoltzService {
             ln_fee_final_sats,
             asset_amount_in,
             btc_usd,
-            "Boltz prepare(FeesIncluded): complete"
+            "Boltz prepare_send(FeesIncluded): complete"
         );
 
         // Carry the probed fee as the send-time budget (not the final), to
         // keep `invoice_sats + max_fee <= amount`.
-        Ok(Self::build_prepared(
+        Ok(Self::build_send_prepared(
             route,
             recipient_address,
             &prepared,
@@ -397,7 +397,7 @@ impl BoltzService {
     /// `slippage_bps` tolerance, so the recipient may land slightly under
     /// `output_amount`. `create_reverse_swap` then commits an HD key index
     /// and persists swap state; the only clean exit after that is a timeout.
-    async fn create_swap_target_output(
+    async fn create_reverse_swap_target_output(
         &self,
         recipient_address: &str,
         chain: &str,
@@ -469,7 +469,7 @@ impl BoltzService {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn build_prepared(
+    fn build_send_prepared(
         route: &CrossChainRoutePair,
         recipient_address: &str,
         prepared: &PreparedSwap,
@@ -478,7 +478,7 @@ impl BoltzService {
         asset_amount_in: u128,
         max_slippage_bps: Option<u32>,
         fee_mode: CrossChainFeeMode,
-    ) -> CrossChainPrepared {
+    ) -> CrossChainSendPrepared {
         // `service_fee_amount` is just the Boltz spread (invoice sats minus
         // on-chain payout). LN routing lives on `source_transfer_fee_sats`;
         // bridge/gas/DEX costs land in `fee_amount = asset_amount_in - estimated_out`.
@@ -498,7 +498,7 @@ impl BoltzService {
             max_slippage_bps: resolved_slippage,
         };
 
-        CrossChainPrepared {
+        CrossChainSendPrepared {
             amount_in: u128::from(invoice_amount_sats),
             asset_amount_in,
             estimated_out,
@@ -553,18 +553,18 @@ impl CrossChainService for BoltzService {
         Ok(routes)
     }
 
-    async fn prepare(
+    async fn prepare_send(
         &self,
         recipient_address: &str,
         route: &CrossChainRoutePair,
         amount: u128,
-        source_chain: Option<SourceChain>,
+        delivery_method: Option<DeliveryMethod>,
         source_token_identifier: Option<String>,
         max_slippage_bps: u32,
         fee_mode: CrossChainFeeMode,
-    ) -> Result<CrossChainPrepared, SdkError> {
+    ) -> Result<CrossChainSendPrepared, SdkError> {
         // Boltz reverse swaps are always paid over Lightning.
-        if !matches!(source_chain, None | Some(SourceChain::Lightning)) {
+        if !matches!(delivery_method, None | Some(DeliveryMethod::Lightning)) {
             return Err(SdkError::InvalidInput(
                 "Boltz routes can only be funded over Lightning".to_string(),
             ));
@@ -601,7 +601,7 @@ impl CrossChainService for BoltzService {
         let slippage = Some(max_slippage_bps);
         match fee_mode {
             CrossChainFeeMode::FeesExcluded => {
-                self.prepare_fees_excluded(
+                self.prepare_send_fees_excluded(
                     recipient_address,
                     route,
                     &route.chain,
@@ -612,7 +612,7 @@ impl CrossChainService for BoltzService {
                 .await
             }
             CrossChainFeeMode::FeesIncluded => {
-                self.prepare_fees_included(
+                self.prepare_send_fees_included(
                     recipient_address,
                     route,
                     &route.chain,
@@ -625,10 +625,25 @@ impl CrossChainService for BoltzService {
         }
     }
 
+    async fn prepare_receive(
+        &self,
+        _route: &CrossChainRoutePair,
+        _recipient_address: &str,
+        _amount: u128,
+        _max_slippage_bps: u32,
+        _destination: &crate::cross_chain::SparkAsset,
+        _fee_mode: crate::cross_chain::CrossChainFeeMode,
+        _target_overpay_bps: u32,
+    ) -> Result<crate::cross_chain::CrossChainReceivePrepared, SdkError> {
+        Err(SdkError::InvalidInput(
+            "Boltz does not support cross-chain receive.".to_string(),
+        ))
+    }
+
     #[allow(clippy::large_futures)]
     async fn send(
         &self,
-        prepared: &CrossChainPrepared,
+        prepared: &CrossChainSendPrepared,
         idempotency_key: Option<String>,
     ) -> Result<crate::Payment, SdkError> {
         let CrossChainProviderContext::Boltz {
@@ -910,8 +925,8 @@ fn destination_to_route_pair(
         contract_address: dest.dest_token_address.clone(),
         decimals: 6,
         exact_out_eligible: false,
-        supported_sources: vec![SourceAsset::Bitcoin],
-        supported_source_chains: vec![SourceChain::Lightning],
+        accepted_assets: vec![SparkAsset::Bitcoin],
+        delivery_methods: vec![DeliveryMethod::Lightning],
     }
 }
 
@@ -1000,7 +1015,7 @@ mod tests {
         assert_eq!(pair.contract_address.as_deref(), Some("0xtoken"));
         assert_eq!(pair.decimals, 6);
         assert!(!pair.exact_out_eligible);
-        assert_eq!(pair.supported_source_chains, vec![SourceChain::Lightning]);
+        assert_eq!(pair.delivery_methods, vec![DeliveryMethod::Lightning]);
     }
 
     #[test_all]
@@ -1053,8 +1068,8 @@ mod tests {
             contract_address: contract.map(str::to_string),
             decimals: 6,
             exact_out_eligible: false,
-            supported_sources: vec![SourceAsset::Bitcoin],
-            supported_source_chains: vec![SourceChain::Lightning],
+            accepted_assets: vec![SparkAsset::Bitcoin],
+            delivery_methods: vec![DeliveryMethod::Lightning],
         }
     }
 

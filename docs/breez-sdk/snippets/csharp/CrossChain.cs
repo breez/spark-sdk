@@ -1,3 +1,4 @@
+using System.Numerics;
 using Breez.Sdk.Spark;
 
 namespace BreezSdkSnippets
@@ -71,6 +72,59 @@ namespace BreezSdkSnippets
             var sendResponse = await sdk.SendPayment(request: request);
             Console.WriteLine($"Payment: {sendResponse.payment}");
             // ANCHOR_END: cross-chain-send
+        }
+
+        async Task GetCrossChainReceiveRoutes(BreezSdk sdk)
+        {
+            // ANCHOR: cross-chain-get-receive-routes
+            var filter = new CrossChainRouteFilter.Receive(contractAddress: null);
+            var routes = await sdk.GetCrossChainRoutes(filter: filter);
+
+            foreach (var route in routes)
+            {
+                Console.WriteLine(
+                    $"Route via {route.provider}: {route.chain}/{route.asset} -> Spark"
+                );
+            }
+            // ANCHOR_END: cross-chain-get-receive-routes
+        }
+
+        async Task ReceivePaymentCrossChain(BreezSdk sdk, CrossChainRoutePair route)
+        {
+            // ANCHOR: cross-chain-receive
+            // amount is in the route's source-asset base units (USD-stable
+            // parity: 1_000_000 = $1 on 6-decimal routes). See the guide for
+            // feeMode, destination, and the slippage/overpay overrides.
+            var amount = new BigInteger(1_000_000);
+            SparkAsset? optionalDestination = null;
+            uint? optionalMaxSlippageBps = 100;
+            uint? optionalTargetOverpayBps = null;
+            CrossChainFeeMode? optionalFeeMode = null;
+
+            var request = new ReceivePaymentRequest(
+                paymentMethod: new ReceivePaymentMethod.CrossChain(
+                    route: route,
+                    amount: amount,
+                    destination: optionalDestination,
+                    feeMode: optionalFeeMode,
+                    maxSlippageBps: optionalMaxSlippageBps,
+                    targetOverpayBps: optionalTargetOverpayBps
+                )
+            );
+            var response = await sdk.ReceivePayment(request: request);
+
+            Console.WriteLine($"Payment request: {response.paymentRequest}");
+            if (response.crossChainInfo is { } info)
+            {
+                Console.WriteLine($"Deposit address: {info.depositAddress}");
+                Console.WriteLine($"Deposit amount: {info.depositAmount}");
+                var denom = info.tokenIdentifier is null ? "BTC" : "USDB";
+                Console.WriteLine(
+                    $"Expected received: {info.expectedReceivedAmount} {denom}"
+                );
+                Console.WriteLine($"Expires at: {info.expiresAt}");
+            }
+            // ANCHOR_END: cross-chain-receive
         }
     }
 }
