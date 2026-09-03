@@ -193,6 +193,11 @@ pub struct CpfpChangeInput {
 pub enum ChainQuery {
     /// Is this output spent, and by which (confirmed?) transaction?
     Outspend(OutPoint),
+    /// Is this transaction in a block? The direct question, for a transaction we
+    /// already hold: it says nothing about what took its place if it is not, so
+    /// ask an [`ChainQuery::Outspend`] of one of its inputs only when the answer
+    /// matters.
+    TxConfirmed(Txid),
     Transaction(Txid),
     /// Scan this leaf's refund address for its refund output of any variant,
     /// spent or not, so a swept refund is recognized as well as an unspent one.
@@ -208,6 +213,8 @@ pub enum ChainQuery {
 pub enum ChainResult {
     /// `None` if unspent.
     Spend(Option<SpendInfo>),
+    /// Whether the transaction is in a block.
+    Confirmed(bool),
     Transaction(Transaction),
     /// Every output ever paid to the address, spent or not.
     AddressUtxos(Vec<AddressUtxo>),
