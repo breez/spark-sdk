@@ -98,8 +98,6 @@ pub enum ServiceError {
     ValidationError(String),
     #[error("insufficient CPFP funding: need at least {required_sat} sats")]
     InsufficientCpfpBudget { required_sat: u64 },
-    #[error("funding UTXO {txid}:{vout} was spent by an unrelated transaction")]
-    FundingUtxoConflict { txid: String, vout: u32 },
     #[error("signer error: {0}")]
     SignerError(#[from] crate::signer::SignerError),
     #[error("service connection error: {0}")]

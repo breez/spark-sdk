@@ -301,10 +301,12 @@ pub enum _UnilateralExitTxKind {
     Sweep,
 }
 
-#[frb(mirror(ConfirmationStatus))]
-pub enum _ConfirmationStatus {
-    Confirmed,
-    Unconfirmed,
+#[frb(mirror(ExitTransactionStatus))]
+pub enum _ExitTransactionStatus {
+    Confirmed { block_height: Option<u32> },
+    Ready,
+    WaitingForDependencies,
+    WaitingForTimelock { spendable_at_height: Option<u32> },
     Unverified,
 }
 
@@ -317,7 +319,7 @@ pub struct _UnilateralExitTransaction {
     pub cpfp_tx_hex: Option<String>,
     pub csv_timelock_blocks: Option<u32>,
     pub depends_on: Vec<String>,
-    pub status: ConfirmationStatus,
+    pub status: ExitTransactionStatus,
 }
 
 #[frb(mirror(UnilateralExitLeaf))]
@@ -340,6 +342,45 @@ pub struct _PrepareUnilateralExitRequest {
     pub selection: ExitLeafSelection,
 }
 
+#[frb(mirror(ExitChainState))]
+pub struct _ExitChainState {
+    pub confirmed_nodes: Vec<ConfirmedExitNode>,
+    pub refunds: Vec<ExitRefund>,
+    pub stopped_leaf_ids: Vec<String>,
+    pub unverified_node_ids: Vec<String>,
+    pub unverifiable_confirmed_node_ids: Vec<String>,
+}
+
+#[frb(mirror(ConfirmedExitNode))]
+pub struct _ConfirmedExitNode {
+    pub node_id: String,
+    pub confirmed_by: ExitNodeConfirmation,
+    pub block_height: Option<u32>,
+}
+
+#[frb(mirror(ExitNodeConfirmation))]
+pub enum _ExitNodeConfirmation {
+    Cpfp,
+    Direct,
+}
+
+#[frb(mirror(ExitRefund))]
+pub struct _ExitRefund {
+    pub leaf_id: String,
+    pub state: ExitRefundState,
+}
+
+#[frb(mirror(ExitRefundState))]
+pub enum _ExitRefundState {
+    OnChain {
+        tx_hex: String,
+        vout: u32,
+        value_sat: u64,
+        block_height: Option<u32>,
+    },
+    Swept,
+}
+
 #[frb(mirror(PrepareUnilateralExitResponse))]
 pub struct _PrepareUnilateralExitResponse {
     pub leaves: Vec<UnilateralExitLeaf>,
@@ -350,6 +391,7 @@ pub struct _PrepareUnilateralExitResponse {
     pub per_branch_funding: Vec<PerBranchFunding>,
     pub fee_rate_sat_per_vbyte: u64,
     pub destination: String,
+    pub exit_chain_state: ExitChainState,
 }
 
 #[frb(mirror(UnilateralExitRequest))]
@@ -358,12 +400,36 @@ pub struct _UnilateralExitRequest {
     pub funding_inputs: Vec<CpfpInput>,
 }
 
+#[frb(mirror(CheckUnilateralExitRequest))]
+pub struct _CheckUnilateralExitRequest {
+    pub exit: UnilateralExitResponse,
+}
+
+#[frb(mirror(CheckUnilateralExitResponse))]
+pub struct _CheckUnilateralExitResponse {
+    pub exit: UnilateralExitResponse,
+    pub verdict: UnilateralExitVerdict,
+}
+
+#[frb(mirror(UnilateralExitVerdict))]
+pub enum _UnilateralExitVerdict {
+    Valid,
+    Done,
+    Redo { reason: UnilateralExitRedoReason },
+}
+
+#[frb(mirror(UnilateralExitRedoReason))]
+pub enum _UnilateralExitRedoReason {
+    OnChainStateDiverged,
+}
+
 #[frb(mirror(UnilateralExitResponse))]
 pub struct _UnilateralExitResponse {
     pub recoverable_value_sat: u64,
     pub total_fee_sat: u64,
     pub leaves: Vec<UnilateralExitLeaf>,
     pub transactions: Vec<UnilateralExitTransaction>,
+    pub funding_inputs: Vec<CpfpInput>,
 }
 
 #[frb(mirror(ExportUnilateralExitStateResponse))]

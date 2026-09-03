@@ -53,6 +53,35 @@ class UnilateralExit {
         // ANCHOR_END: unilateral-exit
     }
 
+    suspend fun checkExit(sdk: BreezSdk, stored: UnilateralExitResponse) {
+        // ANCHOR: check-unilateral-exit
+        val checked = sdk.checkUnilateralExit(
+            CheckUnilateralExitRequest(exit = stored)
+        )
+
+        // Store this one in place of the one you had.
+        val exit = checked.exit
+
+        when (val verdict = checked.verdict) {
+            is UnilateralExitVerdict.Valid -> {
+                for (tx in exit.transactions) {
+                    if (tx.status is ExitTransactionStatus.Ready) {
+                        // Log.v("Breez", "ready to broadcast: ${tx.txid}")
+                    }
+                }
+            }
+            is UnilateralExitVerdict.Done -> {
+                // Log.v("Breez", "The exit finished: ${exit.recoverableValueSat} sats recovered")
+            }
+            is UnilateralExitVerdict.Redo -> {
+                // Quote and build again, naming the same leaves. Pass exit.fundingInputs
+                // back and the SDK follows them to whatever they have become.
+                // Log.v("Breez", "Build the exit again: ${verdict.reason}")
+            }
+        }
+        // ANCHOR_END: check-unilateral-exit
+    }
+
     // ANCHOR: custom-cpfp-signer
     class MyCpfpSigner : CpfpSigner {
         override suspend fun signPsbt(psbtBytes: ByteArray): ByteArray {

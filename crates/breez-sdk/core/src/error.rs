@@ -92,11 +92,6 @@ pub enum SdkError {
     #[error("Insufficient CPFP funding: need at least {required_sat} sats")]
     InsufficientCpfpFunds { required_sat: u64 },
 
-    /// A provided funding UTXO was already spent on-chain by a transaction that
-    /// is not the expected fan-out, so it cannot fund this exit.
-    #[error("Funding UTXO {txid}:{vout} was spent by an unrelated transaction")]
-    FundingUtxoConflict { txid: String, vout: u32 },
-
     #[error("Error: {0}")]
     Generic(String),
 }
@@ -244,10 +239,6 @@ impl From<SparkWalletError> for SdkError {
             SparkWalletError::ServiceError(
                 spark_wallet::ServiceError::InsufficientCpfpBudget { required_sat },
             ) => SdkError::InsufficientCpfpFunds { required_sat },
-            SparkWalletError::ServiceError(spark_wallet::ServiceError::FundingUtxoConflict {
-                txid,
-                vout,
-            }) => SdkError::FundingUtxoConflict { txid, vout },
             _ => SdkError::SparkError(e.to_string()),
         }
     }

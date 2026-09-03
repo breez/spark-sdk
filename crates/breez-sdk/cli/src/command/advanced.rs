@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use breez_sdk_spark::signer::single_key_cpfp_signer;
 use breez_sdk_spark::{
-    BreezSdk, ConfirmationStatus, CpfpFundingKind, CpfpInput, ExitLeafSelection,
+    BreezSdk, CpfpFundingKind, CpfpInput, ExitLeafSelection, ExitTransactionStatus,
     ImportUnilateralExitStateRequest, PrepareUnilateralExitRequest, UnilateralExitRequest,
     UnilateralExitResponse,
 };
@@ -208,9 +208,26 @@ fn print_exit_transactions(response: &UnilateralExitResponse) {
             "  [{i}] {:?} status={:?} txid={}{after}{csv}",
             tx.kind, tx.status, tx.txid,
         );
-        if tx.status == ConfirmationStatus::Confirmed {
-            println!("      (already confirmed, nothing to broadcast)");
-            continue;
+        match tx.status {
+            ExitTransactionStatus::Confirmed { block_height } => {
+                match block_height {
+                    Some(height) => {
+                        println!("      (confirmed in block {height}, nothing to broadcast)");
+                    }
+                    None => println!("      (already confirmed, nothing to broadcast)"),
+                }
+                continue;
+            }
+            ExitTransactionStatus::WaitingForDependencies => {
+                println!("      (waiting on the transactions it depends on)");
+            }
+            ExitTransactionStatus::WaitingForTimelock {
+                spendable_at_height,
+            } => match spendable_at_height {
+                Some(height) => println!("      (waiting for its timelock, until block {height})"),
+                None => println!("      (waiting for its timelock)"),
+            },
+            ExitTransactionStatus::Ready | ExitTransactionStatus::Unverified => {}
         }
         let package = match &tx.cpfp_tx_hex {
             Some(cpfp) => format!("{},{}", tx.tx_hex, cpfp),

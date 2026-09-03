@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -10,9 +11,12 @@ use bitcoin::{
 };
 
 use spark_wallet::{
-    AddressUtxo, ChainQuery, ChainResult, CpfpInput, ExitTxKind, ExitTxStatus, Observation,
-    PreparedUnilateralExit, SpendInfo, TreeNodeId, UnilateralExitBuild, build_unilateral_exit,
-    is_ephemeral_anchor_output, next_chain_queries,
+    AddressUtxo, ChainQuery, ChainResult, ConfirmedExitNode as WalletConfirmedExitNode, CpfpInput,
+    ExitChainState as WalletExitChainState, ExitCheck, ExitCheckInput,
+    ExitNodeConfirmation as WalletExitNodeConfirmation, ExitRefund as WalletExitRefund,
+    ExitRefundState as WalletExitRefundState, ExitTxKind, ExitTxStatus, Observation, SpendInfo,
+    TreeNode, TreeNodeId, UnilateralExitBuild, build_unilateral_exit, check_exit_chain,
+    is_ephemeral_anchor_output, leaf_refund_addresses, scan_exit_chain, scan_funding,
 };
 
 use tracing::{debug, trace, warn};
@@ -21,10 +25,13 @@ use crate::{
     chain::{BitcoinChainService, Outspend},
     error::SdkError,
     models::{
-        ConfirmationStatus, CpfpFundingKind, CpfpInput as ModelCpfpInput, ExitLeafSelection,
-        PerBranchFunding, PrepareUnilateralExitRequest, PrepareUnilateralExitResponse,
-        UnilateralExitLeaf, UnilateralExitRequest, UnilateralExitResponse,
-        UnilateralExitTransaction, UnilateralExitTxKind,
+        CheckUnilateralExitRequest, CheckUnilateralExitResponse, ConfirmedExitNode,
+        CpfpFundingKind, CpfpInput as ModelCpfpInput, ExitChainState as ModelExitChainState,
+        ExitLeafSelection, ExitNodeConfirmation, ExitRefund, ExitRefundState,
+        ExitTransactionStatus, PerBranchFunding, PrepareUnilateralExitRequest,
+        PrepareUnilateralExitResponse, UnilateralExitLeaf, UnilateralExitRedoReason,
+        UnilateralExitRequest, UnilateralExitResponse, UnilateralExitTransaction,
+        UnilateralExitTxKind, UnilateralExitVerdict,
     },
     signer::CpfpSigner,
 };
@@ -57,37 +64,37 @@ impl BreezSdk {
             .map_err(|e| SdkError::InvalidInput(format!("Address network mismatch: {e}")))?;
         let dest_script_len = destination.script_pubkey().len();
 
-        // Leaf auto-resolution lives in the wallet.
-        let selection = match request.selection {
-            ExitLeafSelection::Auto => spark_wallet::ExitLeafSelection::Auto,
-            ExitLeafSelection::Specific { leaf_ids } => {
-                if leaf_ids.is_empty() {
-                    return Err(SdkError::InvalidInput("No leaves to exit".to_string()));
-                }
-                let ids = leaf_ids
-                    .iter()
-                    .map(|s| {
-                        TreeNodeId::from_str(s).map_err(|e| {
-                            SdkError::InvalidInput(format!("Invalid leaf id {s}: {e}"))
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                spark_wallet::ExitLeafSelection::Specific(ids)
-            }
-        };
+        let selection = wallet_selection(request.selection)?;
 
         let (input_weight, output_script) = funding_kind_params(&request.funding_kind)?;
-        let quote = self
-            .spark_wallet
-            .quote_unilateral_exit(
-                sat_per_kw_from_vbyte(request.fee_rate_sat_per_vbyte),
-                selection,
-                input_weight,
-                output_script.len(),
-                output_script.minimal_non_dust().to_sat(),
-                dest_script_len,
-            )
-            .await?;
+        let context = self.spark_wallet.load_exit_context(selection).await?;
+
+        // Ask the chain what these leaves have already done before pricing them,
+        // so a leaf part-way out is quoted on the work it has left rather than on
+        // a fresh exit, and is not dropped as unprofitable over work already
+        // paid for. Every lookup the tree needs happens here.
+        let refund_addresses = leaf_refund_addresses(
+            &context.tree_nodes,
+            &context.leaf_ids,
+            self.config.network.into(),
+        );
+        let exit_chain_state = resolve_exit_chain_state(
+            self.chain_service.as_ref(),
+            &context.tree_nodes,
+            &context.leaf_ids,
+            &refund_addresses,
+        )
+        .await?;
+
+        let quote = self.spark_wallet.quote_unilateral_exit(
+            &context,
+            sat_per_kw_from_vbyte(request.fee_rate_sat_per_vbyte),
+            input_weight,
+            output_script.len(),
+            output_script.minimal_non_dust().to_sat(),
+            dest_script_len,
+            &exit_chain_state,
+        )?;
         // No selected leaves is not an error: return an empty quote.
         let recoverable_value_sat = quote
             .selected_leaves
@@ -130,6 +137,7 @@ impl BreezSdk {
             per_branch_funding,
             fee_rate_sat_per_vbyte: request.fee_rate_sat_per_vbyte,
             destination: request.destination,
+            exit_chain_state: exit_chain_state_model(exit_chain_state),
         })
     }
 
@@ -143,6 +151,59 @@ impl BreezSdk {
     /// already on-chain (recognized by the leaf's refund address, so any refund
     /// variant counts) is swept directly. Re-running after partial progress
     /// therefore resumes rather than restarts.
+    /// Reads an exit you kept back against the chain: which of its transactions
+    /// are now in a block, and whether it can still be finished as it stands.
+    ///
+    /// Needs neither the wallet's leaves nor a signer, so an exit can be followed
+    /// from the response alone. Store the response in place of the one you passed
+    /// in, and broadcast what its statuses leave to send.
+    pub async fn check_unilateral_exit(
+        &self,
+        request: CheckUnilateralExitRequest,
+    ) -> Result<CheckUnilateralExitResponse, SdkError> {
+        let mut exit = request.exit;
+        debug!(
+            transactions = exit.transactions.len(),
+            "check_unilateral_exit: reading back"
+        );
+
+        let inputs = exit
+            .transactions
+            .iter()
+            .map(exit_check_input)
+            .collect::<Result<Vec<_>, SdkError>>()?;
+        let check = resolve_exit_check(self.chain_service.as_ref(), &inputs).await?;
+
+        for tx in &mut exit.transactions {
+            let txid = Txid::from_str(&tx.txid)
+                .map_err(|e| SdkError::InvalidInput(format!("Invalid txid {}: {e}", tx.txid)))?;
+            if let Some(block_height) = check.confirmed.get(&txid) {
+                tx.status = ExitTransactionStatus::Confirmed {
+                    block_height: *block_height,
+                };
+            }
+        }
+
+        resolve_statuses(self.chain_service.as_ref(), &mut exit.transactions).await?;
+
+        let all_confirmed = exit
+            .transactions
+            .iter()
+            .all(|tx| matches!(tx.status, ExitTransactionStatus::Confirmed { .. }));
+        let verdict = if check.diverged {
+            UnilateralExitVerdict::Redo {
+                reason: UnilateralExitRedoReason::OnChainStateDiverged,
+            }
+        } else if all_confirmed && !exit.transactions.is_empty() {
+            UnilateralExitVerdict::Done
+        } else {
+            UnilateralExitVerdict::Valid
+        };
+        debug!(?verdict, "check_unilateral_exit: read back");
+
+        Ok(CheckUnilateralExitResponse { exit, verdict })
+    }
+
     #[allow(clippy::too_many_lines)]
     pub async fn unilateral_exit(
         &self,
@@ -153,6 +214,7 @@ impl BreezSdk {
             prepared,
             funding_inputs,
         } = request;
+        let supplied_funding = funding_inputs.clone();
         debug!(
             leaves = prepared.leaves.len(),
             funding_inputs = funding_inputs.len(),
@@ -196,16 +258,23 @@ impl BreezSdk {
             ));
         }
 
+        // A prior run spends the funding it was given, so what the caller hands
+        // back may name outputs that are gone. Follow them to what they became
+        // before planning, so the plan is made over what can actually be spent.
+        let funding_inputs = resolve_funding(chain, funding_inputs).await?;
         let fee_rate_sat_per_kw = sat_per_kw_from_vbyte(prepared.fee_rate_sat_per_vbyte);
-        let prepared_exit = self
+        let chain_state = exit_chain_state_from_model(&prepared.exit_chain_state)?;
+        let context = self
             .spark_wallet
-            .prepare_unilateral_exit_plan(
-                fee_rate_sat_per_kw,
-                spark_wallet::ExitLeafSelection::Specific(leaf_ids),
-                funding_inputs,
-                dest_script_len,
-            )
+            .load_exit_context(spark_wallet::ExitLeafSelection::Specific(leaf_ids))
             .await?;
+        let prepared_exit = self.spark_wallet.prepare_unilateral_exit_plan(
+            &context,
+            fee_rate_sat_per_kw,
+            funding_inputs,
+            dest_script_len,
+            &chain_state,
+        )?;
         if prepared_exit.plan.selected_leaves.is_empty() {
             debug!("unilateral_exit: plan selected no leaves, returning empty result");
             return Ok(empty_exit_response());
@@ -227,12 +296,11 @@ impl BreezSdk {
             })
             .collect();
 
-        let observed = resolve_exit_observations(chain, &prepared_exit).await?;
-        let build = build_unilateral_exit(&prepared_exit, &observed, fee_rate_sat_per_kw)?;
+        let build = build_unilateral_exit(&prepared_exit, &chain_state, fee_rate_sat_per_kw)?;
         let recoverable_value_sat = build.recoverable_value_sat;
         let build_fee_sat = build.total_fee_sat;
         // Captured before the loop below consumes `build.branches`.
-        let sweep_status = sweep_confirmation_status(&build);
+        let sweep_status = sweep_initial_status(&build);
         debug!(
             has_fan_out = build.fan_out.is_some(),
             branches = build.branches.len(),
@@ -264,7 +332,7 @@ impl BreezSdk {
                 cpfp_tx_hex: None,
                 csv_timelock_blocks: fan_out.csv_timelock_blocks,
                 depends_on: fan_out.depends_on.iter().map(ToString::to_string).collect(),
-                status: confirmation_status(fan_out.status),
+                status: initial_status(fan_out.status),
             });
         }
 
@@ -299,7 +367,7 @@ impl BreezSdk {
                     cpfp_tx_hex,
                     csv_timelock_blocks: tx.csv_timelock_blocks,
                     depends_on: tx.depends_on.iter().map(ToString::to_string).collect(),
-                    status: confirmation_status(tx.status),
+                    status: initial_status(tx.status),
                 });
             }
         }
@@ -307,12 +375,14 @@ impl BreezSdk {
         // A sweep over zero inputs would error: return without one when no refund
         // is on-chain yet. A later run sweeps any refund that surfaces.
         if build.refund_outputs.is_empty() {
+            resolve_statuses(chain, &mut transactions).await?;
             debug!("unilateral_exit: no refund outputs to sweep, omitting the sweep");
             return Ok(UnilateralExitResponse {
                 recoverable_value_sat,
                 total_fee_sat: build_fee_sat,
                 leaves,
                 transactions,
+                funding_inputs: supplied_funding,
             });
         }
 
@@ -351,6 +421,7 @@ impl BreezSdk {
             status: sweep_status,
         });
 
+        resolve_statuses(chain, &mut transactions).await?;
         debug!(
             transactions = transactions.len(),
             recoverable_value_sat, total_fee_sat, "unilateral_exit: complete"
@@ -360,6 +431,7 @@ impl BreezSdk {
             total_fee_sat,
             leaves,
             transactions,
+            funding_inputs: supplied_funding,
         })
     }
 }
@@ -526,39 +598,356 @@ fn parse_xonly(pubkey: &str) -> Result<XOnlyPublicKey, SdkError> {
     Ok(pk.x_only_public_key().0)
 }
 
-/// Drives the wallet's pure resolver to completion: it reports which chain
-/// lookups the exit needs, core performs them, and the results are fed back until
-/// nothing more is needed. Core never interprets the exit tree itself.
-async fn resolve_exit_observations(
+/// Reads what the chain has already done to `leaf_ids`, before any funding is
+/// considered. Same loop as [`resolve_exit_observations`], over the scan that
+/// needs no plan.
+async fn resolve_exit_chain_state(
     chain: &dyn BitcoinChainService,
-    prepared: &PreparedUnilateralExit,
-) -> Result<Vec<Observation>, SdkError> {
+    tree_nodes: &HashMap<TreeNodeId, TreeNode>,
+    leaf_ids: &[TreeNodeId],
+    refund_addresses: &HashMap<TreeNodeId, Address>,
+) -> Result<WalletExitChainState, SdkError> {
     let mut observed: Vec<Observation> = Vec::new();
-    let mut round = 0u32;
     loop {
-        let queries = next_chain_queries(prepared, &observed)?;
-        if queries.is_empty() {
-            break;
+        let scan = scan_exit_chain(tree_nodes, leaf_ids, refund_addresses, &observed);
+        if scan.pending.is_empty() {
+            debug!(
+                nodes = scan.state.nodes.len(),
+                refunds = scan.state.refunds.len(),
+                observations = observed.len(),
+                "resolve_exit_chain_state: what the chain has already done"
+            );
+            return Ok(scan.state);
         }
-        round = round.saturating_add(1);
-        trace!(
-            round,
-            queries = queries.len(),
-            "resolve_exit_observations: round"
-        );
         // Each query is answered exactly once (a failed lookup records
         // `Unavailable`), so the loop always progresses and terminates.
-        for query in queries {
+        for query in scan.pending {
             let result = execute_chain_query(chain, &query).await;
             observed.push(Observation { query, result });
         }
     }
-    debug!(
-        rounds = round,
-        observations = observed.len(),
-        "resolve_exit_observations: on-chain state resolved"
-    );
-    Ok(observed)
+}
+
+/// Leaf auto-resolution lives in the wallet, so a selection only has to be
+/// restated in its terms.
+fn wallet_selection(
+    selection: ExitLeafSelection,
+) -> Result<spark_wallet::ExitLeafSelection, SdkError> {
+    match selection {
+        ExitLeafSelection::Auto => Ok(spark_wallet::ExitLeafSelection::Auto),
+        ExitLeafSelection::Specific { leaf_ids } => {
+            if leaf_ids.is_empty() {
+                return Err(SdkError::InvalidInput("No leaves to exit".to_string()));
+            }
+            Ok(spark_wallet::ExitLeafSelection::Specific(node_ids(
+                &leaf_ids,
+            )?))
+        }
+    }
+}
+
+/// Reads back the state a caller carried over from `prepare_unilateral_exit`.
+fn exit_chain_state_from_model(
+    state: &ModelExitChainState,
+) -> Result<WalletExitChainState, SdkError> {
+    Ok(WalletExitChainState {
+        nodes: state
+            .confirmed_nodes
+            .iter()
+            .map(|node| {
+                Ok(WalletConfirmedExitNode {
+                    block_height: node.block_height,
+                    node_id: node_id(&node.node_id)?,
+                    confirmed_by: match node.confirmed_by {
+                        ExitNodeConfirmation::Cpfp => WalletExitNodeConfirmation::Cpfp,
+                        ExitNodeConfirmation::Direct => WalletExitNodeConfirmation::Direct,
+                    },
+                })
+            })
+            .collect::<Result<_, SdkError>>()?,
+        refunds: state
+            .refunds
+            .iter()
+            .map(|refund| {
+                let restored = match &refund.state {
+                    ExitRefundState::OnChain {
+                        tx_hex,
+                        vout,
+                        value_sat,
+                        block_height,
+                    } => WalletExitRefundState::OnChain {
+                        block_height: *block_height,
+                        tx: deserialize_hex(tx_hex).map_err(|e| {
+                            SdkError::InvalidInput(format!("Invalid refund transaction: {e}"))
+                        })?,
+                        vout: *vout,
+                        value: *value_sat,
+                    },
+                    ExitRefundState::Swept => WalletExitRefundState::Swept,
+                };
+                Ok(WalletExitRefund {
+                    leaf_id: node_id(&refund.leaf_id)?,
+                    state: restored,
+                })
+            })
+            .collect::<Result<_, SdkError>>()?,
+        stopped_leaves: node_ids(&state.stopped_leaf_ids)?,
+        unverified_nodes: node_ids(&state.unverified_node_ids)?,
+        unverifiable_confirmed_nodes: node_ids(&state.unverifiable_confirmed_node_ids)?,
+    })
+}
+
+fn node_id(id: &str) -> Result<TreeNodeId, SdkError> {
+    TreeNodeId::from_str(id).map_err(|e| SdkError::InvalidInput(format!("Invalid id {id}: {e}")))
+}
+
+fn node_ids(ids: &[String]) -> Result<Vec<TreeNodeId>, SdkError> {
+    ids.iter().map(|id| node_id(id)).collect()
+}
+
+/// Restates the wallet's on-chain reading in the API's own types: ids as strings
+/// and transactions as hex, so a caller can read what an exit has already done
+/// rather than hand an opaque token back.
+fn exit_chain_state_model(state: WalletExitChainState) -> ModelExitChainState {
+    ModelExitChainState {
+        confirmed_nodes: state
+            .nodes
+            .into_iter()
+            .map(|node| ConfirmedExitNode {
+                node_id: node.node_id.to_string(),
+                confirmed_by: match node.confirmed_by {
+                    WalletExitNodeConfirmation::Cpfp => ExitNodeConfirmation::Cpfp,
+                    WalletExitNodeConfirmation::Direct => ExitNodeConfirmation::Direct,
+                },
+                block_height: node.block_height,
+            })
+            .collect(),
+        refunds: state
+            .refunds
+            .into_iter()
+            .map(|refund| ExitRefund {
+                leaf_id: refund.leaf_id.to_string(),
+                state: match refund.state {
+                    WalletExitRefundState::OnChain {
+                        tx,
+                        vout,
+                        value,
+                        block_height,
+                    } => ExitRefundState::OnChain {
+                        tx_hex: serialize_hex(&tx),
+                        vout,
+                        value_sat: value,
+                        block_height,
+                    },
+                    WalletExitRefundState::Swept => ExitRefundState::Swept,
+                },
+            })
+            .collect(),
+        stopped_leaf_ids: ids(state.stopped_leaves),
+        unverified_node_ids: ids(state.unverified_nodes),
+        unverifiable_confirmed_node_ids: ids(state.unverifiable_confirmed_nodes),
+    }
+}
+
+fn ids(ids: Vec<TreeNodeId>) -> Vec<String> {
+    ids.into_iter().map(|id| id.to_string()).collect()
+}
+
+/// Fills in the status of every transaction that is neither on-chain nor
+/// unreadable: whether it can go out now, or what it is waiting on. Derived from
+/// the whole list, so it is resolved once the list is complete rather than as
+/// each entry is built.
+///
+/// A relative timelock counts from the height of the input being spent, so
+/// maturity needs that height and the chain tip. Both are read here rather than
+/// fetched again per transaction. A height that cannot be read leaves the
+/// transaction waiting rather than ready, the direction that never sends a
+/// transaction the mempool would reject.
+async fn resolve_statuses(
+    chain: &dyn BitcoinChainService,
+    transactions: &mut [UnilateralExitTransaction],
+) -> Result<(), SdkError> {
+    let confirmed: HashSet<&str> = transactions
+        .iter()
+        .filter(|tx| matches!(tx.status, ExitTransactionStatus::Confirmed { .. }))
+        .map(|tx| tx.txid.as_str())
+        .collect();
+    let met: Vec<bool> = transactions
+        .iter()
+        .map(|tx| {
+            tx.depends_on
+                .iter()
+                .all(|dep| confirmed.contains(dep.as_str()))
+        })
+        .collect();
+
+    // Seeded from the list, which already carries the height of everything the
+    // exit walk confirmed, so the chain is only asked about inputs from outside
+    // it: the ancestor a resumed exit starts from.
+    let mut heights: HashMap<Txid, Option<u32>> = transactions
+        .iter()
+        .filter_map(|tx| match tx.status {
+            ExitTransactionStatus::Confirmed {
+                block_height: Some(height),
+            } => Some((Txid::from_str(&tx.txid).ok()?, Some(height))),
+            _ => None,
+        })
+        .collect();
+    let mut tip: Option<u32> = None;
+
+    let mut resolved = Vec::with_capacity(transactions.len());
+    for (tx, met) in transactions.iter().zip(&met) {
+        // On-chain, or its own on-chain state unknown: neither leaves anything
+        // to wait for.
+        if matches!(
+            tx.status,
+            ExitTransactionStatus::Confirmed { .. } | ExitTransactionStatus::Unverified
+        ) {
+            resolved.push(tx.status);
+            continue;
+        }
+        if !met {
+            resolved.push(ExitTransactionStatus::WaitingForDependencies);
+            continue;
+        }
+        if tx.csv_timelock_blocks.is_none() {
+            resolved.push(ExitTransactionStatus::Ready);
+            continue;
+        }
+        let decoded = deserialize_hex::<Transaction>(&tx.tx_hex)
+            .map_err(|e| SdkError::InvalidInput(format!("Invalid transaction: {e}")))?;
+        let Some(spendable_at) = spendable_at_height(chain, &decoded, &mut heights).await else {
+            resolved.push(ExitTransactionStatus::WaitingForTimelock {
+                spendable_at_height: None,
+            });
+            continue;
+        };
+        if tip.is_none() {
+            tip = chain.tip_height().await.ok();
+        }
+        // A transaction is accepted while it would be valid in the next block.
+        let matured = tip.is_some_and(|tip| tip.saturating_add(1) >= spendable_at);
+        resolved.push(if matured {
+            ExitTransactionStatus::Ready
+        } else {
+            ExitTransactionStatus::WaitingForTimelock {
+                spendable_at_height: Some(spendable_at),
+            }
+        });
+    }
+
+    for (tx, status) in transactions.iter_mut().zip(resolved) {
+        tx.status = status;
+    }
+    Ok(())
+}
+
+/// The first block height that can include `tx`, given the relative timelocks on
+/// its inputs. `None` when an input's confirmation height cannot be established,
+/// which leaves maturity unknown.
+async fn spendable_at_height(
+    chain: &dyn BitcoinChainService,
+    tx: &Transaction,
+    heights: &mut HashMap<Txid, Option<u32>>,
+) -> Option<u32> {
+    let mut spendable_at = None;
+    for input in &tx.input {
+        let blocks = match input.sequence.to_relative_lock_time() {
+            Some(bitcoin::relative::LockTime::Blocks(blocks)) => u32::from(blocks.value()),
+            _ => continue,
+        };
+        if blocks == 0 {
+            continue;
+        }
+        let funded_by = input.previous_output.txid;
+        if heights.get(&funded_by).is_none() {
+            let height = match chain.get_transaction_status(funded_by.to_string()).await {
+                Ok(status) if status.confirmed => status.block_height,
+                _ => None,
+            };
+            heights.insert(funded_by, height);
+        }
+        let known = heights.get(&funded_by).copied().flatten();
+        // One unreadable input is enough to leave the whole transaction unknown:
+        // it may be the one that matures last.
+        let height = known?;
+        spendable_at = Some(spendable_at.unwrap_or(0).max(height.saturating_add(blocks)));
+    }
+    spendable_at
+}
+
+/// Decodes one kept transaction into what the check reads.
+fn exit_check_input(tx: &UnilateralExitTransaction) -> Result<ExitCheckInput, SdkError> {
+    let decode = |hex: &str| {
+        deserialize_hex::<Transaction>(hex)
+            .map_err(|e| SdkError::InvalidInput(format!("Invalid transaction: {e}")))
+    };
+    Ok(ExitCheckInput {
+        tx: decode(&tx.tx_hex)?,
+        cpfp: tx.cpfp_tx_hex.as_deref().map(decode).transpose()?,
+        depends_on: tx
+            .depends_on
+            .iter()
+            .map(|txid| {
+                Txid::from_str(txid)
+                    .map_err(|e| SdkError::InvalidInput(format!("Invalid txid {txid}: {e}")))
+            })
+            .collect::<Result<_, SdkError>>()?,
+        confirmed: matches!(tx.status, ExitTransactionStatus::Confirmed { .. }),
+    })
+}
+
+/// Drives [`check_exit_chain`] to completion.
+async fn resolve_exit_check(
+    chain: &dyn BitcoinChainService,
+    inputs: &[ExitCheckInput],
+) -> Result<ExitCheck, SdkError> {
+    let mut observed: Vec<Observation> = Vec::new();
+    loop {
+        let check = check_exit_chain(inputs, &observed);
+        if check.pending.is_empty() {
+            debug!(
+                confirmed = check.confirmed.len(),
+                diverged = check.diverged,
+                observations = observed.len(),
+                "resolve_exit_check: read back"
+            );
+            return Ok(check);
+        }
+        // Each query is answered exactly once (a failed lookup records
+        // `Unavailable`), so the loop always progresses and terminates.
+        for query in check.pending {
+            let result = execute_chain_query(chain, &query).await;
+            observed.push(Observation { query, result });
+        }
+    }
+}
+
+/// Follows the supplied funding to what it is worth now, driving
+/// [`scan_funding`] to completion. The only chain reading a build does: the tree
+/// was read while preparing.
+async fn resolve_funding(
+    chain: &dyn BitcoinChainService,
+    supplied: Vec<CpfpInput>,
+) -> Result<Vec<CpfpInput>, SdkError> {
+    let mut observed: Vec<Observation> = Vec::new();
+    loop {
+        let scan = scan_funding(&supplied, &observed);
+        if scan.pending.is_empty() {
+            debug!(
+                supplied = supplied.len(),
+                resolved = scan.inputs.len(),
+                "resolve_funding: what the supplied funding is worth now"
+            );
+            return Ok(scan.inputs);
+        }
+        // Each query is answered exactly once (a failed lookup records
+        // `Unavailable`), so the loop always progresses and terminates.
+        for query in scan.pending {
+            let result = execute_chain_query(chain, &query).await;
+            observed.push(Observation { query, result });
+        }
+    }
 }
 
 /// Performs one [`ChainQuery`], translating this crate's chain types into the
@@ -567,6 +956,17 @@ async fn resolve_exit_observations(
 /// rather than treating it as confirmed or absent.
 async fn execute_chain_query(chain: &dyn BitcoinChainService, query: &ChainQuery) -> ChainResult {
     match query {
+        ChainQuery::TxConfirmed(txid) => match chain.get_transaction_status(txid.to_string()).await
+        {
+            Ok(status) => ChainResult::Confirmed {
+                confirmed: status.confirmed,
+                block_height: status.block_height,
+            },
+            Err(e) => {
+                warn!(%txid, error = %e, "chain lookup failed: transaction status");
+                ChainResult::Unavailable
+            }
+        },
         ChainQuery::Outspend(outpoint) => {
             match chain
                 .get_outspend(outpoint.txid.to_string(), outpoint.vout)
@@ -578,6 +978,7 @@ async fn execute_chain_query(chain: &dyn BitcoinChainService, query: &ChainQuery
                         ChainResult::Spend(Some(SpendInfo {
                             spender_txid,
                             confirmed: status.confirmed,
+                            block_height: status.block_height,
                         }))
                     }
                     Err(e) => {
@@ -622,6 +1023,7 @@ async fn execute_chain_query(chain: &dyn BitcoinChainService, query: &ChainQuery
                                 vout: u.vout,
                                 value: u.value,
                                 confirmed: u.status.confirmed,
+                                block_height: u.status.block_height,
                             }),
                             Err(e) => {
                                 warn!("skipping refund txo {} for leaf {leaf_id}: {e}", u.txid);
@@ -646,29 +1048,33 @@ async fn execute_chain_query(chain: &dyn BitcoinChainService, query: &ChainQuery
     }
 }
 
-fn confirmation_status(status: ExitTxStatus) -> ConfirmationStatus {
+/// The status a built transaction starts at. What an unconfirmed one is waiting
+/// for takes the whole list to work out, so [`resolve_statuses`] replaces this.
+fn initial_status(status: ExitTxStatus) -> ExitTransactionStatus {
     match status {
-        ExitTxStatus::Confirmed => ConfirmationStatus::Confirmed,
-        ExitTxStatus::Unconfirmed => ConfirmationStatus::Unconfirmed,
-        ExitTxStatus::Unverified => ConfirmationStatus::Unverified,
+        ExitTxStatus::Confirmed { block_height } => {
+            ExitTransactionStatus::Confirmed { block_height }
+        }
+        ExitTxStatus::Unconfirmed => ExitTransactionStatus::WaitingForDependencies,
+        ExitTxStatus::Unverified => ExitTransactionStatus::Unverified,
     }
 }
 
-/// The sweep's status, derived from the refunds it spends. A verified refund is
-/// spent-and-dropped once its sweep confirms (the exit then returns with no
-/// sweep), so a freshly-returned sweep over verified refunds is never yet
-/// on-chain: `Unconfirmed`. An unverified refund (its chain lookup failed) could
-/// already be on-chain and swept without us knowing, so the sweep is `Unverified`.
-fn sweep_confirmation_status(build: &UnilateralExitBuild) -> ConfirmationStatus {
+/// The sweep's starting status, derived from the refunds it spends. A verified
+/// refund is spent-and-dropped once its sweep confirms (the exit then returns
+/// with no sweep), so a freshly-returned sweep over verified refunds is never
+/// yet on-chain. An unverified refund (its chain lookup failed) could already be
+/// on-chain and swept without us knowing, so the sweep is `Unverified`.
+fn sweep_initial_status(build: &UnilateralExitBuild) -> ExitTransactionStatus {
     let any_refund_unverified = build
         .branches
         .iter()
         .flat_map(|b| b.txs.iter())
         .any(|t| t.kind == ExitTxKind::Refund && t.status == ExitTxStatus::Unverified);
     if any_refund_unverified {
-        ConfirmationStatus::Unverified
+        ExitTransactionStatus::Unverified
     } else {
-        ConfirmationStatus::Unconfirmed
+        ExitTransactionStatus::WaitingForDependencies
     }
 }
 
@@ -678,6 +1084,7 @@ fn empty_exit_response() -> UnilateralExitResponse {
         total_fee_sat: 0,
         leaves: Vec::new(),
         transactions: Vec::new(),
+        funding_inputs: Vec::new(),
     }
 }
 
@@ -784,18 +1191,18 @@ mod tests {
     }
 
     #[test]
-    fn sweep_status_is_unconfirmed_when_refunds_are_verified() {
+    fn a_sweep_over_verified_refunds_starts_out_waiting_on_them() {
         assert_eq!(
-            sweep_confirmation_status(&build_with_refund(ExitTxStatus::Unconfirmed)),
-            ConfirmationStatus::Unconfirmed
+            sweep_initial_status(&build_with_refund(ExitTxStatus::Unconfirmed)),
+            ExitTransactionStatus::WaitingForDependencies
         );
     }
 
     #[test]
-    fn sweep_status_is_unverified_when_a_refund_is_unverified() {
+    fn a_sweep_over_an_unverified_refund_is_unverified() {
         assert_eq!(
-            sweep_confirmation_status(&build_with_refund(ExitTxStatus::Unverified)),
-            ConfirmationStatus::Unverified
+            sweep_initial_status(&build_with_refund(ExitTxStatus::Unverified)),
+            ExitTransactionStatus::Unverified
         );
     }
 
@@ -878,5 +1285,247 @@ mod tests {
     async fn sign_psbt_via_succeeds_when_every_input_is_signed() {
         let result = sign_psbt_via(unsigned_two_input_psbt(), &PartialSigner { finalize: 2 }).await;
         assert!(result.is_ok());
+    }
+
+    /// A chain that knows one transaction's height and one tip, and refuses
+    /// everything else, so a test says exactly what the resolver was told.
+    struct StubChain {
+        tip: Option<u32>,
+        heights: HashMap<String, u32>,
+    }
+
+    #[macros::async_trait]
+    impl BitcoinChainService for StubChain {
+        async fn get_address_utxos(
+            &self,
+            _address: String,
+        ) -> Result<Vec<crate::chain::Utxo>, crate::chain::ChainServiceError> {
+            unreachable!()
+        }
+        async fn get_address_txos(
+            &self,
+            _address: String,
+        ) -> Result<Vec<crate::chain::Utxo>, crate::chain::ChainServiceError> {
+            unreachable!()
+        }
+        async fn get_transaction_status(
+            &self,
+            txid: String,
+        ) -> Result<crate::chain::TxStatus, crate::chain::ChainServiceError> {
+            match self.heights.get(&txid) {
+                Some(height) => Ok(crate::chain::TxStatus {
+                    confirmed: true,
+                    block_height: Some(*height),
+                    block_time: None,
+                }),
+                None => Err(crate::chain::ChainServiceError::Generic("unknown".into())),
+            }
+        }
+        async fn tip_height(&self) -> Result<u32, crate::chain::ChainServiceError> {
+            self.tip
+                .ok_or_else(|| crate::chain::ChainServiceError::Generic("no tip".into()))
+        }
+        async fn get_transaction_hex(
+            &self,
+            _txid: String,
+        ) -> Result<String, crate::chain::ChainServiceError> {
+            unreachable!()
+        }
+        async fn get_outspend(
+            &self,
+            _txid: String,
+            _vout: u32,
+        ) -> Result<Outspend, crate::chain::ChainServiceError> {
+            unreachable!()
+        }
+        async fn broadcast_transaction(
+            &self,
+            _tx: String,
+        ) -> Result<(), crate::chain::ChainServiceError> {
+            unreachable!()
+        }
+        async fn recommended_fees(
+            &self,
+        ) -> Result<crate::chain::RecommendedFees, crate::chain::ChainServiceError> {
+            unreachable!()
+        }
+    }
+
+    /// A transaction spending `parent` under a relative timelock of `csv` blocks.
+    fn timelocked_tx(parent: Txid, csv: u32) -> Transaction {
+        Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: OutPoint {
+                    txid: parent,
+                    vout: 0,
+                },
+                sequence: bitcoin::Sequence::from_height(u16::try_from(csv).unwrap()),
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(1_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        }
+    }
+
+    fn model_tx(
+        tx: &Transaction,
+        csv: Option<u32>,
+        depends_on: Vec<String>,
+        status: ExitTransactionStatus,
+    ) -> UnilateralExitTransaction {
+        UnilateralExitTransaction {
+            kind: UnilateralExitTxKind::Node,
+            node_id: None,
+            txid: tx.compute_txid().to_string(),
+            tx_hex: serialize_hex(tx),
+            cpfp_tx_hex: None,
+            csv_timelock_blocks: csv,
+            depends_on,
+            status,
+        }
+    }
+
+    /// A parent at height 100 with a 6 block timelock is spendable from block
+    /// 106, so a tip of 105 is enough: the child would be valid in block 106.
+    #[macros::async_test_all]
+    async fn a_matured_timelock_is_ready_one_block_early() {
+        let parent = model_tx(
+            &timelocked_tx(Txid::from_byte_array([9; 32]), 0),
+            None,
+            vec![],
+            ExitTransactionStatus::Confirmed {
+                block_height: Some(100),
+            },
+        );
+        let parent_txid = Txid::from_str(&parent.txid).unwrap();
+        let child = model_tx(
+            &timelocked_tx(parent_txid, 6),
+            Some(6),
+            vec![parent.txid.clone()],
+            ExitTransactionStatus::WaitingForDependencies,
+        );
+        let chain = StubChain {
+            tip: Some(105),
+            heights: HashMap::new(),
+        };
+
+        let mut txs = vec![parent, child];
+        resolve_statuses(&chain, &mut txs).await.unwrap();
+
+        assert_eq!(txs[1].status, ExitTransactionStatus::Ready);
+    }
+
+    #[macros::async_test_all]
+    async fn an_unmatured_timelock_reports_the_block_it_waits_for() {
+        let parent = model_tx(
+            &timelocked_tx(Txid::from_byte_array([9; 32]), 0),
+            None,
+            vec![],
+            ExitTransactionStatus::Confirmed {
+                block_height: Some(100),
+            },
+        );
+        let parent_txid = Txid::from_str(&parent.txid).unwrap();
+        let child = model_tx(
+            &timelocked_tx(parent_txid, 6),
+            Some(6),
+            vec![parent.txid.clone()],
+            ExitTransactionStatus::WaitingForDependencies,
+        );
+        let chain = StubChain {
+            tip: Some(104),
+            heights: HashMap::new(),
+        };
+
+        let mut txs = vec![parent, child];
+        resolve_statuses(&chain, &mut txs).await.unwrap();
+
+        assert_eq!(
+            txs[1].status,
+            ExitTransactionStatus::WaitingForTimelock {
+                spendable_at_height: Some(106)
+            }
+        );
+    }
+
+    /// An unconfirmed parent holds the child at its dependencies: the timelock
+    /// has no height to count from yet.
+    #[macros::async_test_all]
+    async fn an_unconfirmed_dependency_outranks_the_timelock() {
+        let parent = model_tx(
+            &timelocked_tx(Txid::from_byte_array([9; 32]), 0),
+            None,
+            vec![],
+            ExitTransactionStatus::WaitingForDependencies,
+        );
+        let parent_txid = Txid::from_str(&parent.txid).unwrap();
+        let child = model_tx(
+            &timelocked_tx(parent_txid, 6),
+            Some(6),
+            vec![parent.txid.clone()],
+            ExitTransactionStatus::WaitingForDependencies,
+        );
+        let chain = StubChain {
+            tip: Some(999),
+            heights: HashMap::new(),
+        };
+
+        let mut txs = vec![parent, child];
+        resolve_statuses(&chain, &mut txs).await.unwrap();
+
+        assert_eq!(txs[1].status, ExitTransactionStatus::WaitingForDependencies);
+    }
+
+    /// The exit a resume builds starts below the node it resumes from, so the
+    /// height its first timelock counts from is not in the list. It comes from
+    /// the chain instead.
+    #[macros::async_test_all]
+    async fn a_height_outside_the_list_is_read_from_the_chain() {
+        let ancestor = Txid::from_byte_array([7; 32]);
+        let tx = timelocked_tx(ancestor, 10);
+        let chain = StubChain {
+            tip: Some(1_000),
+            heights: HashMap::from([(ancestor.to_string(), 500)]),
+        };
+
+        let mut txs = vec![model_tx(
+            &tx,
+            Some(10),
+            vec![],
+            ExitTransactionStatus::WaitingForDependencies,
+        )];
+        resolve_statuses(&chain, &mut txs).await.unwrap();
+
+        assert_eq!(txs[0].status, ExitTransactionStatus::Ready);
+    }
+
+    /// An unreadable chain leaves the transaction waiting rather than ready:
+    /// the direction that never sends what the mempool would reject.
+    #[macros::async_test_all]
+    async fn an_unreadable_height_leaves_the_timelock_unknown() {
+        let tx = timelocked_tx(Txid::from_byte_array([7; 32]), 10);
+        let chain = StubChain {
+            tip: Some(1_000),
+            heights: HashMap::new(),
+        };
+
+        let mut txs = vec![model_tx(
+            &tx,
+            Some(10),
+            vec![],
+            ExitTransactionStatus::WaitingForDependencies,
+        )];
+        resolve_statuses(&chain, &mut txs).await.unwrap();
+
+        assert_eq!(
+            txs[0].status,
+            ExitTransactionStatus::WaitingForTimelock {
+                spendable_at_height: None
+            }
+        );
     }
 }

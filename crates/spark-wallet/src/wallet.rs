@@ -44,10 +44,10 @@ use spark::{
         },
     },
     services::{
-        CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpInput, DepositService, ExitSpeed,
-        Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription, LightningReceivePayment,
-        LightningSendPayment, LightningService, PayLightningResult, Preimage,
-        PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
+        CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpInput, DepositService,
+        ExitChainState, ExitSpeed, Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription,
+        LightningReceivePayment, LightningSendPayment, LightningService, PayLightningResult,
+        Preimage, PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
         QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap, TimelockManager,
         TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
         TransferTokenOutput, TransferType, UnilateralExitLeafFilter, Utxo,
@@ -324,6 +324,14 @@ macro_rules! with_leafs_spent_retry {
             }
         }
     }};
+}
+
+/// The leaves an exit would move and the tree behind them, before any funding or
+/// chain state is considered.
+pub struct ExitContext {
+    pub leaf_ids: Vec<TreeNodeId>,
+    pub filter: UnilateralExitLeafFilter,
+    pub tree_nodes: HashMap<TreeNodeId, TreeNode>,
 }
 
 pub struct SparkWallet {
@@ -1575,15 +1583,19 @@ impl SparkWallet {
     ) -> Result<(Vec<TreeNodeId>, UnilateralExitLeafFilter), SparkWalletError> {
         match selection {
             ExitLeafSelection::Auto => {
-                // Include non-available leaves (e.g. a mid-exit leaf the operators
-                // now report OnChain) so Auto resumes a partially-exited leaf, not
-                // just fresh ones. The planner skips any that turn out un-exitable
-                // under ProfitableOnly.
+                // Every stored leaf is one of ours, so Auto sweeps all of them and
+                // lets the planner drop the few that are unexitable (terminal status,
+                // no refund) or unprofitable. That includes the non-available ones (a
+                // mid-exit leaf the operators now report OnChain, so Auto resumes it)
+                // and the missing-from-operators ones, which are the operator-dropped
+                // case unilateral exit exists for: they count towards the balance, so
+                // omitting them would strand exactly the funds most at risk.
                 let leaves = self.tree_service.list_leaves().await?;
                 let mut leaf_ids: Vec<TreeNodeId> = leaves
                     .available
                     .into_iter()
                     .chain(leaves.not_available)
+                    .chain(leaves.available_missing_from_operators)
                     .map(|l| l.id)
                     .collect();
                 leaf_ids.sort();
@@ -1759,51 +1771,67 @@ impl SparkWallet {
         })
     }
 
-    /// Quotes the funding needed for a unilateral exit of the selected leaves.
-    pub async fn quote_unilateral_exit(
+    /// The leaves an exit would move and the tree behind them. Held apart from
+    /// quoting and planning so the chain can be asked what those leaves have
+    /// already done first, which is what lets both be priced on the work left.
+    pub async fn load_exit_context(
         &self,
-        fee_rate_sat_per_kw: u64,
         selection: ExitLeafSelection,
+    ) -> Result<ExitContext, SparkWalletError> {
+        self.refresh_before_exit().await;
+        let (leaf_ids, filter) = self.resolve_leaf_selection(selection).await?;
+        let tree_nodes = self.load_exit_tree_nodes(&leaf_ids).await?;
+        Ok(ExitContext {
+            leaf_ids,
+            filter,
+            tree_nodes,
+        })
+    }
+
+    /// Quotes the funding needed for a unilateral exit of the context's leaves.
+    #[allow(clippy::too_many_arguments)]
+    pub fn quote_unilateral_exit(
+        &self,
+        context: &ExitContext,
+        fee_rate_sat_per_kw: u64,
         funding_input_weight: u64,
         funding_output_script_len: usize,
         change_dust_limit: u64,
         destination_script_len: usize,
+        on_chain: &ExitChainState,
     ) -> Result<spark::services::UnilateralExitQuote, SparkWalletError> {
-        self.refresh_before_exit().await;
-        let (leaf_ids, filter) = self.resolve_leaf_selection(selection).await?;
-        let tree_nodes = self.load_exit_tree_nodes(&leaf_ids).await?;
         Ok(spark::services::quote_unilateral_exit(
-            &tree_nodes,
-            &leaf_ids,
-            filter,
+            &context.tree_nodes,
+            &context.leaf_ids,
+            context.filter,
             funding_input_weight,
             funding_output_script_len,
             change_dust_limit,
             fee_rate_sat_per_kw,
             destination_script_len,
+            on_chain,
         )?)
     }
 
-    /// Prepares a unilateral exit of the selected leaves: loads the exit tree,
-    /// plans it, and derives each leaf's P2TR refund address. `Auto` keeps only
-    /// profitable leaves; `Specific` exits every requested one.
-    pub async fn prepare_unilateral_exit_plan(
+    /// Plans a unilateral exit over an already-loaded context and derives each
+    /// leaf's refund address. `Auto` keeps only profitable leaves; `Specific`
+    /// exits every requested one.
+    pub fn prepare_unilateral_exit_plan(
         &self,
+        context: &ExitContext,
         fee_rate_sat_per_kw: u64,
-        selection: ExitLeafSelection,
         inputs: Vec<CpfpInput>,
         destination_script_len: usize,
+        on_chain: &ExitChainState,
     ) -> Result<PreparedUnilateralExit, SparkWalletError> {
-        self.refresh_before_exit().await;
-        let (leaf_ids, filter) = self.resolve_leaf_selection(selection).await?;
-        let tree_nodes = self.load_exit_tree_nodes(&leaf_ids).await?;
         let plan = spark::services::plan_unilateral_exit(
-            tree_nodes,
-            &leaf_ids,
-            filter,
+            context.tree_nodes.clone(),
+            &context.leaf_ids,
+            context.filter,
             inputs,
             fee_rate_sat_per_kw,
             destination_script_len,
+            on_chain,
         )?;
         debug!(
             fee_rate_sat_per_kw,
@@ -1813,15 +1841,22 @@ impl SparkWallet {
             "prepare_unilateral_exit_plan: planned"
         );
 
-        // A P2TR address over the leaf's derived key recognizes an on-chain
-        // refund (any variant) and is where the sweep pulls from.
-        let secp = Secp256k1::new();
-        let network: bitcoin::Network = self.config.network.into();
-        let mut leaf_refund_addresses = HashMap::new();
-        for leaf in &plan.selected_leaves {
-            let pubkey = self.spark_signer.get_public_key_for_leaf(&leaf.id).await?;
-            let address = Address::p2tr(&secp, pubkey.x_only_public_key().0, None, network);
-            leaf_refund_addresses.insert(leaf.id.clone(), address);
+        let selected_ids: Vec<TreeNodeId> =
+            plan.selected_leaves.iter().map(|l| l.id.clone()).collect();
+        let leaf_refund_addresses = crate::leaf_refund_addresses(
+            &plan.tree_nodes,
+            &selected_ids,
+            self.config.network.into(),
+        );
+        if let Some(leaf) = selected_ids
+            .iter()
+            .find(|id| !leaf_refund_addresses.contains_key(*id))
+        {
+            // Selection already drops a leaf with no refund_tx, so the only way
+            // here is a refund paying a script no address describes.
+            return Err(SparkWalletError::Generic(format!(
+                "leaf {leaf} has no refund address to sweep from"
+            )));
         }
 
         Ok(PreparedUnilateralExit {
@@ -3468,12 +3503,24 @@ mod tests {
         chain_ids(&pedigrees).into_iter().next().unwrap_or_default()
     }
 
-    fn pedigree_owned_by(
+    /// A pedigree this wallet owns: attributed to `owner`, and with a verifying
+    /// key our signing share and the operators' actually come to, which is what
+    /// the import checks.
+    async fn pedigree_owned_by(
+        wallet: &SparkWallet,
         owner: PublicKey,
         mut leaf: TreeNode,
         ancestors: Vec<TreeNode>,
     ) -> LeafPedigree {
         leaf.owner_identity_public_key = Some(owner);
+        if owner == wallet.get_identity_public_key() {
+            let ours = wallet
+                .spark_signer
+                .get_public_key_for_leaf(&leaf.id)
+                .await
+                .unwrap();
+            leaf.verifying_public_key = ours.combine(&leaf.signing_keyshare.public_key).unwrap();
+        }
         LeafPedigree { leaf, ancestors }
     }
 
@@ -3541,13 +3588,26 @@ mod tests {
         node
     }
 
+    /// Marks `leaf` as this wallet's: attributed to our identity, and with a
+    /// verifying key our signing share and the operators' actually come to, which
+    /// is what the import checks.
+    async fn owned_by(wallet: &SparkWallet, mut leaf: TreeNode) -> TreeNode {
+        leaf.owner_identity_public_key = Some(wallet.get_identity_public_key());
+        let ours = wallet
+            .spark_signer
+            .get_public_key_for_leaf(&leaf.id)
+            .await
+            .unwrap();
+        leaf.verifying_public_key = ours.combine(&leaf.signing_keyshare.public_key).unwrap();
+        leaf
+    }
+
     #[macros::async_test_all]
     async fn import_exit_state_keeps_only_leaves_this_wallet_owns() {
         let store = Arc::new(InMemoryTreeStore::new());
         let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
 
-        let mut mine = create_test_tree_node("mine", 1_000);
-        mine.owner_identity_public_key = Some(wallet.get_identity_public_key());
+        let mine = owned_by(&wallet, create_test_tree_node("mine", 1_000)).await;
         let theirs = create_test_tree_node("theirs", 2_000);
         assert_ne!(
             theirs.owner_identity_public_key,
@@ -3590,21 +3650,21 @@ mod tests {
         seed_pedigrees(
             &*store,
             &[pedigree_owned_by(
+                &wallet,
                 owner,
                 renewed.clone(),
                 vec![mid.clone(), root.clone()],
-            )],
+            )
+            .await],
         )
         .await;
 
         let mut before_renewal = child_of("leaf", &mid, TreeNodeStatus::Available);
         before_renewal.refund_tx = Some(refund_tx_at(100));
         let outcome = wallet
-            .import_exit_state(vec![pedigree_owned_by(
-                owner,
-                before_renewal,
-                vec![mid, root],
-            )])
+            .import_exit_state(vec![
+                pedigree_owned_by(&wallet, owner, before_renewal, vec![mid, root]).await,
+            ])
             .await
             .unwrap();
 
@@ -3625,7 +3685,7 @@ mod tests {
         let leaf = child_of("leaf", &mid, TreeNodeStatus::Available);
         seed_pedigrees(
             &*store,
-            &[pedigree_owned_by(owner, leaf, vec![mid, root.clone()])],
+            &[pedigree_owned_by(&wallet, owner, leaf, vec![mid, root.clone()]).await],
         )
         .await;
 
@@ -3635,11 +3695,9 @@ mod tests {
         let split = child_of("split", &parent, TreeNodeStatus::Splitted);
         let elsewhere = child_of("leaf", &split, TreeNodeStatus::Available);
         let outcome = wallet
-            .import_exit_state(vec![pedigree_owned_by(
-                owner,
-                elsewhere,
-                vec![split, parent, root],
-            )])
+            .import_exit_state(vec![
+                pedigree_owned_by(&wallet, owner, elsewhere, vec![split, parent, root]).await,
+            ])
             .await
             .unwrap();
 
@@ -3664,15 +3722,14 @@ mod tests {
         let leaf = child_of("leaf", &mid, TreeNodeStatus::Available);
         seed_pedigrees(
             &*store,
-            &[pedigree_owned_by(
-                owner,
-                leaf.clone(),
-                vec![mid.clone(), gap.clone()],
-            )],
+            &[
+                pedigree_owned_by(&wallet, owner, leaf.clone(), vec![mid.clone(), gap.clone()])
+                    .await,
+            ],
         )
         .await;
 
-        let complete = pedigree_owned_by(owner, leaf, vec![mid, gap, root]);
+        let complete = pedigree_owned_by(&wallet, owner, leaf, vec![mid, gap, root]).await;
         let outcome = wallet
             .import_exit_state(vec![complete.clone()])
             .await
@@ -3713,11 +3770,7 @@ mod tests {
         let leaf_b = child_of("leaf-b", &mid, TreeNodeStatus::Available);
         seed_pedigrees(
             &*store,
-            &[pedigree_owned_by(
-                owner,
-                leaf_b,
-                vec![mid.clone(), root.clone()],
-            )],
+            &[pedigree_owned_by(&wallet, owner, leaf_b, vec![mid.clone(), root.clone()]).await],
         )
         .await;
 
@@ -3727,11 +3780,9 @@ mod tests {
         conflicting_mid.value += 1;
         let leaf_a = child_of("leaf-a", &mid, TreeNodeStatus::Available);
         let outcome = wallet
-            .import_exit_state(vec![pedigree_owned_by(
-                owner,
-                leaf_a,
-                vec![conflicting_mid, root],
-            )])
+            .import_exit_state(vec![
+                pedigree_owned_by(&wallet, owner, leaf_a, vec![conflicting_mid, root]).await,
+            ])
             .await
             .unwrap();
 
@@ -3750,6 +3801,7 @@ mod tests {
     /// and the chain that would complete it, nearest first.
     async fn store_leaf_short_of_a_root(
         store: &InMemoryTreeStore,
+        wallet: &SparkWallet,
         owner: PublicKey,
     ) -> (TreeNode, Vec<TreeNode>) {
         let root = root_node("root");
@@ -3757,7 +3809,7 @@ mod tests {
         let leaf = child_of("leaf", &mid, TreeNodeStatus::Available);
         seed_pedigrees(
             store,
-            &[pedigree_owned_by(owner, leaf.clone(), vec![mid.clone()])],
+            &[pedigree_owned_by(wallet, owner, leaf.clone(), vec![mid.clone()]).await],
         )
         .await;
         (leaf, vec![mid, root])
@@ -3774,7 +3826,7 @@ mod tests {
         let store = Arc::new(InMemoryTreeStore::new());
         let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
         let owner = wallet.get_identity_public_key();
-        store_leaf_short_of_a_root(store.as_ref(), owner).await;
+        store_leaf_short_of_a_root(store.as_ref(), &wallet, owner).await;
 
         // Each reaches a root along transactions that spend one another, and only
         // by revisiting an id: two nodes parenting each other, a node parenting
@@ -3797,7 +3849,9 @@ mod tests {
         ] {
             let cyclic_leaf = child_of("leaf", &parent, TreeNodeStatus::Available);
             let outcome = wallet
-                .import_exit_state(vec![pedigree_owned_by(owner, cyclic_leaf, ancestors)])
+                .import_exit_state(vec![
+                    pedigree_owned_by(&wallet, owner, cyclic_leaf, ancestors).await,
+                ])
                 .await
                 .unwrap();
 
@@ -3815,7 +3869,7 @@ mod tests {
         let store = Arc::new(InMemoryTreeStore::new());
         let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
         let owner = wallet.get_identity_public_key();
-        let (leaf, chain) = store_leaf_short_of_a_root(store.as_ref(), owner).await;
+        let (leaf, chain) = store_leaf_short_of_a_root(store.as_ref(), &wallet, owner).await;
 
         // Names the right parents all the way to a root, but the leaf's
         // transaction spends elsewhere, so broadcasting the chain exits nothing.
@@ -3830,7 +3884,7 @@ mod tests {
         );
 
         let outcome = wallet
-            .import_exit_state(vec![pedigree_owned_by(owner, adrift, chain)])
+            .import_exit_state(vec![pedigree_owned_by(&wallet, owner, adrift, chain).await])
             .await
             .unwrap();
 
@@ -3847,20 +3901,22 @@ mod tests {
         let store = Arc::new(InMemoryTreeStore::new());
         let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
         let owner = wallet.get_identity_public_key();
-        let (leaf, chain) = store_leaf_short_of_a_root(store.as_ref(), owner).await;
+        let (leaf, chain) = store_leaf_short_of_a_root(store.as_ref(), &wallet, owner).await;
 
         let stranger_key = PublicKey::from_slice(&[2; 33]).unwrap();
         assert_ne!(stranger_key, leaf.verifying_public_key);
         let mut richer_chain = chain.clone();
         richer_chain[0].value = leaf.value + 1;
-        let mut rekeyed_leaf = leaf.clone();
-        rekeyed_leaf.verifying_public_key = stranger_key;
+        // Rekeyed after the fixture, which otherwise gives every leaf a verifying
+        // key this wallet can prove.
+        let mut rekeyed = pedigree_owned_by(&wallet, owner, leaf.clone(), chain.clone()).await;
+        rekeyed.leaf.verifying_public_key = stranger_key;
 
-        for (leaf, ancestors) in [(leaf.clone(), richer_chain), (rekeyed_leaf, chain.clone())] {
-            let outcome = wallet
-                .import_exit_state(vec![pedigree_owned_by(owner, leaf, ancestors)])
-                .await
-                .unwrap();
+        for pedigree in [
+            pedigree_owned_by(&wallet, owner, leaf.clone(), richer_chain).await,
+            rekeyed,
+        ] {
+            let outcome = wallet.import_exit_state(vec![pedigree]).await.unwrap();
 
             assert_eq!(outcome.imported_leaves, 0);
             assert_eq!(outcome.skipped_chains, 1);
@@ -3872,7 +3928,7 @@ mod tests {
 
         // The same chain, agreeing with what is stored, is taken.
         let outcome = wallet
-            .import_exit_state(vec![pedigree_owned_by(owner, leaf, chain)])
+            .import_exit_state(vec![pedigree_owned_by(&wallet, owner, leaf, chain).await])
             .await
             .unwrap();
         assert_eq!(outcome.imported_leaves, 1);
@@ -3887,7 +3943,7 @@ mod tests {
         let store = Arc::new(InMemoryTreeStore::new());
         let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
         let owner = wallet.get_identity_public_key();
-        let (held, chain) = store_leaf_short_of_a_root(store.as_ref(), owner).await;
+        let (held, chain) = store_leaf_short_of_a_root(store.as_ref(), &wallet, owner).await;
 
         // A second entry for the same id, on a chain of its own. Weighing the two
         // entries apart would pair one's leaf with the other's chain.
@@ -3898,8 +3954,8 @@ mod tests {
 
         let outcome = wallet
             .import_exit_state(vec![
-                pedigree_owned_by(owner, held.clone(), chain),
-                pedigree_owned_by(owner, other_leaf, vec![other_mid, other_root]),
+                pedigree_owned_by(&wallet, owner, held.clone(), chain).await,
+                pedigree_owned_by(&wallet, owner, other_leaf, vec![other_mid, other_root]).await,
             ])
             .await
             .unwrap();
@@ -3922,7 +3978,7 @@ mod tests {
 
         let root = root_node("root");
         let leaf = child_of("leaf", &root, TreeNodeStatus::Available);
-        let pedigree = pedigree_owned_by(owner, leaf.clone(), vec![root]);
+        let pedigree = pedigree_owned_by(&wallet, owner, leaf.clone(), vec![root]).await;
         seed_pedigrees(&*store, std::slice::from_ref(&pedigree)).await;
         let reservation = store
             .try_reserve_leaves_by_ids(std::slice::from_ref(&leaf.id), ReservationPurpose::Payment)
@@ -3962,9 +4018,15 @@ mod tests {
         // The operators stopped reporting all three, which the store records on
         // the leaf row itself.
         let missing = [
-            pedigree_owned_by(owner, kept.clone(), vec![kept_mid, root.clone()]),
-            pedigree_owned_by(owner, chained.clone(), vec![chained_mid.clone()]),
-            pedigree_owned_by(owner, rewritten.clone(), vec![rewritten_mid.clone()]),
+            pedigree_owned_by(&wallet, owner, kept.clone(), vec![kept_mid, root.clone()]).await,
+            pedigree_owned_by(&wallet, owner, chained.clone(), vec![chained_mid.clone()]).await,
+            pedigree_owned_by(
+                &wallet,
+                owner,
+                rewritten.clone(),
+                vec![rewritten_mid.clone()],
+            )
+            .await,
         ];
         let missing_leaves: Vec<TreeNode> = missing.iter().map(|p| p.leaf.clone()).collect();
         store
@@ -3977,9 +4039,9 @@ mod tests {
         renewed.refund_tx = Some(refund_tx_at(200));
         wallet
             .import_exit_state(vec![
-                pedigree_owned_by(owner, kept, vec![root.clone()]),
-                pedigree_owned_by(owner, chained, vec![chained_mid, root.clone()]),
-                pedigree_owned_by(owner, renewed, vec![rewritten_mid, root]),
+                pedigree_owned_by(&wallet, owner, kept, vec![root.clone()]).await,
+                pedigree_owned_by(&wallet, owner, chained, vec![chained_mid, root.clone()]).await,
+                pedigree_owned_by(&wallet, owner, renewed, vec![rewritten_mid, root]).await,
             ])
             .await
             .unwrap();
@@ -4008,7 +4070,9 @@ mod tests {
         let mid = child_of("mid", &root, TreeNodeStatus::Splitted);
         let leaf = child_of("leaf", &mid, TreeNodeStatus::Available);
         let outcome = wallet
-            .import_exit_state(vec![pedigree_owned_by(owner, leaf, vec![mid])])
+            .import_exit_state(vec![
+                pedigree_owned_by(&wallet, owner, leaf, vec![mid]).await,
+            ])
             .await
             .unwrap();
 
@@ -4035,8 +4099,8 @@ mod tests {
         seed_pedigrees(
             &*source_store,
             &[
-                pedigree_owned_by(owner, leaf_a, vec![mid, root.clone()]),
-                pedigree_owned_by(owner, leaf_b, vec![root]),
+                pedigree_owned_by(&source, owner, leaf_a, vec![mid, root.clone()]).await,
+                pedigree_owned_by(&source, owner, leaf_b, vec![root]).await,
             ],
         )
         .await;

@@ -99,6 +99,15 @@ impl BreezSdk {
         self.inner.unilateral_exit(request, Arc::new(signer)).await
     }
 
+    /// Reads an exit you kept back against the chain: which of its transactions
+    /// are now in a block, and whether it can still be finished as it stands.
+    pub async fn check_unilateral_exit(
+        &self,
+        request: CheckUnilateralExitRequest,
+    ) -> Result<CheckUnilateralExitResponse, SdkError> {
+        self.inner.check_unilateral_exit(request).await
+    }
+
     /// Builds and signs the unilateral exit with a caller-provided signer. The
     /// `sign_psbt` callback receives the serialized CPFP PSBT, signs the inputs
     /// that are not already finalized with any scheme (custom scripts, multisig,

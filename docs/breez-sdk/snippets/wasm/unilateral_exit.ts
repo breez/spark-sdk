@@ -1,7 +1,8 @@
 import type {
   BreezSdk,
   CpfpSigner,
-  PrepareUnilateralExitResponse
+  PrepareUnilateralExitResponse,
+  UnilateralExitResponse
 } from '@breeztech/breez-sdk-spark'
 import { singleKeyCpfpSigner } from '@breeztech/breez-sdk-spark'
 
@@ -45,6 +46,36 @@ const exampleBuildExit = async (sdk: BreezSdk, quote: PrepareUnilateralExitRespo
     }
   }
   // ANCHOR_END: unilateral-exit
+}
+
+const exampleCheckExit = async (sdk: BreezSdk, stored: UnilateralExitResponse) => {
+  // ANCHOR: check-unilateral-exit
+  const checked = await sdk.checkUnilateralExit({ exit: stored })
+
+  // Store this one in place of the one you had.
+  const exit = checked.exit
+
+  switch (checked.verdict.type) {
+    case 'valid': {
+      for (const tx of exit.transactions) {
+        if (tx.status.type === 'ready') {
+          console.log(`ready to broadcast: ${tx.txid}`)
+        }
+      }
+      break
+    }
+    case 'done': {
+      console.log(`The exit finished: ${exit.recoverableValueSat} sats recovered`)
+      break
+    }
+    case 'redo': {
+      // Quote and build again, naming the same leaves. Pass exit.fundingInputs
+      // back and the SDK follows them to whatever they have become.
+      console.log(`Build the exit again: ${checked.verdict.reason}`)
+      break
+    }
+  }
+  // ANCHOR_END: check-unilateral-exit
 }
 
 const exampleExportExitState = async (sdk: BreezSdk): Promise<string> => {
