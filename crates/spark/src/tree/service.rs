@@ -3,11 +3,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::PublicKey;
 use platform_utils::tokio;
 use platform_utils::tokio::sync::broadcast;
 use tracing::{debug, error, info, trace, warn};
 
+use crate::bitcoin::{BitcoinService, sighash_from_tx, verify_finalized_taproot_signature_tx};
+use crate::services::csv_timelock;
 use crate::tree::{
     LeafPedigree, LeafSelection, Leaves, ReservationPurpose, ReserveResult, SelectLeavesOptions,
     TreeNodeStatus,
@@ -308,42 +311,33 @@ impl TreeService for SynchronousTreeService {
         // Leaves added after this time will be preserved even if not in the refresh data.
         let refresh_started_at = self.state.now().await?;
 
-        // Prepare queries for coordinator and all operators and run them in parallel
-        let coordinator_client = self.operator_pool.get_coordinator().client.clone();
+        // Query every operator the same way. The coordinator gets no special say in
+        // which leaves are ours, so it takes part in the same comparison as the rest.
+        // Leaves only: asking for each leaf's ancestors here would re-download every
+        // chain on every refresh, including the ones already stored.
         let operators: Vec<_> = self
             .operator_pool
-            .get_non_coordinator_operators()
+            .get_all_operators()
             .map(|op| (op.id, op.client.clone()))
             .collect();
-
-        // Leaves only. Asking for each leaf's ancestors here would re-download every
-        // chain on every refresh, including the ones already stored.
-        let coord_fut =
-            self.query_nodes(&coordinator_client, false, None, available_leaf_statuses());
-        let op_futs = operators.iter().map(|(id, client)| async move {
+        let coordinator_id = self.operator_pool.get_coordinator().id;
+        let operator_count = operators.len();
+        let responses = join_all(operators.iter().map(|(id, client)| async move {
             (
                 *id,
-                self.query_nodes(client, false, None, available_leaf_statuses())
+                self.query_nodes(client, false, None, held_leaf_statuses())
                     .await,
             )
-        });
+        }))
+        .await;
 
-        let (coordinator_leaves_res, operator_results) = tokio::join!(coord_fut, join_all(op_futs));
-        let coordinator_leaves: Vec<TreeNode> = coordinator_leaves_res?
-            .into_iter()
-            .filter(|n| n.status == TreeNodeStatus::Available)
-            .collect();
-        debug!(
-            leaves = coordinator_leaves.len(),
-            "refresh_leaves: fetched leaves"
-        );
-
-        // Propagate any operator query error to preserve original behavior and
-        // collect successful operator leaves for later comparison
-        let mut operator_leaves_vec: Vec<Vec<TreeNode>> = Vec::new();
-        for (id, res) in operator_results {
+        // One unreachable operator would shrink the comparison below, making the
+        // leaves only it still reports look dropped by everyone, so a refresh is all
+        // or nothing.
+        let mut per_operator = Vec::with_capacity(responses.len());
+        for (id, res) in responses {
             match res {
-                Ok(leaves) => operator_leaves_vec.push(leaves),
+                Ok(nodes) => per_operator.push((id, nodes)),
                 Err(e) => {
                     error!("Failed to query operator {id}: {e:?}");
                     return Err(e);
@@ -351,71 +345,85 @@ impl TreeService for SynchronousTreeService {
             }
         }
 
+        // Status cannot pick the leaves out of a response any more: now that a
+        // mid-exit leaf is asked for, an ancestor of one is just as able to come
+        // back `OnChain` as the leaf below it. Go by shape instead, and drop what
+        // another node in the same response calls its parent: an ancestor is not a
+        // leaf, whatever status it is in.
+        let mut reported: HashMap<TreeNodeId, Vec<(usize, TreeNode)>> = HashMap::new();
+        for (id, nodes) in per_operator {
+            let parent_ids: HashSet<TreeNodeId> = nodes
+                .iter()
+                .filter_map(|n| n.parent_node_id.clone())
+                .collect();
+            for node in nodes {
+                if parent_ids.contains(&node.id) {
+                    continue;
+                }
+                reported
+                    .entry(node.id.clone())
+                    .or_default()
+                    .push((id, node));
+            }
+        }
+        debug!(
+            leaves = reported.len(),
+            operators = operator_count,
+            "refresh_leaves: fetched leaves from every operator"
+        );
+
         let mut missing_operator_leaves_map: HashMap<TreeNodeId, TreeNode> = HashMap::new();
         let mut ignored_leaves_map: HashMap<TreeNodeId, TreeNode> = HashMap::new();
 
-        // For each operator's leaves, compare against coordinator in the same way as before
-        for (operator_id, operator_leaves) in operators.into_iter().zip(operator_leaves_vec) {
-            // Paging over a set the operator is concurrently mutating can return the
-            // same leaf on more than one page, so keep the first occurrence.
-            let mut operator_leaves_by_id: HashMap<&TreeNodeId, &TreeNode> =
-                HashMap::with_capacity(operator_leaves.len());
-            for operator_leaf in &operator_leaves {
-                operator_leaves_by_id
-                    .entry(&operator_leaf.id)
-                    .or_insert(operator_leaf);
+        // A leaf every operator reported identically is clean. One that some of them
+        // dropped, or described differently, is still ours and still counts towards
+        // the balance, but it is held back from payments until they agree again. A
+        // leaf no operator reports is simply absent from here, and that absence is
+        // what the store reads as a deletion: it now takes every operator to drop a
+        // leaf, where before the coordinator alone decided.
+        let mut union_leaves: Vec<TreeNode> = Vec::with_capacity(reported.len());
+        for (leaf_id, copies) in reported {
+            // Where the operators disagree no copy is the right one, so keep the
+            // coordinator's, the one the rest of the client transacts against. The
+            // leaf is held back either way.
+            let Some(representative) = copies
+                .iter()
+                .find(|(id, _)| *id == coordinator_id)
+                .or_else(|| copies.first())
+                .map(|(_, node)| node.clone())
+            else {
+                continue;
+            };
+            // Count distinct operators: a paged query can return the same node
+            // twice for one of them, which would otherwise pass for agreement
+            // that another operator never gave.
+            let reporting: HashSet<usize> = copies.iter().map(|(id, _)| *id).collect();
+            let agreed = reporting.len() == operator_count
+                && copies
+                    .iter()
+                    .all(|(_, node)| leaf_copies_agree(node, &representative));
+            if !agreed {
+                warn!(
+                    "Leaf {leaf_id} reported by {} of {operator_count} operators, and not identically by all of them; holding it back from payments",
+                    reporting.len()
+                );
+                missing_operator_leaves_map.insert(leaf_id.clone(), representative.clone());
             }
-
-            for leaf in &coordinator_leaves {
-                match operator_leaves_by_id.get(&leaf.id).copied() {
-                    Some(operator_leaf) => {
-                        // TODO: move this logic to TreeNode method
-                        if operator_leaf.status != leaf.status
-                            || operator_leaf.signing_keyshare.public_key
-                                != leaf.signing_keyshare.public_key
-                            || operator_leaf.node_tx != leaf.node_tx
-                            || operator_leaf.refund_tx != leaf.refund_tx
-                        {
-                            warn!(
-                                "Ignoring leaf due to mismatch between coordinator and operator {}. Coordinator: {:?}, Operator: {:?}",
-                                operator_id.0, leaf, operator_leaf
-                            );
-                            missing_operator_leaves_map.insert(leaf.id.clone(), leaf.clone());
-                        }
-                    }
-                    None => {
-                        warn!(
-                            "Ignoring leaf due to missing from operator {}: {:?}",
-                            operator_id.0, leaf.id
-                        );
-                        missing_operator_leaves_map.insert(leaf.id.clone(), leaf.clone());
-                    }
-                }
-            }
+            union_leaves.push(representative);
         }
 
-        // Leaves not Available are ignored outright; the rest need an ownership
-        // check (our signing share + the operators' share must equal the
-        // verifying key).
-        let available_leaves: Vec<&TreeNode> = coordinator_leaves
-            .iter()
-            .filter(|leaf| {
-                if leaf.status == TreeNodeStatus::Available {
-                    true
-                } else {
-                    info!("Ignoring leaf {} due to status: {:?}", leaf.id, leaf.status);
-                    ignored_leaves_map.insert(leaf.id.clone(), (*leaf).clone());
-                    false
-                }
-            })
-            .collect();
+        // Every reported leaf needs an ownership check (our signing share plus the
+        // operators' share must equal the verifying key). The check is not gated on
+        // status: a leaf part-way through an exit is still ours, and dropping it
+        // here would strand the chain that exit resumes from.
+        let reported_leaves: Vec<&TreeNode> = union_leaves.iter().collect();
 
         // Deriving our leaf pubkey is a network round-trip on a remote signer, so
         // re-deriving every leaf each refresh would flood the signer and stall
         // payments behind its rate limiter on large wallets. For remote signers we
         // skip leaves already stored with matching keys (see `VerifiedLeafKeys`),
         // re-checking only new or changed leaves. Local signers derive cheaply, so
-        // they skip the store read and verify every available leaf. Remaining
+        // they skip the store read and verify every reported leaf. Remaining
         // fetches run concurrently, leaving the signer to bound its own
         // concurrency; order is preserved for the zip below.
         let already_verified = if self.spark_signer.is_remote() {
@@ -423,7 +431,7 @@ impl TreeService for SynchronousTreeService {
         } else {
             HashMap::new()
         };
-        let unverified_leaves: Vec<&TreeNode> = available_leaves
+        let unverified_leaves: Vec<&TreeNode> = reported_leaves
             .iter()
             .copied()
             .filter(|leaf| {
@@ -458,7 +466,7 @@ impl TreeService for SynchronousTreeService {
             }
         }
 
-        let new_leaves = coordinator_leaves
+        let new_leaves = union_leaves
             .into_iter()
             .filter(|leaf| {
                 !missing_operator_leaves_map.contains_key(&leaf.id)
@@ -473,10 +481,20 @@ impl TreeService for SynchronousTreeService {
         // A refresh writes no chains, so an already-stored one is left alone
         // rather than rewritten every minute. Collecting the chains of anything
         // newly reported is what the notification below sets off.
+
+        // Only a spendable leaf goes through the renewal check. The statuses
+        // added for the exit are either mid-exit or already locked by the
+        // operators: renewing one is at best refused, and a node that no longer
+        // carries a refund fails the check outright, which would take the whole
+        // refresh down with it.
+        let (renewable, held): (Vec<TreeNode>, Vec<TreeNode>) = new_leaves
+            .into_iter()
+            .partition(|leaf| leaf.status == TreeNodeStatus::Available);
         let RenewalOutcome {
-            pedigrees,
+            mut pedigrees,
             any_renewal_landed,
-        } = self.check_renew_nodes(bare_pedigrees(new_leaves)).await?;
+        } = self.check_renew_nodes(bare_pedigrees(renewable)).await?;
+        pedigrees.extend(bare_pedigrees(held));
         let renewed_leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
         self.state
             .set_leaves(
@@ -496,6 +514,175 @@ impl TreeService for SynchronousTreeService {
     async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
         self.state.get_available_balance().await
     }
+
+    async fn list_leaves_kept_for_exit(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
+        self.state.get_deleted_leaves().await
+    }
+
+    async fn purge_proven_spent_leaves(&self) -> Result<usize, TreeServiceError> {
+        let deleted = self.state.get_deleted_leaves().await?;
+        if deleted.is_empty() {
+            return Ok(0);
+        }
+        let ids: Vec<TreeNodeId> = deleted.iter().map(|leaf| leaf.id.clone()).collect();
+
+        // Ask every operator, by id. By id because an owner query is
+        // status-filtered, and the operators drop Investigation, Lost and
+        // Reimbursed from it whatever statuses we ask for, so it cannot tell a
+        // spent leaf from one it will not talk about; a lookup by id answers for
+        // a node in any status. Every operator because this ends in a deletion,
+        // and no single one of them, coordinator included, gets to decide that on
+        // its own.
+        let operators: Vec<_> = self
+            .operator_pool
+            .get_all_operators()
+            .map(|op| (op.id, op.client.clone()))
+            .collect();
+        if operators.is_empty() {
+            return Ok(0);
+        }
+        let ids = &ids;
+        let responses = join_all(operators.iter().map(|(id, client)| async move {
+            (*id, self.query_nodes_by_id_batched(client, ids).await)
+        }))
+        .await;
+
+        let bitcoin_service = BitcoinService::new(self.network);
+        let Some(proven) = prove_spent_leaves(
+            &bitcoin_service,
+            &self.identity_pubkey,
+            &deleted,
+            &responses,
+        ) else {
+            return Ok(0);
+        };
+        if !proven.is_empty() {
+            info!(
+                "Removing {} of {} kept leaves: every operator reports their refund replaced, at a lower timelock, by one we co-signed",
+                proven.len(),
+                deleted.len()
+            );
+            self.state.remove_leaves(&proven).await?;
+        }
+        Ok(proven.len())
+    }
+}
+
+/// How many node ids go into one `QueryNodes` request. The kept set has no
+/// bound: a leaf the operators will not talk about is never proven and stays
+/// forever, so the set only grows and cannot be sent in a single message.
+const PURGE_QUERY_BATCH: usize = 100;
+
+/// The ids every operator agrees have left us.
+///
+/// `None` when any operator failed to answer: silence has not vouched for
+/// anything, so it holds every leaf rather than counting towards a deletion.
+/// Agreement is counted per distinct operator, so a pool that answered twice for
+/// one of them cannot pass for agreement another never gave.
+fn prove_spent_leaves<E>(
+    bitcoin_service: &BitcoinService,
+    identity: &PublicKey,
+    deleted: &[TreeNode],
+    responses: &[(usize, Result<Vec<TreeNode>, E>)],
+) -> Option<Vec<TreeNodeId>> {
+    let mut agreeing: HashMap<&TreeNodeId, HashSet<usize>> = HashMap::new();
+    let mut answered: HashSet<usize> = HashSet::new();
+    for (id, res) in responses {
+        let Ok(nodes) = res else {
+            debug!("purge: operator {id} unreachable, keeping every leaf this round");
+            return None;
+        };
+        answered.insert(*id);
+        let theirs: HashMap<&TreeNodeId, &TreeNode> = nodes.iter().map(|n| (&n.id, n)).collect();
+        for leaf in deleted {
+            if theirs
+                .get(&leaf.id)
+                .is_some_and(|theirs| refund_left_us(bitcoin_service, identity, leaf, theirs))
+            {
+                agreeing.entry(&leaf.id).or_default().insert(*id);
+            }
+        }
+    }
+    let operator_count = answered.len();
+    if operator_count == 0 {
+        return None;
+    }
+    Some(
+        deleted
+            .iter()
+            .filter(|leaf| {
+                agreeing
+                    .get(&leaf.id)
+                    .is_some_and(|ops| ops.len() == operator_count)
+            })
+            .map(|leaf| leaf.id.clone())
+            .collect(),
+    )
+}
+
+/// Whether the operators' copy of a leaf proves it has left us: it is owned by
+/// somebody else, and it replaces our refund, spending the same node output at a
+/// lower timelock under a signature we must have taken part in.
+///
+/// The owner is what makes this directional. A lower timelock on its own does
+/// not mean the leaf was handed on: a claim re-signs at `enforce_timelock`,
+/// which rounds down to the interval, so a leaf coming back to us can carry a
+/// lower one too (an HTLC refund sits at a 70-block offset and rounds down on
+/// claim). Requiring both means a leaf that returned to us is never mistaken for
+/// one that left, and anything the operators will not talk about proves nothing
+/// and stays exactly where it is.
+///
+/// The signature is what makes it evidence rather than testimony. Everything
+/// else here is read straight off a response, so an operator set that answers in
+/// concert could otherwise hand us a bare transaction and have us delete the
+/// chain we keep in order to survive exactly that party. A leaf is 2-of-2, so a
+/// signature that verifies under our own `verifying_public_key` is one we took
+/// part in producing, and no operator can forge it.
+fn refund_left_us(
+    bitcoin_service: &BitcoinService,
+    identity: &PublicKey,
+    ours: &TreeNode,
+    theirs: &TreeNode,
+) -> bool {
+    // Their copy has to name an owner, and it has to be someone else. An absent
+    // owner is not evidence either way, so it keeps the leaf.
+    let Some(owner) = theirs.owner_identity_public_key else {
+        return false;
+    };
+    if owner == *identity {
+        return false;
+    }
+    let (Some(our_refund), Some(their_refund)) = (&ours.refund_tx, &theirs.refund_tx) else {
+        return false;
+    };
+    // A replacement spends the output ours does. Checking it against our own
+    // stored node tx, rather than against the copy they sent, is what stops a
+    // rewritten node tx carrying a rewritten refund past this.
+    let funding = bitcoin::OutPoint::new(ours.node_tx.compute_txid(), 0);
+    if their_refund
+        .input
+        .first()
+        .is_none_or(|input| input.previous_output != funding)
+    {
+        return false;
+    }
+    match (csv_timelock(our_refund), csv_timelock(their_refund)) {
+        (Some(ours), Some(theirs)) if theirs < ours => {}
+        _ => return false,
+    }
+    let Some(funded) = ours.node_tx.output.first() else {
+        return false;
+    };
+    let Ok(sighash) = sighash_from_tx(their_refund, 0, funded) else {
+        return false;
+    };
+    verify_finalized_taproot_signature_tx(
+        bitcoin_service,
+        their_refund,
+        &sighash.to_raw_hash().to_byte_array(),
+        &ours.verifying_public_key,
+    )
+    .is_ok()
 }
 
 impl SynchronousTreeService {
@@ -796,11 +983,17 @@ impl SynchronousTreeService {
             }
         }
 
+        // The query is what tells us anything about these leaves, so failing it
+        // tells us nothing. Hand them all back: the operators being unreachable
+        // is the case this whole store exists for, and it is not a reason to
+        // stop believing in leaves we hold.
         warn!(
-            "leaf_lifecycle cancel_verify_dropped_all: reservation={} reason=query_failed error={:?}",
-            reservation.id, last_err
+            "leaf_lifecycle cancel_verify_query_failed: reservation={} keeping={} error={:?}",
+            reservation.id,
+            reservation.leaves.len(),
+            last_err
         );
-        Vec::new()
+        reservation.leaves.clone()
     }
 
     async fn query_nodes_inner(
@@ -834,6 +1027,26 @@ impl SynchronousTreeService {
             items,
             next: paging.next_from_offset(nodes.offset),
         })
+    }
+
+    /// Looks nodes up by id in batches, so a caller holding an unbounded set of
+    /// ids does not put all of them in one request.
+    async fn query_nodes_by_id_batched(
+        &self,
+        client: &SparkRpcClient,
+        ids: &[TreeNodeId],
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        let mut nodes = Vec::with_capacity(ids.len());
+        for batch in ids.chunks(PURGE_QUERY_BATCH) {
+            let source = Source::NodeIds(TreeNodeIds {
+                node_ids: batch.iter().map(ToString::to_string).collect(),
+            });
+            nodes.extend(
+                self.query_nodes(client, false, Some(source), vec![])
+                    .await?,
+            );
+        }
+        Ok(nodes)
     }
 
     async fn query_nodes(
@@ -1077,8 +1290,40 @@ fn bare_pedigrees(leaves: Vec<TreeNode>) -> Vec<LeafPedigree> {
         .collect()
 }
 
-fn available_leaf_statuses() -> Vec<i32> {
-    vec![ProtoTreeNodeStatus::Available as i32]
+/// Whether two operators' views of one leaf describe the same leaf. Compares what
+/// a client goes on to act upon: the status, the operators' share of the signing
+/// key, and the two transactions an exit broadcasts.
+fn leaf_copies_agree(a: &TreeNode, b: &TreeNode) -> bool {
+    a.status == b.status
+        && a.signing_keyshare.public_key == b.signing_keyshare.public_key
+        && a.node_tx == b.node_tx
+        && a.refund_tx == b.refund_tx
+}
+
+/// The statuses a leaf we still hold can be reported in. `Available` is the
+/// spendable one. `OnChain` and `Exited` are the two an exit drives a leaf
+/// through, and they have to be asked for: a refresh that requested only
+/// `Available` lost the leaf from every operator's response at once the moment
+/// its node txs confirmed, and the leaf then counted as one nobody reports.
+/// `RenewLocked` is the transient equivalent during a timelock renewal.
+///
+/// `TransferLocked` is deliberately absent: a leaf of ours in that status is one
+/// we are sending, and re-reading it would undo the send.
+///
+/// `ParentExited` belongs here on the same reasoning as `OnChain`, and cannot be
+/// asked for: the operator rejects the whole query with `unknown tree node
+/// status`, so one unrecognised status costs every leaf in the refresh rather
+/// than the ones in that status. Leaving it out is the graceful half of that
+/// trade: a leaf under an exited parent is reported by nobody, so it is kept for
+/// its chain and stays exitable, out of the balance rather than out of reach.
+/// Nothing here may name a status the operators do not know.
+fn held_leaf_statuses() -> Vec<i32> {
+    vec![
+        ProtoTreeNodeStatus::Available as i32,
+        ProtoTreeNodeStatus::OnChain as i32,
+        ProtoTreeNodeStatus::Exited as i32,
+        ProtoTreeNodeStatus::RenewLocked as i32,
+    ]
 }
 
 fn query_nodes_request(
@@ -1511,8 +1756,257 @@ mod tests {
         assert!(!rx.has_changed().unwrap());
     }
 
+    fn pubkey_from(byte: u8) -> PublicKey {
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let sk = bitcoin::secp256k1::SecretKey::from_slice(&[byte; 32]).unwrap();
+        PublicKey::from_secret_key(&secp, &sk)
+    }
+
+    fn other_owner() -> PublicKey {
+        pubkey_from(0x22)
+    }
+
+    fn us() -> PublicKey {
+        pubkey_from(0x11)
+    }
+
+    fn keypair_from(byte: u8) -> bitcoin::secp256k1::Keypair {
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        bitcoin::secp256k1::Keypair::from_seckey_slice(&secp, &[byte; 32]).unwrap()
+    }
+
+    /// The signing group of the leaf under test. A leaf is 2-of-2, so this one
+    /// keypair stands in for the whole group: a refund only verifies under it if
+    /// we took part in signing.
+    fn leaf_signer() -> bitcoin::secp256k1::Keypair {
+        keypair_from(0x33)
+    }
+
+    /// A leaf of ours, funded by a node output and refunded at `seq`.
+    fn our_leaf(seq: u32) -> TreeNode {
+        let mut node = create_test_leaves(&[1_000]).remove(0);
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let verifying = leaf_signer().public_key();
+        node.verifying_public_key = verifying;
+        node.owner_identity_public_key = Some(us());
+        let (x_only, _) = verifying.x_only_public_key();
+        node.node_tx.output = vec![bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(1_000),
+            script_pubkey: bitcoin::ScriptBuf::new_p2tr(&secp, x_only, None),
+        }];
+        node.refund_tx = Some(refund_spending(&node, seq));
+        node
+    }
+
+    /// An unsigned refund of `leaf` at `seq`.
+    fn refund_spending(leaf: &TreeNode, seq: u32) -> Transaction {
+        Transaction {
+            version: Version::non_standard(3),
+            lock_time: LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(leaf.node_tx.compute_txid(), 0),
+                sequence: bitcoin::Sequence::from_consensus(seq),
+                ..Default::default()
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(900),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        }
+    }
+
+    /// Signs `refund` against the output of `funded` it spends.
+    fn sign_refund(refund: &mut Transaction, funded: &TreeNode, kp: &bitcoin::secp256k1::Keypair) {
+        use bitcoin::key::TapTweak;
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let sighash = sighash_from_tx(refund, 0, &funded.node_tx.output[0]).unwrap();
+        let tweaked = kp.tap_tweak(&secp, None).to_keypair();
+        let sig = secp.sign_schnorr_no_aux_rand(
+            &bitcoin::secp256k1::Message::from_digest(sighash.to_raw_hash().to_byte_array()),
+            &tweaked,
+        );
+        refund.input[0].witness = bitcoin::Witness::from_slice(&[sig.serialize()]);
+    }
+
+    /// The operators' copy of `ours`: same node, owned by `owner`, refunded at
+    /// `seq` under a signature `signer` produced.
+    fn their_copy(
+        ours: &TreeNode,
+        owner: PublicKey,
+        seq: u32,
+        signer: &bitcoin::secp256k1::Keypair,
+    ) -> TreeNode {
+        let mut theirs = ours.clone();
+        theirs.owner_identity_public_key = Some(owner);
+        let mut refund = refund_spending(ours, seq);
+        sign_refund(&mut refund, ours, signer);
+        theirs.refund_tx = Some(refund);
+        theirs
+    }
+
+    fn service() -> BitcoinService {
+        BitcoinService::new(Network::Regtest)
+    }
+
+    /// Deleting takes every operator, counted per distinct operator: a leaf one
+    /// of them still vouches for stays put, and an operator answering twice does
+    /// not cover for one that disagreed.
     #[test_all]
-    fn refresh_query_requests_only_available_leaves() {
+    fn a_leaf_is_only_proven_when_every_operator_agrees() {
+        let ours = our_leaf(2000);
+        let deleted = vec![ours.clone()];
+        let gone = their_copy(&ours, other_owner(), 1900, &leaf_signer());
+        let unchanged = their_copy(&ours, other_owner(), 2000, &leaf_signer());
+        let proven = |responses: &[(usize, Result<Vec<TreeNode>, ()>)]| {
+            prove_spent_leaves(&service(), &us(), &deleted, responses)
+        };
+
+        assert_eq!(
+            proven(&[
+                (0, Ok(vec![gone.clone()])),
+                (1, Ok(vec![gone.clone()])),
+                (2, Ok(vec![gone.clone()])),
+            ]),
+            Some(vec![ours.id.clone()]),
+            "unanimous replacement is what proves the spend"
+        );
+
+        assert_eq!(
+            proven(&[
+                (0, Ok(vec![gone.clone()])),
+                (1, Ok(vec![gone.clone()])),
+                (2, Ok(vec![unchanged.clone()])),
+            ]),
+            Some(Vec::new()),
+            "a leaf one operator still vouches for is kept"
+        );
+
+        assert_eq!(
+            proven(&[
+                (0, Ok(vec![gone.clone()])),
+                (1, Ok(vec![gone.clone()])),
+                (2, Ok(Vec::new())),
+            ]),
+            Some(Vec::new()),
+            "an operator that does not report the leaf has vouched for nothing"
+        );
+
+        assert_eq!(
+            proven(&[
+                (0, Ok(vec![gone.clone()])),
+                (1, Ok(vec![gone.clone()])),
+                (2, Err(())),
+            ]),
+            None,
+            "an unreachable operator holds every leaf, however the rest answered"
+        );
+
+        assert_eq!(
+            proven(&[
+                (0, Ok(vec![gone.clone()])),
+                (1, Ok(vec![unchanged])),
+                (0, Ok(vec![gone])),
+            ]),
+            Some(Vec::new()),
+            "one operator answering twice is not two operators agreeing"
+        );
+
+        assert_eq!(proven(&[]), None, "no operators prove nothing");
+    }
+
+    /// A leaf has left us only when somebody else owns it AND its refund
+    /// replaced ours at a lower timelock. The owner is what makes the test
+    /// directional: a claim re-signs through `enforce_timelock`, which rounds
+    /// down to the interval, so a leaf coming back to us carries a lower
+    /// timelock too and must not be mistaken for one that left.
+    #[test_all]
+    fn a_leaf_left_only_when_someone_else_owns_it_at_a_lower_timelock() {
+        let ours = our_leaf(2000);
+        let signer = leaf_signer();
+        let left = |theirs: &TreeNode| refund_left_us(&service(), &us(), &ours, theirs);
+
+        assert!(left(&their_copy(&ours, other_owner(), 1900, &signer)));
+
+        // The HTLC shape that rounds down on a claim back to us: lower, but ours.
+        let ours_htlc = our_leaf(1970);
+        assert!(
+            !refund_left_us(
+                &service(),
+                &us(),
+                &ours_htlc,
+                &their_copy(&ours_htlc, us(), 1900, &signer)
+            ),
+            "a leaf claimed back to us is not a leaf that left"
+        );
+
+        // Someone else owns it, but the refund did not move.
+        assert!(!left(&their_copy(&ours, other_owner(), 2000, &signer)));
+        // A renewal moves the timelock the other way.
+        assert!(!left(&their_copy(&ours, other_owner(), 2100, &signer)));
+
+        let mut no_owner = their_copy(&ours, other_owner(), 1900, &signer);
+        no_owner.owner_identity_public_key = None;
+        assert!(!left(&no_owner));
+
+        let mut no_refund = their_copy(&ours, other_owner(), 1900, &signer);
+        no_refund.refund_tx = None;
+        assert!(!left(&no_refund));
+    }
+
+    /// The replacement has to be evidence, not testimony. Every other condition
+    /// is read straight off an operator's response, so an operator set answering
+    /// in concert could hand us a fabricated one; the signature is what they
+    /// cannot produce without us.
+    #[test_all]
+    fn a_replacement_we_did_not_sign_proves_nothing() {
+        let ours = our_leaf(2000);
+        let left = |theirs: &TreeNode| refund_left_us(&service(), &us(), &ours, theirs);
+
+        // Everything a response controls, and no witness at all.
+        let mut unsigned = their_copy(&ours, other_owner(), 1900, &leaf_signer());
+        unsigned.refund_tx.as_mut().unwrap().input[0].witness = bitcoin::Witness::new();
+        assert!(!left(&unsigned), "an unwitnessed refund is not proof");
+
+        // Signed, but by a key that is not the leaf's signing group.
+        assert!(
+            !left(&their_copy(&ours, other_owner(), 1900, &keypair_from(0x44))),
+            "a refund signed by someone else is not proof"
+        );
+
+        // A well-formed, correctly signed refund of a different node. Its own
+        // chain is fine, but it says nothing about the leaf we asked about.
+        let mut elsewhere = our_leaf(2000);
+        elsewhere.node_tx.lock_time = bitcoin::absolute::LockTime::from_height(7).unwrap();
+        elsewhere.refund_tx = Some(refund_spending(&elsewhere, 2000));
+        assert_ne!(
+            elsewhere.node_tx.compute_txid(),
+            ours.node_tx.compute_txid()
+        );
+        let mut foreign = their_copy(&elsewhere, other_owner(), 1900, &leaf_signer());
+        foreign.id = ours.id.clone();
+        assert!(
+            !left(&foreign),
+            "a refund spending another node's output is not proof"
+        );
+
+        // The same refund, relabelled to claim it funds our node. The outpoint
+        // is checked against our own stored node tx, so relabelling theirs does
+        // not help, and the signature commits to the real one regardless.
+        let mut relabelled = foreign.clone();
+        relabelled.node_tx = ours.node_tx.clone();
+        assert!(
+            !left(&relabelled),
+            "a rewritten node tx does not make a foreign refund ours"
+        );
+    }
+
+    /// The refresh asks for the statuses a leaf we hold can be reported in, so a
+    /// leaf part-way through an exit keeps coming back instead of vanishing from
+    /// every operator at once. `TransferLocked` is deliberately not among them: a
+    /// leaf of ours in that status is one we are sending, and re-reading it would
+    /// undo the send.
+    #[test_all]
+    fn refresh_query_requests_held_leaf_statuses() {
         let owner = PublicKey::from_slice(&[2; 33]).unwrap();
         let req = query_nodes_request(
             &owner,
@@ -1520,12 +2014,27 @@ mod tests {
             false,
             Network::Mainnet,
             &PagingFilter::default(),
-            available_leaf_statuses(),
+            held_leaf_statuses(),
         );
-        assert_eq!(req.statuses, vec![ProtoTreeNodeStatus::Available as i32]);
+        assert_eq!(
+            req.statuses,
+            vec![
+                ProtoTreeNodeStatus::Available as i32,
+                ProtoTreeNodeStatus::OnChain as i32,
+                ProtoTreeNodeStatus::Exited as i32,
+                ProtoTreeNodeStatus::RenewLocked as i32,
+            ]
+        );
         assert!(
             !req.statuses
                 .contains(&(ProtoTreeNodeStatus::TransferLocked as i32))
+        );
+        // The operator rejects the entire query on a status it does not know,
+        // which costs every leaf in the refresh and not just the ones in that
+        // status. `ParentExited` is the one our proto has and it does not.
+        assert!(
+            !req.statuses
+                .contains(&(ProtoTreeNodeStatus::ParentExited as i32))
         );
         assert!(matches!(req.source, Some(Source::OwnerIdentityPubkey(_))));
     }

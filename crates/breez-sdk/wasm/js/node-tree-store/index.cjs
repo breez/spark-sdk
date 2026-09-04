@@ -79,6 +79,7 @@ const SLIM_LEAF_CANDIDATES_SQL = `
   SELECT id, value FROM brz_tree_leaves
   WHERE status = 'Available'
     AND is_missing_from_operators = 0
+    AND is_deleted = 0
     AND reservation_id IS NULL
     AND (
       value <= ?
@@ -86,6 +87,7 @@ const SLIM_LEAF_CANDIDATES_SQL = `
         SELECT id FROM brz_tree_leaves
         WHERE status = 'Available'
           AND is_missing_from_operators = 0
+          AND is_deleted = 0
           AND reservation_id IS NULL
           AND value > ?
         ORDER BY value
@@ -323,8 +325,9 @@ class NodeTreeStore {
           `SELECT COALESCE(SUM(l.value), 0) AS balance
            FROM brz_tree_leaves l
            LEFT JOIN brz_tree_reservations r ON l.reservation_id = r.id
-           WHERE (l.reservation_id IS NULL AND l.status = 'Available')
-              OR r.purpose = 'Swap'`
+           WHERE l.is_deleted = 0
+             AND ((l.reservation_id IS NULL AND l.status = 'Available')
+                  OR r.purpose = 'Swap')`
         )
         .get();
       return BigInt(row.balance);
@@ -351,7 +354,8 @@ class NodeTreeStore {
                   l.signing_public_key AS keyshare
            FROM brz_tree_leaves l
            LEFT JOIN brz_tree_reservations r ON l.reservation_id = r.id
-           WHERE r.purpose IS NOT NULL OR l.status = 'Available'`
+           WHERE l.is_deleted = 0
+             AND (r.purpose IS NOT NULL OR l.status = 'Available')`
         )
         .all();
       return rows.map((row) => [row.id, row.verifying, row.keyshare]);
@@ -367,6 +371,43 @@ class NodeTreeStore {
    * Return all pool leaves categorized by status and reservation purpose.
    * @returns {Promise<Object>}
    */
+  async getDeletedLeaves() {
+    try {
+      const rows = this.db
+        .prepare("SELECT data FROM brz_tree_leaves WHERE is_deleted = 1")
+        .all();
+      return rows.map((row) => JSON.parse(row.data));
+    } catch (error) {
+      throw new TreeStoreError(`Failed to get deleted leaves: ${error.message}`);
+    }
+  }
+
+  async removeLeaves(leafIds) {
+    try {
+      if (!leafIds || leafIds.length === 0) return;
+      this.db.transaction(() => {
+        // Each leaf owns its chain, so its ancestor rows go with it, and in
+        // that order so no ancestor row is ever left without its leaf.
+        // Only a row still marked and still unreserved goes: the purge read its
+        // list, then spent seconds asking the operators, and a refresh landing in
+        // that window may have brought the leaf back or a payment reserved it.
+        const removed = this.db
+          .prepare(
+            `DELETE FROM brz_tree_leaves WHERE id = ? AND is_deleted = 1
+               AND reservation_id IS NULL RETURNING id`
+          );
+        const deleteAncestors = this.db.prepare(
+          "DELETE FROM brz_tree_ancestors WHERE leaf_id = ?"
+        );
+        for (const id of leafIds) {
+          if (removed.all(id).length > 0) deleteAncestors.run(id);
+        }
+      })();
+    } catch (error) {
+      throw new TreeStoreError(`Failed to remove leaves: ${error.message}`);
+    }
+  }
+
   async getLeaves() {
     try {
       const rows = this.db
@@ -374,7 +415,8 @@ class NodeTreeStore {
           `SELECT l.status, l.is_missing_from_operators, l.data,
                   l.reservation_id, r.purpose
            FROM brz_tree_leaves l
-           LEFT JOIN brz_tree_reservations r ON l.reservation_id = r.id`
+           LEFT JOIN brz_tree_reservations r ON l.reservation_id = r.id
+           WHERE l.is_deleted = 0`
         )
         .all();
 
@@ -452,17 +494,26 @@ class NodeTreeStore {
         this._cleanupSpentMarkers(refreshMs);
         const spentIds = this._spentIdsSince(refreshMs);
 
-        // Delete non-reserved pool leaves older than the refresh; reserved and
-        // after-refresh leaves are immune. A leaf reported again in this same
-        // refresh is re-inserted below, so its ancestor rows must survive: only
-        // ids that do NOT reappear in this refresh (truly gone, e.g. spent) get
-        // their ancestor rows dropped alongside them.
-        const deletedIds = this.db
+        // Mark, rather than remove, the non-reserved leaves older than the
+        // refresh. A leaf no operator reports may still be ours, and its stored
+        // transactions are the only way to exit it, so the row stays, and its
+        // ancestor rows stay with it. The upserts below clear the mark on
+        // whatever came back.
+        this.db
           .prepare(
-            "DELETE FROM brz_tree_leaves WHERE reservation_id IS NULL AND added_at < ? RETURNING id"
+            "UPDATE brz_tree_leaves SET is_deleted = 1 WHERE reservation_id IS NULL AND added_at < ? AND is_deleted = 0"
           )
-          .all(refreshMs)
-          .map((r) => r.id);
+          .run(refreshMs);
+
+        // A leaf we spent ourselves is the one absence already accounted for, so
+        // it goes for good, and its ancestor rows go with it below.
+        const deleteSpent = this.db.prepare(
+          "DELETE FROM brz_tree_leaves WHERE id = ? AND reservation_id IS NULL"
+        );
+        const deletedIds = [];
+        for (const id of spentIds) {
+          if (deleteSpent.run(id).changes > 0) deletedIds.push(id);
+        }
 
         this._upsertLeaves(leaves, false, spentIds);
         this._upsertLeaves(missingLeaves, true, spentIds);
@@ -481,9 +532,10 @@ class NodeTreeStore {
   }
 
   /**
-   * Cancel a reservation. Its leaves are deleted from the pool and the row is
-   * dropped. `leavesToKeep` are re-inserted into the available pool; their
-   * ancestors are already stored (they stayed while the leaves were reserved).
+   * Cancel a reservation. Its leaves are marked rather than dropped, and the row
+   * is deleted. `leavesToKeep` are re-inserted into the available pool, clearing
+   * the mark; their ancestors are already stored (they stayed while the leaves
+   * were reserved).
    * @param {string} id
    * @param {Array} leavesToKeep - TreeNode leaves to return to the available pool
    */
@@ -493,18 +545,16 @@ class NodeTreeStore {
         // Return leavesToKeep to the pool even when the reservation is already
         // gone (e.g. released by stale cleanup): dropping them here would lose
         // the leaves until the next refresh. The deletes no-op in that case.
-        // Only the leaves are re-inserted: a kept leaf's ancestor rows stay put
-        // (they are not touched below); a dropped leaf's are removed with it.
-        const keepIds = new Set((leavesToKeep || []).map((l) => l.id));
-        const droppedIds = this.db
-          .prepare("SELECT id FROM brz_tree_leaves WHERE reservation_id = ?")
-          .all(id)
-          .map((r) => r.id)
-          .filter((rid) => !keepIds.has(rid));
-
-        this.db.prepare("DELETE FROM brz_tree_leaves WHERE reservation_id = ?").run(id);
+        // A leaf the verification would not vouch for is marked, not dropped:
+        // one operator declining to confirm it is not proof it was spent, and
+        // its chain is the only way to exit it if it is still ours. The upsert
+        // below clears the mark on everything kept.
+        this.db
+          .prepare(
+            "UPDATE brz_tree_leaves SET reservation_id = NULL, is_deleted = 1 WHERE reservation_id = ?"
+          )
+          .run(id);
         this.db.prepare("DELETE FROM brz_tree_reservations WHERE id = ?").run(id);
-        this._deleteAncestorsForLeaves(droppedIds);
         this._upsertLeaves(leavesToKeep, false, null);
       })();
     } catch (error) {
@@ -683,7 +733,7 @@ class NodeTreeStore {
           .prepare(
             `SELECT DISTINCT id FROM brz_tree_leaves
              WHERE id IN (${placeholders}) AND status = 'Available'
-               AND is_missing_from_operators = 0 AND reservation_id IS NULL`
+               AND is_missing_from_operators = 0 AND is_deleted = 0 AND reservation_id IS NULL`
           )
           .all(...leafIds);
         if (matched.length !== leafIds.length) {
@@ -779,8 +829,9 @@ class NodeTreeStore {
     const stmt = this.db.prepare(
       `INSERT INTO brz_tree_leaves
            (id, parent_node_id, status, value, verifying_public_key,
-            signing_public_key, data, is_missing_from_operators, added_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            signing_public_key, data, is_missing_from_operators, added_at,
+            is_deleted)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
        ON CONFLICT(id) DO UPDATE SET
            parent_node_id = excluded.parent_node_id,
            status = excluded.status,
@@ -789,7 +840,8 @@ class NodeTreeStore {
            signing_public_key = excluded.signing_public_key,
            data = excluded.data,
            is_missing_from_operators = excluded.is_missing_from_operators,
-           added_at = excluded.added_at`
+           added_at = excluded.added_at,
+           is_deleted = 0`
     );
     const now = Date.now();
     for (const leaf of leaves) {
@@ -949,7 +1001,7 @@ class NodeTreeStore {
       .prepare(
         `SELECT COALESCE(SUM(value), 0) AS total FROM brz_tree_leaves
          WHERE status = 'Available'
-           AND is_missing_from_operators = 0 AND reservation_id IS NULL`
+           AND is_missing_from_operators = 0 AND is_deleted = 0 AND reservation_id IS NULL`
       )
       .get().total;
   }

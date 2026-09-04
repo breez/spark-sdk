@@ -63,6 +63,7 @@ const SLIM_LEAF_CANDIDATES_SQL = `
   WHERE user_id = $1
     AND status = 'Available'
     AND is_missing_from_operators = FALSE
+    AND is_deleted = FALSE
     AND reservation_id IS NULL
     AND (
       value <= $2
@@ -71,6 +72,7 @@ const SLIM_LEAF_CANDIDATES_SQL = `
         WHERE user_id = $1
           AND status = 'Available'
           AND is_missing_from_operators = FALSE
+          AND is_deleted = FALSE
           AND reservation_id IS NULL
           AND value > $2
         ORDER BY value
@@ -377,6 +379,7 @@ class PostgresTreeStore {
         LEFT JOIN brz_tree_reservations r
           ON l.reservation_id = r.id AND l.user_id = r.user_id
         WHERE l.user_id = $1
+          AND l.is_deleted = FALSE
           AND (
             (l.reservation_id IS NULL AND l.status = 'Available')
             OR r.purpose = 'Swap'
@@ -408,6 +411,7 @@ class PostgresTreeStore {
         LEFT JOIN brz_tree_reservations r
           ON l.reservation_id = r.id AND l.user_id = r.user_id
         WHERE l.user_id = $1
+          AND l.is_deleted = FALSE
           AND (r.purpose IS NOT NULL OR l.status = 'Available')
       `,
         [this.identity]
@@ -421,6 +425,46 @@ class PostgresTreeStore {
     }
   }
 
+  async getDeletedLeaves() {
+    try {
+      const result = await this.pool.query(
+        "SELECT data FROM brz_tree_leaves WHERE user_id = $1 AND is_deleted = TRUE",
+        [this.identity]
+      );
+      return result.rows.map((row) => row.data);
+    } catch (error) {
+      throw new TreeStoreError(`Failed to get deleted leaves: ${error.message}`);
+    }
+  }
+
+  async removeLeaves(leafIds) {
+    try {
+      if (!leafIds || leafIds.length === 0) return;
+      await this._withWriteTransaction(async (client) => {
+        // Each leaf owns its chain, so its ancestor rows go with it, and in
+        // that order so no ancestor row is ever left without its leaf.
+        // Only a row still marked and still unreserved goes: the purge read its
+        // list, then spent seconds asking the operators, and a refresh landing in
+        // that window may have brought the leaf back or a payment reserved it.
+        const removed = await client.query(
+          `DELETE FROM brz_tree_leaves WHERE user_id = $1 AND id = ANY($2)
+             AND is_deleted = TRUE AND reservation_id IS NULL RETURNING id`,
+          [this.identity, leafIds]
+        );
+        const removedIds = removed.rows.map((r) => r.id);
+        if (removedIds.length > 0) {
+          await client.query(
+            "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)",
+            [this.identity, removedIds]
+          );
+        }
+      });
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(`Failed to remove leaves: ${error.message}`);
+    }
+  }
+
   async getLeaves() {
     try {
       const result = await this.pool.query(
@@ -431,6 +475,7 @@ class PostgresTreeStore {
         LEFT JOIN brz_tree_reservations r
           ON l.reservation_id = r.id AND l.user_id = r.user_id
         WHERE l.user_id = $1
+          AND l.is_deleted = FALSE
       `,
         [this.identity]
       );
@@ -525,14 +570,23 @@ class PostgresTreeStore {
         );
         const spentIds = new Set(spentResult.rows.map((r) => r.leaf_id));
 
-        // Delete non-reserved leaves added before refresh started.
-        // Includes leaves released earlier in this transaction by
-        // _cleanupStaleReservations (which now NULLs reservation_id explicitly,
-        // since the composite FK uses NO ACTION).
-        const deleted = await client.query(
-          "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id IS NULL AND added_at < $2 RETURNING id",
+        // Mark, rather than remove, the non-reserved leaves added before this
+        // refresh started. A leaf no operator reports may still be ours, and its
+        // stored transactions are the only way to exit it, so the row stays, and
+        // its ancestor rows stay with it. The upserts below clear the mark on
+        // whatever came back.
+        await client.query(
+          "UPDATE brz_tree_leaves SET is_deleted = TRUE WHERE user_id = $1 AND reservation_id IS NULL AND added_at < $2 AND is_deleted = FALSE",
           [this.identity, refreshTimestamp]
         );
+
+        // A leaf we spent ourselves is the one absence already accounted for, so
+        // it goes for good and takes its ancestor rows with it below.
+        const deleted = await client.query(
+          "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id IS NULL AND id = ANY($2) RETURNING id",
+          [this.identity, Array.from(spentIds)]
+        );
+
 
         // Upsert all leaves (filtering spent)
         await this._batchUpsertLeaves(client, leaves, false, spentIds);
@@ -581,19 +635,12 @@ class PostgresTreeStore {
         // Return leavesToKeep to the pool even when the reservation is already
         // gone (e.g. released by stale cleanup): dropping them here would lose
         // the leaves until the next refresh. The deletes no-op in that case.
-        // Only the leaves are re-inserted: a kept leaf's ancestor rows stay put
-        // (they are not touched below); a dropped leaf's are removed with it.
-        const keepIds = new Set((leavesToKeep || []).map((l) => l.id));
-        const reservedResult = await client.query(
-          "SELECT id FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
-          [this.identity, id]
-        );
-        const droppedIds = reservedResult.rows
-          .map((r) => r.id)
-          .filter((rid) => !keepIds.has(rid));
-
+        // A leaf the verification would not vouch for is marked, not dropped:
+        // one operator declining to confirm it is not proof it was spent, and
+        // its chain is the only way to exit it if it is still ours. The upsert
+        // below clears the mark on everything kept.
         await client.query(
-          "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+          "UPDATE brz_tree_leaves SET reservation_id = NULL, is_deleted = TRUE WHERE user_id = $1 AND reservation_id = $2",
           [this.identity, id]
         );
 
@@ -601,13 +648,6 @@ class PostgresTreeStore {
           "DELETE FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
           [this.identity, id]
         );
-
-        if (droppedIds.length > 0) {
-          await client.query(
-            "DELETE FROM brz_tree_ancestors WHERE user_id = $1 AND leaf_id = ANY($2)",
-            [this.identity, droppedIds]
-          );
-        }
 
         if (leavesToKeep && leavesToKeep.length > 0) {
           await this._batchUpsertLeaves(client, leavesToKeep, false, null);
@@ -717,6 +757,7 @@ class PostgresTreeStore {
           WHERE user_id = $1
             AND status = 'Available'
             AND is_missing_from_operators = FALSE
+            AND is_deleted = FALSE
             AND reservation_id IS NULL
         `,
           [this.identity]
@@ -867,6 +908,7 @@ class PostgresTreeStore {
             AND id = ANY($2)
             AND status = 'Available'
             AND is_missing_from_operators = FALSE
+            AND is_deleted = FALSE
             AND reservation_id IS NULL
         `,
           [this.identity, leafIds]
@@ -1228,9 +1270,10 @@ class PostgresTreeStore {
       await client.query(
         `INSERT INTO brz_tree_leaves
              (user_id, id, status, is_missing_from_operators, data, added_at,
-              value, parent_node_id, verifying_public_key, signing_public_key)
+              value, parent_node_id, verifying_public_key, signing_public_key,
+              is_deleted)
          SELECT $5, id, status, missing, data::jsonb, NOW(),
-                value, parent_node_id, verifying, signing
+                value, parent_node_id, verifying, signing, FALSE
          FROM UNNEST($1::text[], $2::text[], $3::bool[], $4::text[],
                      $6::bigint[], $7::text[], $8::text[], $9::text[])
              AS t(id, status, missing, data, value, parent_node_id, verifying, signing)
@@ -1242,7 +1285,8 @@ class PostgresTreeStore {
            value = EXCLUDED.value,
            parent_node_id = EXCLUDED.parent_node_id,
            verifying_public_key = EXCLUDED.verifying_public_key,
-           signing_public_key = EXCLUDED.signing_public_key`,
+           signing_public_key = EXCLUDED.signing_public_key,
+           is_deleted = FALSE`,
         [
           ids,
           statuses,

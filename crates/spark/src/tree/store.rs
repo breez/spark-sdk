@@ -28,11 +28,20 @@ pub const DEFAULT_RESERVATION_TIMEOUT: Duration = Duration::from_secs(60);
 struct StoredLeaf {
     node: TreeNode,
     added_at: SystemTime,
-    /// The coordinator returned this leaf but at least one operator did not.
-    /// It still counts towards the wallet balance, but cannot be selected to
-    /// back a payment or a swap until every operator reports it again.
+    /// Some operator returned this leaf but at least one other did not. It still
+    /// counts towards the wallet balance, but cannot be selected to back a payment
+    /// or a swap until every operator reports it again.
     /// Mirrors the `is_missing_from_operators` column of the SQL stores.
     missing_from_operators: bool,
+    /// No operator reports this leaf any more. The row is kept rather than
+    /// removed, because absence is not proof of a spend and the stored
+    /// transactions are the only way to exit the leaf should it still be ours.
+    /// The operators cannot even report some of the statuses a leaf of ours can
+    /// reach: a `Lost` leaf is filtered out of every owner query, and `Lost` is
+    /// exactly the state where they will no longer co-sign a fresh refund. Kept
+    /// out of the balance and out of selection, still resolvable for an exit
+    /// chain, and removed for good only once a spend has actually been proven.
+    deleted: bool,
 }
 
 impl StoredLeaf {
@@ -41,6 +50,7 @@ impl StoredLeaf {
             node: node.clone(),
             added_at,
             missing_from_operators: false,
+            deleted: false,
         }
     }
 
@@ -49,6 +59,7 @@ impl StoredLeaf {
             node: node.clone(),
             added_at,
             missing_from_operators: true,
+            deleted: false,
         }
     }
 }
@@ -91,7 +102,9 @@ impl LeavesState {
     /// by every operator.
     fn selectable_leaves(&self) -> impl Iterator<Item = &StoredLeaf> {
         self.leaves.values().filter(|stored| {
-            stored.node.status == TreeNodeStatus::Available && !stored.missing_from_operators
+            stored.node.status == TreeNodeStatus::Available
+                && !stored.missing_from_operators
+                && !stored.deleted
         })
     }
 
@@ -125,6 +138,13 @@ enum StoreCommand {
     },
     GetLeaves {
         response_tx: oneshot::Sender<Result<Leaves, TreeServiceError>>,
+    },
+    GetDeletedLeaves {
+        response_tx: oneshot::Sender<Result<Vec<TreeNode>, TreeServiceError>>,
+    },
+    RemoveLeaves {
+        leaf_ids: Vec<TreeNodeId>,
+        response_tx: oneshot::Sender<Result<(), TreeServiceError>>,
     },
     GetExitChains {
         leaf_ids: Vec<TreeNodeId>,
@@ -272,6 +292,32 @@ impl InMemoryTreeStore {
                 StoreCommand::GetLeaves { response_tx } => {
                     let result = Self::process_get_leaves(&state);
                     let _ = response_tx.send(result);
+                }
+                StoreCommand::GetDeletedLeaves { response_tx } => {
+                    let leaves = state
+                        .leaves
+                        .values()
+                        .filter(|stored| stored.deleted)
+                        .map(|stored| stored.node.clone())
+                        .collect();
+                    let _ = response_tx.send(Ok(leaves));
+                }
+                StoreCommand::RemoveLeaves {
+                    leaf_ids,
+                    response_tx,
+                } => {
+                    // Each leaf owns its chain, so a removed leaf takes its
+                    // ancestors with it and nothing else can be orphaned. Only a
+                    // leaf still marked goes: the purge read its list, then spent
+                    // seconds asking the operators, and a refresh landing in that
+                    // window may have brought this one back.
+                    for id in &leaf_ids {
+                        if state.leaves.get(id).is_some_and(|stored| stored.deleted) {
+                            state.leaves.remove(id);
+                            state.ancestors.remove(id);
+                        }
+                    }
+                    let _ = response_tx.send(Ok(()));
                 }
                 StoreCommand::GetExitChains {
                     leaf_ids,
@@ -439,6 +485,12 @@ impl InMemoryTreeStore {
         let mut not_available = Vec::new();
         let mut available_missing_from_operators = Vec::new();
         for stored in state.leaves.values() {
+            // A leaf no operator reports any more is kept for its exit chain
+            // alone, so it belongs to no bucket: out of the balance, out of
+            // selection, still exitable.
+            if stored.deleted {
+                continue;
+            }
             if stored.node.status != TreeNodeStatus::Available {
                 not_available.push(stored.node.clone());
             } else if stored.missing_from_operators {
@@ -616,15 +668,39 @@ impl InMemoryTreeStore {
         }
 
         let mut preserved_count = 0u32;
-        for (id, stored) in old_leaves {
-            if stored.added_at >= refresh_started_at && !state.leaves.contains_key(&id) {
+        let mut deleted_count = 0u32;
+        for (id, mut stored) in old_leaves {
+            if state.leaves.contains_key(&id) {
+                continue;
+            }
+            // We spent this one ourselves, so its absence is already accounted for
+            // and the row can go.
+            if state.spent_leaf_ids.contains_key(&id) {
+                continue;
+            }
+            if stored.added_at >= refresh_started_at {
                 trace!(
                     "leaf_lifecycle set_leaves: preserved old leaf={} value={} missing_from_operators={} (added after refresh started)",
                     id, stored.node.value, stored.missing_from_operators
                 );
                 state.leaves.insert(id, stored);
                 preserved_count += 1;
+                continue;
             }
+            // No operator reported it, which is not proof that it was spent. The
+            // query cannot even ask for every status a leaf of ours can reach, so
+            // an absence may say more about the question than the leaf. Keep the
+            // row and its chain, out of the balance and out of selection, until a
+            // spend is actually proven.
+            if !stored.deleted {
+                info!(
+                    "leaf_lifecycle set_leaves: marking leaf={} value={} deleted (no operator reports it)",
+                    id, stored.node.value
+                );
+            }
+            stored.deleted = true;
+            state.leaves.insert(id, stored);
+            deleted_count += 1;
         }
 
         // Update reserved leaves with fresh data, removing them from the unreserved pool
@@ -646,14 +722,20 @@ impl InMemoryTreeStore {
         }
 
         trace!(
-            "set_leaves: {} leaves ({} missing from operators), {} preserved from previous state",
+            "set_leaves: {} leaves ({} missing from operators, {} kept for their exit chain only), {} preserved from previous state, {} newly unreported",
             state.leaves.len(),
             state
                 .leaves
                 .values()
                 .filter(|stored| stored.missing_from_operators)
                 .count(),
-            preserved_count
+            state
+                .leaves
+                .values()
+                .filter(|stored| stored.deleted)
+                .count(),
+            preserved_count,
+            deleted_count
         );
 
         Ok(())
@@ -817,13 +899,21 @@ impl InMemoryTreeStore {
             "leaf_lifecycle cancel: reservation={} purpose={:?} prior_leaves={:?} keeping={:?} dropping={:?}",
             id, purpose, prior_ids, keep_ids, dropped_ids
         );
-        // A kept leaf's ancestor chain (owned by its own id) is untouched here;
-        // only a dropped leaf's chain goes with it.
-        for dropped in &dropped_ids {
-            state.ancestors.remove(*dropped);
-        }
-
         let now = SystemTime::now();
+        // A leaf the verification would not vouch for is marked, not dropped.
+        // One operator declining to confirm it is not proof it was spent, and
+        // its chain is the only way to exit it if it is still ours. The purge
+        // decides that later, once every operator agrees.
+        let dropped: HashSet<TreeNodeId> = dropped_ids.into_iter().cloned().collect();
+        if let Some(entry) = removed {
+            for stored in entry.leaves {
+                if dropped.contains(&stored.node.id) {
+                    let mut kept = stored;
+                    kept.deleted = true;
+                    state.leaves.insert(kept.node.id.clone(), kept);
+                }
+            }
+        }
         for leaf in leaves_to_keep {
             state
                 .leaves
@@ -997,8 +1087,12 @@ impl InMemoryTreeStore {
                 .get(id)
                 .ok_or(TreeServiceError::NonReservableLeaves)?;
             // A leaf the operators no longer report cannot back a payment or a
-            // swap, even though it still counts towards the balance.
-            if stored.node.status != TreeNodeStatus::Available || stored.missing_from_operators {
+            // swap, even though it still counts towards the balance. Nor can one
+            // kept only for its exit chain, which counts towards nothing.
+            if stored.node.status != TreeNodeStatus::Available
+                || stored.missing_from_operators
+                || stored.deleted
+            {
                 return Err(TreeServiceError::NonReservableLeaves);
             }
             selected.push(stored.node.clone());
@@ -1052,6 +1146,23 @@ impl TreeStore for InMemoryTreeStore {
     async fn get_leaves(&self) -> Result<Leaves, TreeServiceError> {
         self.send_command(|tx| StoreCommand::GetLeaves { response_tx: tx })
             .await
+    }
+
+    async fn get_deleted_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
+        self.send_command(|tx| StoreCommand::GetDeletedLeaves { response_tx: tx })
+            .await
+    }
+
+    async fn remove_leaves(&self, leaf_ids: &[TreeNodeId]) -> Result<(), TreeServiceError> {
+        if leaf_ids.is_empty() {
+            return Ok(());
+        }
+        let leaf_ids = leaf_ids.to_vec();
+        self.send_command(|tx| StoreCommand::RemoveLeaves {
+            leaf_ids,
+            response_tx: tx,
+        })
+        .await
     }
 
     async fn get_exit_chains(
@@ -1301,13 +1412,33 @@ mod tests {
     }
 
     #[async_test_all]
-    async fn test_unshared_ancestor_deleted_with_leaf() {
-        shared_tests::test_unshared_ancestor_deleted_with_leaf(&InMemoryTreeStore::new()).await;
+    async fn test_absent_leaf_is_kept_for_its_exit_chain() {
+        shared_tests::test_absent_leaf_is_kept_for_its_exit_chain(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
-    async fn test_shared_ancestor_survives_leaf_deletion() {
-        shared_tests::test_shared_ancestor_survives_leaf_deletion(&InMemoryTreeStore::new()).await;
+    async fn test_remove_leaves_spares_a_revived_leaf() {
+        shared_tests::test_remove_leaves_spares_a_revived_leaf(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_kept_leaf_cannot_back_a_payment() {
+        shared_tests::test_kept_leaf_cannot_back_a_payment(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_cancel_keeps_an_unverified_leaf() {
+        shared_tests::test_cancel_keeps_an_unverified_leaf(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_deleted_leaves_are_listed_and_removable() {
+        shared_tests::test_deleted_leaves_are_listed_and_removable(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_absent_leaf_keeps_shared_ancestor() {
+        shared_tests::test_absent_leaf_keeps_shared_ancestor(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]

@@ -453,11 +453,14 @@ pub async fn test_store_ancestors_backfills_chain(store: &dyn TreeStore) {
 
 /// A stored chain outlives the refreshes that keep reporting its leaf, and is
 /// dropped only when the leaf itself leaves the pool. Refreshes carry leaves
-/// alone, so a chain the resolver wrote must not be collateral damage.
+/// alone, so a chain the resolver wrote must not be collateral damage, and a
+/// leaf merely going unreported does not leave the pool: only a spend does.
 pub async fn test_stored_chain_survives_refresh_and_dies_with_its_leaf(store: &dyn TreeStore) {
     let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
-    let kept = create_test_node_with_parent("kept", Some("root"), TreeNodeStatus::Available);
-    let dropped = create_test_node_with_parent("dropped", Some("root"), TreeNodeStatus::Available);
+    let mut kept = create_test_node_with_parent("kept", Some("root"), TreeNodeStatus::Available);
+    kept.value = 100;
+    let mut spent = create_test_node_with_parent("spent", Some("root"), TreeNodeStatus::Available);
+    spent.value = 700;
     add_with_chains(
         store,
         &[
@@ -466,7 +469,7 @@ pub async fn test_stored_chain_survives_refresh_and_dies_with_its_leaf(store: &d
                 ancestors: vec![root.clone()],
             },
             LeafPedigree {
-                leaf: dropped.clone(),
+                leaf: spent.clone(),
                 ancestors: vec![root],
             },
         ],
@@ -476,24 +479,33 @@ pub async fn test_stored_chain_survives_refresh_and_dies_with_its_leaf(store: &d
     // A refresh reporting both leaves keeps both chains: it writes none itself.
     let refresh_start = future_refresh_start(store).await;
     store
-        .set_leaves(&[kept.clone(), dropped.clone()], &[], refresh_start)
+        .set_leaves(&[kept.clone(), spent.clone()], &[], refresh_start)
         .await
         .unwrap();
     assert_eq!(exit_chain_ids(store, &kept.id).await, vec!["root", "kept"]);
     assert_eq!(
-        exit_chain_ids(store, &dropped.id).await,
-        vec!["root", "dropped"]
+        exit_chain_ids(store, &spent.id).await,
+        vec!["root", "spent"]
     );
 
-    // A refresh that stops reporting `dropped` takes its chain with it, and
-    // leaves the surviving leaf's chain intact.
+    // Spending one leaf is the departure a refresh can act on, so its chain goes
+    // with it while the other leaf's stays.
+    let reservation = store
+        .try_reserve_leaves_by_ids(std::slice::from_ref(&spent.id), ReservationPurpose::Payment)
+        .await
+        .unwrap();
+    store
+        .finalize_reservation(&reservation.id, None)
+        .await
+        .unwrap();
     let refresh_start = future_refresh_start(store).await;
     store
         .set_leaves(std::slice::from_ref(&kept), &[], refresh_start)
         .await
         .unwrap();
+
     assert_eq!(exit_chain_ids(store, &kept.id).await, vec!["root", "kept"]);
-    assert!(exit_chain(store, &dropped.id).await.is_none());
+    assert!(exit_chain(store, &spent.id).await.is_none());
 }
 
 /// A leaf spent between its chain being resolved and stored stays spent: storing
@@ -568,8 +580,11 @@ pub async fn test_store_ancestors_for_absent_leaf(store: &dyn TreeStore) {
     );
 }
 
-/// Deleting a leaf also drops its unshared ancestors.
-pub async fn test_unshared_ancestor_deleted_with_leaf(store: &dyn TreeStore) {
+/// A refresh that stops reporting a leaf keeps it. Absence is not proof of a
+/// spend, and an owner query cannot even ask for every status a leaf of ours can
+/// reach, so the chain that would exit it has to survive. The leaf only stops
+/// counting: out of the balance and out of selection.
+pub async fn test_absent_leaf_is_kept_for_its_exit_chain(store: &dyn TreeStore) {
     let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
     let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
     add_with_chains(
@@ -581,21 +596,144 @@ pub async fn test_unshared_ancestor_deleted_with_leaf(store: &dyn TreeStore) {
     )
     .await;
 
-    // A refresh in the future drops the pre-existing leaf, taking its ancestors.
     let refresh_start = future_refresh_start(store).await;
     store.set_leaves(&[], &[], refresh_start).await.unwrap();
 
-    assert!(exit_chain(store, &leaf.id).await.is_none());
-
-    // Re-adding the leaf alone brings back no ancestors: the root went with it,
-    // so the walk up from the leaf has nothing to link to.
-    store.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
-    assert_eq!(exit_chain_ids(store, &leaf.id).await, vec!["leaf"]);
+    assert!(get_available(store).await.is_empty());
+    assert_eq!(store.get_available_balance().await.unwrap(), 0);
+    assert_eq!(exit_chain_ids(store, &leaf.id).await, vec!["root", "leaf"]);
 }
 
-/// Each leaf owns its own copy of a shared ancestor, so dropping one leaf leaves
-/// the other's chain intact.
-pub async fn test_shared_ancestor_survives_leaf_deletion(store: &dyn TreeStore) {
+/// A leaf kept only for its exit chain is reachable through `get_deleted_leaves`
+/// and nowhere else, and `remove_leaves` is what finally takes it, along with the
+/// ancestors it alone reached.
+pub async fn test_deleted_leaves_are_listed_and_removable(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+    add_with_chains(
+        store,
+        &[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![root.clone()],
+        }],
+    )
+    .await;
+
+    // Nothing is marked while an operator still reports the leaf.
+    assert!(store.get_deleted_leaves().await.unwrap().is_empty());
+
+    let refresh_start = future_refresh_start(store).await;
+    store.set_leaves(&[], &[], refresh_start).await.unwrap();
+
+    let deleted = store.get_deleted_leaves().await.unwrap();
+    assert_eq!(deleted.len(), 1);
+    assert_eq!(deleted[0].id.to_string(), "leaf");
+    assert!(get_available(store).await.is_empty());
+
+    store
+        .remove_leaves(std::slice::from_ref(&leaf.id))
+        .await
+        .unwrap();
+    assert!(store.get_deleted_leaves().await.unwrap().is_empty());
+    assert!(exit_chain(store, &leaf.id).await.is_none());
+}
+
+/// `remove_leaves` only takes a leaf that is still marked. The purge reads its
+/// list, then spends seconds asking the operators, so a refresh that brings the
+/// leaf back in that window must survive the delete that was already in flight.
+pub async fn test_remove_leaves_spares_a_revived_leaf(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+    let pedigree = LeafPedigree {
+        leaf: leaf.clone(),
+        ancestors: vec![root],
+    };
+    add_with_chains(store, std::slice::from_ref(&pedigree)).await;
+
+    let refresh_start = future_refresh_start(store).await;
+    store.set_leaves(&[], &[], refresh_start).await.unwrap();
+    assert_eq!(store.get_deleted_leaves().await.unwrap().len(), 1);
+
+    // The refresh the purge raced with: the leaf is reported again, clearing the
+    // mark, before the delete it decided on lands.
+    add_with_chains(store, std::slice::from_ref(&pedigree)).await;
+    store
+        .remove_leaves(std::slice::from_ref(&leaf.id))
+        .await
+        .unwrap();
+
+    let available = get_available(store).await;
+    assert_eq!(
+        available.len(),
+        1,
+        "a revived leaf survives the stale delete"
+    );
+    assert_eq!(exit_chain_ids(store, &leaf.id).await, vec!["root", "leaf"]);
+}
+
+/// A leaf kept only for its exit chain must never back a payment, by any route:
+/// not the balance, not selection, and not a reservation that names it outright.
+/// It regressed once on one backend, so every backend asserts it.
+pub async fn test_kept_leaf_cannot_back_a_payment(store: &dyn TreeStore) {
+    let leaf = create_test_node_with_parent("leaf", None, TreeNodeStatus::Available);
+    store.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
+
+    let refresh_start = future_refresh_start(store).await;
+    store.set_leaves(&[], &[], refresh_start).await.unwrap();
+
+    assert_eq!(store.get_available_balance().await.unwrap(), 0);
+    assert!(get_available(store).await.is_empty());
+    assert!(
+        store
+            .try_reserve_leaves_by_ids(std::slice::from_ref(&leaf.id), ReservationPurpose::Payment)
+            .await
+            .is_err(),
+        "a kept leaf cannot be reserved by id"
+    );
+    // Still there, and still exitable: that is the whole point of keeping it.
+    assert_eq!(store.get_deleted_leaves().await.unwrap().len(), 1);
+}
+
+/// Cancelling a reservation keeps a leaf the verification would not vouch for,
+/// chain and all. One operator declining to confirm a leaf is not proof it was
+/// spent, so it is held back from payments rather than destroyed, and the purge
+/// decides later on the evidence. (A verification that fails outright is the
+/// other half of this: it vouches for nothing, so it keeps every leaf instead.)
+pub async fn test_cancel_keeps_an_unverified_leaf(store: &dyn TreeStore) {
+    let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+    let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+    add_with_chains(
+        store,
+        &[LeafPedigree {
+            leaf: leaf.clone(),
+            ancestors: vec![root],
+        }],
+    )
+    .await;
+
+    let reservation = reserve_leaves(store, None, false, ReservationPurpose::Payment)
+        .await
+        .unwrap();
+    assert_eq!(reservation.leaves.len(), 1);
+
+    // The verification vouched for nothing, as it does when the operators cannot
+    // be reached at all.
+    store
+        .cancel_reservation(&reservation.id, &[])
+        .await
+        .unwrap();
+
+    // Out of the balance, since nothing confirmed it, but still ours to exit.
+    assert_eq!(store.get_available_balance().await.unwrap(), 0);
+    assert!(get_available(store).await.is_empty());
+    let kept = store.get_deleted_leaves().await.unwrap();
+    assert_eq!(kept.len(), 1, "the unverified leaf is kept, not dropped");
+    assert_eq!(exit_chain_ids(store, &leaf.id).await, vec!["root", "leaf"]);
+}
+
+/// A refresh reporting only one of two leaves keeps both, so the unreported one
+/// stays exitable and each leaf keeps its own copy of the ancestor they share.
+pub async fn test_absent_leaf_keeps_shared_ancestor(store: &dyn TreeStore) {
     let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
     let leaf_a = create_test_node_with_parent("leaf-a", Some("root"), TreeNodeStatus::Available);
     let leaf_b = create_test_node_with_parent("leaf-b", Some("root"), TreeNodeStatus::Available);
@@ -614,14 +752,20 @@ pub async fn test_shared_ancestor_survives_leaf_deletion(store: &dyn TreeStore) 
     )
     .await;
 
-    // A refresh that keeps only leaf-b drops leaf-a and its copy of the root.
+    // A refresh that reports only leaf-b leaves leaf-a marked but intact.
     let refresh_start = future_refresh_start(store).await;
     store
         .set_leaves(std::slice::from_ref(&leaf_b), &[], refresh_start)
         .await
         .unwrap();
 
-    assert!(exit_chain(store, &leaf_a.id).await.is_none());
+    let available = get_available(store).await;
+    assert_eq!(available.len(), 1);
+    assert_eq!(available[0].id.to_string(), "leaf-b");
+    assert_eq!(
+        exit_chain_ids(store, &leaf_a.id).await,
+        vec!["root", "leaf-a"]
+    );
     assert_eq!(
         exit_chain_ids(store, &leaf_b.id).await,
         vec!["root", "leaf-b"]

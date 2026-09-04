@@ -431,6 +431,58 @@ class WebTreeStore {
     }
   }
 
+  async getDeletedLeaves() {
+    try {
+      return await this._txRun(
+        [STORE_LEAVES],
+        "readonly",
+        [{ name: "leaves", store: STORE_LEAVES }],
+        (res) => res.leaves.filter((row) => row.is_deleted).map((row) => row.data)
+      );
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(`Failed to get deleted leaves: ${error.message}`);
+    }
+  }
+
+  async removeLeaves(leafIds) {
+    try {
+      if (!leafIds || leafIds.length === 0) return;
+      const ids = new Set(leafIds);
+      await this._txRun(
+        [STORE_LEAVES, STORE_ANCESTORS],
+        "readwrite",
+        [
+          { name: "leaves", store: STORE_LEAVES },
+          { name: "ancestors", store: STORE_ANCESTORS },
+        ],
+        (res, tx) => {
+          const leavesStore = tx.objectStore(STORE_LEAVES);
+          const ancestorsStore = tx.objectStore(STORE_ANCESTORS);
+          const leafMap = new Map(res.leaves.map((r) => [r.id, r]));
+          // Each leaf owns its chain, so its ancestor rows go with it. They are
+          // keyed by [leaf_id, id], so the leaf's own id selects exactly its own.
+          // Only a row still marked and still unreserved goes: the purge read
+          // its list, then spent seconds asking the operators, and a refresh
+          // landing in that window may have brought the leaf back or a payment
+          // reserved it.
+          for (const id of ids) {
+            const row = leafMap.get(id);
+            if (!row || !row.is_deleted || row.reservation_id != null) continue;
+            leavesStore.delete(id);
+            leafMap.delete(id);
+            for (const anc of res.ancestors) {
+              if (anc.leaf_id === id) ancestorsStore.delete([anc.leaf_id, anc.id]);
+            }
+          }
+        }
+      );
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(`Failed to remove leaves: ${error.message}`);
+    }
+  }
+
   async getLeaves() {
     try {
       return await this._txRun(
@@ -455,6 +507,7 @@ class WebTreeStore {
                 ? resMap.get(row.reservation_id)?.purpose
                 : undefined;
 
+            if (row.is_deleted) continue;
             const spendable = node.status === "Available";
             if (purpose) {
               if (purpose === "Payment") reservedForPayment.push(node);
@@ -504,8 +557,9 @@ class WebTreeStore {
                 ? resMap.get(row.reservation_id)?.purpose
                 : undefined;
             const included =
-              (row.reservation_id == null && row.status === "Available") ||
-              purpose === "Swap";
+              !row.is_deleted &&
+              ((row.reservation_id == null && row.status === "Available") ||
+                purpose === "Swap");
             if (included) balance += BigInt(row.value);
           }
           return balance;
@@ -537,7 +591,7 @@ class WebTreeStore {
               row.reservation_id != null && resIds.has(row.reservation_id);
             // Every reserved leaf plus every Available one; nothing that is
             // neither reserved nor Available.
-            if (hasReservation || row.status === "Available") {
+            if (!row.is_deleted && (hasReservation || row.status === "Available")) {
               out.push([
                 row.id,
                 row.verifying_public_key,
@@ -735,24 +789,36 @@ class WebTreeStore {
             res.spent.filter((s) => s.spent_at >= refreshMs).map((s) => s.id)
           );
 
-          // Delete non-reserved leaves added before the refresh started (this
-          // includes leaves released just above by the stale-reservation
-          // cleanup). A leaf reported again in this same refresh is re-inserted
-          // below, so its ancestor rows must survive: only ids that do NOT
-          // reappear (truly gone, e.g. spent) get their ancestor rows dropped
-          // alongside them.
-          // Taken before the deletion below: a refresh carries leaves alone, so
-          // the chain-complete flag a reported leaf keeps has to come from the
-          // row it already had, or every refresh would report every leaf as
-          // missing its chain.
+          // Taken before the marking below, because a leaf reported again is
+          // rebuilt from its pedigree and a refresh carries no chains. An empty
+          // chain means "unknown", so the flag the row already held has to come
+          // from here, or every refresh would report every leaf as missing one.
           const priorRows = new Map(leafMap);
 
+          // Mark, rather than remove, the non-reserved leaves added before the
+          // refresh started. A leaf no operator reports may still be ours, and
+          // its stored transactions are the only way to exit it, so the row
+          // stays, and its ancestor rows stay with it; the puts below clear the
+          // mark on whatever came back. A leaf we spent ourselves is the one
+          // absence already accounted for, so it goes for good and its ancestor
+          // rows are dropped alongside it.
           const deletedIds = [];
           for (const row of Array.from(leafMap.values())) {
-            if (row.reservation_id == null && row.added_at < refreshMs) {
+            if (row.reservation_id != null) continue;
+            // A leaf we spent goes whenever its marker is live, as on every
+            // other backend: the row being newer than this refresh does not
+            // make the spend any less ours.
+            if (spentIds.has(row.id)) {
               leavesStore.delete(row.id);
               leafMap.delete(row.id);
               deletedIds.push(row.id);
+              continue;
+            }
+            if (row.added_at >= refreshMs) continue;
+            if (!row.is_deleted) {
+              const marked = { ...row, is_deleted: true };
+              leavesStore.put(marked);
+              leafMap.set(marked.id, marked);
             }
           }
 
@@ -804,26 +870,27 @@ class WebTreeStore {
           // gone (e.g. released by stale cleanup): dropping them here would lose
           // the leaves until the next refresh. The deletes below no-op in that case.
           const leavesStore = tx.objectStore(STORE_LEAVES);
-          const ancestorsStore = tx.objectStore(STORE_ANCESTORS);
           const reservationsStore = tx.objectStore(STORE_RESERVATIONS);
 
           const keepIds = new Set(keep.map((l) => l.id));
-          const ancestorRowsByLeaf = this._ancestorRowsByLeaf(res.ancestors);
           const leafMap = new Map(res.leaves.map((r) => [r.id, r]));
           // A kept leaf keeps its ancestor rows, so the row rebuilt below has to
           // keep the flag that describes them.
           const priorRows = new Map(leafMap);
+          // A leaf the verification would not vouch for is marked, not dropped:
+          // one operator declining to confirm it is not proof it was spent, and
+          // its chain is the only way to exit it if it is still ours. The
+          // re-insert below clears the mark on everything kept.
           for (const l of res.leaves) {
             if (l.reservation_id !== id) continue;
-            leavesStore.delete(l.id);
-            leafMap.delete(l.id);
-            // A kept leaf's ancestor rows stay put; a dropped leaf's are
-            // removed with it.
-            if (!keepIds.has(l.id)) {
-              for (const existingId of (ancestorRowsByLeaf.get(l.id) || new Map()).keys()) {
-                ancestorsStore.delete([l.id, existingId]);
-              }
+            if (keepIds.has(l.id)) {
+              leavesStore.delete(l.id);
+              leafMap.delete(l.id);
+              continue;
             }
+            const marked = { ...l, reservation_id: null, is_deleted: true };
+            leavesStore.put(marked);
+            leafMap.set(marked.id, marked);
           }
           reservationsStore.delete(id);
 
@@ -1103,6 +1170,7 @@ class WebTreeStore {
                 (r) =>
                   r.status === "Available" &&
                   !r.is_missing_from_operators &&
+                  !r.is_deleted &&
                   r.reservation_id == null
               )
               .map((r) => r.id)
@@ -1205,6 +1273,7 @@ class WebTreeStore {
       verifying_public_key: node.verifying_public_key,
       signing_public_key: node.signing_keyshare.public_key,
       is_missing_from_operators: !!isMissing,
+      is_deleted: false,
       reservation_id: existingRow ? existingRow.reservation_id ?? null : null,
       added_at: this._nowMs(),
       // Denormalized and indexed so leavesMissingExitChains reads only the ids
@@ -1330,6 +1399,7 @@ class WebTreeStore {
         (r) =>
           r.status === "Available" &&
           !r.is_missing_from_operators &&
+          !r.is_deleted &&
           r.reservation_id == null
       )
       .map((r) => ({ id: r.id, value: r.value }));

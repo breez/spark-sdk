@@ -113,6 +113,15 @@ const TREE_MIGRATIONS: &[&str] = &[
         last_completed_at INTEGER
     );
     INSERT INTO brz_tree_swap_status (id, last_completed_at) VALUES (1, NULL);",
+    // v2: serve the root half of leaves_missing_exit_chains, which otherwise
+    // seeks a leaf's ancestor rows and reads each one to find the parentless
+    // node. SQLite indexes IS NULL as an equality, so both terms bind and the
+    // answer comes from the index without touching the row.
+    "CREATE INDEX IF NOT EXISTS brz_idx_tree_ancestors_root
+        ON brz_tree_ancestors (leaf_id, parent_node_id);",
+    // v3: keep a leaf no operator reports rather than removing it, so the chain
+    // that would exit it survives until a spend has actually been proven.
+    "ALTER TABLE brz_tree_leaves ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0;",
 ];
 
 /// Applies pending migrations, tracking the version in its own table rather than
@@ -336,15 +345,17 @@ impl SqliteTreeStore {
             conn.execute(
                 "INSERT INTO brz_tree_leaves
                      (id, parent_node_id, status, value, verifying_public_key,
-                      signing_public_key, data, is_missing_from_operators, added_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                      signing_public_key, data, is_missing_from_operators, added_at,
+                      is_deleted)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0)
                  ON CONFLICT(id) DO UPDATE SET
                      parent_node_id = excluded.parent_node_id,
                      status = excluded.status,
                      value = excluded.value,
                      data = excluded.data,
                      is_missing_from_operators = excluded.is_missing_from_operators,
-                     added_at = excluded.added_at",
+                     added_at = excluded.added_at,
+                     is_deleted = 0",
                 params![
                     id,
                     leaf.parent_node_id.as_ref().map(ToString::to_string),
@@ -534,7 +545,7 @@ impl SqliteTreeStore {
             .query_row(
                 "SELECT COALESCE(SUM(value), 0) FROM brz_tree_leaves
                  WHERE status = ?1
-                   AND is_missing_from_operators = 0 AND reservation_id IS NULL",
+                   AND is_missing_from_operators = 0 AND is_deleted = 0 AND reservation_id IS NULL",
                 params![available],
                 |row| row.get(0),
             )
@@ -565,13 +576,13 @@ impl SqliteTreeStore {
             .prepare(
                 "SELECT id, value FROM brz_tree_leaves
                  WHERE status = ?1
-                   AND is_missing_from_operators = 0 AND reservation_id IS NULL
+                   AND is_missing_from_operators = 0 AND is_deleted = 0 AND reservation_id IS NULL
                    AND (
                      value <= ?2
                      OR id = (
                        SELECT id FROM brz_tree_leaves
                        WHERE status = ?1
-                         AND is_missing_from_operators = 0 AND reservation_id IS NULL
+                         AND is_missing_from_operators = 0 AND is_deleted = 0 AND reservation_id IS NULL
                          AND value > ?2
                        ORDER BY value LIMIT 1
                      )
@@ -758,13 +769,67 @@ impl TreeStore for SqliteTreeStore {
         Ok(())
     }
 
+    async fn get_deleted_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
+        let conn = self.get_connection()?;
+        let mut stmt = conn
+            .prepare("SELECT data FROM brz_tree_leaves WHERE is_deleted = 1")
+            .map_err(|e| generic("prepare deleted leaves", e))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| generic("query deleted leaves", e))?;
+        let mut leaves = Vec::new();
+        for row in rows {
+            let data = row.map_err(|e| generic("read deleted leaf", e))?;
+            leaves.push(
+                serde_json::from_str(&data).map_err(|e| generic("deserialize deleted leaf", e))?,
+            );
+        }
+        Ok(leaves)
+    }
+
+    async fn remove_leaves(&self, leaf_ids: &[TreeNodeId]) -> Result<(), TreeServiceError> {
+        if leaf_ids.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.get_connection()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| generic("begin remove_leaves", e))?;
+        // Each leaf owns its chain, so its ancestor rows go with it, and in that
+        // order so no ancestor row is ever left without its leaf.
+        // Only a row still marked and still unreserved goes: the purge read its
+        // list, then spent seconds asking the operators, and a refresh landing in
+        // that window may have brought the leaf back or a payment reserved it.
+        for id in leaf_ids {
+            let removed = tx
+                .execute(
+                    "DELETE FROM brz_tree_leaves
+                     WHERE id = ?1 AND is_deleted = 1 AND reservation_id IS NULL",
+                    params![id.to_string()],
+                )
+                .map_err(|e| generic("remove leaf", e))?;
+            if removed > 0 {
+                tx.execute(
+                    "DELETE FROM brz_tree_ancestors WHERE leaf_id = ?1",
+                    params![id.to_string()],
+                )
+                .map_err(|e| generic("remove leaf ancestors", e))?;
+            }
+        }
+        tx.commit()
+            .map_err(|e| generic("commit remove_leaves", e))?;
+        self.notify();
+        Ok(())
+    }
+
     async fn get_leaves(&self) -> Result<Leaves, TreeServiceError> {
         let conn = self.get_connection()?;
         let mut stmt = conn
             .prepare(
                 "SELECT n.data, n.is_missing_from_operators, r.purpose
                  FROM brz_tree_leaves n
-                 LEFT JOIN brz_tree_reservations r ON n.reservation_id = r.id",
+                 LEFT JOIN brz_tree_reservations r ON n.reservation_id = r.id
+                 WHERE n.is_deleted = 0",
             )
             .map_err(|e| generic("prepare get_leaves", e))?;
         let rows = stmt
@@ -814,8 +879,9 @@ impl TreeStore for SqliteTreeStore {
             .query_row(
                 "SELECT COALESCE(SUM(l.value), 0) FROM brz_tree_leaves l
                  LEFT JOIN brz_tree_reservations r ON l.reservation_id = r.id
-                 WHERE (l.reservation_id IS NULL AND l.status = ?1)
-                    OR r.purpose = ?2",
+                 WHERE l.is_deleted = 0
+                   AND ((l.reservation_id IS NULL AND l.status = ?1)
+                        OR r.purpose = ?2)",
                 params![available, ReservationPurpose::Swap.to_string()],
                 |row| row.get(0),
             )
@@ -836,7 +902,8 @@ impl TreeStore for SqliteTreeStore {
                 "SELECT l.id, l.verifying_public_key, l.signing_public_key
                  FROM brz_tree_leaves l
                  LEFT JOIN brz_tree_reservations r ON l.reservation_id = r.id
-                 WHERE r.purpose IS NOT NULL OR l.status = ?1",
+                 WHERE l.is_deleted = 0
+                   AND (r.purpose IS NOT NULL OR l.status = ?1)",
             )
             .map_err(|e| generic("prepare verified leaf keys", e))?;
         let rows = stmt
@@ -898,15 +965,38 @@ impl TreeStore for SqliteTreeStore {
         Self::cleanup_spent_markers(&tx, refresh_ms)?;
         let spent = Self::spent_ids_since(&tx, refresh_ms)?;
 
-        // Delete non-reserved pool leaves older than the refresh; reserved and
+        // Mark the non-reserved pool leaves older than the refresh; reserved and
         // after-refresh leaves are immune. Leaves present in the refresh below are
-        // re-inserted, and any candidate that does not come back is dropped below.
+        // re-inserted, which clears the mark again. A marked leaf stays a row, so
+        // the orphan sweep below leaves its ancestors alone. Already-marked rows
+        // are skipped: they match this predicate forever, and rewriting them on
+        // every refresh is pure churn.
         tx.execute(
-            "DELETE FROM brz_tree_leaves
-             WHERE reservation_id IS NULL AND added_at < ?1",
+            "UPDATE brz_tree_leaves SET is_deleted = 1
+             WHERE reservation_id IS NULL AND added_at < ?1 AND is_deleted = 0",
             params![refresh_ms],
         )
-        .map_err(|e| generic("delete old leaves", e))?;
+        .map_err(|e| generic("mark unreported leaves", e))?;
+
+        // A leaf we spent ourselves is the one absence already accounted for, so
+        // it goes for good and takes its ancestor rows with it, and only when its
+        // row actually went: a row without its chain is the one thing this store
+        // must never produce.
+        for id in &spent {
+            let removed = tx
+                .execute(
+                    "DELETE FROM brz_tree_leaves WHERE id = ?1 AND reservation_id IS NULL",
+                    params![id],
+                )
+                .map_err(|e| generic("delete spent leaf", e))?;
+            if removed > 0 {
+                tx.execute(
+                    "DELETE FROM brz_tree_ancestors WHERE leaf_id = ?1",
+                    params![id],
+                )
+                .map_err(|e| generic("delete spent leaf ancestors", e))?;
+            }
+        }
 
         Self::upsert_leaves(&tx, leaves.iter(), false, Some(&spent))?;
         Self::upsert_leaves(&tx, missing_operators_leaves.iter(), true, Some(&spent))?;
@@ -929,21 +1019,21 @@ impl TreeStore for SqliteTreeStore {
         // Return leaves_to_keep to the pool even when the reservation is already
         // gone (e.g. released by stale cleanup): dropping them here would lose the
         // leaves until the next refresh. The deletes below no-op in that case.
-        let prior_ids = Self::reserved_leaf_ids(&tx, id)?;
-        let keep_ids: HashSet<String> = leaves_to_keep.iter().map(|l| l.id.to_string()).collect();
-        let dropped_ids: Vec<String> = prior_ids
-            .into_iter()
-            .filter(|pid| !keep_ids.contains(pid))
-            .collect();
-        Self::delete_reserved(&tx, id)?;
+        // A leaf the verification would not vouch for is marked, not dropped:
+        // one operator declining to confirm it is not proof it was spent, and
+        // its chain is the only way to exit it if it is still ours. The upsert
+        // below clears the mark on everything kept.
+        tx.execute(
+            "UPDATE brz_tree_leaves SET reservation_id = NULL, is_deleted = 1
+             WHERE reservation_id = ?1",
+            params![id],
+        )
+        .map_err(|e| generic("release reserved leaves", e))?;
         tx.execute(
             "DELETE FROM brz_tree_reservations WHERE id = ?1",
             params![id],
         )
         .map_err(|e| generic("delete reservation", e))?;
-        // A kept leaf's ancestor rows are untouched here; only a dropped leaf's
-        // chain goes with it. The kept leaf rows are re-inserted below.
-        Self::delete_ancestors_for_leaves(&tx, &dropped_ids)?;
         Self::upsert_leaves(&tx, leaves_to_keep, false, None)?;
         tx.commit().map_err(|e| generic("commit cancel", e))?;
         self.notify();
@@ -1123,7 +1213,7 @@ impl TreeStore for SqliteTreeStore {
                 .query_row(
                     "SELECT 1 FROM brz_tree_leaves
                      WHERE id = ?1 AND status = ?2
-                       AND is_missing_from_operators = 0 AND reservation_id IS NULL",
+                       AND is_missing_from_operators = 0 AND is_deleted = 0 AND reservation_id IS NULL",
                     params![id, available],
                     |_| Ok(()),
                 )
@@ -1259,8 +1349,12 @@ mod tests {
         test_node_update_in_place,
         test_leaf_reparented_by_renewal,
         test_ancestor_not_returned_as_leaf,
-        test_unshared_ancestor_deleted_with_leaf,
-        test_shared_ancestor_survives_leaf_deletion,
+        test_absent_leaf_is_kept_for_its_exit_chain,
+        test_remove_leaves_spares_a_revived_leaf,
+        test_kept_leaf_cannot_back_a_payment,
+        test_cancel_keeps_an_unverified_leaf,
+        test_deleted_leaves_are_listed_and_removable,
+        test_absent_leaf_keeps_shared_ancestor,
         test_incomplete_pedigree_still_spendable,
         test_exit_chain_after_swap_update,
         test_exit_chain_after_cancel_reparent,

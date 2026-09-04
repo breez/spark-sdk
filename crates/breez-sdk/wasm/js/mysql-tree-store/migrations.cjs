@@ -536,6 +536,35 @@ class MysqlTreeStoreMigrationManager {
            WHERE verifying_public_key = ''`,
         ],
       },
+      {
+        // Serves the root half of leavesMissingExitChains, which otherwise
+        // seeks a leaf's ancestor rows and reads each one to find the
+        // parentless node. MySQL has no partial indexes, so `parent_node_id`
+        // sits second: it resolves IS NULL as an equality, which keeps every
+        // term of the lookup an equality. Leading with `leaf_id` would not
+        // help, since the clustered primary key already carries
+        // `parent_node_id` once seeked by leaf.
+        name: "Index the root of each leaf's chain",
+        sql: [
+          {
+            op: "createIndex",
+            table: "brz_tree_ancestors",
+            name: "brz_idx_tree_ancestors_root",
+            definition: "(user_id, parent_node_id, leaf_id)",
+          },
+        ],
+      },
+      {
+        name: "Keep a leaf no operator reports, for its exit chain",
+        sql: [
+          {
+            op: "addColumn",
+            table: "brz_tree_leaves",
+            name: "is_deleted",
+            definition: "BOOLEAN NOT NULL DEFAULT FALSE",
+          },
+        ],
+      },
     ];
   }
 }

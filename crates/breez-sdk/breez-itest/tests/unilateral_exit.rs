@@ -74,6 +74,16 @@ async fn new_local_sdk(backend: SignerBackend) -> Result<LocalSdk> {
     build_local_sdk(fixtures, backend).await
 }
 
+/// Two wallets sharing one operator pool and bitcoind, so a leaf can be sent
+/// from one to the other. Each call to `build_local_sdk` derives its own
+/// identity, which is what makes them distinct parties.
+async fn new_local_sdk_pair(backend: SignerBackend) -> Result<(LocalSdk, LocalSdk)> {
+    let fixtures = Arc::new(TestFixtures::new().await?);
+    let sender = build_local_sdk(Arc::clone(&fixtures), backend).await?;
+    let receiver = build_local_sdk(fixtures, backend).await?;
+    Ok((sender, receiver))
+}
+
 /// Claims through the side-channel `SparkWallet`: the fixture's SSP stub has no
 /// URL, so the public claim path (which fetches a fee quote) can't be used.
 async fn deposit_and_claim(sdk: &LocalSdk, amount: Amount) -> Result<()> {
@@ -669,6 +679,173 @@ async fn test_full_exit_and_sweep(#[case] backend: SignerBackend) -> Result<()> 
     Ok(())
 }
 
+/// A leaf received through a Spark transfer exits like any other. Every other
+/// exit here drives a leaf its own wallet deposited; a received leaf reaches the
+/// wallet by a different route, and carries a refund the claim re-signed rather
+/// than the one the deposit produced. This drives that refund on chain and
+/// spends its output, which is what shows the claim's refund is broadcastable
+/// and the exit can spend what it pays to.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn test_exit_leaf_received_by_transfer(#[case] backend: SignerBackend) -> Result<()> {
+    let (sender, receiver) = new_local_sdk_pair(backend).await?;
+    deposit_and_claim(&sender, Amount::from_sat(LEAF_SATS)).await?;
+    wait_for_balance(&sender.sdk, Some(LEAF_SATS), None, 60).await?;
+
+    let receiver_address = receiver.spark_wallet.get_spark_address()?;
+    sender
+        .spark_wallet
+        .transfer(LEAF_SATS, &receiver_address, None)
+        .await?;
+
+    // The receiver claims in the background, and claiming is what re-signs the
+    // refund to its own leaf key. Waiting on the balance waits for that.
+    wait_for_balance(&receiver.sdk, Some(LEAF_SATS), None, 60).await?;
+
+    let cpfp = fund_p2tr_utxo(&receiver.fixtures.bitcoind, Amount::from_sat(CPFP_SATS)).await?;
+    let destination = cpfp.address.clone();
+
+    let quote = receiver
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: destination.to_string(),
+            selection: ExitLeafSelection::Auto,
+        })
+        .await?;
+    assert_quote_consistent(&quote, FEE_RATE, &destination.to_string(), p2tr_dust());
+    assert_eq!(
+        quote.leaves.len(),
+        1,
+        "the receiver holds exactly the transferred leaf"
+    );
+
+    let signer = signer_for(&cpfp.secret_key.secret_bytes())?;
+    let built = receiver
+        .sdk
+        .unilateral_exit(
+            UnilateralExitRequest {
+                prepared: quote.clone(),
+                funding_inputs: vec![cpfp_input(&cpfp)],
+            },
+            signer,
+        )
+        .await?;
+    assert_build_matches_quote(&quote, &built);
+
+    // The refund being driven is the one the claim signed, not the one the
+    // deposit produced. A deposited leaf's refund is timelocked at 2000 blocks
+    // and each transfer hands the leaf on one 100-block interval lower, so 1900
+    // is what a leaf that has moved exactly once carries. Without this the test
+    // would still pass on a leaf that never moved.
+    let refund = built
+        .transactions
+        .iter()
+        .find(|t| t.kind == UnilateralExitTxKind::Refund)
+        .expect("the exit drives the leaf's refund");
+    let refund_sequence = decode_tx(&refund.tx_hex)?.input[0]
+        .sequence
+        .to_consensus_u32()
+        & 0xFFFF;
+    assert_eq!(
+        refund_sequence, 1900,
+        "a leaf transferred once carries a refund one interval below a deposit's 2000"
+    );
+
+    assert_all_mined(&receiver, &built, &destination).await?;
+
+    let sweep_txid = built
+        .transactions
+        .iter()
+        .find(|t| t.kind == UnilateralExitTxKind::Sweep)
+        .map(|t| Txid::from_str(&t.txid))
+        .expect("the built set terminates in a sweep")?;
+    let sweep = receiver
+        .fixtures
+        .bitcoind
+        .get_transaction(&sweep_txid)
+        .await?;
+    let swept = sweep
+        .output
+        .iter()
+        .find(|o| o.script_pubkey == destination.script_pubkey())
+        .map(|o| o.value.to_sat())
+        .expect("the sweep pays the destination");
+    assert_eq!(
+        built.recoverable_value_sat, LEAF_SATS,
+        "the whole transferred leaf is what was recovered"
+    );
+    assert_eq!(
+        swept,
+        CPFP_SATS + built.recoverable_value_sat - built.total_fee_sat,
+        "the transferred value lands at the destination"
+    );
+    Ok(())
+}
+
+/// A leaf sent from elsewhere is retired here, but only on the operators' proof
+/// that it went. The side-channel wallet and the SDK share an identity and keep
+/// separate stores, so they stand in for two devices: one sends the leaf, and
+/// the other has to work out that it is gone.
+///
+/// This is the only coverage of the purge against real operators, and what it
+/// pins is that they answer for a node its owner has changed: the proof is a
+/// lookup by node id, and a wallet asking after a leaf it no longer owns is
+/// exactly the case that has to come back. If it did not, nothing would ever be
+/// provable and every sent leaf would be kept forever.
+///
+/// It is also the only test here that fails when the refresh itself is broken.
+/// Every other exit test plans from the local store and treats a refresh error
+/// as non-fatal, so all of them pass against operators the refresh cannot even
+/// query; this one needs the leaf to have gone from the store, which takes a
+/// refresh that worked.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn test_leaf_sent_from_another_device_is_purged(
+    #[case] backend: SignerBackend,
+) -> Result<()> {
+    let (sender, receiver) = new_local_sdk_pair(backend).await?;
+    deposit_and_claim(&sender, Amount::from_sat(LEAF_SATS)).await?;
+    // Waiting on the SDK's balance is what puts the leaf in the SDK's own store,
+    // which is the store the purge later has to clear.
+    wait_for_balance(&sender.sdk, Some(LEAF_SATS), None, 60).await?;
+
+    // The other device sends it on, and the receiver's claim re-signs the refund
+    // at a lower timelock. That re-signed refund is the proof.
+    let receiver_address = receiver.spark_wallet.get_spark_address()?;
+    sender
+        .spark_wallet
+        .transfer(LEAF_SATS, &receiver_address, None)
+        .await?;
+    wait_for_balance(&receiver.sdk, Some(LEAF_SATS), None, 60).await?;
+
+    // Quoting refreshes, which finds the leaf gone from every operator and keeps
+    // it for its chain, and then purges it once they all report the replacement.
+    let quote = sender
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: fund_p2tr_utxo(&sender.fixtures.bitcoind, Amount::from_sat(CPFP_SATS))
+                .await?
+                .address
+                .to_string(),
+            selection: ExitLeafSelection::Auto,
+        })
+        .await?;
+    assert!(
+        quote.leaves.is_empty(),
+        "a leaf every operator reports as someone else's is not ours to exit, and \
+         a quote still offering it would spend fees driving a leaf that is gone"
+    );
+    assert_eq!(
+        quote.recoverable_value_sat, 0,
+        "nothing is recoverable once the leaf has been proven spent"
+    );
+    Ok(())
+}
+
 /// Re-running a completed exit re-drives nothing. `Auto` drops the exited leaf
 /// from the available set once the exit is mined, but it is still sourceable by
 /// id, so forcing it back in with `Specific` runs the build rather than the
@@ -678,7 +855,6 @@ async fn test_full_exit_and_sweep(#[case] backend: SignerBackend) -> Result<()> 
 /// scan would re-drive the refund (with a fresh CPFP child) and rebuild the sweep.
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
-#[ignore = "resume needs the leaf in local storage, but a refresh deletes it once no operator reports it Available; fix by querying the operators for more statuses, or by not deleting leaves absent from a refresh"]
 async fn test_completed_exit_rerun_redrives_nothing(#[case] backend: SignerBackend) -> Result<()> {
     let sdk = new_local_sdk(backend).await?;
     deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
@@ -759,7 +935,6 @@ async fn test_completed_exit_rerun_redrives_nothing(#[case] backend: SignerBacke
 /// with no CPFP child, while later entries stay unconfirmed with their children.
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
-#[ignore = "resume needs the leaf in local storage, but a refresh deletes it once no operator reports it Available; fix by querying the operators for more statuses, or by not deleting leaves absent from a refresh"]
 async fn test_first_package_confirmed_resumes(#[case] backend: SignerBackend) -> Result<()> {
     let sdk = new_local_sdk(backend).await?;
     deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
@@ -841,7 +1016,6 @@ async fn test_first_package_confirmed_resumes(#[case] backend: SignerBackend) ->
 /// this would fail if the sweep inputs fell back to the default (non-RBF) sequence.
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
-#[ignore = "resume needs the leaf in local storage, but a refresh deletes it once no operator reports it Available; fix by querying the operators for more statuses, or by not deleting leaves absent from a refresh"]
 async fn test_sweep_is_rbf_replaceable(#[case] backend: SignerBackend) -> Result<()> {
     let sdk = new_local_sdk(backend).await?;
     deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
@@ -2438,7 +2612,6 @@ async fn test_custom_funding_input(#[case] backend: SignerBackend) -> Result<()>
 /// the refund's CPFP resumes off the last confirmed node's on-chain change.
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
-#[ignore = "resume needs the leaf in local storage, but a refresh deletes it once no operator reports it Available; fix by querying the operators for more statuses, or by not deleting leaves absent from a refresh"]
 async fn test_all_nodes_confirmed_resumes_at_refund(#[case] backend: SignerBackend) -> Result<()> {
     let sdk = new_local_sdk(backend).await?;
     deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
@@ -2753,7 +2926,6 @@ async fn assert_resumed_all_mined(
 /// of the "not ours" path.
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
-#[ignore = "resume needs the leaf in local storage, but a refresh deletes it once no operator reports it Available; fix by querying the operators for more statuses, or by not deleting leaves absent from a refresh"]
 async fn test_node_confirmed_by_foreign_cpfp_resumes(#[case] backend: SignerBackend) -> Result<()> {
     let sdk = new_local_sdk(backend).await?;
     deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
@@ -2869,7 +3041,6 @@ async fn test_node_confirmed_by_foreign_cpfp_resumes(#[case] backend: SignerBack
 /// coverage.
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
-#[ignore = "resume needs the leaf in local storage, but a refresh deletes it once no operator reports it Available; fix by querying the operators for more statuses, or by not deleting leaves absent from a refresh"]
 async fn test_refund_confirmed_by_foreign_cpfp_is_adopted(
     #[case] backend: SignerBackend,
 ) -> Result<()> {

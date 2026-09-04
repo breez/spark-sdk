@@ -346,6 +346,24 @@ class TreeStoreMigrationManager {
              signing_public_key = data->'signing_keyshare'->>'public_key'`,
         ],
       },
+      {
+        // Serves the root half of leavesMissingExitChains, which otherwise
+        // seeks a leaf's ancestor rows and reads each one to find the
+        // parentless node. Partial, so it holds one entry per leaf whose chain
+        // reaches a root and can answer index-only.
+        name: "Index the root of each leaf's chain",
+        sql: [
+          `CREATE INDEX IF NOT EXISTS brz_idx_tree_ancestors_root
+             ON brz_tree_ancestors (user_id, leaf_id)
+             WHERE parent_node_id IS NULL`,
+        ],
+      },
+      {
+        name: "Keep a leaf no operator reports, for its exit chain",
+        sql: [
+          `ALTER TABLE brz_tree_leaves ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE`,
+        ],
+      },
     ];
   }
 }

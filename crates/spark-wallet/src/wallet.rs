@@ -1566,7 +1566,7 @@ impl SparkWallet {
     }
 
     /// Resolves an [`ExitLeafSelection`] into concrete leaf IDs and the
-    /// profitability filter. `Auto` sweeps every available leaf and keeps only
+    /// profitability filter. `Auto` sweeps every stored leaf and keeps only
     /// profitable ones; `Specific` exits exactly the requested leaves regardless
     /// of profitability.
     async fn resolve_leaf_selection(
@@ -1575,15 +1575,34 @@ impl SparkWallet {
     ) -> Result<(Vec<TreeNodeId>, UnilateralExitLeafFilter), SparkWalletError> {
         match selection {
             ExitLeafSelection::Auto => {
-                // Include non-available leaves (e.g. a mid-exit leaf the operators
-                // now report OnChain) so Auto resumes a partially-exited leaf, not
-                // just fresh ones. The planner skips any that turn out un-exitable
-                // under ProfitableOnly.
+                // Every stored leaf is one of ours, so Auto sweeps all of them and
+                // lets the planner drop the few that are unexitable (terminal status,
+                // no refund) or unprofitable. That includes the non-available ones (a
+                // mid-exit leaf the operators now report OnChain, so Auto resumes it)
+                // and the missing-from-operators ones, which are the operator-dropped
+                // case unilateral exit exists for: they count towards the balance, so
+                // omitting them would strand exactly the funds most at risk. The
+                // leaves kept only for their chain are in no bucket at all, so they
+                // are asked for separately: their row exists to be exitable, which
+                // takes something actually selecting them.
                 let leaves = self.tree_service.list_leaves().await?;
+                // Best-effort: a store that cannot list them still gets to exit
+                // everything else, which matters most on the path that exists for
+                // when things are already going wrong.
+                let kept_for_exit = self
+                    .tree_service
+                    .list_leaves_kept_for_exit()
+                    .await
+                    .unwrap_or_else(|e| {
+                        warn!("unilateral exit: listing leaves kept for exit failed: {e:?}");
+                        Vec::new()
+                    });
                 let mut leaf_ids: Vec<TreeNodeId> = leaves
                     .available
                     .into_iter()
                     .chain(leaves.not_available)
+                    .chain(leaves.available_missing_from_operators)
+                    .chain(kept_for_exit)
                     .map(|l| l.id)
                     .collect();
                 leaf_ids.sort();
@@ -1619,12 +1638,33 @@ impl SparkWallet {
                 "unilateral exit: resolving exit chains failed, planning from local state: {e:?}"
             );
         }
+        // The kept leaves are quoted and driven like any other, and the hourly
+        // purge is the only thing that retires the ones that really are gone. An
+        // exit planned between two of its rounds would otherwise price in leaves
+        // every operator already agrees left us, and then pay to drive them.
+        if let Err(e) = self.tree_service.purge_proven_spent_leaves().await {
+            warn!("unilateral exit: purging spent leaves failed: {e:?}");
+        }
     }
 
     /// Reads out the wallet's whole unilateral exit state: every stored leaf
     /// with its ancestor chain.
     pub async fn export_exit_state(&self) -> Result<ExitStateExport, SparkWalletError> {
-        let leaf_ids = self.tree_service.list_leaves().await?.leaf_ids();
+        let mut leaf_ids = self.tree_service.list_leaves().await?.leaf_ids();
+        // The leaves kept only for their chain are in no bucket, so they are
+        // asked for separately. They are the ones an export exists for: no
+        // operator reports them any more, which leaves the stored chain as the
+        // only way to get the funds back, and an export without them would look
+        // complete while omitting exactly what cannot be recovered any other way.
+        leaf_ids.extend(
+            self.tree_service
+                .list_leaves_kept_for_exit()
+                .await?
+                .into_iter()
+                .map(|leaf| leaf.id),
+        );
+        leaf_ids.sort();
+        leaf_ids.dedup();
         let pedigrees = self.tree_service.load_exit_chains(&leaf_ids).await?;
         debug!(
             leaves = leaf_ids.len(),
@@ -2851,6 +2891,11 @@ impl AutoOptimizationEventHandler for WalletAutoOptimizationEventHandler {
     }
 }
 
+/// How often to check whether the leaves kept for their exit chain have been
+/// spent. They leave the balance the moment the operators stop reporting them,
+/// so this only bounds how long their rows outlive them.
+const SPENT_LEAF_PURGE_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
 struct BackgroundProcessor {
     operator_pool: Arc<OperatorPool>,
     event_manager: Arc<EventManager>,
@@ -2963,6 +3008,20 @@ impl BackgroundProcessor {
 
         if let Err(e) = self.token_service.refresh_tokens_outputs().await {
             error!("Error refreshing token outputs on startup: {:?}", e);
+        }
+
+        {
+            let cloned_self = Arc::clone(self);
+            let cancellation_token_clone = cancellation_token.clone();
+            let span = tracing::Span::current();
+            tokio::spawn(
+                async move {
+                    cloned_self
+                        .run_spent_leaf_purge(cancellation_token_clone)
+                        .await;
+                }
+                .instrument(span),
+            );
         }
 
         // Start token output optimization background task if configured
@@ -3214,6 +3273,36 @@ impl BackgroundProcessor {
                 }
                 _ = cancellation_token.changed() => {
                     info!("Stopping exit state forwarding");
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Clears out the leaves kept only for their exit chain once the operators
+    /// can prove they were spent. Housekeeping, not book-keeping: such a leaf is
+    /// already out of the balance and out of selection, so nothing waits on this
+    /// and it runs on its own slow timer rather than on the refresh, which sits
+    /// on the payment path. When there is nothing lingering it costs one local
+    /// read and no network at all.
+    async fn run_spent_leaf_purge(&self, mut cancellation_token: watch::Receiver<()>) {
+        let run_purge = || async {
+            match self.tree_service.purge_proven_spent_leaves().await {
+                Ok(0) => {}
+                Ok(removed) => info!("Removed {removed} leaves proven spent"),
+                Err(e) => debug!("Could not check whether kept leaves were spent: {e:?}"),
+            }
+        };
+
+        run_purge().await;
+
+        loop {
+            tokio::select! {
+                () = tokio::time::sleep(SPENT_LEAF_PURGE_INTERVAL) => {
+                    run_purge().await;
+                }
+                _ = cancellation_token.changed() => {
+                    debug!("Stopping the spent-leaf purge");
                     break;
                 }
             }
@@ -4020,6 +4109,44 @@ mod tests {
         );
         let export = wallet.export_exit_state().await.unwrap();
         assert_eq!(chain_ids(&export.pedigrees), vec![vec!["leaf".to_string()]]);
+    }
+
+    /// A leaf no operator reports any more is in no bucket, so nothing that
+    /// walks the buckets sees it. It is also the one leaf whose stored chain is
+    /// the only way to get the funds back, so an export that missed it would
+    /// look complete while leaving out precisely what cannot be recovered any
+    /// other way.
+    #[macros::async_test_all]
+    async fn export_exit_state_includes_a_leaf_kept_only_for_its_chain() {
+        let store = Arc::new(InMemoryTreeStore::new());
+        let wallet = wallet_over(Arc::clone(&store) as Arc<dyn TreeStore>).await;
+        let owner = wallet.get_identity_public_key();
+
+        let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
+        let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+        seed_pedigrees(
+            store.as_ref(),
+            &[pedigree_owned_by(owner, leaf, vec![root])],
+        )
+        .await;
+
+        // A refresh no operator answered for marks the leaf, taking it out of
+        // the balance and out of every bucket. Its start comes from the store's
+        // own clock, and sits ahead of it, so the leaf just added counts as
+        // older than the refresh whatever clock the store runs on.
+        let refresh_start = store.now().await.unwrap() + Duration::from_secs(10);
+        store.set_leaves(&[], &[], refresh_start).await.unwrap();
+        assert!(
+            store.get_leaves().await.unwrap().leaf_ids().is_empty(),
+            "the leaf is in no bucket once it is kept only for its chain"
+        );
+
+        let export = wallet.export_exit_state().await.unwrap();
+        assert_eq!(
+            chain_ids(&export.pedigrees),
+            vec![vec!["root".to_string(), "leaf".to_string()]],
+            "the export carries the kept leaf and its whole chain"
+        );
     }
 
     #[macros::async_test_all]
