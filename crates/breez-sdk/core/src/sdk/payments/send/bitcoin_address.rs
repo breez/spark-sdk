@@ -438,4 +438,93 @@ mod tests {
             "Error should tell the caller to re-prepare: {msg}"
         );
     }
+
+    // ---- Budgets that do not land on a provider tier ----
+    //
+    // A budget from a real quote equals a tier. One from prepare's estimate
+    // clears it by a whole step plus part of another, the estimate being priced
+    // at a different vbyte size. Fees move in whole steps, so only the whole
+    // steps in that margin change which tier is affordable. The partial step is
+    // what makes a step down land under the budget rather than on it.
+
+    /// The gap between the provider's tiers, and the amount a 1 sat/vB move
+    /// shifts every tier by.
+    const TIER_STEP_SAT: u64 = 240;
+    /// The shape an estimated budget has: one whole step of tolerance, plus a
+    /// partial one.
+    const ESTIMATED_MARGIN_SAT: u64 = TIER_STEP_SAT + 50;
+
+    fn estimated_budget(
+        network_rate: u64,
+        speed: &OnchainConfirmationSpeed,
+        margin_sat: u64,
+    ) -> u64 {
+        fee_for_speed(&ladder(network_rate), speed).saturating_add(margin_sat)
+    }
+
+    fn speed_index(speed: &OnchainConfirmationSpeed) -> usize {
+        match speed {
+            OnchainConfirmationSpeed::Slow => 0,
+            OnchainConfirmationSpeed::Medium => 1,
+            OnchainConfirmationSpeed::Fast => 2,
+        }
+    }
+
+    #[test_all]
+    fn test_affordable_speed_steps_down_against_an_estimated_budget() {
+        // Two steps outrun the margin. The tier below fits, and fits with room
+        // to spare, since the budget does not sit on a tier boundary.
+        let budget = estimated_budget(3, &OnchainConfirmationSpeed::Fast, ESTIMATED_MARGIN_SAT);
+        let refreshed = ladder(5);
+        let chosen = affordable_speed(&refreshed, &OnchainConfirmationSpeed::Fast, budget).unwrap();
+
+        assert!(matches!(chosen, OnchainConfirmationSpeed::Medium));
+        assert!(
+            fee_for_speed(&refreshed, &chosen) < budget,
+            "a budget between tiers leaves the tier below strictly cheaper than it"
+        );
+    }
+
+    #[test_all]
+    fn test_affordable_speed_never_exceeds_an_estimated_budget() {
+        // The guarantee the caller is given: whatever comes back is within the
+        // fee prepare showed, and never faster than what they picked. It holds
+        // for any budget, so the margins span the whole band prepare is allowed
+        // to hand over rather than the values it derives at these rates.
+        let margins = [TIER_STEP_SAT, ESTIMATED_MARGIN_SAT, TIER_STEP_SAT * 2];
+        let (mut stepped_down, mut failed) = (0, 0);
+
+        for network_rate in 1..=10 {
+            for selected in &SPEEDS {
+                for margin_sat in margins {
+                    let budget = estimated_budget(network_rate, selected, margin_sat);
+                    for rise in 0..=5 {
+                        let refreshed = ladder(network_rate + rise);
+                        let Ok(chosen) = affordable_speed(&refreshed, selected, budget) else {
+                            failed += 1;
+                            continue;
+                        };
+                        if speed_index(&chosen) < speed_index(selected) {
+                            stepped_down += 1;
+                        }
+                        assert!(
+                            fee_for_speed(&refreshed, &chosen) <= budget,
+                            "at {network_rate} sat/vB with a {rise} step rise and a \
+                             {margin_sat} sat margin, {chosen:?} costs more than the \
+                             {budget} sat budget"
+                        );
+                        assert!(
+                            speed_index(&chosen) <= speed_index(selected),
+                            "at {network_rate} sat/vB with a {rise} step rise and a \
+                             {margin_sat} sat margin, {chosen:?} is faster than the \
+                             {selected:?} asked for"
+                        );
+                    }
+                }
+            }
+        }
+        // Without these the sweep would still pass if every case errored.
+        assert!(stepped_down > 0, "the sweep never exercised a step down");
+        assert!(failed > 0, "the sweep never exercised an unaffordable rise");
+    }
 }
