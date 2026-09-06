@@ -34,3 +34,5 @@ packages/wasm/breeztech-breez-sdk-spark-*.tgz
 .claude/worktrees/
 crates/breez-sdk/breez-bench/js/node_modules/
 crates/breez-sdk/wasm/js/node-tree-store/node_modules/
+
+.planning/debug/
