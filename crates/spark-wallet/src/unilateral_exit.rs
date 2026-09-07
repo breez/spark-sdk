@@ -1,10 +1,13 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+};
 
 use bitcoin::{Address, Amount, OutPoint, ScriptBuf, Transaction, TxOut, Txid};
 use spark::{
     services::{
-        CpfpInput, ServiceError, UnilateralExitPlan, build_cpfp_child, csv_timelock,
-        walk_unilateral_exit_chain,
+        CpfpChild, CpfpFundingShape, CpfpInput, ServiceError, UnilateralExitNodeFunding,
+        UnilateralExitPlan, build_cpfp_child, csv_timelock, walk_unilateral_exit_chain,
     },
     tree::{LeafPedigree, TreeNode, TreeNodeId, TreeNodeStatus},
     utils::transactions::is_ephemeral_anchor_output,
@@ -102,11 +105,13 @@ pub(crate) enum RefundState {
     Swept,
 }
 
-/// An already-confirmed fan-out adopted in place of building a fresh one.
+/// An already-confirmed fan-out adopted in place of building a fresh one. A
+/// branch takes as many of its outputs as it has funding inputs: one under
+/// per-branch funding, one per fee-bumped transaction under per-node funding.
 #[derive(Clone, Debug)]
 pub(crate) struct ConfirmedFanOut {
     pub tx: Transaction,
-    pub branch_outputs: HashMap<TreeNodeId, ConfirmedOutput>,
+    pub branch_outputs: HashMap<TreeNodeId, Vec<ConfirmedOutput>>,
 }
 
 /// An output already sitting on-chain, adopted instead of a freshly-built one.
@@ -344,15 +349,21 @@ fn interpret_chain(
         );
     }
 
-    resolve_confirmed_changes(
-        node_map,
-        plan,
-        &mut nodes,
-        &needs_change,
-        observed,
-        &mut unverifiable_confirmed,
-        &mut pending,
-    );
+    // Only chained funding needs a confirmed child's change resolved: under
+    // per-node funding the next child has a UTXO of its own, so there is nothing
+    // to carry forward and nothing a rebuild could double-spend.
+    match plan.funding_shape {
+        CpfpFundingShape::PerBranch => resolve_confirmed_changes(
+            node_map,
+            plan,
+            &mut nodes,
+            &needs_change,
+            observed,
+            &mut unverifiable_confirmed,
+            &mut pending,
+        ),
+        CpfpFundingShape::PerNode => {}
+    }
 
     flag_unverifiable_confirmation_branches(
         node_map,
@@ -393,6 +404,37 @@ fn interpret_chain(
                 }
             }
         }
+    }
+
+    // A per-node UTXO sits on the caller's own funding script for weeks and looks
+    // like any other coin to their wallet. One assigned to a still driven step and
+    // spent by anything but that step's own child cannot fund it any more, and the
+    // step's child cannot be resized around it, so the exit refuses and names the
+    // outpoint. A confirmed spend by the step's own child means the step confirmed,
+    // so the check waits for the walk to finish classifying: run a round early, a
+    // step the walk has not reached yet would read as driven and its own child's
+    // spend as a conflict. A step the walk could not verify is left alone too,
+    // and so is everything below it, which the walk never reached.
+    if plan.funding_shape == CpfpFundingShape::PerNode
+        && pending.is_empty()
+        && let Some(spent) = per_node_funding_conflict(
+            node_map,
+            plan,
+            &resolved_fan_out_outpoints(plan, fan_out.as_ref()),
+            &nodes,
+            &refunds,
+            &stopped,
+            &mut unverified,
+            observed,
+            &mut pending,
+        )
+    {
+        return Err(SparkWalletError::ServiceError(
+            ServiceError::FundingUtxoConflict {
+                txid: spent.txid.to_string(),
+                vout: spent.vout,
+            },
+        ));
     }
 
     trace!(
@@ -474,7 +516,8 @@ fn branch_has_tracked_change(
 /// otherwise emit) tells the caller not to broadcast until a later run confirms it on
 /// a healthy chain. Chain-verified confirmations with a resolved (or safely absent)
 /// change are left alone. Only `Unconfirmed` txs are upgraded, so confirmed nodes
-/// keep their state.
+/// keep their state. Under per-node funding no child reuses another's input, but
+/// the flag is still the only sign the confirmation below was a guess.
 fn flag_unverifiable_confirmation_branches(
     node_map: &HashMap<TreeNodeId, TreeNode>,
     plan: &UnilateralExitPlan,
@@ -616,11 +659,6 @@ fn interpret_fan_out(
     else {
         return Ok((None, true));
     };
-    let branch_leaf_ids: Vec<TreeNodeId> = plan
-        .per_branch_funding
-        .iter()
-        .map(|(id, _)| id.clone())
-        .collect();
     let conflict = || {
         SparkWalletError::ServiceError(ServiceError::FundingUtxoConflict {
             txid: funding_outpoint.txid.to_string(),
@@ -650,32 +688,154 @@ fn interpret_fan_out(
         ChainResult::Unavailable => return Ok((None, true)),
         _ => return Ok((None, false)),
     };
-    // Per-branch outputs pay the funding script in branch order (an optional change
-    // output pays it too, last); take one per branch.
-    let branch_outputs: HashMap<TreeNodeId, ConfirmedOutput> = tx
+    // A fan-out pays the funding script once per branch, or once per fee-bumped
+    // transaction under per-node funding, in plan order. A spender paying it fewer
+    // is not a fan-out of this plan at any fee rate.
+    let paid_to_funding: Vec<ConfirmedOutput> = tx
         .output
         .iter()
         .enumerate()
         .filter(|(_, o)| o.script_pubkey == funding_script)
-        .filter_map(|(vout, o)| u32::try_from(vout).ok().map(|v| (v, o.value.to_sat())))
-        .zip(branch_leaf_ids.iter())
-        .map(|((vout, value), leaf_id)| {
-            (
-                leaf_id.clone(),
-                ConfirmedOutput {
-                    outpoint: OutPoint {
-                        txid: spender,
-                        vout,
-                    },
-                    value,
+        .filter_map(|(vout, o)| {
+            u32::try_from(vout).ok().map(|vout| ConfirmedOutput {
+                outpoint: OutPoint {
+                    txid: spender,
+                    vout,
                 },
-            )
+                value: o.value.to_sat(),
+            })
         })
         .collect();
-    if branch_outputs.len() < branch_leaf_ids.len() {
+    // Per-branch funding takes the first output per branch from a wider one too.
+    // Per-node funding rejects a wider one: its outputs are matched to
+    // transactions by position, so adopting a fan-out built for a longer list would
+    // slide every transaction onto the output before it. Refusing asks the caller
+    // for fresh funding, the same recovery a fan-out too small for a higher fee
+    // rate already asks for.
+    let planned_outputs = fan_out_psbt.unsigned_tx.output.len();
+    let fits = match plan.funding_shape {
+        CpfpFundingShape::PerBranch => paid_to_funding.len() >= planned_outputs,
+        CpfpFundingShape::PerNode => paid_to_funding.len() == planned_outputs,
+    };
+    if !fits {
+        return Err(conflict());
+    }
+    // Each branch takes as many as it has funding inputs: one under per-branch
+    // funding, one per fee-bumped transaction under per-node funding.
+    let mut adopted = paid_to_funding.into_iter();
+    let mut branch_outputs: HashMap<TreeNodeId, Vec<ConfirmedOutput>> =
+        HashMap::with_capacity(plan.per_branch_funding.len());
+    for (leaf_id, funding) in &plan.per_branch_funding {
+        branch_outputs.insert(
+            leaf_id.clone(),
+            adopted.by_ref().take(funding.len()).collect(),
+        );
+    }
+    // A branch named twice would leave both sharing one entry, and so spending one
+    // fan-out output twice.
+    if branch_outputs.len() < plan.per_branch_funding.len() {
         return Err(conflict());
     }
     Ok((Some(ConfirmedFanOut { tx, branch_outputs }), false))
+}
+
+/// Whether the build would still fee-bump `target`: a node the chain has not
+/// resolved, or a refund not adopted, swept or driven direct.
+fn step_driven(
+    target: &UnilateralExitNodeFunding,
+    leaf_id: &TreeNodeId,
+    nodes: &HashMap<TreeNodeId, NodeState>,
+    refunds: &HashMap<TreeNodeId, RefundState>,
+) -> bool {
+    if target.refund {
+        !refunds.contains_key(leaf_id)
+    } else {
+        !nodes.contains_key(&target.node_id)
+    }
+}
+
+/// The real outpoints funding a per-node exit: the supplied UTXOs, or the
+/// adopted fan-out's outputs once one confirmed. Empty while a fresh fan-out is
+/// still to broadcast, when nothing on-chain backs the funding yet.
+fn resolved_fan_out_outpoints(
+    plan: &UnilateralExitPlan,
+    fan_out: Option<&ConfirmedFanOut>,
+) -> HashMap<TreeNodeId, Vec<OutPoint>> {
+    match (&plan.fan_out_psbt, fan_out) {
+        (None, _) => plan
+            .per_branch_funding
+            .iter()
+            .map(|(id, funding)| (id.clone(), funding.iter().map(|f| f.outpoint).collect()))
+            .collect(),
+        (Some(_), Some(confirmed)) => confirmed
+            .branch_outputs
+            .iter()
+            .map(|(id, outputs)| (id.clone(), outputs.iter().map(|o| o.outpoint).collect()))
+            .collect(),
+        (Some(_), None) => HashMap::new(),
+    }
+}
+
+/// The first per-node funding outpoint confirmed spent away from a step the
+/// build would still drive, driving the lookups through `pending`. An
+/// unconfirmed spender is the step's own replaceable child. A lookup that fails
+/// leaves the step unverified: its child is still built, but flagged, since the
+/// UTXO it spends may be gone. A branch the walk stopped in at a node it could
+/// not verify is not judged below that node: the walk classified nothing there,
+/// so a step whose own child confirmed would read as driven.
+#[allow(clippy::too_many_arguments)]
+fn per_node_funding_conflict(
+    node_map: &HashMap<TreeNodeId, TreeNode>,
+    plan: &UnilateralExitPlan,
+    outpoints: &HashMap<TreeNodeId, Vec<OutPoint>>,
+    nodes: &HashMap<TreeNodeId, NodeState>,
+    refunds: &HashMap<TreeNodeId, RefundState>,
+    stopped: &HashSet<TreeNodeId>,
+    unverified: &mut HashSet<TreeNodeId>,
+    observed: &ObservedIndex<'_>,
+    pending: &mut Vec<ChainQuery>,
+) -> Option<OutPoint> {
+    // The walk's own marks, before a failed funding lookup here adds to them: one
+    // on a shared ancestor must not silence the other branches below it.
+    let walk_unverified = unverified.clone();
+    for (leaf_id, named) in &plan.per_node_funding {
+        if stopped.contains(leaf_id) {
+            continue;
+        }
+        let Some(branch_outpoints) = outpoints.get(leaf_id) else {
+            continue;
+        };
+        let walk_stopped = node_map
+            .get(leaf_id)
+            .and_then(|leaf| walk_unilateral_exit_chain(node_map, leaf).ok())
+            .and_then(|chain| chain.into_iter().find(|n| !nodes.contains_key(&n.id)))
+            .is_some_and(|first_driven| walk_unverified.contains(&first_driven.id));
+        if walk_stopped {
+            continue;
+        }
+        for (target, outpoint) in named.iter().zip(branch_outpoints) {
+            let step_id = if target.refund {
+                leaf_id
+            } else {
+                &target.node_id
+            };
+            if unverified.contains(step_id) || !step_driven(target, leaf_id, nodes, refunds) {
+                continue;
+            }
+            let query = ChainQuery::Outspend(*outpoint);
+            match observed.get(&query) {
+                Some(ChainResult::Spend(Some(info))) if info.confirmed => {
+                    return Some(*outpoint);
+                }
+                Some(ChainResult::Unavailable) => {
+                    unverified.insert(step_id.clone());
+                }
+                None => pending.push(query),
+                _ => {}
+            }
+        }
+    }
+    None
 }
 
 /// Follows the confirmed spender from the deposit down one branch, classifying
@@ -953,6 +1113,7 @@ pub(crate) fn build_exit(
 
     let (fan_out, per_branch_funding) = resolve_fan_out_funding(plan, resolved)?;
     let fan_out_txid = fan_out.as_ref().map(|f| f.txid);
+    let node_funding = per_node_funding_by_txid(plan, &per_branch_funding)?;
 
     // A shared ancestor is bumped once, by the first branch that reaches it.
     let mut emitted: HashSet<Txid> = HashSet::new();
@@ -1025,14 +1186,23 @@ pub(crate) fn build_exit(
                     if let Some(p) = parent_txid {
                         depends_on.push(p);
                     }
-                    if first_in_branch && let Some(fo) = fan_out_txid {
+                    // Chained funding reaches the fan-out through the branch's first
+                    // child and carries its change from there. Per-node funding
+                    // spends a fan-out output at every step, so each driven step
+                    // waits on it in its own right.
+                    let waits_on_fan_out = match plan.funding_shape {
+                        CpfpFundingShape::PerBranch => first_in_branch,
+                        CpfpFundingShape::PerNode => node_state.is_none(),
+                    };
+                    if waits_on_fan_out && let Some(fo) = fan_out_txid {
                         depends_on.push(fo);
                     }
 
                     let to_sign = match node_state {
                         Some(NodeState::ConfirmedCpfp { change: Some(c) }) => {
-                            if let (Some(script), Some(weight)) =
-                                (&branch_funding_script, branch_funding_weight)
+                            if plan.funding_shape == CpfpFundingShape::PerBranch
+                                && let (Some(script), Some(weight)) =
+                                    (&branch_funding_script, branch_funding_weight)
                             {
                                 let mut combined = vec![CpfpInput {
                                     outpoint: c.outpoint,
@@ -1060,11 +1230,25 @@ pub(crate) fn build_exit(
                         }
                         Some(_) => None,
                         None => {
-                            let child =
-                                build_cpfp_child(&node.node_tx, &funding, fee_rate_sat_per_kw)?;
-                            cpfp_fee_sat = cpfp_fee_sat.saturating_add(child.fee_sat);
-                            funding = vec![child.change_input];
-                            Some(child.psbt)
+                            let child_funding =
+                                child_inputs(plan, &funding, &node_funding, node_txid, &node.id)?;
+                            let CpfpChild {
+                                psbt,
+                                change_input,
+                                fee_sat,
+                            } = build_cpfp_child(
+                                &node.node_tx,
+                                &child_funding,
+                                fee_rate_sat_per_kw,
+                            )?;
+                            cpfp_fee_sat = cpfp_fee_sat.saturating_add(fee_sat);
+                            // Chained funding hands the child's change to the next
+                            // one; a per-node child's change stays where it lands.
+                            match plan.funding_shape {
+                                CpfpFundingShape::PerBranch => funding = vec![change_input],
+                                CpfpFundingShape::PerNode => {}
+                            }
+                            Some(psbt)
                         }
                     };
                     let status = match node_state {
@@ -1145,7 +1329,9 @@ pub(crate) fn build_exit(
                 let refund_txid = refund_tx.compute_txid();
                 let refund_value = refund_output_value(&refund_tx, leaf_id)?;
                 let refund_csv = csv_timelock(&refund_tx);
-                let child = build_cpfp_child(&refund_tx, &funding, fee_rate_sat_per_kw)?;
+                let refund_funding =
+                    child_inputs(plan, &funding, &node_funding, refund_txid, leaf_id)?;
+                let child = build_cpfp_child(&refund_tx, &refund_funding, fee_rate_sat_per_kw)?;
                 cpfp_fee_sat = cpfp_fee_sat.saturating_add(child.fee_sat);
                 refund_outputs.push(RefundOutput {
                     outpoint: OutPoint {
@@ -1155,12 +1341,25 @@ pub(crate) fn build_exit(
                     leaf_id: leaf_id.clone(),
                     value: refund_value,
                 });
-                // The refund child's change is the branch's terminal sweep input.
-                cpfp_change_inputs.push(CpfpChangeInput {
-                    outpoint: child.change_input.outpoint,
-                    witness_utxo: child.change_input.witness_utxo.clone(),
-                    signed_input_weight: child.change_input.signed_input_weight,
-                });
+                // Chained funding ends in one change output per branch, which the
+                // sweep absorbs. Per-node funding instead leaves every child's change
+                // on the caller's own funding script, so the sweep pulls refunds only.
+                let mut refund_depends_on: Vec<Txid> = leaf_node_txid.into_iter().collect();
+                match plan.funding_shape {
+                    CpfpFundingShape::PerBranch => {
+                        cpfp_change_inputs.push(CpfpChangeInput {
+                            outpoint: child.change_input.outpoint,
+                            witness_utxo: child.change_input.witness_utxo.clone(),
+                            signed_input_weight: child.change_input.signed_input_weight,
+                        });
+                    }
+                    // The refund child spends a fan-out output of its own.
+                    CpfpFundingShape::PerNode => {
+                        if let Some(fo) = fan_out_txid {
+                            refund_depends_on.push(fo);
+                        }
+                    }
+                }
                 txs.push(ExitTx {
                     kind: ExitTxKind::Refund,
                     node_id: Some(leaf_id.clone()),
@@ -1168,7 +1367,7 @@ pub(crate) fn build_exit(
                     base_tx: refund_tx,
                     to_sign: Some(child.psbt),
                     csv_timelock_blocks: refund_csv,
-                    depends_on: leaf_node_txid.into_iter().collect(),
+                    depends_on: refund_depends_on,
                     status: ExitTxStatus::Unconfirmed,
                 });
             }
@@ -1204,6 +1403,80 @@ pub(crate) fn build_exit(
         cpfp_change_inputs,
         recoverable_value_sat,
         total_fee_sat,
+    })
+}
+
+/// The UTXO fee-bumping each transaction, keyed by that transaction's txid.
+/// Empty unless the plan funds per node. Keying on the txid rather than on a
+/// position keeps a step the chain reports confirmed, which the build skips,
+/// from shifting every UTXO after it onto the wrong transaction. Two named
+/// transactions sharing a txid are refused: their children would spend one UTXO,
+/// conflict, and leave whichever loses unbumpable on every rerun.
+fn per_node_funding_by_txid(
+    plan: &UnilateralExitPlan,
+    per_branch_funding: &[(TreeNodeId, Vec<CpfpInput>)],
+) -> Result<HashMap<Txid, CpfpInput>, SparkWalletError> {
+    let mut by_txid = HashMap::new();
+    if plan.funding_shape != CpfpFundingShape::PerNode {
+        return Ok(by_txid);
+    }
+    let named_by_leaf: HashMap<&TreeNodeId, &[UnilateralExitNodeFunding]> = plan
+        .per_node_funding
+        .iter()
+        .map(|(id, named)| (id, named.as_slice()))
+        .collect();
+    for (leaf_id, funding) in per_branch_funding {
+        let Some(named) = named_by_leaf.get(leaf_id) else {
+            continue;
+        };
+        if named.len() != funding.len() {
+            return Err(SparkWalletError::Generic(format!(
+                "Branch {leaf_id} names {} transactions but carries {} funding inputs",
+                named.len(),
+                funding.len()
+            )));
+        }
+        for (target, input) in named.iter().zip(funding) {
+            if by_txid.insert(target.txid, input.clone()).is_some() {
+                return Err(SparkWalletError::ValidationError(format!(
+                    "Two exit transactions share txid {}; the tree cannot be exited per node",
+                    target.txid
+                )));
+            }
+        }
+    }
+    Ok(by_txid)
+}
+
+/// The inputs a CPFP child for `txid` spends: the branch's chained funding, or
+/// the one UTXO named for that transaction.
+fn child_inputs<'a>(
+    plan: &UnilateralExitPlan,
+    chained: &'a [CpfpInput],
+    by_txid: &HashMap<Txid, CpfpInput>,
+    txid: Txid,
+    node_id: &TreeNodeId,
+) -> Result<Cow<'a, [CpfpInput]>, SparkWalletError> {
+    match plan.funding_shape {
+        CpfpFundingShape::PerBranch => Ok(Cow::Borrowed(chained)),
+        CpfpFundingShape::PerNode => {
+            Ok(Cow::Owned(vec![node_funding_for(by_txid, txid, node_id)?]))
+        }
+    }
+}
+
+/// The UTXO funding `txid`'s CPFP child. A per-node plan names every transaction
+/// its branches could bump, so an absent one means the plan and the tree it is
+/// built against have diverged, and the caller has to quote the exit again.
+fn node_funding_for(
+    by_txid: &HashMap<Txid, CpfpInput>,
+    txid: Txid,
+    node_id: &TreeNodeId,
+) -> Result<CpfpInput, SparkWalletError> {
+    by_txid.get(&txid).cloned().ok_or_else(|| {
+        SparkWalletError::ValidationError(format!(
+            "Node {node_id} still needs fee-bumping but the plan funds no transaction {txid}"
+        ))
     })
 }
 
@@ -1277,10 +1550,14 @@ fn resolve_fan_out_funding(
     };
 
     // Adopt the confirmed fan-out's real outputs. Each is fixed at the fee it was
-    // built with, so it must still cover the branch's CPFP fees plus terminal change
-    // dust.
+    // built with, so it must still cover what the branch spends from it.
     let leaf_by_id: HashMap<&TreeNodeId, _> =
         plan.selected_leaves.iter().map(|l| (&l.id, l)).collect();
+    let named_by_leaf: HashMap<&TreeNodeId, &[UnilateralExitNodeFunding]> = plan
+        .per_node_funding
+        .iter()
+        .map(|(id, named)| (id, named.as_slice()))
+        .collect();
     let mut per_branch = plan.per_branch_funding.clone();
     for (leaf_id, funding) in &mut per_branch {
         let adopted = confirmed.branch_outputs.get(leaf_id).ok_or_else(|| {
@@ -1288,28 +1565,66 @@ fn resolve_fan_out_funding(
                 "adopted fan-out is missing an output for branch {leaf_id}"
             ))
         })?;
-        // The fan-out funds each branch with exactly one output.
-        let Some(first) = funding.first_mut() else {
-            continue;
-        };
-        // Dust from the branch's own funding script, not the plan's change_dust_limit.
-        let dust = first.witness_utxo.script_pubkey.minimal_non_dust().to_sat();
-        // Gate on the physical CPFP floor (cpfp_cost), not the quote's estimated_cost:
-        // the sweep is paid from the swept value, not this output, so its sweep-fee
-        // headroom must not reject a higher-rate resume the CPFP fees can afford.
-        let required = leaf_by_id
-            .get(leaf_id)
-            .map_or(dust, |leaf| leaf.cpfp_cost.saturating_add(dust));
-        if adopted.value < required {
-            return Err(SparkWalletError::ServiceError(
-                ServiceError::InsufficientCpfpBudget {
-                    required_sat: required,
-                },
-            ));
+        match plan.funding_shape {
+            CpfpFundingShape::PerBranch => {
+                // The fan-out funds each branch with exactly one output.
+                let (Some(first), Some(adopted)) = (funding.first_mut(), adopted.first()) else {
+                    continue;
+                };
+                // Dust from the branch's own funding script, not the plan's
+                // change_dust_limit.
+                let dust = first.witness_utxo.script_pubkey.minimal_non_dust().to_sat();
+                // Gate on the physical CPFP floor (cpfp_cost), not the quote's
+                // estimated_cost: the sweep is paid from the swept value, not this
+                // output, so its sweep-fee headroom must not reject a higher-rate
+                // resume the CPFP fees can afford.
+                let required = leaf_by_id
+                    .get(leaf_id)
+                    .map_or(dust, |leaf| leaf.cpfp_cost.saturating_add(dust));
+                if adopted.value < required {
+                    return Err(SparkWalletError::ServiceError(
+                        ServiceError::InsufficientCpfpBudget {
+                            required_sat: required,
+                        },
+                    ));
+                }
+                first.outpoint = adopted.outpoint;
+                first.witness_utxo.value = Amount::from_sat(adopted.value);
+                funding.truncate(1);
+            }
+            CpfpFundingShape::PerNode => {
+                // One output per transaction, gated on what that transaction's own
+                // CPFP child costs rather than on the branch as a whole. A step the
+                // chain already resolved builds no child, so its output, spent or
+                // priced for an older rate, is adopted without the gate: holding a
+                // dead output to a fresh rate would refuse a resume the still
+                // driven steps can afford.
+                let named = named_by_leaf.get(leaf_id).copied().unwrap_or_default();
+                if adopted.len() != funding.len() || named.len() != funding.len() {
+                    return Err(SparkWalletError::Generic(format!(
+                        "adopted fan-out gives branch {leaf_id} {} outputs for {} inputs \
+                         funding {} transactions",
+                        adopted.len(),
+                        funding.len(),
+                        named.len()
+                    )));
+                }
+                let stopped = resolved.stopped.contains(leaf_id);
+                for ((input, adopted), target) in funding.iter_mut().zip(adopted).zip(named) {
+                    let driven = !stopped
+                        && step_driven(target, leaf_id, &resolved.nodes, &resolved.refunds);
+                    if driven && adopted.value < target.funding_sat {
+                        return Err(SparkWalletError::ServiceError(
+                            ServiceError::InsufficientCpfpBudget {
+                                required_sat: target.funding_sat,
+                            },
+                        ));
+                    }
+                    input.outpoint = adopted.outpoint;
+                    input.witness_utxo.value = Amount::from_sat(adopted.value);
+                }
+            }
         }
-        first.outpoint = adopted.outpoint;
-        first.witness_utxo.value = Amount::from_sat(adopted.value);
-        funding.truncate(1);
     }
 
     let fan_out = ExitTx {
@@ -1433,6 +1748,8 @@ mod exit_build_tests {
 
     fn plan_of(root: TreeNode, leaf: TreeNode) -> UnilateralExitPlan {
         UnilateralExitPlan {
+            funding_shape: CpfpFundingShape::PerBranch,
+            per_node_funding: vec![],
             selected_leaves: vec![UnilateralExitSelectedLeaf {
                 id: leaf.id.clone(),
                 value: 100_000,
@@ -1638,6 +1955,8 @@ mod exit_build_tests {
         };
         let fan_out_psbt = bitcoin::Psbt::from_unsigned_tx(fan_out_tx).unwrap();
         let plan = UnilateralExitPlan {
+            funding_shape: CpfpFundingShape::PerBranch,
+            per_node_funding: vec![],
             selected_leaves: vec![UnilateralExitSelectedLeaf {
                 id: leaf.id.clone(),
                 value: 100_000,
@@ -1840,6 +2159,8 @@ mod exit_build_tests {
         let leaf_a = node("leafA", Some("mid"), anchor_tx(3), Some(anchor_tx(4)));
         let leaf_b = node("leafB", Some("mid"), anchor_tx(5), Some(anchor_tx(6)));
         UnilateralExitPlan {
+            funding_shape: CpfpFundingShape::PerBranch,
+            per_node_funding: vec![],
             selected_leaves: vec![
                 UnilateralExitSelectedLeaf {
                     id: leaf_a.id.clone(),
@@ -1925,6 +2246,8 @@ mod exit_build_tests {
         let fan_out_psbt = bitcoin::Psbt::from_unsigned_tx(fan_out_tx).unwrap();
 
         UnilateralExitPlan {
+            funding_shape: CpfpFundingShape::PerBranch,
+            per_node_funding: vec![],
             selected_leaves: vec![
                 UnilateralExitSelectedLeaf {
                     id: leaf_a.id.clone(),
@@ -2132,6 +2455,7 @@ mod exit_build_tests {
                 std::slice::from_ref(&leaf_id),
                 UnilateralExitLeafFilter::ProfitableOnly,
                 vec![a, b],
+                CpfpFundingShape::PerBranch,
                 FEE_RATE,
                 dest_len,
             )
@@ -2144,6 +2468,7 @@ mod exit_build_tests {
                 std::slice::from_ref(&leaf_id),
                 UnilateralExitLeafFilter::ProfitableOnly,
                 vec![only],
+                CpfpFundingShape::PerBranch,
                 FEE_RATE,
                 dest_len,
             )
@@ -2210,6 +2535,7 @@ mod exit_build_tests {
             272,
             change_len,
             dust,
+            CpfpFundingShape::PerBranch,
             FEE_RATE,
             change_len,
         )
@@ -2228,6 +2554,7 @@ mod exit_build_tests {
             &[a_id, b_id],
             UnilateralExitLeafFilter::ProfitableOnly,
             inputs,
+            CpfpFundingShape::PerBranch,
             FEE_RATE,
             change_len,
         )
@@ -2245,6 +2572,456 @@ mod exit_build_tests {
         );
         let build = build_exit(&plan, &ResolvedExitState::default(), FEE_RATE).unwrap();
         assert_eq!(build.branches.len(), 2);
+    }
+
+    /// One funding UTXO per transaction, told apart by vout.
+    fn per_node_inputs(count: u32, value: u64) -> Vec<CpfpInput> {
+        (0..count)
+            .map(|vout| {
+                let mut input = funding(value);
+                input.outpoint.vout = vout;
+                input
+            })
+            .collect()
+    }
+
+    /// A root and its leaf, so the branch fee-bumps three transactions: the root's
+    /// node tx, the leaf's node tx, and the leaf's refund.
+    /// Two leaves under one shared root, so the branches fee-bump an unequal
+    /// number of transactions (3 and 2) and the fan-out has to be split between
+    /// them in plan order.
+    fn per_node_two_branch_plan(
+        inputs: Vec<CpfpInput>,
+    ) -> Result<UnilateralExitPlan, ServiceError> {
+        let root = node("root", None, anchor_tx(1), None);
+        let leaf_a = node("leafA", Some("root"), anchor_tx(2), Some(anchor_tx(3)));
+        let leaf_b = node("leafB", Some("root"), anchor_tx(4), Some(anchor_tx(5)));
+        plan_unilateral_exit(
+            to_node_map(vec![root, leaf_a, leaf_b]),
+            &[id("leafA"), id("leafB")],
+            UnilateralExitLeafFilter::All,
+            inputs,
+            CpfpFundingShape::PerNode,
+            FEE_RATE,
+            22,
+        )
+    }
+
+    fn per_node_plan(
+        inputs: Vec<CpfpInput>,
+        root_status: TreeNodeStatus,
+    ) -> Result<UnilateralExitPlan, ServiceError> {
+        let mut root = node("root", None, anchor_tx(1), None);
+        root.status = root_status;
+        let leaf = node("leaf", Some("root"), anchor_tx(2), Some(anchor_tx(3)));
+        plan_unilateral_exit(
+            to_node_map(vec![root, leaf]),
+            &[id("leaf")],
+            UnilateralExitLeafFilter::All,
+            inputs,
+            CpfpFundingShape::PerNode,
+            FEE_RATE,
+            22,
+        )
+    }
+
+    /// The outpoints each built CPFP child spends, child by child.
+    fn child_inputs(branch: &ExitBranch) -> Vec<Vec<OutPoint>> {
+        branch
+            .txs
+            .iter()
+            .filter_map(|tx| tx.to_sign.as_ref())
+            .map(|psbt| {
+                psbt.unsigned_tx
+                    .input
+                    .iter()
+                    .map(|i| i.previous_output)
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn build_per_node_funds_each_child_from_its_own_utxo() {
+        // The point of funding per node: no child spends another child's change, so
+        // a child's inputs are settled before the rate any other child is built at.
+        let inputs = per_node_inputs(3, 5_000);
+        let plan = per_node_plan(inputs.clone(), TreeNodeStatus::Available).unwrap();
+        assert!(plan.fan_out_psbt.is_none(), "an exact set needs no fan-out");
+
+        let build = build_exit(&plan, &ResolvedExitState::default(), FEE_RATE).unwrap();
+        let branch = &build.branches[0];
+        let spent = child_inputs(branch);
+        assert_eq!(spent.len(), 3, "root, leaf and refund each get a child");
+        assert_eq!(
+            spent.iter().map(|i| i[0]).collect::<Vec<_>>(),
+            inputs.iter().map(|i| i.outpoint).collect::<Vec<_>>(),
+            "each child spends the UTXO supplied for its own transaction"
+        );
+
+        let children: HashSet<Txid> = branch
+            .txs
+            .iter()
+            .filter_map(|tx| tx.to_sign.as_ref())
+            .map(|psbt| psbt.unsigned_tx.compute_txid())
+            .collect();
+        assert!(
+            spent
+                .iter()
+                .flatten()
+                .all(|outpoint| !children.contains(&outpoint.txid)),
+            "no child spends another child's output"
+        );
+    }
+
+    #[test]
+    fn build_per_node_leaves_every_change_off_the_sweep() {
+        // Each child writes its own change to the caller's funding script. Folding
+        // them all in would grow the sweep by one input per transaction, to recover
+        // outputs that are already spendable where they sit.
+        let plan = per_node_plan(per_node_inputs(3, 5_000), TreeNodeStatus::Available).unwrap();
+        let build = build_exit(&plan, &ResolvedExitState::default(), FEE_RATE).unwrap();
+
+        assert_eq!(build.refund_outputs.len(), 1);
+        assert!(
+            build.cpfp_change_inputs.is_empty(),
+            "per-node change stays on the funding script"
+        );
+    }
+
+    #[test]
+    fn build_per_node_keeps_a_confirmed_node_from_shifting_the_rest() {
+        // Funding is keyed by the transaction it pays for, not by position. A node
+        // the chain reports confirmed drops out of the build, and the UTXOs after it
+        // must stay on their own transactions rather than sliding up one.
+        let inputs = per_node_inputs(3, 5_000);
+        let plan = per_node_plan(inputs.clone(), TreeNodeStatus::Available).unwrap();
+        let resolved = ResolvedExitState {
+            nodes: [(id("root"), NodeState::ConfirmedCpfp { change: None })]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+
+        let build = build_exit(&plan, &resolved, FEE_RATE).unwrap();
+        let spent = child_inputs(&build.branches[0]);
+        assert_eq!(spent.len(), 2, "the confirmed root is not bumped again");
+        assert_eq!(
+            spent.iter().map(|i| i[0]).collect::<Vec<_>>(),
+            vec![inputs[1].outpoint, inputs[2].outpoint],
+            "the leaf and its refund keep their own UTXOs"
+        );
+    }
+
+    #[test]
+    fn build_per_node_names_a_transaction_it_has_no_funding_for() {
+        // A plan that funds fewer transactions than the branch bumps has to say which
+        // one it left out. Quietly reusing another transaction's UTXO would build two
+        // children spending it, and neither the caller nor the chain would say why.
+        let mut plan = per_node_plan(per_node_inputs(3, 5_000), TreeNodeStatus::Available).unwrap();
+        assert_eq!(plan.per_node_funding[0].1.len(), 3);
+        plan.per_node_funding[0].1.remove(0);
+        plan.per_branch_funding[0].1.remove(0);
+
+        let err = build_exit(&plan, &ResolvedExitState::default(), FEE_RATE)
+            .expect_err("the root still needs a child");
+        assert!(
+            matches!(err, SparkWalletError::ValidationError(ref m) if m.contains("root")),
+            "expected the unfunded node to be named, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn build_per_node_refuses_a_branch_whose_inputs_do_not_match_its_list() {
+        // The named transactions and the inputs are paired by position, so a plan
+        // carrying fewer inputs than it names cannot say which transaction each one
+        // pays for. Pairing what is there would leave the last transaction unfunded
+        // with nothing to say why, so the mismatch itself is the error.
+        let mut plan = per_node_plan(per_node_inputs(3, 5_000), TreeNodeStatus::Available).unwrap();
+        plan.per_branch_funding[0].1.pop();
+
+        let err = build_exit(&plan, &ResolvedExitState::default(), FEE_RATE)
+            .expect_err("three transactions, two inputs");
+        assert!(
+            matches!(err, SparkWalletError::Generic(ref m) if m.contains("names 3") && m.contains("2 funding")),
+            "expected the mismatch to be named, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn build_per_node_waits_on_the_fan_out_at_every_driven_step() {
+        // Each child spends a fan-out output of its own, so each one has to wait for
+        // the fan-out to confirm. Carrying that dependency only on the branch's first
+        // transaction would hand the caller a package they can broadcast as soon as
+        // its parent confirms, spending an output that does not exist yet.
+        let plan = per_node_plan(vec![funding(100_000)], TreeNodeStatus::Available).unwrap();
+        let fan_out_txid = plan
+            .fan_out_psbt
+            .as_ref()
+            .expect("one UTXO, three transactions")
+            .unsigned_tx
+            .compute_txid();
+
+        // The chain reports the root confirmed, so it is emitted but drives nothing.
+        let resolved = ResolvedExitState {
+            nodes: [(id("root"), NodeState::ConfirmedCpfp { change: None })]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let build = build_exit(&plan, &resolved, FEE_RATE).unwrap();
+
+        for tx in &build.branches[0].txs {
+            if tx.to_sign.is_none() {
+                continue;
+            }
+            assert!(
+                tx.depends_on.contains(&fan_out_txid),
+                "{:?} {} is funded by the fan-out but does not wait on it",
+                tx.kind,
+                tx.txid
+            );
+        }
+    }
+
+    #[test]
+    fn build_per_node_resume_ignores_a_confirmed_steps_fan_out_output() {
+        // A confirmed step builds no child, so its fan-out output, spent by the
+        // earlier run and fixed at that run's rate, cannot be held to the current
+        // rate: that would refuse a resume the still driven steps can afford.
+        let plan = per_node_plan(vec![funding(100_000)], TreeNodeStatus::Available).unwrap();
+        let psbt = plan
+            .fan_out_psbt
+            .clone()
+            .expect("one UTXO, three transactions");
+        let confirmed_txid = Txid::from_byte_array([0x99; 32]);
+        let output_values = [1, 5_000, 5_000];
+        let branch_outputs = |values: [u64; 3]| {
+            values
+                .iter()
+                .enumerate()
+                .map(|(vout, value)| ConfirmedOutput {
+                    outpoint: OutPoint {
+                        txid: confirmed_txid,
+                        vout: vout as u32,
+                    },
+                    value: *value,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // The root confirmed, so its one-sat output is dead and passes ungated.
+        let resolved = ResolvedExitState {
+            fan_out: Some(ConfirmedFanOut {
+                tx: psbt.unsigned_tx.clone(),
+                branch_outputs: [(id("leaf"), branch_outputs(output_values))]
+                    .into_iter()
+                    .collect(),
+            }),
+            nodes: [(id("root"), NodeState::ConfirmedCpfp { change: None })]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let build = build_exit(&plan, &resolved, FEE_RATE).unwrap();
+        let spent = child_inputs(&build.branches[0]);
+        assert_eq!(
+            spent.iter().map(|i| i[0].vout).collect::<Vec<_>>(),
+            vec![1, 2],
+            "the driven steps keep their own adopted outputs"
+        );
+
+        // Still driven, the same one-sat output is short and refused.
+        let resolved = ResolvedExitState {
+            fan_out: Some(ConfirmedFanOut {
+                tx: psbt.unsigned_tx.clone(),
+                branch_outputs: [(id("leaf"), branch_outputs(output_values))]
+                    .into_iter()
+                    .collect(),
+            }),
+            ..Default::default()
+        };
+        let err = build_exit(&plan, &resolved, FEE_RATE)
+            .expect_err("a driven step's output is held to its funding amount");
+        assert!(matches!(
+            err,
+            SparkWalletError::ServiceError(ServiceError::InsufficientCpfpBudget { .. })
+        ));
+    }
+
+    #[test]
+    fn build_per_node_refuses_funding_spent_from_under_a_driven_step() {
+        // A per-node UTXO looks like any other coin to the caller's wallet. Spent
+        // away from the still driven step it funds, the exit refuses and names the
+        // outpoint rather than handing back a child that cannot broadcast.
+        let inputs = per_node_inputs(3, 5_000);
+        let plan = per_node_plan(inputs.clone(), TreeNodeStatus::Available).unwrap();
+        let prepared = PreparedUnilateralExit {
+            plan,
+            leaf_refund_addresses: HashMap::new(),
+        };
+        let foreign = Txid::from_byte_array([0xaa; 32]);
+        let spend = |confirmed: bool| {
+            vec![Observation {
+                query: ChainQuery::Outspend(inputs[1].outpoint),
+                result: ChainResult::Spend(Some(SpendInfo {
+                    spender_txid: foreign,
+                    confirmed,
+                })),
+            }]
+        };
+
+        let err = build_unilateral_exit(&prepared, &spend(true), FEE_RATE)
+            .expect_err("a confirmed foreign spend of driven funding refuses");
+        assert!(
+            matches!(
+                err,
+                SparkWalletError::ServiceError(ServiceError::FundingUtxoConflict { .. })
+            ),
+            "expected FundingUtxoConflict, got: {err:?}"
+        );
+
+        // An unconfirmed spender is the step's own replaceable child.
+        assert!(build_unilateral_exit(&prepared, &spend(false), FEE_RATE).is_ok());
+    }
+
+    #[test]
+    fn build_per_node_fan_out_funds_one_transaction_per_output() {
+        // A caller with one coin fans it out per transaction. On resume the confirmed
+        // fan-out's outputs have to land back on the same transactions, in order.
+        let plan = per_node_plan(vec![funding(100_000)], TreeNodeStatus::Available).unwrap();
+        let psbt = plan
+            .fan_out_psbt
+            .clone()
+            .expect("one UTXO, three transactions");
+        assert_eq!(psbt.unsigned_tx.output.len(), 3);
+
+        let confirmed_txid = Txid::from_byte_array([0x99; 32]);
+        let branch_outputs = (0..3u32)
+            .map(|vout| ConfirmedOutput {
+                outpoint: OutPoint {
+                    txid: confirmed_txid,
+                    vout,
+                },
+                value: 5_000,
+            })
+            .collect();
+        let resolved = ResolvedExitState {
+            fan_out: Some(ConfirmedFanOut {
+                tx: psbt.unsigned_tx.clone(),
+                branch_outputs: [(id("leaf"), branch_outputs)].into_iter().collect(),
+            }),
+            ..Default::default()
+        };
+
+        let build = build_exit(&plan, &resolved, FEE_RATE).unwrap();
+        let spent = child_inputs(&build.branches[0]);
+        assert_eq!(
+            spent.iter().map(|i| i[0].vout).collect::<Vec<_>>(),
+            vec![0, 1, 2],
+            "each transaction keeps the fan-out output the plan gave it"
+        );
+        assert!(
+            spent.iter().all(|inputs| inputs[0].txid == confirmed_txid),
+            "the adopted fan-out replaces the planned outpoints"
+        );
+    }
+
+    #[test]
+    fn build_per_node_splits_a_fan_out_between_branches_of_unequal_length() {
+        // Two branches sharing a root fee-bump three transactions and two. A
+        // confirmed fan-out pays one output per transaction, in plan order, and
+        // each branch has to take its own run: hand one branch an output belonging
+        // to the other and two children would spend the same UTXO.
+        let plan = per_node_two_branch_plan(vec![funding(400_000)]).unwrap();
+        let named: Vec<usize> = plan.per_node_funding.iter().map(|(_, f)| f.len()).collect();
+        assert_eq!(named, vec![3, 2], "the shared root is named once, by leafA");
+        let psbt = plan
+            .fan_out_psbt
+            .clone()
+            .expect("one UTXO, five transactions");
+        assert_eq!(psbt.unsigned_tx.output.len(), 5);
+
+        let confirmed_txid = Txid::from_byte_array([0x99; 32]);
+        let adopted: Vec<ConfirmedOutput> = (0..5u32)
+            .map(|vout| ConfirmedOutput {
+                outpoint: OutPoint {
+                    txid: confirmed_txid,
+                    vout,
+                },
+                value: 60_000,
+            })
+            .collect();
+        let resolved = ResolvedExitState {
+            fan_out: Some(ConfirmedFanOut {
+                tx: psbt.unsigned_tx.clone(),
+                branch_outputs: [
+                    (id("leafA"), adopted[..3].to_vec()),
+                    (id("leafB"), adopted[3..].to_vec()),
+                ]
+                .into_iter()
+                .collect(),
+            }),
+            ..Default::default()
+        };
+
+        let build = build_exit(&plan, &resolved, FEE_RATE).unwrap();
+        let mut spent: Vec<u32> = build
+            .branches
+            .iter()
+            .flat_map(|b| b.txs.iter())
+            .filter_map(|tx| tx.to_sign.as_ref())
+            .map(|child| {
+                let funding_input = child
+                    .unsigned_tx
+                    .input
+                    .iter()
+                    .find(|i| i.previous_output.txid == confirmed_txid)
+                    .expect("each child spends an adopted output");
+                funding_input.previous_output.vout
+            })
+            .collect();
+        spent.sort_unstable();
+        assert_eq!(
+            spent,
+            vec![0, 1, 2, 3, 4],
+            "every adopted output funds exactly one child"
+        );
+    }
+
+    #[test]
+    fn build_per_node_refuses_an_adopted_fan_out_short_of_a_branch() {
+        // The interpreter only adopts a fan-out paying exactly the planned outputs, so
+        // a branch handed fewer than it has transactions is a resolved state no chain
+        // produced. Pairing what is there would fund the last transactions from
+        // nothing; the mismatch is refused instead.
+        let plan = per_node_plan(vec![funding(100_000)], TreeNodeStatus::Available).unwrap();
+        let psbt = plan
+            .fan_out_psbt
+            .clone()
+            .expect("one UTXO, three transactions");
+        let branch_outputs = (0..2u32)
+            .map(|vout| ConfirmedOutput {
+                outpoint: OutPoint {
+                    txid: Txid::from_byte_array([0x99; 32]),
+                    vout,
+                },
+                value: 5_000,
+            })
+            .collect();
+        let resolved = ResolvedExitState {
+            fan_out: Some(ConfirmedFanOut {
+                tx: psbt.unsigned_tx.clone(),
+                branch_outputs: [(id("leaf"), branch_outputs)].into_iter().collect(),
+            }),
+            ..Default::default()
+        };
+
+        let err = build_exit(&plan, &resolved, FEE_RATE).expect_err("two outputs, three inputs");
+        assert!(
+            matches!(err, SparkWalletError::Generic(ref m) if m.contains("2 outputs for 3 inputs")),
+            "expected the short branch to be named, got: {err:?}"
+        );
     }
 
     #[test]
@@ -2278,6 +3055,7 @@ mod exit_build_tests {
             &[a_id, b_id, c_id],
             UnilateralExitLeafFilter::ProfitableOnly,
             two(50_000),
+            CpfpFundingShape::PerBranch,
             FEE_RATE,
             change_len,
         )
@@ -2368,12 +3146,37 @@ mod interpret_tests {
         let leaf_id = leaf.id.clone();
         PreparedUnilateralExit {
             plan: UnilateralExitPlan {
+                funding_shape: CpfpFundingShape::PerBranch,
+                per_node_funding: vec![],
                 selected_leaves: vec![],
                 fan_out_psbt: None,
                 per_branch_funding: vec![(leaf_id.clone(), vec![])],
                 tree_nodes: to_node_map(vec![root, leaf]),
             },
             leaf_refund_addresses: [(leaf_id, leaf_addr())].into_iter().collect(),
+        }
+    }
+
+    /// An output paying the shared test funding script.
+    fn funding_output(value: u64) -> TxOut {
+        TxOut {
+            value: Amount::from_sat(value),
+            script_pubkey: leaf_addr().script_pubkey(),
+        }
+    }
+
+    /// A transaction spending the funding outpoint into `outputs`, the shape a
+    /// fan-out takes on-chain.
+    fn spend_funding_with(funding_outpoint: OutPoint, outputs: Vec<TxOut>) -> Transaction {
+        Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: funding_outpoint,
+                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+                ..Default::default()
+            }],
+            output: outputs,
         }
     }
 
@@ -2510,6 +3313,492 @@ mod interpret_tests {
         ));
     }
 
+    /// A per-node root-to-leaf plan over real spending transactions, with every
+    /// UTXO named, so the walk and the funding checks run as they would on-chain.
+    fn per_node_prepared(
+        root_tx: Transaction,
+        leaf_tx: Transaction,
+        refund_tx: Transaction,
+    ) -> PreparedUnilateralExit {
+        let root = treenode("root", None, root_tx.clone(), 0);
+        let mut leaf = treenode("leaf", Some("root"), leaf_tx.clone(), 0);
+        leaf.refund_tx = Some(refund_tx.clone());
+        let leaf_id = leaf.id.clone();
+        let named = |node: &str, txid: Txid, refund: bool| UnilateralExitNodeFunding {
+            leaf_id: leaf_id.clone(),
+            node_id: id(node),
+            txid,
+            refund,
+            funding_sat: 5_000,
+        };
+        let input = |vout: u32| CpfpInput {
+            outpoint: OutPoint {
+                txid: Txid::from_byte_array([7u8; 32]),
+                vout,
+            },
+            witness_utxo: funding_output(5_000),
+            signed_input_weight: 272,
+        };
+        PreparedUnilateralExit {
+            plan: UnilateralExitPlan {
+                funding_shape: CpfpFundingShape::PerNode,
+                per_node_funding: vec![(
+                    leaf_id.clone(),
+                    vec![
+                        named("root", root_tx.compute_txid(), false),
+                        named("leaf", leaf_tx.compute_txid(), false),
+                        named("leaf", refund_tx.compute_txid(), true),
+                    ],
+                )],
+                selected_leaves: vec![],
+                fan_out_psbt: None,
+                per_branch_funding: vec![(leaf_id.clone(), vec![input(0), input(1), input(2)])],
+                tree_nodes: to_node_map(vec![root, leaf]),
+            },
+            leaf_refund_addresses: [(leaf_id, leaf_addr())].into_iter().collect(),
+        }
+    }
+
+    /// Drives [`next_chain_queries`] to completion against `chain`, one round at
+    /// a time, the way the SDK's observation loop does.
+    fn drive(
+        prepared: &PreparedUnilateralExit,
+        chain: impl Fn(&ChainQuery) -> ChainResult,
+    ) -> Result<Vec<Observation>, SparkWalletError> {
+        let mut observed = Vec::new();
+        loop {
+            let queries = next_chain_queries(prepared, &observed)?;
+            if queries.is_empty() {
+                return Ok(observed);
+            }
+            for query in queries {
+                let result = chain(&query);
+                observed.push(Observation { query, result });
+            }
+        }
+    }
+
+    #[test]
+    fn interpret_per_node_resume_waits_for_the_walk_before_judging_funding() {
+        // The walk classifies one level per round while every funding UTXO can be
+        // queried at once. A step whose own child confirmed in an earlier run has
+        // its UTXO spent, and read as driven before the walk reaches it that spend
+        // would look like a conflict. The check waits for the walk instead.
+        let deposit = OutPoint {
+            txid: Txid::from_byte_array([1u8; 32]),
+            vout: 0,
+        };
+        // Each transaction carries the anchor its child spends.
+        let anchored = |mut tx: Transaction| {
+            tx.output.push(TxOut {
+                value: Amount::from_sat(0),
+                script_pubkey: ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]),
+            });
+            tx
+        };
+        let root_tx = anchored(tx_spending(deposit, 1));
+        let root_txid = root_tx.compute_txid();
+        let leaf_tx = anchored(tx_spending(
+            OutPoint {
+                txid: root_txid,
+                vout: 0,
+            },
+            2,
+        ));
+        let leaf_txid = leaf_tx.compute_txid();
+        let refund_tx = anchored(tx_spending(
+            OutPoint {
+                txid: leaf_txid,
+                vout: 0,
+            },
+            3,
+        ));
+        let prepared = per_node_prepared(root_tx, leaf_tx, refund_tx);
+        let funding = |vout: u32| OutPoint {
+            txid: Txid::from_byte_array([7u8; 32]),
+            vout,
+        };
+        let confirmed_by = |spender: Txid| {
+            ChainResult::Spend(Some(SpendInfo {
+                spender_txid: spender,
+                confirmed: true,
+            }))
+        };
+        let root_child = Txid::from_byte_array([0xa1; 32]);
+        let leaf_child = Txid::from_byte_array([0xa2; 32]);
+
+        // Root and leaf confirmed through their own children, which spent the
+        // first two UTXOs; the refund is still waiting out its timelock.
+        let chain = move |query: &ChainQuery| match query {
+            ChainQuery::Outspend(op) if *op == deposit => confirmed_by(root_txid),
+            ChainQuery::Outspend(op) if op.txid == root_txid && op.vout == 0 => {
+                confirmed_by(leaf_txid)
+            }
+            ChainQuery::Outspend(op) if *op == funding(0) => confirmed_by(root_child),
+            ChainQuery::Outspend(op) if *op == funding(1) => confirmed_by(leaf_child),
+            ChainQuery::Outspend(_) => ChainResult::Spend(None),
+            ChainQuery::RefundAddress { .. } => ChainResult::AddressUtxos(vec![]),
+            ChainQuery::Transaction(_) => ChainResult::Unavailable,
+        };
+        let observed = drive(&prepared, chain).expect("a resume over confirmed steps");
+        let build = build_unilateral_exit(&prepared, &observed, 250).unwrap();
+        let driven: Vec<_> = build.branches[0]
+            .txs
+            .iter()
+            .filter(|tx| tx.to_sign.is_some())
+            .map(|tx| tx.kind)
+            .collect();
+        assert_eq!(
+            driven,
+            vec![ExitTxKind::Refund],
+            "only the refund is left to drive"
+        );
+
+        // The refund's own UTXO spent away by something else is a conflict, found
+        // once the walk has finished.
+        let foreign = Txid::from_byte_array([0xee; 32]);
+        let chain = move |query: &ChainQuery| match query {
+            ChainQuery::Outspend(op) if *op == funding(2) => confirmed_by(foreign),
+            other => chain(other),
+        };
+        let err = drive(&prepared, chain).expect_err("the refund's funding is gone");
+        assert!(
+            matches!(
+                err,
+                SparkWalletError::ServiceError(ServiceError::FundingUtxoConflict { vout: 2, .. })
+            ),
+            "expected the refund's outpoint named, got: {err:?}"
+        );
+
+        // A lookup that fails cannot say either way, so the refund is still built,
+        // flagged unverified rather than handed back as a plain unconfirmed step.
+        let chain = move |query: &ChainQuery| match query {
+            ChainQuery::Outspend(op) if *op == funding(2) => ChainResult::Unavailable,
+            other => chain(other),
+        };
+        let observed = drive(&prepared, chain).expect("an unverifiable funding still builds");
+        let build = build_unilateral_exit(&prepared, &observed, 250).unwrap();
+        let refund = build.branches[0]
+            .txs
+            .iter()
+            .find(|tx| tx.kind == ExitTxKind::Refund)
+            .unwrap();
+        assert!(refund.to_sign.is_some());
+        assert_eq!(refund.status, ExitTxStatus::Unverified);
+
+        // The walk stopping at a lookup it could not make classifies nothing below
+        // it, so the leaf, confirmed through its own child in truth, reads as
+        // driven. Its spent UTXO is no conflict: the branch is built from the
+        // unverified node down, flagged there, rather than refused.
+        let chain = move |query: &ChainQuery| match query {
+            ChainQuery::Outspend(op) if *op == deposit => ChainResult::Unavailable,
+            other => chain(other),
+        };
+        let observed = drive(&prepared, chain).expect("an unverifiable walk still builds");
+        let build = build_unilateral_exit(&prepared, &observed, 250).unwrap();
+        let statuses: Vec<_> = build.branches[0]
+            .txs
+            .iter()
+            .filter(|tx| tx.to_sign.is_some())
+            .map(|tx| (tx.kind, tx.status))
+            .collect();
+        assert_eq!(
+            statuses,
+            vec![
+                (ExitTxKind::Node, ExitTxStatus::Unverified),
+                (ExitTxKind::Node, ExitTxStatus::Unconfirmed),
+                (ExitTxKind::Refund, ExitTxStatus::Unconfirmed),
+            ],
+            "every step from the unverified node down is driven"
+        );
+    }
+
+    #[test]
+    fn interpret_per_branch_still_takes_one_output_per_branch_from_a_wider_fan_out() {
+        // Per-branch adoption is unchanged by the second shape: a confirmed fan-out
+        // paying the funding script more times than the plan has branches is still
+        // adopted, one output per branch in plan order, as it is on a narrowed
+        // re-quote. Only a per-node plan refuses a wider one.
+        let funding_outpoint = OutPoint {
+            txid: Txid::from_byte_array([9u8; 32]),
+            vout: 0,
+        };
+        let mut fan_out_psbt = bitcoin::Psbt::from_unsigned_tx(spend_funding_with(
+            funding_outpoint,
+            vec![funding_output(5_000)],
+        ))
+        .unwrap();
+        fan_out_psbt.inputs[0].witness_utxo = Some(funding_output(20_000));
+        let prepared = PreparedUnilateralExit {
+            plan: UnilateralExitPlan {
+                funding_shape: CpfpFundingShape::PerBranch,
+                per_node_funding: vec![],
+                selected_leaves: vec![],
+                fan_out_psbt: Some(fan_out_psbt),
+                per_branch_funding: vec![(
+                    id("a"),
+                    vec![CpfpInput {
+                        outpoint: funding_outpoint,
+                        witness_utxo: funding_output(5_000),
+                        signed_input_weight: 272,
+                    }],
+                )],
+                tree_nodes: to_node_map(vec![]),
+            },
+            leaf_refund_addresses: HashMap::new(),
+        };
+        let observe = |outputs: usize| {
+            let confirmed =
+                spend_funding_with(funding_outpoint, vec![funding_output(5_000); outputs]);
+            let txid = confirmed.compute_txid();
+            vec![
+                spent(funding_outpoint, txid),
+                Observation {
+                    query: ChainQuery::Transaction(txid),
+                    result: ChainResult::Transaction(confirmed),
+                },
+            ]
+        };
+
+        for outputs in [1, 2, 3] {
+            let interp = interpret_chain(&prepared, &observe(outputs))
+                .unwrap_or_else(|e| panic!("{outputs} outputs adopted under per-branch: {e}"));
+            let adopted = &interp
+                .resolved
+                .fan_out
+                .expect("fan-out adopted")
+                .branch_outputs[&id("a")];
+            assert_eq!(
+                adopted.iter().map(|o| o.outpoint.vout).collect::<Vec<_>>(),
+                vec![0],
+                "the branch takes the first output"
+            );
+        }
+    }
+
+    #[test]
+    fn interpret_rejects_a_branch_named_twice() {
+        // Two branches under one leaf id would resolve to the same fan-out output and
+        // spend it twice, so the adoption refuses rather than hand that back.
+        let funding_outpoint = OutPoint {
+            txid: Txid::from_byte_array([9u8; 32]),
+            vout: 0,
+        };
+        let output = funding_output;
+        let spend_funding = |outputs: Vec<TxOut>| spend_funding_with(funding_outpoint, outputs);
+
+        let mut fan_out_psbt =
+            bitcoin::Psbt::from_unsigned_tx(spend_funding(vec![output(5_000), output(5_000)]))
+                .unwrap();
+        fan_out_psbt.inputs[0].witness_utxo = Some(output(20_000));
+        let confirmed = spend_funding(vec![output(5_000), output(5_000)]);
+        let confirmed_txid = confirmed.compute_txid();
+
+        let prepared = PreparedUnilateralExit {
+            plan: UnilateralExitPlan {
+                funding_shape: CpfpFundingShape::PerBranch,
+                per_node_funding: vec![],
+                selected_leaves: vec![],
+                fan_out_psbt: Some(fan_out_psbt),
+                per_branch_funding: vec![(id("a"), vec![]), (id("a"), vec![])],
+                tree_nodes: to_node_map(vec![]),
+            },
+            leaf_refund_addresses: HashMap::new(),
+        };
+        let observed = vec![
+            spent(funding_outpoint, confirmed_txid),
+            Observation {
+                query: ChainQuery::Transaction(confirmed_txid),
+                result: ChainResult::Transaction(confirmed),
+            },
+        ];
+
+        assert!(
+            matches!(
+                interpret_chain(&prepared, &observed),
+                Err(SparkWalletError::ServiceError(
+                    ServiceError::FundingUtxoConflict { .. }
+                ))
+            ),
+            "one leaf id cannot fund two branches"
+        );
+    }
+
+    #[test]
+    fn interpret_per_node_adopts_a_fan_out_across_branches_and_watches_its_outputs() {
+        // A confirmed fan-out pays one output per fee-bumped transaction, and two
+        // branches of unequal length take their own runs of it in plan order. Those
+        // adopted outputs are what the funding watch then reads: one spent from
+        // under a still driven step refuses the resume, exactly as a supplied UTXO
+        // would. Nothing else drives this arm, so a fan-out that adopted into the
+        // wrong branch, or a watch that read the pre-fan-out outpoints, would pass
+        // every other test in this file.
+        let funding_outpoint = OutPoint {
+            txid: Txid::from_byte_array([9u8; 32]),
+            vout: 0,
+        };
+        let output = funding_output;
+        let mut fan_out_psbt = bitcoin::Psbt::from_unsigned_tx(spend_funding_with(
+            funding_outpoint,
+            vec![output(5_000); 3],
+        ))
+        .unwrap();
+        fan_out_psbt.inputs[0].witness_utxo = Some(output(20_000));
+        let input_at = |vout: u32| CpfpInput {
+            outpoint: OutPoint {
+                txid: funding_outpoint.txid,
+                vout,
+            },
+            witness_utxo: output(5_000),
+            signed_input_weight: 272,
+        };
+        let target = |leaf: &str, node: &str, refund: bool| UnilateralExitNodeFunding {
+            leaf_id: id(leaf),
+            node_id: id(node),
+            txid: Txid::from_byte_array([u8::try_from(node.len()).unwrap(); 32]),
+            refund,
+            funding_sat: 5_000,
+        };
+        let prepared = PreparedUnilateralExit {
+            plan: UnilateralExitPlan {
+                funding_shape: CpfpFundingShape::PerNode,
+                // leafA fee-bumps two transactions, leafB one.
+                per_node_funding: vec![
+                    (
+                        id("a"),
+                        vec![target("a", "rootnode", false), target("a", "a", true)],
+                    ),
+                    (id("b"), vec![target("b", "b", true)]),
+                ],
+                selected_leaves: vec![],
+                fan_out_psbt: Some(fan_out_psbt),
+                per_branch_funding: vec![
+                    (id("a"), vec![input_at(0), input_at(1)]),
+                    (id("b"), vec![input_at(2)]),
+                ],
+                tree_nodes: to_node_map(vec![]),
+            },
+            leaf_refund_addresses: HashMap::new(),
+        };
+
+        let confirmed = spend_funding_with(funding_outpoint, vec![output(5_000); 3]);
+        let confirmed_txid = confirmed.compute_txid();
+        let adopted = |vout: u32| OutPoint {
+            txid: confirmed_txid,
+            vout,
+        };
+        let seen = vec![
+            spent(funding_outpoint, confirmed_txid),
+            Observation {
+                query: ChainQuery::Transaction(confirmed_txid),
+                result: ChainResult::Transaction(confirmed),
+            },
+        ];
+
+        let Ok(interp) = interpret_chain(&prepared, &seen) else {
+            panic!("the fan-out is adopted");
+        };
+        let branch_outputs = &interp.resolved.fan_out.as_ref().unwrap().branch_outputs;
+        assert_eq!(
+            branch_outputs[&id("a")]
+                .iter()
+                .map(|o| o.outpoint.vout)
+                .collect::<Vec<_>>(),
+            vec![0, 1],
+            "the longer branch takes the first run of outputs"
+        );
+        assert_eq!(
+            branch_outputs[&id("b")]
+                .iter()
+                .map(|o| o.outpoint.vout)
+                .collect::<Vec<_>>(),
+            vec![2],
+            "the next branch continues where it left off"
+        );
+
+        // The watch runs over the adopted outputs, not the planned ones: the last
+        // one, funding leafB's still driven refund, is spent away by a stranger.
+        let foreign = Txid::from_byte_array([0xee; 32]);
+        let mut with_conflict = seen.clone();
+        with_conflict.push(spent(adopted(2), foreign));
+        let Err(err) = interpret_chain(&prepared, &with_conflict) else {
+            panic!("leafB's adopted funding is gone, the resume must refuse");
+        };
+        assert!(
+            matches!(
+                err,
+                SparkWalletError::ServiceError(ServiceError::FundingUtxoConflict { vout: 2, ref txid })
+                    if txid == &confirmed_txid.to_string()
+            ),
+            "expected the adopted outpoint named, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn interpret_rejects_a_fan_out_wider_than_the_plan_under_per_node() {
+        // Per-node outputs are matched to transactions by position, and an Auto
+        // re-quote that dropped a leaf names fewer of them. A wider fan-out from
+        // the earlier run would slide the survivors onto the wrong outputs, so it
+        // is refused; naming the original leaves restores the width.
+        let funding_outpoint = OutPoint {
+            txid: Txid::from_byte_array([9u8; 32]),
+            vout: 0,
+        };
+        let output = funding_output;
+        let spend_funding = |outputs: Vec<TxOut>| spend_funding_with(funding_outpoint, outputs);
+
+        // The plan now fee-bumps two transactions, so it plans a two-output fan-out.
+        let mut fan_out_psbt =
+            bitcoin::Psbt::from_unsigned_tx(spend_funding(vec![output(5_000), output(5_000)]))
+                .unwrap();
+        fan_out_psbt.inputs[0].witness_utxo = Some(output(20_000));
+        let branch_funding = vec![CpfpInput {
+            outpoint: funding_outpoint,
+            witness_utxo: output(5_000),
+            signed_input_weight: 272,
+        }];
+
+        // The confirmed one from the earlier run fanned out three.
+        let confirmed = spend_funding(vec![output(5_000), output(5_000), output(5_000)]);
+        let confirmed_txid = confirmed.compute_txid();
+        let observed = vec![
+            spent(funding_outpoint, confirmed_txid),
+            Observation {
+                query: ChainQuery::Transaction(confirmed_txid),
+                result: ChainResult::Transaction(confirmed),
+            },
+        ];
+
+        let prepared_of = |shape| PreparedUnilateralExit {
+            plan: UnilateralExitPlan {
+                funding_shape: shape,
+                per_node_funding: vec![],
+                selected_leaves: vec![],
+                fan_out_psbt: Some(fan_out_psbt.clone()),
+                per_branch_funding: vec![
+                    (id("a"), branch_funding.clone()),
+                    (id("b"), branch_funding.clone()),
+                ],
+                tree_nodes: to_node_map(vec![]),
+            },
+            leaf_refund_addresses: HashMap::new(),
+        };
+
+        assert!(
+            matches!(
+                interpret_chain(&prepared_of(CpfpFundingShape::PerNode), &observed),
+                Err(SparkWalletError::ServiceError(
+                    ServiceError::FundingUtxoConflict { .. }
+                ))
+            ),
+            "per-node funding must refuse a fan-out built for more transactions"
+        );
+        assert!(
+            interpret_chain(&prepared_of(CpfpFundingShape::PerBranch), &observed).is_ok(),
+            "per-branch funding still takes one output per branch"
+        );
+    }
+
     #[test]
     fn interpret_flags_funding_conflict() {
         let funding_outpoint = OutPoint {
@@ -2545,6 +3834,8 @@ mod interpret_tests {
 
         let prepared = PreparedUnilateralExit {
             plan: UnilateralExitPlan {
+                funding_shape: CpfpFundingShape::PerBranch,
+                per_node_funding: vec![],
                 selected_leaves: vec![],
                 fan_out_psbt: Some(fan_out_psbt),
                 per_branch_funding: vec![(id("a"), vec![]), (id("b"), vec![])],
@@ -3080,6 +4371,8 @@ mod interpret_tests {
         };
         let prepared = PreparedUnilateralExit {
             plan: UnilateralExitPlan {
+                funding_shape: CpfpFundingShape::PerBranch,
+                per_node_funding: vec![],
                 selected_leaves: vec![],
                 fan_out_psbt: None,
                 per_branch_funding: vec![(leaf_id.clone(), vec![funding_input])],
@@ -3187,6 +4480,8 @@ mod interpret_tests {
         };
         let prepared = PreparedUnilateralExit {
             plan: UnilateralExitPlan {
+                funding_shape: CpfpFundingShape::PerBranch,
+                per_node_funding: vec![],
                 selected_leaves: vec![],
                 fan_out_psbt: None,
                 per_branch_funding: vec![(leaf_id.clone(), vec![funding_input])],

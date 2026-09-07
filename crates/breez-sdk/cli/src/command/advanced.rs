@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use breez_sdk_spark::signer::single_key_cpfp_signer;
 use breez_sdk_spark::{
-    BreezSdk, ConfirmationStatus, CpfpFundingKind, CpfpInput, ExitLeafSelection,
+    BreezSdk, ConfirmationStatus, CpfpFundingKind, CpfpFundingShape, CpfpInput, ExitLeafSelection,
     ImportUnilateralExitStateRequest, PrepareUnilateralExitRequest, UnilateralExitRequest,
     UnilateralExitResponse,
 };
@@ -28,6 +28,22 @@ impl From<FundingKindArg> for CpfpFundingKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum FundingShapeArg {
+    PerBranch,
+    PerNode,
+}
+
+impl From<FundingShapeArg> for CpfpFundingShape {
+    fn from(shape: FundingShapeArg) -> Self {
+        match shape {
+            FundingShapeArg::PerBranch => CpfpFundingShape::PerBranch,
+            FundingShapeArg::PerNode => CpfpFundingShape::PerNode,
+        }
+    }
+}
+
 /// Expert-only commands that build raw transactions for you to broadcast
 /// yourself. Misuse can strand or lose funds.
 #[derive(Clone, Debug, Subcommand)]
@@ -41,6 +57,11 @@ pub enum AdvancedCommand {
         /// Funding UTXO kind.
         #[arg(long, value_enum, default_value_t = FundingKindArg::P2tr)]
         funding_kind: FundingKindArg,
+        /// One funding UTXO per branch, or one per transaction the exit
+        /// fee-bumps. Per-node funding lets every CPFP child be signed without
+        /// knowing what rate the others will go out at.
+        #[arg(long, value_enum, default_value_t = FundingShapeArg::PerBranch)]
+        funding_shape: FundingShapeArg,
         /// Destination address for the swept funds.
         #[arg(long)]
         destination: String,
@@ -73,6 +94,7 @@ pub async fn handle_command(
         AdvancedCommand::UnilateralExit {
             fee_rate,
             funding_kind,
+            funding_shape,
             destination,
             leaf_ids,
         } => {
@@ -82,6 +104,7 @@ pub async fn handle_command(
                     funding_kind: funding_kind.into(),
                     destination,
                     selection: exit_leaf_selection(leaf_ids),
+                    funding_shape: Some(funding_shape.into()),
                 })
                 .await?;
             print_value(&prepared)?;

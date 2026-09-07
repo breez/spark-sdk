@@ -30,10 +30,10 @@ use breez_sdk_itest::{
 };
 use breez_sdk_spark::signer::{CpfpSigner, single_key_cpfp_signer};
 use breez_sdk_spark::{
-    ConfirmationStatus, CpfpFundingKind, CpfpInput, ExitLeafSelection,
-    ImportUnilateralExitStateRequest, PrepareUnilateralExitRequest, PrepareUnilateralExitResponse,
-    SdkError, UnilateralExitRequest, UnilateralExitResponse, UnilateralExitTransaction,
-    UnilateralExitTxKind,
+    ConfirmationStatus, CpfpFundingKind, CpfpFundingShape, CpfpInput, ExitLeafSelection,
+    ImportUnilateralExitStateRequest, PerNodeFunding, PrepareUnilateralExitRequest,
+    PrepareUnilateralExitResponse, SdkError, UnilateralExitRequest, UnilateralExitResponse,
+    UnilateralExitTransaction, UnilateralExitTxKind,
 };
 use rstest::*;
 use rstest_reuse::{apply, template};
@@ -217,13 +217,20 @@ fn assert_quote_consistent(
         "recoverable_value_sat must equal the sum of selected leaf values"
     );
 
-    // One funding recommendation per branch, each naming a selected leaf.
-    assert_eq!(
-        quote.per_branch_funding.len(),
-        quote.leaves.len(),
-        "one per-branch funding entry per selected leaf"
-    );
+    // Each shape names exactly one list to fund: a per-branch quote one entry per
+    // selected leaf, a per-node quote its transactions and nothing per branch.
     let leaf_ids: HashSet<&String> = quote.leaves.iter().map(|l| &l.leaf_id).collect();
+    match quote.funding_shape {
+        CpfpFundingShape::PerBranch => assert_eq!(
+            quote.per_branch_funding.len(),
+            quote.leaves.len(),
+            "one per-branch funding entry per selected leaf"
+        ),
+        CpfpFundingShape::PerNode => assert!(
+            quote.per_branch_funding.is_empty(),
+            "a per-node quote names no per-branch amounts"
+        ),
+    }
     for b in &quote.per_branch_funding {
         assert!(
             leaf_ids.contains(&b.leaf_id),
@@ -233,16 +240,66 @@ fn assert_quote_consistent(
         assert!(b.funding_sat > 0, "a per-branch funding amount is zero");
     }
 
-    // A single branch never fans out; multiple branches do at a positive rate.
-    if n == 1 {
-        assert_eq!(
-            quote.fanout_fee_sat, 0,
-            "a single branch has no fan-out fee"
-        );
+    // What one UTXO would be fanned out into: an output per branch, or an output
+    // per transaction when funding per node.
+    let funded = match quote.funding_shape {
+        CpfpFundingShape::PerBranch => {
+            assert!(
+                quote.per_node_funding.is_empty(),
+                "per-branch funding names no individual transactions"
+            );
+            n
+        }
+        CpfpFundingShape::PerNode => {
+            assert!(
+                !quote.per_node_funding.is_empty(),
+                "per-node funding names the transactions it funds"
+            );
+            for f in &quote.per_node_funding {
+                assert!(
+                    leaf_ids.contains(&f.leaf_id),
+                    "per-node entry names unselected leaf {}",
+                    f.leaf_id
+                );
+                assert!(f.funding_sat > 0, "a per-node funding amount is zero");
+            }
+            // A branch's entries run root to leaf and end with the leaf's refund,
+            // which is the order the funding UTXOs are supplied in.
+            for leaf in &quote.leaves {
+                let branch: Vec<&PerNodeFunding> = quote
+                    .per_node_funding
+                    .iter()
+                    .filter(|f| f.leaf_id == leaf.leaf_id)
+                    .collect();
+                let (refund, nodes) = branch.split_last().expect("a branch funds its refund");
+                assert!(
+                    matches!(refund.kind, UnilateralExitTxKind::Refund),
+                    "a branch's last entry funds its refund, got {:?}",
+                    refund.kind
+                );
+                assert_eq!(
+                    refund.node_id, leaf.leaf_id,
+                    "a refund belongs to its own leaf"
+                );
+                for node in nodes {
+                    assert!(
+                        matches!(node.kind, UnilateralExitTxKind::Node),
+                        "every entry before the refund funds a tree node, got {:?}",
+                        node.kind
+                    );
+                }
+            }
+            quote.per_node_funding.len() as u64
+        }
+    };
+
+    // One thing to fund never fans out; several do at a positive rate.
+    if funded == 1 {
+        assert_eq!(quote.fanout_fee_sat, 0, "one output needs no fan-out fee");
     } else if fee_rate_sat_per_vbyte > 0 {
         assert!(
             quote.fanout_fee_sat > 0,
-            "multiple branches carry a positive fan-out fee at a positive rate"
+            "several outputs carry a positive fan-out fee at a positive rate"
         );
     }
     assert!(
@@ -250,22 +307,30 @@ fn assert_quote_consistent(
         "fan-out fee is part of the total fee"
     );
 
-    // Funding identities from quote_unilateral_exit.
+    // Funding identities from quote_unilateral_exit: one UTXO covers whichever
+    // list the shape names, plus the fan-out that splits it.
+    let named_total: u64 = quote
+        .per_branch_funding
+        .iter()
+        .map(|b| b.funding_sat)
+        .chain(quote.per_node_funding.iter().map(|f| f.funding_sat))
+        .sum();
     assert_eq!(
         quote.single_utxo_funding_sat,
-        quote
-            .per_branch_funding
-            .iter()
-            .map(|b| b.funding_sat)
-            .sum::<u64>()
-            + quote.fanout_fee_sat,
-        "single_utxo_funding_sat = sum(per_branch) + fanout_fee"
+        named_total + quote.fanout_fee_sat,
+        "single_utxo_funding_sat = sum(named amounts) + fanout_fee"
     );
-    assert_eq!(
-        quote.single_utxo_funding_sat - quote.total_fee_sat,
-        n * dust,
-        "single_utxo_funding_sat reserves exactly one dust output per branch above fees"
-    );
+    // Per-branch funding reserves one dust output per branch on top of the whole
+    // quoted fee, sweep share included. Per-node funding reserves one per
+    // transaction and no sweep share, since it sweeps none of that change, so
+    // only the per-branch case has an exact identity against total_fee_sat.
+    if quote.funding_shape == CpfpFundingShape::PerBranch {
+        assert_eq!(
+            quote.single_utxo_funding_sat - quote.total_fee_sat,
+            funded * dust,
+            "single_utxo_funding_sat reserves exactly one dust output per branch above fees"
+        );
+    }
 
     // The quote echoes the request verbatim.
     assert_eq!(
@@ -514,6 +579,7 @@ async fn quote_then_build_single(
             funding_kind: CpfpFundingKind::P2tr,
             destination: utxo.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let signer = signer_for(&utxo.secret_key.secret_bytes())?;
@@ -548,6 +614,7 @@ async fn test_nothing_confirmed(#[case] backend: SignerBackend) -> Result<()> {
             funding_kind: CpfpFundingKind::P2tr,
             destination: destination.clone(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_eq!(quote.leaves.len(), 1, "expected a single selected leaf");
@@ -619,6 +686,7 @@ async fn test_full_exit_and_sweep(#[case] backend: SignerBackend) -> Result<()> 
             funding_kind: CpfpFundingKind::P2tr,
             destination: destination.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_quote_consistent(&quote, FEE_RATE, &destination.to_string(), p2tr_dust());
@@ -692,6 +760,7 @@ async fn test_completed_exit_rerun_redrives_nothing(#[case] backend: SignerBacke
             funding_kind: CpfpFundingKind::P2tr,
             destination: destination.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     // The wallet drops the leaf from its available set once the exit is mined, so
@@ -721,6 +790,7 @@ async fn test_completed_exit_rerun_redrives_nothing(#[case] backend: SignerBacke
             selection: ExitLeafSelection::Specific {
                 leaf_ids: exited_leaf_ids,
             },
+            funding_shape: None,
         })
         .await?;
     let rerun = sdk
@@ -772,6 +842,7 @@ async fn test_first_package_confirmed_resumes(#[case] backend: SignerBackend) ->
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let first = sdk
@@ -801,6 +872,7 @@ async fn test_first_package_confirmed_resumes(#[case] backend: SignerBackend) ->
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let second = sdk
@@ -854,6 +926,7 @@ async fn test_sweep_is_rbf_replaceable(#[case] backend: SignerBackend) -> Result
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     // Captured before the quote is moved: the mined leaf drops out of the available
@@ -933,6 +1006,7 @@ async fn test_sweep_is_rbf_replaceable(#[case] backend: SignerBackend) -> Result
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Specific { leaf_ids },
+            funding_shape: None,
         })
         .await?;
     let bumped = sdk
@@ -1016,6 +1090,7 @@ async fn test_multi_leaf_fan_out_and_sweep(#[case] backend: SignerBackend) -> Re
             funding_kind: CpfpFundingKind::P2tr,
             destination: destination.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_eq!(quote.leaves.len(), 2, "expected two selected leaves");
@@ -1114,6 +1189,7 @@ async fn test_multi_leaf_offline_exit(#[case] backend: SignerBackend) -> Result<
             funding_kind: CpfpFundingKind::P2tr,
             destination: destination.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_eq!(
@@ -1263,6 +1339,7 @@ async fn test_importing_another_wallets_state_takes_nothing(
             funding_kind: CpfpFundingKind::P2tr,
             destination: destination.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert!(
@@ -1293,6 +1370,7 @@ async fn test_confirmed_fan_out_is_adopted(#[case] backend: SignerBackend) -> Re
             funding_kind: CpfpFundingKind::P2tr,
             destination: dest.clone(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let first = sdk
@@ -1316,6 +1394,7 @@ async fn test_confirmed_fan_out_is_adopted(#[case] backend: SignerBackend) -> Re
             funding_kind: CpfpFundingKind::P2tr,
             destination: dest.clone(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let second = sdk
@@ -1375,6 +1454,7 @@ async fn test_confirmed_fan_out_insufficient_at_higher_fee(
             funding_kind: CpfpFundingKind::P2tr,
             destination: dest.clone(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let first = sdk
@@ -1396,6 +1476,7 @@ async fn test_confirmed_fan_out_insufficient_at_higher_fee(
             funding_kind: CpfpFundingKind::P2tr,
             destination: dest,
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let err = sdk
@@ -1464,6 +1545,7 @@ async fn test_fees_p2wpkh_never_below_rate(#[case] backend: SignerBackend) -> Re
             funding_kind: CpfpFundingKind::P2wpkh,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_quote_consistent(&quote, FEE_RATE, &cpfp.address.to_string(), dust);
@@ -1507,6 +1589,7 @@ async fn test_single_leaf_multiple_utxos(#[case] backend: SignerBackend) -> Resu
             funding_kind: CpfpFundingKind::P2tr,
             destination: u1.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_quote_consistent(&quote, FEE_RATE, &u1.address.to_string(), p2tr_dust());
@@ -1538,6 +1621,360 @@ async fn test_single_leaf_multiple_utxos(#[case] backend: SignerBackend) -> Resu
     Ok(())
 }
 
+/// Every CPFP child in the set spends only funding the caller supplied, never
+/// another child's output. This is what funding per node buys: a child's inputs
+/// are settled before any other child is built, so all of them can be signed up
+/// front, at fee rates chosen independently.
+fn assert_children_are_independent(resp: &UnilateralExitResponse) -> Result<()> {
+    let mut children: HashSet<Txid> = HashSet::new();
+    let mut spent: Vec<OutPoint> = Vec::new();
+    for entry in &resp.transactions {
+        let Some(hex) = &entry.cpfp_tx_hex else {
+            continue;
+        };
+        let child = decode_tx(hex)?;
+        children.insert(child.compute_txid());
+        spent.extend(child.input.iter().map(|i| i.previous_output));
+    }
+    assert!(!children.is_empty(), "the set carries CPFP children");
+    for outpoint in &spent {
+        assert!(
+            !children.contains(&outpoint.txid),
+            "a CPFP child spends another child's output {outpoint}"
+        );
+    }
+    Ok(())
+}
+
+/// One leaf funded per node: a UTXO for every transaction the exit fee-bumps, so
+/// no fan-out and no child chained onto another. Mined end to end. The branch a
+/// freshly claimed deposit gives us is shallow, so node-to-node independence over
+/// a longer chain is covered by `exit_build_tests` in spark-wallet.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn test_per_node_funding_no_fanout(#[case] backend: SignerBackend) -> Result<()> {
+    let sdk = new_local_sdk(backend).await?;
+    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+    let key = fixed_key(0x31);
+    let bitcoind = &sdk.fixtures.bitcoind;
+    // A destination off a different key, so the sweep's payment is told apart from
+    // the change every CPFP child writes back to the funding script.
+    let destination = p2tr_address(&fixed_key(0x41));
+
+    let quote = sdk
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: destination.to_string(),
+            selection: ExitLeafSelection::Auto,
+            funding_shape: Some(CpfpFundingShape::PerNode),
+        })
+        .await?;
+    assert_quote_consistent(&quote, FEE_RATE, &destination.to_string(), p2tr_dust());
+    assert_eq!(quote.leaves.len(), 1);
+
+    // Exactly what the quote asks for, one UTXO per named transaction: this both
+    // funds the exit and proves the quoted amounts are not under-stated.
+    let mut utxos = Vec::with_capacity(quote.per_node_funding.len());
+    for named in &quote.per_node_funding {
+        utxos.push(
+            fund_p2tr_utxo_with_key(bitcoind, Amount::from_sat(named.funding_sat), &key).await?,
+        );
+    }
+    let funding: Vec<CpfpInput> = utxos.iter().map(cpfp_input_for).collect();
+
+    let resp = sdk
+        .sdk
+        .unilateral_exit(
+            UnilateralExitRequest {
+                prepared: quote.clone(),
+                funding_inputs: funding,
+            },
+            signer_for(&key.secret_bytes())?,
+        )
+        .await?;
+    assert_build_matches_quote(&quote, &resp);
+    // Checked before the fan-out assertion: a build that re-derived a different set
+    // of transactions reports as a count mismatch rather than as a stray fan-out.
+    assert_eq!(
+        resp.transactions
+            .iter()
+            .filter(|t| t.cpfp_tx_hex.is_some())
+            .count(),
+        quote.per_node_funding.len(),
+        "every transaction the quote named is fee-bumped, and no other"
+    );
+    assert!(
+        !resp
+            .transactions
+            .iter()
+            .any(|t| matches!(t.kind, UnilateralExitTxKind::FanOut)),
+        "a UTXO per transaction needs no fan-out"
+    );
+    assert_children_are_independent(&resp)?;
+    // Funding at exactly the quoted amount puts every package fee on the relay
+    // floor, so a fee sized one sat low is named here rather than surfacing as an
+    // opaque package rejection.
+    let external: Vec<&FundedUtxo> = utxos.iter().collect();
+    assert_fee_rate(&resp, &external, FEE_RATE_KW, false)?;
+
+    assert_all_mined(&sdk, &resp, &destination).await?;
+    Ok(())
+}
+
+/// One leaf funded per node from a single UTXO: the fan-out splits it one output
+/// per transaction rather than one per branch, and the children stay independent.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn test_per_node_funding_single_utxo_fans_out(#[case] backend: SignerBackend) -> Result<()> {
+    let sdk = new_local_sdk(backend).await?;
+    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+    let key = fixed_key(0x32);
+    let bitcoind = &sdk.fixtures.bitcoind;
+    let destination = p2tr_address(&fixed_key(0x42));
+
+    let quote = sdk
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: destination.to_string(),
+            selection: ExitLeafSelection::Auto,
+            funding_shape: Some(CpfpFundingShape::PerNode),
+        })
+        .await?;
+    assert_quote_consistent(&quote, FEE_RATE, &destination.to_string(), p2tr_dust());
+    assert!(
+        quote.fanout_fee_sat > 0,
+        "a leaf bumping several transactions carries a fan-out fee"
+    );
+
+    let single = fund_p2tr_utxo_with_key(
+        bitcoind,
+        Amount::from_sat(quote.single_utxo_funding_sat),
+        &key,
+    )
+    .await?;
+    let resp = sdk
+        .sdk
+        .unilateral_exit(
+            UnilateralExitRequest {
+                prepared: quote.clone(),
+                funding_inputs: vec![cpfp_input_for(&single)],
+            },
+            signer_for(&key.secret_bytes())?,
+        )
+        .await?;
+    let fan_out = resp
+        .transactions
+        .iter()
+        .find(|t| matches!(t.kind, UnilateralExitTxKind::FanOut))
+        .expect("one UTXO for several transactions fans out");
+    assert_eq!(
+        decode_tx(&fan_out.tx_hex)?.output.len(),
+        quote.per_node_funding.len(),
+        "the fan-out pays one output per transaction it funds"
+    );
+    assert_children_are_independent(&resp)?;
+    assert_fee_rate(&resp, &[&single], FEE_RATE_KW, false)?;
+
+    assert_all_mined(&sdk, &resp, &destination).await?;
+    Ok(())
+}
+
+/// A per-node exit interrupted after its fan-out confirms resumes through that
+/// fan-out: the adopted transaction reappears confirmed with no child, every
+/// still driven step spends its own adopted output, and the set mines end to
+/// end. This is the resume the shape exists for, driven against real chain
+/// state rather than a hand-built one.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn test_per_node_confirmed_fan_out_is_adopted(#[case] backend: SignerBackend) -> Result<()> {
+    let sdk = new_local_sdk(backend).await?;
+    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+    let key = fixed_key(0x33);
+    let bitcoind = &sdk.fixtures.bitcoind;
+    let destination = p2tr_address(&fixed_key(0x43));
+
+    let quote = sdk
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: destination.to_string(),
+            selection: ExitLeafSelection::Auto,
+            funding_shape: Some(CpfpFundingShape::PerNode),
+        })
+        .await?;
+    let leaf_ids: Vec<String> = quote.leaves.iter().map(|l| l.leaf_id.clone()).collect();
+    let single = fund_p2tr_utxo_with_key(
+        bitcoind,
+        Amount::from_sat(quote.single_utxo_funding_sat),
+        &key,
+    )
+    .await?;
+    let funding = vec![cpfp_input_for(&single)];
+
+    let first = sdk
+        .sdk
+        .unilateral_exit(
+            UnilateralExitRequest {
+                prepared: quote,
+                funding_inputs: funding.clone(),
+            },
+            signer_for(&key.secret_bytes())?,
+        )
+        .await?;
+    let fan_out_txid = confirm_fan_out(&sdk, &first).await?;
+
+    // Resume with the same leaves named, as the guide says, and the same funding
+    // outpoint, now spent by the confirmed fan-out.
+    let second_quote = sdk
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: destination.to_string(),
+            selection: ExitLeafSelection::Specific { leaf_ids },
+            funding_shape: Some(CpfpFundingShape::PerNode),
+        })
+        .await?;
+    let second = sdk
+        .sdk
+        .unilateral_exit(
+            UnilateralExitRequest {
+                prepared: second_quote.clone(),
+                funding_inputs: funding,
+            },
+            signer_for(&key.secret_bytes())?,
+        )
+        .await?;
+
+    let adopted = second
+        .transactions
+        .iter()
+        .find(|t| matches!(t.kind, UnilateralExitTxKind::FanOut))
+        .expect("the confirmed fan-out must still appear");
+    assert_eq!(
+        adopted.txid, fan_out_txid,
+        "adopts the confirmed fan-out, not a fresh one"
+    );
+    assert!(matches!(adopted.status, ConfirmationStatus::Confirmed));
+    assert!(adopted.cpfp_tx_hex.is_none());
+
+    // Every driven child spends an output of the confirmed fan-out.
+    for entry in &second.transactions {
+        let Some(hex) = &entry.cpfp_tx_hex else {
+            continue;
+        };
+        let child = decode_tx(hex)?;
+        assert!(
+            child
+                .input
+                .iter()
+                .any(|i| i.previous_output.txid.to_string() == fan_out_txid),
+            "{:?} {} is funded by the adopted fan-out",
+            entry.kind,
+            entry.txid
+        );
+    }
+    assert_children_are_independent(&second)?;
+
+    assert_resumed_all_mined(&sdk, &second, &destination).await?;
+    Ok(())
+}
+
+/// A per-node exit resumed after its first package confirms, with the same
+/// UTXOs supplied again: the confirmed step comes back `Confirmed` with no child,
+/// its spent UTXO is not mistaken for a conflict, and the rest still drive from
+/// their own UTXOs.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+#[ignore = "resume needs the leaf in local storage, but a refresh deletes it once no operator reports it Available; fix by querying the operators for more statuses, or by not deleting leaves absent from a refresh"]
+async fn test_per_node_first_package_confirmed_resumes(
+    #[case] backend: SignerBackend,
+) -> Result<()> {
+    let sdk = new_local_sdk(backend).await?;
+    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+    let key = fixed_key(0x34);
+    let bitcoind = &sdk.fixtures.bitcoind;
+    let destination = p2tr_address(&fixed_key(0x44));
+
+    let quote = sdk
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: destination.to_string(),
+            selection: ExitLeafSelection::Auto,
+            funding_shape: Some(CpfpFundingShape::PerNode),
+        })
+        .await?;
+    let leaf_ids: Vec<String> = quote.leaves.iter().map(|l| l.leaf_id.clone()).collect();
+    let mut utxos = Vec::with_capacity(quote.per_node_funding.len());
+    for named in &quote.per_node_funding {
+        utxos.push(
+            fund_p2tr_utxo_with_key(bitcoind, Amount::from_sat(named.funding_sat), &key).await?,
+        );
+    }
+    let funding: Vec<CpfpInput> = utxos.iter().map(cpfp_input_for).collect();
+
+    let first = sdk
+        .sdk
+        .unilateral_exit(
+            UnilateralExitRequest {
+                prepared: quote,
+                funding_inputs: funding.clone(),
+            },
+            signer_for(&key.secret_bytes())?,
+        )
+        .await?;
+    let first_pkg = first
+        .transactions
+        .iter()
+        .find(|t| is_package(t))
+        .expect("a node/refund package");
+    let confirmed_txid = first_pkg.txid.clone();
+    broadcast_and_mine(&sdk, first_pkg).await?;
+
+    let second_quote = sdk
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: destination.to_string(),
+            selection: ExitLeafSelection::Specific { leaf_ids },
+            funding_shape: Some(CpfpFundingShape::PerNode),
+        })
+        .await?;
+    let second = sdk
+        .sdk
+        .unilateral_exit(
+            UnilateralExitRequest {
+                prepared: second_quote,
+                funding_inputs: funding,
+            },
+            signer_for(&key.secret_bytes())?,
+        )
+        .await?;
+
+    let resumed = second
+        .transactions
+        .iter()
+        .find(|t| t.txid == confirmed_txid)
+        .expect("the confirmed package must still appear");
+    assert!(matches!(resumed.status, ConfirmationStatus::Confirmed));
+    assert!(
+        resumed.cpfp_tx_hex.is_none(),
+        "a confirmed step is not bumped again"
+    );
+    assert_children_are_independent(&second)?;
+
+    assert_resumed_all_mined(&sdk, &second, &destination).await?;
+    Ok(())
+}
+
 /// Two leaves, two UTXOs each large enough for a branch: 1:1 assignment, no
 /// fan-out. The quote plans for the single-UTXO fan-out (positive fanout_fee),
 /// but funding one sufficient UTXO per branch avoids it, so the built set
@@ -1563,6 +2000,7 @@ async fn test_two_leaves_two_utxos_no_fanout(#[case] backend: SignerBackend) -> 
             funding_kind: CpfpFundingKind::P2tr,
             destination: u1.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_eq!(quote.leaves.len(), 2);
@@ -1614,6 +2052,7 @@ async fn test_two_leaves_undersized_utxo_fans_out(#[case] backend: SignerBackend
             funding_kind: CpfpFundingKind::P2tr,
             destination: big.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_eq!(quote.leaves.len(), 2);
@@ -1660,6 +2099,7 @@ async fn test_two_leaves_subset_assignment_no_fanout(#[case] backend: SignerBack
             funding_kind: CpfpFundingKind::P2tr,
             destination: big.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_eq!(quote.leaves.len(), 2);
@@ -1709,6 +2149,7 @@ async fn test_higher_rate_reuses_fan_out_within_headroom(
             funding_kind: CpfpFundingKind::P2tr,
             destination: dest.clone(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let first = sdk
@@ -1731,6 +2172,7 @@ async fn test_higher_rate_reuses_fan_out_within_headroom(
             funding_kind: CpfpFundingKind::P2tr,
             destination: dest,
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let second = sdk
@@ -1777,6 +2219,7 @@ async fn test_higher_rate_recovers_by_refunding(#[case] backend: SignerBackend) 
             funding_kind: CpfpFundingKind::P2tr,
             destination: dest.clone(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let first = sdk
@@ -1799,6 +2242,7 @@ async fn test_higher_rate_recovers_by_refunding(#[case] backend: SignerBackend) 
             funding_kind: CpfpFundingKind::P2tr,
             destination: dest.clone(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let err = sdk
@@ -1838,6 +2282,7 @@ async fn test_higher_rate_recovers_by_refunding(#[case] backend: SignerBackend) 
             funding_kind: CpfpFundingKind::P2tr,
             destination: dest,
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let recovered = sdk
@@ -1878,6 +2323,7 @@ async fn test_no_profitable_leaves_auto(#[case] backend: SignerBackend) -> Resul
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert!(
@@ -1933,6 +2379,7 @@ async fn test_specific_ignores_other_leaves(#[case] backend: SignerBackend) -> R
             selection: ExitLeafSelection::Specific {
                 leaf_ids: vec![first_id.clone()],
             },
+            funding_shape: None,
         })
         .await?;
     assert_eq!(quote.leaves.len(), 1, "only the named leaf is exited");
@@ -1970,6 +2417,7 @@ async fn test_prepare_is_idempotent(#[case] backend: SignerBackend) -> Result<()
         funding_kind: CpfpFundingKind::P2tr,
         destination: cpfp.address.to_string(),
         selection: ExitLeafSelection::Auto,
+        funding_shape: None,
     };
 
     let quote_a = sdk.sdk.prepare_unilateral_exit(request()).await?;
@@ -2032,6 +2480,7 @@ async fn test_higher_rate_changes_sweep_txid(#[case] backend: SignerBackend) -> 
         funding_kind: CpfpFundingKind::P2tr,
         destination: cpfp.address.to_string(),
         selection: ExitLeafSelection::Auto,
+        funding_shape: None,
     };
     let sweep_txid = |resp: &UnilateralExitResponse| {
         resp.transactions
@@ -2094,6 +2543,7 @@ async fn test_empty_funding_rejected(#[case] backend: SignerBackend) -> Result<(
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let err = sdk
@@ -2126,6 +2576,7 @@ async fn test_explicit_empty_list_rejected(#[case] backend: SignerBackend) -> Re
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Specific { leaf_ids: vec![] },
+            funding_shape: None,
         })
         .await
         .expect_err("no leaves named");
@@ -2149,6 +2600,7 @@ async fn test_zero_fee_rate_succeeds(#[case] backend: SignerBackend) -> Result<(
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_eq!(quote.total_fee_sat, 0, "a zero fee rate quotes a zero fee");
@@ -2192,6 +2644,7 @@ async fn test_mixed_p2tr_p2wpkh_funding(#[case] backend: SignerBackend) -> Resul
             funding_kind: CpfpFundingKind::P2tr,
             destination: taproot.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_quote_consistent(&quote, FEE_RATE, &taproot.address.to_string(), p2tr_dust());
@@ -2261,6 +2714,7 @@ async fn test_single_leaf_funding_boundary(#[case] backend: SignerBackend) -> Re
             funding_kind: CpfpFundingKind::P2tr,
             destination: short.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let err = sdk
@@ -2325,6 +2779,7 @@ async fn test_two_leaf_fanout_funding_boundary(#[case] backend: SignerBackend) -
             funding_kind: CpfpFundingKind::P2tr,
             destination: floor.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let required = match sdk
@@ -2362,6 +2817,7 @@ async fn test_two_leaf_fanout_funding_boundary(#[case] backend: SignerBackend) -
             funding_kind: CpfpFundingKind::P2tr,
             destination: short.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let err = sdk
@@ -2402,6 +2858,7 @@ async fn test_custom_funding_input(#[case] backend: SignerBackend) -> Result<()>
             },
             destination: utxo.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     assert_quote_consistent(&quote, FEE_RATE, &utxo.address.to_string(), p2tr_dust());
@@ -2450,6 +2907,7 @@ async fn test_all_nodes_confirmed_resumes_at_refund(#[case] backend: SignerBacke
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let first = sdk
@@ -2485,6 +2943,7 @@ async fn test_all_nodes_confirmed_resumes_at_refund(#[case] backend: SignerBacke
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let second = sdk
@@ -2545,6 +3004,7 @@ async fn test_unconfirmed_funding_accepted(#[case] backend: SignerBackend) -> Re
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let resp = sdk
@@ -2766,6 +3226,7 @@ async fn test_node_confirmed_by_foreign_cpfp_resumes(#[case] backend: SignerBack
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let leaf_ids: Vec<String> = first_quote
@@ -2807,6 +3268,7 @@ async fn test_node_confirmed_by_foreign_cpfp_resumes(#[case] backend: SignerBack
             selection: ExitLeafSelection::Specific {
                 leaf_ids: leaf_ids.clone(),
             },
+            funding_shape: None,
         })
         .await?;
     let second = sdk
@@ -2884,6 +3346,7 @@ async fn test_refund_confirmed_by_foreign_cpfp_is_adopted(
             funding_kind: CpfpFundingKind::P2tr,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Auto,
+            funding_shape: None,
         })
         .await?;
     let leaf_ids: Vec<String> = first_quote
@@ -2933,6 +3396,7 @@ async fn test_refund_confirmed_by_foreign_cpfp_is_adopted(
             selection: ExitLeafSelection::Specific {
                 leaf_ids: leaf_ids.clone(),
             },
+            funding_shape: None,
         })
         .await?;
     let second = sdk

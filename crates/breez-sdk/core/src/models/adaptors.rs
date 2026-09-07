@@ -12,10 +12,10 @@ use platform_utils::time::UNIX_EPOCH;
 use tracing::{debug, warn};
 
 use crate::{
-    AutoOptimizationEvent, Fee, Network, OnchainConfirmationSpeed, OptimizationOutcome, Payment,
-    PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, SdkError, SendOnchainFeeQuote,
-    SendOnchainSpeedFeeQuote, SparkHtlcDetails, SparkHtlcStatus, SparkInvoicePaymentDetails,
-    TokenBalance, TokenMetadata,
+    AutoOptimizationEvent, CpfpFundingShape, Fee, Network, OnchainConfirmationSpeed,
+    OptimizationOutcome, Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType,
+    SdkError, SendOnchainFeeQuote, SendOnchainSpeedFeeQuote, SparkHtlcDetails, SparkHtlcStatus,
+    SparkInvoicePaymentDetails, TokenBalance, TokenMetadata,
 };
 
 /// Feb 1, 2026 00:00:00 UTC — transfers before this may lack HTLC data on the operator.
@@ -391,6 +391,15 @@ impl From<Network> for SparkNetwork {
         match network {
             Network::Mainnet => SparkNetwork::Mainnet,
             Network::Regtest => SparkNetwork::Regtest,
+        }
+    }
+}
+
+impl From<CpfpFundingShape> for spark_wallet::CpfpFundingShape {
+    fn from(shape: CpfpFundingShape) -> Self {
+        match shape {
+            CpfpFundingShape::PerBranch => spark_wallet::CpfpFundingShape::PerBranch,
+            CpfpFundingShape::PerNode => spark_wallet::CpfpFundingShape::PerNode,
         }
     }
 }
