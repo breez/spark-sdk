@@ -665,6 +665,29 @@ pub async fn test_remove_leaves_spares_a_revived_leaf(store: &dyn TreeStore) {
     assert_eq!(exit_chain_ids(store, &leaf.id).await, vec!["root", "leaf"]);
 }
 
+/// A leaf kept only for its exit chain must never back a payment, by any route:
+/// not the balance, not selection, and not a reservation that names it outright.
+/// It regressed once on one backend, so every backend asserts it.
+pub async fn test_kept_leaf_cannot_back_a_payment(store: &dyn TreeStore) {
+    let leaf = create_test_node_with_parent("leaf", None, TreeNodeStatus::Available);
+    store.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
+
+    let refresh_start = future_refresh_start(store).await;
+    store.set_leaves(&[], &[], refresh_start).await.unwrap();
+
+    assert_eq!(store.get_available_balance().await.unwrap(), 0);
+    assert!(get_available(store).await.is_empty());
+    assert!(
+        store
+            .try_reserve_leaves_by_ids(std::slice::from_ref(&leaf.id), ReservationPurpose::Payment)
+            .await
+            .is_err(),
+        "a kept leaf cannot be reserved by id"
+    );
+    // Still there, and still exitable: that is the whole point of keeping it.
+    assert_eq!(store.get_deleted_leaves().await.unwrap().len(), 1);
+}
+
 /// A refresh reporting only one of two leaves keeps both, so the unreported one
 /// stays exitable and each leaf keeps its own copy of the ancestor they share.
 pub async fn test_absent_leaf_keeps_shared_ancestor(store: &dyn TreeStore) {

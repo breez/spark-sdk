@@ -1414,6 +1414,11 @@ mod tests {
     }
 
     #[async_test_all]
+    async fn test_kept_leaf_cannot_back_a_payment() {
+        shared_tests::test_kept_leaf_cannot_back_a_payment(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
     async fn test_deleted_leaves_are_listed_and_removable() {
         shared_tests::test_deleted_leaves_are_listed_and_removable(&InMemoryTreeStore::new()).await;
     }
