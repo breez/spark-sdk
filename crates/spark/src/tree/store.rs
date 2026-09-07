@@ -307,10 +307,15 @@ impl InMemoryTreeStore {
                     response_tx,
                 } => {
                     // Each leaf owns its chain, so a removed leaf takes its
-                    // ancestors with it and nothing else can be orphaned.
+                    // ancestors with it and nothing else can be orphaned. Only a
+                    // leaf still marked goes: the purge read its list, then spent
+                    // seconds asking the operators, and a refresh landing in that
+                    // window may have brought this one back.
                     for id in &leaf_ids {
-                        state.leaves.remove(id);
-                        state.ancestors.remove(id);
+                        if state.leaves.get(id).is_some_and(|stored| stored.deleted) {
+                            state.leaves.remove(id);
+                            state.ancestors.remove(id);
+                        }
                     }
                     let _ = response_tx.send(Ok(()));
                 }
@@ -1074,8 +1079,12 @@ impl InMemoryTreeStore {
                 .get(id)
                 .ok_or(TreeServiceError::NonReservableLeaves)?;
             // A leaf the operators no longer report cannot back a payment or a
-            // swap, even though it still counts towards the balance.
-            if stored.node.status != TreeNodeStatus::Available || stored.missing_from_operators {
+            // swap, even though it still counts towards the balance. Nor can one
+            // kept only for its exit chain, which counts towards nothing.
+            if stored.node.status != TreeNodeStatus::Available
+                || stored.missing_from_operators
+                || stored.deleted
+            {
                 return Err(TreeServiceError::NonReservableLeaves);
             }
             selected.push(stored.node.clone());
@@ -1397,6 +1406,11 @@ mod tests {
     #[async_test_all]
     async fn test_absent_leaf_is_kept_for_its_exit_chain() {
         shared_tests::test_absent_leaf_is_kept_for_its_exit_chain(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_remove_leaves_spares_a_revived_leaf() {
+        shared_tests::test_remove_leaves_spares_a_revived_leaf(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
