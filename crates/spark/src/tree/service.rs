@@ -418,14 +418,18 @@ impl TreeService for SynchronousTreeService {
             else {
                 continue;
             };
-            let agreed = copies.len() == operator_count
+            // Count distinct operators: a paged query can return the same node
+            // twice for one of them, which would otherwise pass for agreement
+            // that another operator never gave.
+            let reporting: HashSet<usize> = copies.iter().map(|(id, _)| *id).collect();
+            let agreed = reporting.len() == operator_count
                 && copies
                     .iter()
                     .all(|(_, node)| leaf_copies_agree(node, &representative));
             if !agreed {
                 warn!(
                     "Leaf {leaf_id} reported by {} of {operator_count} operators, and not identically by all of them; holding it back from payments",
-                    copies.len()
+                    reporting.len()
                 );
                 missing_operator_leaves_map.insert(leaf_id.clone(), representative.clone());
             }

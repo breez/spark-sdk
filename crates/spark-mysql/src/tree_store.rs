@@ -1319,25 +1319,24 @@ impl MysqlTreeStore {
         // A leaf we spent ourselves is the one absence already accounted for, so
         // it goes for good and takes its ancestor rows with it, in that order so
         // no ancestor row is ever left without its leaf.
-        let spent_vec: Vec<String> = spent_ids.iter().cloned().collect();
-        for chunk in spent_vec.chunks(IDS_PER_STATEMENT) {
-            let placeholders = build_placeholders(chunk.len());
-            for sql in [
-                format!(
-                    "DELETE FROM brz_tree_ancestors \
-                     WHERE user_id = ? AND leaf_id IN ({placeholders})"
-                ),
-                format!(
-                    "DELETE FROM brz_tree_leaves \
-                     WHERE user_id = ? AND reservation_id IS NULL AND id IN ({placeholders})"
-                ),
-            ] {
-                let mut params: Vec<Value> = Vec::with_capacity(chunk.len().saturating_add(1));
-                params.push(Value::from(self.identity.clone()));
-                params.extend(chunk.iter().cloned().map(Value::from));
-                tx.exec_drop(&sql, Params::Positional(params))
-                    .await
-                    .map_err(map_err)?;
+        for id in &spent_ids {
+            tx.exec_drop(
+                "DELETE FROM brz_tree_leaves \
+                 WHERE user_id = ? AND reservation_id IS NULL AND id = ?",
+                (self.identity.clone(), id.clone()),
+            )
+            .await
+            .map_err(map_err)?;
+            // Only if the row actually went: a spent leaf still held by a
+            // reservation keeps its row, and a row without its chain is the one
+            // thing this store must never produce.
+            if tx.affected_rows() > 0 {
+                tx.exec_drop(
+                    "DELETE FROM brz_tree_ancestors WHERE user_id = ? AND leaf_id = ?",
+                    (self.identity.clone(), id.clone()),
+                )
+                .await
+                .map_err(map_err)?;
             }
         }
 
@@ -2510,6 +2509,12 @@ mod tests {
     async fn test_remove_leaves_spares_a_revived_leaf() {
         let fixture = MysqlTreeStoreTestFixture::new().await;
         shared_tests::test_remove_leaves_spares_a_revived_leaf(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_kept_leaf_cannot_back_a_payment() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_kept_leaf_cannot_back_a_payment(&fixture.store).await;
     }
 
     #[tokio::test]
