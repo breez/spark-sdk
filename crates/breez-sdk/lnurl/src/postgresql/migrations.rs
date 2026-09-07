@@ -1,6 +1,9 @@
 //! Schema migrations for the LNURL server database.
 
-use spark_postgres::{PostgresError, deadpool_postgres::Pool, map_db_error, map_pool_error};
+use std::collections::HashSet;
+
+use spark_postgres::deadpool_postgres::{Pool, Transaction};
+use spark_postgres::{PostgresError, map_db_error, map_pool_error};
 
 /// Tracker table for applied migrations. Prefixed so a database shared with
 /// other Breez components gets a distinct table and a distinct migration
@@ -12,6 +15,41 @@ const MIGRATIONS_TABLE: &str = "lnurl_schema_migrations";
 /// TABLE` and the version inserts cannot interleave.
 const ADOPT_LOCK_ID: i64 = 0x6c6e_7572_6c5f_6164; // "lnurl_ad"
 
+/// The file versions the previous runner recorded, in the order it applied
+/// them, matching [`migrations`] entry for entry: a database that stopped after
+/// the Nth of these resumes at entry N+1.
+///
+/// That order is the order the files were added, which is not their version
+/// order: `users_pubkey_index` carries a 14-digit version that sorts after the
+/// 8-digit ones added over the following weeks, but it shipped before them.
+/// Every deploy applied whatever was missing, so a database carries the files
+/// that existed when it last ran.
+///
+/// The list is closed. It names the migrations that once existed as `.sql`
+/// files, so anything appended to [`migrations`] since has no counterpart here
+/// and is never adopted.
+const PREVIOUS_VERSIONS: [i64; 19] = [
+    20_250_911,         // initial
+    20_251_013,         // zaps
+    20_251_107,         // sender_comments
+    20_251_127,         // server_signed
+    20_251_204,         // allowed_domains
+    20_260_123,         // invoices
+    20_260_303,         // metadata_query_indexes
+    20_260_303_211_700, // users_pubkey_index
+    20_260_312,         // webhook_secret
+    20_260_314,         // multi_instance
+    20_260_323,         // drop_unused_user_columns
+    20_260_326_110_000, // rename_pending_zap_receipts
+    20_260_326_115_000, // invoice_domain_columns
+    20_260_326_120_000, // domain_webhooks
+    20_260_416_120_000, // webhook_signing
+    20_260_709_000_000, // domain_attribution
+    20_260_803_120_000, // used_signed_messages
+    20_260_814_120_000, // released_names
+    20_260_826_120_000, // address_registrations
+];
+
 /// Runs any migrations the database is missing.
 pub async fn run(pool: &Pool) -> Result<(), PostgresError> {
     adopt_applied_prefix(pool).await?;
@@ -20,9 +58,7 @@ pub async fn run(pool: &Pool) -> Result<(), PostgresError> {
 
 /// Resumes a database migrated by the previous runner, which tracked applied
 /// migrations in `_sqlx_migrations` keyed by file version instead of by the
-/// ordinal used here. Only the count is read back, so [`migrations`] has to
-/// list them in the order that runner applied them: a count of N means the
-/// first N entries there, and nothing else.
+/// ordinal used here. [`PREVIOUS_VERSIONS`] maps one onto the other.
 ///
 /// Returns as soon as [`MIGRATIONS_TABLE`] exists, so this runs at most once per
 /// database and can be deleted outright once every deployment is past the
@@ -60,23 +96,16 @@ async fn adopt_applied_prefix(pool: &Pool) -> Result<(), PostgresError> {
         return Ok(());
     }
 
-    // LEAST bounds the adopted prefix to migrations that actually exist here:
-    // a tracker with more rows than this list would otherwise record versions
-    // no statement backs, and every later migration would be skipped as applied.
-    let migration_count = i32::try_from(migrations().len()).unwrap_or(i32::MAX);
+    // `generate_series` yields nothing at 0, so a tracker holding none of ours
+    // starts the schema from scratch.
+    let adopted = applied_prefix_len(&tx).await?;
     tx.batch_execute(&format!(
         "CREATE TABLE {MIGRATIONS_TABLE} (
              version INTEGER PRIMARY KEY,
              applied_at TIMESTAMPTZ DEFAULT NOW()
          );
          INSERT INTO {MIGRATIONS_TABLE} (version)
-         SELECT generate_series(
-             1,
-             LEAST(
-                 (SELECT COUNT(*) FROM _sqlx_migrations WHERE success)::int,
-                 {migration_count}
-             )
-         );"
+         SELECT generate_series(1, {adopted});"
     ))
     .await
     .map_err(map_db_error)?;
@@ -85,18 +114,52 @@ async fn adopt_applied_prefix(pool: &Pool) -> Result<(), PostgresError> {
     Ok(())
 }
 
-/// The migrations, in the order the previous runner actually applied them:
-/// the order their files were added, which is what [`adopt_applied_prefix`]
-/// assumes a partially migrated database stopped along. Every deploy applied
-/// whatever was missing, so a database carries the files that existed when it
-/// last ran, not the numerically-first N of them.
+/// How many of [`PREVIOUS_VERSIONS`] the previous runner recorded as applied.
 ///
-/// The two differ once: `users_pubkey_index` carries a 14-digit version, which
-/// sorts after the 8-digit ones added over the following weeks, but it shipped
-/// before them and so belongs here ahead of `webhook_secret`. Ordering is not
-/// cosmetic: a prefix that names the wrong migrations leaves later ones with
-/// their prerequisites unapplied, and `drop_unused_user_columns` drops the very
-/// column `webhook_secret` adds.
+/// Reads the versions themselves rather than a row count. `_sqlx_migrations` is
+/// sqlx's own table name, so a schema an unrelated application migrated with
+/// sqlx carries one too, and a count taken off it would be that application's:
+/// a server pointed at a database a partner already uses would resume part way
+/// through a schema that was never created, or find every migration applied
+/// against one holding no lnurl tables at all. Ignoring rows outside
+/// [`PREVIOUS_VERSIONS`] also keeps the number right in a schema shared with
+/// such an application.
+///
+/// The versions found have to be a leading run of [`PREVIOUS_VERSIONS`], since
+/// every deploy applied whatever was missing. One recorded past a gap means
+/// that list is in the wrong order, and adopting would mark a migration applied
+/// whose statements never ran, so it is refused instead.
+async fn applied_prefix_len(tx: &Transaction<'_>) -> Result<usize, PostgresError> {
+    let known: &[i64] = &PREVIOUS_VERSIONS;
+    let applied: HashSet<i64> = tx
+        .query(
+            "SELECT version FROM _sqlx_migrations WHERE success AND version = ANY($1)",
+            &[&known],
+        )
+        .await
+        .map_err(map_db_error)?
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+
+    let prefix = PREVIOUS_VERSIONS
+        .iter()
+        .take_while(|version| applied.contains(version))
+        .count();
+
+    if prefix < applied.len() {
+        return Err(PostgresError::Initialization(format!(
+            "_sqlx_migrations holds {} of this server's migrations but only the first {prefix} \
+             run consecutively, so PREVIOUS_VERSIONS does not match the order they were applied in",
+            applied.len(),
+        )));
+    }
+
+    Ok(prefix)
+}
+
+/// The migrations, in the order the previous runner applied them, which
+/// [`PREVIOUS_VERSIONS`] names version by version.
 ///
 /// Position is the tracked version, so entries are only ever appended.
 #[allow(clippy::too_many_lines)]
@@ -350,15 +413,25 @@ fn migrations() -> Vec<Vec<String>> {
 mod tests {
     use spark_postgres::deadpool_postgres::{Client, Pool};
 
-    use super::{MIGRATIONS_TABLE, migrations, run};
+    use super::{MIGRATIONS_TABLE, PREVIOUS_VERSIONS, migrations, run};
     use crate::test_support::empty_test_pool;
 
     /// Brings a schema to the state the previous runner left it in after
     /// applying the first `count` migrations: the statements themselves, plus
-    /// its tracker table. It keyed rows by file version; only how many of them
-    /// succeeded is read back, so the values just have to be distinct.
+    /// its tracker table keyed by the file versions it really used.
     async fn migrate_as_previous_runner(pool: &Pool, count: usize) {
         let client = pool.get().await.unwrap();
+        create_previous_tracker(&client).await;
+
+        for (i, statements) in migrations().iter().take(count).enumerate() {
+            for statement in statements {
+                client.execute(statement.as_str(), &[]).await.unwrap();
+            }
+            record_applied(&client, i, true).await;
+        }
+    }
+
+    async fn create_previous_tracker(client: &Client) {
         client
             .execute(
                 "CREATE TABLE _sqlx_migrations (
@@ -373,18 +446,14 @@ mod tests {
             )
             .await
             .unwrap();
-
-        for (i, statements) in migrations().iter().take(count).enumerate() {
-            for statement in statements {
-                client.execute(statement.as_str(), &[]).await.unwrap();
-            }
-            record_applied(&client, i, true).await;
-        }
     }
 
-    /// Records migration `i` in the previous runner's tracker.
+    /// Records migration `i` under the file version it shipped with.
     async fn record_applied(client: &Client, i: usize, success: bool) {
-        let version = 20_250_911_i64.saturating_add(i64::try_from(i).unwrap());
+        record_version(client, PREVIOUS_VERSIONS[i], success).await;
+    }
+
+    async fn record_version(client: &Client, version: i64, success: bool) {
         client
             .execute(
                 "INSERT INTO _sqlx_migrations
@@ -431,6 +500,100 @@ mod tests {
         (1..=i32::try_from(migrations().len()).unwrap()).collect()
     }
 
+    /// `_sqlx_migrations` is sqlx's hardcoded table name, so a schema an
+    /// unrelated application migrated with sqlx carries one. Adopting its count
+    /// would leave us running against a schema with no lnurl tables in it.
+    #[tokio::test]
+    async fn a_foreign_tracker_is_not_adopted() {
+        let (_pg, pool) = empty_test_pool().await;
+        {
+            let client = pool.get().await.unwrap();
+            create_previous_tracker(&client).await;
+            for version in [20_240_101_i64, 20_240_202, 20_240_303] {
+                record_version(&client, version, true).await;
+            }
+        }
+
+        run(&pool)
+            .await
+            .expect("migrate alongside a foreign tracker");
+
+        assert_eq!(applied_versions(&pool).await, all_versions());
+        assert!(table_exists(&pool, "domain_attribution").await);
+    }
+
+    /// A schema holding our tables and somebody else's, sharing the one tracker
+    /// sqlx gives them both. Only our own versions may be counted: the foreign
+    /// rows would otherwise inflate the prefix and skip migrations that never
+    /// ran.
+    #[tokio::test]
+    async fn a_shared_tracker_counts_only_our_versions() {
+        let (_pg, pool) = empty_test_pool().await;
+        migrate_as_previous_runner(&pool, 6).await;
+        {
+            let client = pool.get().await.unwrap();
+            for version in [20_240_101_i64, 20_240_202, 20_240_303, 20_270_101] {
+                record_version(&client, version, true).await;
+            }
+        }
+        assert!(!table_exists(&pool, "domain_attribution").await);
+
+        run(&pool)
+            .await
+            .expect("resume alongside a foreign tracker");
+
+        assert_eq!(applied_versions(&pool).await, all_versions());
+        assert!(table_exists(&pool, "domain_attribution").await);
+    }
+
+    /// A version recorded past a gap means [`PREVIOUS_VERSIONS`] is not the
+    /// order these were applied in. Adopting the leading run would mark the
+    /// skipped one applied though its statements never ran, so startup fails
+    /// instead.
+    #[tokio::test]
+    async fn a_gap_in_the_recorded_versions_is_refused() {
+        let (_pg, pool) = empty_test_pool().await;
+        migrate_as_previous_runner(&pool, 6).await;
+        // Entry 7 never ran, so entry 8 cannot legitimately be recorded.
+        record_applied(&pool.get().await.unwrap(), 7, true).await;
+
+        let err = run(&pool)
+            .await
+            .expect_err("refuse an out-of-order tracker");
+
+        assert!(
+            format!("{err}").contains("PREVIOUS_VERSIONS"),
+            "expected the order to be named, got {err}"
+        );
+        assert!(!table_exists(&pool, MIGRATIONS_TABLE).await);
+    }
+
+    /// Every version has to name a migration that is still in the list, or
+    /// adoption would record one no statement backs, and no two may name the
+    /// same one: a repeated version counts once and shortens every prefix past
+    /// it.
+    ///
+    /// That the versions are in the order they were applied is not checkable
+    /// here, since the fixtures read the same list. It was established against
+    /// the original `.sql` files, and a database that contradicts it is refused
+    /// at startup rather than adopted (see [`applied_prefix_len`]).
+    #[test]
+    fn previous_versions_line_up_with_the_migrations() {
+        assert!(
+            PREVIOUS_VERSIONS.len() <= migrations().len(),
+            "PREVIOUS_VERSIONS names {} migrations but only {} exist",
+            PREVIOUS_VERSIONS.len(),
+            migrations().len()
+        );
+
+        let distinct: std::collections::HashSet<i64> = PREVIOUS_VERSIONS.into_iter().collect();
+        assert_eq!(
+            distinct.len(),
+            PREVIOUS_VERSIONS.len(),
+            "PREVIOUS_VERSIONS repeats a version"
+        );
+    }
+
     #[tokio::test]
     async fn fresh_database_applies_every_migration() {
         let (_pg, pool) = empty_test_pool().await;
@@ -475,17 +638,16 @@ mod tests {
         assert_eq!(applied_versions(&pool).await, all_versions());
     }
 
-    /// A tracker holding more successful rows than there are migrations here
-    /// must not record versions no statement backs: those would mark later
-    /// migrations as already applied and skip them forever.
+    /// A tracker carrying versions past the last one this server ever shipped
+    /// as a file must not record migrations no statement backs: those would
+    /// mark later ones as already applied and skip them forever.
     #[tokio::test]
-    async fn adoption_is_bounded_by_the_migration_list() {
+    async fn adoption_is_bounded_by_the_known_versions() {
         let (_pg, pool) = empty_test_pool().await;
-        let count = migrations().len();
-        migrate_as_previous_runner(&pool, count).await;
+        migrate_as_previous_runner(&pool, PREVIOUS_VERSIONS.len()).await;
         let client = pool.get().await.unwrap();
-        for i in count..count.saturating_add(3) {
-            record_applied(&client, i, true).await;
+        for version in [20_270_101_i64, 20_270_202, 20_270_303] {
+            record_version(&client, version, true).await;
         }
 
         run(&pool).await.expect("adopt over-long tracker");
