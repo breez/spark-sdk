@@ -462,12 +462,17 @@ class WebTreeStore {
           const leafMap = new Map(res.leaves.map((r) => [r.id, r]));
           // Each leaf owns its chain, so its ancestor rows go with it. They are
           // keyed by [leaf_id, id], so the leaf's own id selects exactly its own.
+          // Only a row still marked and still unreserved goes: the purge read
+          // its list, then spent seconds asking the operators, and a refresh
+          // landing in that window may have brought the leaf back or a payment
+          // reserved it.
           for (const id of ids) {
-            if (!leafMap.has(id)) continue;
+            const row = leafMap.get(id);
+            if (!row || !row.is_deleted || row.reservation_id != null) continue;
             leavesStore.delete(id);
             leafMap.delete(id);
-            for (const row of res.ancestors) {
-              if (row.leaf_id === id) ancestorsStore.delete([row.leaf_id, row.id]);
+            for (const anc of res.ancestors) {
+              if (anc.leaf_id === id) ancestorsStore.delete([anc.leaf_id, anc.id]);
             }
           }
         }

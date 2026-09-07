@@ -1146,12 +1146,20 @@ fn leaf_copies_agree(a: &TreeNode, b: &TreeNode) -> bool {
 /// through, and they have to be asked for: a refresh that requested only
 /// `Available` lost the leaf from every operator's response at once the moment
 /// its node txs confirmed, and the store, reading that absence as a spend,
-/// deleted the chain the exit still needed to resume.
+/// deleted the chain the exit still needed to resume. `ParentExited` is the same
+/// problem one level down: exiting one leaf puts every other leaf under that
+/// parent into it, so a partial exit would drop the siblings it did not touch.
+/// `RenewLocked` is the transient equivalent during a timelock renewal.
+///
+/// `TransferLocked` is deliberately absent: a leaf of ours in that status is one
+/// we are sending, and re-reading it would undo the send.
 fn held_leaf_statuses() -> Vec<i32> {
     vec![
         ProtoTreeNodeStatus::Available as i32,
         ProtoTreeNodeStatus::OnChain as i32,
         ProtoTreeNodeStatus::Exited as i32,
+        ProtoTreeNodeStatus::ParentExited as i32,
+        ProtoTreeNodeStatus::RenewLocked as i32,
     ]
 }
 
@@ -1702,6 +1710,8 @@ mod tests {
                 ProtoTreeNodeStatus::Available as i32,
                 ProtoTreeNodeStatus::OnChain as i32,
                 ProtoTreeNodeStatus::Exited as i32,
+                ProtoTreeNodeStatus::ParentExited as i32,
+                ProtoTreeNodeStatus::RenewLocked as i32,
             ]
         );
         assert!(
