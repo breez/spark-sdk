@@ -90,6 +90,22 @@ debug = "line-tables-only"
 [profile.release.package.xtask]
 debug = "line-tables-only"
 
+# The LNURL server's release build. It is a long-running service, so a panic in
+# one request handler has to unwind into the task that raised it and leave the
+# process serving, which `[profile.release]` would not: it aborts. The
+# size-first settings there buy nothing on a server and cost it throughput.
+#
+# A profile of its own rather than a `[profile.release.package.lnurl]` override
+# because `panic` and `lto` are not settable per package.
+[profile.release-lnurl]
+inherits = "release"
+panic = "unwind"
+lto = false
+opt-level = 3
+codegen-units = 16
+rpath = false
+debug = false
+
 [profile.release.package.nip65-publisher]
 debug = "line-tables-only"
 
