@@ -1613,7 +1613,17 @@ impl SparkWallet {
                 // are asked for separately: their row exists to be exitable, which
                 // takes something actually selecting them.
                 let leaves = self.tree_service.list_leaves().await?;
-                let kept_for_exit = self.tree_service.list_leaves_kept_for_exit().await?;
+                // Best-effort: a store that cannot list them still gets to exit
+                // everything else, which matters most on the path that exists for
+                // when things are already going wrong.
+                let kept_for_exit = self
+                    .tree_service
+                    .list_leaves_kept_for_exit()
+                    .await
+                    .unwrap_or_else(|e| {
+                        warn!("unilateral exit: listing leaves kept for exit failed: {e:?}");
+                        Vec::new()
+                    });
                 let mut leaf_ids: Vec<TreeNodeId> = leaves
                     .available
                     .into_iter()
@@ -1654,6 +1664,20 @@ impl SparkWallet {
             warn!(
                 "unilateral exit: resolving exit chains failed, planning from local state: {e:?}"
             );
+        }
+        // The kept leaves are quoted and driven like any other, and the hourly
+        // purge is the only thing that retires the ones that really are gone. An
+        // exit planned between two of its rounds would otherwise price in leaves
+        // we have already sent away, and then pay to drive them.
+        if let Err(e) = purge_spent_leaves(
+            self.tree_service.as_ref(),
+            &self.transfer_service,
+            &self.identity_public_key,
+            self.config.network,
+        )
+        .await
+        {
+            warn!("unilateral exit: purging spent leaves failed: {e:?}");
         }
     }
 
