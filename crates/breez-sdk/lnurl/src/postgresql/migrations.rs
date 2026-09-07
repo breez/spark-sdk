@@ -594,6 +594,88 @@ mod tests {
         );
     }
 
+    /// Wipes the schema so one container can stand in for a series of
+    /// databases.
+    async fn reset_schema(pool: &Pool) {
+        pool.get()
+            .await
+            .unwrap()
+            .batch_execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+            .await
+            .unwrap();
+    }
+
+    /// Every column and index in the schema, as a comparable fingerprint.
+    /// Recording a migration is not the same as having run it, so resuming is
+    /// checked against the schema itself rather than the tracker.
+    async fn schema_fingerprint(pool: &Pool) -> Vec<String> {
+        let client = pool.get().await.unwrap();
+        let mut out: Vec<String> = client
+            .query(
+                "SELECT table_name || '.' || column_name || ' ' || data_type || ' ' || is_nullable
+                 FROM information_schema.columns
+                 WHERE table_schema = current_schema()",
+                &[],
+            )
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| row.get::<_, String>(0))
+            .collect();
+        out.extend(
+            client
+                .query(
+                    "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema()",
+                    &[],
+                )
+                .await
+                .unwrap()
+                .iter()
+                .map(|row| row.get::<_, String>(0)),
+        );
+        out.sort();
+        out
+    }
+
+    /// Deployments are upgraded from wherever they happen to be, so every state
+    /// the previous runner could have left one in has to converge on the schema
+    /// a fresh database gets. Includes 0, where the tracker exists but holds
+    /// nothing, and the full list, where there is nothing left to apply.
+    #[tokio::test]
+    async fn every_partial_state_converges() {
+        let (_pg, pool) = empty_test_pool().await;
+
+        reset_schema(&pool).await;
+        run(&pool).await.expect("migrate a fresh database");
+        let expected = schema_fingerprint(&pool).await;
+
+        for count in 0..=PREVIOUS_VERSIONS.len() {
+            reset_schema(&pool).await;
+            migrate_as_previous_runner(&pool, count).await;
+
+            run(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("resume a database left at {count}: {e}"));
+
+            assert_eq!(
+                applied_versions(&pool).await,
+                all_versions(),
+                "a database left at {count} must end fully migrated"
+            );
+            // The previous tracker is left in place for a rollback, so it is
+            // not part of the comparison.
+            let actual: Vec<String> = schema_fingerprint(&pool)
+                .await
+                .into_iter()
+                .filter(|item| !item.contains("_sqlx_migrations"))
+                .collect();
+            assert_eq!(
+                actual, expected,
+                "a database left at {count} must end with a fresh database's schema"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn fresh_database_applies_every_migration() {
         let (_pg, pool) = empty_test_pool().await;
