@@ -136,6 +136,16 @@ Store the one {{#name check_unilateral_exit}} returns in its place each time you
 
 The SDK does not broadcast anything. {{#name transactions}} is the complete, signed set in valid broadcast order, and it is yours to send to the network over time. Broadcast each transaction whose {{#name status}} is {{#enum ExitTransactionStatus::Ready}}, and leave the rest until a later {{#name check_unilateral_exit}} reports them ready. Because of the timelocks in the tree, a full exit can span several days.
 
+<div class="warning">
+<h4>A step left waiting changes who pays its fee</h4>
+
+Each step of the exit becomes valid at a certain block. About 50 blocks later, which is roughly eight hours, a second version of that same step becomes valid too. Spark's watchtowers hold that second version as a safety net for a wallet that goes offline part-way through an exit, and can send it to the network once it unlocks.
+
+Both versions move the same money to the same place. What differs is where the mining fee comes from. The version the SDK builds for you is paid for by the funding UTXO you supplied, at the fee rate you asked for. The watchtower's version has its fee built in and takes it from the leaf itself, so that fee comes off the amount arriving at your address instead of out of your funding, at a rate you have no say in.
+
+The window runs per step, from the moment that step's timelock matures. An exit whose steps go out as they become {{#enum ExitTransactionStatus::Ready}} keeps the fee split the quote described; one that sits unbroadcast for a day or more can end up paying for parts of itself out of the money it is recovering.
+</div>
+
 ### Broadcast each package together
 
 Most steps come as a pair: a tree transaction and its {{#name cpfp_tx_hex}} CPFP child. The tree transaction pays no fee on its own, so a normal single-transaction broadcast rejects it; only the child makes the pair pay enough. Broadcast the two together, as a package, with a node that supports package relay, for example Bitcoin Core:
@@ -239,6 +249,7 @@ An out of date value can restore leaves that have since been spent, so the balan
 | A leaf you are mid-exit on is missing from a new {{#enum ExitLeafSelection::Auto}} quote | The new quote reselected leaves instead of naming them | Quote with {{#enum ExitLeafSelection::Specific}}, naming the leaves from your stored response |
 | {{#name check_unilateral_exit}} returns {{#enum UnilateralExitVerdict::Redo}} | Something on-chain no longer matches the transactions you hold | Quote and build again, naming the same leaves; see [Starting over](#starting-over) |
 | The exit has stopped confirming | On-chain fees rose above what its transactions pay | Quote and build again at a higher {{#name fee_rate_sat_per_vbyte}}; see [Starting over](#starting-over) |
+| Less arrived than {{#name recoverable_value_sat}} less {{#name sweep_fee_sat}} | A step sat unbroadcast long enough for a watchtower to send its own version, which pays its fee out of the leaf | Broadcast each step while it is {{#enum ExitTransactionStatus::Ready}}; see [A step left waiting changes who pays its fee](#broadcast-the-transactions) |
 | {{#name total_fee_sat}} is close to or above {{#name recoverable_value_sat}} | The shared fan-out fee makes a single-UTXO multi-leaf exit uneconomical | Fund one UTXO per branch ({{#name per_branch_funding}}) to drop the fan-out fee, exit fewer leaves with {{#enum ExitLeafSelection::Specific}}, or wait for a lower fee rate |
 | The build/sweep fails with a "below the dust limit" error | The recoverable value net of fees is below the destination's dust limit | Exit higher-value leaves with {{#enum ExitLeafSelection::Specific}}, lower the {{#name fee_rate_sat_per_vbyte}}, or wait for a cheaper fee rate |
 | {{#enum SdkError::InsufficientCpfpFunds}} | The funding you gave, once followed to what it became, is below what the exit needs | Fund at least {{#name single_utxo_funding_sat}}, or the amount in each {{#name PerBranchFunding}}; you can pass fresh UTXOs alongside the old ones |
