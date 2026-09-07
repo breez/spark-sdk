@@ -52,11 +52,37 @@ Call {{#name prepare_unilateral_exit}} with the target {{#name fee_rate_sat_per_
 
 The quote returns a {{#name PrepareUnilateralExitResponse}}. Its fields tell you how much Bitcoin to gather and how to structure it:
 
-- {{#name recoverable_value_sat}} is the total value of the selected {{#name leaves}}, and {{#name total_fee_sat}} is the on-chain fee to recover it. Compare them to decide whether the exit is worth it at the current fee rate.
+- {{#name recoverable_value_sat}} is the total value of the selected {{#name leaves}}, and {{#name total_fee_sat}} is the on-chain fee to recover it, broken down into its three components below. Compare them to decide whether the exit is worth it at the current fee rate.
 - {{#name single_utxo_funding_sat}} is the simplest option: fund **one** UTXO of at least this many satoshis and the SDK fans it out across branches.
 - {{#name per_branch_funding}} lets you skip the fan-out (and its {{#name fanout_fee_sat}}) by funding **one UTXO per branch**, each of at least the amount in its {{#name PerBranchFunding}} entry.
 
 So you do not have to guess how much to send or how many UTXOs to prepare: the quote tells you both.
+
+### The fee components, and what arrives
+
+An exit pays its mining fees from two different places, so {{#name total_fee_sat}} comes with the split that says which is which. Both {{#name prepare_unilateral_exit}} and {{#name unilateral_exit}} report all four numbers.
+
+| Component | Paid by |
+|---|---|
+| {{#name cpfp_fee_sat}} | The funding UTXOs, through the CPFP children that fee-bump the tree transactions |
+| {{#name fanout_fee_sat}} | The funding UTXO, by the fan-out transaction. Zero when there is no fan-out |
+| {{#name sweep_fee_sat}} | The value being recovered, by the final sweep |
+
+The three always add up to the total:
+
+```text
+cpfp_fee_sat + fanout_fee_sat + sweep_fee_sat = total_fee_sat
+```
+
+The first two come out of the Bitcoin you supplied as funding and do not reduce what the exit recovers. The third is different: the sweep spends the refunds and pays out what is left after its own fee, so it comes off the money on its way to your address.
+
+**What arrives at {{#name destination}}** is therefore {{#name recoverable_value_sat}} less {{#name sweep_fee_sat}}, plus any funding that was not spent on fees. The sweep also collects the leftover change of the CPFP children it built, so unused funding is delivered to the same address rather than left behind.
+
+**What the exit costs in total** is {{#name total_fee_sat}}, counting both pockets. Beginning with {{#name recoverable_value_sat}} in Spark and a funding UTXO of `F`, the destination ends up with `recoverable_value_sat + F - total_fee_sat`.
+
+{{#name recoverable_value_sat}} less {{#name total_fee_sat}} is not the arriving amount. It subtracts the CPFP and fan-out fees a second time, when they were already paid from the funding UTXO.
+
+{{#name single_utxo_funding_sat}} sits above `cpfp_fee_sat + fanout_fee_sat` on purpose. It carries the sweep fee and a small per-branch allowance as headroom, and both come back to you in the sweep.
 
 Preparing also reads the chain, and {{#name exit_chain_state}} carries back what it found: which nodes are already on-chain, which refunds landed, and which of those have been swept. Pass the whole {{#name PrepareUnilateralExitResponse}} to {{#name unilateral_exit}} unchanged, so the build covers only the steps still left. You can read it yourself to show how far an exit has got.
 

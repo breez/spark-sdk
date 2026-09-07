@@ -3018,12 +3018,26 @@ pub struct PrepareUnilateralExitResponse {
     /// branches), in satoshis. Exact for the given funding kind; nodes the
     /// operators report on-chain are assumed already paid, so a partially-exited
     /// tree quotes a lower fee than a fresh one.
+    ///
+    /// The sum of the three components below, which say who pays what:
+    /// `cpfp_fee_sat + fanout_fee_sat + sweep_fee_sat`. The first two come from
+    /// your funding UTXO, the third off the value being recovered.
     pub total_fee_sat: u64,
-    /// The part of `total_fee_sat` paid for the fan-out transaction. Funding one
-    /// UTXO per branch (`per_branch_funding`) avoids it. Zero for a single
-    /// branch (no fan-out).
+    /// The part of `total_fee_sat` the CPFP children pay, funded by your UTXOs.
+    /// It does not reduce what the exit recovers.
+    pub cpfp_fee_sat: u64,
+    /// The part of `total_fee_sat` paid for the fan-out transaction, funded by
+    /// your UTXO. Funding one UTXO per branch (`per_branch_funding`) avoids it.
+    /// Zero for a single branch (no fan-out).
     pub fanout_fee_sat: u64,
+    /// The part of `total_fee_sat` the final sweep pays. The sweep takes its fee
+    /// from the value it moves, so this is the one component subtracted from
+    /// what reaches `destination`.
+    pub sweep_fee_sat: u64,
     /// Fund a single UTXO of at least this many satoshis to exit with a fan-out.
+    /// Above `cpfp_fee_sat + fanout_fee_sat` by design: it carries the sweep fee
+    /// and a per-branch dust allowance as headroom, both of which come back to
+    /// you in the sweep.
     pub single_utxo_funding_sat: u64,
     /// To skip the fan-out, fund one UTXO per branch of at least the given
     /// amount (one entry per selected leaf).
@@ -3060,7 +3074,23 @@ pub struct UnilateralExitResponse {
     /// The actual total on-chain fee the returned transactions pay at the
     /// requested rate, in satoshis. A resumed or partially-confirmed exit pays
     /// less because already-confirmed steps are not rebuilt.
+    ///
+    /// The sum of the three components below, which say who pays what:
+    /// `cpfp_fee_sat + fanout_fee_sat + sweep_fee_sat`. The first two come from
+    /// your funding UTXOs, the third off the value being recovered.
     pub total_fee_sat: u64,
+    /// The part of `total_fee_sat` the CPFP children pay, funded by your UTXOs.
+    /// It does not reduce what the exit recovers.
+    pub cpfp_fee_sat: u64,
+    /// The part of `total_fee_sat` the fan-out pays, funded by your UTXO. Zero
+    /// when this exit needed no fan-out, and when an earlier attempt's fan-out
+    /// had already confirmed.
+    pub fanout_fee_sat: u64,
+    /// The part of `total_fee_sat` the sweep pays, taken from the value it
+    /// moves, so this is the one component subtracted from what reaches the
+    /// destination. Zero while no refund is on-chain yet and the set carries no
+    /// sweep.
+    pub sweep_fee_sat: u64,
     pub leaves: Vec<UnilateralExitLeaf>,
     /// The full signed transaction set, in valid topological (broadcast) order
     /// with shared ancestors appearing once and the sweep last.

@@ -122,7 +122,9 @@ impl BreezSdk {
             selected_leaves = quote.selected_leaves.len(),
             recoverable_value_sat,
             total_fee_sat = quote.total_fee_sat,
+            cpfp_fee_sat = quote.cpfp_fee_sat,
             fanout_fee_sat = quote.fanout_fee_sat,
+            sweep_fee_sat = quote.sweep_fee_sat,
             single_utxo_funding_sat = quote.single_utxo_funding_sat,
             branches = per_branch_funding.len(),
             "prepare_unilateral_exit: quote ready"
@@ -132,7 +134,9 @@ impl BreezSdk {
             leaves,
             recoverable_value_sat,
             total_fee_sat: quote.total_fee_sat,
+            cpfp_fee_sat: quote.cpfp_fee_sat,
             fanout_fee_sat: quote.fanout_fee_sat,
+            sweep_fee_sat: quote.sweep_fee_sat,
             single_utxo_funding_sat: quote.single_utxo_funding_sat,
             per_branch_funding,
             fee_rate_sat_per_vbyte: request.fee_rate_sat_per_vbyte,
@@ -298,7 +302,9 @@ impl BreezSdk {
 
         let build = build_unilateral_exit(&prepared_exit, &chain_state, fee_rate_sat_per_kw)?;
         let recoverable_value_sat = build.recoverable_value_sat;
-        let build_fee_sat = build.total_fee_sat;
+        let cpfp_fee_sat = build.cpfp_fee_sat;
+        let fanout_fee_sat = build.fanout_fee_sat;
+        let build_fee_sat = cpfp_fee_sat.saturating_add(fanout_fee_sat);
         // Captured before the loop below consumes `build.branches`.
         let sweep_status = sweep_initial_status(&build);
         debug!(
@@ -307,7 +313,8 @@ impl BreezSdk {
             refund_outputs = build.refund_outputs.len(),
             cpfp_change_inputs = build.cpfp_change_inputs.len(),
             recoverable_value_sat,
-            build_fee_sat,
+            cpfp_fee_sat,
+            fanout_fee_sat,
             "unilateral_exit: build assembled, signing"
         );
 
@@ -380,6 +387,9 @@ impl BreezSdk {
             return Ok(UnilateralExitResponse {
                 recoverable_value_sat,
                 total_fee_sat: build_fee_sat,
+                cpfp_fee_sat,
+                fanout_fee_sat,
+                sweep_fee_sat: 0,
                 leaves,
                 transactions,
                 funding_inputs: supplied_funding,
@@ -400,8 +410,8 @@ impl BreezSdk {
                 fee_rate_sat_per_kw,
             )
             .await?;
-        let actual_sweep_fee = sweep_fee(&sweep_psbt);
-        let total_fee_sat = build_fee_sat.saturating_add(actual_sweep_fee);
+        let sweep_fee_sat = sweep_fee(&sweep_psbt);
+        let total_fee_sat = build_fee_sat.saturating_add(sweep_fee_sat);
         let sweep_txid = sweep_psbt.unsigned_tx.compute_txid();
         trace!(
             txid = %sweep_txid,
@@ -424,11 +434,14 @@ impl BreezSdk {
         resolve_statuses(chain, &mut transactions).await?;
         debug!(
             transactions = transactions.len(),
-            recoverable_value_sat, total_fee_sat, "unilateral_exit: complete"
+            recoverable_value_sat, total_fee_sat, sweep_fee_sat, "unilateral_exit: complete"
         );
         Ok(UnilateralExitResponse {
             recoverable_value_sat,
             total_fee_sat,
+            cpfp_fee_sat,
+            fanout_fee_sat,
+            sweep_fee_sat,
             leaves,
             transactions,
             funding_inputs: supplied_funding,
@@ -1082,6 +1095,9 @@ fn empty_exit_response() -> UnilateralExitResponse {
     UnilateralExitResponse {
         recoverable_value_sat: 0,
         total_fee_sat: 0,
+        cpfp_fee_sat: 0,
+        fanout_fee_sat: 0,
+        sweep_fee_sat: 0,
         leaves: Vec::new(),
         transactions: Vec::new(),
         funding_inputs: Vec::new(),
@@ -1186,7 +1202,8 @@ mod tests {
             refund_outputs: vec![],
             cpfp_change_inputs: vec![],
             recoverable_value_sat: 0,
-            total_fee_sat: 0,
+            cpfp_fee_sat: 0,
+            fanout_fee_sat: 0,
         }
     }
 

@@ -329,7 +329,14 @@ pub struct UnilateralExitQuote {
     /// Per-branch funding to avoid a fan-out: (leaf id, minimum sats).
     pub per_branch_funding: Vec<(TreeNodeId, u64)>,
     pub single_utxo_funding_sat: u64,
+    /// CPFP children's fees, paid by the funding UTXOs.
+    pub cpfp_fee_sat: u64,
+    /// The fan-out's fee, paid by the funding UTXO. Zero for a single branch.
     pub fanout_fee_sat: u64,
+    /// The sweep's fee, paid out of the value being swept rather than by the
+    /// funding.
+    pub sweep_fee_sat: u64,
+    /// `cpfp_fee_sat + fanout_fee_sat + sweep_fee_sat`.
     pub total_fee_sat: u64,
 }
 
@@ -362,7 +369,9 @@ pub fn quote_unilateral_exit(
             selected_leaves: vec![],
             per_branch_funding: vec![],
             single_utxo_funding_sat: 0,
+            cpfp_fee_sat: 0,
             fanout_fee_sat: 0,
+            sweep_fee_sat: 0,
             total_fee_sat: 0,
         });
     }
@@ -375,9 +384,15 @@ pub fn quote_unilateral_exit(
         .iter()
         .map(|(_, sat)| *sat)
         .fold(0u64, u64::saturating_add);
-    let sum_estimated: u64 = selected
+    let cpfp_fee_sat: u64 = selected
         .iter()
-        .map(|l| l.estimated_cost)
+        .map(|l| l.cpfp_cost)
+        .fold(0u64, u64::saturating_add);
+    // Each leaf's sweep share is the marginal cost of adding its input, so the
+    // shares telescope to the fee of the one sweep that spends all of them.
+    let sweep_fee_sat: u64 = selected
+        .iter()
+        .map(|l| l.estimated_cost.saturating_sub(l.cpfp_cost))
         .fold(0u64, u64::saturating_add);
 
     let fanout_fee_sat = if selected.len() == 1 {
@@ -393,10 +408,14 @@ pub fn quote_unilateral_exit(
 
     Ok(UnilateralExitQuote {
         single_utxo_funding_sat: leaves_total.saturating_add(fanout_fee_sat),
-        total_fee_sat: sum_estimated.saturating_add(fanout_fee_sat),
+        total_fee_sat: cpfp_fee_sat
+            .saturating_add(fanout_fee_sat)
+            .saturating_add(sweep_fee_sat),
         selected_leaves: selected,
         per_branch_funding,
+        cpfp_fee_sat,
         fanout_fee_sat,
+        sweep_fee_sat,
     })
 }
 
@@ -1971,6 +1990,8 @@ mod tests {
             assert_eq!(quote.per_branch_funding[0].1, est + DUST);
             assert_eq!(quote.single_utxo_funding_sat, est + DUST);
             assert_eq!(quote.total_fee_sat, est);
+            assert_eq!(quote.cpfp_fee_sat, quote.selected_leaves[0].cpfp_cost);
+            assert_eq!(quote.sweep_fee_sat, est - quote.cpfp_fee_sat);
         }
 
         #[test_all]
@@ -2010,6 +2031,18 @@ mod tests {
             assert_eq!(
                 quote.single_utxo_funding_sat,
                 (517 + DUST) + (476 + DUST) + 141
+            );
+
+            // The per-leaf sweep shares are marginal, so they telescope to the fee
+            // of the single sweep that spends both leaves' inputs.
+            let per_leaf_input_weight = p2tr_key_path_input_weight() + Weight::from_wu(272);
+            assert_eq!(
+                quote.sweep_fee_sat,
+                compute_sweep_fee(per_leaf_input_weight * 2, 22, 250)
+            );
+            assert_eq!(
+                quote.cpfp_fee_sat + quote.fanout_fee_sat + quote.sweep_fee_sat,
+                quote.total_fee_sat
             );
         }
 

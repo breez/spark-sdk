@@ -189,9 +189,13 @@ fn parse_cpfp_input(s: &str, kind: FundingKindArg) -> Result<CpfpInput, anyhow::
 /// broadcast, so they show no package.
 fn print_exit_transactions(response: &UnilateralExitResponse) {
     println!(
-        "Recoverable {} sats, total fee {} sats, {} transaction(s):",
+        "Recoverable {} sats, total fee {} sats (cpfp {}, fanout {}, sweep {}), \
+         {} transaction(s):",
         response.recoverable_value_sat,
         response.total_fee_sat,
+        response.cpfp_fee_sat,
+        response.fanout_fee_sat,
+        response.sweep_fee_sat,
         response.transactions.len(),
     );
     for (i, tx) in response.transactions.iter().enumerate() {

@@ -168,9 +168,11 @@ pub struct UnilateralExitBuild {
     /// refund child was built fresh).
     pub cpfp_change_inputs: Vec<CpfpChangeInput>,
     pub recoverable_value_sat: u64,
-    /// CPFP-package fees of the txs built plus a fresh fan-out's fee; excludes the
-    /// sweep fee (the caller adds that).
-    pub total_fee_sat: u64,
+    /// CPFP-package fees of the txs built fresh, paid by the funding UTXOs.
+    pub cpfp_fee_sat: u64,
+    /// A freshly-broadcast fan-out's fee, paid by the funding UTXO. Zero when
+    /// there is no fan-out or it was adopted already-confirmed.
+    pub fanout_fee_sat: u64,
 }
 
 /// A refund output sitting on-chain after a unilateral exit.
@@ -1443,7 +1445,7 @@ pub(crate) fn build_exit(
         .iter()
         .map(|l| l.value)
         .fold(0u64, u64::saturating_add);
-    let total_fee_sat = cpfp_fee_sat.saturating_add(fresh_fan_out_fee(plan, fan_out.as_ref()));
+    let fanout_fee_sat = fresh_fan_out_fee(plan, fan_out.as_ref());
 
     debug!(
         has_fan_out = fan_out.is_some(),
@@ -1451,7 +1453,8 @@ pub(crate) fn build_exit(
         refund_outputs = refund_outputs.len(),
         cpfp_change_inputs = cpfp_change_inputs.len(),
         recoverable_value_sat,
-        total_fee_sat,
+        cpfp_fee_sat,
+        fanout_fee_sat,
         "build_unilateral_exit: assembled"
     );
     Ok(UnilateralExitBuild {
@@ -1460,7 +1463,8 @@ pub(crate) fn build_exit(
         refund_outputs,
         cpfp_change_inputs,
         recoverable_value_sat,
-        total_fee_sat,
+        cpfp_fee_sat,
+        fanout_fee_sat,
     })
 }
 
@@ -1993,7 +1997,8 @@ mod exit_build_tests {
             refund_outputs: vec![],
             cpfp_change_inputs: vec![],
             recoverable_value_sat: 0,
-            total_fee_sat: 0,
+            cpfp_fee_sat: 0,
+            fanout_fee_sat: 0,
         };
         let interpretation = ChainInterpretation {
             resolved: ResolvedExitState::default(),
@@ -2031,7 +2036,7 @@ mod exit_build_tests {
     }
 
     #[test]
-    fn build_total_fee_sums_built_cpfp_children() {
+    fn build_cpfp_fee_sums_built_cpfp_children() {
         let build =
             build_exit(&single_leaf_plan(), &ResolvedExitState::default(), FEE_RATE).unwrap();
         assert!(
@@ -2046,7 +2051,8 @@ mod exit_build_tests {
             .map(psbt_fee)
             .fold(0u64, u64::saturating_add);
         assert!(children_fee > 0);
-        assert_eq!(build.total_fee_sat, children_fee);
+        assert_eq!(build.cpfp_fee_sat, children_fee);
+        assert_eq!(build.fanout_fee_sat, 0);
     }
 
     #[test]
@@ -2061,11 +2067,11 @@ mod exit_build_tests {
         };
         let resumed = build_exit(&single_leaf_plan(), &resolved, FEE_RATE).unwrap();
         assert!(
-            resumed.total_fee_sat < all_driven.total_fee_sat,
+            resumed.cpfp_fee_sat < all_driven.cpfp_fee_sat,
             "a confirmed node is not rebuilt, so the resume pays less \
              ({} vs {})",
-            resumed.total_fee_sat,
-            all_driven.total_fee_sat
+            resumed.cpfp_fee_sat,
+            all_driven.cpfp_fee_sat
         );
     }
 
