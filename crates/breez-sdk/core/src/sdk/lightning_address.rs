@@ -2,8 +2,8 @@ use std::str::FromStr;
 
 use bitcoin::hex::DisplayHex;
 use lnurl_models::{sanitize_username, signed_message};
-use platform_utils::time::{SystemTime, UNIX_EPOCH};
 
+use crate::utils::time::try_now_secs;
 use crate::{
     AuthorizeTransferRequest, CheckLightningAddressRequest, ClaimTransferRequest,
     LightningAddressInfo, LnurlInfo, RegisterLightningAddressRequest, TransferAuthorization,
@@ -11,13 +11,6 @@ use crate::{
 };
 
 use super::BreezSdk;
-
-fn now_secs() -> Result<u64, SdkError> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs())
-        .map_err(|_| SdkError::Generic("system clock is before the Unix epoch".to_string()))
-}
 
 /// Lowercase compressed hex, the form the server rebuilds the signed message
 /// with. A caller-supplied pubkey that differs only in case or encoding would
@@ -166,7 +159,7 @@ impl BreezSdk {
 
         let self_pubkey = self.spark_wallet.get_identity_public_key().to_string();
         let transferee_pubkey = normalized_pubkey(&request.transferee_pubkey)?;
-        let timestamp = now_secs()?;
+        let timestamp = try_now_secs()?;
         let signature = self
             .spark_wallet
             .sign_message(&signed_message::transfer_from(
@@ -213,7 +206,8 @@ impl BreezSdk {
         // transferee sat on fails saying so rather than as a generic rejection.
         // Deliberately short: nothing revokes an authorization, so expiry is the
         // only thing that takes one back.
-        if now_secs()?.abs_diff(request.authorization.timestamp) > signed_message::VALIDITY_SECS {
+        if try_now_secs()?.abs_diff(request.authorization.timestamp) > signed_message::VALIDITY_SECS
+        {
             return Err(SdkError::InvalidInput(
                 "authorization is expired or not yet valid; ask the current owner to \
                  authorize the transfer again"

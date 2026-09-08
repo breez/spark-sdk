@@ -23,6 +23,7 @@ use crate::{
         StoredCrossChainSwap, parse_cached_lightning_address,
     },
     sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
+    utils::time::now_secs,
 };
 use platform_utils::tokio;
 use serde::{Deserialize, Serialize};
@@ -648,9 +649,7 @@ impl Storage for SyncedStorage {
     }
 
     async fn delete_contact(&self, id: String) -> Result<(), StorageError> {
-        let now = platform_utils::time::SystemTime::now()
-            .duration_since(platform_utils::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
+        let now = now_secs();
         let mut updated_fields = HashMap::new();
         updated_fields.insert(DELETED_AT_FIELD.to_string(), serde_json::json!(now));
         self.sync_service

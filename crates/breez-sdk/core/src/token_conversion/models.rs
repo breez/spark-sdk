@@ -161,8 +161,9 @@ impl FromStr for ConversionStatus {
 ///
 /// The variant identifies which provider handled the conversion:
 /// - [`ConversionInfo::Amm`] for Spark token swaps via Flashnet AMM pools.
-/// - [`ConversionInfo::Orchestra`] for cross-chain sends via Flashnet
-///   Orchestra (Spark → external chain).
+/// - [`ConversionInfo::Orchestra`] for cross-chain transfers via Flashnet
+///   Orchestra, in either direction (Spark → external chain, or external
+///   chain → Spark).
 /// - [`ConversionInfo::Boltz`] for sats → stable-coin reverse swaps via Boltz.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
@@ -191,7 +192,13 @@ pub enum ConversionInfo {
         #[serde(default)]
         degradation: Option<SwapDegradation>,
     },
-    /// Orchestra cross-chain conversion via the Flashnet orchestration API.
+    /// Orchestra cross-chain conversion via the Flashnet orchestration API,
+    /// in either direction.
+    ///
+    /// `chain`, `asset`, `asset_decimals` and `asset_contract` always describe
+    /// the external (non-Spark) side: the destination on a send, the source on
+    /// a receive. Amounts follow the direction of the transfer, so read each
+    /// amount field's own denomination.
     #[serde(rename = "orchestra")]
     Orchestra {
         /// The Orchestra order id returned by `/v1/orchestration/submit`.
@@ -212,20 +219,25 @@ pub enum ConversionInfo {
         /// Asset ticker (e.g. `"USDC"`, `"USDT"`).
         #[serde(default)]
         asset: String,
-        /// Recipient address on the target chain.
+        /// The target-chain address on a send, the receiving Spark address
+        /// on a receive.
         recipient_address: String,
-        /// Amount in expressed in the cross-chain asset's base units, via
-        /// the rate the SDK used at prepare time.
+        /// Amount paid in, in `asset` base units. On a send it is the Spark
+        /// amount expressed in `asset` via the rate the SDK used at prepare
+        /// time. On a receive it is the deposit the sender made on `chain`.
         #[serde(default, with = "serde_option_u128_as_string")]
         asset_amount_in: Option<u128>,
-        /// Estimated recipient amount, frozen at prepare time.
+        /// Estimated amount delivered to the receiving end, frozen at prepare
+        /// time. In `asset` base units on a send, and in Spark-side units on
+        /// a receive (sats for Bitcoin, token base units for a token).
         #[serde(with = "serde_u128_as_string")]
         estimated_out: u128,
-        /// Actual delivered amount, Unset until the order reaches a terminal state.
+        /// Actual delivered amount, in the same units as `estimated_out`.
+        /// Unset until the order reaches a terminal state.
         #[serde(default, with = "serde_option_u128_as_string")]
         delivered_amount: Option<u128>,
         status: ConversionStatus,
-        /// Best-available total fee in destination asset base units.
+        /// Best-available total fee, in `asset` base units.
         /// Prepare-time estimate while pending, realized fee when Completed.
         #[serde(default, with = "serde_option_u128_as_string")]
         fee_amount: Option<u128>,
@@ -242,7 +254,8 @@ pub enum ConversionInfo {
         service_fee_asset: Option<String>,
         /// Asset decimals (e.g. 6 for USDC).
         asset_decimals: u32,
-        /// Token contract / mint address. Unset for native-asset destinations.
+        /// Token contract / mint address on `chain`. Unset when that side is
+        /// the chain's native asset.
         #[serde(default)]
         asset_contract: Option<String>,
     },
@@ -310,7 +323,8 @@ pub enum ConversionInfo {
         service_fee_asset: Option<String>,
         /// Asset decimals (e.g. 6 for USDT).
         asset_decimals: u32,
-        /// Token contract / mint address. Unset for native-asset destinations.
+        /// Token contract / mint address on `chain`. Unset when that side is
+        /// the chain's native asset.
         #[serde(default)]
         asset_contract: Option<String>,
     },

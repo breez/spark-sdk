@@ -99,6 +99,7 @@ pub enum ReceivePaymentMethodArg {
     SparkInvoice,
     Bitcoin,
     Bolt11,
+    CrossChain,
 }
 
 #[derive(Clone, Parser)]
@@ -176,11 +177,16 @@ pub enum Command {
         #[clap(short = 'd', long = "description")]
         description: Option<String>,
 
-        /// The amount the payer should send, in sats or token base units.
+        /// The amount the payer should send, in sats, token base units, or
+        /// (for cross-chain receive) the source asset's base units at
+        /// `route.decimals` (USD-stable parity, e.g. `1_000_000` for $1 on
+        /// 6-decimal USDC).
         #[arg(short = 'a', long)]
         amount: Option<u128>,
 
-        /// Optional token identifier. Only used if the payment method is a spark invoice. Absence indicates sats payment.
+        /// Optional token identifier. On spark invoice, names the invoice's asset
+        /// (absent = sats). On cross-chain receive, picks the Spark-side
+        /// destination token (absent = auto: active stable-balance or BTC).
         #[arg(short = 't', long)]
         token_identifier: Option<String>,
 
@@ -199,6 +205,23 @@ pub enum Command {
         /// Request a new bitcoin deposit address instead of reusing the current one.
         #[arg(long)]
         new_address: bool,
+
+        /// Maximum slippage in basis points for cross-chain receives. Must be in 10..=500.
+        /// Falls back to the SDK config default (100 bps) when unset.
+        #[arg(long = "cross-chain-max-slippage-bps")]
+        cross_chain_max_slippage_bps: Option<u32>,
+
+        /// If set, fees will be deducted from the specified amount instead of being
+        /// padded onto the deposit shown to the sender. Defaults to fees-excluded
+        /// (the receiver's net target is preserved).
+        #[arg(long = "cross-chain-fees-included", action = clap::ArgAction::SetTrue)]
+        cross_chain_fees_included: bool,
+
+        /// Per-request override for the overpay buffer applied to the sender's
+        /// deposit when using the default fees-excluded mode. Must be in 0..=500.
+        /// Falls back to the SDK config default (15 bps) when unset.
+        #[arg(long = "cross-chain-target-overpay-bps")]
+        cross_chain_target_overpay_bps: Option<u32>,
     },
 
     /// Pay the given payment request
@@ -765,6 +788,9 @@ pub(crate) async fn execute_command(
             sender_public_key,
             hodl,
             new_address,
+            cross_chain_max_slippage_bps,
+            cross_chain_fees_included,
+            cross_chain_target_overpay_bps,
         } => {
             let payment_method = match payment_method {
                 ReceivePaymentMethodArg::SparkAddress => ReceivePaymentMethod::SparkAddress,
@@ -808,6 +834,31 @@ pub(crate) async fn execute_command(
                         expiry_secs,
                         payment_hash,
                         receiver_identity_public_key: None,
+                    }
+                }
+                ReceivePaymentMethodArg::CrossChain => {
+                    let amount = amount.ok_or_else(|| {
+                        anyhow::anyhow!("--amount is required for cross-chain receive")
+                    })?;
+                    let filter = breez_sdk_spark::CrossChainRouteFilter::Receive {
+                        contract_address: None,
+                    };
+                    let route = select_cross_chain_route(sdk, rl, filter).await?;
+                    let fee_mode = if cross_chain_fees_included {
+                        Some(breez_sdk_spark::CrossChainFeeMode::FeesIncluded)
+                    } else {
+                        None
+                    };
+                    let destination = token_identifier.map(|token_identifier| {
+                        breez_sdk_spark::SparkAsset::Token { token_identifier }
+                    });
+                    ReceivePaymentMethod::CrossChain {
+                        route,
+                        amount,
+                        destination,
+                        fee_mode,
+                        max_slippage_bps: cross_chain_max_slippage_bps,
+                        target_overpay_bps: cross_chain_target_overpay_bps,
                     }
                 }
             };
@@ -1292,7 +1343,7 @@ pub(crate) async fn execute_command(
     }
 }
 
-/// Fetches cross-chain routes for the given address and prompts the user to
+/// Fetches cross-chain routes for the given filter and prompts the user to
 /// select one. If only a single route is available it is auto-selected.
 async fn select_cross_chain_route(
     sdk: &BreezSdk,
@@ -1301,9 +1352,7 @@ async fn select_cross_chain_route(
 ) -> Result<CrossChainRoutePair, anyhow::Error> {
     let routes = sdk.get_cross_chain_routes(&filter).await?;
     if routes.is_empty() {
-        return Err(anyhow::anyhow!(
-            "No cross-chain routes available for this address"
-        ));
+        return Err(anyhow::anyhow!("No cross-chain routes available"));
     }
 
     if routes.len() == 1 {

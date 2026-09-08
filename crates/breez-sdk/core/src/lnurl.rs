@@ -4,11 +4,12 @@ use lnurl_models::{
     RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
     RegisterLnurlPayResponse, TransferLnurlPayRequest, UnregisterLnurlPayRequest, signed_message,
 };
-use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use platform_utils::{ContentType, HttpClient, add_content_type_header};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
+
+use crate::utils::time::try_now_secs;
 
 /// Headers `list_metadata` sends its credential in, keeping it out of the query
 /// string and so out of proxy and access logs. The response carries preimages.
@@ -218,10 +219,7 @@ impl DefaultLnurlServerClient {
     /// Seconds since the Unix epoch, the unit every signed message and every
     /// `timestamp` field on the wire uses.
     fn now() -> Result<u64, LnurlServerError> {
-        Ok(SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| LnurlServerError::SigningError("invalid systemtime".to_string()))?
-            .as_secs())
+        try_now_secs().map_err(|_| LnurlServerError::SigningError("invalid systemtime".to_string()))
     }
 
     /// Sign one canonical message, hex-encoding the DER signature the way the

@@ -7,7 +7,6 @@ use flashnet::{
     GetMinAmountsRequest, ListClawbackTransfersRequest, ListPoolsRequest, ListUserSwapsRequest,
     PoolSortOrder, SimulateSwapRequest, Swap, SwapOutcome, SwapSortOrder,
 };
-use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use spark_wallet::{SparkWallet, TransferId};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
@@ -23,6 +22,7 @@ use crate::{
             insert_payment_with_metadata, resolve_and_insert_payment_metadata, resolve_payment_id,
         },
         polling::{PollSchedule, poll_until},
+        time::now_secs,
     },
 };
 
@@ -529,10 +529,7 @@ impl FlashnetTokenConverter {
             clawback_transfers.transfers.len()
         );
 
-        let cutoff_secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs())
-            .saturating_sub(RECONCILE_MIN_AGE_SECS);
+        let cutoff_secs = now_secs().saturating_sub(RECONCILE_MIN_AGE_SECS);
         let mut res = RefundPendingConversionsResponse::default();
         for transfer in clawback_transfers.transfers {
             if !transfer_is_older_than(&transfer, cutoff_secs) {
