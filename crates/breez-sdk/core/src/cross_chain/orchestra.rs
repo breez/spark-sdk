@@ -1379,9 +1379,9 @@ impl CrossChainService for OrchestraService {
             expires_at: expires_at_secs,
         };
 
-        let adapter = OrchestraStorageAdapter::new(Arc::clone(&self.storage));
-        adapter.upsert(&data).await?;
-
+        // Persist only once the request the caller gets back is in hand: a
+        // row written for a request that failed to build is polled for the
+        // whole grace window against a quote nobody is paying.
         let payment_request = super::build_receive_payment_request(
             &quote.deposit_address,
             &route.chain,
@@ -1389,6 +1389,9 @@ impl CrossChainService for OrchestraService {
             route.contract_address.as_deref(),
             deposit_amount,
         )?;
+
+        let adapter = OrchestraStorageAdapter::new(Arc::clone(&self.storage));
+        adapter.upsert(&data).await?;
 
         Ok(CrossChainReceivePrepared {
             payment_request,

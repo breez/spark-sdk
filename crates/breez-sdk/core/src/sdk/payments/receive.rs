@@ -8,15 +8,13 @@ use tracing::debug;
 
 use crate::{
     ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse,
-    cross_chain::{
-        CrossChainReceivePrepared, CrossChainRoutePair, DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS,
-        MAX_CROSS_CHAIN_SLIPPAGE_BPS, MIN_CROSS_CHAIN_SLIPPAGE_BPS, SparkAsset,
-    },
+    cross_chain::{CrossChainReceivePrepared, CrossChainRoutePair, SparkAsset},
     error::SdkError,
     models::{Payment, ReceivePaymentMethod, ReceivePaymentRequest, ReceivePaymentResponse},
 };
 
 use super::super::{BreezSdk, helpers::get_deposit_address};
+use super::validation::resolve_slippage_bps;
 
 pub(super) async fn receive_payment(
     sdk: &BreezSdk,
@@ -140,14 +138,13 @@ async fn receive_cross_chain(
             route.asset
         )));
     }
-    let slippage = max_slippage_bps.unwrap_or(DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS);
-    if !(MIN_CROSS_CHAIN_SLIPPAGE_BPS..=MAX_CROSS_CHAIN_SLIPPAGE_BPS).contains(&slippage) {
-        return Err(SdkError::InvalidInput(format!(
-            "Cross-chain max_slippage_bps must be in \
-             {MIN_CROSS_CHAIN_SLIPPAGE_BPS} to {MAX_CROSS_CHAIN_SLIPPAGE_BPS}. \
-             Got {slippage}."
-        )));
-    }
+    let slippage = resolve_slippage_bps(
+        max_slippage_bps,
+        sdk.config
+            .cross_chain_config
+            .as_ref()
+            .and_then(|c| c.default_slippage_bps),
+    )?;
     let fee_mode = fee_mode.unwrap_or(crate::cross_chain::CrossChainFeeMode::FeesExcluded);
     let overpay_bps = crate::cross_chain::resolve_target_overpay_bps(
         target_overpay_bps,
@@ -167,6 +164,12 @@ async fn receive_cross_chain(
         amount,
     )
     .await?;
+    if provider_amount == 0 {
+        return Err(SdkError::InvalidInput(format!(
+            "Cross-chain receive amount {amount} is too small for this route: it converts to \
+             zero units of the requested destination."
+        )));
+    }
 
     let service = sdk.cross_chain_context.get(route.provider)?.clone();
 

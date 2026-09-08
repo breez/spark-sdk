@@ -191,6 +191,36 @@ const MIN_STABLE_SWEEP: u128 = 1_000_000;
 /// public-endpoint latency spike doesn't fail the test.
 const TX_CONFIRM_TIMEOUT_SECS: u64 = 300;
 
+/// How long to wait for the delivery's payment event after its balance has
+/// already landed. The event trails the balance by a sync pass at most.
+const RECEIVE_EVENT_TIMEOUT_SECS: u64 = 120;
+
+/// The conversion info a payment carries, whichever details variant holds it.
+fn conversion_info_of(payment: &Payment) -> Option<&ConversionInfo> {
+    match payment.details.as_ref()? {
+        PaymentDetails::Spark {
+            conversion_info, ..
+        }
+        | PaymentDetails::Token {
+            conversion_info, ..
+        }
+        | PaymentDetails::Lightning {
+            conversion_info, ..
+        } => conversion_info.as_ref(),
+        _ => None,
+    }
+}
+
+/// Empties the event channel so a later assertion only sees what the deposit
+/// caused.
+fn drain_events(alice: &mut SdkInstance) {
+    let mut drained = 0;
+    while alice.events.try_recv().is_ok() {
+        drained += 1;
+    }
+    debug!("Drained {drained} queued SDK events");
+}
+
 fn env_amount_or(var: &str, default: u128) -> u128 {
     std::env::var(var)
         .ok()
@@ -929,6 +959,7 @@ async fn run_cross_chain_evm_receive(
     }
 
     // 7. Broadcast the ERC-20 transfer.
+    drain_events(alice);
     let tx_hash = evm_send_erc20(
         &rpc_url,
         &signer,
@@ -1000,6 +1031,30 @@ async fn run_cross_chain_evm_receive(
             );
         }
     }
+
+    // 9. The delivery has to reach event listeners, not just the balance.
+    //    The inbound payment carries Orchestra conversion info, and treating a
+    //    conversion-tagged payment as an internal leg has the event middleware
+    //    swallow it, leaving an app with no signal that the money arrived.
+    let event_payment = wait_for_payment_succeeded_event(
+        &mut alice.events,
+        PaymentType::Receive,
+        RECEIVE_EVENT_TIMEOUT_SECS,
+    )
+    .await
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "cross-chain receive {source_asset}→{dest_label} delivered {delivered} but emitted \
+             no PaymentSucceeded event: {e}"
+        )
+    })?;
+    info!(
+        "Receive event: payment {} for {} ({:?}), conversion_info present: {}",
+        event_payment.id,
+        event_payment.amount,
+        event_payment.method,
+        conversion_info_of(&event_payment).is_some()
+    );
 
     // 10. Assert the fees-excluded contract when a parity target is set.
     if let Some(target) = parity_min_out {

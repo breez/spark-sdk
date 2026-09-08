@@ -258,18 +258,20 @@ pub struct Payment {
 impl Payment {
     /// Returns `true` if this payment is a child of a conversion operation.
     ///
-    /// Conversion operations (stable balance, ongoing sends) create internal child
-    /// payments (send sats→Flashnet, receive tokens). These are identified by having
-    /// `conversion_info` set in their payment details.
+    /// An AMM conversion (stable balance, convert-on-send) settles as its own
+    /// payments: sats out to the pool, tokens back in. Those legs are internal
+    /// plumbing, so they carry [`ConversionInfo::Amm`]. A cross-chain
+    /// conversion has no such legs: it annotates the payment the user made or
+    /// received, which is never a child.
     pub fn is_conversion_child(&self) -> bool {
         matches!(
             &self.details,
             Some(
                 PaymentDetails::Spark {
-                    conversion_info: Some(_),
+                    conversion_info: Some(ConversionInfo::Amm { .. }),
                     ..
                 } | PaymentDetails::Token {
-                    conversion_info: Some(_),
+                    conversion_info: Some(ConversionInfo::Amm { .. }),
                     ..
                 }
             )
@@ -3045,4 +3047,79 @@ pub struct ImportUnilateralExitStateResponse {
     /// incomplete, the wallet's own copy can already back an exit, or the leaf
     /// was named more than once. The leaf itself is in the wallet either way.
     pub skipped_chains: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ConversionStatus, PaymentMethod};
+    use macros::test_all;
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    fn spark_payment(conversion_info: Option<ConversionInfo>) -> Payment {
+        Payment {
+            id: "pmt".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Completed,
+            amount: 1_000,
+            fees: 0,
+            timestamp: 0,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: None,
+                conversion_info,
+            }),
+            conversion_details: None,
+        }
+    }
+
+    fn amm_info() -> ConversionInfo {
+        ConversionInfo::Amm {
+            pool_id: "pool".to_string(),
+            conversion_id: "conv".to_string(),
+            status: ConversionStatus::Completed,
+            fee: None,
+            purpose: None,
+            amount_adjustment: None,
+            degradation: None,
+        }
+    }
+
+    fn orchestra_info() -> ConversionInfo {
+        ConversionInfo::Orchestra {
+            order_id: "ord".to_string(),
+            quote_id: "q".to_string(),
+            read_token: None,
+            chain: "base".to_string(),
+            chain_id: Some("8453".to_string()),
+            asset: "USDC".to_string(),
+            recipient_address: "sp1rcv".to_string(),
+            asset_amount_in: Some(1_000_000),
+            estimated_out: 990_000,
+            delivered_amount: Some(990_000),
+            status: ConversionStatus::Completed,
+            fee_amount: Some(10_000),
+            service_fee_amount: None,
+            service_fee_asset: None,
+            asset_decimals: 6,
+            asset_contract: None,
+        }
+    }
+
+    #[test_all]
+    fn only_amm_legs_are_conversion_children() {
+        // The AMM settles a conversion as its own payments, and those are the
+        // ones the event middleware keeps to itself.
+        assert!(spark_payment(Some(amm_info())).is_conversion_child());
+
+        // A cross-chain conversion annotates the payment the user made or
+        // received. Treating it as a child would swallow its events, which on
+        // receive is the only signal the funds arrived.
+        assert!(!spark_payment(Some(orchestra_info())).is_conversion_child());
+
+        assert!(!spark_payment(None).is_conversion_child());
+    }
 }
