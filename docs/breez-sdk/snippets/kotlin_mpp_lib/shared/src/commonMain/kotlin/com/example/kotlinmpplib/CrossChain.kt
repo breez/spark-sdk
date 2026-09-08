@@ -132,10 +132,12 @@ class CrossChain {
             println("Payment request: ${response.paymentRequest}")
             val info = response.crossChainInfo
             if (info != null) {
-                val denom = if (info.tokenIdentifier != null) "USDB" else "BTC"
                 println("Deposit address: ${info.depositAddress}")
                 println("Deposit amount: ${info.depositAmount}")
-                println("Expected received: ${info.expectedReceivedAmount} $denom")
+                println(
+                    "Expected received: ${info.expectedReceivedAmount} " +
+                        "${info.destinationAsset}",
+                )
                 println("Expires at: ${info.expiresAt}")
             }
         } catch (e: Exception) {

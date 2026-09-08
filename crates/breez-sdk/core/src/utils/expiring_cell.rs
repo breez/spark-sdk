@@ -1,6 +1,7 @@
-use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use platform_utils::tokio;
 use tokio::sync::RwLock;
+
+use super::time::{checked_now_ms, now_ms};
 
 /// A cell that holds a value with a time-to-live (TTL) expiration.
 ///
@@ -28,11 +29,7 @@ impl<T: Clone> ExpiringCell<T> {
     pub async fn get(&self) -> Option<T> {
         let guard = self.inner.read().await;
         let (value, expiration) = guard.as_ref()?;
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .ok()?
-            .as_millis();
-        if now < *expiration {
+        if checked_now_ms()? < *expiration {
             Some(value.clone())
         } else {
             None
@@ -41,9 +38,7 @@ impl<T: Clone> ExpiringCell<T> {
 
     /// Sets a new value with the specified TTL in milliseconds.
     pub async fn set(&self, value: T, ttl_ms: u128) {
-        let expiration = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis().saturating_add(ttl_ms));
+        let expiration = now_ms().saturating_add(ttl_ms);
         *self.inner.write().await = Some((value, expiration));
     }
 }

@@ -120,13 +120,14 @@ const exampleReceivePaymentCrossChain = async (
       depositAddress,
       depositAmount,
       expectedReceivedAmount,
-      tokenIdentifier,
+      destinationAsset,
       expiresAt
     } = response.crossChainInfo
-    const denom = tokenIdentifier !== undefined ? 'USDB' : 'BTC'
     console.debug(`Deposit address: ${depositAddress}`)
     console.debug(`Deposit amount: ${depositAmount}`)
-    console.debug(`Expected received: ${expectedReceivedAmount} ${denom}`)
+    console.debug(
+      `Expected received: ${expectedReceivedAmount} ${destinationAsset}`
+    )
     console.debug(`Expires at: ${expiresAt}`)
   }
   // ANCHOR_END: cross-chain-receive

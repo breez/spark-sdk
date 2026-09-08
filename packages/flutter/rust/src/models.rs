@@ -495,6 +495,7 @@ pub struct _CrossChainReceiveInfo {
     pub deposit_address: String,
     pub deposit_amount: u128,
     pub expected_received_amount: u128,
+    pub destination_asset: String,
     pub token_identifier: Option<String>,
     pub service_fee_amount: u128,
     pub service_fee_asset: Option<String>,

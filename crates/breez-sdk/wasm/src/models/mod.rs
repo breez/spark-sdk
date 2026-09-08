@@ -1209,6 +1209,7 @@ pub struct CrossChainReceiveInfo {
     #[tsify(type = "string")]
     #[serde(with = "serde_u128_as_string")]
     pub expected_received_amount: u128,
+    pub destination_asset: String,
     pub token_identifier: Option<String>,
     #[tsify(type = "string")]
     #[serde(with = "serde_u128_as_string")]

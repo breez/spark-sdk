@@ -492,7 +492,7 @@ impl BreezSdk {
         // the route can't be funded that way. Rejecting an empty
         // `delivery_methods` stops a hand-built route from reaching
         // `prepare` and committing provider state it can't fund.
-        if !route_supports_source_chain(&route, DeliveryMethod::Lightning) {
+        if !route_supports_delivery_method(&route, DeliveryMethod::Lightning) {
             return Err(SdkError::InvalidInput(
                 "The selected route can't be funded over Lightning".to_string(),
             ));
@@ -587,10 +587,10 @@ impl BreezSdk {
     }
 }
 
-/// Whether `route` advertises `required` as a fundable source chain. An empty
-/// `delivery_methods` (e.g. a hand-built route) matches nothing and is
+/// Whether `route` advertises `required` as a fundable delivery method. An
+/// empty `delivery_methods` (e.g. a hand-built route) matches nothing and is
 /// rejected.
-fn route_supports_source_chain(route: &CrossChainRoutePair, required: DeliveryMethod) -> bool {
+fn route_supports_delivery_method(route: &CrossChainRoutePair, required: DeliveryMethod) -> bool {
     route.delivery_methods.contains(&required)
 }
 
@@ -703,7 +703,7 @@ fn parse_compressed_public_key(hex_encoded: &str) -> Result<PublicKey, SdkError>
 mod tests {
     use super::{
         CashAppProvider, SdkError, deposit_target, parse_compressed_public_key,
-        prepare_payment_link_response, reject_reserved_namespace, route_supports_source_chain,
+        prepare_payment_link_response, reject_reserved_namespace, route_supports_delivery_method,
     };
     use crate::cross_chain::{CrossChainProviderContext, CrossChainSendPrepared};
     use crate::{CrossChainFeeMode, CrossChainProvider, CrossChainRoutePair, DeliveryMethod};
@@ -720,7 +720,7 @@ mod tests {
         }
     }
 
-    fn route_with_source_chains(chains: Vec<DeliveryMethod>) -> CrossChainRoutePair {
+    fn route_with_delivery_methods(methods: Vec<DeliveryMethod>) -> CrossChainRoutePair {
         CrossChainRoutePair {
             provider: CrossChainProvider::Orchestra,
             chain: "base".to_string(),
@@ -730,31 +730,34 @@ mod tests {
             decimals: 6,
             exact_out_eligible: false,
             accepted_assets: vec![],
-            delivery_methods: chains,
+            delivery_methods: methods,
         }
     }
 
     #[test_all]
-    fn route_supports_source_chain_checks_membership() {
-        let lightning_only = route_with_source_chains(vec![DeliveryMethod::Lightning]);
+    fn route_supports_delivery_method_checks_membership() {
+        let lightning_only = route_with_delivery_methods(vec![DeliveryMethod::Lightning]);
         // Cash App (Lightning) is supported; MoonPay (Bitcoin) is not.
-        assert!(route_supports_source_chain(
+        assert!(route_supports_delivery_method(
             &lightning_only,
             DeliveryMethod::Lightning
         ));
-        assert!(!route_supports_source_chain(
+        assert!(!route_supports_delivery_method(
             &lightning_only,
             DeliveryMethod::Bitcoin
         ));
 
         let both =
-            route_with_source_chains(vec![DeliveryMethod::Lightning, DeliveryMethod::Bitcoin]);
-        assert!(route_supports_source_chain(&both, DeliveryMethod::Bitcoin));
+            route_with_delivery_methods(vec![DeliveryMethod::Lightning, DeliveryMethod::Bitcoin]);
+        assert!(route_supports_delivery_method(
+            &both,
+            DeliveryMethod::Bitcoin
+        ));
 
         // An empty list matches nothing: a route must advertise its rails, so a
         // hand-built route can't slip a bad rail through to `prepare`.
-        let empty = route_with_source_chains(vec![]);
-        assert!(!route_supports_source_chain(
+        let empty = route_with_delivery_methods(vec![]);
+        assert!(!route_supports_delivery_method(
             &empty,
             DeliveryMethod::Bitcoin
         ));

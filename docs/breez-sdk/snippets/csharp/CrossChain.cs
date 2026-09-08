@@ -118,9 +118,9 @@ namespace BreezSdkSnippets
             {
                 Console.WriteLine($"Deposit address: {info.depositAddress}");
                 Console.WriteLine($"Deposit amount: {info.depositAmount}");
-                var denom = info.tokenIdentifier is null ? "BTC" : "USDB";
                 Console.WriteLine(
-                    $"Expected received: {info.expectedReceivedAmount} {denom}"
+                    "Expected received: "
+                        + $"{info.expectedReceivedAmount} {info.destinationAsset}"
                 );
                 Console.WriteLine($"Expires at: {info.expiresAt}");
             }

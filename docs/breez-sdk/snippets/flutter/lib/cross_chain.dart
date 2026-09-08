@@ -116,10 +116,11 @@ Future<ReceivePaymentResponse> receivePaymentCrossChain(
   print("Payment request: ${response.paymentRequest}");
   final info = response.crossChainInfo;
   if (info != null) {
-    final denom = info.tokenIdentifier != null ? "USDB" : "BTC";
     print("Deposit address: ${info.depositAddress}");
     print("Deposit amount: ${info.depositAmount}");
-    print("Expected received: ${info.expectedReceivedAmount} $denom");
+    print(
+      "Expected received: ${info.expectedReceivedAmount} ${info.destinationAsset}",
+    );
     print("Expires at: ${info.expiresAt}");
   }
   // ANCHOR_END: cross-chain-receive

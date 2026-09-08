@@ -14,6 +14,7 @@ use crate::{
     Storage,
     error::SdkError,
     persist::{StorageError, StoredCrossChainSwap},
+    utils::time::now_secs,
 };
 
 pub(crate) const PROVIDER_TAG_ORCHESTRA: &str = "orchestra";
@@ -22,11 +23,13 @@ pub(crate) const PROVIDER_TAG_ORCHESTRA: &str = "orchestra";
 /// the row through two states:
 ///
 /// * **Pre-order** (`order_id` / `read_token` absent): probe `POST /submit`
-///   with a fresh idempotency key each tick. Any error means "no deposit
-///   yet". A 200 returns `{ orderId, readToken }` and the adapter writes
-///   both. This is the only mid-flight mutation before the terminal flip.
+///   with a fresh idempotency key, every tick while the quote is live and on
+///   the poller's slower in-memory clock once it expires. Any error means "no
+///   deposit yet". A 200 returns `{ orderId, readToken }` and the adapter
+///   writes both.
 /// * **Order in flight** (`order_id` / `read_token` set): poll
-///   `GET /status?id={orderId}&readToken={token}` until terminal.
+///   `GET /status?id={orderId}&readToken={token}` until terminal. `/submit`
+///   is idempotent, so a rejected read token is refreshed by probing again.
 ///
 /// Live status / `sparkTxHash` / `amountOut` / refund tx are always read
 /// off the poll response, never cached here.
@@ -103,7 +106,7 @@ impl OrchestraStorageAdapter {
             provider: PROVIDER_TAG_ORCHESTRA.to_string(),
             id: data.quote_id.clone(),
             is_terminal: false,
-            updated_at: current_unix_seconds(),
+            updated_at: now_secs(),
             data: serialized,
             secrets: String::new(),
         })
@@ -161,7 +164,7 @@ impl OrchestraStorageAdapter {
                 "Failed to serialize Orchestra row after submit response: {e}"
             ))
         })?;
-        row.updated_at = current_unix_seconds();
+        row.updated_at = now_secs();
         self.storage
             .set_cross_chain_swap(row.clone())
             .await
@@ -175,7 +178,7 @@ impl OrchestraStorageAdapter {
         mut row: StoredCrossChainSwap,
     ) -> Result<(), SdkError> {
         row.is_terminal = true;
-        row.updated_at = current_unix_seconds();
+        row.updated_at = now_secs();
         self.storage
             .set_cross_chain_swap(row)
             .await
@@ -185,13 +188,6 @@ impl OrchestraStorageAdapter {
 
 fn map_storage_err(e: &StorageError) -> SdkError {
     SdkError::StorageError(e.to_string())
-}
-
-fn current_unix_seconds() -> u64 {
-    use platform_utils::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
 }
 
 #[cfg(test)]

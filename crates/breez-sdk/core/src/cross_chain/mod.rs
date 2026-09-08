@@ -171,16 +171,24 @@ impl std::fmt::Display for DeliveryMethod {
     }
 }
 
-/// How the caller wants fees handled against the request `amount`.
-///
-/// - `FeesExcluded`: `amount` is the provider invoice/deposit target; the
-///   wallet pays `amount + source_transfer_fee_sats` in total.
-/// - `FeesIncluded`: `amount` is the wallet's total sats budget; the provider
-///   leg is sized so `amount_in + source_transfer_fee_sats <= amount`.
+/// Which side of the transfer the request `amount` sizes: what leaves the
+/// payer, or what reaches the receiver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum CrossChainFeeMode {
+    /// `amount` sizes the receiving end, and fees are paid on top.
+    ///
+    /// Sending: `amount` is the provider invoice/deposit target, and the
+    /// wallet pays `amount + source_transfer_fee_sats` in total.
+    /// Receiving: `amount` is what the wallet ends up with, and the deposit
+    /// the sender is asked for is sized above it to cover fees.
     FeesExcluded,
+    /// `amount` sizes the paying end, and fees come out of it.
+    ///
+    /// Sending: `amount` is the wallet's total sats budget, and the provider
+    /// leg is sized so `amount_in + source_transfer_fee_sats <= amount`.
+    /// Receiving: `amount` is the deposit the sender makes, and the wallet
+    /// ends up with that minus fees.
     FeesIncluded,
 }
 
@@ -352,6 +360,10 @@ pub struct CrossChainReceiveInfo {
     /// or token base units when receiving a Spark token (e.g. USDB). The
     /// final delivered amount may move within the slippage tolerance.
     pub expected_received_amount: u128,
+    /// Symbol of the Spark-side asset `expected_received_amount` is
+    /// denominated in, as the provider reports it: `"BTC"` for sats, or the
+    /// token symbol (e.g. `"USDB"`).
+    pub destination_asset: String,
     /// Spark token identifier when the destination is a token. Absent when
     /// the destination is BTC and the receiver will see sats.
     pub token_identifier: Option<String>,

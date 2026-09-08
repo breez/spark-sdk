@@ -234,7 +234,8 @@ async fn convert_receive_amount_to_provider_units(
             rescale_decimals(amount, src_decimals, 6)
         }
         (CrossChainFeeMode::FeesExcluded, SparkAsset::Bitcoin) => {
-            let btc_usd = fetch_btc_usd_rate(sdk.fiat_service.as_ref()).await?;
+            let btc_usd =
+                fetch_btc_usd_rate(sdk.cross_chain_context.fiat_service().as_ref()).await?;
             convert_source_amount_to_sats(amount, src_decimals, btc_usd)
         }
     }

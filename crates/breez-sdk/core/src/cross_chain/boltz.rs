@@ -16,11 +16,8 @@ use boltz_client::{
 };
 use breez_sdk_common::fiat::FiatService;
 use breez_sdk_common::input::CrossChainAddressFamily;
+use platform_utils::tokio;
 use platform_utils::tokio::sync::OnceCell;
-use platform_utils::{
-    time::{SystemTime, UNIX_EPOCH},
-    tokio,
-};
 use spark_wallet::SparkWallet;
 use tokio::{select, sync::watch, time::sleep};
 use tracing::{debug, error, info, warn};
@@ -39,6 +36,7 @@ use crate::{
     utils::{
         payments::resolve_and_insert_payment_metadata,
         polling::{PollSchedule, poll_until},
+        time::try_now_secs,
     },
 };
 
@@ -862,11 +860,7 @@ fn validate_quote_expiry(expires_at: &str) -> Result<(), SdkError> {
     let exp_secs: u64 = expires_at
         .parse()
         .map_err(|e| SdkError::Generic(format!("Boltz: invalid expires_at {expires_at:?}: {e}")))?;
-    let now_secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| SdkError::Generic("Failed to read current time".to_string()))?
-        .as_secs();
-    if now_secs >= exp_secs {
+    if try_now_secs()? >= exp_secs {
         return Err(SdkError::InvalidInput(
             "Cross-chain quote has expired. Please re-prepare.".to_string(),
         ));

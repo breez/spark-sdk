@@ -5,8 +5,8 @@
 //! complete set of rules for an input type is visible in that type's own file.
 
 use breez_sdk_common::input;
-use platform_utils::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::utils::time::try_now_secs;
 use crate::{
     ConversionOptions, ConversionType, CrossChainRouteFilter, CrossChainRoutePair, FeePolicy,
     SparkInvoiceDetails,
@@ -24,13 +24,10 @@ pub(in crate::sdk) fn validate_spark_invoice_payable(
     details: &SparkInvoiceDetails,
     identity_public_key: &str,
 ) -> Result<(), SdkError> {
-    if let Some(expiry_time) = details.expiry_time {
-        let current_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| SdkError::Generic("Failed to get current time".to_string()))?;
-        if current_time > Duration::from_secs(expiry_time) {
-            return Err(SdkError::InvalidInput("Invoice has expired".to_string()));
-        }
+    if let Some(expiry_time) = details.expiry_time
+        && try_now_secs()? > expiry_time
+    {
+        return Err(SdkError::InvalidInput("Invoice has expired".to_string()));
     }
 
     if let Some(sender_public_key) = &details.sender_public_key

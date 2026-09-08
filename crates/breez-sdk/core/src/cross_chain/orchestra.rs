@@ -16,7 +16,7 @@ use flashnet::orchestra::{
     Route, RouteAsset, StatusResponse, SubmitResponse,
 };
 use flashnet::{FlashnetError, OrchestraClient, OrchestraConfig, OrchestraConfigResolver};
-use platform_utils::time::{Duration, SystemTime, UNIX_EPOCH};
+use platform_utils::time::Duration;
 use platform_utils::tokio;
 use spark_wallet::SparkWallet;
 use tokio::{
@@ -26,7 +26,10 @@ use tokio::{
 use tracing::{Instrument, debug, error, info, warn};
 
 use crate::error::SdkError;
-use crate::persist::{ConversionFilter, StorageListPaymentsRequest, StoragePaymentDetailsFilter};
+use crate::persist::{
+    ConversionFilter, ObjectCacheRepository, StorageListPaymentsRequest,
+    StoragePaymentDetailsFilter,
+};
 use crate::{ConversionInfo, ConversionStatus, Payment, PaymentDetails, PaymentStatus, Storage};
 
 use super::{
@@ -38,8 +41,9 @@ use super::{
 };
 
 use crate::utils::{
-    payments::{fetch_and_process_payment, resolve_and_insert_payment_metadata},
+    payments::{fetch_and_process_payment, resolve_payment_id},
     polling::{PollSchedule, poll_until},
+    time::{now_secs, try_now_secs},
 };
 
 // Orchestra `/quote` `source_chain` wire values.
@@ -77,6 +81,10 @@ const SEND_POLL_MAX_DELAY_MS: u64 = 2000;
 const SEND_POLL_TIMEOUT_SECS: u64 = 30;
 /// Grace period to keep probing a receive quote before giving up.
 const RECEIVE_GRACE_SECS: u64 = 24 * 60 * 60;
+/// How often a receive row may hit `/submit`, once it is off the every-tick
+/// cadence: an expired quote probing for a late deposit (Orchestra reprices
+/// those), and a funded row re-acquiring a rejected read token.
+const RECEIVE_EXPIRED_PROBE_SECS: u64 = 10 * 60;
 
 /// One-cent margin (in 6-decimal USDB base units) covering Orchestra's
 /// post-quote rounding drift on USDB deliveries: `estimated_out` rounds up
@@ -193,6 +201,11 @@ impl OrchestraService {
 
         tokio::spawn(
             async move {
+                // Probe clock for expired receive quotes, keyed by quote id.
+                // In-memory on purpose: a persisted one writes through
+                // `SyncedStorage` and replicates a bump to every device. A
+                // restart costs one extra probe per expired row.
+                let mut probe_clock: HashMap<String, u64> = HashMap::new();
                 loop {
                     if let Err(e) =
                         Self::poll_in_flight_sends(&storage, &client, &spark_wallet).await
@@ -205,6 +218,7 @@ impl OrchestraService {
                         &client,
                         &spark_wallet,
                         fiat_service.as_ref(),
+                        &mut probe_clock,
                     )
                     .await
                     {
@@ -489,21 +503,23 @@ impl OrchestraService {
     }
 
     /// Polls Orchestra for status updates on active cross-chain receive orders.
-    /// Dispatches per row based on whether Orchestra has issued an order
-    /// handle: pre-order rows go to [`Self::check_for_receive_deposit`],
-    /// in-flight rows go to [`Self::poll_receive_order_status`].
+    /// Each row is resolved to an order handle by
+    /// [`Self::ensure_receive_order_handle`], then polled by
+    /// [`Self::poll_receive_order_status`].
     async fn poll_in_flight_receives(
         storage: &Arc<dyn Storage>,
         swap_storage: &OrchestraStorageAdapter,
         client: &Arc<OrchestraClient>,
         spark_wallet: &Arc<SparkWallet>,
         fiat_service: &dyn FiatService,
+        probe_clock: &mut HashMap<String, u64>,
     ) -> Result<(), SdkError> {
         let active = swap_storage.list_active().await?;
         debug!(
             "Orchestra monitor: found {} active receive rows",
             active.len()
         );
+        prune_probe_clock(probe_clock, &active);
 
         for (row, data) in active {
             let quote_id = data.quote_id.clone();
@@ -520,18 +536,11 @@ impl OrchestraService {
                 continue;
             }
 
-            let (row, data, order_id) = match data.order_id.clone() {
-                Some(order_id) => (row, data, order_id),
-                None => {
-                    match Self::check_for_receive_deposit(swap_storage, client, row, data).await {
-                        Ok(Some((row, data, order_id))) => (row, data, order_id),
-                        Ok(None) => continue,
-                        Err(e) => {
-                            error!("Orchestra receive {quote_id}: deposit check failed: {e:?}");
-                            continue;
-                        }
-                    }
-                }
+            let Some((row, data, order_id)) =
+                Self::ensure_receive_order_handle(swap_storage, client, row, data, probe_clock)
+                    .await
+            else {
+                continue;
             };
             if let Err(e) = Self::poll_receive_order_status(
                 storage,
@@ -542,6 +551,7 @@ impl OrchestraService {
                 row,
                 data,
                 &order_id,
+                probe_clock,
             )
             .await
             {
@@ -552,13 +562,46 @@ impl OrchestraService {
         Ok(())
     }
 
+    /// Resolves a row to the `(row, data, order_id)` triple `/status` needs,
+    /// probing `/submit` first for a row without an order handle. `None` means
+    /// there is nothing to poll this tick.
+    async fn ensure_receive_order_handle(
+        swap_storage: &OrchestraStorageAdapter,
+        client: &Arc<OrchestraClient>,
+        row: crate::StoredCrossChainSwap,
+        data: OrchestraSwapData,
+        probe_clock: &mut HashMap<String, u64>,
+    ) -> Option<(crate::StoredCrossChainSwap, OrchestraSwapData, String)> {
+        if let Some(order_id) = data.order_id.clone() {
+            return Some((row, data, order_id));
+        }
+        let quote_id = data.quote_id.clone();
+        // A live quote is probed every tick. Past expiry it drops to the
+        // slower clock.
+        if is_past_quote_expiry(&data) && !is_probe_due(probe_clock, &quote_id) {
+            return None;
+        }
+        record_probe(probe_clock, &quote_id);
+        match Self::submit_receive_probe(swap_storage, client, row, data).await {
+            Ok(handle) => handle,
+            Err(e) => {
+                error!("Orchestra receive {quote_id}: deposit check failed: {e:?}");
+                None
+            }
+        }
+    }
+
     /// Probes `/submit` with a fresh idempotency key. A 200 means Orchestra
-    /// detected the deposit and issued an order handle: the adapter persists
-    /// it and this returns the updated `(row, data, order_id)` for immediate
+    /// has the deposit and issues an order handle: the adapter persists it
+    /// and this returns the updated `(row, data, order_id)` for immediate
     /// status polling. Any error (including the `invalid_tx_hash` 400
     /// Orchestra returns before the deposit arrives) leaves the row
     /// non-terminal for the next tick.
-    async fn check_for_receive_deposit(
+    ///
+    /// `/submit` is idempotent, so this also serves as the recovery path for
+    /// a read token `/status` has rejected: the same order id comes back with
+    /// a fresh token.
+    async fn submit_receive_probe(
         swap_storage: &OrchestraStorageAdapter,
         client: &Arc<OrchestraClient>,
         row: crate::StoredCrossChainSwap,
@@ -584,13 +627,13 @@ impl OrchestraService {
                 Ok(Some((row, data, order_id)))
             }
             Err(e) => {
-                // 4xx is the expected "no deposit yet" shape from Orchestra.
-                // 5xx / 429 / transport errors are transient provider issues
-                // worth surfacing so a persistent outage doesn't go silent.
+                // Everything else (rejected credentials, throttling, 5xx,
+                // transport failure) is surfaced so a persistent outage or a
+                // bad key doesn't read as a quote waiting on its deposit.
                 if is_expected_no_deposit_error(&e) {
                     debug!("Orchestra receive {quote_id}: no deposit yet: {e}");
                 } else {
-                    warn!("Orchestra receive {quote_id}: transient submit error: {e}");
+                    warn!("Orchestra receive {quote_id}: submit error: {e}");
                 }
                 Ok(None)
             }
@@ -611,17 +654,29 @@ impl OrchestraService {
         row: crate::StoredCrossChainSwap,
         data: OrchestraSwapData,
         order_id: &str,
+        probe_clock: &mut HashMap<String, u64>,
     ) -> Result<(), SdkError> {
         let quote_id = data.quote_id.clone();
-        let resp = match client
+        let status = client
             .status_by_id(order_id, data.read_token.as_deref())
-            .await
-        {
+            .await;
+        let resp = match status {
             Ok(resp) => resp,
             Err(e) => {
                 debug!(
                     "Orchestra receive {quote_id}: status request failed for orderId={order_id}: {e}"
                 );
+                // Read tokens expire. `/submit` is idempotent and reissues
+                // one against the same order, so the next tick can poll again.
+                // On the probe clock, so a token the provider keeps rejecting
+                // costs one submit per window rather than one per tick.
+                if is_invalid_read_token(&e) && is_probe_due(probe_clock, &quote_id) {
+                    info!(
+                        "Orchestra receive {quote_id}: read token rejected, re-acquiring via submit"
+                    );
+                    record_probe(probe_clock, &quote_id);
+                    Self::submit_receive_probe(swap_storage, client, row, data).await?;
+                }
                 return Ok(());
             }
         };
@@ -629,24 +684,38 @@ impl OrchestraService {
         debug!("Orchestra receive {quote_id}: order response: {order:?}");
         match order.status {
             OrderStatus::Completed => {
-                match attach_receive_metadata(storage, spark_wallet, fiat_service, &data, &order)
-                    .await
+                let attached = match attach_receive_metadata(
+                    storage,
+                    spark_wallet,
+                    fiat_service,
+                    &data,
+                    &order,
+                )
+                .await
                 {
-                    Ok(true) => {
-                        info!("Orchestra receive {quote_id} → Completed, metadata attached");
-                        swap_storage.mark_terminal(row).await?;
-                    }
-                    Ok(false) => {
-                        // Order Completed but no sparkTxHash yet: no key to
-                        // link or cache against. Retry next tick once
-                        // Orchestra populates it.
+                    Ok(ReceiveMetadataOutcome::Attached) => true,
+                    Ok(ReceiveMetadataOutcome::Pending) => {
                         debug!(
-                            "Orchestra receive {quote_id} Completed without sparkTxHash; will retry"
+                            "Orchestra receive {quote_id} Completed, metadata not on the \
+                             payment row yet; will retry"
                         );
+                        false
                     }
                     Err(e) => {
                         error!("Orchestra receive {quote_id} metadata attach failed: {e:?}");
+                        false
                     }
+                };
+                if attached {
+                    info!("Orchestra receive {quote_id} → Completed, metadata attached");
+                    swap_storage.mark_terminal(row).await?;
+                } else if is_past_receive_grace(&data) {
+                    // Out of retries. The metadata stays in the cache.
+                    warn!(
+                        "Orchestra receive {quote_id} Completed but metadata never reached the \
+                         payment row within the grace window, closing row"
+                    );
+                    swap_storage.mark_terminal(row).await?;
                 }
             }
             OrderStatus::Failed | OrderStatus::Refunded => {
@@ -837,10 +906,16 @@ fn pad_required_in(scaled: u128, reported_pad: u128) -> (u128, u128) {
 }
 
 /// Whether an Orchestra error on the receive-side `/submit` probe is the
-/// expected "no deposit yet" shape (any 4xx). Anything else (5xx, 429,
-/// transport failure) is a transient provider issue worth logging louder.
+/// expected "no deposit yet" shape: a 4xx that isn't about credentials or
+/// rate limiting. Anything else (401, 403, 429, 5xx, transport failure) is a
+/// provider or configuration issue worth logging louder, not a quote still
+/// waiting on its deposit.
 fn is_expected_no_deposit_error(err: &FlashnetError) -> bool {
-    matches!(err, FlashnetError::Network { code: Some(c), .. } if *c < 500)
+    matches!(
+        err,
+        FlashnetError::Network { code: Some(c), .. }
+            if *c < 500 && !matches!(*c, 401 | 403 | 429)
+    )
 }
 
 /// Errors if `quoted_amount_in` differs from `requested_source_amount` by
@@ -1295,7 +1370,7 @@ impl CrossChainService for OrchestraService {
             source_contract_address: route.contract_address.clone(),
             source_decimals: u32::from(route.decimals),
             destination_chain: SOURCE_CHAIN_SPARK.to_string(),
-            destination_asset: destination_asset_symbol,
+            destination_asset: destination_asset_symbol.clone(),
             destination_decimals,
             token_identifier: destination_token_identifier.clone(),
             amount_in: quote.amount_in.clone(),
@@ -1321,6 +1396,7 @@ impl CrossChainService for OrchestraService {
                 deposit_address: quote.deposit_address,
                 deposit_amount,
                 expected_received_amount,
+                destination_asset: destination_asset_symbol,
                 token_identifier: destination_token_identifier,
                 service_fee_amount,
                 service_fee_asset: if quote.fee_asset.eq_ignore_ascii_case("BTC") {
@@ -1723,30 +1799,41 @@ fn apply_terminal_status(
     })
 }
 
+/// Where a receive order's `ConversionInfo` ended up.
+enum ReceiveMetadataOutcome {
+    /// Written against the inbound `Payment` row.
+    Attached,
+    /// Not on the row yet, and cached under the order's `sparkTxHash`: the
+    /// order carries no hash, the hash did not resolve to a payment id, or
+    /// the row write failed.
+    Pending,
+}
+
 /// Reads `order.sparkTxHash` (the receive-side linking key), resolves it to
 /// the inbound Spark `Payment` id, and upserts `ConversionInfo::Orchestra`
 /// onto it. `spark_tx_hash` may be a Spark transfer id (BTC receive) or a
 /// token tx hash (USDB receive: token payment ids carry a `:vout` suffix
-/// that the raw hash lacks), so resolution goes through
-/// `resolve_and_insert_payment_metadata`, which also caches the metadata
-/// when the Payment row is not yet synced.
+/// that the raw hash lacks), so token hashes resolve through a
+/// `get_token_transactions_by_hashes` lookup.
 ///
-/// Returns `false` when the order is `Completed` but `spark_tx_hash` is
-/// absent (nothing to link or cache against), and `true` when metadata
-/// was attached or cached.
+/// Anything short of a row write caches the metadata under the hash and
+/// reports [`ReceiveMetadataOutcome::Pending`], leaving the row to try again:
+/// the cache is only reapplied for a payment the sync cursor still covers, so
+/// a lookup or write that failed on a payment already synced would otherwise
+/// strand the conversion there.
 async fn attach_receive_metadata(
     storage: &Arc<dyn Storage>,
     spark_wallet: &SparkWallet,
     fiat_service: &dyn FiatService,
     data: &OrchestraSwapData,
     order: &Order,
-) -> Result<bool, SdkError> {
+) -> Result<ReceiveMetadataOutcome, SdkError> {
     let Some(spark_tx_hash) = order.spark_tx_hash.as_deref() else {
         debug!(
             "Orchestra receive {}: order Completed but no sparkTxHash yet",
             data.quote_id
         );
-        return Ok(false);
+        return Ok(ReceiveMetadataOutcome::Pending);
     };
     let conversion_info = build_orchestra_receive_conversion_info(data, order, fiat_service).await;
     let metadata = crate::PaymentMetadata {
@@ -1755,9 +1842,29 @@ async fn attach_receive_metadata(
     };
     // tx_inputs_are_ours = false: on receive, the inbound token tx is funded
     // by Orchestra's counterparty, not us.
-    resolve_and_insert_payment_metadata(spark_tx_hash, metadata, spark_wallet, storage, false)
-        .await?;
-    Ok(true)
+    match resolve_payment_id(spark_tx_hash, spark_wallet, storage, false).await {
+        Ok(payment_id) => match storage
+            .insert_payment_metadata(payment_id.clone(), metadata.clone())
+            .await
+        {
+            Ok(()) => return Ok(ReceiveMetadataOutcome::Attached),
+            Err(e) => warn!(
+                "Orchestra receive {}: failed to write metadata onto payment {payment_id} ({e}), \
+                 caching it",
+                data.quote_id
+            ),
+        },
+        Err(e) => debug!(
+            "Orchestra receive {}: {spark_tx_hash} did not resolve to a payment id ({e}), \
+             caching metadata",
+            data.quote_id
+        ),
+    }
+    ObjectCacheRepository::new(Arc::clone(storage))
+        .save_payment_metadata(spark_tx_hash, &metadata)
+        .await
+        .map_err(|e| SdkError::Generic(format!("Failed to cache payment metadata: {e}")))?;
+    Ok(ReceiveMetadataOutcome::Pending)
 }
 
 /// Receive-side counterpart to [`apply_terminal_status`]: pulls live bits
@@ -1815,10 +1922,37 @@ async fn build_orchestra_receive_conversion_info(
 /// Whether a pre-order receive row is past the grace window past
 /// `expires_at`, at which point the poller stops probing `/submit` for it.
 fn is_past_receive_grace(data: &OrchestraSwapData) -> bool {
-    let now_secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    now_secs >= data.expires_at.saturating_add(RECEIVE_GRACE_SECS)
+    now_secs() >= data.expires_at.saturating_add(RECEIVE_GRACE_SECS)
+}
+
+/// Whether the quote behind a receive row has expired. Probing stays on the
+/// every-tick cadence while it is live, and drops to the slower clock after.
+fn is_past_quote_expiry(data: &OrchestraSwapData) -> bool {
+    now_secs() >= data.expires_at
+}
+
+/// Whether `quote_id` is due another `/submit`, at most one per
+/// [`RECEIVE_EXPIRED_PROBE_SECS`] window. A quote the clock has never seen
+/// (a fresh row, or the first pass after a restart) is due immediately.
+fn is_probe_due(probe_clock: &HashMap<String, u64>, quote_id: &str) -> bool {
+    is_probe_due_at(probe_clock.get(quote_id).copied(), now_secs())
+}
+
+fn is_probe_due_at(last_probe_secs: Option<u64>, now_secs: u64) -> bool {
+    last_probe_secs.is_none_or(|last| now_secs.saturating_sub(last) >= RECEIVE_EXPIRED_PROBE_SECS)
+}
+
+fn record_probe(probe_clock: &mut HashMap<String, u64>, quote_id: &str) {
+    probe_clock.insert(quote_id.to_string(), now_secs());
+}
+
+/// Drops the entries of rows that are no longer active, so a quote that went
+/// terminal cannot pin one for the life of the process.
+fn prune_probe_clock(
+    probe_clock: &mut HashMap<String, u64>,
+    active: &[(crate::StoredCrossChainSwap, OrchestraSwapData)],
+) {
+    probe_clock.retain(|quote_id, _| active.iter().any(|(_, data)| &data.quote_id == quote_id));
 }
 
 /// Realized cross-chain receive fee in source-asset base units. Returns
@@ -1862,11 +1996,7 @@ fn parse_rfc3339_to_unix_seconds(expires_at: &str) -> Result<u64, SdkError> {
 /// instead of getting a less helpful error from `/submit`.
 fn validate_quote_expiry(expires_at: &str) -> Result<(), SdkError> {
     let exp_secs = parse_rfc3339_to_unix_seconds(expires_at)?;
-    let now_secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| SdkError::Generic("Failed to read current time".to_string()))?
-        .as_secs();
-    if now_secs >= exp_secs {
+    if try_now_secs()? >= exp_secs {
         return Err(SdkError::InvalidInput(
             "Cross-chain quote has expired. Please re-prepare.".to_string(),
         ));
@@ -2760,6 +2890,106 @@ mod tests {
         assert!(!is_invalid_read_token(&FlashnetError::Generic(
             "boom".to_string()
         )));
+    }
+
+    fn receive_swap_data() -> OrchestraSwapData {
+        OrchestraSwapData {
+            quote_id: "q_xyz".to_string(),
+            order_id: None,
+            read_token: None,
+            recipient_address: "sp1rcv".to_string(),
+            source_chain: "ethereum".to_string(),
+            source_asset: "USDC".to_string(),
+            source_chain_id: Some("1".to_string()),
+            source_contract_address: Some("0xUSDC".to_string()),
+            source_decimals: 6,
+            destination_chain: "spark".to_string(),
+            destination_asset: "BTC".to_string(),
+            destination_decimals: 8,
+            token_identifier: None,
+            amount_in: "100".to_string(),
+            expected_amount_out: "50000".to_string(),
+            fee_amount: Some("250".to_string()),
+            expires_at: 1_700_000_120,
+        }
+    }
+
+    fn stored_receive_row(data: &OrchestraSwapData) -> crate::StoredCrossChainSwap {
+        crate::StoredCrossChainSwap {
+            provider: super::super::orchestra_storage_adapter::PROVIDER_TAG_ORCHESTRA.to_string(),
+            id: data.quote_id.clone(),
+            is_terminal: false,
+            updated_at: 0,
+            data: serde_json::to_string(data).unwrap(),
+            secrets: String::new(),
+        }
+    }
+
+    #[test_all]
+    fn a_rate_limit_is_not_read_as_a_missing_deposit() {
+        // The probe treats 4xx as "the deposit isn't there yet", but a 429 is
+        // the provider throttling us and deserves a louder log.
+        for code in [400, 404] {
+            assert!(
+                is_expected_no_deposit_error(&FlashnetError::Network {
+                    reason: "invalid_tx_hash".to_string(),
+                    code: Some(code),
+                }),
+                "{code} should read as no deposit yet"
+            );
+        }
+        // A rejected key or read token is not a quote waiting on its deposit,
+        // and must not log at debug as one.
+        for code in [401, 403, 429, 500, 503] {
+            assert!(
+                !is_expected_no_deposit_error(&FlashnetError::Network {
+                    reason: "throttled".to_string(),
+                    code: Some(code),
+                }),
+                "{code} should surface as a provider issue"
+            );
+        }
+    }
+
+    #[test_all]
+    fn an_expired_quote_is_probed_on_the_slower_clock() {
+        // A live quote never reaches the backoff: it is probed every tick.
+        let mut data = receive_swap_data();
+        data.expires_at = u64::MAX;
+        assert!(!is_past_quote_expiry(&data));
+
+        data.expires_at = 1_000;
+        assert!(is_past_quote_expiry(&data));
+
+        // A quote the clock has never seen is due at once: a restart drops the
+        // clock, and one probe per row is the price of not persisting it.
+        assert!(is_probe_due_at(None, 1_000));
+
+        // Otherwise, only once the window since the last probe has elapsed.
+        assert!(!is_probe_due_at(
+            Some(1_000),
+            1_000 + RECEIVE_EXPIRED_PROBE_SECS - 1
+        ));
+        assert!(is_probe_due_at(
+            Some(1_000),
+            1_000 + RECEIVE_EXPIRED_PROBE_SECS
+        ));
+    }
+
+    #[test_all]
+    fn a_probe_clock_entry_dies_with_its_row() {
+        let mut probe_clock = HashMap::new();
+        record_probe(&mut probe_clock, "q_live");
+        record_probe(&mut probe_clock, "q_gone");
+
+        let mut live = receive_swap_data();
+        live.quote_id = "q_live".to_string();
+        let active = vec![(stored_receive_row(&live), live)];
+        prune_probe_clock(&mut probe_clock, &active);
+
+        assert!(!is_probe_due(&probe_clock, "q_live"));
+        // The row is gone, so its entry no longer holds off a probe.
+        assert!(is_probe_due(&probe_clock, "q_gone"));
     }
 
     #[test_all]

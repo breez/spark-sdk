@@ -141,9 +141,9 @@ async def receive_payment_cross_chain(sdk: BreezSdk, route: CrossChainRoutePair)
         if info is not None:
             logging.debug(f"Deposit address: {info.deposit_address}")
             logging.debug(f"Deposit amount: {info.deposit_amount}")
-            denom = "USDB" if info.token_identifier else "BTC"
             logging.debug(
-                f"Expected received: {info.expected_received_amount} {denom}"
+                f"Expected received: {info.expected_received_amount} "
+                f"{info.destination_asset}"
             )
             logging.debug(f"Expires at: {info.expires_at}")
     except Exception as error:

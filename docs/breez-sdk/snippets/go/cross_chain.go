@@ -149,13 +149,9 @@ func ReceivePaymentCrossChain(
 	if info := response.CrossChainInfo; info != nil {
 		log.Printf("Deposit address: %s", info.DepositAddress)
 		log.Printf("Deposit amount: %v", info.DepositAmount)
-		denom := "BTC"
-		if info.TokenIdentifier != nil {
-			denom = "USDB"
-		}
 		log.Printf(
 			"Expected received: %v %s",
-			info.ExpectedReceivedAmount, denom,
+			info.ExpectedReceivedAmount, info.DestinationAsset,
 		)
 		log.Printf("Expires at: %d", info.ExpiresAt)
 	}
