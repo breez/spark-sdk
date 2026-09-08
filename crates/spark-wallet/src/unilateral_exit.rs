@@ -473,13 +473,10 @@ pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> Exi
             if confirmed.contains_key(&txid) {
                 continue;
             }
-            // Not reachable: something it needs is not in a block, so its own
-            // inputs do not exist yet and nothing can have taken them.
-            if !input
-                .depends_on
-                .iter()
-                .all(|dep| confirmed.contains_key(dep))
-            {
+            // Not reachable: an input of its own is not in a block, so the
+            // outpoint it would spend does not exist and nothing can have taken
+            // it.
+            if !spend_parents(input, &by_txid).all(|parent| confirmed.contains_key(&parent)) {
                 continue;
             }
             // One input answers for a transaction with several (the sweep): they
@@ -526,6 +523,23 @@ pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> Exi
     }
 }
 
+/// The transactions of this exit whose outputs `input` spends.
+///
+/// Narrower than its `depends_on`, which also orders the broadcast: that carries
+/// the fan-out, which `input`'s CPFP child spends rather than `input` itself. A
+/// confirmation says nothing about a transaction it does not spend from.
+fn spend_parents<'a>(
+    input: &'a ExitCheckInput,
+    by_txid: &'a HashMap<Txid, &ExitCheckInput>,
+) -> impl Iterator<Item = Txid> + 'a {
+    input
+        .tx
+        .input
+        .iter()
+        .map(|i| i.previous_output.txid)
+        .filter(|txid| by_txid.contains_key(txid))
+}
+
 /// Whether `spender` is this exit's own transaction for that outpoint.
 fn ours(input: &ExitCheckInput, spender: Txid) -> bool {
     spender == input.tx.compute_txid()
@@ -551,7 +565,7 @@ fn mark_settled(
         // In a block by the same spend chain, but which one was never asked.
         confirmed.entry(txid).or_insert(None);
         if let Some(input) = by_txid.get(&txid) {
-            stack.extend(input.depends_on.iter().copied());
+            stack.extend(spend_parents(input, by_txid));
         }
     }
 }
@@ -2711,6 +2725,65 @@ mod interpret_tests {
         assert!(check.pending.is_empty(), "{:?}", check.pending);
         assert_eq!(check.confirmed.get(&first), Some(&Some(880_000)));
         assert_eq!(check.confirmed.get(&second), Some(&Some(880_002)));
+    }
+
+    /// The fan-out is in a branch transaction's `depends_on` for broadcast order,
+    /// not because that transaction spends it. Settling along `depends_on` would
+    /// tick it off as confirmed without asking, and the caller, told it is in a
+    /// block, would never broadcast it.
+    #[test]
+    fn a_confirmed_branch_does_not_settle_the_fan_out_it_only_waits_for() {
+        let mut chain = exit_chain_of_three();
+        let fan_out = ExitCheckInput {
+            tx: Transaction {
+                version: bitcoin::transaction::Version::TWO,
+                lock_time: LockTime::ZERO,
+                input: vec![bitcoin::TxIn {
+                    previous_output: OutPoint {
+                        txid: Txid::from_byte_array([0x77; 32]),
+                        vout: 0,
+                    },
+                    ..Default::default()
+                }],
+                output: vec![],
+            },
+            cpfp: None,
+            depends_on: vec![],
+            confirmed: false,
+        };
+        let fan_out_txid = fan_out.tx.compute_txid();
+        // Broadcast order only: the branch's CPFP child spends the fan-out, the
+        // branch transaction itself does not.
+        chain[0].depends_on.push(fan_out_txid);
+        for tx in &mut chain {
+            tx.confirmed = true;
+        }
+        let deepest = chain[2].tx.compute_txid();
+
+        let mut inputs = vec![fan_out];
+        inputs.extend(chain);
+        let check = check_exit_chain(
+            &inputs,
+            &[Observation {
+                query: ChainQuery::TxConfirmed(deepest),
+                result: ChainResult::Confirmed {
+                    confirmed: true,
+                    block_height: Some(880_002),
+                },
+            }],
+        );
+
+        assert!(
+            !check.confirmed.contains_key(&fan_out_txid),
+            "the fan-out is not settled by a transaction that never spends it"
+        );
+        assert!(
+            check.pending.contains(&ChainQuery::Outspend(OutPoint {
+                txid: Txid::from_byte_array([0x77; 32]),
+                vout: 0,
+            })),
+            "it is asked about instead"
+        );
     }
 
     /// A frontier whose own input was taken by somebody else: the exit no longer
