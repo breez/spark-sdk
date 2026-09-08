@@ -181,11 +181,7 @@ impl BreezSdk {
         for tx in &mut exit.transactions {
             let txid = Txid::from_str(&tx.txid)
                 .map_err(|e| SdkError::InvalidInput(format!("Invalid txid {}: {e}", tx.txid)))?;
-            if let Some(block_height) = check.confirmed.get(&txid) {
-                tx.status = ExitTransactionStatus::Confirmed {
-                    block_height: *block_height,
-                };
-            }
+            tx.status = status_after_check(tx.status, &check, &txid);
         }
 
         resolve_statuses(self.chain_service.as_ref(), &mut exit.transactions).await?;
@@ -855,6 +851,31 @@ async fn resolve_statuses(
     Ok(())
 }
 
+/// The status of one kept transaction after a chain read.
+///
+/// - The chain has it in a block: `Confirmed`, at the height the read reported.
+/// - The chain was asked and reported it is not in a block: reset to a
+///   placeholder `resolve_statuses` replaces, discarding a confirmation a reorg
+///   has undone.
+/// - Anything else: left as it is. `resolve_statuses` recomputes every status
+///   except `Confirmed` and `Unverified`, and neither of those may be dropped on
+///   a read that did not contradict it.
+fn status_after_check(
+    current: ExitTransactionStatus,
+    check: &ExitCheck,
+    txid: &Txid,
+) -> ExitTransactionStatus {
+    match (check.confirmed.get(txid), current) {
+        (Some(block_height), _) => ExitTransactionStatus::Confirmed {
+            block_height: *block_height,
+        },
+        (None, ExitTransactionStatus::Confirmed { .. }) if check.not_confirmed.contains(txid) => {
+            ExitTransactionStatus::WaitingForDependencies
+        }
+        (None, _) => current,
+    }
+}
+
 /// The first block height that can include `tx`, given the relative timelocks on
 /// its inputs. `None` when an input's confirmation height cannot be established,
 /// which leaves maturity unknown.
@@ -1403,6 +1424,91 @@ mod tests {
             csv_timelock_blocks: csv,
             depends_on,
             status,
+        }
+    }
+
+    fn check_of(
+        confirmed: &[(Txid, Option<u32>)],
+        not_confirmed: &[Txid],
+    ) -> spark_wallet::ExitCheck {
+        spark_wallet::ExitCheck {
+            confirmed: confirmed.iter().copied().collect(),
+            diverged: false,
+            not_confirmed: not_confirmed.iter().copied().collect(),
+            pending: Vec::new(),
+        }
+    }
+
+    /// A transaction the chain reports as not in a block loses its stored
+    /// `Confirmed`, so a reorg cannot leave the exit reporting `Done` over a
+    /// transaction that is no longer there. A failed lookup leaves it alone.
+    #[macros::async_test_all]
+    async fn a_confirmation_the_chain_contradicts_is_dropped() {
+        let txid = Txid::from_byte_array([5; 32]);
+        let held = ExitTransactionStatus::Confirmed {
+            block_height: Some(880_000),
+        };
+
+        assert_eq!(
+            status_after_check(held, &check_of(&[], &[txid]), &txid),
+            ExitTransactionStatus::WaitingForDependencies,
+            "re-derived, so resolve_statuses works out where it really stands"
+        );
+        assert_eq!(
+            status_after_check(held, &check_of(&[], &[]), &txid),
+            held,
+            "no answer either way leaves the caller's record alone"
+        );
+    }
+
+    /// `Unverified` says the chain could not be read while the exit was built, so
+    /// the SDK cannot tell whether an earlier fee-bumping child already spent the
+    /// funding this transaction would use. A check reads only the kept exit, never
+    /// the funding, so it can promote the status on finding the transaction in a
+    /// block, but must not clear it on failing to.
+    #[macros::async_test_all]
+    async fn a_check_promotes_an_unverified_transaction_but_never_clears_it() {
+        let txid = Txid::from_byte_array([6; 32]);
+
+        assert_eq!(
+            status_after_check(
+                ExitTransactionStatus::Unverified,
+                &check_of(&[], &[]),
+                &txid
+            ),
+            ExitTransactionStatus::Unverified,
+            "not found is not evidence that broadcasting it is safe"
+        );
+        assert_eq!(
+            status_after_check(
+                ExitTransactionStatus::Unverified,
+                &check_of(&[(txid, Some(880_000))], &[]),
+                &txid,
+            ),
+            ExitTransactionStatus::Confirmed {
+                block_height: Some(880_000)
+            },
+            "found in a block settles it outright"
+        );
+    }
+
+    /// `resolve_statuses` recomputes everything except `Confirmed` and
+    /// `Unverified`, so a check that learned nothing about a transaction can leave
+    /// its status alone and still have it come out up to date.
+    #[macros::async_test_all]
+    async fn a_check_that_learned_nothing_leaves_a_recomputable_status_alone() {
+        let txid = Txid::from_byte_array([7; 32]);
+        for status in [
+            ExitTransactionStatus::Ready,
+            ExitTransactionStatus::WaitingForDependencies,
+            ExitTransactionStatus::WaitingForTimelock {
+                spendable_at_height: Some(880_010),
+            },
+        ] {
+            assert_eq!(
+                status_after_check(status, &check_of(&[], &[]), &txid),
+                status
+            );
         }
     }
 

@@ -405,6 +405,11 @@ pub struct ExitCheck {
     /// Whether the chain no longer matches: something other than this exit's own
     /// transaction took an outpoint it still needs.
     pub diverged: bool,
+    /// Transactions this check asked the chain about, where the chain replied
+    /// that they are not in a block. A txid in neither this nor `confirmed` was
+    /// either not asked about or its lookup failed, and neither of those says
+    /// anything about where the transaction is.
+    pub not_confirmed: HashSet<Txid>,
     pub pending: Vec<ChainQuery>,
 }
 
@@ -424,6 +429,7 @@ pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> Exi
     let mut pending: Vec<ChainQuery> = Vec::new();
     let mut confirmed: HashMap<Txid, Option<u32>> = HashMap::new();
     let mut settled: HashSet<Txid> = HashSet::new();
+    let mut not_confirmed: HashSet<Txid> = HashSet::new();
     let mut diverged = false;
 
     let by_txid: HashMap<Txid, &ExitCheckInput> =
@@ -454,6 +460,7 @@ pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> Exi
             Some(ChainResult::Confirmed {
                 confirmed: false, ..
             }) => {
+                not_confirmed.insert(txid);
                 settled.insert(txid);
             }
             // Unreadable: nothing is known, and asking again next time is all
@@ -516,9 +523,12 @@ pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> Exi
     let mut seen: HashSet<ChainQuery> = HashSet::new();
     pending.retain(|query| seen.insert(query.clone()));
 
+    not_confirmed.retain(|txid| !confirmed.contains_key(txid));
+
     ExitCheck {
         confirmed,
         diverged,
+        not_confirmed,
         pending,
     }
 }
@@ -2783,6 +2793,41 @@ mod interpret_tests {
                 vout: 0,
             })),
             "it is asked about instead"
+        );
+    }
+
+    /// A transaction the chain reports as not in a block is listed in
+    /// `not_confirmed`, so a caller holding it as confirmed can discard that. A
+    /// failed lookup is not listed: it says nothing about where the transaction
+    /// is.
+    #[test]
+    fn check_reports_a_contradicted_confirmation_but_not_an_unreadable_one() {
+        let mut chain = exit_chain_of_three();
+        chain[0].confirmed = true;
+        let first = chain[0].tx.compute_txid();
+
+        let contradicted = check_exit_chain(
+            &chain[..1],
+            &[Observation {
+                query: ChainQuery::TxConfirmed(first),
+                result: ChainResult::Confirmed {
+                    confirmed: false,
+                    block_height: None,
+                },
+            }],
+        );
+        assert!(contradicted.not_confirmed.contains(&first));
+
+        let unreadable = check_exit_chain(
+            &chain[..1],
+            &[Observation {
+                query: ChainQuery::TxConfirmed(first),
+                result: ChainResult::Unavailable,
+            }],
+        );
+        assert!(
+            unreadable.not_confirmed.is_empty(),
+            "a failed lookup is not an answer"
         );
     }
 
