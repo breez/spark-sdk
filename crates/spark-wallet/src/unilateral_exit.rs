@@ -199,10 +199,8 @@ pub struct CpfpChangeInput {
 pub enum ChainQuery {
     /// Is this output spent, and by which (confirmed?) transaction?
     Outspend(OutPoint),
-    /// Is this transaction in a block? The direct question, for a transaction we
-    /// already hold: it says nothing about what took its place if it is not, so
-    /// ask an [`ChainQuery::Outspend`] of one of its inputs only when the answer
-    /// matters.
+    /// Is this transaction in a block? A "no" does not say what took its place;
+    /// [`ChainQuery::Outspend`] on one of its inputs answers that.
     TxConfirmed(Txid),
     Transaction(Txid),
     /// Scan this leaf's refund address for its refund output of any variant,
@@ -782,9 +780,9 @@ fn walk_exit_chain(
     walk
 }
 
-/// The exit's on-chain state as the build sees it: the tree, read before the
-/// exit was funded, restated in the build's own terms. Pure, and asks the chain
-/// nothing: the funding was resolved before the plan was made.
+/// Restates the tree's on-chain state, read while preparing, in the terms the
+/// build works in: which nodes are confirmed, which refunds are there to sweep,
+/// and which branches can no longer be continued. Reads no chain of its own.
 fn interpret_chain(
     prepared: &PreparedUnilateralExit,
     state: &ExitChainState,

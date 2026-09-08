@@ -76,8 +76,7 @@ struct RenewalOutcome {
 /// down with it.
 ///
 /// Named as what is kept rather than what is excluded, so a status added later is
-/// left out until someone decides it belongs. Both halves are stored: a leaf on
-/// its way out keeps its place in the pool, and its chain with it.
+/// left out until someone decides it belongs.
 fn partition_renewable(leaves: Vec<TreeNode>) -> (Vec<TreeNode>, Vec<TreeNode>) {
     leaves
         .into_iter()
