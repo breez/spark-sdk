@@ -7,7 +7,7 @@ use breez_sdk_common::lnurl::{
 use spark_wallet::SparkWallet;
 use std::{str::FromStr, sync::Arc};
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use x509_cert::Certificate;
 use x509_cert::der::{Decode, asn1::ObjectIdentifier};
 
@@ -16,7 +16,8 @@ use crate::{
     error::SdkError,
     events::{EventListener, SdkEvent},
     models::Payment,
-    persist::Storage,
+    persist::{Storage, UpdateWatchedAddressPayload},
+    utils::deposit_address_watch::now_secs,
     utils::payments::update_balances,
 };
 
@@ -173,7 +174,8 @@ pub(crate) fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
     Ok(())
 }
 
-/// Returns a static deposit address.
+/// Returns a static deposit address, and starts watching it on-chain for
+/// deposits still in the mempool.
 ///
 /// When `new_address` is `true`, rotates to a fresh address (archives the
 /// old one). The SO request creates one when no address exists yet.
@@ -182,17 +184,40 @@ pub(crate) fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
 /// generate (which creates one on first call).
 pub(crate) async fn get_deposit_address(
     spark_wallet: &SparkWallet,
+    storage: &Arc<dyn Storage>,
     new_address: bool,
 ) -> Result<String, SdkError> {
-    if new_address {
-        Ok(spark_wallet
+    let address = if new_address {
+        spark_wallet
             .rotate_static_deposit_address()
             .await?
-            .to_string())
+            .to_string()
     } else {
-        Ok(spark_wallet
+        spark_wallet
             .generate_static_deposit_address()
             .await?
-            .to_string())
+            .to_string()
+    };
+    watch_deposit_address(storage, &address).await;
+    Ok(address)
+}
+
+/// Starts (or restarts) the on-chain watch on a deposit address about to be
+/// handed out. Failures are logged, never propagated: the watch only makes a
+/// deposit claimable a confirmation sooner, so it must not fail issuing the
+/// address a payer is waiting for.
+async fn watch_deposit_address(storage: &Arc<dyn Storage>, address: &str) {
+    let Some(issued_at) = now_secs() else {
+        warn!("Not watching deposit address {address}: the system clock is unusable");
+        return;
+    };
+    if let Err(e) = storage
+        .update_watched_deposit_address(
+            address.to_string(),
+            UpdateWatchedAddressPayload::Watch { issued_at },
+        )
+        .await
+    {
+        error!("Failed to watch deposit address {address}: {e}");
     }
 }

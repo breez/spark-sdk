@@ -16,7 +16,7 @@ use crate::{
     persist::{
         PaymentMetadata, SetLnurlMetadataItem, StorageListPaymentsRequest,
         StoragePaymentDetailsFilter, StoredCrossChainSwap, UpdateDepositPayload,
-        parse_payment_status,
+        UpdateWatchedAddressPayload, WatchedDepositAddress, parse_payment_status,
     },
     sync_storage::{
         IncomingChange, OutgoingChange, Record, RecordChange, RecordId, UnversionedRecordChange,
@@ -390,6 +390,14 @@ impl SqliteStorage {
             // RefundState. NULL on refunds created before this column existed, which
             // is read as BroadcastPending.
             "ALTER TABLE unclaimed_deposits ADD COLUMN refund_state TEXT;",
+            // Deposit addresses polled on-chain for deposits still in the mempool.
+            // Rows are removed once watching them can no longer lead to an early
+            // claim, so the table holds only the live watch set.
+            "CREATE TABLE IF NOT EXISTS watched_deposit_addresses (
+                address TEXT PRIMARY KEY,
+                issued_at INTEGER NOT NULL,
+                seen INTEGER NOT NULL DEFAULT 0
+            );",
         ]
     }
 }
@@ -1050,6 +1058,55 @@ impl Storage for SqliteStorage {
                 connection.execute(
                     "UPDATE unclaimed_deposits SET refund_state = ? WHERE txid = ? AND vout = ? AND refund_tx_id = ?",
                     params![state, txid, vout, refund_txid],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn list_watched_deposit_addresses(
+        &self,
+    ) -> Result<Vec<WatchedDepositAddress>, StorageError> {
+        let connection = self.get_connection()?;
+        let mut stmt = connection.prepare(
+            "SELECT address, issued_at, seen FROM watched_deposit_addresses ORDER BY issued_at DESC",
+        )?;
+        let rows = stmt.query_map(params![], |row| {
+            Ok(WatchedDepositAddress {
+                address: row.get(0)?,
+                issued_at: row.get(1)?,
+                seen: row.get(2)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    async fn update_watched_deposit_address(
+        &self,
+        address: String,
+        payload: UpdateWatchedAddressPayload,
+    ) -> Result<(), StorageError> {
+        let connection = self.get_connection()?;
+        match payload {
+            UpdateWatchedAddressPayload::Watch { issued_at } => {
+                connection.execute(
+                    "INSERT INTO watched_deposit_addresses (address, issued_at, seen)
+                     VALUES (?, ?, 0)
+                     ON CONFLICT(address) DO UPDATE SET issued_at = excluded.issued_at, seen = 0",
+                    params![address, issued_at],
+                )?;
+            }
+            UpdateWatchedAddressPayload::Seen => {
+                connection.execute(
+                    "UPDATE watched_deposit_addresses SET seen = 1 WHERE address = ?",
+                    params![address],
+                )?;
+            }
+            UpdateWatchedAddressPayload::Unwatch { issued_at } => {
+                connection.execute(
+                    "DELETE FROM watched_deposit_addresses WHERE address = ? AND issued_at = ?",
+                    params![address, issued_at],
                 )?;
             }
         }
@@ -1982,6 +2039,14 @@ mod tests {
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         Box::pin(crate::persist::tests::test_storage(Box::new(storage))).await;
+    }
+
+    #[tokio::test]
+    async fn test_watched_deposit_addresses() {
+        let temp_dir = create_temp_dir("sqlite_storage_watched_addresses");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        crate::persist::tests::test_watched_deposit_addresses(Box::new(storage)).await;
     }
 
     #[tokio::test]

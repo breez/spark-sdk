@@ -87,6 +87,32 @@ pub enum UpdateDepositPayload {
     },
 }
 
+/// A static deposit address being watched on-chain for unconfirmed deposits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct WatchedDepositAddress {
+    pub address: String,
+    /// When the address was handed out, in seconds since the epoch. The watch
+    /// window is measured from here.
+    pub issued_at: u64,
+    /// Whether a deposit to it has been seen unconfirmed.
+    pub seen: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum UpdateWatchedAddressPayload {
+    /// Starts watching the address, or restarts the window on one already
+    /// watched, clearing `seen`.
+    Watch { issued_at: u64 },
+    /// Records that a deposit to it has been seen unconfirmed.
+    Seen,
+    /// Stops watching it, removing the row. Applies only while `issued_at` is
+    /// still the stored value, so an address handed out again since it was read
+    /// is not retired by a decision taken before that.
+    Unwatch { issued_at: u64 },
+}
+
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SetLnurlMetadataItem {
     pub payment_hash: String,
@@ -517,6 +543,20 @@ pub trait Storage: Send + Sync {
         txid: String,
         vout: u32,
         payload: UpdateDepositPayload,
+    ) -> Result<(), StorageError>;
+
+    /// Lists the deposit addresses currently being watched for unconfirmed
+    /// deposits, most recently issued first.
+    async fn list_watched_deposit_addresses(
+        &self,
+    ) -> Result<Vec<WatchedDepositAddress>, StorageError>;
+
+    /// Applies one change to a watched deposit address. `Watch` inserts or
+    /// restarts it, `Seen` marks it, and `Unwatch` removes it.
+    async fn update_watched_deposit_address(
+        &self,
+        address: String,
+        payload: UpdateWatchedAddressPayload,
     ) -> Result<(), StorageError>;
 
     async fn set_lnurl_metadata(

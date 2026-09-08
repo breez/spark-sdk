@@ -784,6 +784,71 @@ class SqliteStorage {
     }
   }
 
+  listWatchedDepositAddresses() {
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT address, issued_at, seen FROM watched_deposit_addresses
+             ORDER BY issued_at DESC`
+        )
+        .all();
+      return Promise.resolve(
+        rows.map((row) => ({
+          address: row.address,
+          issuedAt: row.issued_at,
+          seen: Boolean(row.seen),
+        }))
+      );
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(
+          `Failed to list watched deposit addresses: ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
+  updateWatchedDepositAddress(address, payload) {
+    try {
+      if (payload.type === "watch") {
+        this.db
+          .prepare(
+            `INSERT INTO watched_deposit_addresses (address, issued_at, seen)
+               VALUES (?, ?, 0)
+               ON CONFLICT(address) DO UPDATE SET issued_at = excluded.issued_at, seen = 0`
+          )
+          .run(address, payload.issuedAt);
+      } else if (payload.type === "seen") {
+        this.db
+          .prepare(
+            "UPDATE watched_deposit_addresses SET seen = 1 WHERE address = ?"
+          )
+          .run(address);
+      } else if (payload.type === "unwatch") {
+        this.db
+          .prepare(
+            `DELETE FROM watched_deposit_addresses
+               WHERE address = ? AND issued_at = ?`
+          )
+          .run(address, payload.issuedAt);
+      } else {
+        return Promise.reject(
+          new StorageError(`Unknown payload type: ${payload.type}`)
+        );
+      }
+      return Promise.resolve();
+    } catch (error) {
+      if (error instanceof StorageError) return Promise.reject(error);
+      return Promise.reject(
+        new StorageError(
+          `Failed to update watched deposit address '${address}': ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
   setLnurlMetadata(metadata) {
     try {
       const stmt = this.db.prepare(

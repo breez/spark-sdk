@@ -85,6 +85,25 @@ pub async fn bob_strict_fee_sdk() -> Result<SdkInstance> {
     build_sdk_with_custom_config(path, seed, cfg, Some(dir), true).await
 }
 
+/// Fixture: Bob's SDK with a claim-fee ceiling high enough to clear the regtest
+/// early-claim spread, so the background cascade can claim a deposit the mempool
+/// watch discovers rather than the ceiling blocking it.
+#[fixture]
+pub async fn bob_zero_conf_sdk() -> Result<SdkInstance> {
+    let dir = tempfile::Builder::new()
+        .prefix("breez-sdk-bob-zero-conf")
+        .tempdir()?;
+    let path = dir.path().to_string_lossy().to_string();
+    let mut seed = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut seed);
+
+    let mut cfg = default_config(Network::Regtest);
+    // The regtest spread carries a ~3% term, so 3000 clears it at the amounts
+    // this test funds. `bob_strict_fee_sdk`'s 0 would block every claim.
+    cfg.max_deposit_claim_fee = Some(MaxFee::Fixed { amount: 3_000 });
+    build_sdk_with_custom_config(path, seed, cfg, Some(dir), true).await
+}
+
 /// Fixture: Alice's SDK with leaf optimization in manual-trigger mode and a
 /// high target multiplicity. Used to drive a deterministic optimization run
 /// (no background optimizer racing the test; enough work that the planner

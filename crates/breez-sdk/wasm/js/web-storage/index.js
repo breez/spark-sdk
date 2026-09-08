@@ -611,6 +611,19 @@ class MigrationManager {
           };
         },
       },
+      {
+        // Deposit addresses polled on-chain for deposits still in the mempool.
+        // Entries are removed once watching them can no longer lead to an early
+        // claim, so the store holds only the live watch set.
+        name: "Create watched_deposit_addresses store",
+        upgrade: (db) => {
+          if (!db.objectStoreNames.contains("watched_deposit_addresses")) {
+            db.createObjectStore("watched_deposit_addresses", {
+              keyPath: "address",
+            });
+          }
+        },
+      },
     ];
   }
 }
@@ -639,7 +652,7 @@ class IndexedDBStorage {
     // so existing databases depend on indices never shifting. Never insert,
     // reorder, or delete a migration — only append. dbVersion MUST equal the
     // number of migrations (enforced by the guard in initialize()).
-    this.dbVersion = 21; // Current schema version (= migration count)
+    this.dbVersion = 22; // Current schema version (= migration count)
   }
 
   /**
@@ -1603,6 +1616,131 @@ class IndexedDBStorage {
           )
         );
       };
+    });
+  }
+
+  async listWatchedDepositAddresses() {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction(
+        "watched_deposit_addresses",
+        "readonly"
+      );
+      const store = transaction.objectStore("watched_deposit_addresses");
+      const request = store.getAll();
+
+      request.onsuccess = () => {
+        const watched = (request.result || []).map((entry) => ({
+          address: entry.address,
+          issuedAt: entry.issuedAt,
+          seen: Boolean(entry.seen),
+        }));
+        // The store is keyed by address, so ordering is applied here rather
+        // than by an index.
+        watched.sort((a, b) => Number(b.issuedAt) - Number(a.issuedAt));
+        resolve(watched);
+      };
+      request.onerror = () =>
+        reject(
+          new StorageError(
+            `Failed to list watched deposit addresses: ${request.error}`
+          )
+        );
+    });
+  }
+
+  async updateWatchedDepositAddress(address, payload) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction(
+        "watched_deposit_addresses",
+        "readwrite"
+      );
+      const store = transaction.objectStore("watched_deposit_addresses");
+
+      if (payload.type === "watch") {
+        const request = store.put({
+          address,
+          issuedAt: payload.issuedAt,
+          seen: false,
+        });
+        request.onsuccess = () => resolve();
+        request.onerror = () =>
+          reject(
+            new StorageError(
+              `Failed to watch deposit address '${address}': ${request.error}`
+            )
+          );
+        return;
+      }
+
+      if (payload.type === "unwatch") {
+        // Conditional on issuedAt, so an address handed out again since the
+        // caller read it is not retired by a decision taken before that. The
+        // get and the delete share one readwrite transaction, so nothing can
+        // interleave between them.
+        const getRequest = store.get(address);
+        getRequest.onsuccess = () => {
+          const existing = getRequest.result;
+          const stale =
+            !existing || String(existing.issuedAt) !== String(payload.issuedAt);
+          if (stale) {
+            resolve();
+            return;
+          }
+          const request = store.delete(address);
+          request.onsuccess = () => resolve();
+          request.onerror = () =>
+            reject(
+              new StorageError(
+                `Failed to unwatch deposit address '${address}': ${request.error}`
+              )
+            );
+        };
+        getRequest.onerror = () =>
+          reject(
+            new StorageError(
+              `Failed to read watched deposit address '${address}': ${getRequest.error}`
+            )
+          );
+        return;
+      }
+
+      if (payload.type === "seen") {
+        const getRequest = store.get(address);
+        getRequest.onsuccess = () => {
+          const existing = getRequest.result;
+          if (!existing) {
+            // Not watched, so there is nothing to mark (matches the SQL stores,
+            // whose UPDATE affects no rows).
+            resolve();
+            return;
+          }
+          const request = store.put({ ...existing, seen: true });
+          request.onsuccess = () => resolve();
+          request.onerror = () =>
+            reject(
+              new StorageError(
+                `Failed to mark deposit address '${address}' seen: ${request.error}`
+              )
+            );
+        };
+        getRequest.onerror = () =>
+          reject(
+            new StorageError(
+              `Failed to read watched deposit address '${address}': ${getRequest.error}`
+            )
+          );
+        return;
+      }
+
+      reject(new StorageError(`Unknown payload type: ${payload.type}`));
     });
   }
 

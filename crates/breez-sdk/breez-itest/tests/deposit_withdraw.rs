@@ -37,6 +37,33 @@ async fn wait_for_unclaimed_event(
     }
 }
 
+/// Waits for `txid` to be announced through a `NewDeposits` event.
+async fn wait_for_new_deposit(
+    event_rx: &mut tokio::sync::mpsc::Receiver<SdkEvent>,
+    txid: &str,
+    timeout: u64,
+) -> Result<DepositInfo> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            anyhow::bail!("the mempool deposit {txid} was never announced as a new deposit");
+        }
+        match tokio::time::timeout(remaining, event_rx.recv()).await {
+            Ok(Some(SdkEvent::NewDeposits { new_deposits })) => {
+                if let Some(deposit) = new_deposits.into_iter().find(|d| d.txid == txid) {
+                    return Ok(deposit);
+                }
+            }
+            Ok(Some(_)) => continue,
+            Ok(None) => anyhow::bail!("Event channel closed"),
+            Err(_) => {
+                anyhow::bail!("the mempool deposit {txid} was never announced as a new deposit")
+            }
+        }
+    }
+}
+
 // ---------------------
 // Tests
 // ---------------------
@@ -1165,6 +1192,177 @@ async fn test_claim_deposit_rejects_concurrent_calls(
     assert_eq!(
         rejected, 1,
         "exactly one concurrent claim should be rejected as in progress (r1={r1:?}, r2={r2:?})"
+    );
+
+    Ok(())
+}
+
+/// The subject of mempool deposit monitoring: a deposit is discovered while it
+/// is still unconfirmed, by the background sync rather than by the caller
+/// supplying a txid.
+///
+/// `receive_payment` is called first, because handing out the address is what
+/// starts the watch on it. Nothing is mined afterwards, so a discovery here can
+/// only have come from the address watch finding the mempool transaction: the
+/// operators do not report a deposit until it confirms, which is the gap this
+/// closes.
+///
+/// Asserted on the {{`NewDeposits`}} event rather than by polling
+/// `list_unclaimed_deposits`, because a deposit can be discovered, claimed and
+/// dropped between two polls, which would look like it was never found.
+///
+/// The deterministic half is discovery, which depends on nothing but the chain
+/// backend. Whether the claim then lands is up to the SSP and the block race
+/// (regtest matures a deposit at one confirmation), so it is asserted
+/// best-effort. Requires faucet credentials.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_zero_conf_deposit_auto_claim(
+    #[future] bob_zero_conf_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    let mut bob = bob_zero_conf_sdk.await?;
+
+    let start_balance = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+
+    // Order matters: handing out the address is what puts it under watch.
+    let addr = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
+        })
+        .await?
+        .payment_request;
+
+    let faucet = RegtestFaucet::new()?;
+    let fund_amount = 50_000u64;
+    let txid = faucet.fund_address(&addr, fund_amount).await?;
+    info!("Funded watched deposit address, txid: {txid}");
+
+    // The background sync runs the address watch on its own interval, and
+    // announces what it finds through NewDeposits.
+    let discovered = wait_for_new_deposit(&mut bob.events, &txid, 120).await?;
+
+    // Regtest mines fast, so the deposit can confirm before any sync observes it.
+    // That is the pre-existing path, not a discovery failure, and it leaves this
+    // test nothing to prove.
+    if discovered.is_mature {
+        warn!(
+            "SKIP test_zero_conf_deposit_auto_claim: the deposit confirmed before a sync observed it"
+        );
+        return Ok(());
+    }
+
+    // Discovery is the subject: an unconfirmed deposit, announced, with the
+    // amount read off the funding transaction rather than from the operators.
+    assert_eq!(
+        discovered.amount_sats, fund_amount,
+        "the deposit amount comes from the funding transaction"
+    );
+    info!(
+        "Discovered mempool deposit {txid}:{} before it confirmed",
+        discovered.vout
+    );
+
+    // Best-effort: the cascade should now claim it early. The SSP may offer no
+    // 0-conf plan, or the deposit may mature first, and neither is a failure of
+    // the discovery this test covers.
+    match wait_for_balance(&bob.sdk, Some(start_balance + 1), None, 180).await {
+        Ok(balance) => {
+            info!("Background claim credited {balance} (was {start_balance})");
+            assert!(
+                balance < start_balance + fund_amount,
+                "a claim before maturity takes the SSP spread: {balance}"
+            );
+        }
+        Err(e) => warn!(
+            "SKIP claim assertions: the deposit was discovered but not credited within the timeout: {e}"
+        ),
+    }
+
+    Ok(())
+}
+
+/// The `max_deposit_claim_fee = None` path, which is the documented setup for
+/// running your own claim logic. Automatic claiming is off, so nothing is
+/// claimed, but the deposit is still discovered in the mempool and surfaced.
+/// That discovery is the input such an app acts on.
+///
+/// Deterministic in a way the auto-claim test is not: with no ceiling the SSP is
+/// never asked for anything, so only the block race can cut it short.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_zero_conf_deposit_discovered_without_auto_claim(
+    #[future] bob_no_fee_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    let mut bob = bob_no_fee_sdk.await?;
+
+    let start_balance = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+
+    // Order matters: handing out the address is what puts it under watch.
+    let addr = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
+        })
+        .await?
+        .payment_request;
+
+    let faucet = RegtestFaucet::new()?;
+    let fund_amount = 50_000u64;
+    let txid = faucet.fund_address(&addr, fund_amount).await?;
+    info!("Funded watched deposit address with no claim ceiling, txid: {txid}");
+
+    // Sync at once rather than waiting for the background tick: on regtest the
+    // deposit can mature within a few seconds, and the 0-conf window with it.
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let discovered = wait_for_new_deposit(&mut bob.events, &txid, 120).await?;
+
+    if discovered.is_mature {
+        warn!(
+            "SKIP test_zero_conf_deposit_discovered_without_auto_claim: the deposit confirmed before a sync observed it"
+        );
+        return Ok(());
+    }
+
+    assert_eq!(
+        discovered.amount_sats, fund_amount,
+        "the deposit amount comes from the funding transaction"
+    );
+
+    // Discovery does not depend on the ceiling, but claiming does: with none
+    // configured the deposit stays unclaimed and uncredited.
+    sleep(Duration::from_secs(15)).await;
+    let balance = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    assert_eq!(
+        balance, start_balance,
+        "nothing should be claimed without a fee ceiling"
+    );
+    assert!(
+        bob.sdk
+            .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
+            .await?
+            .deposits
+            .iter()
+            .any(|d| d.txid == txid),
+        "the deposit must stay listed for the app to claim itself"
     );
 
     Ok(())

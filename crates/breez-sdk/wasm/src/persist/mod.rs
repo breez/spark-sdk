@@ -16,6 +16,7 @@ use crate::models::{
     Contact, DepositInfo, IncomingChange, ListContactsRequest, OutgoingChange, Payment,
     PaymentMetadata, Record, SetLnurlMetadataItem, StorageListPaymentsRequest,
     StoredCrossChainSwap, UnversionedRecordChange, UpdateDepositPayload,
+    UpdateWatchedAddressPayload, WatchedDepositAddress,
 };
 
 pub struct WasmStorage {
@@ -249,6 +250,35 @@ impl breez_sdk_spark::Storage for WasmStorage {
         let promise = self
             .storage
             .update_deposit(txid, vout, payload.into())
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        future.await.map_err(js_error_to_storage_error)?;
+        Ok(())
+    }
+
+    async fn list_watched_deposit_addresses(
+        &self,
+    ) -> Result<Vec<breez_sdk_spark::WatchedDepositAddress>, StorageError> {
+        let promise = self
+            .storage
+            .list_watched_deposit_addresses()
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        let result = future.await.map_err(js_error_to_storage_error)?;
+
+        let watched: Vec<WatchedDepositAddress> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+        Ok(watched.into_iter().map(Into::into).collect())
+    }
+
+    async fn update_watched_deposit_address(
+        &self,
+        address: String,
+        payload: breez_sdk_spark::UpdateWatchedAddressPayload,
+    ) -> Result<(), StorageError> {
+        let promise = self
+            .storage
+            .update_watched_deposit_address(address, payload.into())
             .map_err(js_error_to_storage_error)?;
         let future = JsFuture::from(promise);
         future.await.map_err(js_error_to_storage_error)?;
@@ -558,6 +588,8 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     deleteDeposit: (txid: string, vout: number) => Promise<void>;
     listDeposits: () => Promise<DepositInfo[]>;
     updateDeposit: (txid: string, vout: number, payload: UpdateDepositPayload) => Promise<void>;
+    listWatchedDepositAddresses: () => Promise<WatchedDepositAddress[]>;
+    updateWatchedDepositAddress: (address: string, payload: UpdateWatchedAddressPayload) => Promise<void>;
     setLnurlMetadata: (metadata: SetLnurlMetadataItem[]) => Promise<void>;
     getPaymentsByParentIds: (parentPaymentIds: string[]) => Promise<{ [parentId: string]: RelatedPayment[] }>;
     listContacts: (request: ListContactsRequest) => Promise<Contact[]>;
@@ -635,6 +667,16 @@ extern "C" {
         txid: String,
         vout: u32,
         payload: UpdateDepositPayload,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = listWatchedDepositAddresses, catch)]
+    pub fn list_watched_deposit_addresses(this: &Storage) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = updateWatchedDepositAddress, catch)]
+    pub fn update_watched_deposit_address(
+        this: &Storage,
+        address: String,
+        payload: UpdateWatchedAddressPayload,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = setLnurlMetadata, catch)]
