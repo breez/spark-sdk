@@ -1102,27 +1102,17 @@ async fn run_cross_chain_evm_receive(
     // The settlement hash on a receive is the Spark side: the very transfer
     // this payment row was built from. A token payment id appends `:vout` to
     // that hash, so the id is the hash or the hash plus a suffix.
-    if let Some(ConversionInfo::Orchestra {
-        destination_tx_hash,
-        ..
-    }) = conversion_info_of(&event_payment)
-    {
-        let hash = destination_tx_hash.as_deref().unwrap_or_else(|| {
-            panic!(
-                "Orchestra receive delivered payment {} without a destination_tx_hash",
-                event_payment.id
-            )
-        });
-        assert!(
-            event_payment.id.starts_with(hash),
-            "destination_tx_hash {hash} does not key payment {}",
-            event_payment.id
-        );
-        info!(
-            "Receive settlement tx {hash} keys payment {}",
-            event_payment.id
-        );
-    }
+    let hash = wait_for_receive_settlement_hash(&alice.sdk, &event_payment.id, SETTLE_TIMEOUT_SECS)
+        .await?;
+    assert!(
+        event_payment.id.starts_with(&hash),
+        "destination_tx_hash {hash} does not key payment {}",
+        event_payment.id
+    );
+    info!(
+        "Receive settlement tx {hash} keys payment {}",
+        event_payment.id
+    );
 
     // 10. Assert the fees-excluded contract when a parity target is set.
     if let Some(target) = parity_min_out {
@@ -1241,6 +1231,43 @@ fn describe_conversion(info: &ConversionInfo) -> String {
         ConversionInfo::Amm { conversion_id, .. } => {
             format!("AMM conversion_id={conversion_id} (unexpected for a cross-chain send)")
         }
+    }
+}
+
+/// Poll a receive payment row until the Orchestra conversion lands on it
+/// carrying its settlement hash.
+///
+/// `PaymentSucceeded` fires when the inbound Spark transfer settles, which
+/// precedes the receive poller attaching the order's metadata, so the hash has
+/// to be read off a re-read row rather than off the event.
+async fn wait_for_receive_settlement_hash(
+    sdk: &BreezSdk,
+    payment_id: &str,
+    timeout_secs: u64,
+) -> Result<String> {
+    let start = Instant::now();
+    loop {
+        let payment = sdk
+            .get_payment(GetPaymentRequest {
+                payment_id: payment_id.to_string(),
+            })
+            .await?
+            .payment;
+        if let Some(ConversionInfo::Orchestra {
+            destination_tx_hash: Some(hash),
+            ..
+        }) = conversion_info_of(&payment)
+        {
+            return Ok(hash.clone());
+        }
+        if start.elapsed() >= Duration::from_secs(timeout_secs) {
+            anyhow::bail!(
+                "timeout after {timeout_secs}s waiting for the Orchestra settlement hash on \
+                 receive payment {payment_id}"
+            );
+        }
+        let _ = sdk.sync_wallet(SyncWalletRequest {}).await;
+        tokio::time::sleep(STATUS_POLL_INTERVAL).await;
     }
 }
 
