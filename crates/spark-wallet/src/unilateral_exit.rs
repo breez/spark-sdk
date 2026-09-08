@@ -855,7 +855,7 @@ fn interpret_chain(
 /// its on-chain spend can't be verified: either confirmed via the operator-OnChain
 /// fallback (the node's own chain lookup was unavailable), or chain-confirmed with
 /// its CPFP child's spend or body lookup unavailable, so its change is unresolved.
-/// In both cases the confirmed child's spend is invisible to `spent_funding`, so a
+/// In both cases the confirmed child's spend is invisible to `scan_funding`, so a
 /// re-supplied input the child already spent wouldn't be dropped and the next driven
 /// child would double-spend; flagging (not the `Unconfirmed` the build would
 /// otherwise emit) tells the caller not to broadcast until a later run confirms it on
@@ -962,7 +962,7 @@ fn walk_branch(
     refunds: &mut HashMap<TreeNodeId, RefundState>,
     stopped: &mut HashSet<TreeNodeId>,
     unverified: &mut HashSet<TreeNodeId>,
-    // Confirmed nodes whose on-chain spend `spent_funding` can't see (here: the
+    // Confirmed nodes whose on-chain spend `scan_funding` can't see (here: the
     // operator-OnChain fallback, when the chain lookup was unavailable).
     unverifiable_confirmed: &mut HashSet<TreeNodeId>,
     pending: &mut Vec<ChainQuery>,
@@ -3659,7 +3659,7 @@ mod interpret_tests {
     #[test]
     fn interpret_flags_driven_child_below_operator_confirmed_node() {
         // The root's chain lookup is unavailable, so its confirmation rests on the
-        // operators' OnChain flag: spent_funding can't see the spend, so the leaf
+        // operators' OnChain flag: scan_funding can't see the spend, so the leaf
         // driven below it is flagged unverified rather than broadcast.
         let deposit = OutPoint {
             txid: Txid::from_byte_array([1u8; 32]),
@@ -3713,7 +3713,7 @@ mod interpret_tests {
     #[test]
     fn interpret_does_not_flag_chain_verified_unresolved_change() {
         // The root is confirmed on-chain (spend visible) but carries no anchor, so
-        // its CPFP change can't be resolved. spent_funding still protects any reused
+        // its CPFP change can't be resolved. scan_funding still protects any reused
         // input, so the leaf driven below stays unconfirmed rather than flagged.
         let deposit = OutPoint {
             txid: Txid::from_byte_array([1u8; 32]),

@@ -145,16 +145,6 @@ impl BreezSdk {
         })
     }
 
-    /// Builds and signs a complete unilateral exit from a `prepare_unilateral_exit`
-    /// quote and the actual funding UTXOs, returning the full transaction set in
-    /// topological broadcast order without broadcasting. Broadcast it over time,
-    /// respecting each transaction's `depends_on` and `csv_timelock_blocks`.
-    ///
-    /// It resolves on-chain state first (see [`resolve_exit_observations`]): an
-    /// already-confirmed fan-out or CPFP node is not rebuilt, and a leaf refund
-    /// already on-chain (recognized by the leaf's refund address, so any refund
-    /// variant counts) is swept directly. Re-running after partial progress
-    /// therefore resumes rather than restarts.
     /// Reads an exit you kept back against the chain: which of its transactions
     /// are now in a block, and whether it can still be finished as it stands.
     ///
@@ -204,6 +194,15 @@ impl BreezSdk {
         Ok(CheckUnilateralExitResponse { exit, verdict })
     }
 
+    /// Builds and signs a complete unilateral exit from a `prepare_unilateral_exit`
+    /// quote and the actual funding UTXOs, returning the full transaction set in
+    /// topological broadcast order without broadcasting. Broadcast it over time,
+    /// respecting each transaction's `depends_on` and `csv_timelock_blocks`.
+    ///
+    /// It reads on-chain state first: an already-confirmed fan-out or CPFP node
+    /// is not rebuilt, and a leaf refund already on-chain (recognized by the
+    /// leaf's refund address, so any refund variant counts) is swept directly.
+    /// Re-running after partial progress therefore resumes rather than restarts.
     #[allow(clippy::too_many_lines)]
     pub async fn unilateral_exit(
         &self,
@@ -608,8 +607,8 @@ fn parse_xonly(pubkey: &str) -> Result<XOnlyPublicKey, SdkError> {
 }
 
 /// Reads what the chain has already done to `leaf_ids`, before any funding is
-/// considered. Same loop as [`resolve_exit_observations`], over the scan that
-/// needs no plan.
+/// considered. Same loop as [`resolve_exit_check`], over the scan that needs no
+/// plan.
 async fn resolve_exit_chain_state(
     chain: &dyn BitcoinChainService,
     tree_nodes: &HashMap<TreeNodeId, TreeNode>,
