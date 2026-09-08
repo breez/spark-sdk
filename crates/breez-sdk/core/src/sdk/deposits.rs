@@ -65,14 +65,18 @@ impl BreezSdk {
             .or(self.config.max_deposit_claim_fee.clone());
 
         // Held for the whole attempt, so a sync pass or a second call on the same
-        // outpoint cannot run one alongside it.
+        // outpoint cannot run one alongside it. Keyed on the parsed txid rather
+        // than the caller's spelling of it, which `Txid::from_str` accepts in any
+        // case: an uppercase txid would otherwise take a key the sync loop never
+        // looks up, and slip past the guard.
+        let txid = detailed_utxo.txid.to_string();
         let Some(_claim_guard) = self.claim_guards.try_acquire(TxOutput {
-            txid: request.txid.clone(),
-            vout: request.vout,
+            txid: txid.clone(),
+            vout: detailed_utxo.vout,
         }) else {
             return Err(SdkError::DepositClaimInProgress {
-                tx: request.txid.clone(),
-                vout: request.vout,
+                tx: txid,
+                vout: detailed_utxo.vout,
             });
         };
 
