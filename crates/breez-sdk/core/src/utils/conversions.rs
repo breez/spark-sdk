@@ -447,6 +447,7 @@ mod tests {
             asset_amount_in: Some(100_000_000),
             estimated_out: 99_500_000,
             delivered_amount: None,
+            destination_tx_hash: None,
             status,
             fee_amount: Some(500_000),
             service_fee_amount: Some(500),

@@ -259,6 +259,11 @@ pub struct Order {
     pub deposit_address: String,
     pub destination_chain: String,
     pub destination_asset: String,
+    /// Settlement transaction on the destination chain, set once the order is
+    /// delivered. Absent from the documented status schema but returned by the
+    /// live API, so it is modelled as optional.
+    #[serde(default)]
+    pub destination_tx_hash: Option<String>,
     pub recipient_address: String,
     pub amount_in: String,
     #[serde(default)]

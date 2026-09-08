@@ -147,6 +147,131 @@ pub async fn wait_for_evm_balance_increase(
     }
 }
 
+/// `keccak256("Transfer(address,address,uint256)")`, `topics[0]` of every
+/// ERC-20 transfer log.
+const ERC20_TRANSFER_TOPIC: &str =
+    "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+
+/// Total amount of `token_contract` credited to `recipient` by `tx_hash`, read
+/// from the transaction's own receipt logs. `None` while the node has not
+/// indexed the transaction yet; `Some(0)` if it is mined but credits the
+/// recipient nothing.
+///
+/// This is what turns a provider-reported settlement hash into evidence: it
+/// proves the named transaction exists on the destination chain, succeeded, and
+/// moved the token to the address we asked for.
+pub async fn evm_erc20_credited_by_tx(
+    rpc_url: &str,
+    tx_hash: &str,
+    token_contract: &str,
+    recipient: &str,
+) -> Result<Option<u128>> {
+    let token: Address = token_contract
+        .parse()
+        .map_err(|e| anyhow!("invalid token contract {token_contract}: {e}"))?;
+    let recipient: Address = recipient
+        .parse()
+        .map_err(|e| anyhow!("invalid recipient address {recipient}: {e}"))?;
+
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_getTransactionReceipt",
+        "params": [tx_hash],
+    });
+    let resp: serde_json::Value = http_client()
+        .post(rpc_url)
+        .json(&body)
+        .send()
+        .await?
+        .json()
+        .await?;
+    if let Some(err) = resp.get("error") {
+        bail!("eth_getTransactionReceipt error from {rpc_url}: {err}");
+    }
+    let receipt = match resp.get("result") {
+        None | Some(serde_json::Value::Null) => return Ok(None),
+        Some(receipt) => receipt,
+    };
+
+    let status = receipt.get("status").and_then(serde_json::Value::as_str);
+    if status != Some("0x1") {
+        bail!("settlement tx {tx_hash} did not succeed (receipt status {status:?})");
+    }
+
+    // topics = [Transfer, from, to]; `to` is the 32-byte left-padded recipient.
+    let mut recipient_topic = [0u8; 32];
+    recipient_topic[12..].copy_from_slice(recipient.as_slice());
+    let recipient_topic = format!("0x{}", hex::encode(recipient_topic));
+
+    let mut credited: u128 = 0;
+    let logs = receipt
+        .get("logs")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    for log in logs {
+        let address = log.get("address").and_then(serde_json::Value::as_str);
+        if !address.is_some_and(|a| a.eq_ignore_ascii_case(&token.to_string())) {
+            continue;
+        }
+        let topics = log
+            .get("topics")
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let [event, _from, to, ..] = topics else {
+            continue;
+        };
+        let matches = event
+            .as_str()
+            .is_some_and(|t| t.eq_ignore_ascii_case(ERC20_TRANSFER_TOPIC))
+            && to
+                .as_str()
+                .is_some_and(|t| t.eq_ignore_ascii_case(&recipient_topic));
+        if !matches {
+            continue;
+        }
+        let data = log
+            .get("data")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("0x");
+        let value = U256::from_str_radix(data.trim_start_matches("0x"), 16)
+            .map_err(|e| anyhow!("transfer log in {tx_hash} has bad value {data}: {e}"))?;
+        credited = credited.saturating_add(
+            u128::try_from(value).map_err(|_| anyhow!("transfer value exceeds u128: {value}"))?,
+        );
+    }
+    Ok(Some(credited))
+}
+
+/// Poll [`evm_erc20_credited_by_tx`] until the node has indexed `tx_hash`,
+/// returning what it credited `recipient`. A receipt that is mined but failed
+/// is fatal immediately; only "not indexed yet" and transient RPC errors are
+/// retried.
+pub async fn wait_for_evm_settlement_tx(
+    rpc_url: &str,
+    tx_hash: &str,
+    token_contract: &str,
+    recipient: &str,
+    timeout_secs: u64,
+) -> Result<u128> {
+    let start = Instant::now();
+    let timeout = Duration::from_secs(timeout_secs);
+    loop {
+        match evm_erc20_credited_by_tx(rpc_url, tx_hash, token_contract, recipient).await {
+            Ok(Some(credited)) => return Ok(credited),
+            Ok(None) => debug!("settlement tx {tx_hash} not indexed yet; waiting..."),
+            Err(e) if e.to_string().contains("did not succeed") => return Err(e),
+            Err(e) => debug!("receipt read for {tx_hash} failed (retrying): {e:#}"),
+        }
+        if start.elapsed() >= timeout {
+            bail!("timeout after {timeout_secs}s waiting for settlement tx {tx_hash} on {rpc_url}");
+        }
+        tokio::time::sleep(EVM_POLL_INTERVAL).await;
+    }
+}
+
 /// Log where standing test funds live so a human can recover them later (the
 /// derivation path in the module docs plus this address + balance is everything
 /// needed to import the wallet and sweep).

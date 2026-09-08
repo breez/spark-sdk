@@ -81,11 +81,12 @@ The Spark/USDB token transfer and the cross-chain delivery have distinct status 
 | {{#name status}}                                      | The Spark or USDB token transfer (sender-side settlement)      |
 | {{#name conversion_info.status}}                      | The provider-driven cross-chain leg                            |
 | {{#name conversion_info.delivered_amount}}            | Final amount delivered to the recipient, set when terminal     |
+| {{#name conversion_info.destination_tx_hash}}         | Settlement transaction on the destination chain, set on delivery |
 
 The cross-chain status walks one of:
 
 - **{{#enum ConversionStatus::Pending}}** — deposit transfer submitted, provider working on the cross-chain leg.
-- **{{#enum ConversionStatus::Completed}}** — provider reports the order terminal-successful; {{#name delivered_amount}} is set.
+- **{{#enum ConversionStatus::Completed}}** — provider reports the order terminal-successful; {{#name delivered_amount}} is set, and {{#name destination_tx_hash}} identifies the settlement transaction on the destination chain. Boltz-provider conversions leave it unset.
 - **{{#enum ConversionStatus::RefundNeeded}}** — provider rejected the submit or order failed before delivery; the local Spark transfer is settled and the deposit is sitting at the provider awaiting refund.
 - **{{#enum ConversionStatus::Refunded}}** — the funds have been refunded back to the wallet.
 - **{{#enum ConversionStatus::Failed}}** — terminal failure with no refund pending.
