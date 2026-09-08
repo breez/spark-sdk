@@ -47,16 +47,6 @@ pub struct ExitStateImport {
     pub skipped_chains: usize,
 }
 
-/// A prepared unilateral exit: the chain-independent plan plus per-leaf refund
-/// addresses. Feed to [`next_chain_queries`], then [`build_unilateral_exit`].
-#[derive(Clone, Debug)]
-pub struct PreparedUnilateralExit {
-    pub plan: UnilateralExitPlan,
-    /// Every refund variant pays the same leaf key, so this one P2TR address
-    /// recognizes an on-chain refund of any variant, and is where the sweep pulls.
-    pub leaf_refund_addresses: HashMap<TreeNodeId, Address>,
-}
-
 /// The exit's on-chain state; empty drives a fresh cpfp exit.
 ///
 /// The pre-signed txs only continue along the cpfp `node_tx` chain (every child
@@ -273,11 +263,14 @@ pub struct ExitChainScan {
 /// The exit's on-chain state as the tree alone shows it: which nodes are
 /// confirmed, which refunds landed, which branches can no longer be continued.
 /// Answered without any funding, so it can be resolved before an exit is funded.
+#[derive(Default)]
 struct ExitChainWalk {
     nodes: HashMap<TreeNodeId, NodeState>,
     refunds: HashMap<TreeNodeId, RefundState>,
     stopped: HashSet<TreeNodeId>,
     unverified: HashSet<TreeNodeId>,
+    /// Confirmed nodes whose on-chain spend `scan_funding` cannot see: the
+    /// operator-OnChain fallback taken because the chain lookup was unavailable.
     unverifiable_confirmed: HashSet<TreeNodeId>,
     pending: Vec<ChainQuery>,
 }
@@ -390,8 +383,6 @@ pub struct ExitCheckInput {
     pub tx: Transaction,
     /// The CPFP child that pays its fee, where it has one.
     pub cpfp: Option<Transaction>,
-    /// Txids of the transactions that must be in a block before this one can be.
-    pub depends_on: Vec<Txid>,
     /// Whether the caller last recorded it in a block. Where the check starts,
     /// not what it concludes.
     pub confirmed: bool,
@@ -535,9 +526,10 @@ pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> Exi
 
 /// The transactions of this exit whose outputs `input` spends.
 ///
-/// Narrower than its `depends_on`, which also orders the broadcast: that carries
-/// the fan-out, which `input`'s CPFP child spends rather than `input` itself. A
-/// confirmation says nothing about a transaction it does not spend from.
+/// The check works from these rather than from the broadcast order the caller
+/// holds, which also lists the fan-out: `input`'s CPFP child spends that, not
+/// `input`. A confirmation says nothing about a transaction it does not spend
+/// from.
 fn spend_parents<'a>(
     input: &'a ExitCheckInput,
     by_txid: &'a HashMap<Txid, &ExitCheckInput>,
@@ -766,27 +758,10 @@ fn walk_exit_chain(
     refund_addresses: &HashMap<TreeNodeId, Address>,
     observed: &ObservedIndex<'_>,
 ) -> ExitChainWalk {
-    let mut walk = ExitChainWalk {
-        nodes: HashMap::new(),
-        refunds: HashMap::new(),
-        stopped: HashSet::new(),
-        unverified: HashSet::new(),
-        unverifiable_confirmed: HashSet::new(),
-        pending: Vec::new(),
-    };
+    let mut walk = ExitChainWalk::default();
 
     for leaf_id in leaf_ids {
-        walk_branch(
-            node_map,
-            leaf_id,
-            observed,
-            &mut walk.nodes,
-            &mut walk.refunds,
-            &mut walk.stopped,
-            &mut walk.unverified,
-            &mut walk.unverifiable_confirmed,
-            &mut walk.pending,
-        );
+        walk_branch(node_map, leaf_id, observed, &mut walk);
     }
 
     // Runs per leaf independently of the walk; an adopted refund overrides it.
@@ -807,11 +782,7 @@ fn walk_exit_chain(
 /// Restates the tree's on-chain state, read while preparing, in the terms the
 /// build works in: which nodes are confirmed, which refunds are there to sweep,
 /// and which branches can no longer be continued. Reads no chain of its own.
-fn interpret_chain(
-    prepared: &PreparedUnilateralExit,
-    state: &ExitChainState,
-) -> ChainInterpretation {
-    let plan = &prepared.plan;
+fn interpret_chain(plan: &UnilateralExitPlan, state: &ExitChainState) -> ChainInterpretation {
     let node_map = &plan.tree_nodes;
 
     let leaf_ids: Vec<TreeNodeId> = plan
@@ -953,20 +924,20 @@ enum ResumePoint {
 /// Follows the confirmed spender from the deposit down one branch, classifying
 /// each node into `nodes`/`refunds`. Stops (emitting the next lookup into
 /// `pending`) at the first output whose spender is not yet observed.
-#[allow(clippy::too_many_arguments)]
 fn walk_branch(
     node_map: &HashMap<TreeNodeId, TreeNode>,
     leaf_id: &TreeNodeId,
     observed: &ObservedIndex<'_>,
-    nodes: &mut HashMap<TreeNodeId, NodeState>,
-    refunds: &mut HashMap<TreeNodeId, RefundState>,
-    stopped: &mut HashSet<TreeNodeId>,
-    unverified: &mut HashSet<TreeNodeId>,
-    // Confirmed nodes whose on-chain spend `scan_funding` can't see (here: the
-    // operator-OnChain fallback, when the chain lookup was unavailable).
-    unverifiable_confirmed: &mut HashSet<TreeNodeId>,
-    pending: &mut Vec<ChainQuery>,
+    walk: &mut ExitChainWalk,
 ) {
+    let ExitChainWalk {
+        nodes,
+        refunds,
+        stopped,
+        unverified,
+        unverifiable_confirmed,
+        pending,
+    } = walk;
     let Some(leaf) = node_map.get(leaf_id) else {
         return;
     };
@@ -1210,16 +1181,12 @@ fn interpret_refund(
 /// unsigned CPFP child that pays its fee; confirmed nodes and adopted refunds
 /// are emitted without one.
 pub fn build_unilateral_exit(
-    prepared: &PreparedUnilateralExit,
+    plan: &UnilateralExitPlan,
     state: &ExitChainState,
     fee_rate_sat_per_kw: u64,
 ) -> Result<UnilateralExitBuild, SparkWalletError> {
-    let interpretation = interpret_chain(prepared, state);
-    let mut build = build_exit(
-        &prepared.plan,
-        &interpretation.resolved,
-        fee_rate_sat_per_kw,
-    )?;
+    let interpretation = interpret_chain(plan, state);
+    let mut build = build_exit(plan, &interpretation.resolved, fee_rate_sat_per_kw)?;
     flag_unverified_txs(&mut build, &interpretation);
     Ok(build)
 }
@@ -2433,16 +2400,13 @@ mod interpret_tests {
         TreeNodeId::from_str(s).unwrap()
     }
 
-    fn prepared_of(root: TreeNode, leaf: TreeNode) -> PreparedUnilateralExit {
+    fn prepared_of(root: TreeNode, leaf: TreeNode) -> UnilateralExitPlan {
         let leaf_id = leaf.id.clone();
-        PreparedUnilateralExit {
-            plan: UnilateralExitPlan {
-                selected_leaves: vec![],
-                fan_out_psbt: None,
-                per_branch_funding: vec![(leaf_id.clone(), vec![])],
-                tree_nodes: to_node_map(vec![root, leaf]),
-            },
-            leaf_refund_addresses: [(leaf_id, leaf_addr())].into_iter().collect(),
+        UnilateralExitPlan {
+            selected_leaves: vec![],
+            fan_out_psbt: None,
+            per_branch_funding: vec![(leaf_id, vec![])],
+            tree_nodes: to_node_map(vec![root, leaf]),
         }
     }
 
@@ -2737,10 +2701,10 @@ mod interpret_tests {
         assert_eq!(check.confirmed.get(&second), Some(&Some(880_002)));
     }
 
-    /// The fan-out is in a branch transaction's `depends_on` for broadcast order,
-    /// not because that transaction spends it. Settling along `depends_on` would
-    /// tick it off as confirmed without asking, and the caller, told it is in a
-    /// block, would never broadcast it.
+    /// The branch's CPFP child spends the fan-out output; the branch transaction
+    /// itself does not. Settling had followed the caller's broadcast order, which
+    /// lists the fan-out, and ticked it off as confirmed without asking. Told it
+    /// is in a block, the caller would never broadcast it.
     #[test]
     fn a_confirmed_branch_does_not_settle_the_fan_out_it_only_waits_for() {
         let mut chain = exit_chain_of_three();
@@ -2758,13 +2722,9 @@ mod interpret_tests {
                 output: vec![],
             },
             cpfp: None,
-            depends_on: vec![],
             confirmed: false,
         };
         let fan_out_txid = fan_out.tx.compute_txid();
-        // Broadcast order only: the branch's CPFP child spends the fan-out, the
-        // branch transaction itself does not.
-        chain[0].depends_on.push(fan_out_txid);
         for tx in &mut chain {
             tx.confirmed = true;
         }
@@ -2965,19 +2925,16 @@ mod interpret_tests {
         );
         vec![
             ExitCheckInput {
-                depends_on: vec![],
                 cpfp: None,
                 confirmed: true,
                 tx: first.clone(),
             },
             ExitCheckInput {
-                depends_on: vec![first.compute_txid()],
                 cpfp: None,
                 confirmed: false,
                 tx: second.clone(),
             },
             ExitCheckInput {
-                depends_on: vec![second.compute_txid()],
                 cpfp: None,
                 confirmed: false,
                 tx: third,
@@ -3173,35 +3130,34 @@ mod interpret_tests {
 
     /// Production scans the tree first and hands the result to the build, so the
     /// tests interpret the same way: one pass over the observations they set up.
-    fn scan_of(prepared: &PreparedUnilateralExit, observed: &[Observation]) -> ExitChainScan {
-        let leaf_ids: Vec<TreeNodeId> = prepared
-            .plan
+    fn scan_of(plan: &UnilateralExitPlan, observed: &[Observation]) -> ExitChainScan {
+        let leaf_ids: Vec<TreeNodeId> = plan
             .per_branch_funding
             .iter()
             .map(|(leaf_id, _)| leaf_id.clone())
             .collect();
         scan_exit_chain(
-            &prepared.plan.tree_nodes,
+            &plan.tree_nodes,
             &leaf_ids,
-            &prepared.leaf_refund_addresses,
+            &leaf_ids
+                .iter()
+                .map(|id| (id.clone(), leaf_addr()))
+                .collect(),
             observed,
         )
     }
 
-    fn interpret_chain(
-        prepared: &PreparedUnilateralExit,
-        observed: &[Observation],
-    ) -> ChainInterpretation {
-        super::interpret_chain(prepared, &scan_of(prepared, observed).state)
+    fn interpret_chain(plan: &UnilateralExitPlan, observed: &[Observation]) -> ChainInterpretation {
+        super::interpret_chain(plan, &scan_of(plan, observed).state)
     }
 
     /// Every lookup reading the tree still needs. The build asks for none: its
     /// funding was resolved before the plan was made.
     fn next_chain_queries(
-        prepared: &PreparedUnilateralExit,
+        plan: &UnilateralExitPlan,
         observed: &[Observation],
     ) -> Result<Vec<ChainQuery>, SparkWalletError> {
-        Ok(scan_of(prepared, observed).pending)
+        Ok(scan_of(plan, observed).pending)
     }
 
     fn refund_scan(leaf_id: &TreeNodeId, refund_txid: Txid, value: u64) -> Observation {

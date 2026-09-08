@@ -83,8 +83,7 @@ use crate::{
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
     unilateral_exit::{
-        CpfpChangeInput, ExitLeafSelection, ExitStateExport, ExitStateImport,
-        PreparedUnilateralExit, RefundOutput,
+        CpfpChangeInput, ExitLeafSelection, ExitStateExport, ExitStateImport, RefundOutput,
     },
 };
 
@@ -1823,7 +1822,7 @@ impl SparkWallet {
         inputs: Vec<CpfpInput>,
         destination_script_len: usize,
         on_chain: &ExitChainState,
-    ) -> Result<PreparedUnilateralExit, SparkWalletError> {
+    ) -> Result<spark::services::UnilateralExitPlan, SparkWalletError> {
         let plan = spark::services::plan_unilateral_exit(
             context.tree_nodes.clone(),
             &context.leaf_ids,
@@ -1843,14 +1842,14 @@ impl SparkWallet {
 
         let selected_ids: Vec<TreeNodeId> =
             plan.selected_leaves.iter().map(|l| l.id.clone()).collect();
-        let leaf_refund_addresses = crate::leaf_refund_addresses(
+        let refund_addresses = crate::leaf_refund_addresses(
             &plan.tree_nodes,
             &selected_ids,
             self.config.network.into(),
         );
         if let Some(leaf) = selected_ids
             .iter()
-            .find(|id| !leaf_refund_addresses.contains_key(*id))
+            .find(|id| !refund_addresses.contains_key(*id))
         {
             // Selection already drops a leaf with no refund_tx, so the only way
             // here is a refund paying a script no address describes.
@@ -1859,10 +1858,7 @@ impl SparkWallet {
             )));
         }
 
-        Ok(PreparedUnilateralExit {
-            plan,
-            leaf_refund_addresses,
-        })
+        Ok(plan)
     }
 
     /// Builds a sweep PSBT that pulls every leaf's refund output and every

@@ -281,19 +281,18 @@ impl BreezSdk {
             dest_script_len,
             &chain_state,
         )?;
-        if prepared_exit.plan.selected_leaves.is_empty() {
+        if prepared_exit.selected_leaves.is_empty() {
             debug!("unilateral_exit: plan selected no leaves, returning empty result");
             return Ok(empty_exit_response());
         }
         trace!(
-            selected_leaves = prepared_exit.plan.selected_leaves.len(),
-            tree_nodes = prepared_exit.plan.tree_nodes.len(),
-            has_fan_out = prepared_exit.plan.fan_out_psbt.is_some(),
+            selected_leaves = prepared_exit.selected_leaves.len(),
+            tree_nodes = prepared_exit.tree_nodes.len(),
+            has_fan_out = prepared_exit.fan_out_psbt.is_some(),
             "unilateral_exit: plan prepared"
         );
 
         let leaves: Vec<UnilateralExitLeaf> = prepared_exit
-            .plan
             .selected_leaves
             .iter()
             .map(|l| UnilateralExitLeaf {
@@ -931,14 +930,6 @@ fn exit_check_input(tx: &UnilateralExitTransaction) -> Result<ExitCheckInput, Sd
     Ok(ExitCheckInput {
         tx: decode(&tx.tx_hex)?,
         cpfp: tx.cpfp_tx_hex.as_deref().map(decode).transpose()?,
-        depends_on: tx
-            .depends_on
-            .iter()
-            .map(|txid| {
-                Txid::from_str(txid)
-                    .map_err(|e| SdkError::InvalidInput(format!("Invalid txid {txid}: {e}")))
-            })
-            .collect::<Result<_, SdkError>>()?,
         confirmed: matches!(tx.status, ExitTransactionStatus::Confirmed { .. }),
     })
 }
