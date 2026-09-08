@@ -241,6 +241,10 @@ pub enum ConversionInfo {
         /// (e.g. `0x`-prefixed hex on EVM, a base58 signature on Solana).
         /// Unset until the order is delivered, and on orders that failed or
         /// were refunded.
+        ///
+        /// On a receive the destination is Spark, so this is the Spark transfer
+        /// id (or token tx hash) of the inbound payment, not an external-chain
+        /// transaction. Note that `chain` names the source side on a receive.
         #[serde(default)]
         destination_tx_hash: Option<String>,
         status: ConversionStatus,

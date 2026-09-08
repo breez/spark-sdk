@@ -96,7 +96,7 @@ The Spark-side transfer and the external cross-chain leg have distinct status fi
 The cross-chain status walks one of:
 
 - **{{#enum ConversionStatus::Pending}}**: deposit/transfer submitted, provider working on the cross-chain leg.
-- **{{#enum ConversionStatus::Completed}}**: provider reports the order terminal-successful; {{#name delivered_amount}} is set, and {{#name destination_tx_hash}} identifies the settlement transaction on the destination chain. Boltz-provider conversions leave the hash unset.
+- **{{#enum ConversionStatus::Completed}}**: provider reports the order terminal-successful; {{#name delivered_amount}} is set, and {{#name destination_tx_hash}} identifies the settlement transaction on the destination chain, which on a receive is the inbound Spark transfer. Boltz-provider conversions leave the hash unset.
 - **{{#enum ConversionStatus::RefundNeeded}}**: the cross-chain leg was rejected after deposit (typically because the realized rate exceeded {{#name max_slippage_bps}}); the deposit is awaiting refund. *(send only)*
 - **{{#enum ConversionStatus::Refunded}}**: the funds have been refunded back to the wallet.
 - **{{#enum ConversionStatus::Failed}}**: terminal failure with no refund pending.

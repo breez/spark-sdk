@@ -1099,6 +1099,31 @@ async fn run_cross_chain_evm_receive(
         conversion_info_of(&event_payment).is_some()
     );
 
+    // The settlement hash on a receive is the Spark side: the very transfer
+    // this payment row was built from. A token payment id appends `:vout` to
+    // that hash, so the id is the hash or the hash plus a suffix.
+    if let Some(ConversionInfo::Orchestra {
+        destination_tx_hash,
+        ..
+    }) = conversion_info_of(&event_payment)
+    {
+        let hash = destination_tx_hash.as_deref().unwrap_or_else(|| {
+            panic!(
+                "Orchestra receive delivered payment {} without a destination_tx_hash",
+                event_payment.id
+            )
+        });
+        assert!(
+            event_payment.id.starts_with(hash),
+            "destination_tx_hash {hash} does not key payment {}",
+            event_payment.id
+        );
+        info!(
+            "Receive settlement tx {hash} keys payment {}",
+            event_payment.id
+        );
+    }
+
     // 10. Assert the fees-excluded contract when a parity target is set.
     if let Some(target) = parity_min_out {
         let floor = reduce_by_bps(target, SLIPPAGE_TOLERANCE_BPS);

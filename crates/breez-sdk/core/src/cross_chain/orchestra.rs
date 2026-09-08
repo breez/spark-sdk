@@ -1914,10 +1914,7 @@ async fn build_orchestra_receive_conversion_info(
         asset_amount_in,
         estimated_out,
         delivered_amount,
-        // Send-only: on receive the destination is Spark, and the inbound
-        // transfer is the payment row itself. Setting it here would pair a
-        // Spark transfer id with `chain`, which on receive names the source.
-        destination_tx_hash: None,
+        destination_tx_hash: order.destination_tx_hash.clone(),
         status: ConversionStatus::Completed,
         // Realized total fee in source-asset units.
         fee_amount,
