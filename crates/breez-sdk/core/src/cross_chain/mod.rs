@@ -871,12 +871,12 @@ mod tests {
                 description: Some("desc".to_string()),
                 invoice: "lnbc1".to_string(),
                 destination_pubkey: "02aa".to_string(),
-                htlc_details: crate::SparkHtlcDetails {
+                htlc_details: Some(crate::SparkHtlcDetails {
                     payment_hash: "hash1".to_string(),
                     preimage: None,
                     expiry_time: 0,
                     status: crate::SparkHtlcStatus::PreimageShared,
-                },
+                }),
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,

@@ -558,6 +558,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
              ,      z.zap_event
              ,      GREATEST(COALESCE(z.updated_at, 0), COALESCE(sc.updated_at, 0), COALESCE(i.updated_at, 0)) AS updated_at
              ,      i.preimage
+             ,      i.invoice
              FROM (
                  SELECT payment_hash FROM invoices WHERE user_pubkey = $1 AND updated_at > $4
                  UNION
@@ -587,6 +588,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     nostr_zap_receipt: row.try_get(3)?,
                     updated_at: row.try_get(4)?,
                     preimage: row.try_get(5)?,
+                    invoice: row.try_get(6)?,
                 })
             })
             .collect::<Result<Vec<_>, sqlx::Error>>()?;

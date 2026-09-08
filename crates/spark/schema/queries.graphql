@@ -359,3 +359,23 @@ query UserRequest($request_id: ID!) {
     }
   }
 }
+
+query CurrentUserLightningReceiveRequests($first: Int, $after: String) {
+  current_user {
+    user_requests(first: $first, after: $after, types: [LIGHTNING_RECEIVE]) {
+      page_info {
+        has_next_page
+        end_cursor
+      }
+      entities {
+        __typename
+        ... on LightningReceiveRequest {
+          created_at
+          invoice {
+            encoded_invoice
+          }
+        }
+      }
+    }
+  }
+}

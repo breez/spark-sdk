@@ -20,7 +20,8 @@ pub struct LnurlImageConfig {
     /// Whether to auto-migrate the database
     pub auto_migrate: bool,
     /// Whether to include Spark address routing hints in Lightning invoices
-    pub include_spark_address: bool,
+    /// Whether the Bolt11 invoices the server mints advertise a Spark destination.
+    pub include_spark_fallback: bool,
 }
 
 impl Default for LnurlImageConfig {
@@ -36,7 +37,7 @@ impl Default for LnurlImageConfig {
             },
             network: "regtest".to_string(),
             auto_migrate: true,
-            include_spark_address: false,
+            include_spark_fallback: false,
         }
     }
 }
@@ -62,8 +63,8 @@ impl LnurlImageConfig {
     }
 
     /// Set whether to include Spark address routing hints in invoices
-    pub fn with_include_spark_address(mut self, include_spark_address: bool) -> Self {
-        self.include_spark_address = include_spark_address;
+    pub fn with_include_spark_fallback(mut self, include_spark_fallback: bool) -> Self {
+        self.include_spark_fallback = include_spark_fallback;
         self
     }
 }
@@ -140,8 +141,8 @@ impl LnurlFixture {
             .with_env_var("BREEZ_LNURL_MIN_SENDABLE", "1000")
             .with_env_var("BREEZ_LNURL_MAX_SENDABLE", "1000000000")
             .with_env_var(
-                "BREEZ_LNURL_DEV_DONT_USE_LNURL_INCLUDE_SPARK_ADDRESS",
-                config.include_spark_address.to_string(),
+                "BREEZ_LNURL_DEV_DONT_USE_LNURL_INCLUDE_SPARK_FALLBACK",
+                config.include_spark_fallback.to_string(),
             )
             // Allow the container to reach services on the host via host.docker.internal
             .with_host("host.docker.internal", Host::HostGateway);

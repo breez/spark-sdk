@@ -16,6 +16,7 @@ use crate::{
     events::{EventListener, SdkEvent},
     persist::ObjectCacheRepository,
     token_conversion::TokenConverter,
+    utils::payments::{FallbackLookup, resolve_bolt11_fallback},
     utils::{
         payments::{get_payment_and_emit_event, update_balances},
         run_with_shutdown,
@@ -328,6 +329,14 @@ async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
             info!("Transfer claim starting");
             let mut payment_emitted = false;
             if let Ok(mut payment) = Payment::try_from(transfer) {
+                resolve_bolt11_fallback(
+                    &sdk.spark_wallet,
+                    &sdk.storage,
+                    &mut payment,
+                    FallbackLookup::Remote,
+                )
+                .await;
+
                 // Persist before syncing metadata so the Pending payment is not
                 // delayed by the metadata fetch.
                 let should_emit = match sdk.storage.apply_payment_update(payment.clone()).await {

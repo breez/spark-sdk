@@ -821,12 +821,12 @@ mod tests {
                 invoice: "lnbc1test".to_string(),
                 destination_pubkey: "02def456".to_string(),
                 description: None,
-                htlc_details: SparkHtlcDetails {
+                htlc_details: Some(SparkHtlcDetails {
                     payment_hash: "abc123".to_string(),
                     preimage: None,
                     expiry_time: 0,
                     status: crate::SparkHtlcStatus::WaitingForPreimage,
-                },
+                }),
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,

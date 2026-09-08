@@ -1,16 +1,16 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use platform_utils::time::Instant;
+use platform_utils::time::{Duration, Instant, SystemTime};
 use spark_wallet::{
-    ListTransfersRequest, SparkWallet, TokenTransaction, TransferDirection, TransferId,
-    TransferStatus, WalletTransfer,
+    ListTransfersRequest, SparkAddress, SparkWallet, TokenTransaction, TransferDirection,
+    TransferId, TransferStatus, WalletTransfer,
 };
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    ConversionInfo, ConversionStatus, EventEmitter, Payment, PaymentMetadata, PaymentStatus,
-    PaymentType, Storage,
+    ConversionInfo, ConversionStatus, EventEmitter, Payment, PaymentDetails, PaymentMetadata,
+    PaymentMethod, PaymentStatus, PaymentType, Storage,
     error::SdkError,
     events::SdkEvent,
     persist::{CachedAccountInfo, ObjectCacheRepository},
@@ -20,6 +20,187 @@ use crate::{
     },
     utils::token::token_transaction_to_payments,
 };
+
+/// Whether a payment settled a Spark invoice that has not been tied back to the
+/// Bolt11 it was embedded in.
+pub(crate) fn awaits_bolt11_fallback(payment: &Payment) -> bool {
+    payment.payment_type == PaymentType::Receive
+        && matches!(
+            &payment.details,
+            Some(PaymentDetails::Spark {
+                invoice_details: Some(_),
+                ..
+            })
+        )
+}
+
+/// How far [`resolve_bolt11_fallback`] goes to recover the link.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FallbackLookup {
+    /// Consult only the local mapping.
+    ///
+    /// For a caller holding the transfer as the operators returned it, complete
+    /// with the invoice it settled, and that has a later pass to fall back on.
+    Local,
+    /// Also re-read the transfer and search the SSP.
+    Remote,
+}
+
+/// Reports a Spark transfer that settled a Bolt11 invoice as that invoice being
+/// paid, rather than as a bare Spark receive.
+///
+/// A payer that takes the Spark destination advertised by a Bolt11 invoice
+/// settles it with a transfer, so nothing reaches the SSP and the payment
+/// arrives carrying only the Spark invoice it fulfilled. Recovering the Bolt11
+/// behind that invoice is what lets a receiver waiting on the invoice see it
+/// paid, and it re-attaches the metadata keyed on the invoice and its payment
+/// hash.
+///
+/// Leaves the payment untouched when the Bolt11 cannot be recovered: it is
+/// still a correct Spark receive for the right amount, just not tied to the
+/// invoice it settled.
+pub(crate) async fn resolve_bolt11_fallback(
+    spark_wallet: &SparkWallet,
+    storage: &Arc<dyn Storage>,
+    payment: &mut Payment,
+    lookup: FallbackLookup,
+) {
+    if payment.payment_type != PaymentType::Receive {
+        return;
+    }
+    let cache = ObjectCacheRepository::new(Arc::clone(storage));
+    let Some(spark_invoice) = settled_spark_invoice(spark_wallet, &cache, payment, lookup).await
+    else {
+        return;
+    };
+
+    let bolt11 = match cache.fetch_bolt11_fallback(&spark_invoice).await {
+        Ok(Some(bolt11)) => Some(bolt11),
+        Ok(None) if lookup == FallbackLookup::Remote => {
+            recover_bolt11_from_ssp(spark_wallet, &cache, &spark_invoice, payment.timestamp).await
+        }
+        Ok(None) => None,
+        Err(e) => {
+            error!("Failed to read the Bolt11 fallback mapping: {e:?}");
+            None
+        }
+    };
+    let Some(bolt11) = bolt11 else {
+        return;
+    };
+    let Some(details) = breez_sdk_common::input::parse_invoice(&bolt11) else {
+        error!("Recovered an unparseable Bolt11 for Spark invoice {spark_invoice}");
+        return;
+    };
+
+    payment.method = PaymentMethod::Lightning;
+    payment.details = Some(PaymentDetails::Lightning {
+        description: details.description,
+        invoice: bolt11,
+        destination_pubkey: details.payee_pubkey,
+        // Settled by a transfer, so no HTLC was ever created.
+        htlc_details: None,
+        lnurl_pay_info: None,
+        lnurl_withdraw_info: None,
+        lnurl_receive_metadata: None,
+        conversion_info: None,
+    });
+}
+
+/// The Spark invoice a received transfer settled.
+///
+/// The event announcing a claim can carry a transfer without the invoice it
+/// settled, where the operator query that the sync uses returns it. A
+/// [`FallbackLookup::Remote`] re-reads the transfer in that case, but only for a
+/// wallet that has issued a Bolt11 advertising a Spark destination: for any
+/// other, an incoming transfer with no invoice on it simply has none.
+async fn settled_spark_invoice(
+    spark_wallet: &SparkWallet,
+    cache: &ObjectCacheRepository,
+    payment: &Payment,
+    lookup: FallbackLookup,
+) -> Option<String> {
+    match &payment.details {
+        Some(PaymentDetails::Spark {
+            invoice_details: Some(invoice_details),
+            ..
+        }) => return Some(invoice_details.invoice.clone()),
+        Some(PaymentDetails::Spark {
+            invoice_details: None,
+            htlc_details: None,
+            ..
+        }) => {}
+        _ => return None,
+    }
+
+    if lookup == FallbackLookup::Local {
+        return None;
+    }
+    if !cache.has_bolt11_fallbacks().await.unwrap_or(false) {
+        return None;
+    }
+    let transfer_id = TransferId::from_str(&payment.id).ok()?;
+    let mut transfers = spark_wallet
+        .list_transfers(ListTransfersRequest {
+            transfer_ids: vec![transfer_id],
+            paging: None,
+        })
+        .await
+        .inspect_err(|e| warn!("Failed to re-read a claimed transfer: {e:?}"))
+        .ok()?;
+    transfers.items.pop()?.spark_invoice
+}
+
+/// The oldest a receive request can be and still have been settled by the
+/// payment being resolved, matching the SSP's default receive expiry. A Bolt11
+/// that expired before the payment cannot be the one it paid.
+const BOLT11_FALLBACK_MAX_AGE_SECS: u64 = 30 * 24 * 60 * 60;
+
+/// Finds the Bolt11 that advertised `spark_invoice` among the receive requests
+/// the SSP holds for us, and caches what it finds.
+///
+/// Covers the device that did not create the invoice, and the one that lost its
+/// local mapping. The search reaches back [`BOLT11_FALLBACK_MAX_AGE_SECS`]
+/// before the payment: the Bolt11 was necessarily created before the transfer
+/// that settled it, and cannot have been created before it would have expired.
+async fn recover_bolt11_from_ssp(
+    spark_wallet: &SparkWallet,
+    cache: &ObjectCacheRepository,
+    spark_invoice: &str,
+    payment_timestamp: u64,
+) -> Option<String> {
+    let Ok(wanted) = spark_invoice.parse::<SparkAddress>() else {
+        error!("Unparseable Spark invoice on a received transfer");
+        return None;
+    };
+    let created_after = SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(
+        payment_timestamp.saturating_sub(BOLT11_FALLBACK_MAX_AGE_SECS),
+    ))?;
+
+    let requests = match spark_wallet
+        .list_lightning_receive_invoices(created_after)
+        .await
+    {
+        Ok(requests) => requests,
+        Err(e) => {
+            warn!("Failed to list lightning receive requests from the SSP: {e:?}");
+            return None;
+        }
+    };
+
+    let bolt11 = requests.into_iter().find(|bolt11| {
+        spark_wallet
+            .extract_spark_fallback(bolt11)
+            .ok()
+            .flatten()
+            .is_some_and(|fallback| fallback.address == wanted)
+    })?;
+
+    if let Err(e) = cache.save_bolt11_fallback(spark_invoice, &bolt11).await {
+        error!("Failed to cache the recovered Bolt11 fallback mapping: {e:?}");
+    }
+    Some(bolt11)
+}
 
 /// Insert a payment through the storage status guard and emit when requested
 /// and when the persisted status advances.
@@ -654,7 +835,7 @@ mod tests {
                 description: None,
                 invoice: "lnbc1000n1p".to_string(),
                 destination_pubkey: "02abc".to_string(),
-                htlc_details: test_htlc_details(),
+                htlc_details: Some(test_htlc_details()),
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
@@ -680,7 +861,7 @@ mod tests {
                 description: None,
                 invoice: "lnbc1000n1p".to_string(),
                 destination_pubkey: "02abc".to_string(),
-                htlc_details: test_htlc_details(),
+                htlc_details: Some(test_htlc_details()),
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,

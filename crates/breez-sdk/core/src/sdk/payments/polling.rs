@@ -6,7 +6,10 @@ use crate::{
     error::SdkError,
     models::Payment,
     utils::{
-        payments::{fetch_and_process_payment, insert_payment_with_metadata},
+        payments::{
+            FallbackLookup, fetch_and_process_payment, insert_payment_with_metadata,
+            resolve_bolt11_fallback,
+        },
         polling::{PollSchedule, poll_until},
     },
 };
@@ -43,9 +46,9 @@ pub(super) async fn wait_for_incoming_payment(
             })
             .await?
         }
-        WaitForPaymentIdentifier::LightningReceive { ssp_id, .. } => {
+        WaitForPaymentIdentifier::LightningReceive { ssp_id, invoice } => {
             poll_until(schedule, shutdown, || {
-                poll_then_process_lightning_receive(sdk, &ssp_id)
+                poll_lightning_receive(sdk, &ssp_id, &invoice)
             })
             .await?
         }
@@ -58,6 +61,16 @@ pub(super) async fn wait_for_incoming_payment(
 /// refresh, so an LNURL-receive payment lands in storage with its sender
 /// metadata attached. Returns whether a status event was emitted.
 pub(super) async fn finalize_payment(sdk: &BreezSdk, mut payment: Payment) -> bool {
+    // Must run first: the metadata below is keyed on the Bolt11 invoice, which a
+    // Spark-settled payment only carries once this has recovered it.
+    resolve_bolt11_fallback(
+        &sdk.spark_wallet,
+        &sdk.storage,
+        &mut payment,
+        FallbackLookup::Remote,
+    )
+    .await;
+
     // No-op for non-Lightning-receive payments; for LNURL receives
     // this pulls the LNURL metadata into the payment record.
     sdk.sync_single_lnurl_metadata(&mut payment).await;
@@ -69,6 +82,29 @@ pub(super) async fn finalize_payment(sdk: &BreezSdk, mut payment: Payment) -> bo
         payment,
     )
     .await
+}
+
+/// Polls for a Bolt11 receive settling over either rail.
+///
+/// A payer that takes the invoice's Spark destination settles it with a transfer
+/// the SSP never sees, leaving the receive request at `InvoiceCreated` for good,
+/// so the SSP poll alone would wait out the whole timeout. Background sync
+/// ingests that transfer and records it against the Bolt11, so storage is where
+/// the Spark-settled payment shows up.
+async fn poll_lightning_receive(
+    sdk: &BreezSdk,
+    ssp_id: &str,
+    invoice: &str,
+) -> Result<Option<Payment>, SdkError> {
+    if let Some(payment) = sdk
+        .storage
+        .get_payment_by_invoice(invoice.to_string())
+        .await?
+        && payment.status == PaymentStatus::Completed
+    {
+        return Ok(Some(payment));
+    }
+    poll_then_process_lightning_receive(sdk, ssp_id).await
 }
 
 /// Polls an inbound Lightning payment by SSP id. The receive object

@@ -104,13 +104,19 @@ pub(in crate::sdk) async fn build_unsigned_transfer_package(
                 _ => (sdk.config.prefer_spark_over_lightning, None),
             };
             if prefers_bolt11_spark_route(prefer_spark, prepare_response) {
-                let spark_address = sdk
+                let fallback = sdk
                     .spark_wallet
-                    .extract_spark_address(&invoice_details.invoice.bolt11)?
+                    .extract_spark_fallback(&invoice_details.invoice.bolt11)?
                     .ok_or_else(|| {
-                        SdkError::Generic("invoice expected to carry a spark address".to_string())
+                        SdkError::Generic(
+                            "invoice expected to carry a spark destination".to_string(),
+                        )
                     })?;
-                let receiver = spark_address
+                // The transfer goes to the receiver either way; an advertised
+                // invoice rides along so they can tell which Bolt11 it settled.
+                let spark_invoice = fallback.is_invoice().then(|| fallback.encoded.clone());
+                let receiver = fallback
+                    .receiver_address()
                     .to_address_string()
                     .map_err(|e| SdkError::Generic(e.to_string()))?;
                 if prepare_response.fee_policy == FeePolicy::FeesIncluded
@@ -120,9 +126,9 @@ pub(in crate::sdk) async fn build_unsigned_transfer_package(
                     adjusted.amount = adjusted
                         .amount
                         .saturating_sub(u128::from(spark_transfer_fee_sats.unwrap_or(0)));
-                    return build_spark_package(sdk, &adjusted, &receiver, None).await;
+                    return build_spark_package(sdk, &adjusted, &receiver, spark_invoice).await;
                 }
-                return build_spark_package(sdk, prepare_response, &receiver, None).await;
+                return build_spark_package(sdk, prepare_response, &receiver, spark_invoice).await;
             }
             build_lightning_package(
                 sdk,

@@ -151,7 +151,7 @@ impl LightningSender {
         info!("Polling lightning send payment {}", payment_id);
 
         let Some(htlc_details) = payment.details.as_ref().and_then(|d| match d {
-            PaymentDetails::Lightning { htlc_details, .. } => Some(htlc_details.clone()),
+            PaymentDetails::Lightning { htlc_details, .. } => htlc_details.clone(),
             _ => None,
         }) else {
             error!(

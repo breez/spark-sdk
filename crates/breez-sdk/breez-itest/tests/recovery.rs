@@ -126,8 +126,11 @@ fn build_expected_payments(payments: &[Payment], balance_sats: u64) -> ExpectedR
                 }),
                 Some(PaymentDetails::Lightning { htlc_details, .. }) => {
                     Some(ExpectedPaymentDetails::Lightning {
-                        payment_hash: htlc_details.payment_hash.clone(),
-                        preimage: htlc_details.preimage.clone(),
+                        payment_hash: htlc_details
+                            .as_ref()
+                            .map(|d| d.payment_hash.clone())
+                            .unwrap_or_default(),
+                        preimage: htlc_details.as_ref().and_then(|d| d.preimage.clone()),
                     })
                 }
                 Some(PaymentDetails::Deposit { tx_id, .. }) => {
@@ -893,12 +896,17 @@ async fn test_wallet_recovery_from_mnemonic() -> Result<()> {
             }) => {
                 if let Some(PaymentDetails::Lightning { htlc_details, .. }) = &payment.details {
                     assert_eq!(
-                        &htlc_details.payment_hash, payment_hash,
+                        &htlc_details
+                            .as_ref()
+                            .map(|d| d.payment_hash.clone())
+                            .unwrap_or_default(),
+                        payment_hash,
                         "Lightning payment_hash mismatch for {}",
                         expected.id
                     );
                     assert_eq!(
-                        &htlc_details.preimage, preimage,
+                        &htlc_details.as_ref().and_then(|d| d.preimage.clone()),
+                        preimage,
                         "Lightning preimage mismatch for {}",
                         expected.id
                     );

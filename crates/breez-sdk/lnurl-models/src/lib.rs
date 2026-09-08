@@ -113,6 +113,13 @@ pub struct ListMetadataMetadata {
     pub updated_at: i64,
     /// The payment preimage if invoice has been paid
     pub preimage: Option<String>,
+    /// The Bolt11 invoice this metadata belongs to.
+    ///
+    /// Lets a wallet recognise a payment that settled over the Spark destination
+    /// the invoice advertises, which reaches the wallet carrying that
+    /// destination rather than the Bolt11.
+    #[serde(default)]
+    pub invoice: Option<String>,
 }
 
 pub fn sanitize_username(username: &str) -> String {

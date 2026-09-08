@@ -113,7 +113,7 @@ pub(crate) fn process_success_action(
         )));
     };
 
-    let Some(preimage) = &htlc_details.preimage else {
+    let Some(preimage) = htlc_details.as_ref().and_then(|d| d.preimage.as_ref()) else {
         return Ok(None);
     };
 

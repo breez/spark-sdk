@@ -38,6 +38,25 @@ try {
 }
 
 const { StorageError } = require("./errors.cjs");
+
+/**
+ * Rebuilds the HTLC details of a Lightning payment row.
+ *
+ * No HTLC status means the invoice was settled by a transfer to the Spark
+ * destination it advertised, which creates no HTLC.
+ */
+function htlcDetailsFromRow(row) {
+  if (!row.lightning_htlc_status) {
+    return null;
+  }
+  return {
+    paymentHash: row.lightning_payment_hash,
+    preimage: row.lightning_preimage || null,
+    expiryTime: Number(row.lightning_htlc_expiry_time) || 0,
+    status: row.lightning_htlc_status,
+  };
+}
+
 const { MysqlMigrationManager } = require("./migrations.cjs");
 
 const PAYMENT_UPDATE_LOCK_TIMEOUT_SECS = 10;
@@ -86,7 +105,7 @@ const SELECT_PAYMENT_SQL = `
       LEFT JOIN brz_payment_details_spark s ON p.id = s.payment_id AND p.user_id = s.user_id
       LEFT JOIN brz_payment_details_deposit pd ON p.id = pd.payment_id AND p.user_id = pd.user_id
       LEFT JOIN brz_payment_metadata pm ON p.id = pm.payment_id AND p.user_id = pm.user_id
-      LEFT JOIN brz_lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash AND l.user_id = lrm.user_id`;
+      LEFT JOIN brz_lnurl_receive_metadata lrm ON l.invoice = lrm.invoice AND l.user_id = lrm.user_id`;
 
 /**
  * mysql2 may return JSON columns as either parsed objects or raw strings
@@ -283,7 +302,9 @@ class MysqlStorage {
           } else if (paymentDetailsFilter.type === "token") {
             paymentDetailsClauses.push("p.spark IS NULL AND t.tx_hash IS NOT NULL");
           } else if (paymentDetailsFilter.type === "lightning") {
-            paymentDetailsClauses.push("l.htlc_status IS NOT NULL");
+            // Not htlc_status: a payment settled over the Spark destination its
+            // invoice advertised is a Lightning payment with no HTLC.
+            paymentDetailsClauses.push("l.invoice IS NOT NULL");
           }
 
           const htlcAlias =
@@ -580,18 +601,18 @@ class MysqlStorage {
             destination_pubkey=VALUES(destination_pubkey),
             description=VALUES(description),
             preimage=COALESCE(VALUES(preimage), preimage),
-            htlc_status=COALESCE(VALUES(htlc_status), htlc_status),
-            htlc_expiry_time=COALESCE(VALUES(htlc_expiry_time), htlc_expiry_time)`,
+            htlc_status=VALUES(htlc_status),
+            htlc_expiry_time=VALUES(htlc_expiry_time)`,
         [
           this.identity,
           payment.id,
           payment.details.invoice,
-          payment.details.htlcDetails.paymentHash,
+          payment.details.htlcDetails?.paymentHash ?? null,
           payment.details.destinationPubkey,
           payment.details.description,
           payment.details.htlcDetails?.preimage,
           payment.details.htlcDetails?.status ?? null,
-          payment.details.htlcDetails?.expiryTime ?? 0,
+          payment.details.htlcDetails?.expiryTime ?? null,
         ]
       );
     }
@@ -885,15 +906,17 @@ class MysqlStorage {
       await this._withTransaction(async (conn) => {
         for (const item of metadata) {
           await conn.query(
-            `INSERT INTO brz_lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
-             VALUES (?, ?, ?, ?, ?)
+            `INSERT INTO brz_lnurl_receive_metadata (user_id, payment_hash, invoice, nostr_zap_request, nostr_zap_receipt, sender_comment)
+             VALUES (?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
+               invoice = COALESCE(VALUES(invoice), invoice),
                nostr_zap_request = VALUES(nostr_zap_request),
                nostr_zap_receipt = VALUES(nostr_zap_receipt),
                sender_comment = VALUES(sender_comment)`,
             [
               this.identity,
               item.paymentHash,
+              item.invoice || null,
               item.nostrZapRequest || null,
               item.nostrZapReceipt || null,
               item.senderComment || null,
@@ -920,18 +943,7 @@ class MysqlStorage {
         invoice: row.lightning_invoice,
         destinationPubkey: row.lightning_destination_pubkey,
         description: row.lightning_description,
-        htlcDetails: row.lightning_htlc_status
-          ? {
-              paymentHash: row.lightning_payment_hash,
-              preimage: row.lightning_preimage || null,
-              expiryTime: Number(row.lightning_htlc_expiry_time) ?? 0,
-              status: row.lightning_htlc_status,
-            }
-          : (() => {
-              throw new StorageError(
-                `htlc_status is required for Lightning payment ${row.id}`
-              );
-            })(),
+        htlcDetails: htlcDetailsFromRow(row),
       };
 
       if (row.lnurl_pay_info) {

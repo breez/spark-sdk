@@ -230,3 +230,12 @@ pub struct DeleteWalletWebhook;
     extern_enums("SparkWalletWebhookEventType")
 )]
 pub struct WalletWebhooks;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    query_path = "schema/queries.graphql",
+    schema_path = "schema/spark.graphql",
+    variables_derives = "Clone",
+    response_derives = "Debug,Clone"
+)]
+pub struct CurrentUserLightningReceiveRequests;

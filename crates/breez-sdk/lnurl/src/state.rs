@@ -15,7 +15,9 @@ pub struct State<DB> {
     pub scheme: String,
     pub min_sendable: u64,
     pub max_sendable: u64,
-    pub include_spark_address: bool,
+    /// Whether the Bolt11 invoices this server mints advertise a Spark destination,
+    /// letting a Spark-aware payer settle them with a transfer.
+    pub include_spark_fallback: bool,
     /// `None` disables the per-pubkey registration limit.
     pub registration_limit: Option<crate::repository::RegistrationLimit>,
     pub domains: Arc<RwLock<crate::domains::DomainMap>>,
@@ -90,7 +92,7 @@ where
             scheme: self.scheme.clone(),
             min_sendable: self.min_sendable,
             max_sendable: self.max_sendable,
-            include_spark_address: self.include_spark_address,
+            include_spark_fallback: self.include_spark_fallback,
             registration_limit: self.registration_limit,
             domains: Arc::clone(&self.domains),
             nostr_keys: self.nostr_keys.clone(),

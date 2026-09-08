@@ -414,8 +414,9 @@ pub enum PaymentDetails {
         /// The invoice destination/payee pubkey
         destination_pubkey: String,
 
-        /// The HTLC transfer details
-        htlc_details: SparkHtlcDetails,
+        /// The HTLC transfer details. Absent when the invoice was settled by a
+        /// Spark transfer to the destination it advertised, which involves no HTLC.
+        htlc_details: Option<SparkHtlcDetails>,
 
         /// Lnurl payment information if this was an lnurl payment.
         lnurl_pay_info: Option<LnurlPayInfo>,
@@ -715,9 +716,13 @@ pub struct Config {
     /// The domain used for receiving through lnurl-pay and lightning address.
     pub lnurl_domain: Option<String>,
 
-    /// When this is set to `true` we will prefer to use spark payments over
-    /// lightning when sending and receiving. This has the benefit of lower fees
-    /// but is at the cost of privacy.
+    /// Whether to settle over Spark rather than Lightning where both are
+    /// possible, for lower fees and faster settlement.
+    ///
+    /// Sending pays a Bolt11 invoice by Spark transfer when the invoice offers a
+    /// Spark destination. Receiving embeds one in the Bolt11 invoices it creates,
+    /// so a Spark-aware payer can take that route. Either way the payment is
+    /// still reported as the Bolt11 invoice being paid.
     pub prefer_spark_over_lightning: bool,
 
     /// Whether the data needed to exit a payment unilaterally, without the Spark
