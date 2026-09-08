@@ -1271,7 +1271,7 @@ pub(crate) fn build_exit(
         }
         let mut funding = branch_funding.clone();
         let mut txs: Vec<ExitTx> = Vec::new();
-        let mut first_in_branch = true;
+        let mut fan_out_dep = fan_out_txid;
         // Tracked so dependencies survive skipped shared ancestors.
         let mut prev_txid: Option<Txid> = None;
 
@@ -1298,14 +1298,6 @@ pub(crate) fn build_exit(
                 }
 
                 if emitted.insert(node_txid) {
-                    let mut depends_on = Vec::new();
-                    if let Some(p) = parent_txid {
-                        depends_on.push(p);
-                    }
-                    if first_in_branch && let Some(fo) = fan_out_txid {
-                        depends_on.push(fo);
-                    }
-
                     let to_sign = match node_state {
                         // Confirmed: its child already paid, and what that child
                         // left over came back as funding like any other input, so
@@ -1319,6 +1311,15 @@ pub(crate) fn build_exit(
                             Some(child.psbt)
                         }
                     };
+                    let mut depends_on = Vec::new();
+                    if let Some(p) = parent_txid {
+                        depends_on.push(p);
+                    }
+                    if to_sign.is_some()
+                        && let Some(fo) = fan_out_dep.take()
+                    {
+                        depends_on.push(fo);
+                    }
                     let status = match node_state {
                         Some(
                             NodeState::ConfirmedCpfp { block_height }
@@ -1338,7 +1339,6 @@ pub(crate) fn build_exit(
                         depends_on,
                         status,
                     });
-                    first_in_branch = false;
                 }
             }
         }
@@ -1420,6 +1420,10 @@ pub(crate) fn build_exit(
                     witness_utxo: child.change_input.witness_utxo.clone(),
                     signed_input_weight: child.change_input.signed_input_weight,
                 });
+                let mut depends_on: Vec<Txid> = leaf_node_txid.into_iter().collect();
+                if let Some(fo) = fan_out_dep.take() {
+                    depends_on.push(fo);
+                }
                 txs.push(ExitTx {
                     kind: ExitTxKind::Refund,
                     node_id: Some(leaf_id.clone()),
@@ -1427,7 +1431,7 @@ pub(crate) fn build_exit(
                     base_tx: refund_tx,
                     to_sign: Some(child.psbt),
                     csv_timelock_blocks: refund_csv,
-                    depends_on: leaf_node_txid.into_iter().collect(),
+                    depends_on,
                     status: ExitTxStatus::Unconfirmed,
                 });
             }
@@ -1968,6 +1972,58 @@ mod exit_build_tests {
             second_first.depends_on.contains(&fan_out_txid),
             "the second branch's first driven node must depend on the fan-out"
         );
+    }
+
+    #[test]
+    fn resumed_branch_hangs_the_fanout_dependency_on_the_first_built_tx() {
+        // Resume with the shared ancestors already in a block. They are emitted
+        // first but build no child, so the leaf's child is what spends the
+        // fan-out output. A confirmed transaction never waits on anything, so a
+        // dependency parked on one is silently lost.
+        let plan = shared_ancestor_plan_with_fan_out();
+        let fan_out_txid = plan
+            .fan_out_psbt
+            .as_ref()
+            .unwrap()
+            .unsigned_tx
+            .compute_txid();
+        let resolved = ResolvedExitState {
+            nodes: [
+                (
+                    id("root"),
+                    NodeState::ConfirmedCpfp {
+                        block_height: Some(1),
+                    },
+                ),
+                (
+                    id("mid"),
+                    NodeState::ConfirmedCpfp {
+                        block_height: Some(2),
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let build = build_exit(&plan, &resolved, FEE_RATE).unwrap();
+
+        for branch in &build.branches {
+            let carrying: Vec<&ExitTx> = branch
+                .txs
+                .iter()
+                .filter(|t| t.depends_on.contains(&fan_out_txid))
+                .collect();
+            assert_eq!(
+                carrying.len(),
+                1,
+                "exactly one tx per branch waits on the fan-out"
+            );
+            assert!(
+                carrying[0].to_sign.is_some(),
+                "the tx waiting on the fan-out is the one whose child spends it"
+            );
+        }
     }
 
     #[test]
