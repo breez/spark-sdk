@@ -1,4 +1,4 @@
-use platform_utils::time::{Instant, SystemTime};
+use platform_utils::time::Instant;
 use platform_utils::tokio;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -7,6 +7,7 @@ use tracing::{debug, error, info, trace, warn};
 use super::{
     BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncType, deposits::InstantClaimOutcome,
 };
+use crate::utils::time::now_secs;
 use crate::{
     DepositInfo, Fee, InputType, InstantClaimStatus, MaxFee, PaymentDetails, PaymentType,
     error::SdkError,
@@ -155,10 +156,7 @@ impl BreezSdk {
     ) -> Result<(), SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
         let sync_interval_secs = u64::from(self.config.sync_interval_secs);
-
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
+        let now = now_secs();
 
         // Skip if we synced recently (unless forced).
         if !force

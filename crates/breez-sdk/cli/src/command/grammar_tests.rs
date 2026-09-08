@@ -152,6 +152,7 @@ fn receive_methods() {
         ("receive -m bitcoin", "bitcoin"),
         ("receive -m bolt11", "bolt11"),
         ("receive --method bolt11", "bolt11"),
+        ("receive -m crosschain -a 1000000", "crosschain"),
     ] {
         let Command::Receive { payment_method, .. } = parse_ok(line) else {
             panic!("expected Receive for '{line}'");
@@ -161,11 +162,53 @@ fn receive_methods() {
             ReceivePaymentMethodArg::SparkInvoice => expected == "sparkinvoice",
             ReceivePaymentMethodArg::Bitcoin => expected == "bitcoin",
             ReceivePaymentMethodArg::Bolt11 => expected == "bolt11",
+            ReceivePaymentMethodArg::CrossChain => expected == "crosschain",
         };
         assert!(matches_expected, "'{line}' parsed the wrong method");
     }
     parse_err("receive");
     parse_err("receive -m lightning");
+}
+
+#[test]
+fn receive_crosschain_flags() {
+    let Command::Receive {
+        payment_method,
+        amount,
+        cross_chain_max_slippage_bps,
+        cross_chain_fees_included,
+        cross_chain_target_overpay_bps,
+        ..
+    } = parse_ok(
+        "receive -m crosschain -a 1000000 --cross-chain-max-slippage-bps 250 \
+         --cross-chain-fees-included --cross-chain-target-overpay-bps 30",
+    )
+    else {
+        panic!("expected Receive");
+    };
+    assert!(matches!(
+        payment_method,
+        ReceivePaymentMethodArg::CrossChain
+    ));
+    assert_eq!(amount, Some(1_000_000));
+    assert_eq!(cross_chain_max_slippage_bps, Some(250));
+    assert!(cross_chain_fees_included);
+    assert_eq!(cross_chain_target_overpay_bps, Some(30));
+
+    let Command::Receive {
+        cross_chain_max_slippage_bps,
+        cross_chain_fees_included,
+        cross_chain_target_overpay_bps,
+        ..
+    } = parse_ok("receive -m crosschain -a 1000000")
+    else {
+        panic!("expected Receive");
+    };
+    assert_eq!(cross_chain_max_slippage_bps, None);
+    assert!(!cross_chain_fees_included);
+    assert_eq!(cross_chain_target_overpay_bps, None);
+
+    parse_err("receive -m crosschain -a 1000000 --cross-chain-max-slippage-bps ten");
 }
 
 #[test]

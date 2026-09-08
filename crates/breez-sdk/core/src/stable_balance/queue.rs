@@ -5,24 +5,16 @@
 
 use std::sync::Arc;
 
-use platform_utils::{
-    time::{SystemTime, UNIX_EPOCH},
-    tokio,
-};
+use platform_utils::tokio;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, Notify, watch};
 use tracing::{Instrument, debug, info, warn};
 
 use crate::models::ConversionStatus;
 use crate::persist::{ObjectCacheRepository, PaymentMetadata, Storage};
+use crate::utils::time::now_secs;
 
 use super::{StableBalance, per_receive_transfer_id};
-
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
-}
 
 /// A conversion task to be processed by the worker.
 #[derive(Clone, Debug)]

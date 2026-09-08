@@ -15,10 +15,11 @@ use breez_sdk_common::{
     error::ServiceConnectivityError,
     fiat::{FiatCurrency, FiatService, Rate},
 };
-use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::Mutex;
 use tracing::trace;
+
+use crate::utils::time::now_ms;
 
 /// Default cache TTL. Long enough to amortize repeated fetches in a session,
 /// short enough to bound fiat-rate drift between estimate and quote.
@@ -91,12 +92,6 @@ impl CachedFiatService {
         );
         Ok(response)
     }
-}
-
-fn now_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis())
 }
 
 #[macros::async_trait]

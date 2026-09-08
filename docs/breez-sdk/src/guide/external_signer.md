@@ -59,4 +59,4 @@ Some external signers can't perform the SDK's local ECIES/HMAC operations (for e
 
 - **LNURL-auth** returns an error when called.
 - **Real-time sync** must be disabled: leave [{{#name real_time_sync_server_url}}](./config.md#real-time-sync-server-url) unset, or the build fails.
-- **Cross-chain** must be disabled: leave [{{#name cross_chain_config}}](./config.md#send-usdc-usdt) unset, or the build fails.
+- **Cross-chain** must be disabled: leave [{{#name cross_chain_config}}](./config.md#usdc-usdt) unset, or the build fails.

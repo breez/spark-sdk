@@ -7,6 +7,7 @@ pub(crate) mod fees;
 pub(crate) mod payments;
 pub(crate) mod polling;
 pub mod serde_helpers;
+pub(crate) mod time;
 pub(crate) mod token;
 pub(crate) mod utxo_fetcher;
 
