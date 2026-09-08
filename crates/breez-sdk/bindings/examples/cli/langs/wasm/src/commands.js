@@ -219,14 +219,17 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
   program
     .command('receive')
     .description('Receive a payment')
-    .requiredOption('-m, --method <method>', 'Payment method: sparkaddress, sparkinvoice, bitcoin, bolt11')
+    .requiredOption('-m, --method <method>', 'Payment method: sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain')
     .option('-d, --description <text>', 'Optional description for the invoice')
-    .option('-a, --amount <number>', 'The amount the payer should send, in sats or token base units')
-    .option('-t, --token-identifier <id>', 'Optional token identifier (spark invoice only)')
+    .option('-a, --amount <number>', 'The amount the payer should send, in sats, token base units, or (for cross-chain receive) the source asset\'s base units')
+    .option('-t, --token-identifier <id>', 'Optional token identifier')
     .option('-e, --expiry-secs <seconds>', 'Optional expiry time in seconds from now', parseInt)
     .option('-s, --sender-public-key <key>', 'Optional sender public key (spark invoice only)')
     .option('--hodl', 'Create a HODL invoice (bolt11 only)', false)
     .option('--new-address', 'Request a new bitcoin deposit address instead of reusing the current one', false)
+    .option('--cross-chain-max-slippage-bps <bps>', 'Maximum slippage in basis points for cross-chain receives (10..500)', parseInt)
+    .option('--cross-chain-fees-included', 'Deduct fees from the specified amount for cross-chain receives', false)
+    .option('--cross-chain-target-overpay-bps <bps>', 'Overpay buffer in basis points for cross-chain receives (0..500)', parseInt)
     .action(async (options) => {
       const sdk = getSdk()
       let paymentMethod
@@ -282,8 +285,28 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
           }
           break
         }
+        case 'crosschain': {
+          if (options.amount == null) {
+            throw new Error('--amount is required for cross-chain receive')
+          }
+          const route = await selectCrossChainRoute(sdk, rl, { type: 'receive', contractAddress: undefined })
+          const feeMode = options.crossChainFeesIncluded ? 'feesIncluded' : undefined
+          const destination = options.tokenIdentifier != null
+            ? { type: 'token', tokenIdentifier: options.tokenIdentifier }
+            : undefined
+          paymentMethod = {
+            type: 'crossChain',
+            route,
+            amount: options.amount,
+            destination,
+            feeMode,
+            maxSlippageBps: options.crossChainMaxSlippageBps,
+            targetOverpayBps: options.crossChainTargetOverpayBps
+          }
+          break
+        }
         default: {
-          throw new Error(`Invalid payment method: ${method}. Use: sparkaddress, sparkinvoice, bitcoin, bolt11`)
+          throw new Error(`Invalid payment method: ${method}. Use: sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain`)
         }
       }
 
@@ -1093,7 +1116,7 @@ async function selectCrossChainRoute(sdk, rl, filter) {
   const routes = await sdk.getCrossChainRoutes(filter)
 
   if (!routes || routes.length === 0) {
-    throw new Error('No cross-chain routes available for this address')
+    throw new Error('No cross-chain routes available')
   }
 
   if (routes.length === 1) {

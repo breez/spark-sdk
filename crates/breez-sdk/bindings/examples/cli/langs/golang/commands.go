@@ -271,9 +271,9 @@ func handleListPayments(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, arg
 
 // --- receive ---
 
-func handleReceive(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []string) error {
+func handleReceive(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []string) error {
 	fs := flag.NewFlagSet("receive", flag.ContinueOnError)
-	method := fs.String("m", "", "Payment method: sparkaddress, sparkinvoice, bitcoin, bolt11")
+	method := fs.String("m", "", "Payment method: sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain")
 	fs.StringVar(method, "method", "", "Payment method")
 	description := fs.String("d", "", "Optional description")
 	fs.StringVar(description, "description", "", "Optional description")
@@ -287,13 +287,16 @@ func handleReceive(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []s
 	fs.StringVar(senderPublicKey, "sender-public-key", "", "Optional sender public key")
 	hodl := fs.Bool("hodl", false, "Create a HODL invoice (bolt11 only)")
 	newAddress := fs.Bool("new-address", false, "Get a new bitcoin deposit address (bitcoin only)")
+	crossChainMaxSlippageStr := fs.String("cross-chain-max-slippage-bps", "", "Max slippage in basis points for cross-chain receives (10..500)")
+	crossChainFeesIncluded := fs.Bool("cross-chain-fees-included", false, "Deduct fees from amount instead of padding onto deposit")
+	crossChainTargetOverpayStr := fs.String("cross-chain-target-overpay-bps", "", "Override for the overpay buffer in basis points (0..500)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	if *method == "" {
 		fmt.Println("Usage: receive -m <method> [options]")
-		fmt.Println("Methods: sparkaddress, sparkinvoice, bitcoin, bolt11")
+		fmt.Println("Methods: sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain")
 		return nil
 	}
 
@@ -365,9 +368,51 @@ func handleReceive(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []s
 		}
 		paymentMethod = pm
 
+	case "crosschain":
+		if *amountStr == "" {
+			return fmt.Errorf("--amount is required for cross-chain receive")
+		}
+		amount, ok := new(big.Int).SetString(*amountStr, 10)
+		if !ok {
+			return fmt.Errorf("invalid amount: %s", *amountStr)
+		}
+		route, err := selectCrossChainRoute(sdk, rl, breez_sdk_spark.CrossChainRouteFilterReceive{ContractAddress: nil})
+		if err != nil {
+			return err
+		}
+		pm := breez_sdk_spark.ReceivePaymentMethodCrossChain{
+			Route:  route,
+			Amount: amount,
+		}
+		if *tokenId != "" {
+			var dest breez_sdk_spark.SparkAsset = breez_sdk_spark.SparkAssetToken{TokenIdentifier: *tokenId}
+			pm.Destination = &dest
+		}
+		if *crossChainFeesIncluded {
+			fm := breez_sdk_spark.CrossChainFeeModeFeesIncluded
+			pm.FeeMode = &fm
+		}
+		if *crossChainMaxSlippageStr != "" {
+			val, err := strconv.ParseUint(*crossChainMaxSlippageStr, 10, 32)
+			if err != nil {
+				return fmt.Errorf("invalid cross-chain max slippage: %s", *crossChainMaxSlippageStr)
+			}
+			val32 := uint32(val)
+			pm.MaxSlippageBps = &val32
+		}
+		if *crossChainTargetOverpayStr != "" {
+			val, err := strconv.ParseUint(*crossChainTargetOverpayStr, 10, 32)
+			if err != nil {
+				return fmt.Errorf("invalid cross-chain target overpay: %s", *crossChainTargetOverpayStr)
+			}
+			val32 := uint32(val)
+			pm.TargetOverpayBps = &val32
+		}
+		paymentMethod = pm
+
 	default:
 		fmt.Printf("Invalid payment method: %s\n", *method)
-		fmt.Println("Available methods: sparkaddress, sparkinvoice, bitcoin, bolt11")
+		fmt.Println("Available methods: sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain")
 		return nil
 	}
 
@@ -1476,7 +1521,7 @@ func selectCrossChainRoute(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance,
 		return breez_sdk_spark.CrossChainRoutePair{}, err
 	}
 	if len(routes) == 0 {
-		return breez_sdk_spark.CrossChainRoutePair{}, fmt.Errorf("no cross-chain routes available for this address")
+		return breez_sdk_spark.CrossChainRoutePair{}, fmt.Errorf("no cross-chain routes available")
 	}
 
 	if len(routes) == 1 {

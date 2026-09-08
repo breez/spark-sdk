@@ -311,14 +311,25 @@ Future<void> _handleListPayments(BreezSdk sdk, TokenIssuer tokenIssuer, List<Str
 Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
   final parser =
       _parser('receive')
-        ..addOption('method', abbr: 'm', mandatory: true, help: 'sparkaddress, sparkinvoice, bitcoin, bolt11')
+        ..addOption(
+          'method',
+          abbr: 'm',
+          mandatory: true,
+          help: 'sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain',
+        )
         ..addOption('description', abbr: 'd')
         ..addOption('amount', abbr: 'a')
         ..addOption('token-identifier', abbr: 't')
         ..addOption('expiry-secs', abbr: 'e')
         ..addOption('sender-public-key', abbr: 's')
         ..addFlag('hodl', defaultsTo: false)
-        ..addFlag('new-address', defaultsTo: false, help: 'Get a new bitcoin deposit address');
+        ..addFlag('new-address', defaultsTo: false, help: 'Get a new bitcoin deposit address')
+        ..addOption(
+          'cross-chain-max-slippage-bps',
+          help: 'Max slippage in bps for cross-chain receives (10..500)',
+        )
+        ..addFlag('cross-chain-fees-included', defaultsTo: false, help: 'Deduct fees from the amount')
+        ..addOption('cross-chain-target-overpay-bps', help: 'Overpay buffer in bps (0..500)');
   final results = _parseArgs(parser, args, 'receive -m <method> [options]');
   if (results == null) return;
 
@@ -371,6 +382,31 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
         expirySecs: expirySecs,
         paymentHash: paymentHash,
         receiverIdentityPublicKey: null,
+      );
+    case 'crosschain':
+      if (amount == null) {
+        print('--amount is required for cross-chain receive');
+        return;
+      }
+      final route = await _selectCrossChainRoute(sdk, CrossChainRouteFilter.receive(contractAddress: null));
+      if (route == null) return;
+      final crossChainFeesIncluded = results.flag('cross-chain-fees-included');
+      final feeMode = crossChainFeesIncluded ? CrossChainFeeMode.feesIncluded : null;
+      final maxSlippageBpsStr = results.option('cross-chain-max-slippage-bps');
+      final maxSlippageBps = maxSlippageBpsStr != null ? int.parse(maxSlippageBpsStr) : null;
+      final targetOverpayBpsStr = results.option('cross-chain-target-overpay-bps');
+      final targetOverpayBps = targetOverpayBpsStr != null ? int.parse(targetOverpayBpsStr) : null;
+      SparkAsset? destination;
+      if (tokenIdentifier != null) {
+        destination = SparkAsset.token(tokenIdentifier: tokenIdentifier);
+      }
+      paymentMethod = ReceivePaymentMethod.crossChain(
+        route: route,
+        amount: amount,
+        destination: destination,
+        feeMode: feeMode,
+        maxSlippageBps: maxSlippageBps,
+        targetOverpayBps: targetOverpayBps,
       );
     default:
       print('Invalid payment method: $method');
@@ -1282,7 +1318,7 @@ SendPaymentOptions? _readPaymentOptions(SendPaymentMethod paymentMethod) {
 Future<CrossChainRoutePair?> _selectCrossChainRoute(BreezSdk sdk, CrossChainRouteFilter filter) async {
   final routes = await sdk.getCrossChainRoutes(filter: filter);
   if (routes.isEmpty) {
-    print('No cross-chain routes available for this address');
+    print('No cross-chain routes available');
     return null;
   }
 
