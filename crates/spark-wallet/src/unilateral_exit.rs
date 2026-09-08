@@ -2796,6 +2796,31 @@ mod interpret_tests {
         );
     }
 
+    /// A settled ancestor is never queried, so the check reports it with no
+    /// height. The height the caller already had is the only one there is.
+    #[test]
+    fn settling_along_the_spend_chain_reports_an_ancestor_without_a_height() {
+        let mut chain = exit_chain_of_three();
+        for tx in &mut chain {
+            tx.confirmed = true;
+        }
+        let first = chain[0].tx.compute_txid();
+        let deepest = chain[2].tx.compute_txid();
+
+        let check = check_exit_chain(
+            &chain,
+            &[Observation {
+                query: ChainQuery::TxConfirmed(deepest),
+                result: ChainResult::Confirmed {
+                    confirmed: true,
+                    block_height: Some(880_002),
+                },
+            }],
+        );
+
+        assert_eq!(check.confirmed.get(&first), Some(&None));
+    }
+
     /// A transaction the chain reports as not in a block is listed in
     /// `not_confirmed`, so a caller holding it as confirmed can discard that. A
     /// failed lookup is not listed: it says nothing about where the transaction

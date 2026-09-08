@@ -853,7 +853,9 @@ async fn resolve_statuses(
 
 /// The status of one kept transaction after a chain read.
 ///
-/// - The chain has it in a block: `Confirmed`, at the height the read reported.
+/// - The chain has it in a block: `Confirmed`, at the height the read reported,
+///   or at the height already held when the read settled it along the spend
+///   chain instead of asking about it.
 /// - The chain was asked and reported it is not in a block: reset to a
 ///   placeholder `resolve_statuses` replaces, discarding a confirmation a reorg
 ///   has undone.
@@ -865,9 +867,13 @@ fn status_after_check(
     check: &ExitCheck,
     txid: &Txid,
 ) -> ExitTransactionStatus {
+    let held_height = match current {
+        ExitTransactionStatus::Confirmed { block_height } => block_height,
+        _ => None,
+    };
     match (check.confirmed.get(txid), current) {
         (Some(block_height), _) => ExitTransactionStatus::Confirmed {
-            block_height: *block_height,
+            block_height: block_height.or(held_height),
         },
         (None, ExitTransactionStatus::Confirmed { .. }) if check.not_confirmed.contains(txid) => {
             ExitTransactionStatus::WaitingForDependencies
@@ -1437,6 +1443,30 @@ mod tests {
             not_confirmed: not_confirmed.iter().copied().collect(),
             pending: Vec::new(),
         }
+    }
+
+    /// The check settles an ancestor along the spend chain without asking, so it
+    /// reports no height for it. Overwriting with that loses the height the
+    /// caller is holding, which is what a child's timelock counts from.
+    #[macros::async_test_all]
+    async fn a_settled_ancestor_keeps_the_height_the_caller_already_had() {
+        let txid = Txid::from_byte_array([4; 32]);
+        let held = ExitTransactionStatus::Confirmed {
+            block_height: Some(880_000),
+        };
+
+        assert_eq!(
+            status_after_check(held, &check_of(&[(txid, None)], &[]), &txid),
+            held,
+            "a height-less confirmation does not erase the one held"
+        );
+        assert_eq!(
+            status_after_check(held, &check_of(&[(txid, Some(880_004))], &[]), &txid),
+            ExitTransactionStatus::Confirmed {
+                block_height: Some(880_004)
+            },
+            "a height the chain did report wins"
+        );
     }
 
     /// A transaction the chain reports as not in a block loses its stored
