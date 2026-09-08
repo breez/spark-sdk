@@ -584,6 +584,21 @@ class MysqlMigrationManager {
           `ALTER TABLE brz_unclaimed_deposits ADD COLUMN refund_state JSON NULL`,
         ],
       },
+      {
+        // Deposit addresses polled on-chain for deposits still in the mempool.
+        // Rows are removed once watching them can no longer lead to an early
+        // claim, so the table holds only the live watch set.
+        name: "Add brz_watched_deposit_addresses",
+        sql: [
+          `CREATE TABLE IF NOT EXISTS brz_watched_deposit_addresses (
+              user_id VARBINARY(33) NOT NULL,
+              address VARCHAR(255) NOT NULL,
+              issued_at BIGINT NOT NULL,
+              seen BOOLEAN NOT NULL DEFAULT FALSE,
+              PRIMARY KEY (user_id, address)
+          )`,
+        ],
+      },
     ];
   }
 }
