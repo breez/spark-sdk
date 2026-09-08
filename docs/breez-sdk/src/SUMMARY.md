@@ -64,7 +64,7 @@
   - [Server mode](guide/server_mode.md)
   - [Client signing](guide/client_signing.md)
   - [Using Turnkey](guide/turnkey.md)
-  - [Send USDC/USDT](guide/cross_chain.md)
+  - [USDC/USDT payments](guide/cross_chain.md)
   - [Unilateral exit](guide/unilateral_exit.md)
 - [Moving to production](guide/moving_to_production.md)
 
