@@ -24,6 +24,25 @@ try {
 }
 
 const { StorageError } = require("./errors.cjs");
+
+/**
+ * Rebuilds the HTLC details of a Lightning payment row.
+ *
+ * No HTLC status means the invoice was settled by a transfer to the Spark
+ * destination it advertised, which creates no HTLC.
+ */
+function htlcDetailsFromRow(row) {
+  if (!row.lightning_htlc_status) {
+    return null;
+  }
+  return {
+    paymentHash: row.lightning_payment_hash,
+    preimage: row.lightning_preimage || null,
+    expiryTime: Number(row.lightning_htlc_expiry_time) || 0,
+    status: row.lightning_htlc_status,
+  };
+}
+
 const { PostgresMigrationManager } = require("./migrations.cjs");
 
 /**
@@ -71,7 +90,7 @@ const SELECT_PAYMENT_SQL = `
       LEFT JOIN brz_payment_details_spark s ON p.id = s.payment_id AND p.user_id = s.user_id
       LEFT JOIN brz_payment_details_deposit pd ON p.id = pd.payment_id AND p.user_id = pd.user_id
       LEFT JOIN brz_payment_metadata pm ON p.id = pm.payment_id AND p.user_id = pm.user_id
-      LEFT JOIN brz_lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash AND l.user_id = lrm.user_id`;
+      LEFT JOIN brz_lnurl_receive_metadata lrm ON l.invoice = lrm.invoice AND l.user_id = lrm.user_id`;
 
 class PostgresStorage {
   /**
@@ -245,7 +264,9 @@ class PostgresStorage {
           } else if (paymentDetailsFilter.type === "token") {
             paymentDetailsClauses.push("p.spark IS NULL AND t.tx_hash IS NOT NULL");
           } else if (paymentDetailsFilter.type === "lightning") {
-            paymentDetailsClauses.push("l.htlc_status IS NOT NULL");
+            // Not htlc_status: a payment settled over the Spark destination its
+            // invoice advertised is a Lightning payment with no HTLC.
+            paymentDetailsClauses.push("l.invoice IS NOT NULL");
           }
 
           // Filter by HTLC status (Spark or Lightning)
@@ -514,18 +535,18 @@ class PostgresStorage {
             destination_pubkey=EXCLUDED.destination_pubkey,
             description=EXCLUDED.description,
             preimage=COALESCE(EXCLUDED.preimage, brz_payment_details_lightning.preimage),
-            htlc_status=COALESCE(EXCLUDED.htlc_status, brz_payment_details_lightning.htlc_status),
-            htlc_expiry_time=COALESCE(EXCLUDED.htlc_expiry_time, brz_payment_details_lightning.htlc_expiry_time)`,
+            htlc_status=EXCLUDED.htlc_status,
+            htlc_expiry_time=EXCLUDED.htlc_expiry_time`,
         [
           this.identity,
           payment.id,
           payment.details.invoice,
-          payment.details.htlcDetails.paymentHash,
+          payment.details.htlcDetails?.paymentHash ?? null,
           payment.details.destinationPubkey,
           payment.details.description,
           payment.details.htlcDetails?.preimage,
           payment.details.htlcDetails?.status ?? null,
-          payment.details.htlcDetails?.expiryTime ?? 0,
+          payment.details.htlcDetails?.expiryTime ?? null,
         ]
       );
     }
@@ -813,15 +834,17 @@ class PostgresStorage {
       await this._withTransaction(async (client) => {
         for (const item of metadata) {
           await client.query(
-            `INSERT INTO brz_lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
-             VALUES ($1, $2, $3, $4, $5)
+            `INSERT INTO brz_lnurl_receive_metadata (user_id, payment_hash, invoice, nostr_zap_request, nostr_zap_receipt, sender_comment)
+             VALUES ($1, $2, $3, $4, $5, $6)
              ON CONFLICT(user_id, payment_hash) DO UPDATE SET
+               invoice = COALESCE(EXCLUDED.invoice, brz_lnurl_receive_metadata.invoice),
                nostr_zap_request = EXCLUDED.nostr_zap_request,
                nostr_zap_receipt = EXCLUDED.nostr_zap_receipt,
                sender_comment = EXCLUDED.sender_comment`,
             [
               this.identity,
               item.paymentHash,
+              item.invoice || null,
               item.nostrZapRequest || null,
               item.nostrZapReceipt || null,
               item.senderComment || null,
@@ -848,19 +871,7 @@ class PostgresStorage {
         invoice: row.lightning_invoice,
         destinationPubkey: row.lightning_destination_pubkey,
         description: row.lightning_description,
-        htlcDetails: row.lightning_htlc_status
-          ? {
-              paymentHash: row.lightning_payment_hash,
-              preimage: row.lightning_preimage || null,
-              expiryTime:
-                Number(row.lightning_htlc_expiry_time) ?? 0,
-              status: row.lightning_htlc_status,
-            }
-          : (() => {
-              throw new StorageError(
-                `htlc_status is required for Lightning payment ${row.id}`
-              );
-            })(),
+        htlcDetails: htlcDetailsFromRow(row),
       };
 
       if (row.lnurl_pay_info) {

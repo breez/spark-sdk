@@ -390,6 +390,35 @@ impl SqliteStorage {
             // RefundState. NULL on refunds created before this column existed, which
             // is read as BroadcastPending.
             "ALTER TABLE unclaimed_deposits ADD COLUMN refund_state TEXT;",
+            // A Lightning payment settled by a transfer to the Spark destination
+            // its invoice advertised involves no HTLC, so the columns describing
+            // one have to be nullable. SQLite cannot drop NOT NULL in place, so
+            // the table is rebuilt. Every existing row settled over Lightning and
+            // keeps its values.
+            "CREATE TABLE payment_details_lightning_new (
+               payment_id TEXT PRIMARY KEY,
+               invoice TEXT NOT NULL,
+               destination_pubkey TEXT NOT NULL,
+               description TEXT,
+               payment_hash TEXT,
+               preimage TEXT,
+               htlc_status TEXT,
+               htlc_expiry_time INTEGER,
+               FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
+             );
+             INSERT INTO payment_details_lightning_new
+               (payment_id, invoice, destination_pubkey, description, payment_hash, preimage, htlc_status, htlc_expiry_time)
+             SELECT payment_id, invoice, destination_pubkey, description, payment_hash, preimage, htlc_status, htlc_expiry_time
+             FROM payment_details_lightning;
+             DROP TABLE payment_details_lightning;
+             ALTER TABLE payment_details_lightning_new RENAME TO payment_details_lightning;
+             CREATE INDEX idx_payment_details_lightning_invoice ON payment_details_lightning(invoice);",
+            // Lnurl receive metadata is matched to a payment on the invoice: a
+            // payment with no HTLC has no payment hash of its own to match on.
+            // Clearing the cursor re-syncs every row so the column is filled.
+            "ALTER TABLE lnurl_receive_metadata ADD COLUMN invoice TEXT;
+             CREATE INDEX idx_lnurl_receive_metadata_invoice ON lnurl_receive_metadata(invoice);
+             DELETE FROM settings WHERE key = 'lnurl_metadata_updated_after';",
         ]
     }
 }
@@ -547,17 +576,17 @@ impl SqliteStorage {
                         destination_pubkey=excluded.destination_pubkey,
                         description=excluded.description,
                         preimage=COALESCE(excluded.preimage, payment_details_lightning.preimage),
-                        htlc_status=COALESCE(excluded.htlc_status, payment_details_lightning.htlc_status),
-                        htlc_expiry_time=COALESCE(excluded.htlc_expiry_time, payment_details_lightning.htlc_expiry_time)",
+                        htlc_status=excluded.htlc_status,
+                        htlc_expiry_time=excluded.htlc_expiry_time",
                     params![
                         payment.id,
                         invoice,
-                        htlc_details.payment_hash,
+                        htlc_details.as_ref().map(|d| d.payment_hash.clone()),
                         destination_pubkey,
                         description,
-                        htlc_details.preimage,
-                        htlc_details.status.to_string(),
-                        htlc_details.expiry_time,
+                        htlc_details.as_ref().and_then(|d| d.preimage.clone()),
+                        htlc_details.as_ref().map(|d| d.status.to_string()),
+                        htlc_details.as_ref().map(|d| d.expiry_time),
                     ],
                 )?;
             }
@@ -1063,10 +1092,19 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
         for metadata in metadata {
             connection.execute(
-                "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
-                 VALUES (?, ?, ?, ?)",
+                // The invoice is kept when a later row arrives without one, so a
+                // row that reaches us before its invoice exists server-side is
+                // not stripped of the invoice a previous sync did carry.
+                "INSERT INTO lnurl_receive_metadata (payment_hash, invoice, nostr_zap_request, nostr_zap_receipt, sender_comment)
+                 VALUES (?, ?, ?, ?, ?)
+                 ON CONFLICT(payment_hash) DO UPDATE SET
+                    invoice=COALESCE(excluded.invoice, lnurl_receive_metadata.invoice),
+                    nostr_zap_request=excluded.nostr_zap_request,
+                    nostr_zap_receipt=excluded.nostr_zap_receipt,
+                    sender_comment=excluded.sender_comment",
                 params![
                     metadata.payment_hash,
+                    metadata.invoice,
                     metadata.nostr_zap_request,
                     metadata.nostr_zap_receipt,
                     metadata.sender_comment,
@@ -1610,7 +1648,7 @@ const SELECT_PAYMENT_SQL: &str = "
       LEFT JOIN payment_details_spark s ON p.id = s.payment_id
       LEFT JOIN payment_details_deposit pd ON p.id = pd.payment_id
       LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
-      LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash";
+      LEFT JOIN lnurl_receive_metadata lrm ON l.invoice = lrm.invoice";
 
 #[allow(clippy::too_many_lines)]
 fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
@@ -1627,24 +1665,26 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
         token_metadata,
     ) {
         (Some(invoice), _, _, _, _) => {
-            let payment_hash: String = row.get(12)?;
+            let payment_hash: Option<String> = row.get(12)?;
             let destination_pubkey: String = row.get(13)?;
             let description: Option<String> = row.get(14)?;
             let preimage: Option<String> = row.get(15)?;
-            let htlc_status: SparkHtlcStatus =
-                row.get::<_, Option<SparkHtlcStatus>>(16)?.ok_or_else(|| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        16,
-                        rusqlite::types::Type::Null,
-                        "htlc_status is required for Lightning payments".into(),
-                    )
-                })?;
-            let htlc_expiry_time: u64 = row.get(17)?;
-            let htlc_details = SparkHtlcDetails {
-                payment_hash,
-                preimage,
-                expiry_time: htlc_expiry_time,
-                status: htlc_status,
+            // No HTLC status means the invoice was settled by a transfer to the
+            // Spark destination it advertised, which creates no HTLC.
+            let htlc_details = match row.get::<_, Option<SparkHtlcStatus>>(16)? {
+                Some(status) => Some(SparkHtlcDetails {
+                    payment_hash: payment_hash.ok_or_else(|| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            12,
+                            rusqlite::types::Type::Null,
+                            "payment_hash is required alongside an HTLC status".into(),
+                        )
+                    })?,
+                    preimage,
+                    expiry_time: row.get::<_, Option<u64>>(17)?.unwrap_or_default(),
+                    status,
+                }),
+                None => None,
             };
             let lnurl_pay_info: Option<LnurlPayInfo> = row.get(18)?;
             let lnurl_withdraw_info: Option<LnurlWithdrawInfo> = row.get(19)?;
@@ -2058,6 +2098,14 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_lightning_payment_settled_over_spark() {
+        let temp_dir = create_temp_dir("sqlite_storage_settled_over_spark");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        crate::persist::tests::test_lightning_payment_settled_over_spark(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
     async fn test_conversion_filtering() {
         let temp_dir = create_temp_dir("sqlite_storage_conversion_refund_needed_filter");
         let storage = SqliteStorage::new(&temp_dir).unwrap();
@@ -2456,7 +2504,10 @@ mod tests {
             .await
             .unwrap();
         match &completed.details {
-            Some(PaymentDetails::Lightning { htlc_details, .. }) => {
+            Some(PaymentDetails::Lightning {
+                htlc_details: Some(htlc_details),
+                ..
+            }) => {
                 assert_eq!(htlc_details.status, SparkHtlcStatus::PreimageShared);
                 assert_eq!(htlc_details.expiry_time, 0);
                 assert_eq!(
@@ -2474,7 +2525,10 @@ mod tests {
             .await
             .unwrap();
         match &pending.details {
-            Some(PaymentDetails::Lightning { htlc_details, .. }) => {
+            Some(PaymentDetails::Lightning {
+                htlc_details: Some(htlc_details),
+                ..
+            }) => {
                 assert_eq!(htlc_details.status, SparkHtlcStatus::WaitingForPreimage);
                 assert_eq!(htlc_details.expiry_time, 0);
                 assert_eq!(
@@ -2492,7 +2546,10 @@ mod tests {
             .await
             .unwrap();
         match &failed.details {
-            Some(PaymentDetails::Lightning { htlc_details, .. }) => {
+            Some(PaymentDetails::Lightning {
+                htlc_details: Some(htlc_details),
+                ..
+            }) => {
                 assert_eq!(htlc_details.status, SparkHtlcStatus::Returned);
                 assert_eq!(htlc_details.expiry_time, 0);
             }

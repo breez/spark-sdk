@@ -15,8 +15,8 @@ pub use deposit::*;
 pub use error::*;
 pub use htlc::*;
 pub use lightning::{
-    InvoiceDescription, LightningReceivePayment, LightningSendPayment, LightningSendStatus,
-    LightningService, PayLightningResult,
+    InvoiceDescription, LightningReceiveFallback, LightningReceivePayment, LightningSendPayment,
+    LightningSendStatus, LightningService, PayLightningResult,
 };
 pub use models::*;
 pub use swap::*;

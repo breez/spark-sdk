@@ -540,6 +540,23 @@ class PostgresMigrationManager {
           `ALTER TABLE brz_unclaimed_deposits ADD COLUMN refund_state JSONB`,
         ],
       },
+      {
+        // A Lightning payment settled by a transfer to the Spark destination its
+        // invoice advertised involves no HTLC, so the columns describing one
+        // become nullable. Lnurl receive metadata is matched on the invoice for
+        // the same reason: such a payment has no payment hash of its own to match
+        // on. Clearing the sync cursor refills the new column for rows already
+        // synced.
+        name: "Allow lightning payments with no HTLC",
+        sql: [
+          `ALTER TABLE brz_payment_details_lightning ALTER COLUMN payment_hash DROP NOT NULL`,
+          `ALTER TABLE brz_payment_details_lightning ALTER COLUMN htlc_status DROP NOT NULL`,
+          `ALTER TABLE brz_payment_details_lightning ALTER COLUMN htlc_expiry_time DROP NOT NULL`,
+          `ALTER TABLE brz_lnurl_receive_metadata ADD COLUMN IF NOT EXISTS invoice TEXT`,
+          `CREATE INDEX IF NOT EXISTS brz_idx_lnurl_receive_metadata_invoice ON brz_lnurl_receive_metadata(invoice)`,
+          `DELETE FROM brz_settings WHERE key = 'lnurl_metadata_updated_after'`,
+        ],
+      },
     ];
   }
 }

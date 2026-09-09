@@ -488,12 +488,13 @@ async fn test_05_lnurl_payment_flow(#[future] alice_sdk: Result<SdkInstance>) ->
     Ok(())
 }
 
-/// Fixture: Lnurl service with include_spark_address enabled
+/// Fixture: Lnurl service that advertises a Spark destination on the invoices
+/// it mints.
 #[fixture]
-async fn lnurl_spark_address_fixture() -> LnurlFixture {
-    LnurlFixture::with_config(LnurlImageConfig::default().with_include_spark_address(true))
+async fn lnurl_spark_fallback_fixture() -> LnurlFixture {
+    LnurlFixture::with_config(LnurlImageConfig::default().with_include_spark_fallback(true))
         .await
-        .expect("Failed to start Lnurl service with Spark address")
+        .expect("Failed to start Lnurl service with a Spark fallback")
 }
 
 /// Test LNURL full balance payment - sends entire balance via LNURL
@@ -1070,14 +1071,14 @@ async fn test_09_invoice_expiry_parameter() -> Result<()> {
 /// error despite the funds being transferred successfully.
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_11_lnurl_spark_address_payment(
-    #[future] lnurl_spark_address_fixture: LnurlFixture,
+async fn test_11_lnurl_spark_fallback_payment(
+    #[future] lnurl_spark_fallback_fixture: LnurlFixture,
     #[future] alice_sdk: Result<SdkInstance>,
 ) -> Result<()> {
-    info!("=== Starting test_11_lnurl_spark_address_payment ===");
+    info!("=== Starting test_11_lnurl_spark_fallback_payment ===");
 
     // Setup Bob with the Spark address LNURL server
-    let lnurl = Arc::new(lnurl_spark_address_fixture.await);
+    let lnurl = Arc::new(lnurl_spark_fallback_fixture.await);
     let lnurl_domain = lnurl.http_url().to_string();
 
     let mut bob = async {
@@ -1114,7 +1115,8 @@ async fn test_11_lnurl_spark_address_payment(
     let payment_amount_sats = 5_000;
     let payment_comment = "Spark address LNURL payment from Alice";
 
-    // Bob registers a Lightning address (LNURL server has include_spark_address=true)
+    // Bob registers a Lightning address. The server advertises a Spark
+    // destination on the invoices it mints for him.
     let bob_lightning_address = async {
         let register_response = bob
             .sdk
@@ -1159,10 +1161,8 @@ async fn test_11_lnurl_spark_address_payment(
     let amount_sats = prepare_response.amount_sats;
     info!("Alice prepared payment for {amount_sats} sats to {bob_lightning_address}");
 
-    // Alice sends the payment via lnurl_pay
-    // This is the key part: the LNURL server returns an invoice with a Spark routing hint,
-    // so the SDK pays via Spark transfer. Previously this returned
-    // "Expected Lightning payment details" error.
+    // The invoice the LNURL server returns advertises a Spark destination, so
+    // the SDK settles it with a transfer rather than routing over Lightning.
     let pay_response = alice
         .sdk
         .lnurl_pay(LnurlPayRequest {
@@ -1203,7 +1203,34 @@ async fn test_11_lnurl_spark_address_payment(
         alice_payment.details,
     );
 
-    info!("=== Test test_11_lnurl_spark_address_payment PASSED ===");
+    // Bob's side must report the Bolt11 the server minted for him as paid,
+    // rather than a bare Spark receive: he never created that invoice himself,
+    // so the link comes from the metadata the lnurl server syncs to him.
+    let bob_payments = bob
+        .sdk
+        .list_payments(ListPaymentsRequest {
+            offset: None,
+            limit: Some(10),
+            ..Default::default()
+        })
+        .await?
+        .payments;
+    let received = bob_payments
+        .iter()
+        .find(|p| p.payment_type == PaymentType::Receive)
+        .expect("Bob should have a received payment");
+    let Some(PaymentDetails::Lightning { htlc_details, .. }) = &received.details else {
+        anyhow::bail!(
+            "Expected Bob's receive to report as Lightning, got: {:?}",
+            received.details
+        );
+    };
+    assert!(
+        htlc_details.is_none(),
+        "a Spark-settled invoice has no HTLC"
+    );
+
+    info!("=== Test test_11_lnurl_spark_fallback_payment PASSED ===");
     Ok(())
 }
 

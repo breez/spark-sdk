@@ -500,6 +500,44 @@ class MigrationManager {
         name: "Add refund state to unclaimed_deposits",
         sql: [`ALTER TABLE unclaimed_deposits ADD COLUMN refund_state TEXT`],
       },
+      {
+        // A Lightning payment settled by a transfer to the Spark destination its
+        // invoice advertised involves no HTLC, so the columns describing one have
+        // to be nullable. SQLite cannot drop NOT NULL in place, so the table is
+        // rebuilt. Every existing row settled over Lightning and keeps its values.
+        name: "Allow lightning payments with no HTLC",
+        sql: [
+          `CREATE TABLE payment_details_lightning_new (
+             payment_id TEXT PRIMARY KEY,
+             invoice TEXT NOT NULL,
+             destination_pubkey TEXT NOT NULL,
+             description TEXT,
+             payment_hash TEXT,
+             preimage TEXT,
+             htlc_status TEXT,
+             htlc_expiry_time INTEGER,
+             FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
+           )`,
+          `INSERT INTO payment_details_lightning_new
+             (payment_id, invoice, destination_pubkey, description, payment_hash, preimage, htlc_status, htlc_expiry_time)
+           SELECT payment_id, invoice, destination_pubkey, description, payment_hash, preimage, htlc_status, htlc_expiry_time
+           FROM payment_details_lightning`,
+          `DROP TABLE payment_details_lightning`,
+          `ALTER TABLE payment_details_lightning_new RENAME TO payment_details_lightning`,
+          `CREATE INDEX idx_payment_details_lightning_invoice ON payment_details_lightning(invoice)`,
+        ],
+      },
+      {
+        // Lnurl receive metadata is matched to a payment on the invoice: a
+        // payment with no HTLC has no payment hash of its own to match on.
+        // Clearing the cursor re-syncs every row so the column is filled.
+        name: "Match lnurl receive metadata on the invoice",
+        sql: [
+          `ALTER TABLE lnurl_receive_metadata ADD COLUMN invoice TEXT`,
+          `CREATE INDEX idx_lnurl_receive_metadata_invoice ON lnurl_receive_metadata(invoice)`,
+          `DELETE FROM settings WHERE key = 'lnurl_metadata_updated_after'`,
+        ],
+      },
     ];
   }
 }

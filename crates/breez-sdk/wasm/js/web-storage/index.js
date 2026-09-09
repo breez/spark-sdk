@@ -611,6 +611,26 @@ class MigrationManager {
           };
         },
       },
+      {
+        // Lnurl receive metadata is matched to a payment on the invoice: a
+        // payment settled over the Spark destination its invoice advertised has
+        // no HTLC, and so no payment hash of its own to match on. Clearing the
+        // cursor re-syncs every row so the new field is filled.
+        name: "Match lnurl receive metadata on the invoice",
+        upgrade: (db, transaction) => {
+          if (db.objectStoreNames.contains("lnurl_receive_metadata")) {
+            const store = transaction.objectStore("lnurl_receive_metadata");
+            if (!store.indexNames.contains("invoice")) {
+              store.createIndex("invoice", "invoice", { unique: false });
+            }
+          }
+          if (db.objectStoreNames.contains("settings")) {
+            transaction
+              .objectStore("settings")
+              .delete("lnurl_metadata_updated_after");
+          }
+        },
+      },
     ];
   }
 }
@@ -639,7 +659,7 @@ class IndexedDBStorage {
     // so existing databases depend on indices never shifting. Never insert,
     // reorder, or delete a migration — only append. dbVersion MUST equal the
     // number of migrations (enforced by the guard in initialize()).
-    this.dbVersion = 21; // Current schema version (= migration count)
+    this.dbVersion = 22; // Current schema version (= migration count)
   }
 
   /**
@@ -1626,29 +1646,40 @@ class IndexedDBStorage {
         return;
       }
 
+      const onError = (item, request) => () => {
+        reject(
+          new StorageError(
+            `Failed to add lnurl metadata for payment hash '${item.paymentHash
+            }': ${request.error?.message || "Unknown error"}`,
+            request.error
+          )
+        );
+      };
+
       for (const item of metadata) {
-        const request = store.put({
-          paymentHash: item.paymentHash,
-          nostrZapRequest: item.nostrZapRequest || null,
-          nostrZapReceipt: item.nostrZapReceipt || null,
-          senderComment: item.senderComment || null,
-        });
+        // Read first so the invoice is kept when a later row arrives without
+        // one: a row that reaches us before its invoice exists server-side must
+        // not be stripped of the invoice a previous sync did carry.
+        const existing = store.get(item.paymentHash);
 
-        request.onsuccess = () => {
-          completed++;
-          if (completed === total) {
-            resolve();
-          }
-        };
+        existing.onerror = onError(item, existing);
+        existing.onsuccess = () => {
+          const request = store.put({
+            paymentHash: item.paymentHash,
+            invoice: item.invoice || existing.result?.invoice || null,
+            nostrZapRequest: item.nostrZapRequest || null,
+            nostrZapReceipt: item.nostrZapReceipt || null,
+            senderComment: item.senderComment || null,
+          });
 
-        request.onerror = () => {
-          reject(
-            new StorageError(
-              `Failed to add lnurl metadata for payment hash '${item.paymentHash
-              }': ${request.error?.message || "Unknown error"}`,
-              request.error
-            )
-          );
+          request.onsuccess = () => {
+            completed++;
+            if (completed === total) {
+              resolve();
+            }
+          };
+
+          request.onerror = onError(item, request);
         };
       }
     });
@@ -2570,12 +2601,6 @@ class IndexedDBStorage {
       }
     }
 
-    if (details && details.type === "lightning" && !details.htlcDetails) {
-      throw new StorageError(
-        `htlc_details is required for Lightning payment ${payment.id}`
-      );
-    }
-
     if (metadata && details) {
       if (details.type == "lightning") {
         if (metadata.lnurlDescription && !details.description) {
@@ -2640,11 +2665,12 @@ class IndexedDBStorage {
   }
 
   _fetchLnurlReceiveMetadata(payment, lnurlReceiveMetadataStore) {
-    // Only fetch for lightning payments with a payment hash
+    // Matched on the invoice: a payment settled over the Spark destination its
+    // invoice advertised has no HTLC, and so no payment hash of its own.
     if (
       !payment.details ||
       payment.details.type !== "lightning" ||
-      !payment.details.htlcDetails?.paymentHash
+      !payment.details.invoice
     ) {
       return Promise.resolve(payment);
     }
@@ -2654,9 +2680,9 @@ class IndexedDBStorage {
     }
 
     return new Promise((resolve, reject) => {
-      const lnurlReceiveRequest = lnurlReceiveMetadataStore.get(
-        payment.details.htlcDetails.paymentHash
-      );
+      const lnurlReceiveRequest = lnurlReceiveMetadataStore
+        .index("invoice")
+        .get(payment.details.invoice);
 
       lnurlReceiveRequest.onsuccess = () => {
         const lnurlReceiveMetadata = lnurlReceiveRequest.result;

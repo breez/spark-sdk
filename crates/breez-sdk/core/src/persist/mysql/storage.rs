@@ -554,6 +554,31 @@ impl MysqlStorage {
                 column: "refund_state",
                 definition: "JSON NULL",
             }],
+            // Migration 24: A Lightning payment settled by a transfer to the Spark
+            // destination its invoice advertised involves no HTLC, so the columns
+            // describing one become nullable. Lnurl receive metadata is matched on
+            // the invoice for the same reason: such a payment has no payment hash
+            // of its own to match on. Clearing the sync cursor refills the new
+            // column for rows already synced.
+            vec![
+                Migration::sql(
+                    "ALTER TABLE brz_payment_details_lightning
+                       MODIFY payment_hash VARCHAR(255) NULL,
+                       MODIFY htlc_status VARCHAR(64) NULL,
+                       MODIFY htlc_expiry_time BIGINT NULL",
+                ),
+                Migration::AddColumn {
+                    table: "brz_lnurl_receive_metadata",
+                    column: "invoice",
+                    definition: "TEXT NULL",
+                },
+                Migration::CreateIndex {
+                    name: "brz_idx_lnurl_receive_metadata_invoice",
+                    table: "brz_lnurl_receive_metadata",
+                    columns: "(invoice(255))",
+                },
+                Migration::sql("DELETE FROM brz_settings WHERE `key` = 'lnurl_metadata_updated_after'"),
+            ],
         ]
     }
 }
@@ -889,10 +914,13 @@ impl MysqlStorage {
                 htlc_details,
                 ..
             }) => {
-                let payment_hash = htlc_details.payment_hash.clone();
-                let preimage = htlc_details.preimage.clone();
-                let htlc_status = htlc_details.status.to_string();
-                let htlc_expiry_time = i64::try_from(htlc_details.expiry_time)?;
+                let preimage = htlc_details.as_ref().and_then(|d| d.preimage.clone());
+                let payment_hash = htlc_details.as_ref().map(|d| d.payment_hash.clone());
+                let htlc_status = htlc_details.as_ref().map(|d| d.status.to_string());
+                let htlc_expiry_time = htlc_details
+                    .as_ref()
+                    .map(|d| i64::try_from(d.expiry_time))
+                    .transpose()?;
                 tx.exec_drop(
                     "INSERT INTO brz_payment_details_lightning (user_id, payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -902,8 +930,8 @@ impl MysqlStorage {
                             destination_pubkey = VALUES(destination_pubkey),
                             description = VALUES(description),
                             preimage = COALESCE(VALUES(preimage), preimage),
-                            htlc_status = COALESCE(VALUES(htlc_status), htlc_status),
-                            htlc_expiry_time = COALESCE(VALUES(htlc_expiry_time), htlc_expiry_time)",
+                            htlc_status = VALUES(htlc_status),
+                            htlc_expiry_time = VALUES(htlc_expiry_time)",
                     (
                         identity.to_vec(),
                         &payment.id,
@@ -1501,13 +1529,14 @@ impl Storage for MysqlStorage {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         for m in metadata {
             conn.exec_drop(
-                "INSERT INTO brz_lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
-                 VALUES (?, ?, ?, ?, ?)
+                "INSERT INTO brz_lnurl_receive_metadata (user_id, payment_hash, invoice, nostr_zap_request, nostr_zap_receipt, sender_comment)
+                 VALUES (?, ?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
+                    invoice = COALESCE(VALUES(invoice), invoice),
                     nostr_zap_request = VALUES(nostr_zap_request),
                     nostr_zap_receipt = VALUES(nostr_zap_receipt),
                     sender_comment = VALUES(sender_comment)",
-                (self.identity.clone(), m.payment_hash, m.nostr_zap_request, m.nostr_zap_receipt, m.sender_comment),
+                (self.identity.clone(), m.payment_hash, m.invoice, m.nostr_zap_request, m.nostr_zap_receipt, m.sender_comment),
             )
             .await
             .map_err(map_db_error)?;
@@ -2083,7 +2112,7 @@ const SELECT_PAYMENT_SQL: &str = "
       LEFT JOIN brz_payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
       LEFT JOIN brz_payment_details_spark s ON p.id = s.payment_id AND p.user_id = s.user_id
       LEFT JOIN brz_payment_metadata pm ON p.id = pm.payment_id AND p.user_id = pm.user_id
-      LEFT JOIN brz_lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash AND l.user_id = lrm.user_id";
+      LEFT JOIN brz_lnurl_receive_metadata lrm ON l.invoice = lrm.invoice AND l.user_id = lrm.user_id";
 
 #[allow(clippy::too_many_lines)]
 fn map_payment(row: &Row) -> Result<Payment, StorageError> {
@@ -2101,27 +2130,30 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
         token_metadata,
     ) {
         (Some(invoice), _, _, _, _) => {
-            let payment_hash: String = get_str(row, 12)?;
+            let payment_hash: Option<String> = get_opt_str(row, 12);
             let destination_pubkey: String = get_str(row, 13)?;
             let description: Option<String> = get_opt_str(row, 14);
             let preimage: Option<String> = get_opt_str(row, 15);
-            let htlc_status_str: Option<String> = get_opt_str(row, 16);
-            let htlc_status: SparkHtlcStatus = htlc_status_str
-                .ok_or_else(|| {
-                    StorageError::Implementation(
-                        "htlc_status is required for Lightning payments".to_string(),
-                    )
-                })
-                .and_then(|s| {
-                    s.parse()
-                        .map_err(|e: String| StorageError::Serialization(e))
-                })?;
-            let htlc_expiry_time: i64 = get_i64(row, 17)?;
-            let htlc_details = SparkHtlcDetails {
-                payment_hash,
-                preimage,
-                expiry_time: u64::try_from(htlc_expiry_time)?,
-                status: htlc_status,
+            // No HTLC status means the invoice was settled by a transfer to the
+            // Spark destination it advertised, which creates no HTLC.
+            let htlc_details = match get_opt_str(row, 16) {
+                Some(status) => {
+                    let status: SparkHtlcStatus = status
+                        .parse()
+                        .map_err(|e: String| StorageError::Serialization(e))?;
+                    let payment_hash = payment_hash.ok_or_else(|| {
+                        StorageError::Implementation(
+                            "payment_hash is required alongside an HTLC status".to_string(),
+                        )
+                    })?;
+                    Some(SparkHtlcDetails {
+                        payment_hash,
+                        preimage,
+                        expiry_time: u64::try_from(get_i64(row, 17).unwrap_or_default())?,
+                        status,
+                    })
+                }
+                None => None,
             };
             let lnurl_pay_info_str: Option<String> = get_opt_str(row, 18);
             let lnurl_withdraw_info_str: Option<String> = get_opt_str(row, 19);
@@ -2424,6 +2456,13 @@ mod tests {
             fixture.storage,
         ))
         .await;
+    }
+
+    #[tokio::test]
+    async fn test_lightning_payment_settled_over_spark() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_lightning_payment_settled_over_spark(Box::new(fixture.storage))
+            .await;
     }
 
     #[tokio::test]
@@ -2736,12 +2775,12 @@ mod tests {
                 invoice: "lnbc_a".to_string(),
                 destination_pubkey: "pkA".to_string(),
                 description: None,
-                htlc_details: SparkHtlcDetails {
+                htlc_details: Some(SparkHtlcDetails {
                     payment_hash: "shared_payment_hash".to_string(),
                     preimage: Some("preimage_a".to_string()),
                     expiry_time: 0,
                     status: SparkHtlcStatus::PreimageShared,
-                },
+                }),
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
@@ -2876,6 +2915,7 @@ mod tests {
         // --- lnurl receive metadata ---
         fx.a.set_lnurl_metadata(vec![SetLnurlMetadataItem {
             payment_hash: "shared_payment_hash".to_string(),
+            invoice: Some("lnbc_a".to_string()),
             nostr_zap_request: Some("zap_a".to_string()),
             nostr_zap_receipt: None,
             sender_comment: None,
@@ -2884,6 +2924,7 @@ mod tests {
         .unwrap();
         fx.b.set_lnurl_metadata(vec![SetLnurlMetadataItem {
             payment_hash: "shared_payment_hash".to_string(),
+            invoice: Some("lnbc_b".to_string()),
             nostr_zap_request: Some("zap_b".to_string()),
             nostr_zap_receipt: None,
             sender_comment: None,
@@ -3050,7 +3091,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(23), "migration version must advance to 23");
+        assert_eq!(version, Some(24), "migration version must advance to 24");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())
@@ -3322,7 +3363,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(23), "migration must advance to 23");
+        assert_eq!(version, Some(24), "migration must advance to 24");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())

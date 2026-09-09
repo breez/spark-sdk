@@ -584,6 +584,24 @@ class MysqlMigrationManager {
           `ALTER TABLE brz_unclaimed_deposits ADD COLUMN refund_state JSON NULL`,
         ],
       },
+      {
+        // A Lightning payment settled by a transfer to the Spark destination its
+        // invoice advertised involves no HTLC, so the columns describing one
+        // become nullable. Lnurl receive metadata is matched on the invoice for
+        // the same reason: such a payment has no payment hash of its own to match
+        // on. Clearing the sync cursor refills the new column for rows already
+        // synced.
+        name: "Allow lightning payments with no HTLC",
+        sql: [
+          `ALTER TABLE brz_payment_details_lightning
+             MODIFY payment_hash VARCHAR(255) NULL,
+             MODIFY htlc_status VARCHAR(64) NULL,
+             MODIFY htlc_expiry_time BIGINT NULL`,
+          `ALTER TABLE brz_lnurl_receive_metadata ADD COLUMN invoice TEXT NULL`,
+          `CREATE INDEX brz_idx_lnurl_receive_metadata_invoice ON brz_lnurl_receive_metadata(invoice(255))`,
+          "DELETE FROM brz_settings WHERE `key` = 'lnurl_metadata_updated_after'",
+        ],
+      },
     ];
   }
 }

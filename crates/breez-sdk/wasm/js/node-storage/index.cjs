@@ -25,6 +25,25 @@ try {
 }
 
 const { StorageError } = require("./errors.cjs");
+
+/**
+ * Rebuilds the HTLC details of a Lightning payment row.
+ *
+ * No HTLC status means the invoice was settled by a transfer to the Spark
+ * destination it advertised, which creates no HTLC.
+ */
+function htlcDetailsFromRow(row) {
+  if (!row.lightning_htlc_status) {
+    return null;
+  }
+  return {
+    paymentHash: row.lightning_payment_hash,
+    preimage: row.lightning_preimage || null,
+    expiryTime: row.lightning_htlc_expiry_time ?? 0,
+    status: row.lightning_htlc_status,
+  };
+}
+
 const { MigrationManager } = require("./migrations.cjs");
 
 /**
@@ -72,7 +91,7 @@ const SELECT_PAYMENT_SQL = `
       LEFT JOIN payment_details_spark s ON p.id = s.payment_id
       LEFT JOIN payment_details_deposit pd ON p.id = pd.payment_id
       LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
-      LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash`;
+      LEFT JOIN lnurl_receive_metadata lrm ON l.invoice = lrm.invoice`;
 
 class SqliteStorage {
   constructor(dbPath, logger = null) {
@@ -212,7 +231,9 @@ class SqliteStorage {
           } else if (paymentDetailsFilter.type === "token") {
             paymentDetailsClauses.push("p.spark IS NULL AND t.tx_hash IS NOT NULL");
           } else if (paymentDetailsFilter.type === "lightning") {
-            paymentDetailsClauses.push("l.htlc_status IS NOT NULL");
+            // Not htlc_status: a payment settled over the Spark destination its
+            // invoice advertised is a Lightning payment with no HTLC.
+            paymentDetailsClauses.push("l.invoice IS NOT NULL");
           }
           // Filter by HTLC status (Spark or Lightning)
           const htlcAlias =
@@ -417,8 +438,8 @@ class SqliteStorage {
           destination_pubkey=excluded.destination_pubkey,
           description=excluded.description,
           preimage=COALESCE(excluded.preimage, payment_details_lightning.preimage),
-          htlc_status=COALESCE(excluded.htlc_status, payment_details_lightning.htlc_status),
-          htlc_expiry_time=COALESCE(excluded.htlc_expiry_time, payment_details_lightning.htlc_expiry_time)`
+          htlc_status=excluded.htlc_status,
+          htlc_expiry_time=excluded.htlc_expiry_time`
     );
     const tokenInsert = this.db.prepare(
       `INSERT INTO payment_details_token
@@ -480,12 +501,12 @@ class SqliteStorage {
       lightningInsert.run({
         id: payment.id,
         invoice: payment.details.invoice,
-        paymentHash: payment.details.htlcDetails.paymentHash,
+        paymentHash: payment.details.htlcDetails?.paymentHash ?? null,
         destinationPubkey: payment.details.destinationPubkey,
         description: payment.details.description,
         preimage: payment.details.htlcDetails?.preimage,
         htlcStatus: payment.details.htlcDetails?.status ?? null,
-        htlcExpiryTime: payment.details.htlcDetails?.expiryTime ?? 0,
+        htlcExpiryTime: payment.details.htlcDetails?.expiryTime ?? null,
       });
     }
 
@@ -787,13 +808,23 @@ class SqliteStorage {
   setLnurlMetadata(metadata) {
     try {
       const stmt = this.db.prepare(
-        "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment) VALUES (?, ?, ?, ?)"
+        // The invoice is kept when a later row arrives without one, so a row that
+        // reaches us before its invoice exists server-side is not stripped of the
+        // invoice a previous sync did carry.
+        `INSERT INTO lnurl_receive_metadata (payment_hash, invoice, nostr_zap_request, nostr_zap_receipt, sender_comment)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(payment_hash) DO UPDATE SET
+           invoice=COALESCE(excluded.invoice, lnurl_receive_metadata.invoice),
+           nostr_zap_request=excluded.nostr_zap_request,
+           nostr_zap_receipt=excluded.nostr_zap_receipt,
+           sender_comment=excluded.sender_comment`
       );
 
       const transaction = this.db.transaction(() => {
         for (const item of metadata) {
           stmt.run(
             item.paymentHash,
+            item.invoice || null,
             item.nostrZapRequest || null,
             item.nostrZapReceipt || null,
             item.senderComment || null
@@ -823,14 +854,7 @@ class SqliteStorage {
         invoice: row.lightning_invoice,
         destinationPubkey: row.lightning_destination_pubkey,
         description: row.lightning_description,
-        htlcDetails: row.lightning_htlc_status
-          ? {
-              paymentHash: row.lightning_payment_hash,
-              preimage: row.lightning_preimage || null,
-              expiryTime: row.lightning_htlc_expiry_time ?? 0,
-              status: row.lightning_htlc_status,
-            }
-          : (() => { throw new StorageError(`htlc_status is required for Lightning payment ${row.id}`); })(),
+        htlcDetails: htlcDetailsFromRow(row),
       };
 
       if (row.lnurl_pay_info) {

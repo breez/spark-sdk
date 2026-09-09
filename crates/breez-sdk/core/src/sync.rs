@@ -10,7 +10,9 @@ use crate::{
     EventEmitter, Payment, PaymentDetails, PaymentStatus, SdkError, Storage,
     persist::{CachedSyncInfo, ObjectCacheRepository, StorageListPaymentsRequest},
     utils::{
-        payments::record_payment_update,
+        payments::{
+            FallbackLookup, awaits_bolt11_fallback, record_payment_update, resolve_bolt11_fallback,
+        },
         token::{token_transaction_to_payments, token_tx_inputs_are_ours},
     },
 };
@@ -36,20 +38,28 @@ impl SparkSyncService {
         }
     }
 
-    pub async fn sync_payments(&self, initial_sync_complete: bool) -> Result<(), SdkError> {
+    /// Returns the payments that settled a Spark invoice this pass could not tie
+    /// back to the Bolt11 it was embedded in from the local mapping alone, for
+    /// the caller to retry once it has refreshed the sources of that link. The
+    /// remote lookups are left to that pass so this one stays local.
+    pub async fn sync_payments(
+        &self,
+        initial_sync_complete: bool,
+    ) -> Result<Vec<Payment>, SdkError> {
         let object_repository = ObjectCacheRepository::new(self.storage.clone());
-        self.sync_bitcoin_payments_to_storage(&object_repository, initial_sync_complete)
+        let unresolved = self
+            .sync_bitcoin_payments_to_storage(&object_repository, initial_sync_complete)
             .await?;
         self.sync_token_payments_to_storage(&object_repository, initial_sync_complete)
             .await?;
-        Ok(())
+        Ok(unresolved)
     }
 
     async fn sync_bitcoin_payments_to_storage(
         &self,
         object_repository: &ObjectCacheRepository,
         initial_sync_complete: bool,
-    ) -> Result<(), SdkError> {
+    ) -> Result<Vec<Payment>, SdkError> {
         // Get the last offset we processed from storage
         let cached_sync_info = object_repository
             .fetch_sync_info()
@@ -67,6 +77,7 @@ impl SparkSyncService {
         });
         info!("Syncing payments to storage, offset = {}", current_offset);
         let mut pending_payments: u64 = 0;
+        let mut unresolved_fallbacks = Vec::new();
         while let Some(filter) = next_filter {
             // Get batch of transfers starting from current offset
             let transfers_response = self
@@ -85,7 +96,17 @@ impl SparkSyncService {
             // Process transfers in this batch
             for transfer in &transfers_response.items {
                 // Create a payment record
-                let payment: Payment = transfer.clone().try_into()?;
+                let mut payment: Payment = transfer.clone().try_into()?;
+                resolve_bolt11_fallback(
+                    &self.spark_wallet,
+                    &self.storage,
+                    &mut payment,
+                    FallbackLookup::Local,
+                )
+                .await;
+                if awaits_bolt11_fallback(&payment) {
+                    unresolved_fallbacks.push(payment.clone());
+                }
                 // Apply any payment metadata for the payment
                 if let Err(e) = self.apply_payment_metadata(&payment).await {
                     error!(
@@ -132,16 +153,19 @@ impl SparkSyncService {
 
         // Re-check all locally-stored pending payments to catch status transitions
         // that occurred before our current offset window (e.g. pending → failed).
-        self.reconcile_pending_payments(initial_sync_complete).await;
+        unresolved_fallbacks.extend(self.reconcile_pending_payments(initial_sync_complete).await);
 
-        Ok(())
+        Ok(unresolved_fallbacks)
     }
 
     /// Re-fetches all locally-stored pending payments from the server and updates
     /// any whose status has changed. This catches cases where a payment transitioned to
     /// failed/completed before the current sync offset window began.
     /// Skip payments younger than 1 minute to avoid unnecessary server load.
-    async fn reconcile_pending_payments(&self, initial_sync_complete: bool) {
+    ///
+    /// Returns the reconciled payments that settled a Spark invoice with no local
+    /// mapping back to a Bolt11, on the same terms as [`Self::sync_payments`].
+    async fn reconcile_pending_payments(&self, initial_sync_complete: bool) -> Vec<Payment> {
         let now = u64::from(breez_sdk_common::utils::now());
         let pending_payments = match self
             .storage
@@ -155,7 +179,7 @@ impl SparkSyncService {
             Ok(p) => p,
             Err(e) => {
                 error!("Failed to list pending payments for reconciliation: {e:?}");
-                return;
+                return Vec::new();
             }
         };
 
@@ -164,7 +188,7 @@ impl SparkSyncService {
             .filter_map(|p| TransferId::from_str(&p.id).ok())
             .collect();
         if transfer_ids.is_empty() {
-            return;
+            return Vec::new();
         }
 
         info!(
@@ -182,12 +206,13 @@ impl SparkSyncService {
             Ok(r) => r,
             Err(e) => {
                 error!("Failed to fetch pending payments for reconciliation: {e:?}");
-                return;
+                return Vec::new();
             }
         };
 
+        let mut unresolved_fallbacks = Vec::new();
         for transfer in &transfers_response.items {
-            let payment = match Payment::try_from(transfer.clone()) {
+            let mut payment = match Payment::try_from(transfer.clone()) {
                 Ok(p) => p,
                 Err(e) => {
                     error!("Failed to convert transfer to payment during reconciliation: {e:?}");
@@ -197,6 +222,16 @@ impl SparkSyncService {
 
             if payment.status == PaymentStatus::Pending {
                 continue;
+            }
+            resolve_bolt11_fallback(
+                &self.spark_wallet,
+                &self.storage,
+                &mut payment,
+                FallbackLookup::Local,
+            )
+            .await;
+            if awaits_bolt11_fallback(&payment) {
+                unresolved_fallbacks.push(payment.clone());
             }
 
             info!(
@@ -212,6 +247,7 @@ impl SparkSyncService {
             )
             .await;
         }
+        unresolved_fallbacks
     }
 
     pub(crate) async fn apply_payment_metadata(&self, payment: &Payment) -> Result<(), SdkError> {

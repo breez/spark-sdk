@@ -477,7 +477,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             description: Some("Test lightning payment".to_string()),
             invoice: "lnbc250n1pjqxyz9pp5abc123def456ghi789jkl012mno345pqr678stu901vwx234yz567890abcdefghijklmnopqrstuvwxyz".to_string(),
             destination_pubkey: "03123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01".to_string(),
-            htlc_details: test_lightning_htlc("fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321"),
+            htlc_details: Some(test_lightning_htlc("fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321")),
             lnurl_pay_info: pay_metadata.lnurl_pay_info.clone(),
             lnurl_withdraw_info: pay_metadata.lnurl_withdraw_info.clone(),
             lnurl_receive_metadata: None,
@@ -505,7 +505,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             description: Some("Test lightning payment".to_string()),
             invoice: "lnbc250n1pjqxyz9pp5abc123def456ghi789jkl012mno345pqr678stu901vwx234yz567890abcdefghijklmnopqrstuvwxyz".to_string(),
             destination_pubkey: "03123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01".to_string(),
-            htlc_details: test_lightning_htlc("fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321"),
+            htlc_details: Some(test_lightning_htlc("fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321")),
             lnurl_pay_info: withdraw_metadata.lnurl_pay_info.clone(),
             lnurl_withdraw_info: withdraw_metadata.lnurl_withdraw_info.clone(),
             lnurl_receive_metadata: None,
@@ -528,13 +528,13 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             invoice: "lnbc500n1hodl_invoice_abc123".to_string(),
             destination_pubkey:
                 "03hodlpubkey123456789abcdef0123456789abcdef0123456789abcdef01234567".to_string(),
-            htlc_details: SparkHtlcDetails {
+            htlc_details: Some(SparkHtlcDetails {
                 payment_hash: "hodlhash1234567890abcdef1234567890abcdef1234567890abcdef12345678"
                     .to_string(),
                 preimage: None,
                 expiry_time: 30_000,
                 status: SparkHtlcStatus::WaitingForPreimage,
-            },
+            }),
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
@@ -556,7 +556,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             description: None,
             invoice: "lnbc100n1pjqxyz9pp5def456ghi789jkl012mno345pqr678stu901vwx234yz567890abcdefghijklmnopqrstuvwxyz".to_string(),
             destination_pubkey: "02987654321fedcba0987654321fedcba0987654321fedcba0987654321fedcba09".to_string(),
-            htlc_details: test_lightning_htlc("abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"),
+            htlc_details: Some(test_lightning_htlc("abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890")),
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
@@ -585,7 +585,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             description: Some("LNURL receive test".to_string()),
             invoice: "lnbc1000n1pjqxyz9pp5receive123def456ghi789jkl012mno345pqr678stu901vwx234yz567890abcdefghijklmnopqrstuvwxyz".to_string(),
             destination_pubkey: "03receivepubkey123456789abcdef0123456789abcdef0123456789abcdef01234".to_string(),
-            htlc_details: test_lightning_htlc(&lnurl_receive_payment_hash),
+            htlc_details: Some(test_lightning_htlc(&lnurl_receive_payment_hash)),
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: Some(lnurl_receive_metadata.clone()),
@@ -819,6 +819,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             nostr_zap_receipt: lnurl_receive_metadata.nostr_zap_receipt.clone(),
             nostr_zap_request: lnurl_receive_metadata.nostr_zap_request.clone(),
             payment_hash: lnurl_receive_payment_hash.clone(),
+            invoice: Some("lnbc1000n1pjqxyz9pp5receive123def456ghi789jkl012mno345pqr678stu901vwx234yz567890abcdefghijklmnopqrstuvwxyz".to_string()),
             sender_comment: lnurl_receive_metadata.sender_comment.clone(),
         }])
         .await
@@ -1101,7 +1102,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             description: Some("Zap payment".to_string()),
             invoice: "lnbc1000n1pjqxyz9pp5zap123def456ghi789jkl012mno345pqr678stu901vwx234yz567890abcdefghijklmnopqrstuvwxyz".to_string(),
             destination_pubkey: "03zappubkey123456789abcdef0123456789abcdef0123456789abcdef0123456701".to_string(),
-            htlc_details: test_lightning_htlc("zaphash1234567890abcdef1234567890abcdef1234567890abcdef12345678"),
+            htlc_details: Some(test_lightning_htlc("zaphash1234567890abcdef1234567890abcdef1234567890abcdef12345678")),
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
@@ -1120,6 +1121,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         .set_lnurl_metadata(vec![SetLnurlMetadataItem {
             payment_hash: "zaphash1234567890abcdef1234567890abcdef1234567890abcdef12345678"
                 .to_string(),
+            invoice: Some("lnbc1000n1pjqxyz9pp5zap123def456ghi789jkl012mno345pqr678stu901vwx234yz567890abcdefghijklmnopqrstuvwxyz".to_string()),
             sender_comment: Some("Great content!".to_string()),
             nostr_zap_request: Some(
                 r#"{"kind":9734,"content":"zap request","tags":[]}"#.to_string(),
@@ -1174,7 +1176,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             description: Some("Another zap".to_string()),
             invoice: "lnbc500n1pjqxyz9pp5zap2".to_string(),
             destination_pubkey: "03zappubkey2".to_string(),
-            htlc_details: test_lightning_htlc("zaphash2"),
+            htlc_details: Some(test_lightning_htlc("zaphash2")),
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
@@ -1195,7 +1197,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             description: Some("Third zap".to_string()),
             invoice: "lnbc250n1pjqxyz9pp5zap3".to_string(),
             destination_pubkey: "03zappubkey3".to_string(),
-            htlc_details: test_lightning_htlc("zaphash3"),
+            htlc_details: Some(test_lightning_htlc("zaphash3")),
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
@@ -1218,12 +1220,14 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         .set_lnurl_metadata(vec![
             SetLnurlMetadataItem {
                 payment_hash: "zaphash2".to_string(),
+                invoice: Some("lnbc500n1pjqxyz9pp5zap2".to_string()),
                 sender_comment: Some("Nice work!".to_string()),
                 nostr_zap_request: None,
                 nostr_zap_receipt: None,
             },
             SetLnurlMetadataItem {
                 payment_hash: "zaphash3".to_string(),
+                invoice: Some("lnbc250n1pjqxyz9pp5zap3".to_string()),
                 sender_comment: None,
                 nostr_zap_request: Some(r#"{"kind":9734,"content":"zap3"}"#.to_string()),
                 nostr_zap_receipt: None,
@@ -1714,7 +1718,7 @@ pub async fn test_payment_type_filtering(storage: Box<dyn Storage>) {
         details: Some(PaymentDetails::Lightning {
             invoice: "lnbc1".to_string(),
             destination_pubkey: "pubkey1".to_string(),
-            htlc_details: test_lightning_htlc("hash1"),
+            htlc_details: Some(test_lightning_htlc("hash1")),
             description: None,
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
@@ -1735,7 +1739,7 @@ pub async fn test_payment_type_filtering(storage: Box<dyn Storage>) {
         details: Some(PaymentDetails::Lightning {
             invoice: "lnbc2".to_string(),
             destination_pubkey: "pubkey2".to_string(),
-            htlc_details: test_lightning_htlc("hash2"),
+            htlc_details: Some(test_lightning_htlc("hash2")),
             description: None,
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
@@ -1910,7 +1914,7 @@ pub async fn test_asset_filtering(storage: Box<dyn Storage>) {
         details: Some(PaymentDetails::Lightning {
             invoice: "lnbc1".to_string(),
             destination_pubkey: "pubkey1".to_string(),
-            htlc_details: test_lightning_htlc("hash1"),
+            htlc_details: Some(test_lightning_htlc("hash1")),
             description: None,
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
@@ -2620,7 +2624,7 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
             invoice: invoice.to_string(),
             destination_pubkey:
                 "03e9c5157126b8049ad235bdade8db97a473b5760b34781b8c870bd2ba34dbfcf8".to_string(),
-            htlc_details: test_lightning_htlc("boltz_payment_hash"),
+            htlc_details: Some(test_lightning_htlc("boltz_payment_hash")),
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
@@ -2917,7 +2921,7 @@ pub async fn test_combined_filters(storage: Box<dyn Storage>) {
         details: Some(PaymentDetails::Lightning {
             invoice: "lnbc1".to_string(),
             destination_pubkey: "pubkey1".to_string(),
-            htlc_details: test_lightning_htlc("hash1"),
+            htlc_details: Some(test_lightning_htlc("hash1")),
             description: None,
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
@@ -2938,7 +2942,7 @@ pub async fn test_combined_filters(storage: Box<dyn Storage>) {
         details: Some(PaymentDetails::Lightning {
             invoice: "lnbc2".to_string(),
             destination_pubkey: "pubkey2".to_string(),
-            htlc_details: test_lightning_htlc("hash2"),
+            htlc_details: Some(test_lightning_htlc("hash2")),
             description: None,
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
@@ -3397,12 +3401,12 @@ pub async fn test_lightning_htlc_details_and_status_filtering(storage: Box<dyn S
         details: Some(PaymentDetails::Lightning {
             invoice: "lnbc_htlc1".to_string(),
             destination_pubkey: "pubkey1".to_string(),
-            htlc_details: SparkHtlcDetails {
+            htlc_details: Some(SparkHtlcDetails {
                 payment_hash: "htlc_hash1".to_string(),
                 preimage: None,
                 expiry_time: 1_700_000_000,
                 status: SparkHtlcStatus::WaitingForPreimage,
-            },
+            }),
             description: Some("hodl invoice".to_string()),
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
@@ -3424,12 +3428,12 @@ pub async fn test_lightning_htlc_details_and_status_filtering(storage: Box<dyn S
         details: Some(PaymentDetails::Lightning {
             invoice: "lnbc_htlc2".to_string(),
             destination_pubkey: "pubkey2".to_string(),
-            htlc_details: SparkHtlcDetails {
+            htlc_details: Some(SparkHtlcDetails {
                 payment_hash: "htlc_hash2".to_string(),
                 preimage: Some("preimage_abc".to_string()),
                 expiry_time: 1_700_001_000,
                 status: SparkHtlcStatus::PreimageShared,
-            },
+            }),
             description: None,
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
@@ -3451,12 +3455,12 @@ pub async fn test_lightning_htlc_details_and_status_filtering(storage: Box<dyn S
         details: Some(PaymentDetails::Lightning {
             invoice: "lnbc_regular".to_string(),
             destination_pubkey: "pubkey3".to_string(),
-            htlc_details: SparkHtlcDetails {
+            htlc_details: Some(SparkHtlcDetails {
                 payment_hash: "regular_hash".to_string(),
                 preimage: Some("preimage_def".to_string()),
                 expiry_time: 1_700_002_000,
                 status: SparkHtlcStatus::PreimageShared,
-            },
+            }),
             description: None,
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
@@ -3502,8 +3506,12 @@ pub async fn test_lightning_htlc_details_and_status_filtering(storage: Box<dyn S
         .get_payment_by_id("htlc_waiting".to_string())
         .await
         .unwrap();
-    let Some(PaymentDetails::Lightning { htlc_details, .. }) = &fetched.details else {
-        panic!("Expected Lightning payment details");
+    let Some(PaymentDetails::Lightning {
+        htlc_details: Some(htlc_details),
+        ..
+    }) = &fetched.details
+    else {
+        panic!("Expected Lightning payment details with an HTLC");
     };
     assert_eq!(htlc_details.status, SparkHtlcStatus::WaitingForPreimage);
     assert_eq!(htlc_details.expiry_time, 1_700_000_000);
@@ -3512,8 +3520,12 @@ pub async fn test_lightning_htlc_details_and_status_filtering(storage: Box<dyn S
         .get_payment_by_id("regular_ln".to_string())
         .await
         .unwrap();
-    let Some(PaymentDetails::Lightning { htlc_details, .. }) = &fetched.details else {
-        panic!("Expected Lightning payment details");
+    let Some(PaymentDetails::Lightning {
+        htlc_details: Some(htlc_details),
+        ..
+    }) = &fetched.details
+    else {
+        panic!("Expected Lightning payment details with an HTLC");
     };
     assert_eq!(htlc_details.status, SparkHtlcStatus::PreimageShared);
 
@@ -3997,7 +4009,7 @@ fn boltz_payment(id: &str) -> Payment {
             description: Some("Boltz hold invoice".to_string()),
             invoice: "lnbc1000n1pexample".to_string(),
             destination_pubkey: "02boltznode".to_string(),
-            htlc_details: test_lightning_htlc("deadbeefcafebabe"),
+            htlc_details: Some(test_lightning_htlc("deadbeefcafebabe")),
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
@@ -4134,4 +4146,96 @@ pub async fn test_update_boltz_status_to_completed(storage: Box<dyn Storage>) {
     assert_eq!(delivered_amount, Some(70_900_000));
     assert_eq!(bridge_ref, Some("0xabc123".to_string()));
     assert!(fetched.conversion_details.is_none());
+}
+
+/// A Bolt11 invoice settled by a Spark transfer to the destination it
+/// advertised has no HTLC, and must round-trip that way rather than being read
+/// back with invented HTLC details.
+pub async fn test_lightning_payment_settled_over_spark(storage: Box<dyn Storage>) {
+    let over_spark = Payment {
+        id: "settled_over_spark".to_string(),
+        payment_type: PaymentType::Receive,
+        status: PaymentStatus::Completed,
+        amount: 10_000,
+        fees: 0,
+        timestamp: 1000,
+        method: PaymentMethod::Lightning,
+        details: Some(PaymentDetails::Lightning {
+            description: Some("paid over spark".to_string()),
+            invoice: "lnbc_over_spark".to_string(),
+            destination_pubkey: "02spark".to_string(),
+            htlc_details: None,
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: None,
+            lnurl_receive_metadata: None,
+            conversion_info: None,
+        }),
+        conversion_details: None,
+    };
+    let over_lightning = Payment {
+        id: "settled_over_lightning".to_string(),
+        details: Some(PaymentDetails::Lightning {
+            description: Some("paid over lightning".to_string()),
+            invoice: "lnbc_over_lightning".to_string(),
+            destination_pubkey: "02ln".to_string(),
+            htlc_details: Some(test_lightning_htlc("hash_over_lightning")),
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: None,
+            lnurl_receive_metadata: None,
+            conversion_info: None,
+        }),
+        ..over_spark.clone()
+    };
+    storage
+        .apply_payment_update(over_spark.clone())
+        .await
+        .unwrap();
+    storage
+        .apply_payment_update(over_lightning.clone())
+        .await
+        .unwrap();
+
+    let fetched = storage
+        .get_payment_by_id("settled_over_spark".to_string())
+        .await
+        .unwrap();
+    let Some(PaymentDetails::Lightning {
+        invoice,
+        htlc_details,
+        ..
+    }) = &fetched.details
+    else {
+        panic!("Expected Lightning payment details");
+    };
+    assert!(
+        htlc_details.is_none(),
+        "a payment settled over Spark has no HTLC details"
+    );
+    assert_eq!(invoice, "lnbc_over_spark");
+
+    // The neighbouring row must be unaffected: absent HTLC details are a
+    // property of the payment, not of the table.
+    let fetched = storage
+        .get_payment_by_id("settled_over_lightning".to_string())
+        .await
+        .unwrap();
+    let Some(PaymentDetails::Lightning {
+        htlc_details: Some(htlc_details),
+        ..
+    }) = &fetched.details
+    else {
+        panic!("Expected Lightning payment details with an HTLC");
+    };
+    assert_eq!(htlc_details.payment_hash, "hash_over_lightning");
+
+    // Re-inserting must not resurrect HTLC details from the previous row state.
+    storage.apply_payment_update(over_spark).await.unwrap();
+    let fetched = storage
+        .get_payment_by_id("settled_over_spark".to_string())
+        .await
+        .unwrap();
+    let Some(PaymentDetails::Lightning { htlc_details, .. }) = &fetched.details else {
+        panic!("Expected Lightning payment details");
+    };
+    assert!(htlc_details.is_none());
 }

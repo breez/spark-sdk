@@ -572,7 +572,7 @@ pub enum PaymentDetails {
         description: Option<String>,
         invoice: String,
         destination_pubkey: String,
-        htlc_details: SparkHtlcDetails,
+        htlc_details: Option<SparkHtlcDetails>,
         lnurl_pay_info: Option<LnurlPayInfo>,
         lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
         lnurl_receive_metadata: Option<LnurlReceiveMetadata>,
@@ -1619,6 +1619,7 @@ pub struct PaymentMetadata {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SetLnurlMetadataItem)]
 pub struct SetLnurlMetadataItem {
     pub payment_hash: String,
+    pub invoice: Option<String>,
     pub sender_comment: Option<String>,
     pub nostr_zap_request: Option<String>,
     pub nostr_zap_receipt: Option<String>,

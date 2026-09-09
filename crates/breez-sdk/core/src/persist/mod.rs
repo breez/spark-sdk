@@ -44,6 +44,8 @@ const TX_CACHE_KEY: &str = "tx_cache";
 // Note: the key "static_deposit_address" may still exist in storage from older versions.
 const TOKEN_METADATA_KEY_PREFIX: &str = "token_metadata_";
 const PAYMENT_METADATA_KEY_PREFIX: &str = "payment_metadata";
+const BOLT11_FALLBACK_KEY_PREFIX: &str = "bolt11_fallback";
+const HAS_BOLT11_FALLBACKS_KEY: &str = "has_bolt11_fallbacks";
 const PUBLISHED_PACKAGE_KEY_PREFIX: &str = "published_package_";
 const SPARK_PRIVATE_MODE_INITIALIZED_KEY: &str = "spark_private_mode_initialized";
 pub(crate) const STABLE_BALANCE_ACTIVE_LABEL_KEY: &str = "stable_balance_active_label";
@@ -91,6 +93,13 @@ pub enum UpdateDepositPayload {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SetLnurlMetadataItem {
     pub payment_hash: String,
+    /// The Bolt11 the metadata belongs to.
+    ///
+    /// What the payment is matched on: a payment settled over the Spark
+    /// destination its invoice advertised has no HTLC, and so no payment hash of
+    /// its own to match against. Absent on rows synced before the server
+    /// reported it.
+    pub invoice: Option<String>,
     pub sender_comment: Option<String>,
     pub nostr_zap_request: Option<String>,
     pub nostr_zap_receipt: Option<String>,
@@ -100,6 +109,7 @@ impl From<lnurl_models::ListMetadataMetadata> for SetLnurlMetadataItem {
     fn from(value: lnurl_models::ListMetadataMetadata) -> Self {
         SetLnurlMetadataItem {
             payment_hash: value.payment_hash,
+            invoice: value.invoice,
             sender_comment: value.sender_comment,
             nostr_zap_request: value.nostr_zap_request,
             nostr_zap_receipt: value.nostr_zap_receipt,
@@ -782,6 +792,48 @@ impl ObjectCacheRepository {
             Some(value) => Ok(Some(serde_json::from_str(&value)?)),
             None => Ok(None),
         }
+    }
+
+    /// Records which BOLT11 a Spark invoice was embedded in, so a transfer that
+    /// settles the invoice can be reported as that BOLT11 being paid.
+    ///
+    /// Local to the device that created the invoice. Other devices recover the
+    /// same link from the SSP instead, so a miss here is not the end of the road.
+    pub(crate) async fn save_bolt11_fallback(
+        &self,
+        spark_invoice: &str,
+        bolt11: &str,
+    ) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(
+                format!("{BOLT11_FALLBACK_KEY_PREFIX}-{spark_invoice}"),
+                bolt11.to_string(),
+            )
+            .await?;
+        self.storage
+            .set_cached_item(HAS_BOLT11_FALLBACKS_KEY.to_string(), "true".to_string())
+            .await
+    }
+
+    /// Whether any Bolt11 this wallet knows of advertises a Spark destination.
+    ///
+    /// Answers whether an incoming transfer is worth a second look, so a wallet
+    /// that never issues such invoices pays nothing for the feature.
+    pub(crate) async fn has_bolt11_fallbacks(&self) -> Result<bool, StorageError> {
+        Ok(self
+            .storage
+            .get_cached_item(HAS_BOLT11_FALLBACKS_KEY.to_string())
+            .await?
+            .is_some())
+    }
+
+    pub(crate) async fn fetch_bolt11_fallback(
+        &self,
+        spark_invoice: &str,
+    ) -> Result<Option<String>, StorageError> {
+        self.storage
+            .get_cached_item(format!("{BOLT11_FALLBACK_KEY_PREFIX}-{spark_invoice}"))
+            .await
     }
 
     pub(crate) async fn save_payment_metadata(

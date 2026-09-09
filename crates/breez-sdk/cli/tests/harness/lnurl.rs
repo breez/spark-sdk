@@ -82,7 +82,7 @@ impl LnurlFixture {
             "-e",
             "BREEZ_LNURL_MAX_SENDABLE=1000000000",
             "-e",
-            "BREEZ_LNURL_DEV_DONT_USE_LNURL_INCLUDE_SPARK_ADDRESS=false",
+            "BREEZ_LNURL_DEV_DONT_USE_LNURL_INCLUDE_SPARK_FALLBACK=false",
             IMAGE,
         ])
         .await?

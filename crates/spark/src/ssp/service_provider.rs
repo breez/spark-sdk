@@ -289,6 +289,19 @@ impl ServiceProvider {
         Ok(self.gql_client.get_transfers(transfer_spark_ids).await?)
     }
 
+    /// List the Bolt11 invoices of our own lightning receive requests created at
+    /// or after `created_after`.
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
+    pub async fn list_lightning_receive_invoices(
+        &self,
+        created_after: chrono::DateTime<chrono::Utc>,
+    ) -> ServiceProviderResult<Vec<String>> {
+        Ok(self
+            .gql_client
+            .list_lightning_receive_invoices(created_after)
+            .await?)
+    }
+
     /// Register a wallet webhook with the SSP
     #[instrument(level = "info", target = "spark::ssp", skip_all)]
     pub async fn register_wallet_webhook(

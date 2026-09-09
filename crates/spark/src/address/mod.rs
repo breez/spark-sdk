@@ -283,6 +283,42 @@ impl SparkAddress {
         Ok(address)
     }
 
+    /// Encodes a sats invoice without a signature.
+    ///
+    /// The signature is optional throughout Spark, so an unsigned invoice is
+    /// payable like any other. Unlike [`SparkAddress::to_invoice_string`] this
+    /// needs no key, so it can be minted for any receiver: an LNURL server, for
+    /// instance, mints them for the users it holds no keys for.
+    ///
+    /// Being unsigned, it carries no proof it came from the receiver. Only act
+    /// on one obtained through a channel that authenticates it, such as the
+    /// fallback field of a BOLT11 validated against what was requested.
+    pub fn to_unsigned_invoice_string(&self) -> Result<String, AddressError> {
+        let invoice_fields = self
+            .spark_invoice_fields
+            .as_ref()
+            .ok_or_else(|| AddressError::Other("No invoice fields".to_string()))?;
+        if !matches!(
+            invoice_fields.payment_type,
+            Some(SparkAddressPaymentType::SatsPayment(_))
+        ) {
+            return Err(AddressError::Other(
+                "Only sats invoices can be left unsigned".to_string(),
+            ));
+        }
+
+        let proto_address = ProtoSparkAddress {
+            identity_public_key: self.identity_public_key.serialize().to_vec(),
+            spark_invoice_fields: Some(invoice_fields.clone().try_into()?),
+            signature: None,
+        };
+
+        let payload_bytes = encode_spark_address_canonical(&proto_address);
+        let hrp = Self::network_to_hrp(&self.network);
+        // Safe to unwrap: a valid HRP and payload.
+        Ok(bech32::encode::<Bech32m>(hrp, &payload_bytes).unwrap())
+    }
+
     pub async fn to_invoice_string(
         &self,
         spark_signer: &dyn SparkSigner,

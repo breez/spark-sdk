@@ -10,6 +10,9 @@ use platform_utils::tokio;
 use platform_utils::{ContentType, HttpClient, add_content_type_header};
 use tokio::time::sleep;
 
+/// Page size when walking our own lightning receive requests.
+const LIGHTNING_RECEIVE_REQUEST_PAGE_SIZE: i64 = 100;
+
 use crate::header_provider::HeaderProvider;
 use crate::ssp::graphql::error::{GraphQLError, GraphQLResult};
 use crate::ssp::graphql::queries::{
@@ -490,6 +493,56 @@ impl GraphQLClient {
             .into_iter()
             .map(SspTransfer::from)
             .collect())
+    }
+
+    /// Lists the Bolt11 invoices of our own lightning receive requests, newest
+    /// first, stopping once a request older than `created_after` is reached.
+    ///
+    /// The newest-first order is the SSP's own: the schema does not state it and
+    /// the query cannot ask for it, but it is what the deployed SSP returns, and
+    /// stopping at the cutoff rather than paging the whole history depends on it.
+    ///
+    /// Scoped to requests we created. A request another party created naming us
+    /// as receiver, as an LNURL server does, is not returned here.
+    pub async fn list_lightning_receive_invoices(
+        &self,
+        created_after: chrono::DateTime<chrono::Utc>,
+    ) -> GraphQLResult<Vec<String>> {
+        use crate::ssp::graphql::queries::current_user_lightning_receive_requests as query;
+
+        let mut invoices = Vec::new();
+        let mut after = None;
+        loop {
+            let response = self
+                .post_query::<queries::CurrentUserLightningReceiveRequests, _>(query::Variables {
+                    first: Some(LIGHTNING_RECEIVE_REQUEST_PAGE_SIZE),
+                    after,
+                })
+                .await?;
+            let Some(requests) = response.current_user.map(|user| user.user_requests) else {
+                return Ok(invoices);
+            };
+
+            let mut reached_cutoff = false;
+            for entity in requests.entities {
+                let query::CurrentUserLightningReceiveRequestsCurrentUserUserRequestsEntities::LightningReceiveRequest(request) = entity else {
+                    continue;
+                };
+                if request.created_at < created_after {
+                    reached_cutoff = true;
+                    break;
+                }
+                invoices.push(request.invoice.encoded_invoice);
+            }
+
+            if reached_cutoff || !requests.page_info.has_next_page.unwrap_or(false) {
+                return Ok(invoices);
+            }
+            after = requests.page_info.end_cursor;
+            if after.is_none() {
+                return Ok(invoices);
+            }
+        }
     }
 
     /// Register a wallet webhook with the SSP

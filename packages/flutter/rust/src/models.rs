@@ -1279,7 +1279,7 @@ pub enum _PaymentDetails {
         description: Option<String>,
         invoice: String,
         destination_pubkey: String,
-        htlc_details: SparkHtlcDetails,
+        htlc_details: Option<SparkHtlcDetails>,
         lnurl_pay_info: Option<LnurlPayInfo>,
         lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
         lnurl_receive_metadata: Option<LnurlReceiveMetadata>,

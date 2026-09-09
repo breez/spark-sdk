@@ -442,7 +442,7 @@ mod tests {
                 description: None,
                 invoice: "lnbc1000n1p".to_string(),
                 destination_pubkey: "02abc".to_string(),
-                htlc_details: test_htlc_details(),
+                htlc_details: Some(test_htlc_details()),
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
