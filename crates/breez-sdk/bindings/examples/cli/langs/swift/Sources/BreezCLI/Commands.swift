@@ -369,7 +369,7 @@ func handleReceive(_ sdk: BreezSdk, _ args: [String]) async throws {
     let fp = FlagParser(args)
     guard let method = fp.get("m", "method") else {
         print("Usage: receive -m <method> [options]")
-        print("Methods: sparkaddress, sparkinvoice, bitcoin, bolt11")
+        print("Methods: sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain")
         return
     }
 
@@ -380,6 +380,9 @@ func handleReceive(_ sdk: BreezSdk, _ args: [String]) async throws {
     let senderPublicKey = fp.get("s", "sender-public-key")
     let hodl = fp.has("hodl")
     let newAddress = fp.has("new-address")
+    let crossChainMaxSlippageBps = fp.get("cross-chain-max-slippage-bps").flatMap { UInt32($0) }
+    let crossChainFeesIncluded = fp.has("cross-chain-fees-included")
+    let crossChainTargetOverpayBps = fp.get("cross-chain-target-overpay-bps").flatMap { UInt32($0) }
 
     let paymentMethod: ReceivePaymentMethod
 
@@ -421,9 +424,32 @@ func handleReceive(_ sdk: BreezSdk, _ args: [String]) async throws {
             receiverIdentityPublicKey: nil
         )
 
+    case "crosschain":
+        guard let amountStr, let amount = BInt(amountStr) else {
+            print("--amount is required for cross-chain receive")
+            return
+        }
+        let route = try await selectCrossChainRoute(
+            sdk: sdk,
+            filter: .receive(contractAddress: nil)
+        )
+        let feeMode: CrossChainFeeMode? = crossChainFeesIncluded
+            ? .feesIncluded : nil
+        let destination: SparkAsset? = tokenIdentifier.map {
+            .token(tokenIdentifier: $0)
+        }
+        paymentMethod = .crossChain(
+            route: route,
+            amount: amount,
+            destination: destination,
+            feeMode: feeMode,
+            maxSlippageBps: crossChainMaxSlippageBps,
+            targetOverpayBps: crossChainTargetOverpayBps
+        )
+
     default:
         print("Invalid payment method: \(method)")
-        print("Available methods: sparkaddress, sparkinvoice, bitcoin, bolt11")
+        print("Available methods: sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain")
         return
     }
 
@@ -1173,7 +1199,7 @@ func selectCrossChainRoute(
     let routes = try await sdk.getCrossChainRoutes(filter: filter)
     if routes.isEmpty {
         throw NSError(domain: "BreezCLI", code: 1, userInfo: [
-            NSLocalizedDescriptionKey: "No cross-chain routes available for this address",
+            NSLocalizedDescriptionKey: "No cross-chain routes available",
         ])
     }
 

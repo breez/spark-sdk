@@ -308,18 +308,24 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
     val senderPublicKey = fp.getString("s", "sender-public-key")
     val hodl = fp.hasFlag("hodl")
     val newAddress = fp.hasFlag("new-address")
+    val crossChainMaxSlippageBps = fp.getUInt("cross-chain-max-slippage-bps")
+    val crossChainFeesIncluded = fp.hasFlag("cross-chain-fees-included")
+    val crossChainTargetOverpayBps = fp.getUInt("cross-chain-target-overpay-bps")
 
     if (method == null) {
         println("Usage: receive -m <method> [options]")
-        println("Methods: sparkaddress, sparkinvoice, bitcoin, bolt11")
+        println("Methods: sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain")
         println("Options:")
-        println("  -d, --description <desc>        Optional description")
-        println("  -a, --amount <amount>            Amount in sats or token base units")
-        println("  -t, --token-identifier <id>      Token identifier (spark invoice only)")
-        println("  -e, --expiry-secs <secs>         Expiry in seconds")
-        println("  -s, --sender-public-key <key>    Sender public key (spark invoice only)")
-        println("  --hodl                           Create a HODL invoice (bolt11 only)")
-        println("  --new-address                    Get a new bitcoin deposit address")
+        println("  -d, --description <desc>                   Optional description")
+        println("  -a, --amount <amount>                      Amount in sats, token base units, or source asset base units")
+        println("  -t, --token-identifier <id>                Token identifier (spark invoice / cross-chain destination)")
+        println("  -e, --expiry-secs <secs>                   Expiry in seconds")
+        println("  -s, --sender-public-key <key>              Sender public key (spark invoice only)")
+        println("  --hodl                                     Create a HODL invoice (bolt11 only)")
+        println("  --new-address                              Get a new bitcoin deposit address")
+        println("  --cross-chain-max-slippage-bps <bps>       Max slippage in basis points (10..500, cross-chain only)")
+        println("  --cross-chain-fees-included                Deduct fees from amount (cross-chain only)")
+        println("  --cross-chain-target-overpay-bps <bps>     Overpay buffer in basis points (0..500, cross-chain only)")
         return
     }
 
@@ -387,9 +393,28 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
             )
         }
 
+        "crosschain" -> {
+            if (amount == null) {
+                println("Error: --amount is required for cross-chain receive")
+                return
+            }
+            val filter = CrossChainRouteFilter.Receive(contractAddress = null)
+            val route = selectCrossChainRoute(sdk, reader, filter)
+            val feeMode = if (crossChainFeesIncluded) CrossChainFeeMode.FEES_INCLUDED else null
+            val destination = tokenIdentifier?.let { SparkAsset.Token(tokenIdentifier = it) }
+            ReceivePaymentMethod.CrossChain(
+                route = route,
+                amount = amount,
+                destination = destination,
+                feeMode = feeMode,
+                maxSlippageBps = crossChainMaxSlippageBps,
+                targetOverpayBps = crossChainTargetOverpayBps,
+            )
+        }
+
         else -> {
             println("Invalid payment method: $method")
-            println("Available methods: sparkaddress, sparkinvoice, bitcoin, bolt11")
+            println("Available methods: sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain")
             return
         }
     }
@@ -1205,7 +1230,7 @@ suspend fun selectCrossChainRoute(
 ): CrossChainRoutePair {
     val routes = sdk.getCrossChainRoutes(filter)
     if (routes.isEmpty()) {
-        throw Exception("No cross-chain routes available for this address")
+        throw Exception("No cross-chain routes available")
     }
 
     if (routes.size == 1) {

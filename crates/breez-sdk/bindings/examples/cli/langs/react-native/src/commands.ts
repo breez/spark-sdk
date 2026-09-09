@@ -37,6 +37,8 @@ import {
   PaymentRequest,
   CrossChainRouteFilter,
   CrossChainProvider,
+  CrossChainFeeMode,
+  SparkAsset,
 } from '@breeztech/breez-sdk-spark-react-native'
 import type {
   BatchRecipient,
@@ -477,7 +479,7 @@ async function handleListPayments(sdk: BreezSdkInterface, _tokenIssuer: TokenIss
 async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   const method = parseFlag(args, '--method', '-m')
   if (!method) {
-    return 'Usage: receive -m <method> [options]\nMethods: sparkaddress, sparkinvoice, bitcoin, bolt11\n\nOptions:\n  -d, --description <desc>       Optional description\n  -a, --amount <amount>          Amount in sats or token base units\n  -t, --token-identifier <id>    Token identifier (sparkinvoice only)\n  -e, --expiry-secs <secs>       Expiry time in seconds from now\n  -s, --sender-public-key <key>  Sender public key (sparkinvoice only)\n  --hodl                         Create a HODL invoice (bolt11 only)'
+    return 'Usage: receive -m <method> [options]\nMethods: sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain\n\nOptions:\n  -d, --description <desc>       Optional description\n  -a, --amount <amount>          Amount in sats or token base units\n  -t, --token-identifier <id>    Token identifier (sparkinvoice/crosschain)\n  -e, --expiry-secs <secs>       Expiry time in seconds from now\n  -s, --sender-public-key <key>  Sender public key (sparkinvoice only)\n  --hodl                         Create a HODL invoice (bolt11 only)\n  --cross-chain-max-slippage-bps   Max slippage bps (crosschain)\n  --cross-chain-fees-included      Deduct fees from amount (crosschain)\n  --cross-chain-target-overpay-bps Overpay buffer bps (crosschain)'
   }
 
   const description = parseFlag(args, '--description', '-d')
@@ -487,6 +489,10 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
   const senderPublicKey = parseFlag(args, '--sender-public-key', '-s')
   const hodl = hasFlag(args, '--hodl')
   const newAddress = hasFlag(args, '--new-address')
+  const crossChainMaxSlippageBps = parseNumericFlag(args, '--cross-chain-max-slippage-bps')
+  const crossChainFeesIncluded = hasFlag(args, '--cross-chain-fees-included')
+  const crossChainTargetOverpayBps = parseNumericFlag(args, '--cross-chain-target-overpay-bps')
+  const routeIndex = parseNumericFlag(args, '--route')
 
   const amount = amountStr !== undefined ? BigInt(amountStr) : undefined
   const expirySecs = expirySecsStr !== undefined ? parseInt(expirySecsStr, 10) : undefined
@@ -495,6 +501,7 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
     | InstanceType<typeof ReceivePaymentMethod.SparkInvoice>
     | InstanceType<typeof ReceivePaymentMethod.BitcoinAddress>
     | InstanceType<typeof ReceivePaymentMethod.Bolt11Invoice>
+    | InstanceType<typeof ReceivePaymentMethod.CrossChain>
 
   const lines: string[] = []
 
@@ -551,8 +558,34 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
       break
     }
 
+    case 'crosschain': {
+      if (amount === undefined) {
+        return 'Error: --amount is required for cross-chain receive'
+      }
+      const filter = new CrossChainRouteFilter.Receive({ contractAddress: undefined })
+      const routeResult = await selectCrossChainRoute(sdk, filter, routeIndex)
+      lines.push(routeResult.message)
+
+      const feeMode = crossChainFeesIncluded
+        ? CrossChainFeeMode.FeesIncluded
+        : undefined
+      const destination = tokenIdentifier
+        ? new SparkAsset.Token({ tokenIdentifier })
+        : undefined
+
+      paymentMethod = new ReceivePaymentMethod.CrossChain({
+        route: routeResult.route,
+        amount,
+        destination,
+        feeMode,
+        maxSlippageBps: crossChainMaxSlippageBps,
+        targetOverpayBps: crossChainTargetOverpayBps,
+      })
+      break
+    }
+
     default:
-      return `Invalid payment method: ${method}\nAvailable methods: sparkaddress, sparkinvoice, bitcoin, bolt11`
+      return `Invalid payment method: ${method}\nAvailable methods: sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain`
   }
 
   const result = await sdk.receivePayment({ paymentMethod })
@@ -1395,13 +1428,13 @@ function maybeTruncateAddress(addr: string | undefined | null): string {
 
 async function selectCrossChainRoute(
   sdk: BreezSdkInterface,
-  filter: InstanceType<typeof CrossChainRouteFilter.Send> | InstanceType<typeof CrossChainRouteFilter.PaymentLink>,
+  filter: InstanceType<typeof CrossChainRouteFilter.Send> | InstanceType<typeof CrossChainRouteFilter.PaymentLink> | InstanceType<typeof CrossChainRouteFilter.Receive>,
   preferredIndex: number | undefined,
 ): Promise<{ route: CrossChainRoutePair; message: string }> {
   const routes: CrossChainRoutePair[] = await sdk.getCrossChainRoutes(filter)
 
   if (routes.length === 0) {
-    throw new Error('No cross-chain routes available for this address')
+    throw new Error('No cross-chain routes available')
   }
 
   if (routes.length === 1) {

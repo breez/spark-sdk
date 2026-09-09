@@ -15,6 +15,7 @@ from breez_sdk_spark import (
     ClaimTransferRequest,
     ConversionOptions,
     ConversionType,
+    CrossChainFeeMode,
     CrossChainRouteFilter,
     Fee,
     FeePolicy,
@@ -47,6 +48,7 @@ from breez_sdk_spark import (
     SendPaymentMethod,
     SendPaymentOptions,
     SendPaymentRequest,
+    SparkAsset,
     SparkHtlcOptions,
     SparkHtlcStatus,
     SparkMasterIdentityPublicKey,
@@ -256,7 +258,7 @@ async def _handle_list_payments(sdk, _token_issuer, _session, args):
 def _build_receive_parser():
     p = _parser("receive", "Receive a payment")
     p.add_argument("-m", "--method", required=True,
-                   help="Payment method: sparkaddress, sparkinvoice, bitcoin, bolt11")
+                   help="Payment method: sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain")
     p.add_argument("-d", "--description", default=None)
     p.add_argument("-a", "--amount", type=int, default=None)
     p.add_argument("-t", "--token-identifier", default=None)
@@ -266,9 +268,15 @@ def _build_receive_parser():
                    help="Create a HODL invoice (bolt11 only)")
     p.add_argument("--new-address", action="store_true", default=False,
                    help="Request a new bitcoin deposit address instead of reusing the current one")
+    p.add_argument("--cross-chain-max-slippage-bps", type=int, default=None,
+                   help="Max slippage in basis points for cross-chain receives (10..500)")
+    p.add_argument("--cross-chain-fees-included", action="store_true", default=False,
+                   help="Deduct fees from the amount instead of padding onto the deposit")
+    p.add_argument("--cross-chain-target-overpay-bps", type=int, default=None,
+                   help="Overpay buffer in basis points for fees-excluded mode (0..500)")
     return p
 
-async def _handle_receive(sdk, _token_issuer, _session, args):
+async def _handle_receive(sdk, _token_issuer, session, args):
     method = args.method.lower()
 
     if method == "sparkaddress":
@@ -304,6 +312,30 @@ async def _handle_receive(sdk, _token_issuer, _session, args):
             expiry_secs=args.expiry_secs,
             payment_hash=payment_hash,
             receiver_identity_public_key=None,
+        )
+    elif method == "crosschain":
+        if args.amount is None:
+            print("--amount is required for cross-chain receive")
+            return
+        route_filter = CrossChainRouteFilter.RECEIVE(contract_address=None)
+        route = await _select_cross_chain_route(sdk, session, route_filter)
+        fee_mode = (
+            CrossChainFeeMode.FEES_INCLUDED
+            if args.cross_chain_fees_included
+            else None
+        )
+        destination = (
+            SparkAsset.TOKEN(token_identifier=args.token_identifier)
+            if args.token_identifier
+            else None
+        )
+        payment_method = ReceivePaymentMethod.CROSS_CHAIN(
+            route=route,
+            amount=args.amount,
+            destination=destination,
+            fee_mode=fee_mode,
+            max_slippage_bps=args.cross_chain_max_slippage_bps,
+            target_overpay_bps=args.cross_chain_target_overpay_bps,
         )
     else:
         print(f"Invalid payment method: {method}")
@@ -1067,7 +1099,7 @@ async def _select_cross_chain_route(sdk, session, route_filter):
     """Fetch cross-chain routes and prompt the user to select one."""
     routes = await sdk.get_cross_chain_routes(filter=route_filter)
     if not routes:
-        raise ValueError("No cross-chain routes available for this address")
+        raise ValueError("No cross-chain routes available")
 
     if len(routes) == 1:
         route = routes[0]

@@ -325,7 +325,7 @@ public static class Commands
     private static readonly HashSet<string> BooleanFlags = new()
     {
         "--fees-included", "--from-bitcoin", "--hodl", "-f", "--freezable",
-        "--new-address", "--clear-master-key"
+        "--new-address", "--clear-master-key", "--cross-chain-fees-included"
     };
 
     private static string[] GetPositionalArgs(string[] args)
@@ -525,11 +525,14 @@ public static class Commands
         var senderPubKey = GetFlag(args, "-s", "--sender-public-key");
         var hodl = HasFlag(args, "--hodl");
         var newAddress = HasFlag(args, "--new-address");
+        var crossChainMaxSlippageStr = GetFlag(args, "--cross-chain-max-slippage-bps");
+        var crossChainFeesIncluded = HasFlag(args, "--cross-chain-fees-included");
+        var crossChainTargetOverpayStr = GetFlag(args, "--cross-chain-target-overpay-bps");
 
         if (method == null)
         {
             Console.WriteLine("Usage: receive -m <method> [options]");
-            Console.WriteLine("Methods: sparkaddress, sparkinvoice, bitcoin, bolt11");
+            Console.WriteLine("Methods: sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain");
             return;
         }
 
@@ -591,9 +594,35 @@ public static class Commands
                 );
                 break;
 
+            case "crosschain":
+                if (amountStr == null)
+                {
+                    Console.Error.WriteLine("--amount is required for cross-chain receive");
+                    return;
+                }
+                var crossChainAmount = BigInteger.Parse(amountStr);
+                var filter = new CrossChainRouteFilter.Receive(contractAddress: null);
+                var route = await SelectCrossChainRoute(sdk, readline, filter);
+                if (route == null) return;
+                CrossChainFeeMode? feeMode = crossChainFeesIncluded
+                    ? CrossChainFeeMode.FeesIncluded
+                    : null;
+                SparkAsset? destination = tokenIdentifier != null
+                    ? new SparkAsset.Token(tokenIdentifier: tokenIdentifier)
+                    : null;
+                paymentMethod = new ReceivePaymentMethod.CrossChain(
+                    route: route,
+                    amount: crossChainAmount,
+                    destination: destination,
+                    feeMode: feeMode,
+                    maxSlippageBps: ParseOptionalUint(crossChainMaxSlippageStr),
+                    targetOverpayBps: ParseOptionalUint(crossChainTargetOverpayStr)
+                );
+                break;
+
             default:
                 Console.WriteLine($"Invalid payment method: {method}");
-                Console.WriteLine("Available methods: sparkaddress, sparkinvoice, bitcoin, bolt11");
+                Console.WriteLine("Available methods: sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain");
                 return;
         }
 
@@ -1559,7 +1588,7 @@ public static class Commands
         var routes = await sdk.GetCrossChainRoutes(filter: filter);
         if (routes.Length == 0)
         {
-            Console.WriteLine("No cross-chain routes available for this address");
+            Console.WriteLine("No cross-chain routes available");
             return null;
         }
 
