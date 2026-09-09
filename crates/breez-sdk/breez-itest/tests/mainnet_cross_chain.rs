@@ -679,11 +679,11 @@ async fn run_cross_chain_evm_send(
     // 7. Wait for the SDK's background monitor to report a terminal status.
     let CompletedConversion {
         delivered_amount: delivered,
-        destination_tx_hash,
+        external_tx_hash,
     } = wait_for_cross_chain_completion(&alice.sdk, &payment_id, SETTLE_TIMEOUT_SECS).await?;
     info!(
         "SDK reports conversion Completed, delivered_amount = {delivered:?}, \
-         destination_tx_hash = {destination_tx_hash:?}"
+         external_tx_hash = {external_tx_hash:?}"
     );
 
     // 8. Verify delivery (all in destination base units).
@@ -745,10 +745,10 @@ async fn run_cross_chain_evm_send(
     // exist on the destination chain, have succeeded, and credit the recipient.
     // A balance that merely went up proves funds arrived; this proves the hash
     // the SDK handed the integrator is the transaction that delivered them.
-    match (provider, destination_tx_hash.as_deref()) {
+    match (provider, external_tx_hash.as_deref()) {
         (CrossChainProvider::Orchestra, None) => {
             panic!(
-                "Orchestra reported Completed without a destination_tx_hash; \
+                "Orchestra reported Completed without an external_tx_hash; \
                  the settlement hash should be recorded on delivery"
             );
         }
@@ -1099,18 +1099,18 @@ async fn run_cross_chain_evm_receive(
         conversion_info_of(&event_payment).is_some()
     );
 
-    // The settlement hash on a receive is the Spark side: the very transfer
-    // this payment row was built from. A token payment id appends `:vout` to
-    // that hash, so the id is the hash or the hash plus a suffix.
-    let hash = wait_for_receive_settlement_hash(&alice.sdk, &event_payment.id, SETTLE_TIMEOUT_SECS)
-        .await?;
-    assert!(
-        event_payment.id.starts_with(&hash),
-        "destination_tx_hash {hash} does not key payment {}",
-        event_payment.id
+    // On a receive the external side is the source, so the hash has to be the
+    // deposit this test broadcast at step 7.
+    let hash =
+        wait_for_receive_external_tx_hash(&alice.sdk, &event_payment.id, SETTLE_TIMEOUT_SECS)
+            .await?;
+    assert_eq!(
+        hash.to_lowercase(),
+        tx_hash.to_lowercase(),
+        "external_tx_hash should be the {source_asset} deposit this test sent"
     );
     info!(
-        "Receive settlement tx {hash} keys payment {}",
+        "Receive external tx {hash} matches the deposit sent for payment {}",
         event_payment.id
     );
 
@@ -1235,12 +1235,12 @@ fn describe_conversion(info: &ConversionInfo) -> String {
 }
 
 /// Poll a receive payment row until the Orchestra conversion lands on it
-/// carrying its settlement hash.
+/// carrying its external-chain tx hash.
 ///
 /// `PaymentSucceeded` fires when the inbound Spark transfer settles, which
 /// precedes the receive poller attaching the order's metadata, so the hash has
 /// to be read off a re-read row rather than off the event.
-async fn wait_for_receive_settlement_hash(
+async fn wait_for_receive_external_tx_hash(
     sdk: &BreezSdk,
     payment_id: &str,
     timeout_secs: u64,
@@ -1254,7 +1254,7 @@ async fn wait_for_receive_settlement_hash(
             .await?
             .payment;
         if let Some(ConversionInfo::Orchestra {
-            destination_tx_hash: Some(hash),
+            external_tx_hash: Some(hash),
             ..
         }) = conversion_info_of(&payment)
         {
@@ -1262,7 +1262,7 @@ async fn wait_for_receive_settlement_hash(
         }
         if start.elapsed() >= Duration::from_secs(timeout_secs) {
             anyhow::bail!(
-                "timeout after {timeout_secs}s waiting for the Orchestra settlement hash on \
+                "timeout after {timeout_secs}s waiting for the Orchestra external tx hash on \
                  receive payment {payment_id}"
             );
         }
@@ -1276,7 +1276,7 @@ struct CompletedConversion {
     delivered_amount: Option<u128>,
     /// Settlement transaction on the destination chain. Orchestra reports one;
     /// Boltz does not yet carry it.
-    destination_tx_hash: Option<String>,
+    external_tx_hash: Option<String>,
 }
 
 /// Poll the payment until its cross-chain `ConversionInfo` reaches a terminal
@@ -1317,13 +1317,13 @@ async fn wait_for_cross_chain_completion(
                 info!("Cross-chain conversion: {}", describe_conversion(info));
                 handles_logged = true;
             }
-            let (status, delivered, destination_tx_hash) = match info {
+            let (status, delivered, external_tx_hash) = match info {
                 ConversionInfo::Orchestra {
                     status,
                     delivered_amount,
-                    destination_tx_hash,
+                    external_tx_hash,
                     ..
-                } => (status, *delivered_amount, destination_tx_hash.clone()),
+                } => (status, *delivered_amount, external_tx_hash.clone()),
                 ConversionInfo::Boltz {
                     status,
                     delivered_amount,
@@ -1340,7 +1340,7 @@ async fn wait_for_cross_chain_completion(
             if last_status.as_deref() != Some(status_str.as_str()) {
                 info!(
                     "Cross-chain status: {status_str} (delivered_amount={delivered:?}, \
-                     destination_tx_hash={destination_tx_hash:?}, elapsed {}s)",
+                     external_tx_hash={external_tx_hash:?}, elapsed {}s)",
                     start.elapsed().as_secs()
                 );
                 last_status = Some(status_str);
@@ -1349,7 +1349,7 @@ async fn wait_for_cross_chain_completion(
                 ConversionStatus::Completed => {
                     return Ok(CompletedConversion {
                         delivered_amount: delivered,
-                        destination_tx_hash,
+                        external_tx_hash,
                     });
                 }
                 ConversionStatus::Failed

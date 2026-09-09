@@ -1996,7 +1996,7 @@ pub enum ConversionInfo {
         #[serde(default, with = "serde_option_u128_as_string")]
         delivered_amount: Option<u128>,
         #[serde(default)]
-        destination_tx_hash: Option<String>,
+        external_tx_hash: Option<String>,
         status: ConversionStatus,
         #[tsify(type = "string")]
         #[serde(default, with = "serde_option_u128_as_string")]
