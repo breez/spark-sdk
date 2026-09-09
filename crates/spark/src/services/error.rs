@@ -46,6 +46,8 @@ pub enum ServiceError {
     InvalidVerifyingKey,
     #[error("not a deposit output")]
     NotADepositOutput,
+    #[error("static deposit quote does not match the requested deposit: {0}")]
+    StaticDepositQuoteMismatch(String),
 
     // Lightning related errors
     #[error("invoice decoding error: {0}")]

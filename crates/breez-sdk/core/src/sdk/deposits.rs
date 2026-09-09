@@ -703,6 +703,15 @@ impl BreezSdk {
                 error: SdkError::Generic("No instant claim plan available".to_string()),
                 max_fee_sats: None,
             }),
+            InstantClaimPlan::CreditAboveDeposit { credit_sats } => {
+                Ok(InstantClaimOutcome::Declined {
+                    error: SdkError::Generic(format!(
+                        "Instant quote credits {credit_sats} sats for {}:{}, which is worth {} sats",
+                        detailed_utxo.txid, detailed_utxo.vout, detailed_utxo.value
+                    )),
+                    max_fee_sats: None,
+                })
+            }
             InstantClaimPlan::FeeExceeded {
                 quoted_sats,
                 quoted_rate,
@@ -793,6 +802,9 @@ enum InstantClaimPlan {
     /// The SSP spread (`deposit - credit`) exceeds the ceiling, in sats and as the
     /// on-chain rate it implies over the claim tx (both for the decline message).
     FeeExceeded { quoted_sats: u64, quoted_rate: u64 },
+    /// The quote credits more than the deposit is worth, so there is no spread to
+    /// price. Carries the credit for the decline message.
+    CreditAboveDeposit { credit_sats: u64 },
 }
 
 /// Selects the shallowest of the fulfillment plans the SSP returned with the
@@ -829,8 +841,14 @@ fn select_instant_claim_plan(
     if plan_confirmations > u64::from(confirmations) {
         return InstantClaimPlan::NoPlan;
     }
-    // Priced off the quote's credit, which is what the claim signs.
-    let quoted_sats = deposit_sats.saturating_sub(quote_result.quote.credit_amount.original_value);
+    // Priced off the quote's credit, which is what the claim signs. A credit above
+    // the deposit's own value is not a fee at all, and must not read as a free
+    // claim: the claim rejects it at signing time, so reject it here where the
+    // reason is still attributable.
+    let credit_sats = quote_result.quote.credit_amount.original_value;
+    let Some(quoted_sats) = deposit_sats.checked_sub(credit_sats) else {
+        return InstantClaimPlan::CreditAboveDeposit { credit_sats };
+    };
     if quoted_sats <= max_fee_sats {
         InstantClaimPlan::Claimable(plan.clone())
     } else {
@@ -1117,6 +1135,20 @@ mod tests {
         assert!(matches!(
             select_instant_claim_plan(&q, 100_000, 100_000, 0, 3),
             InstantClaimPlan::NoPlan
+        ));
+    }
+
+    /// The substitution the claim-time binding rejects, seen from the fee gate: a
+    /// credit above the deposit's value has no spread to price, and saturating it
+    /// to zero would admit it against any ceiling.
+    #[test]
+    fn declines_a_credit_above_the_deposit_value() {
+        let q = quote_result(100_000, &[(0, 125_000)]);
+        assert!(matches!(
+            select_instant_claim_plan(&q, 100_000, 0, 0, 3),
+            InstantClaimPlan::CreditAboveDeposit {
+                credit_sats: 125_000
+            }
         ));
     }
 

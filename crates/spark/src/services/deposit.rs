@@ -25,9 +25,10 @@ use crate::{
         StartedStaticDepositRefund,
     },
     ssp::{
-        ClaimStaticDepositInput, ClaimStaticDepositRequestType,
-        CreateClaimInstantStaticDepositInput, InstantStaticDepositPlan, InstantStaticDepositQuote,
-        InstantStaticDepositQuoteResult, ServiceProvider,
+        BitcoinNetwork, ClaimStaticDepositInput, ClaimStaticDepositRequestType,
+        CreateClaimInstantStaticDepositInput, CurrencyAmount, CurrencyUnit,
+        InstantStaticDepositPlan, InstantStaticDepositQuote, InstantStaticDepositQuoteResult,
+        ServiceProvider,
     },
     tree::{TreeNode, TreeNodeId},
     utils::{
@@ -165,21 +166,111 @@ pub struct StaticDepositQuote {
     pub signature: Signature,
 }
 
-impl TryFrom<crate::ssp::StaticDepositQuote> for StaticDepositQuote {
-    type Error = ServiceError;
-
-    fn try_from(quote: crate::ssp::StaticDepositQuote) -> Result<Self, Self::Error> {
+impl StaticDepositQuote {
+    /// Parses an SSP quote and binds it to the outpoint and network it was asked
+    /// about. The claim signs whatever the quote names, so an answer about a
+    /// different deposit would have the wallet sign that one instead: the fee the
+    /// caller checks is derived from the deposit it enumerated, which says nothing
+    /// about the credit for another.
+    fn from_ssp_response(
+        quote: crate::ssp::StaticDepositQuote,
+        expected_txid: Txid,
+        expected_output_index: u32,
+        expected_network: BitcoinNetwork,
+    ) -> Result<Self, ServiceError> {
         let txid =
             Txid::from_str(&quote.transaction_id).map_err(|_| ServiceError::InvalidTransaction)?;
+        if txid != expected_txid {
+            return Err(ServiceError::StaticDepositQuoteMismatch(format!(
+                "quoted transaction {txid}, requested {expected_txid}"
+            )));
+        }
+        let output_index = u32::try_from(quote.output_index).map_err(|_| {
+            ServiceError::StaticDepositQuoteMismatch(format!(
+                "quoted output index {} is out of range",
+                quote.output_index
+            ))
+        })?;
+        if output_index != expected_output_index {
+            return Err(ServiceError::StaticDepositQuoteMismatch(format!(
+                "quoted output index {output_index}, requested {expected_output_index}"
+            )));
+        }
+        if quote.network != expected_network {
+            return Err(ServiceError::StaticDepositQuoteMismatch(format!(
+                "quoted network {:?}, requested {expected_network:?}",
+                quote.network
+            )));
+        }
         let signature = Signature::from_str(&quote.signature)
             .map_err(|_| ServiceError::InvalidSignatureShare)?;
         Ok(StaticDepositQuote {
             txid,
-            output_index: quote.output_index as u32,
+            output_index,
             credit_amount_sats: quote.credit_amount_sats,
             signature,
         })
     }
+}
+
+/// Binds a static deposit claim to the funding transaction the wallet holds,
+/// checking the quoted outpoint and that the credit fits inside the output's own
+/// value, and returns the output it names. The claim signs the quoted outpoint
+/// and credit, so this is the last point at which either can still be checked
+/// against chain data.
+fn validate_claim_against_funding_tx(
+    tx: &Transaction,
+    txid: Txid,
+    output_index: u32,
+    credit_amount_sats: u64,
+) -> Result<&TxOut, ServiceError> {
+    let funding_txid = tx.compute_txid();
+    if funding_txid != txid {
+        return Err(ServiceError::StaticDepositQuoteMismatch(format!(
+            "quoted transaction {txid}, funding transaction {funding_txid}"
+        )));
+    }
+    let tx_out = tx
+        .output
+        .get(output_index as usize)
+        .ok_or(ServiceError::InvalidOutputIndex)?;
+    let deposit_value_sats = tx_out.value.to_sat();
+    if credit_amount_sats > deposit_value_sats {
+        return Err(ServiceError::StaticDepositQuoteMismatch(format!(
+            "quoted credit {credit_amount_sats} sats exceeds the deposit value {deposit_value_sats} sats"
+        )));
+    }
+    Ok(tx_out)
+}
+
+/// Checks a quoted deposit amount against the output it describes. The 0-conf
+/// statement names the static deposit address instead of the outpoint, and one
+/// address receives every deposit made to it, so this amount is the only field
+/// tying that statement to the UTXO the wallet means to claim.
+fn validate_quoted_deposit_amount(
+    tx_out: &TxOut,
+    deposit_amount_sats: u64,
+) -> Result<(), ServiceError> {
+    let deposit_value_sats = tx_out.value.to_sat();
+    if deposit_amount_sats != deposit_value_sats {
+        return Err(ServiceError::StaticDepositQuoteMismatch(format!(
+            "quoted deposit amount {deposit_amount_sats} sats is not the deposit value {deposit_value_sats} sats"
+        )));
+    }
+    Ok(())
+}
+
+/// Reads a quoted amount as satoshis. The statement the claim signs carries the
+/// number verbatim, so a quote in another unit is rejected rather than rescaled
+/// into one the SSP never quoted and would not verify against.
+fn quoted_amount_sats(amount: &CurrencyAmount, field: &str) -> Result<u64, ServiceError> {
+    if amount.original_unit != CurrencyUnit::Satoshi {
+        return Err(ServiceError::StaticDepositQuoteMismatch(format!(
+            "quoted {field} is denominated in {:?}, not satoshis",
+            amount.original_unit
+        )));
+    }
+    Ok(amount.original_value)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -283,8 +374,13 @@ impl DepositService {
     /// Submits a static deposit claim to the SSP and returns the resulting
     /// transfer id. The transfer can then be looked up by id via the
     /// transfer service / `SparkWallet::list_transfers`.
+    ///
+    /// `tx` is the funding transaction the quote was issued for. The claim signs
+    /// the outpoint and credit the quote names, so it is the last point at which
+    /// they can still be checked against chain data the wallet holds itself.
     pub async fn claim_static_deposit(
         &self,
+        tx: &Transaction,
         quote: StaticDepositQuote,
     ) -> Result<String, ServiceError> {
         trace!("Claiming static deposit with quote: {quote:?}");
@@ -294,6 +390,8 @@ impl DepositService {
             credit_amount_sats,
             signature: quote_signature,
         } = quote;
+
+        validate_claim_against_funding_tx(tx, txid, output_index, credit_amount_sats)?;
 
         // Serialize the static deposit claim user-statement.
         let user_statement = self.serialize_static_deposit_claim_payload(
@@ -1048,16 +1146,14 @@ impl DepositService {
                 .await?
                 .ok_or(ServiceError::InvalidOutputIndex)?,
         };
+        let txid = tx.compute_txid();
+        let network: BitcoinNetwork = self.network.into();
         let static_deposit_quote = self
             .ssp_client
-            .get_claim_deposit_quote(
-                tx.compute_txid().to_string(),
-                output_index,
-                self.network.into(),
-            )
+            .get_claim_deposit_quote(txid.to_string(), output_index, network)
             .await?;
 
-        static_deposit_quote.try_into()
+        StaticDepositQuote::from_ssp_response(static_deposit_quote, txid, output_index, network)
     }
 
     /// Fetch an instant static deposit quote and its fulfillment plans.
@@ -1073,17 +1169,21 @@ impl DepositService {
                 .await?
                 .ok_or(ServiceError::InvalidOutputIndex)?,
         };
+        let txid = tx.compute_txid();
         let result = self
             .ssp_client
-            .get_instant_static_deposit_quote(
-                tx.compute_txid().to_string(),
-                output_index,
-                self.network.into(),
-            )
+            .get_instant_static_deposit_quote(txid.to_string(), output_index, self.network.into())
             .await?;
-        // Guard against the SSP quoting a different output than the one requested.
+        // Guard against the SSP quoting a different outpoint than the one requested.
+        let quoted_txid = Txid::from_str(&result.quote.transaction_id)
+            .map_err(|_| ServiceError::InvalidTransaction)?;
+        if quoted_txid != txid {
+            return Err(ServiceError::StaticDepositQuoteMismatch(format!(
+                "instant quote transaction {quoted_txid} does not match requested {txid}"
+            )));
+        }
         if result.quote.output_index != i64::from(output_index) {
-            return Err(ServiceError::Generic(format!(
+            return Err(ServiceError::StaticDepositQuoteMismatch(format!(
                 "instant quote output index {} does not match requested {output_index}",
                 result.quote.output_index
             )));
@@ -1101,16 +1201,25 @@ impl DepositService {
         quote: InstantStaticDepositQuote,
         plan: InstantStaticDepositPlan,
     ) -> Result<String, ServiceError> {
-        // `tx` must be the transaction the quote was issued for: the statement is
-        // signed against `tx`'s output, so a mismatched pair would sign the wrong
-        // address. (Public API; in-tree the caller always pairs them correctly.)
         let quote_txid = Txid::from_str(&quote.transaction_id)
             .map_err(|e| ServiceError::Generic(format!("invalid quote transaction id: {e}")))?;
-        if tx.compute_txid() != quote_txid {
-            return Err(ServiceError::Generic(
-                "funding tx does not match the quote transaction_id".to_string(),
-            ));
-        }
+        let output_index = u32::try_from(quote.output_index).map_err(|_| {
+            ServiceError::StaticDepositQuoteMismatch(format!(
+                "quoted output index {} is out of range",
+                quote.output_index
+            ))
+        })?;
+        let credit_amount_sats = quoted_amount_sats(&quote.credit_amount, "credit amount")?;
+        let deposit_amount_sats = quoted_amount_sats(&quote.deposit_amount, "deposit amount")?;
+        // Only the deeper statement form below names the outpoint. Binding the quote
+        // to the funding transaction here puts the 0-conf form, which names just the
+        // address and the amounts, on the same footing as a claim at maturity.
+        let tx_out =
+            validate_claim_against_funding_tx(&tx, quote_txid, output_index, credit_amount_sats)?;
+        // Checked for both plans, not just the 0-conf one that signs it: a quote
+        // disagreeing with the output about how much it holds describes some other
+        // deposit, whichever statement is built from it.
+        validate_quoted_deposit_amount(tx_out, deposit_amount_sats)?;
 
         // Raw bytes of the SSP quote signature (hex) go into the user statement.
         let quote_signature_bytes = hex::decode(&quote.quote_signature)
@@ -1121,15 +1230,10 @@ impl DepositService {
         // from 1-conf on. Both commit to the quote's credit amount, not the plan's.
         // Mirrors claimInstantStaticDeposit in buildonspark/spark
         // (sdks/js/packages/spark-sdk/src/spark-wallet/spark-wallet.ts).
-        let credit_amount_sats = quote.credit_amount.original_value;
         let user_statement = if plan.confirmations == 0 {
             // The statement names the address the UTXO actually paid to, derived
             // from the funding output. The wallet's current static address may have
             // rotated since the deposit landed, so it cannot be regenerated here.
-            let output_index = quote.output_index as usize;
-            let tx_out = tx.output.get(output_index).ok_or_else(|| {
-                ServiceError::Generic(format!("quote output_index {output_index} out of range"))
-            })?;
             let params: Params = self.network.into();
             let static_deposit_address = Address::from_script(&tx_out.script_pubkey, &params)
                 .map_err(|e| ServiceError::Generic(format!("invalid static deposit script: {e}")))?
@@ -1138,14 +1242,11 @@ impl DepositService {
             serialize_instant_static_deposit_claim_payload(
                 &self.network.to_string(),
                 credit_amount_sats,
-                quote.deposit_amount.original_value,
+                deposit_amount_sats,
                 &static_deposit_address,
                 &quote_signature_bytes,
             )
         } else {
-            let output_index = u32::try_from(quote.output_index).map_err(|_| {
-                ServiceError::Generic(format!("invalid quote output_index {}", quote.output_index))
-            })?;
             self.serialize_static_deposit_claim_payload(
                 quote_txid,
                 output_index,
@@ -1463,6 +1564,216 @@ mod tests {
     fn p2tr(key: &PublicKey) -> Address {
         let secp = Secp256k1::new();
         Address::p2tr(&secp, key.x_only_public_key().0, None, NETWORK)
+    }
+
+    fn quote_txid(seed: u8) -> Txid {
+        Txid::from_slice(&[seed; 32]).unwrap()
+    }
+
+    /// A well-formed DER signature, so a rejection is attributable to the field
+    /// under test rather than to signature parsing.
+    fn valid_der_signature() -> String {
+        let secp = Secp256k1::new();
+        let secret = SecretKey::from_slice(&[9u8; 32]).unwrap();
+        let message = Message::from_digest([1u8; 32]);
+        secp.sign_ecdsa(&message, &secret)
+            .serialize_der()
+            .to_string()
+    }
+
+    fn ssp_quote(
+        txid: Txid,
+        output_index: i64,
+        network: BitcoinNetwork,
+        credit_amount_sats: u64,
+    ) -> crate::ssp::StaticDepositQuote {
+        crate::ssp::StaticDepositQuote {
+            transaction_id: txid.to_string(),
+            output_index,
+            network,
+            credit_amount_sats,
+            signature: valid_der_signature(),
+        }
+    }
+
+    fn funding_tx(value_sats: u64) -> Transaction {
+        Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![TxOut {
+                value: Amount::from_sat(value_sats),
+                script_pubkey: p2tr(&test_key(1)).script_pubkey(),
+            }],
+        }
+    }
+
+    #[test_all]
+    fn accepts_quote_for_the_requested_deposit() {
+        let txid = quote_txid(3);
+        let quote = StaticDepositQuote::from_ssp_response(
+            ssp_quote(txid, 1, BitcoinNetwork::Regtest, 900),
+            txid,
+            1,
+            BitcoinNetwork::Regtest,
+        )
+        .unwrap();
+
+        assert_eq!(quote.txid, txid);
+        assert_eq!(quote.output_index, 1);
+        assert_eq!(quote.credit_amount_sats, 900);
+    }
+
+    /// A valid quote for a second, larger deposit in the same wallet, credited at
+    /// the requested deposit's value so the caller's fee ceiling reads zero.
+    #[test_all]
+    fn rejects_quote_for_another_deposit() {
+        assert!(matches!(
+            StaticDepositQuote::from_ssp_response(
+                ssp_quote(quote_txid(4), 0, BitcoinNetwork::Regtest, 1_000),
+                quote_txid(3),
+                0,
+                BitcoinNetwork::Regtest,
+            ),
+            Err(ServiceError::StaticDepositQuoteMismatch(_))
+        ));
+    }
+
+    #[test_all]
+    fn rejects_quote_for_another_output_of_the_requested_tx() {
+        let txid = quote_txid(3);
+        assert!(matches!(
+            StaticDepositQuote::from_ssp_response(
+                ssp_quote(txid, 2, BitcoinNetwork::Regtest, 1_000),
+                txid,
+                0,
+                BitcoinNetwork::Regtest,
+            ),
+            Err(ServiceError::StaticDepositQuoteMismatch(_))
+        ));
+    }
+
+    /// A negative index wraps into a plausible `u32` under an `as` cast.
+    #[test_all]
+    fn rejects_out_of_range_output_index() {
+        let txid = quote_txid(3);
+        for output_index in [-1, i64::from(u32::MAX) + 1] {
+            assert!(
+                matches!(
+                    StaticDepositQuote::from_ssp_response(
+                        ssp_quote(txid, output_index, BitcoinNetwork::Regtest, 1_000),
+                        txid,
+                        0,
+                        BitcoinNetwork::Regtest,
+                    ),
+                    Err(ServiceError::StaticDepositQuoteMismatch(_))
+                ),
+                "output index: {output_index}"
+            );
+        }
+    }
+
+    #[test_all]
+    fn rejects_quote_for_another_network() {
+        let txid = quote_txid(3);
+        assert!(matches!(
+            StaticDepositQuote::from_ssp_response(
+                ssp_quote(txid, 0, BitcoinNetwork::Mainnet, 1_000),
+                txid,
+                0,
+                BitcoinNetwork::Regtest,
+            ),
+            Err(ServiceError::StaticDepositQuoteMismatch(_))
+        ));
+    }
+
+    #[test_all]
+    fn accepts_claim_matching_the_funding_tx() {
+        let tx = funding_tx(1_000);
+        let tx_out = validate_claim_against_funding_tx(&tx, tx.compute_txid(), 0, 900).unwrap();
+
+        assert_eq!(tx_out.value, Amount::from_sat(1_000));
+    }
+
+    #[test_all]
+    fn rejects_claim_against_another_funding_tx() {
+        let tx = funding_tx(1_000);
+        assert!(matches!(
+            validate_claim_against_funding_tx(&tx, quote_txid(5), 0, 900),
+            Err(ServiceError::StaticDepositQuoteMismatch(_))
+        ));
+    }
+
+    #[test_all]
+    fn rejects_claim_for_an_output_the_funding_tx_does_not_have() {
+        let tx = funding_tx(1_000);
+        assert!(matches!(
+            validate_claim_against_funding_tx(&tx, tx.compute_txid(), 1, 900),
+            Err(ServiceError::InvalidOutputIndex)
+        ));
+    }
+
+    #[test_all]
+    fn accepts_a_deposit_amount_equal_to_the_output_value() {
+        let tx = funding_tx(1_000);
+
+        assert!(validate_quoted_deposit_amount(&tx.output[0], 1_000).is_ok());
+    }
+
+    /// The 0-conf statement carries no outpoint, so a deposit amount belonging to
+    /// another UTXO at the same static address would authorize claiming that one.
+    #[test_all]
+    fn rejects_a_deposit_amount_that_is_not_the_output_value() {
+        let tx = funding_tx(1_000);
+
+        for deposit_amount_sats in [999, 1_001, 199_000] {
+            assert!(
+                matches!(
+                    validate_quoted_deposit_amount(&tx.output[0], deposit_amount_sats),
+                    Err(ServiceError::StaticDepositQuoteMismatch(_))
+                ),
+                "deposit amount: {deposit_amount_sats}"
+            );
+        }
+    }
+
+    #[test_all]
+    fn reads_a_satoshi_denominated_quote_amount() {
+        let amount = CurrencyAmount {
+            original_value: 1_000,
+            ..Default::default()
+        };
+
+        assert_eq!(quoted_amount_sats(&amount, "credit amount").unwrap(), 1_000);
+    }
+
+    /// A millisatoshi value read as satoshis is a thousandfold overstatement, and
+    /// rescaling it would sign a number the quote does not carry.
+    #[test_all]
+    fn rejects_a_quote_amount_that_is_not_in_satoshis() {
+        for original_unit in [CurrencyUnit::Millisatoshi, CurrencyUnit::Bitcoin] {
+            let amount = CurrencyAmount {
+                original_value: 1_000,
+                original_unit,
+                ..Default::default()
+            };
+            assert!(
+                matches!(
+                    quoted_amount_sats(&amount, "credit amount"),
+                    Err(ServiceError::StaticDepositQuoteMismatch(_))
+                ),
+                "unit: {original_unit:?}"
+            );
+        }
+    }
+
+    #[test_all]
+    fn rejects_claim_crediting_more_than_the_deposit_is_worth() {
+        let tx = funding_tx(1_000);
+        assert!(matches!(
+            validate_claim_against_funding_tx(&tx, tx.compute_txid(), 0, 1_001),
+            Err(ServiceError::StaticDepositQuoteMismatch(_))
+        ));
     }
 
     #[test_all]

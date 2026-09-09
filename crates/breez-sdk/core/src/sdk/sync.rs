@@ -650,7 +650,21 @@ impl BreezSdk {
             .fetch_static_deposit_claim_quote(detailed_utxo.tx.clone(), Some(detailed_utxo.vout))
             .await?;
 
-        let spark_requested_fee_sats = detailed_utxo.value.saturating_sub(quote.credit_amount_sats);
+        // The quote is bound to this outpoint, so its credit is priced against the
+        // value read from the funding output. A credit above that value is not a
+        // fee at all, and must not read as a free claim.
+        let spark_requested_fee_sats = detailed_utxo
+            .value
+            .checked_sub(quote.credit_amount_sats)
+            .ok_or_else(|| {
+                SdkError::Generic(format!(
+                    "Static deposit quote credits {} sats for {}:{}, which is worth {} sats",
+                    quote.credit_amount_sats,
+                    detailed_utxo.txid,
+                    detailed_utxo.vout,
+                    detailed_utxo.value
+                ))
+            })?;
 
         let spark_requested_fee_rate = spark_requested_fee_sats.div_ceil(CLAIM_TX_SIZE_VBYTES);
 
@@ -676,7 +690,10 @@ impl BreezSdk {
             detailed_utxo.txid, detailed_utxo.vout
         );
         let credit_amount_sats = quote.credit_amount_sats;
-        let transfer_id = self.spark_wallet.claim_static_deposit(quote).await?;
+        let transfer_id = self
+            .spark_wallet
+            .claim_static_deposit(&detailed_utxo.tx, quote)
+            .await?;
         info!(
             "Claimed static deposit for utxo {}:{} (deposit value {}, credit {}), transfer {transfer_id}",
             detailed_utxo.txid, detailed_utxo.vout, detailed_utxo.value, credit_amount_sats,

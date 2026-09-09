@@ -882,11 +882,15 @@ impl SparkWallet {
 
     /// Submits a static deposit claim and returns the resulting transfer id.
     /// The transfer can then be fetched with [`Self::list_transfers`].
+    ///
+    /// `tx` is the funding transaction the quote was issued for; the claim is
+    /// rejected unless the quote names one of its outputs.
     pub async fn claim_static_deposit(
         &self,
+        tx: &Transaction,
         quote: StaticDepositQuote,
     ) -> Result<String, SparkWalletError> {
-        let transfer_id = self.deposit_service.claim_static_deposit(quote).await?;
+        let transfer_id = self.deposit_service.claim_static_deposit(tx, quote).await?;
 
         self.on_leaves_changed().await;
 
