@@ -1038,6 +1038,7 @@ pub struct SendOnchainFeeQuote {
     pub speed_fast: SendOnchainSpeedFeeQuote,
     pub speed_medium: SendOnchainSpeedFeeQuote,
     pub speed_slow: SendOnchainSpeedFeeQuote,
+    pub is_estimate: bool,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendOnchainSpeedFeeQuote)]

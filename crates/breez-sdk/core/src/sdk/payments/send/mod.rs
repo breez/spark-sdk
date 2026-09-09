@@ -411,7 +411,14 @@ pub(super) async fn send_internal(
             .await
         }
         SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
-            bitcoin_address::send(sdk, address, fee_quote, request, amount_override).await
+            Box::pin(bitcoin_address::send(
+                sdk,
+                address,
+                fee_quote,
+                request,
+                amount_override,
+            ))
+            .await
         }
         method @ SendPaymentMethod::CrossChainAddress { .. } => {
             cross_chain::send(

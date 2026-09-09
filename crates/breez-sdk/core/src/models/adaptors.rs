@@ -435,6 +435,7 @@ impl From<CoopExitFeeQuote> for SendOnchainFeeQuote {
             speed_fast: value.speed_fast.into(),
             speed_medium: value.speed_medium.into(),
             speed_slow: value.speed_slow.into(),
+            is_estimate: false,
         }
     }
 }
@@ -608,5 +609,38 @@ impl From<spark_wallet::WebhookEntry> for crate::Webhook {
             url: value.url,
             event_types: value.event_types.into_iter().map(Into::into).collect(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::SendOnchainFeeQuote;
+    use macros::test_all;
+    use spark_wallet::{CoopExitFeeQuote, CoopExitSpeedFeeQuote};
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[test_all]
+    fn test_a_provider_quote_is_never_an_estimate() {
+        // What keeps a real quote distinguishable from a locally derived one.
+        // Marking it an estimate would give it an estimate's fee headroom and
+        // stop it being refreshed near expiry.
+        let speed = || CoopExitSpeedFeeQuote {
+            user_fee_sat: 750,
+            l1_broadcast_fee_sat: 960,
+        };
+        let quote: SendOnchainFeeQuote = CoopExitFeeQuote {
+            id: "SparkCoopExitFeeQuote:test".to_string(),
+            expires_at: 1_787_907_773,
+            speed_fast: speed(),
+            speed_medium: speed(),
+            speed_slow: speed(),
+        }
+        .into();
+
+        assert!(!quote.is_estimate);
+        assert_eq!(quote.id, "SparkCoopExitFeeQuote:test");
+        assert_eq!(quote.expires_at, 1_787_907_773);
     }
 }
