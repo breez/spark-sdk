@@ -132,9 +132,7 @@ pub(crate) fn derive_btc_leg_transfer_id(
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum CrossChainProvider {
     Orchestra,
-    /// Not operational: no routes are offered under this provider, and it is
-    /// unclear when or whether that will change. The variant is retained so
-    /// persisted payment history keeps decoding.
+    /// Not operational: no routes are currently offered under this provider.
     Boltz,
 }
 
