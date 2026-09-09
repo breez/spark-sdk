@@ -236,6 +236,13 @@ pub enum ConversionInfo {
         /// Unset until the order reaches a terminal state.
         #[serde(default, with = "serde_option_u128_as_string")]
         delivered_amount: Option<u128>,
+        /// Transaction on `chain`, the non-Spark side of the conversion: the
+        /// delivery on a send, the funding deposit on a receive. Format follows
+        /// the chain (e.g. `0x`-prefixed hex on EVM, a base58 signature on
+        /// Solana). Unset until that transaction exists, and on orders that
+        /// failed or were refunded.
+        #[serde(default)]
+        external_tx_hash: Option<String>,
         status: ConversionStatus,
         /// Best-available total fee, in `asset` base units.
         /// Prepare-time estimate while pending, realized fee when Completed.
@@ -362,6 +369,7 @@ impl fmt::Debug for ConversionInfo {
                 asset_amount_in,
                 estimated_out,
                 delivered_amount,
+                external_tx_hash,
                 status,
                 fee_amount,
                 service_fee_amount,
@@ -380,6 +388,7 @@ impl fmt::Debug for ConversionInfo {
                 .field("asset_amount_in", asset_amount_in)
                 .field("estimated_out", estimated_out)
                 .field("delivered_amount", delivered_amount)
+                .field("external_tx_hash", external_tx_hash)
                 .field("status", status)
                 .field("fee_amount", fee_amount)
                 .field("service_fee_amount", service_fee_amount)

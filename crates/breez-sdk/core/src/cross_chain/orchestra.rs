@@ -1505,6 +1505,7 @@ impl CrossChainService for OrchestraService {
             asset_amount_in: Some(prepared.asset_amount_in),
             estimated_out: prepared.estimated_out,
             delivered_amount: None,
+            external_tx_hash: None,
             status,
             fee_amount: Some(prepared.fee_amount),
             service_fee_amount: Some(prepared.service_fee_amount),
@@ -1790,6 +1791,7 @@ fn apply_terminal_status(
             asset_amount_in: *asset_amount_in,
             estimated_out: *estimated_out,
             delivered_amount,
+            external_tx_hash: status_response.order.destination_tx_hash.clone(),
             status: new_status,
             fee_amount: updated_fee_amount,
             service_fee_amount: *service_fee_amount,
@@ -1912,6 +1914,7 @@ async fn build_orchestra_receive_conversion_info(
         asset_amount_in,
         estimated_out,
         delivered_amount,
+        external_tx_hash: order.source_tx_hash.clone(),
         status: ConversionStatus::Completed,
         // Realized total fee in source-asset units.
         fee_amount,
@@ -2223,6 +2226,7 @@ mod tests {
                 asset_amount_in,
                 estimated_out,
                 delivered_amount,
+                external_tx_hash,
                 status,
                 ..
             } => {
@@ -2235,6 +2239,8 @@ mod tests {
                 assert_eq!(asset_amount_in, Some(100));
                 assert_eq!(estimated_out, 50_000);
                 assert_eq!(delivered_amount, Some(49_500));
+                // Receive: the external side is the source.
+                assert_eq!(external_tx_hash.as_deref(), Some("0xeth-tx"));
                 assert_eq!(status, ConversionStatus::Completed);
             }
             _ => panic!("expected Orchestra variant"),
@@ -3074,6 +3080,7 @@ mod tests {
             asset_amount_in: Some(1_010_000),
             estimated_out: 1_000_000,
             delivered_amount: None,
+            external_tx_hash: None,
             status: ConversionStatus::Pending,
             fee_amount: Some(10_000),
             service_fee_amount: Some(50),
@@ -3084,7 +3091,17 @@ mod tests {
         }
     }
 
+    const EXTERNAL_TX_HASH: &str = "0xdeadbeef";
+
     fn status_response(status: OrderStatus, amount_out: Option<&str>) -> StatusResponse {
+        status_response_with_destination(status, amount_out, Some(EXTERNAL_TX_HASH))
+    }
+
+    fn status_response_with_destination(
+        status: OrderStatus,
+        amount_out: Option<&str>,
+        external_tx_hash: Option<&str>,
+    ) -> StatusResponse {
         StatusResponse {
             order: flashnet::orchestra::Order {
                 id: "ord1".to_string(),
@@ -3101,7 +3118,7 @@ mod tests {
                 destination_chain: Some("base".to_string()),
                 destination_asset: Some("USDC".to_string()),
                 destination_address: None,
-                destination_tx_hash: None,
+                destination_tx_hash: external_tx_hash.map(str::to_string),
                 recipient_address: Some("0xabc".to_string()),
                 amount_in: Some("1000".to_string()),
                 amount_out: amount_out.map(str::to_string),
@@ -3173,6 +3190,7 @@ mod tests {
             delivered_amount,
             estimated_out,
             fee_amount,
+            external_tx_hash,
             ..
         }) = &updated.conversion_info
         {
@@ -3181,7 +3199,26 @@ mod tests {
             // Realized fee = asset_amount_in (1_010_000) − delivered_amount (999_000)
             // = 11_000, overriding the prepare-time estimate of 10_000.
             assert_eq!(*fee_amount, Some(11_000));
+            assert_eq!(
+                external_tx_hash.as_deref(),
+                Some(EXTERNAL_TX_HASH),
+                "settlement tx hash is carried over from the order"
+            );
         }
+    }
+
+    #[test_all]
+    fn apply_terminal_status_without_an_external_tx_hash() {
+        let info = orchestra_info("ord1", "q1");
+        let resp = status_response_with_destination(OrderStatus::Completed, Some("999000"), None);
+        let updated = apply_terminal_status(&info, &resp).expect("terminal");
+        let Some(ConversionInfo::Orchestra {
+            external_tx_hash, ..
+        }) = &updated.conversion_info
+        else {
+            panic!("expected Orchestra variant");
+        };
+        assert_eq!(*external_tx_hash, None);
     }
 
     #[test_all]
@@ -3221,6 +3258,7 @@ mod tests {
                 recipient_address,
                 estimated_out,
                 delivered_amount,
+                external_tx_hash,
                 status,
                 service_fee_amount,
                 service_fee_asset,
@@ -3238,6 +3276,7 @@ mod tests {
                 asset_amount_in: None,
                 estimated_out,
                 delivered_amount,
+                external_tx_hash,
                 status,
                 fee_amount: Some(10_000),
                 service_fee_amount,

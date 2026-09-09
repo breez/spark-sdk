@@ -1,7 +1,10 @@
 //! Request/response types for the Flashnet Orchestra API.
 //!
-//! Mirrors the public schema at
-//! <https://docs.flashnet.xyz/products/orchestration/api/quotes-and-orders>.
+//! Mirrors the machine-readable schema the API serves at
+//! <https://orchestration.flashnet.xyz/openapi.json> (rendered at `/docs`),
+//! which is authoritative where the narrative docs at
+//! <https://docs.flashnet.xyz/products/orchestration/api/quotes-and-orders>
+//! are incomplete.
 
 use serde::{Deserialize, Serialize};
 
@@ -271,6 +274,8 @@ pub struct Order {
     pub destination_asset: Option<String>,
     #[serde(default)]
     pub destination_address: Option<String>,
+    /// Settlement transaction on the destination chain, set once the order is
+    /// delivered.
     #[serde(default)]
     pub destination_tx_hash: Option<String>,
     #[serde(default)]

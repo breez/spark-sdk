@@ -677,9 +677,14 @@ async fn run_cross_chain_evm_send(
     info!("Cross-chain send dispatched: payment {payment_id}");
 
     // 7. Wait for the SDK's background monitor to report a terminal status.
-    let delivered =
-        wait_for_cross_chain_completion(&alice.sdk, &payment_id, SETTLE_TIMEOUT_SECS).await?;
-    info!("SDK reports conversion Completed, delivered_amount = {delivered:?}");
+    let CompletedConversion {
+        delivered_amount: delivered,
+        external_tx_hash,
+    } = wait_for_cross_chain_completion(&alice.sdk, &payment_id, SETTLE_TIMEOUT_SECS).await?;
+    info!(
+        "SDK reports conversion Completed, delivered_amount = {delivered:?}, \
+         external_tx_hash = {external_tx_hash:?}"
+    );
 
     // 8. Verify delivery (all in destination base units).
     //
@@ -735,6 +740,44 @@ async fn run_cross_chain_evm_send(
         "On-chain {asset} delta = {on_chain_delta} (required floor {onchain_floor}, \
          SDK delivered {delivered:?})"
     );
+
+    // 9. Verify the reported settlement transaction is the real thing: it must
+    // exist on the destination chain, have succeeded, and credit the recipient.
+    // A balance that merely went up proves funds arrived; this proves the hash
+    // the SDK handed the integrator is the transaction that delivered them.
+    match (provider, external_tx_hash.as_deref()) {
+        (CrossChainProvider::Orchestra, None) => {
+            panic!(
+                "Orchestra reported Completed without an external_tx_hash; \
+                 the settlement hash should be recorded on delivery"
+            );
+        }
+        (_, Some(tx_hash)) => {
+            let credited = wait_for_evm_settlement_tx(
+                &rpc_url,
+                tx_hash,
+                &contract,
+                recipient,
+                SETTLE_TIMEOUT_SECS,
+            )
+            .await?;
+            info!("Settlement tx {tx_hash} credited {credited} {asset} to {recipient}");
+            assert!(
+                credited > 0,
+                "settlement tx {tx_hash} credited nothing to {recipient}"
+            );
+            if let Some(d) = delivered {
+                let floor = reduce_by_bps(d, ONCHAIN_TOLERANCE_BPS);
+                assert!(
+                    credited >= floor,
+                    "settlement tx {tx_hash} credited {credited}, below the {floor} implied \
+                     by the SDK-reported delivered_amount {d}"
+                );
+            }
+        }
+        // Boltz does not carry a settlement hash yet; nothing to verify.
+        (CrossChainProvider::Boltz, None) => {}
+    }
 
     log_evm_recovery_balance(&rpc_url, &contract, recipient, asset).await;
     Ok(())
@@ -1056,6 +1099,21 @@ async fn run_cross_chain_evm_receive(
         conversion_info_of(&event_payment).is_some()
     );
 
+    // On a receive the external side is the source, so the hash has to be the
+    // deposit this test broadcast at step 7.
+    let hash =
+        wait_for_receive_external_tx_hash(&alice.sdk, &event_payment.id, SETTLE_TIMEOUT_SECS)
+            .await?;
+    assert_eq!(
+        hash.to_lowercase(),
+        tx_hash.to_lowercase(),
+        "external_tx_hash should be the {source_asset} deposit this test sent"
+    );
+    info!(
+        "Receive external tx {hash} matches the deposit sent for payment {}",
+        event_payment.id
+    );
+
     // 10. Assert the fees-excluded contract when a parity target is set.
     if let Some(target) = parity_min_out {
         let floor = reduce_by_bps(target, SLIPPAGE_TOLERANCE_BPS);
@@ -1176,15 +1234,60 @@ fn describe_conversion(info: &ConversionInfo) -> String {
     }
 }
 
+/// Poll a receive payment row until the Orchestra conversion lands on it
+/// carrying its external-chain tx hash.
+///
+/// `PaymentSucceeded` fires when the inbound Spark transfer settles, which
+/// precedes the receive poller attaching the order's metadata, so the hash has
+/// to be read off a re-read row rather than off the event.
+async fn wait_for_receive_external_tx_hash(
+    sdk: &BreezSdk,
+    payment_id: &str,
+    timeout_secs: u64,
+) -> Result<String> {
+    let start = Instant::now();
+    loop {
+        let payment = sdk
+            .get_payment(GetPaymentRequest {
+                payment_id: payment_id.to_string(),
+            })
+            .await?
+            .payment;
+        if let Some(ConversionInfo::Orchestra {
+            external_tx_hash: Some(hash),
+            ..
+        }) = conversion_info_of(&payment)
+        {
+            return Ok(hash.clone());
+        }
+        if start.elapsed() >= Duration::from_secs(timeout_secs) {
+            anyhow::bail!(
+                "timeout after {timeout_secs}s waiting for the Orchestra external tx hash on \
+                 receive payment {payment_id}"
+            );
+        }
+        let _ = sdk.sync_wallet(SyncWalletRequest {}).await;
+        tokio::time::sleep(STATUS_POLL_INTERVAL).await;
+    }
+}
+
+/// What a terminal `Completed` conversion reported about its delivery.
+struct CompletedConversion {
+    delivered_amount: Option<u128>,
+    /// Settlement transaction on the destination chain. Orchestra reports one;
+    /// Boltz does not yet carry it.
+    external_tx_hash: Option<String>,
+}
+
 /// Poll the payment until its cross-chain `ConversionInfo` reaches a terminal
-/// state. Returns `delivered_amount` on `Completed`. Errors on a failed/refunded
+/// state. Returns what `Completed` reported. Errors on a failed/refunded
 /// outcome or timeout. Logs the provider handles once and every status change,
 /// so a debugging run has a trail to correlate against the provider/explorer.
 async fn wait_for_cross_chain_completion(
     sdk: &BreezSdk,
     payment_id: &str,
     timeout_secs: u64,
-) -> Result<Option<u128>> {
+) -> Result<CompletedConversion> {
     let start = Instant::now();
     let mut handles_logged = false;
     let mut last_status: Option<String> = None;
@@ -1214,17 +1317,18 @@ async fn wait_for_cross_chain_completion(
                 info!("Cross-chain conversion: {}", describe_conversion(info));
                 handles_logged = true;
             }
-            let (status, delivered) = match info {
+            let (status, delivered, external_tx_hash) = match info {
                 ConversionInfo::Orchestra {
                     status,
                     delivered_amount,
+                    external_tx_hash,
                     ..
-                }
-                | ConversionInfo::Boltz {
+                } => (status, *delivered_amount, external_tx_hash.clone()),
+                ConversionInfo::Boltz {
                     status,
                     delivered_amount,
                     ..
-                } => (status, *delivered_amount),
+                } => (status, *delivered_amount, None),
                 // A cross-chain send should carry an Orchestra/Boltz conversion,
                 // never a plain AMM one. Fail fast rather than spin to timeout.
                 ConversionInfo::Amm { status, .. } => anyhow::bail!(
@@ -1236,13 +1340,18 @@ async fn wait_for_cross_chain_completion(
             if last_status.as_deref() != Some(status_str.as_str()) {
                 info!(
                     "Cross-chain status: {status_str} (delivered_amount={delivered:?}, \
-                     elapsed {}s)",
+                     external_tx_hash={external_tx_hash:?}, elapsed {}s)",
                     start.elapsed().as_secs()
                 );
                 last_status = Some(status_str);
             }
             match status {
-                ConversionStatus::Completed => return Ok(delivered),
+                ConversionStatus::Completed => {
+                    return Ok(CompletedConversion {
+                        delivered_amount: delivered,
+                        external_tx_hash,
+                    });
+                }
                 ConversionStatus::Failed
                 | ConversionStatus::Refunded
                 | ConversionStatus::RefundNeeded => {
