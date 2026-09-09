@@ -3,14 +3,19 @@
 //! The [`CrossChainService`] trait abstracts route discovery, quoting, and
 //! sending. Each provider module (e.g. `orchestra`, `boltz`) implements it.
 
+// Boltz is not registered as a provider (see `sdk_builder`): the service is not
+// operational, and it is unclear when or whether it will be again. The modules
+// stay compiled so the wiring can be restored in one place.
+#[allow(dead_code)]
 pub(crate) mod boltz;
+#[allow(dead_code)]
 pub(crate) mod boltz_event_listener;
+#[allow(dead_code)]
 pub(crate) mod boltz_storage_adapter;
 mod cached_fiat;
 mod orchestra;
 mod orchestra_storage_adapter;
 
-pub(crate) use boltz::BoltzService;
 pub(crate) use cached_fiat::{CachedFiatService, DEFAULT_FIAT_CACHE_TTL};
 pub(crate) use orchestra::{BreezServerOrchestraConfigResolver, OrchestraService};
 
@@ -127,6 +132,7 @@ pub(crate) fn derive_btc_leg_transfer_id(
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum CrossChainProvider {
     Orchestra,
+    /// Not operational: no routes are currently offered under this provider.
     Boltz,
 }
 

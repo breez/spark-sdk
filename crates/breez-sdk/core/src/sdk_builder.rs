@@ -612,9 +612,7 @@ impl SdkBuilder {
 
         let sync_coordinator = SyncCoordinator::new();
 
-        // Shared lightning-send helper used by `send_bolt11_invoice` and
-        // by cross-chain providers that pay LN invoices (currently: Boltz
-        // reverse swap).
+        // Shared lightning-send helper used by `send_bolt11_invoice`.
         let lightning_sender = Arc::new(crate::sdk::LightningSender::new(
             Arc::clone(&spark_wallet),
             Arc::clone(&storage),
@@ -628,8 +626,6 @@ impl SdkBuilder {
             &context.http_client,
             &spark_wallet,
             &storage,
-            signers.ecies.clone(),
-            &lightning_sender,
             Arc::clone(&fiat_service),
             shutdown_sender.subscribe(),
         );
@@ -1112,15 +1108,12 @@ async fn build_stable_balance(
 
 /// Builds the cross-chain context: provider registry + shared cached fiat
 /// service. Returns an empty registry when `config.cross_chain_config` is unset.
-#[allow(clippy::too_many_arguments)]
 fn build_cross_chain_context(
     config: &Config,
     breez_server: &Arc<BreezServer>,
     http_client: &Arc<dyn platform_utils::HttpClient>,
     spark_wallet: &Arc<SparkWallet>,
     storage: &Arc<dyn crate::persist::Storage>,
-    ecies: Option<Arc<dyn crate::signer::EciesSigner>>,
-    lightning_sender: &Arc<crate::sdk::LightningSender>,
     fiat_service: Arc<dyn breez_sdk_common::fiat::FiatService>,
     shutdown_receiver: watch::Receiver<()>,
 ) -> crate::cross_chain::CrossChainContext {
@@ -1151,33 +1144,9 @@ fn build_cross_chain_context(
                 Arc::clone(storage),
                 Arc::clone(&cached_fiat),
                 Arc::clone(http_client),
-                shutdown_receiver.clone(),
+                shutdown_receiver,
             )),
         );
-    }
-
-    match crate::cross_chain::BoltzService::build(
-        config.network,
-        Arc::clone(spark_wallet),
-        Arc::clone(storage),
-        ecies,
-        cached_fiat,
-        Arc::clone(lightning_sender),
-        config.proxy.as_ref(),
-        shutdown_receiver,
-    ) {
-        Ok(Some(service)) => {
-            providers.insert(crate::cross_chain::CrossChainProvider::Boltz, service);
-        }
-        Ok(None) => {
-            info!(
-                "Boltz provider skipped: no default configuration for network {:?}",
-                config.network
-            );
-        }
-        Err(e) => {
-            tracing::error!("Failed to initialize Boltz provider: {e:?}");
-        }
     }
 
     providers
