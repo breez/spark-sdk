@@ -48,6 +48,7 @@ const PUBLISHED_PACKAGE_KEY_PREFIX: &str = "published_package_";
 const SPARK_PRIVATE_MODE_INITIALIZED_KEY: &str = "spark_private_mode_initialized";
 pub(crate) const STABLE_BALANCE_ACTIVE_LABEL_KEY: &str = "stable_balance_active_label";
 const PENDING_CONVERSIONS_KEY: &str = "pending_conversions";
+const PENDING_LIGHTNING_SENDS_KEY: &str = "pending_lightning_sends";
 
 /// Wrapper stored in the cache that carries context about whether the value
 /// was written as part of a recovery or a client-initiated change.
@@ -866,6 +867,36 @@ impl ObjectCacheRepository {
         self.storage
             .delete_cached_item(STABLE_BALANCE_ACTIVE_LABEL_KEY.to_string())
             .await
+    }
+
+    /// Records a Lightning send whose preimage swap is about to be committed
+    /// with the operators. Written before that commit so a send interrupted
+    /// before the SSP is asked to pay can still be resumed: the invoice is the
+    /// one thing neither the operators nor the SSP can tell us afterwards.
+    pub(crate) async fn save_pending_lightning_sends(
+        &self,
+        pending: &[super::sdk::PendingLightningSend],
+    ) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(
+                PENDING_LIGHTNING_SENDS_KEY.to_string(),
+                serde_json::to_string(pending)?,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_pending_lightning_sends(
+        &self,
+    ) -> Result<Vec<super::sdk::PendingLightningSend>, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(PENDING_LIGHTNING_SENDS_KEY.to_string())
+            .await?;
+        match value {
+            Some(value) => Ok(serde_json::from_str(&value)?),
+            None => Ok(Vec::new()),
+        }
     }
 
     pub(crate) async fn save_pending_conversions(

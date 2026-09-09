@@ -657,64 +657,73 @@ impl SparkWallet {
         self.finalize_pay_lightning(lightning_payment).await
     }
 
+    /// Asks the SSP to pay a send whose preimage swap is already committed with
+    /// the operators, for a send whose SSP request was never made.
+    ///
+    /// Returns `None` when there is nothing left to pay. Safe to call more than
+    /// once for the same transfer: the SSP keys the request on the transfer id.
+    pub async fn resume_lightning_send(
+        &self,
+        transfer_id: &TransferId,
+        invoice: &str,
+        amount_to_send: Option<u64>,
+    ) -> Result<Option<PayLightningInvoiceResult>, SparkWalletError> {
+        let Some(lightning_payment) = self
+            .lightning_service
+            .resume_lightning_send(transfer_id, invoice, amount_to_send)
+            .await?
+        else {
+            return Ok(None);
+        };
+        self.finalize_pay_lightning(lightning_payment)
+            .await
+            .map(Some)
+    }
+
     async fn finalize_pay_lightning(
         &self,
         lightning_payment: PayLightningResult,
     ) -> Result<PayLightningInvoiceResult, SparkWalletError> {
         let payment_hash = lightning_payment.payment_hash;
         let lightning_send_payment = lightning_payment.lightning_send_payment;
-        let wallet_transfer = match &lightning_send_payment {
-            Some(lsp) => {
-                let preimage = lsp
-                    .payment_preimage
-                    .as_deref()
-                    .map(Preimage::from_hex)
-                    .transpose()
-                    .map_err(SparkWalletError::ServiceError)?;
-                let preimage_request = PreimageRequest {
-                    payment_hash,
-                    status: if preimage.is_some() {
-                        PreimageRequestStatus::PreimageShared
-                    } else {
-                        PreimageRequestStatus::WaitingForPreimage
-                    },
-                    created_time: UNIX_EPOCH
-                        .checked_add(Duration::from_secs(
-                            lightning_payment.transfer.created_time.unwrap_or_default(),
-                        ))
-                        .unwrap_or(UNIX_EPOCH),
-                    expiry_time: UNIX_EPOCH
-                        .checked_add(Duration::from_secs(
-                            lightning_payment.transfer.expiry_time.unwrap_or_default(),
-                        ))
-                        .unwrap_or(UNIX_EPOCH),
-                    preimage,
-                };
-                WalletTransfer::from_transfer(
-                    lightning_payment.transfer,
-                    None,
-                    Some(preimage_request),
-                    self.identity_public_key,
-                    self.config.service_provider_config.identity_public_key,
-                )
-            }
-            None => {
-                create_transfer(
-                    lightning_payment.transfer,
-                    &self.ssp_client,
-                    &self.htlc_service,
-                    self.identity_public_key,
-                    self.config.service_provider_config.identity_public_key,
-                )
-                .await?
-            }
+        let preimage = lightning_send_payment
+            .payment_preimage
+            .as_deref()
+            .map(Preimage::from_hex)
+            .transpose()
+            .map_err(SparkWalletError::ServiceError)?;
+        let preimage_request = PreimageRequest {
+            payment_hash,
+            status: if preimage.is_some() {
+                PreimageRequestStatus::PreimageShared
+            } else {
+                PreimageRequestStatus::WaitingForPreimage
+            },
+            created_time: UNIX_EPOCH
+                .checked_add(Duration::from_secs(
+                    lightning_payment.transfer.created_time.unwrap_or_default(),
+                ))
+                .unwrap_or(UNIX_EPOCH),
+            expiry_time: UNIX_EPOCH
+                .checked_add(Duration::from_secs(
+                    lightning_payment.transfer.expiry_time.unwrap_or_default(),
+                ))
+                .unwrap_or(UNIX_EPOCH),
+            preimage,
         };
+        let wallet_transfer = WalletTransfer::from_transfer(
+            lightning_payment.transfer,
+            None,
+            Some(preimage_request),
+            self.identity_public_key,
+            self.config.service_provider_config.identity_public_key,
+        );
 
         self.on_leaves_changed().await;
 
         Ok(PayLightningInvoiceResult {
             transfer: wallet_transfer,
-            lightning_payment: lightning_send_payment,
+            lightning_payment: Some(lightning_send_payment),
         })
     }
 

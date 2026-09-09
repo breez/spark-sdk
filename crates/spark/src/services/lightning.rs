@@ -6,6 +6,7 @@ use crate::operator::rpc::spark::{
 };
 use crate::services::{
     LeafKeyTweak, ServiceError, Transfer, TransferId, TransferObserver, TransferService,
+    TransferStatus, TransferType,
 };
 use crate::signer::{
     OperatorRecipient, PrepareLightningReceiveRequest, PrepareTransferRequest, PreparedTransfer,
@@ -26,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::models::LightningSendRequestStatus;
 
@@ -196,7 +197,7 @@ impl TryFrom<crate::ssp::LightningReceiveRequest> for LightningReceivePayment {
 
 pub struct PayLightningResult {
     pub transfer: Transfer,
-    pub lightning_send_payment: Option<LightningSendPayment>,
+    pub lightning_send_payment: LightningSendPayment,
     pub payment_hash: sha256::Hash,
 }
 
@@ -518,7 +519,6 @@ impl LightningService {
         leaves: &[TreeNode],
         transfer_id: Option<TransferId>,
     ) -> Result<PayLightningResult, ServiceError> {
-        let recover_on_error = transfer_id.is_some();
         let unwrapped_transfer_id = transfer_id.unwrap_or_else(TransferId::generate);
         self.send_lightning_inner(
             &unwrapped_transfer_id,
@@ -526,7 +526,6 @@ impl LightningService {
             invoice,
             amount_to_send,
             None,
-            recover_on_error,
         )
         .await
     }
@@ -538,7 +537,6 @@ impl LightningService {
         invoice: &str,
         amount_to_send: Option<u64>,
         prepared: Option<PreparedTransfer>,
-        recover_on_error: bool,
     ) -> Result<PayLightningResult, ServiceError> {
         let ssp_identity_public_key = self.ssp_client.identity_public_key();
         let expiry_time = SystemTime::now() + Duration::from_secs(DEFAULT_SEND_EXPIRY_SECS);
@@ -594,12 +592,18 @@ impl LightningService {
 
         let transfer: Transfer = match initiate_preimage_swap_res {
             Ok(initiate_preimage_swap) => transfer_from_preimage_swap(initiate_preimage_swap)?,
-            Err(e) if recover_on_error => {
-                return self
-                    .recovered_lightning_result(transfer_id, e, payment_hash)
-                    .await;
+            // The preimage swap can commit server-side and still lose its response. Bind
+            // the recovered transfer rather than returning it: only request_lightning_send
+            // finishes the send, and nothing else advances a WaitingForPreimage transfer
+            // before it expires. Recover even for an id generated here: the query also
+            // matches our own sender key, so it resolves only to this call's transfer,
+            // and it is the last chance to finish the send. The operator commit is the
+            // first effectful step, and the invoice it pays exists nowhere server-side.
+            Err(e) => {
+                self.transfer_service
+                    .recover_transfer_on_rpc_connection_error(transfer_id, e)
+                    .await?
             }
-            Err(e) => return Err(e),
         };
 
         self.request_lightning_send_result(
@@ -610,6 +614,46 @@ impl LightningService {
             payment_hash,
         )
         .await
+    }
+
+    /// Asks the SSP to pay a send whose preimage swap is already committed with
+    /// the operators.
+    ///
+    /// Returns `None` when there is nothing left to pay: the transfer is gone,
+    /// it settled or was released on its own, or it never committed leaves under
+    /// a preimage condition. The type check is what keeps a Spark-routed send,
+    /// which pays the invoice without ever involving the SSP, from being paid a
+    /// second time over Lightning.
+    pub async fn resume_lightning_send(
+        &self,
+        transfer_id: &TransferId,
+        invoice: &str,
+        amount_to_send: Option<u64>,
+    ) -> Result<Option<PayLightningResult>, ServiceError> {
+        let Some(transfer) = self.transfer_service.query_transfer(transfer_id).await? else {
+            return Ok(None);
+        };
+        if !is_resumable_send(transfer.transfer_type, transfer.status) {
+            debug!(
+                "Not resuming transfer {transfer_id}: type {:?}, status {}",
+                transfer.transfer_type, transfer.status
+            );
+            return Ok(None);
+        }
+
+        let decoded_invoice = Bolt11Invoice::from_str(invoice)
+            .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
+        let payment_hash = *decoded_invoice.payment_hash();
+
+        self.request_lightning_send_result(
+            transfer,
+            transfer_id,
+            invoice,
+            amount_to_send,
+            payment_hash,
+        )
+        .await
+        .map(Some)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -644,23 +688,6 @@ impl LightningService {
         .await
     }
 
-    async fn recovered_lightning_result(
-        &self,
-        transfer_id: &TransferId,
-        error: ServiceError,
-        payment_hash: sha256::Hash,
-    ) -> Result<PayLightningResult, ServiceError> {
-        let transfer = self
-            .transfer_service
-            .recover_transfer_on_rpc_connection_error(transfer_id, error)
-            .await?;
-        Ok(PayLightningResult {
-            transfer,
-            lightning_send_payment: None,
-            payment_hash,
-        })
-    }
-
     async fn request_lightning_send_result(
         &self,
         transfer: Transfer,
@@ -673,6 +700,11 @@ impl LightningService {
             .ssp_client
             .request_lightning_send(RequestLightningSendInput {
                 encoded_invoice: invoice.to_string(),
+                // The transfer id keys the request, so a repeat, whether the
+                // client's own retry or a resume that cannot tell a lost response
+                // from a lost request, resolves to the request the SSP already has.
+                // Setting idempotency_key as well is refused outright: "Only
+                // idempotency_key or user_outbound_transfer_external_id is needed".
                 idempotency_key: None,
                 amount_sats: amount_to_send,
                 user_outbound_transfer_external_id: Some(transfer_id.to_string()),
@@ -684,7 +716,7 @@ impl LightningService {
         }
 
         Ok(PayLightningResult {
-            lightning_send_payment: Some(lightning_send_payment),
+            lightning_send_payment,
             transfer,
             payment_hash,
         })
@@ -732,7 +764,6 @@ impl LightningService {
             invoice,
             amount_to_send,
             Some(approved_transfer),
-            true,
         )
         .await
     }
@@ -837,6 +868,20 @@ impl LightningService {
             None => Ok(None),
         }
     }
+}
+
+/// Whether a send still has leaves committed under a preimage condition that
+/// only the SSP can settle.
+///
+/// The type check carries the weight: a Spark-routed send pays the invoice
+/// without the SSP ever being involved, so asking the SSP to pay it would pay
+/// the same invoice twice.
+fn is_resumable_send(transfer_type: TransferType, status: TransferStatus) -> bool {
+    transfer_type == TransferType::PreimageSwap
+        && !matches!(
+            status,
+            TransferStatus::Completed | TransferStatus::Expired | TransferStatus::Returned
+        )
 }
 
 fn transfer_from_preimage_swap(
@@ -1245,5 +1290,82 @@ mod get_invoice_amount_sats_tests {
             get_invoice_amount_sats(&invoice(None), None),
             Err(ServiceError::ValidationError(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EVERY_STATUS: [TransferStatus; 12] = [
+        TransferStatus::SenderInitiated,
+        TransferStatus::SenderKeyTweakPending,
+        TransferStatus::SenderKeyTweaked,
+        TransferStatus::ReceiverKeyTweaked,
+        TransferStatus::ReceiverRefundSigned,
+        TransferStatus::Completed,
+        TransferStatus::Expired,
+        TransferStatus::Returned,
+        TransferStatus::SenderInitiatedCoordinator,
+        TransferStatus::ReceiverKeyTweakLocked,
+        TransferStatus::ReceiverKeyTweakApplied,
+        TransferStatus::ApplyingSenderKeyTweak,
+    ];
+
+    const EVERY_TYPE: [TransferType; 8] = [
+        TransferType::PreimageSwap,
+        TransferType::CooperativeExit,
+        TransferType::Transfer,
+        TransferType::UtxoSwap,
+        TransferType::Swap,
+        TransferType::CounterSwap,
+        TransferType::PrimarySwapV3,
+        TransferType::CounterSwapV3,
+    ];
+
+    /// The money-critical case: a Spark-routed send pays the invoice itself, so
+    /// resuming one would pay the same invoice a second time over Lightning.
+    #[test]
+    fn only_preimage_swaps_resume() {
+        for transfer_type in EVERY_TYPE {
+            for status in EVERY_STATUS {
+                if transfer_type != TransferType::PreimageSwap {
+                    assert!(
+                        !is_resumable_send(transfer_type, status),
+                        "{transfer_type:?} at {status} must never be resumed"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A settled or released transfer has no leaves left under the preimage
+    /// condition, so asking the SSP to pay again would open a request against
+    /// leaves that are gone.
+    #[test]
+    fn terminal_preimage_swaps_do_not_resume() {
+        for status in [
+            TransferStatus::Completed,
+            TransferStatus::Expired,
+            TransferStatus::Returned,
+        ] {
+            assert!(!is_resumable_send(TransferType::PreimageSwap, status));
+        }
+    }
+
+    #[test]
+    fn in_flight_preimage_swaps_resume() {
+        for status in EVERY_STATUS {
+            if matches!(
+                status,
+                TransferStatus::Completed | TransferStatus::Expired | TransferStatus::Returned
+            ) {
+                continue;
+            }
+            assert!(
+                is_resumable_send(TransferType::PreimageSwap, status),
+                "{status} still holds committed leaves and must resume"
+            );
+        }
     }
 }

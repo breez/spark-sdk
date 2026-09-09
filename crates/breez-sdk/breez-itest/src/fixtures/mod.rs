@@ -2,6 +2,7 @@ pub mod data_sync;
 pub mod docker;
 pub mod lnurl;
 pub mod socks5;
+pub mod ssp_fault;
 
 use anyhow::Result;
 use breez_sdk_spark::{

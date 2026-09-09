@@ -205,6 +205,13 @@ impl BreezSdk {
                 false
             };
 
+            // Finish any Lightning send that committed leaves with the operators
+            // but never reached the SSP. Runs with the wallet sync because it
+            // needs the operators' view of the transfer.
+            if sync_type.contains(SyncType::Wallet) {
+                self.lightning_sender.resume_pending_sends().await;
+            }
+
             let wallet_state_synced = if sync_type.contains(SyncType::WalletState) {
                 debug!("sync_wallet_internal: Starting WalletState sync");
                 let wallet_state_start = Instant::now();

@@ -7,7 +7,7 @@ use crate::{
     Bolt11InvoiceDetails, ConversionOptions, ConversionPurpose, FeePolicy, SendPaymentOptions,
     error::SdkError,
     models::{SendPaymentRequest, SendPaymentResponse},
-    sdk::BreezSdk,
+    sdk::{BreezSdk, PendingLightningSend},
     signer::{ExternalPrepareTransferRequest, ExternalPreparedTransfer},
     token_conversion::{ConversionAmount, TokenConversionResponse},
     utils::fees::fee_overpayment,
@@ -128,14 +128,28 @@ pub(super) async fn send_signed(
         amount_sat
     };
 
+    let transfer_id = prepare_transfer.transfer_id()?;
+    let _in_flight = sdk
+        .lightning_sender
+        .record_pending_send(&PendingLightningSend {
+            transfer_id: transfer_id.to_string(),
+            invoice: bolt11.to_string(),
+            amount_sats: Some(amount_to_send),
+            displayed_amount: u128::from(amount_to_send),
+        })
+        .await;
+
     let result = Box::pin(sdk.spark_wallet.publish_lightning_send_package(
-        prepare_transfer.transfer_id()?,
+        transfer_id.clone(),
         prepare_transfer.leaf_ids()?,
         bolt11.to_string(),
         Some(amount_to_send),
         signed.to_prepared_transfer()?,
     ))
     .await?;
+    sdk.lightning_sender
+        .forget_pending_send(&transfer_id.to_string())
+        .await;
 
     let payment = sdk
         .lightning_sender
