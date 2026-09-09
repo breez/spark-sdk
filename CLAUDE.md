@@ -17,6 +17,14 @@ brew install protobuf
 pacman -S protobuf
 ```
 
+On Linux, `make clippy-check` also needs libudev: the CLI's `fido2` feature pulls
+in hidapi, whose build script looks for it via pkg-config.
+
+```bash
+apt-get install -y libudev-dev   # Debian/Ubuntu
+pacman -S systemd-libs           # Arch Linux
+```
+
 ## Build Commands
 
 ```bash

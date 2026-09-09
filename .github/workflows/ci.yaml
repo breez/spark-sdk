@@ -29,6 +29,11 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # The CLI's `fido2` feature pulls in hidapi, whose build script needs
+      # libudev on Linux.
+      - name: Install libudev
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev
+
       - name: Run Clippy
         run: make cargo-clippy-check
 
