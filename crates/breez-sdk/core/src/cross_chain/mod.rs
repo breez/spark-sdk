@@ -155,6 +155,48 @@ pub enum SparkAsset {
     Token { token_identifier: String },
 }
 
+/// Amount bounds a provider publishes for moving a route with one Spark-side
+/// asset.
+///
+/// The two groups are independent, and either can be absent: a route may
+/// publish a base-unit floor (a dust minimum on a sats-funded route), a USD
+/// notional band, both, or neither.
+///
+/// `min_amount` / `max_amount` bound the asset that is paid in, so which asset
+/// they are denominated in follows the direction: the Spark-side asset on a
+/// send, the external asset on a receive. The USD band bounds the order's
+/// value and reads the same in both directions.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CrossChainRouteLimits {
+    /// Smallest amount accepted, in the base units of the asset paid in.
+    pub min_amount: Option<u128>,
+    /// Largest amount accepted, in the base units of the asset paid in.
+    pub max_amount: Option<u128>,
+    /// Smallest order value accepted, in USD cents.
+    pub min_usd_cents: Option<u64>,
+    /// Largest order value accepted, in USD cents.
+    pub max_usd_cents: Option<u64>,
+    /// Whether the provider can still reject an amount that satisfies the
+    /// bounds above. Live routing legs impose moving minimums and liquidity
+    /// ceilings that the published bounds do not capture, so when this is set
+    /// the bounds are a floor on what will be rejected, not the whole truth.
+    /// Validate a concrete amount by preparing the payment.
+    pub dynamic_limits_possible: bool,
+}
+
+/// A Spark-side asset a route accepts, with the amount bounds that apply to it.
+///
+/// Bounds are per asset rather than per route: the same external endpoint can
+/// carry a dust floor when moved as sats and none when moved as a token.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CrossChainAcceptedAsset {
+    pub asset: SparkAsset,
+    /// Unset when the provider publishes no bounds for this pairing.
+    pub limits: Option<CrossChainRouteLimits>,
+}
+
 /// The rail a cross-chain payment is delivered over.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -249,14 +291,28 @@ pub struct CrossChainRoutePair {
     pub decimals: u8,
     /// Whether the route supports exact-out mode.
     pub exact_out_eligible: bool,
-    /// Spark-side assets this route accepts.
-    pub accepted_assets: Vec<SparkAsset>,
+    /// Spark-side assets this route accepts, each with its own amount bounds.
+    pub accepted_assets: Vec<CrossChainAcceptedAsset>,
     /// Rails this route can be delivered over, orthogonal to
     /// `accepted_assets` (the asset moved vs the rail moved on).
     pub delivery_methods: Vec<DeliveryMethod>,
 }
 
 impl CrossChainRoutePair {
+    /// The bounds published for moving this route with `asset`, if the route
+    /// accepts it at all.
+    pub fn limits_for(&self, asset: &SparkAsset) -> Option<&CrossChainRouteLimits> {
+        self.accepted_assets
+            .iter()
+            .find(|a| &a.asset == asset)
+            .and_then(|a| a.limits.as_ref())
+    }
+
+    /// Whether `asset` is one of the Spark-side assets this route accepts.
+    pub fn accepts_asset(&self, asset: &SparkAsset) -> bool {
+        self.accepted_assets.iter().any(|a| &a.asset == asset)
+    }
+
     /// Infers the destination address family from the route's
     /// `contract_address`. Returns `None` for native-asset routes (no
     /// contract address) or if the address format isn't recognized; callers

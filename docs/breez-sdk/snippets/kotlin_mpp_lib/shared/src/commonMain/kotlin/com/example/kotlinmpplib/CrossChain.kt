@@ -21,6 +21,16 @@ class CrossChain {
 
             for (route in routes) {
                 // Log.v("Breez", "Route via ${route.provider}: ${route.chain}/${route.asset}")
+                // Amount bounds are published per accepted asset. Read the ones for
+                // the asset you intend to pay with, before quoting.
+                for (accepted in route.acceptedAssets) {
+                    val limits = accepted.limits ?: continue
+                    // Log.v("Breez", "  ${accepted.asset} minimum: ${limits.minAmount} " +
+                    //     "base units / ${limits.minUsdCents} USD cents")
+                    if (limits.dynamicLimitsPossible) {
+                        // Log.v("Breez", "  The provider may enforce a higher minimum")
+                    }
+                }
             }
         } catch (e: Exception) {
             // handle error

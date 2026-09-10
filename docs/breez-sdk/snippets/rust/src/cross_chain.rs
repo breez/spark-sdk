@@ -20,6 +20,20 @@ async fn get_cross_chain_routes(sdk: &BreezSdk) -> Result<()> {
             "Route via {:?}: {}/{}",
             route.provider, route.chain, route.asset
         );
+        // Amount bounds are published per accepted asset. Read the ones for
+        // the asset you intend to pay with, before quoting.
+        for accepted in &route.accepted_assets {
+            let Some(limits) = &accepted.limits else {
+                continue;
+            };
+            info!(
+                "  {:?} minimum: {:?} base units / {:?} USD cents",
+                accepted.asset, limits.min_amount, limits.min_usd_cents
+            );
+            if limits.dynamic_limits_possible {
+                info!("  The provider may enforce a higher minimum than published");
+            }
+        }
     }
     // ANCHOR_END: cross-chain-get-routes
     Ok(())

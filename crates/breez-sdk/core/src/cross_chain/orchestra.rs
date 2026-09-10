@@ -13,7 +13,7 @@ use breez_sdk_common::input::CrossChainAddressFamily;
 use chrono::DateTime;
 use flashnet::orchestra::{
     AmountMode, EstimateRequest, EstimateResponse, Order, OrderStatus, QuoteRequest, QuoteResponse,
-    Route, RouteAsset, StatusResponse, SubmitResponse,
+    Route, RouteAsset, RouteLimits, RouteWithLimits, StatusResponse, SubmitResponse,
 };
 use flashnet::{FlashnetError, OrchestraClient, OrchestraConfig, OrchestraConfigResolver};
 use platform_utils::time::Duration;
@@ -33,9 +33,10 @@ use crate::persist::{
 use crate::{ConversionInfo, ConversionStatus, Payment, PaymentDetails, PaymentStatus, Storage};
 
 use super::{
-    CrossChainFeeMode, CrossChainProvider, CrossChainProviderContext, CrossChainReceiveInfo,
-    CrossChainReceivePrepared, CrossChainRouteFilter, CrossChainRoutePair, CrossChainSendPrepared,
-    CrossChainService, DeliveryMethod, SparkAsset, derive_btc_leg_transfer_id,
+    CrossChainAcceptedAsset, CrossChainFeeMode, CrossChainProvider, CrossChainProviderContext,
+    CrossChainReceiveInfo, CrossChainReceivePrepared, CrossChainRouteFilter, CrossChainRouteLimits,
+    CrossChainRoutePair, CrossChainSendPrepared, CrossChainService, DeliveryMethod, SparkAsset,
+    derive_btc_leg_transfer_id,
     orchestra_storage_adapter::{OrchestraStorageAdapter, OrchestraSwapData},
     payment_with_conversion_info,
 };
@@ -747,7 +748,7 @@ impl OrchestraService {
         token_identifier: Option<&str>,
     ) -> Result<ResolvedSparkAsset, SdkError> {
         let raw_routes = self.client.filter_routes(source_chain, true).await?;
-        find_source_asset(&raw_routes, dest, token_identifier).ok_or_else(|| {
+        find_source_asset(spark_routes(&raw_routes), dest, token_identifier).ok_or_else(|| {
             SdkError::InvalidInput(format!(
                 "Orchestra does not offer a {source_chain} route for source {} → {}/{}",
                 token_identifier.unwrap_or("BTC"),
@@ -970,18 +971,118 @@ fn verify_quote_not_drifted(
     Ok(())
 }
 
+/// Fill in the bounds on an amount rejection from what the route publishes for
+/// the asset the payment moves. Leaves every other error untouched.
+fn attach_route_limits(
+    error: SdkError,
+    route: &CrossChainRoutePair,
+    asset: &SparkAsset,
+) -> SdkError {
+    let SdkError::CrossChainAmountOutOfRange {
+        reason, too_small, ..
+    } = error
+    else {
+        return error;
+    };
+    let limits = route.limits_for(asset);
+    let (bound_amount, bound_usd_cents) = match (limits, too_small) {
+        (Some(l), true) => (l.min_amount, l.min_usd_cents),
+        (Some(l), false) => (l.max_amount, l.max_usd_cents),
+        (None, _) => (None, None),
+    };
+    SdkError::CrossChainAmountOutOfRange {
+        reason,
+        too_small,
+        bound_amount,
+        bound_usd_cents,
+        dynamic_limits_possible: limits.is_some_and(|l| l.dynamic_limits_possible),
+    }
+}
+
+/// Narrow an Orchestra [`RouteLimits`] to the bounds the SDK surfaces.
+///
+/// Orchestra denominates a bound either in the request leg's base units or in
+/// USD cents, and publishes whichever it can compute; an unparseable value is
+/// dropped rather than failing route discovery. Returns `None` when nothing
+/// usable survives.
+fn to_route_limits(limits: &RouteLimits) -> Option<CrossChainRouteLimits> {
+    let request_amount = limits
+        .exact_in
+        .as_ref()
+        .filter(|mode| mode.supported)
+        .and_then(|mode| mode.request_amount.as_ref());
+
+    let min_amount = request_amount.and_then(|r| r.min_amount_smallest.as_ref()?.parse().ok());
+    let max_amount = request_amount.and_then(|r| r.max_amount_smallest.as_ref()?.parse().ok());
+    // The per-mode USD band is the route-level notional band restated against
+    // the request leg; fall back to the route level when the mode omits it.
+    let min_usd_cents = request_amount
+        .and_then(|r| r.min_usd_cents.as_ref()?.parse().ok())
+        .or_else(|| {
+            limits
+                .order_notional_usd
+                .as_ref()?
+                .min_cents
+                .as_ref()?
+                .parse()
+                .ok()
+        });
+    let max_usd_cents = request_amount
+        .and_then(|r| r.max_usd_cents.as_ref()?.parse().ok())
+        .or_else(|| {
+            limits
+                .order_notional_usd
+                .as_ref()?
+                .max_cents
+                .as_ref()?
+                .parse()
+                .ok()
+        });
+
+    // Default to "the route may enforce more" when Orchestra does not report
+    // it. Claiming a bound is exact on no evidence is the failure worth
+    // avoiding here: the whole point of the flag is to say when the published
+    // number can be trusted.
+    let dynamic_limits_possible = limits
+        .dynamic_provider_limits
+        .as_ref()
+        .and_then(|d| d.possible)
+        .unwrap_or(true);
+
+    if min_amount.is_none()
+        && max_amount.is_none()
+        && min_usd_cents.is_none()
+        && max_usd_cents.is_none()
+    {
+        return None;
+    }
+    Some(CrossChainRouteLimits {
+        min_amount,
+        max_amount,
+        min_usd_cents,
+        max_usd_cents,
+        dynamic_limits_possible,
+    })
+}
+
+/// Borrows just the route shape out of a limits-bearing route list, for the
+/// helpers that match on shape alone.
+fn spark_routes(routes: &[RouteWithLimits]) -> impl Iterator<Item = &Route> {
+    routes.iter().map(|r| &r.route)
+}
+
 /// Finds the Spark-side wire symbol and decimals for a route matching
 /// `(external_pair, spark_asset)`. `is_send` picks direction: Spark is the
 /// source on send, the destination on receive. Returns `None` if no route
 /// matches.
-fn find_spark_side(
-    routes: &[Route],
+fn find_spark_side<'a>(
+    routes: impl IntoIterator<Item = &'a Route>,
     external_pair: &CrossChainRoutePair,
     spark_asset: &SparkAsset,
     is_send: bool,
 ) -> Option<ResolvedSparkAsset> {
     routes
-        .iter()
+        .into_iter()
         .find(|r| {
             let (external, spark) = if is_send {
                 (&r.destination, &r.source)
@@ -1011,8 +1112,8 @@ fn find_spark_side(
 /// route. Thin wrapper over [`find_spark_side`] in the send direction.
 /// `token_identifier == None` means BTC source. Otherwise the Spark token
 /// id (bech32m).
-fn find_source_asset(
-    routes: &[Route],
+fn find_source_asset<'a>(
+    routes: impl IntoIterator<Item = &'a Route>,
     dest: &CrossChainRoutePair,
     token_identifier: Option<&str>,
 ) -> Option<ResolvedSparkAsset> {
@@ -1028,8 +1129,8 @@ fn find_source_asset(
 /// Test-only projection of [`find_spark_side`] to just the destination
 /// asset symbol.
 #[cfg(test)]
-fn find_destination_asset_symbol(
-    routes: &[Route],
+fn find_destination_asset_symbol<'a>(
+    routes: impl IntoIterator<Item = &'a Route>,
     pair: &CrossChainRoutePair,
     destination: &SparkAsset,
 ) -> Option<String> {
@@ -1109,6 +1210,15 @@ impl CrossChainService for OrchestraService {
         let source_asset = self
             .resolve_source_asset(route, source_chain, source_token_identifier.as_deref())
             .await?;
+        // The route's published bounds for the asset being moved, used to
+        // enrich an amount rejection with the number Orchestra leaves out.
+        let moved_asset = match &source_token_identifier {
+            Some(token_identifier) => SparkAsset::Token {
+                token_identifier: token_identifier.clone(),
+            },
+            None => SparkAsset::Bitcoin,
+        };
+        let with_limits = |e| attach_route_limits(e, route, &moved_asset);
 
         // FeesExcluded inflates the source to deliver the cross-chain
         // conversion of `amount`; FeesIncluded passes `amount` through (send
@@ -1130,7 +1240,8 @@ impl CrossChainService for OrchestraService {
                         false,
                         false,
                     )
-                    .await?;
+                    .await
+                    .map_err(with_limits)?;
                 (required_in, Some(destination_amount))
             }
         };
@@ -1158,7 +1269,11 @@ impl CrossChainService for OrchestraService {
             request.destination_asset,
             request.amount
         );
-        let quote: QuoteResponse = self.client.quote(request).await?;
+        let quote: QuoteResponse = self
+            .client
+            .quote(request)
+            .await
+            .map_err(|e| with_limits(SdkError::from(e)))?;
         debug!("Orchestra: quote response: {:?}", quote);
 
         let amount_in = parse_amount(&quote.amount_in, "amountIn")?;
@@ -1220,13 +1335,15 @@ impl CrossChainService for OrchestraService {
         // validation of `destination` against `route.accepted_assets` is
         // the caller's responsibility.
         let raw_routes = self.client.filter_routes(SOURCE_CHAIN_SPARK, false).await?;
-        let resolved_destination = find_spark_side(&raw_routes, route, destination, false)
-            .ok_or_else(|| {
-                SdkError::Generic(format!(
-                    "Orchestra route {}/{} has no entry matching destination {:?}",
-                    route.chain, route.asset, destination
-                ))
-            })?;
+        let resolved_destination =
+            find_spark_side(spark_routes(&raw_routes), route, destination, false).ok_or_else(
+                || {
+                    SdkError::Generic(format!(
+                        "Orchestra route {}/{} has no entry matching destination {:?}",
+                        route.chain, route.asset, destination
+                    ))
+                },
+            )?;
         let destination_asset_symbol = resolved_destination.asset;
         let destination_decimals = u32::from(resolved_destination.decimals);
         let destination_token_identifier = match destination {
@@ -1302,7 +1419,8 @@ impl CrossChainService for OrchestraService {
                         apply_rounding_margin,
                         true,
                     )
-                    .await?;
+                    .await
+                    .map_err(|e| attach_route_limits(e, route, destination))?;
                 (required_in, Some(amount))
             }
         };
@@ -1335,7 +1453,11 @@ impl CrossChainService for OrchestraService {
             request.destination_asset,
             request.amount
         );
-        let quote: QuoteResponse = self.client.quote(request).await?;
+        let quote: QuoteResponse = self
+            .client
+            .quote(request)
+            .await
+            .map_err(|e| attach_route_limits(SdkError::from(e), route, destination))?;
         debug!("Orchestra: receive quote response: {:?}", quote);
 
         let deposit_amount = parse_amount(&quote.amount_in, "amountIn")?;
@@ -2018,7 +2140,7 @@ fn validate_quote_expiry(expires_at: &str) -> Result<(), SdkError> {
 /// `BTC->USDT-on-tron` and `USDB->USDT-on-tron`), and the caller wants to see
 /// one `USDT-on-tron` route advertising both.
 fn dedupe_routes(
-    routes: &[Route],
+    routes: &[RouteWithLimits],
     is_send: bool,
     family_filter: Option<CrossChainAddressFamily>,
     contract_filter: Option<&str>,
@@ -2027,10 +2149,11 @@ fn dedupe_routes(
     let mut order: Vec<Key> = Vec::new();
     let mut grouped: HashMap<Key, CrossChainRoutePair> = HashMap::new();
 
-    for r in routes
+    for with_limits in routes
         .iter()
-        .filter(|r| route_passes_filters(r, is_send, family_filter, contract_filter))
+        .filter(|r| route_passes_filters(&r.route, is_send, family_filter, contract_filter))
     {
+        let r = &with_limits.route;
         let side = non_spark_side(r, is_send);
         let key: Key = (
             side.chain.clone(),
@@ -2071,9 +2194,12 @@ fn dedupe_routes(
         });
 
         if let Some(asset) = spark_asset
-            && !entry.accepted_assets.contains(&asset)
+            && !entry.accepted_assets.iter().any(|a| a.asset == asset)
         {
-            entry.accepted_assets.push(asset);
+            entry.accepted_assets.push(CrossChainAcceptedAsset {
+                limits: to_route_limits(&with_limits.limits),
+                asset,
+            });
         }
         if let Some(method) = delivery_method
             && !entry.delivery_methods.contains(&method)
@@ -2111,6 +2237,8 @@ fn side_to_route_pair(side: &RouteAsset, exact_out_eligible: bool) -> CrossChain
 mod tests {
     use breez_sdk_common::error::ServiceConnectivityError;
     use breez_sdk_common::fiat::{FiatCurrency, Rate};
+
+    use flashnet::orchestra::{DynamicProviderLimits, ModeLimits, RequestAmountLimits, UsdBounds};
 
     use super::*;
     use macros::{async_test_all, test_all};
@@ -2428,6 +2556,241 @@ mod tests {
         }
     }
 
+    fn no_limits() -> RouteLimits {
+        RouteLimits {
+            order_notional_usd: None,
+            exact_in: None,
+            dynamic_provider_limits: None,
+        }
+    }
+
+    /// Attach empty bounds to routes whose test is about route shape alone.
+    fn unlimited(routes: Vec<Route>) -> Vec<RouteWithLimits> {
+        routes
+            .into_iter()
+            .map(|route| RouteWithLimits {
+                route,
+                limits: no_limits(),
+            })
+            .collect()
+    }
+
+    // ---- to_route_limits / per-asset bounds ----
+
+    /// Shaped after a live `/limits` entry: Orchestra publishes the USD band on
+    /// both the route and the `exactIn` leg, and a base-unit floor only on the
+    /// legs that have one.
+    fn limits(
+        min_amount: Option<&str>,
+        min_usd: &str,
+        max_usd: &str,
+        dynamic: bool,
+    ) -> RouteLimits {
+        RouteLimits {
+            order_notional_usd: Some(UsdBounds {
+                min_cents: Some(min_usd.to_string()),
+                max_cents: Some(max_usd.to_string()),
+            }),
+            exact_in: Some(ModeLimits {
+                supported: true,
+                request_amount: Some(RequestAmountLimits {
+                    min_amount_smallest: min_amount.map(str::to_string),
+                    max_amount_smallest: None,
+                    min_usd_cents: Some(min_usd.to_string()),
+                    max_usd_cents: Some(max_usd.to_string()),
+                }),
+            }),
+            dynamic_provider_limits: Some(DynamicProviderLimits {
+                possible: Some(dynamic),
+            }),
+        }
+    }
+
+    #[test_all]
+    fn to_route_limits_reads_both_denominations() {
+        let parsed = to_route_limits(&limits(Some("1200"), "80", "8980000", true))
+            .expect("published bounds should survive");
+        assert_eq!(parsed.min_amount, Some(1200));
+        assert_eq!(parsed.max_amount, None);
+        assert_eq!(parsed.min_usd_cents, Some(80));
+        assert_eq!(parsed.max_usd_cents, Some(8_980_000));
+        assert!(parsed.dynamic_limits_possible);
+    }
+
+    #[test_all]
+    fn to_route_limits_falls_back_to_the_route_level_usd_band() {
+        // No `exactIn` leg: the route-level notional band still applies.
+        let mut raw = limits(None, "500", "1200000000", false);
+        raw.exact_in = None;
+        let parsed = to_route_limits(&raw).expect("route-level band should survive");
+        assert_eq!(parsed.min_usd_cents, Some(500));
+        assert_eq!(parsed.max_usd_cents, Some(1_200_000_000));
+        assert_eq!(parsed.min_amount, None);
+        assert!(!parsed.dynamic_limits_possible);
+    }
+
+    #[test_all]
+    fn to_route_limits_assumes_moving_limits_when_orchestra_does_not_say() {
+        // Orchestra reports this field on every route today. If it stops, a
+        // published bound we cannot vouch for must not read as exact.
+        let mut raw = limits(Some("1200"), "80", "8980000", false);
+        raw.dynamic_provider_limits = None;
+        assert!(
+            to_route_limits(&raw)
+                .expect("bounds present")
+                .dynamic_limits_possible
+        );
+
+        raw.dynamic_provider_limits = Some(DynamicProviderLimits { possible: None });
+        assert!(
+            to_route_limits(&raw)
+                .expect("bounds present")
+                .dynamic_limits_possible,
+            "an unset `possible` is not the same as false"
+        );
+    }
+
+    #[test_all]
+    fn to_route_limits_is_none_when_nothing_is_published() {
+        assert!(to_route_limits(&no_limits()).is_none());
+    }
+
+    #[test_all]
+    fn to_route_limits_drops_unparseable_values() {
+        let mut raw = limits(Some("not-a-number"), "80", "8980000", false);
+        raw.order_notional_usd = None;
+        let parsed = to_route_limits(&raw).expect("the USD band should still survive");
+        assert_eq!(parsed.min_amount, None, "garbage must not fail discovery");
+        assert_eq!(parsed.min_usd_cents, Some(80));
+    }
+
+    #[test_all]
+    fn dedupe_routes_keeps_bounds_per_spark_asset() {
+        // Live shape: the same external endpoint carries a sats dust floor when
+        // moved as BTC and none when moved as a token.
+        let usdb = "btkn1usdb_contract";
+        let routes = vec![
+            RouteWithLimits {
+                route: route(
+                    ra("spark", "BTC", None),
+                    ra("tron", "USDT", Some("TXYZtronUsdt")),
+                ),
+                limits: limits(Some("1200"), "80", "8980000", true),
+            },
+            RouteWithLimits {
+                route: route(
+                    ra("spark", "USDB", Some(usdb)),
+                    ra("tron", "USDT", Some("TXYZtronUsdt")),
+                ),
+                limits: limits(None, "80", "8980000", true),
+            },
+        ];
+
+        let pairs = dedupe_routes(&routes, true, None, None);
+
+        assert_eq!(pairs.len(), 1);
+        let pair = &pairs[0];
+        let btc = pair
+            .limits_for(&SparkAsset::Bitcoin)
+            .expect("BTC publishes bounds");
+        assert_eq!(btc.min_amount, Some(1200), "sats dust floor");
+        let token = pair
+            .limits_for(&SparkAsset::Token {
+                token_identifier: usdb.to_string(),
+            })
+            .expect("token publishes bounds");
+        assert_eq!(token.min_amount, None, "token has no dust floor");
+        assert_eq!(token.min_usd_cents, Some(80));
+    }
+
+    #[test_all]
+    fn attach_route_limits_fills_in_the_published_bound() {
+        let pairs = dedupe_routes(
+            &[RouteWithLimits {
+                route: route(
+                    ra("spark", "BTC", None),
+                    ra("tron", "USDT", Some("TXYZtronUsdt")),
+                ),
+                limits: limits(Some("1200"), "80", "8980000", true),
+            }],
+            true,
+            None,
+            None,
+        );
+
+        let enriched = attach_route_limits(
+            SdkError::CrossChainAmountOutOfRange {
+                reason: "Amount too small".to_string(),
+                too_small: true,
+                bound_amount: None,
+                bound_usd_cents: None,
+                dynamic_limits_possible: false,
+            },
+            &pairs[0],
+            &SparkAsset::Bitcoin,
+        );
+
+        let SdkError::CrossChainAmountOutOfRange {
+            bound_amount,
+            bound_usd_cents,
+            dynamic_limits_possible,
+            ..
+        } = enriched
+        else {
+            panic!("variant must be preserved");
+        };
+        assert_eq!(bound_amount, Some(1200));
+        assert_eq!(bound_usd_cents, Some(80));
+        assert!(dynamic_limits_possible);
+    }
+
+    #[test_all]
+    fn attach_route_limits_leaves_other_errors_alone() {
+        let pairs = dedupe_routes(
+            &unlimited(vec![route(
+                ra("spark", "BTC", None),
+                ra("tron", "USDT", Some("TXYZtronUsdt")),
+            )]),
+            true,
+            None,
+            None,
+        );
+        let untouched = attach_route_limits(
+            SdkError::NetworkError("boom".to_string()),
+            &pairs[0],
+            &SparkAsset::Bitcoin,
+        );
+        assert!(matches!(untouched, SdkError::NetworkError(_)));
+    }
+
+    #[test_all]
+    fn dedupe_routes_keeps_bounds_on_the_receive_side_too() {
+        // On receive the Spark side is the destination, so the bounds land on
+        // the Spark-side asset even though Orchestra quotes them against the
+        // external source leg.
+        let routes = vec![RouteWithLimits {
+            route: route(
+                ra("arbitrum", "USDC", Some("0xUSDC")),
+                ra("spark", "USDB", Some("btkn1usdb")),
+            ),
+            limits: limits(None, "80", "8980000", false),
+        }];
+
+        let pairs = dedupe_routes(&routes, false, None, None);
+
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(
+            pairs[0].chain, "arbitrum",
+            "the pair names the external side"
+        );
+        let bounds = pairs[0]
+            .limits_for(&SparkAsset::Token {
+                token_identifier: "btkn1usdb".to_string(),
+            })
+            .expect("bounds keyed by the Spark-side asset");
+        assert_eq!(bounds.min_usd_cents, Some(80));
+    }
+
     #[test_all]
     fn dedupe_routes_accumulates_source_variants() {
         // Same external endpoint (tron/USDT) fronted by two Spark sources
@@ -2445,7 +2808,7 @@ mod tests {
             ),
         ];
 
-        let pairs = dedupe_routes(&routes, true, None, None);
+        let pairs = dedupe_routes(&unlimited(routes), true, None, None);
 
         assert_eq!(
             pairs.len(),
@@ -2455,8 +2818,8 @@ mod tests {
         let p = &pairs[0];
         assert_eq!(p.chain, "tron");
         assert_eq!(p.asset, "USDT");
-        assert!(p.accepted_assets.contains(&SparkAsset::Bitcoin));
-        assert!(p.accepted_assets.contains(&SparkAsset::Token {
+        assert!(p.accepts_asset(&SparkAsset::Bitcoin));
+        assert!(p.accepts_asset(&SparkAsset::Token {
             token_identifier: usdb_contract.to_string(),
         }));
         // A Spark-sourced send reports Spark as the delivery method.
@@ -2478,7 +2841,7 @@ mod tests {
             ),
         ];
 
-        let pairs = dedupe_routes(&routes, true, None, None);
+        let pairs = dedupe_routes(&unlimited(routes), true, None, None);
 
         assert_eq!(pairs.len(), 1);
         let p = &pairs[0];
@@ -2496,7 +2859,7 @@ mod tests {
             ra("spark", "BTC", None),
         )];
 
-        let pairs = dedupe_routes(&routes, false, None, None);
+        let pairs = dedupe_routes(&unlimited(routes), false, None, None);
 
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].delivery_methods, vec![DeliveryMethod::Spark]);
@@ -2509,7 +2872,7 @@ mod tests {
             route(ra("spark", "BTC", None), ra("base", "USDC", Some("0xABC"))),
         ];
 
-        let pairs = dedupe_routes(&routes, true, None, None);
+        let pairs = dedupe_routes(&unlimited(routes), true, None, None);
 
         assert_eq!(pairs.len(), 2);
         // Insertion order preserved.
@@ -2526,7 +2889,7 @@ mod tests {
             route(ra("spark", "BTC", None), ra("base", "USDC", Some("0xBBB"))),
         ];
 
-        let pairs = dedupe_routes(&routes, true, None, Some("0xBBB"));
+        let pairs = dedupe_routes(&unlimited(routes), true, None, Some("0xBBB"));
 
         assert_eq!(pairs.len(), 1, "contract filter narrows the result set");
         assert_eq!(pairs[0].contract_address.as_deref(), Some("0xBBB"));
@@ -2545,12 +2908,12 @@ mod tests {
             ),
         ];
 
-        let pairs = dedupe_routes(&routes, false, None, None);
+        let pairs = dedupe_routes(&unlimited(routes), false, None, None);
 
         assert_eq!(pairs.len(), 1, "receive dedup groups by source side");
         assert_eq!(pairs[0].chain, "base");
-        assert!(pairs[0].accepted_assets.contains(&SparkAsset::Bitcoin));
-        assert!(pairs[0].accepted_assets.contains(&SparkAsset::Token {
+        assert!(pairs[0].accepts_asset(&SparkAsset::Bitcoin));
+        assert!(pairs[0].accepts_asset(&SparkAsset::Token {
             token_identifier: "btkn1usdb".to_string(),
         }));
     }
@@ -3670,7 +4033,7 @@ mod tests {
             ra("base", "USDC", Some("0xABC")),
         )];
 
-        let pairs = dedupe_routes(&routes, true, None, None);
+        let pairs = dedupe_routes(&unlimited(routes), true, None, None);
 
         // The route still produces a pair (the destination still matters),
         // but `accepted_assets` is empty.

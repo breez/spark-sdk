@@ -20,6 +20,21 @@ const exampleGetCrossChainRoutes = async (sdk: BreezSdk) => {
 
   for (const route of routes) {
     console.debug(`Route via ${route.provider}: ${route.chain}/${route.asset}`)
+    // Amount bounds are published per accepted asset. Read the ones for
+    // the asset you intend to pay with, before quoting.
+    for (const accepted of route.acceptedAssets) {
+      const limits = accepted.limits
+      if (limits === undefined) {
+        continue
+      }
+      console.debug(
+        `  ${accepted.asset.type} minimum: ${limits.minAmount} base units / ` +
+          `${limits.minUsdCents} USD cents`
+      )
+      if (limits.dynamicLimitsPossible) {
+        console.debug('  The provider may enforce a higher minimum than published')
+      }
+    }
   }
   // ANCHOR_END: cross-chain-get-routes
 }

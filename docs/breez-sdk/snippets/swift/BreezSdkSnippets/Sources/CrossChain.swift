@@ -15,6 +15,20 @@ func getCrossChainRoutes(sdk: BreezSdk) async throws {
 
     for route in routes {
         print("Route via \(route.provider): \(route.chain)/\(route.asset)")
+        // Amount bounds are published per accepted asset. Read the ones for
+        // the asset you intend to pay with, before quoting.
+        for accepted in route.acceptedAssets {
+            guard let limits = accepted.limits else {
+                continue
+            }
+            print(
+                "  \(accepted.asset) minimum: \(String(describing: limits.minAmount)) "
+                    + "base units / \(String(describing: limits.minUsdCents)) USD cents"
+            )
+            if limits.dynamicLimitsPossible {
+                print("  The provider may enforce a higher minimum than published")
+            }
+        }
     }
     // ANCHOR_END: cross-chain-get-routes
 }

@@ -34,6 +34,23 @@ func GetCrossChainRoutes(sdk *breez_sdk_spark.BreezSdk) ([]breez_sdk_spark.Cross
 
 	for _, route := range routes {
 		log.Printf("Route via %v: %s/%s", route.Provider, route.Chain, route.Asset)
+		// Amount bounds are published per accepted asset. Read the ones for
+		// the asset you intend to pay with, before quoting.
+		for _, accepted := range route.AcceptedAssets {
+			limits := accepted.Limits
+			if limits == nil {
+				continue
+			}
+			if limits.MinAmount != nil {
+				log.Printf("  %v minimum: %v base units", accepted.Asset, *limits.MinAmount)
+			}
+			if limits.MinUsdCents != nil {
+				log.Printf("  %v minimum: %d USD cents", accepted.Asset, *limits.MinUsdCents)
+			}
+			if limits.DynamicLimitsPossible {
+				log.Printf("  The provider may enforce a higher minimum than published")
+			}
+		}
 	}
 	// ANCHOR_END: cross-chain-get-routes
 	return routes, nil
