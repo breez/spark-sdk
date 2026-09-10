@@ -194,16 +194,32 @@ private func parseCpfpInput(_ s: String, _ kind: CpfpFundingKind) -> CpfpInput? 
 private func printExitTransactions(_ response: UnilateralExitResponse) {
     print(
         "Recoverable \(response.recoverableValueSat) sats, " +
-        "total fee \(response.totalFeeSat) sats, " +
+        "total fee \(response.totalFeeSat) sats " +
+        "(cpfp \(response.cpfpFeeSat), fanout \(response.fanoutFeeSat), sweep \(response.sweepFeeSat)), " +
         "\(response.transactions.count) transaction(s):"
     )
     for (i, tx) in response.transactions.enumerated() {
         let after = tx.dependsOn.isEmpty ? "" : ", after \(tx.dependsOn.joined(separator: ","))"
         let csv = tx.csvTimelockBlocks.map { ", csv \($0) blocks" } ?? ""
         print("  [\(i)] \(tx.kind) status=\(tx.status) txid=\(tx.txid)\(after)\(csv)")
-        if case .confirmed = tx.status {
-            print("      (already confirmed, nothing to broadcast)")
+        switch tx.status {
+        case let .confirmed(blockHeight):
+            if let height = blockHeight {
+                print("      (confirmed in block \(height), nothing to broadcast)")
+            } else {
+                print("      (already confirmed, nothing to broadcast)")
+            }
             continue
+        case .waitingForDependencies:
+            print("      (waiting on the transactions it depends on)")
+        case let .waitingForTimelock(spendableAtHeight):
+            if let height = spendableAtHeight {
+                print("      (waiting for its timelock, until block \(height))")
+            } else {
+                print("      (waiting for its timelock)")
+            }
+        case .ready, .unverified:
+            break
         }
         let package: String
         if let cpfp = tx.cpfpTxHex {

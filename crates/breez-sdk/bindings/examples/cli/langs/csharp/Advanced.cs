@@ -270,7 +270,8 @@ public static class AdvancedCommands
     {
         Console.WriteLine(
             $"Recoverable {response.recoverableValueSat} sats, " +
-            $"total fee {response.totalFeeSat} sats, " +
+            $"total fee {response.totalFeeSat} sats " +
+            $"(cpfp {response.cpfpFeeSat}, fanout {response.fanoutFeeSat}, sweep {response.sweepFeeSat}), " +
             $"{response.transactions.Length} transaction(s):");
 
         for (int i = 0; i < response.transactions.Length; i++)
@@ -285,10 +286,36 @@ public static class AdvancedCommands
             Console.WriteLine(
                 $"  [{i}] {tx.kind} status={tx.status} txid={tx.txid}{after}{csv}");
 
-            if (tx.status is ExitTransactionStatus.Confirmed)
+            switch (tx.status)
             {
-                Console.WriteLine("      (already confirmed, nothing to broadcast)");
-                continue;
+                case ExitTransactionStatus.Confirmed confirmed:
+                    if (confirmed.blockHeight != null)
+                    {
+                        Console.WriteLine(
+                            $"      (confirmed in block {confirmed.blockHeight}, nothing to broadcast)");
+                    }
+                    else
+                    {
+                        Console.WriteLine("      (already confirmed, nothing to broadcast)");
+                    }
+                    continue;
+                case ExitTransactionStatus.WaitingForDependencies:
+                    Console.WriteLine("      (waiting on the transactions it depends on)");
+                    break;
+                case ExitTransactionStatus.WaitingForTimelock wft:
+                    if (wft.spendableAtHeight != null)
+                    {
+                        Console.WriteLine(
+                            $"      (waiting for its timelock, until block {wft.spendableAtHeight})");
+                    }
+                    else
+                    {
+                        Console.WriteLine("      (waiting for its timelock)");
+                    }
+                    break;
+                case ExitTransactionStatus.Ready:
+                case ExitTransactionStatus.Unverified:
+                    break;
             }
 
             var package = tx.cpfpTxHex != null

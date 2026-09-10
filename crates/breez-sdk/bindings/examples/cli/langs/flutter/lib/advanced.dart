@@ -225,7 +225,9 @@ CpfpInput? _parseCpfpInput(String s, String kindStr) {
 void _printExitTransactions(UnilateralExitResponse response) {
   print(
     'Recoverable ${response.recoverableValueSat} sats, '
-    'total fee ${response.totalFeeSat} sats, '
+    'total fee ${response.totalFeeSat} sats '
+    '(cpfp ${response.cpfpFeeSat}, fanout ${response.fanoutFeeSat}, '
+    'sweep ${response.sweepFeeSat}), '
     '${response.transactions.length} transaction(s):',
   );
   for (var i = 0; i < response.transactions.length; i++) {
@@ -233,9 +235,24 @@ void _printExitTransactions(UnilateralExitResponse response) {
     final after = tx.dependsOn.isEmpty ? '' : ', after ${tx.dependsOn.join(",")}';
     final csv = tx.csvTimelockBlocks != null ? ', csv ${tx.csvTimelockBlocks} blocks' : '';
     print('  [$i] ${tx.kind} status=${tx.status} txid=${tx.txid}$after$csv');
-    if (tx.status is ExitTransactionStatus_Confirmed) {
-      print('      (already confirmed, nothing to broadcast)');
+    final status = tx.status;
+    if (status is ExitTransactionStatus_Confirmed) {
+      final height = status.blockHeight;
+      if (height != null) {
+        print('      (confirmed in block $height, nothing to broadcast)');
+      } else {
+        print('      (already confirmed, nothing to broadcast)');
+      }
       continue;
+    } else if (status is ExitTransactionStatus_WaitingForDependencies) {
+      print('      (waiting on the transactions it depends on)');
+    } else if (status is ExitTransactionStatus_WaitingForTimelock) {
+      final height = status.spendableAtHeight;
+      if (height != null) {
+        print('      (waiting for its timelock, until block $height)');
+      } else {
+        print('      (waiting for its timelock)');
+      }
     }
     final package = tx.cpfpTxHex != null ? '${tx.txHex},${tx.cpfpTxHex}' : tx.txHex;
     print('      Package: $package');

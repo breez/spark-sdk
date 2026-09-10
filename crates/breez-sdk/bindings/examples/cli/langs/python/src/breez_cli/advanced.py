@@ -64,7 +64,9 @@ def _parse_cpfp_input(s, funding_kind_str):
 def _print_exit_transactions(response):
     print(
         f"Recoverable {response.recoverable_value_sat} sats, "
-        f"total fee {response.total_fee_sat} sats, "
+        f"total fee {response.total_fee_sat} sats "
+        f"(cpfp {response.cpfp_fee_sat}, fanout {response.fanout_fee_sat}, "
+        f"sweep {response.sweep_fee_sat}), "
         f"{len(response.transactions)} transaction(s):"
     )
     for i, tx in enumerate(response.transactions):
@@ -76,8 +78,20 @@ def _print_exit_transactions(response):
             csv = f", csv {tx.csv_timelock_blocks} blocks"
         print(f"  [{i}] {tx.kind} status={tx.status} txid={tx.txid}{after}{csv}")
         if isinstance(tx.status, ExitTransactionStatus.CONFIRMED):
-            print("      (already confirmed, nothing to broadcast)")
+            block_height = tx.status.block_height
+            if block_height is not None:
+                print(f"      (confirmed in block {block_height}, nothing to broadcast)")
+            else:
+                print("      (already confirmed, nothing to broadcast)")
             continue
+        if isinstance(tx.status, ExitTransactionStatus.WAITING_FOR_DEPENDENCIES):
+            print("      (waiting on the transactions it depends on)")
+        elif isinstance(tx.status, ExitTransactionStatus.WAITING_FOR_TIMELOCK):
+            spendable_at_height = tx.status.spendable_at_height
+            if spendable_at_height is not None:
+                print(f"      (waiting for its timelock, until block {spendable_at_height})")
+            else:
+                print("      (waiting for its timelock)")
         if tx.cpfp_tx_hex is not None:
             package = f"{tx.tx_hex},{tx.cpfp_tx_hex}"
         else:
