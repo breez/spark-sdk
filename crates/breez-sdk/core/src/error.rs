@@ -33,6 +33,36 @@ pub enum SdkError {
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
+    /// A cross-chain provider rejected the amount as outside what it accepts
+    /// for the route.
+    ///
+    /// The bound fields carry what the route publishes in the direction that
+    /// failed, in whichever denominations the provider publishes. They can be
+    /// looser than what it actually enforces: when `dynamic_limits_possible` is
+    /// set, the route is carried over legs with their own moving minimums and
+    /// liquidity ceilings, so an amount inside the published bound can still
+    /// land here.
+    ///
+    /// The message is the provider's own rejection text with the published
+    /// bound appended, so it already names the direction.
+    #[error(
+        "{reason}{}",
+        render_bound(*too_small, *bound_amount, *bound_usd_cents, *dynamic_limits_possible)
+    )]
+    CrossChainAmountOutOfRange {
+        reason: String,
+        /// `true` for a rejection below the minimum, `false` for one above the
+        /// maximum or beyond available liquidity.
+        too_small: bool,
+        /// The published bound in the base units of the asset paid in: the
+        /// Spark-side asset on a send, the external asset on a receive.
+        bound_amount: Option<u128>,
+        /// The published bound as an order value in USD cents.
+        bound_usd_cents: Option<u64>,
+        /// Whether the provider can reject an amount that satisfies the bound.
+        dynamic_limits_possible: bool,
+    },
+
     /// Network error
     #[error("Network error: {0}")]
     NetworkError(String),
@@ -123,6 +153,15 @@ impl From<bitcoin::address::ParseError> for SdkError {
 impl From<flashnet::FlashnetError> for SdkError {
     fn from(e: flashnet::FlashnetError) -> Self {
         match e {
+            flashnet::FlashnetError::AmountOutOfRange { reason, too_small } => {
+                SdkError::CrossChainAmountOutOfRange {
+                    reason,
+                    too_small,
+                    bound_amount: None,
+                    bound_usd_cents: None,
+                    dynamic_limits_possible: false,
+                }
+            }
             flashnet::FlashnetError::Network { reason, code } => {
                 let code = match code {
                     Some(c) => format!(" (code: {c})"),
@@ -383,5 +422,107 @@ impl From<String> for SignerError {
 impl From<&str> for SignerError {
     fn from(s: &str) -> Self {
         SignerError::Generic(s.to_string())
+    }
+}
+
+/// Renders the bound an amount rejection ran into, for the error message.
+/// Empty when the provider publishes nothing in that direction.
+///
+/// Both denominations are named when both are published: which one the provider
+/// applied is not reported, and they are not interconvertible without a rate.
+fn render_bound(
+    too_small: bool,
+    bound_amount: Option<u128>,
+    bound_usd_cents: Option<u64>,
+    dynamic_limits_possible: bool,
+) -> String {
+    let mut bounds = Vec::new();
+    if let Some(amount) = bound_amount {
+        bounds.push(format!("{amount} base units"));
+    }
+    if let Some(cents) = bound_usd_cents {
+        bounds.push(format!("{}.{:02} USD", cents / 100, cents % 100));
+    }
+    if bounds.is_empty() {
+        return String::new();
+    }
+    let label = if too_small { "minimum" } else { "maximum" };
+    // Live legs move the bound in whichever direction failed: their own
+    // minimums raise the floor, their liquidity lowers the ceiling.
+    let caveat = match (dynamic_limits_possible, too_small) {
+        (true, true) => "; the route can enforce a higher one",
+        (true, false) => "; the route can enforce a lower one",
+        (false, _) => "",
+    };
+    format!(" (published {label}: {}{caveat})", bounds.join(" or "))
+}
+
+#[cfg(test)]
+mod render_bound_tests {
+    use super::*;
+
+    /// The rendered message is the only channel bindings that flatten
+    /// `SdkError` to a string have, so the number has to survive into it.
+    fn message(
+        too_small: bool,
+        bound_amount: Option<u128>,
+        bound_usd_cents: Option<u64>,
+        dynamic_limits_possible: bool,
+    ) -> String {
+        // Orchestra's own wording for each direction.
+        let reason = if too_small {
+            "Amount too small"
+        } else {
+            "Amount too large"
+        };
+        SdkError::CrossChainAmountOutOfRange {
+            reason: reason.to_string(),
+            too_small,
+            bound_amount,
+            bound_usd_cents,
+            dynamic_limits_possible,
+        }
+        .to_string()
+    }
+
+    #[test]
+    fn names_both_denominations_when_both_are_published() {
+        assert_eq!(
+            message(true, Some(1200), Some(80), false),
+            "Amount too small (published minimum: 1200 base units or 0.80 USD)"
+        );
+    }
+
+    #[test]
+    fn flags_a_route_that_can_enforce_a_higher_minimum() {
+        assert_eq!(
+            message(true, None, Some(80), true),
+            "Amount too small (published minimum: 0.80 USD; the route can enforce a higher one)"
+        );
+    }
+
+    #[test]
+    fn a_too_large_rejection_reads_as_a_maximum() {
+        // A liquidity rejection lands here, and live liquidity sits below the
+        // published ceiling, so the caveat qualifies a maximum too.
+        assert_eq!(
+            message(false, None, Some(8_980_000), true),
+            "Amount too large (published maximum: 89800.00 USD; the route can enforce a lower one)"
+        );
+        assert_eq!(
+            message(false, None, Some(8_980_000), false),
+            "Amount too large (published maximum: 89800.00 USD)",
+            "a route that publishes exact bounds carries no caveat"
+        );
+    }
+
+    #[test]
+    fn says_nothing_when_the_provider_publishes_no_bound() {
+        assert_eq!(message(true, None, None, true), "Amount too small");
+    }
+
+    #[test]
+    fn pads_a_sub_dollar_bound_to_two_decimals() {
+        assert!(message(true, None, Some(5), false).ends_with("(published minimum: 0.05 USD)"));
     }
 }

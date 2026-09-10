@@ -121,6 +121,36 @@ fn is_target_chain(route: &CrossChainRoutePair) -> bool {
     )
 }
 
+/// Asserts the route publishes amount bounds for `asset`.
+///
+/// Orchestra route discovery reads `GET /v1/orchestration/limits`, so a change
+/// in that response's shape would silently strip every route of its bounds
+/// (and losing the endpoint outright would drop the provider). Nothing else in
+/// the suite would notice, so assert it here against the live API. Either
+/// denomination alone satisfies this: every Orchestra route published a USD
+/// notional band as of writing, and only some publish a base-unit floor.
+fn assert_publishes_limits(route: &CrossChainRoutePair, asset: &SparkAsset) -> Result<()> {
+    let limits = route.limits_for(asset).cloned().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Route {}/{} publishes no amount limits for {asset:?}. Orchestra's \
+             /limits response has probably changed shape: check `to_route_limits`.",
+            route.chain,
+            route.asset,
+        )
+    })?;
+    anyhow::ensure!(
+        limits.min_amount.is_some()
+            || limits.max_amount.is_some()
+            || limits.min_usd_cents.is_some()
+            || limits.max_usd_cents.is_some(),
+        "Route {}/{} published an empty limits block for {asset:?}: {limits:?}",
+        route.chain,
+        route.asset,
+    );
+    info!("Published limits for {asset:?}: {limits:?}");
+    Ok(())
+}
+
 // SEND-side note: `amount` on `PaymentRequest::CrossChain` is denominated in
 // the **source** asset's units. Token-source sends use token base units (USDB
 // for test 02). BTC-source sends use **sats** (test 01). Sized and asserted
@@ -574,6 +604,13 @@ async fn run_cross_chain_evm_send(
         "Selected route: {asset} on {} ({contract}) [{provider:?}], recipient {recipient}",
         route.chain
     );
+    let funding_asset = match &token_identifier {
+        Some(token_identifier) => SparkAsset::Token {
+            token_identifier: token_identifier.clone(),
+        },
+        None => SparkAsset::Bitcoin,
+    };
+    assert_publishes_limits(&route, &funding_asset)?;
 
     // 2. Baseline the recipient's on-chain balance before sending.
     let baseline = evm_erc20_balance(&rpc_url, &contract, recipient).await?;
@@ -850,7 +887,7 @@ async fn run_cross_chain_evm_receive(
     );
 
     // Confirm the route lands the requested destination.
-    if !route.accepted_assets.contains(&destination) {
+    if !route.accepts_asset(&destination) {
         warn!(
             "Route {source_asset}→Arbitrum does not offer {dest_label} destination \
              (accepted_assets={:?}); skipping",
@@ -858,6 +895,7 @@ async fn run_cross_chain_evm_receive(
         );
         return Ok(());
     }
+    assert_publishes_limits(&route, &destination)?;
 
     // 2. Gas-for-broadcast check.
     let eth_balance = evm_native_balance(&rpc_url, &recipient).await?;

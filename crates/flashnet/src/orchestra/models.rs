@@ -8,15 +8,6 @@
 
 use serde::{Deserialize, Serialize};
 
-// ---------------------------------------------------------------------------
-// GET /v1/orchestration/routes
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RoutesResponse {
-    pub routes: Vec<Route>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Route {
@@ -38,6 +29,85 @@ pub struct RouteAsset {
     pub contract_address: Option<String>,
     pub decimals: u8,
     pub chain_id: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// GET /v1/orchestration/limits
+// ---------------------------------------------------------------------------
+
+/// `/limits` returns the same route set as `/routes` under the same filters,
+/// with a `limits` block attached to each entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LimitsResponse {
+    pub routes: Vec<RouteWithLimits>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouteWithLimits {
+    #[serde(flatten)]
+    pub route: Route,
+    pub limits: RouteLimits,
+}
+
+/// Only the bounds the SDK surfaces are modelled. The `constraints` array and
+/// the `fiatUsd` / `exactOut` groups are ignored on deserialization.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteLimits {
+    #[serde(default)]
+    pub order_notional_usd: Option<UsdBounds>,
+    #[serde(default)]
+    pub exact_in: Option<ModeLimits>,
+    #[serde(default)]
+    pub dynamic_provider_limits: Option<DynamicProviderLimits>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsdBounds {
+    #[serde(default)]
+    pub min_cents: Option<String>,
+    #[serde(default)]
+    pub max_cents: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModeLimits {
+    #[serde(default)]
+    pub supported: bool,
+    #[serde(default)]
+    pub request_amount: Option<RequestAmountLimits>,
+}
+
+/// Bounds on the amount the caller passes to `/estimate` and `/quote`.
+///
+/// `*_amount_smallest` is denominated in the request leg's base units (the
+/// source leg for `exact_in`); `*_usd_cents` in USD cents. Either group can be
+/// absent, and the two are independent: a route can publish a base-unit dust
+/// floor, a USD notional floor, both, or neither.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestAmountLimits {
+    #[serde(default)]
+    pub min_amount_smallest: Option<String>,
+    #[serde(default)]
+    pub max_amount_smallest: Option<String>,
+    #[serde(default)]
+    pub min_usd_cents: Option<String>,
+    #[serde(default)]
+    pub max_usd_cents: Option<String>,
+}
+
+/// Whether live routing legs can reject an amount that sits inside the static
+/// bounds. `true` means the published minimum is a floor, not the real one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DynamicProviderLimits {
+    /// Unset when Orchestra does not report it. Distinct from `false`, which is
+    /// a positive claim that the published bounds are the whole truth.
+    #[serde(default)]
+    pub possible: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------
@@ -334,6 +404,86 @@ pub struct Stage {
     pub status: String,
     #[serde(default)]
     pub completed_at: Option<String>,
+}
+
+#[cfg(test)]
+mod limits_response_tests {
+    use super::*;
+
+    /// Verbatim `/v1/orchestration/limits` entry for spark/USDB to tron/USDT,
+    /// including the groups the SDK does not model.
+    const LIVE_ENTRY: &str = r#"{"routes":[{
+        "sourceChain":"spark","sourceAsset":"USDB",
+        "destinationChain":"tron","destinationAsset":"USDT",
+        "exactOutEligible":false,"fixedEligible":true,
+        "source":{"chain":"spark","asset":"USDB","contractAddress":"btkn1xgrv","decimals":6,"chainId":null},
+        "destination":{"chain":"tron","asset":"USDT","contractAddress":"TR7NHqje","decimals":6,"chainId":"728126428"},
+        "direction":"sell",
+        "limits":{
+            "orderNotionalUsd":{"minCents":"80","maxCents":"9030000","source":"runtime_order_bounds"},
+            "exactIn":{"supported":true,"requestAmount":{"leg":"source","chain":"spark","asset":"USDB",
+                "minAmountSmallest":null,"maxAmountSmallest":null,
+                "minUsdCents":"80","maxUsdCents":"9030000"},
+                "constraints":["order_notional_usd","provider_dynamic_limits"]},
+            "exactOut":{"supported":false,"requestAmount":null,"constraints":[]},
+            "fiatUsd":null,
+            "dynamicProviderLimits":{"possible":true,"components":["relay"],"description":"..."},
+            "constraints":[{"id":"order_notional_usd","amountMode":"all","leg":"route"}]
+        }}]}"#;
+
+    #[test]
+    fn deserializes_a_live_limits_entry() {
+        let parsed: LimitsResponse = serde_json::from_str(LIVE_ENTRY).expect("live shape parses");
+        let entry = &parsed.routes[0];
+        // The route fields are flattened alongside `limits`.
+        assert_eq!(entry.route.source_chain, "spark");
+        assert_eq!(entry.route.destination.decimals, 6);
+
+        let exact_in = entry.limits.exact_in.as_ref().expect("exactIn present");
+        assert!(exact_in.supported);
+        let request = exact_in.request_amount.as_ref().expect("bounds present");
+        assert_eq!(request.min_amount_smallest, None);
+        assert_eq!(request.min_usd_cents.as_deref(), Some("80"));
+        assert_eq!(
+            entry
+                .limits
+                .order_notional_usd
+                .as_ref()
+                .and_then(|b| b.max_cents.as_deref()),
+            Some("9030000")
+        );
+        assert_eq!(
+            entry
+                .limits
+                .dynamic_provider_limits
+                .as_ref()
+                .expect("dynamic block present")
+                .possible,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn survives_a_cache_round_trip() {
+        // Cached responses are re-read through serde, and the flattened `route`
+        // fields go through serde's buffered representation on the way back in.
+        let parsed: LimitsResponse = serde_json::from_str(LIVE_ENTRY).unwrap();
+        let round_tripped: LimitsResponse =
+            serde_json::from_str(&serde_json::to_string(&parsed).unwrap())
+                .expect("a cached response must re-read");
+        let entry = &round_tripped.routes[0];
+        assert_eq!(entry.route.destination.decimals, 6);
+        assert!(!entry.route.exact_out_eligible);
+        assert_eq!(
+            entry
+                .limits
+                .exact_in
+                .as_ref()
+                .and_then(|m| m.request_amount.as_ref())
+                .and_then(|r| r.min_usd_cents.as_deref()),
+            Some("80")
+        );
+    }
 }
 
 #[cfg(test)]

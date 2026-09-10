@@ -15,6 +15,21 @@ Future<List<CrossChainRoutePair>> getCrossChainRoutes(BreezSdk sdk) async {
 
   for (var route in routes) {
     print("Route via ${route.provider}: ${route.chain}/${route.asset}");
+    // Amount bounds are published per accepted asset. Read the ones for
+    // the asset you intend to pay with, before quoting.
+    for (var accepted in route.acceptedAssets) {
+      final limits = accepted.limits;
+      if (limits == null) {
+        continue;
+      }
+      print(
+        "  ${accepted.asset} minimum: ${limits.minAmount} base units"
+        " / ${limits.minUsdCents} USD cents",
+      );
+      if (limits.dynamicLimitsPossible) {
+        print("  The provider may enforce a higher minimum than published");
+      }
+    }
   }
   // ANCHOR_END: cross-chain-get-routes
   return routes;

@@ -78,11 +78,11 @@ fn validate_route_supports_effective_source(
         }
     };
 
-    if !route.accepted_assets.contains(&effective_source) {
+    if !route.accepts_asset(&effective_source) {
         let supported_list = route
             .accepted_assets
             .iter()
-            .map(|s| match s {
+            .map(|s| match &s.asset {
                 SparkAsset::Bitcoin => "sats".to_string(),
                 SparkAsset::Token {
                     token_identifier: t,
@@ -773,16 +773,15 @@ fn decide_cross_chain_source(
     match token_identifier {
         // 2) Caller specified a token.
         Some(token_id) => {
-            let route_accepts_token = route
-                .accepted_assets
-                .iter()
-                .any(|s| matches!(s, SparkAsset::Token { token_identifier: t } if t == token_id));
+            let route_accepts_token = route.accepted_assets.iter().any(
+                |s| matches!(&s.asset, SparkAsset::Token { token_identifier: t } if t == token_id),
+            );
             if route_accepts_token {
                 // Direct token send — no conversion needed.
                 return CrossChainSourceDecision::UseAsIs(None);
             }
 
-            let route_accepts_bitcoin = route.accepted_assets.contains(&SparkAsset::Bitcoin);
+            let route_accepts_bitcoin = route.accepts_asset(&SparkAsset::Bitcoin);
             if !route_accepts_bitcoin {
                 // Neither direct nor auto-inject; caller must handle.
                 return CrossChainSourceDecision::UseAsIs(None);
@@ -803,7 +802,7 @@ fn decide_cross_chain_source(
         }
         // 3) No token specified.
         None => {
-            if route.accepted_assets.contains(&SparkAsset::Bitcoin) {
+            if route.accepts_asset(&SparkAsset::Bitcoin) {
                 // Defer to stable_balance auto-inject: fires when the sats
                 // balance is insufficient to cover `amount`.
                 CrossChainSourceDecision::DeferToStableBalance
@@ -876,7 +875,13 @@ mod tests {
             contract_address: None,
             decimals: 6,
             exact_out_eligible: false,
-            accepted_assets: sources,
+            accepted_assets: sources
+                .into_iter()
+                .map(|asset| crate::cross_chain::CrossChainAcceptedAsset {
+                    asset,
+                    limits: None,
+                })
+                .collect(),
             delivery_methods: vec![DeliveryMethod::Spark],
         }
     }

@@ -223,7 +223,7 @@ pub(in crate::sdk) fn resolve_direct_overpay_amount(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CrossChainProvider, DeliveryMethod, SparkAsset};
+    use crate::{CrossChainAcceptedAsset, CrossChainProvider, DeliveryMethod, SparkAsset};
     use macros::test_all;
 
     #[cfg(feature = "browser-tests")]
@@ -375,7 +375,10 @@ mod tests {
             contract_address: contract.map(str::to_string),
             decimals: 6,
             exact_out_eligible: false,
-            accepted_assets: vec![SparkAsset::Bitcoin],
+            accepted_assets: vec![CrossChainAcceptedAsset {
+                asset: SparkAsset::Bitcoin,
+                limits: None,
+            }],
             delivery_methods: vec![DeliveryMethod::Spark],
         }
     }
