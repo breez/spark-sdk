@@ -15,6 +15,9 @@
  *          those hand-written files (which live under
  *          `android/src/main/kotlin/...` to survive `yarn ubrn:clean`)
  *          are actually compiled
+ *        - guard `apply plugin: "kotlin-android"` so it is skipped when AGP
+ *          has already registered the `kotlin` extension (AGP 9+ built-in
+ *          Kotlin), which otherwise fails configuration
  *
  *   2. android/src/main/java/.../BreezSdkSparkReactNativePackage.kt
  *        - register BreezSdkSparkPasskeyModule alongside the generated
@@ -134,6 +137,32 @@ patchFile(
       main.kotlin.srcDirs += 'src/main/kotlin'
       if (isNewArchitectureEnabled()) {`
     );
+  }
+);
+
+patchFile(
+  'android/build.gradle',
+  'AGP 9 built-in Kotlin guard',
+  (content, label, relPath) => {
+    if (content.includes("project.extensions.findByName('kotlin')")) {
+      return content;
+    }
+    // Anchored on both applies, not just the Kotlin one: the guard is only
+    // correct after AGP has registered its extensions, so a reordering
+    // upstream must fail here rather than inject it where findByName always
+    // returns null.
+    const anchor = `apply plugin: "com.android.library"
+apply plugin: "kotlin-android"`;
+    requireAnchor(content, anchor, label, relPath);
+    const injected = `apply plugin: "com.android.library"
+// AGP 9 ships built-in Kotlin support and registers the \`kotlin\` extension
+// itself. Applying the Kotlin plugin on top of it fails configuration with
+// "Cannot add extension with name 'kotlin'". Only apply it when nothing has
+// registered that extension yet.
+if (project.extensions.findByName('kotlin') == null) {
+  apply plugin: "kotlin-android"
+}`;
+    return content.replace(anchor, injected);
   }
 );
 
