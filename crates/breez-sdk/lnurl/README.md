@@ -46,10 +46,10 @@ brew install protobuf openssl pkg-config
 From the repository root:
 
 ```shell
-cargo build --release --manifest-path crates/breez-sdk/lnurl/Cargo.toml
+cargo build --profile release-lnurl -p lnurl
 ```
 
-The compiled binary will be available at `target/release/lnurl`.
+The compiled binary will be available at `target/release-lnurl/lnurl`.
 
 ## How to Run
 
@@ -77,7 +77,7 @@ docker run -p 8080:8080 \
 If you've built the binary, you can run it directly:
 
 ```shell
-./target/release/lnurl --db-url="postgres://user:password@localhost:5432/lnurl_db" --domains="yourdomain.com" --default-api-key="<breez-api-key>" --auto-migrate
+./target/release-lnurl/lnurl --db-url="postgres://user:password@localhost:5432/lnurl_db" --domains="yourdomain.com" --default-api-key="<breez-api-key>" --auto-migrate
 ```
 
 ## Configuration
@@ -272,7 +272,7 @@ pubkey that released it.
 
 ```shell
 # Point at a local database with auto-migrations
-./target/release/lnurl --db-url="postgres://user:password@localhost:5432/lnurl_db" \
+./target/release-lnurl/lnurl --db-url="postgres://user:password@localhost:5432/lnurl_db" \
   --domains="localhost:8080" \
   --auto-migrate \
   --scheme="http"
@@ -282,7 +282,7 @@ pubkey that released it.
 
 ```shell
 # Setup PostgreSQL database with auto-migrations
-./target/release/lnurl --db-url="postgres://user:password@localhost:5432/lnurl_db" \
+./target/release-lnurl/lnurl --db-url="postgres://user:password@localhost:5432/lnurl_db" \
   --domains="yourdomain.com" \
   --auto-migrate \
   --address="0.0.0.0:8080"
@@ -326,21 +326,12 @@ volumes:
 
 ## Testing
 
-The tests run against a real PostgreSQL instance. Each test gets its own schema,
-so they can share one database, but the tests create and drop schemas in it:
-point `LNURL_TEST_POSTGRES_URL` at a disposable instance, never at real data.
+The tests run against a real PostgreSQL instance, started per test as a
+throwaway container, so Docker has to be running.
 
 ```shell
-docker run -d --rm --name lnurl-pg-test \
-  -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=lnurl_test \
-  -p 55432:5432 postgres:16-alpine
-
-LNURL_TEST_POSTGRES_URL="postgres://postgres:postgres@localhost:55432/lnurl_test" \
-  make lnurl-test
+cargo test -p lnurl
 ```
-
-Without `LNURL_TEST_POSTGRES_URL` the database-backed tests fail rather than
-silently skip.
 
 ## License
 
