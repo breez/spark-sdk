@@ -46,7 +46,7 @@
 - [Signing and verifying messages](guide/messages.md)
 - [Supporting fiat currencies](guide/fiat_currencies.md)
 - [Buying Bitcoin](guide/buy_bitcoin.md)
-- [USDC/USDT payments](guide/cross_chain.md)
+- [Send and receive USDC/USDT](guide/cross_chain.md)
 - [Cash App to USDC/USDT](guide/cash_app_to_usdc_usdt.md)
 - [End-user fees](guide/end-user_fees.md)
 - [Handling tokens](guide/tokens.md)
