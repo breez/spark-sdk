@@ -215,6 +215,20 @@ impl BitcoindFixture {
         Ok(hashes)
     }
 
+    /// Mines blocks nobody spends, for advancing the chain past a timelock.
+    ///
+    /// Pays a fixed address outside the node's wallet: `generate_blocks` pays
+    /// the wallet, and a run that clears a relative timelock mines thousands of
+    /// blocks, so tracking a coinbase for each one slows the call until it
+    /// outruns the RPC timeout.
+    pub async fn generate_filler_blocks(&self, count: u64) -> Result<Vec<String>> {
+        self.rpc_call::<Vec<String>>(
+            "generatetoaddress",
+            &[json!(count), json!(DEFAULT_MINING_ADDRESS)],
+        )
+        .await
+    }
+
     pub async fn broadcast_transaction(&self, tx: &Transaction) -> Result<Txid> {
         let tx_hex = hex::encode(bitcoin::consensus::serialize(tx));
         self.rpc_call::<String>("sendrawtransaction", &[json!(tx_hex)])

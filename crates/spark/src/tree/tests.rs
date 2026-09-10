@@ -956,9 +956,11 @@ pub async fn test_get_verified_leaf_keys(store: &dyn TreeStore) {
         got.signing_keyshare_public_key,
         PublicKey::from_str(keyshare).unwrap()
     );
-    // Reserved leaf included; non-Available unreserved leaf excluded.
+    // Every stored leaf is a verified leaf, whatever its status: a leaf part-way
+    // through an exit is re-verified on every refresh if it is left out, which
+    // costs a remote signer a round trip per leaf.
     assert!(keys.contains_key(&reserved.id));
-    assert!(!keys.contains_key(&not_available.id));
+    assert!(keys.contains_key(&not_available.id));
 }
 
 pub async fn test_add_leaves(store: &dyn TreeStore) {

@@ -54,6 +54,40 @@ namespace BreezSdkSnippets
             // ANCHOR_END: unilateral-exit
         }
 
+        async Task CheckExit(BreezSdk sdk, UnilateralExitResponse stored)
+        {
+            // ANCHOR: check-unilateral-exit
+            var checkedExit = await sdk.CheckUnilateralExit(
+                request: new CheckUnilateralExitRequest(exit: stored)
+            );
+
+            // Store this one in place of the one you had.
+            var exit = checkedExit.exit;
+
+            switch (checkedExit.verdict)
+            {
+                case UnilateralExitVerdict.Valid:
+                    foreach (var tx in exit.transactions)
+                    {
+                        if (tx.status is ExitTransactionStatus.Ready)
+                        {
+                            Console.WriteLine($"ready to broadcast: {tx.txid}");
+                        }
+                    }
+                    break;
+                case UnilateralExitVerdict.Done:
+                    Console.WriteLine(
+                        $"The exit finished: {exit.recoverableValueSat} sats recovered");
+                    break;
+                case UnilateralExitVerdict.Redo { reason: var reason }:
+                    // Quote and build again, naming the same leaves. Pass exit.fundingInputs
+                    // back and the SDK follows them to whatever they have become.
+                    Console.WriteLine($"Build the exit again: {reason}");
+                    break;
+            }
+            // ANCHOR_END: check-unilateral-exit
+        }
+
         async Task<string> ExportExitState(BreezSdk sdk)
         {
             // ANCHOR: export-unilateral-exit-state

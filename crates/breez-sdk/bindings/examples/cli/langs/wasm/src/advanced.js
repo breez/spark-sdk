@@ -60,7 +60,7 @@ function printExitTransactions(response) {
       ? `, csv ${tx.csvTimelockBlocks} blocks`
       : ''
     console.log(`  [${i}] ${tx.kind} status=${tx.status} txid=${tx.txid}${after}${csv}`)
-    if (tx.status === 'confirmed') {
+    if (tx.status.type === 'confirmed') {
       console.log('      (already confirmed, nothing to broadcast)')
       continue
     }

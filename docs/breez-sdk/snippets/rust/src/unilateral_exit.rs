@@ -42,12 +42,44 @@ async fn build_exit(sdk: &BreezSdk, quote: PrepareUnilateralExitResponse) -> Res
         )
         .await?;
 
+    // Store the whole response: it is the only record of the exit.
     for tx in &response.transactions {
         if let Some(blocks) = tx.csv_timelock_blocks {
             println!("{}: wait {} blocks after its parents confirm", tx.txid, blocks);
         }
     }
     // ANCHOR_END: unilateral-exit
+
+    Ok(())
+}
+
+async fn check_exit(sdk: &BreezSdk, stored: UnilateralExitResponse) -> Result<()> {
+    // ANCHOR: check-unilateral-exit
+    let checked = sdk
+        .check_unilateral_exit(CheckUnilateralExitRequest { exit: stored })
+        .await?;
+
+    // Store this one in place of the one you had.
+    let exit = checked.exit;
+
+    match checked.verdict {
+        UnilateralExitVerdict::Valid => {
+            for tx in &exit.transactions {
+                if matches!(tx.status, ExitTransactionStatus::Ready) {
+                    println!("ready to broadcast: {}", tx.txid);
+                }
+            }
+        }
+        UnilateralExitVerdict::Done => {
+            println!("The exit finished: {} sats recovered", exit.recoverable_value_sat);
+        }
+        UnilateralExitVerdict::Redo { reason } => {
+            // Quote and build again, naming the same leaves. Pass exit.funding_inputs
+            // back and the SDK follows them to whatever they have become.
+            println!("Build the exit again: {reason:?}");
+        }
+    }
+    // ANCHOR_END: check-unilateral-exit
 
     Ok(())
 }
