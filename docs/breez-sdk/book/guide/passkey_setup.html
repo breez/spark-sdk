@@ -1,0 +1,344 @@
+<!DOCTYPE HTML>
+<html lang="en" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Setup - Breez SDK - Spark</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../styles.css">
+        <link rel="stylesheet" href="../theme/pagetoc.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <!--
+                  Breez SDK · Spark docs — brand header partial.
+                
+                  mdBook renders the `header` partial at the top of every page's content. The default
+                  theme ships an EMPTY header.hbs, which is why the reskin's styles.css and
+                  brand-header.js both reference `.brand-header` / #brand-controls but the file
+                  itself was never committed to the reskin branch. THIS is that missing file,
+                  reconstructed from the design mockup (design/Breez SDK Docs.dc.html) and the
+                  class names in styles.css.
+                
+                  Drop this at: docs/breez-sdk/theme/header.hbs
+                  It pairs with styles.css (.brand-header rules) and brand-header.js (which moves
+                  mdBook's theme/search/sidebar controls into #brand-controls at load time).
+                -->
+                <div id="brand-header" class="brand-header">
+                  <a class="brand-logo" href="../index.html" aria-label="Docs home">
+                    <img src="../assets/icons/logo-breez-header.svg" alt="Breez">
+                  </a>
+                  <span class="brand-sep"></span>
+                  <span class="brand-product">SDK Documentation</span>
+                  <span class="brand-badge">
+                    <img src="../assets/icons/spark_icon.svg" alt="">Spark
+                  </span>
+                
+                  <span class="brand-spacer"></span>
+                
+                  <nav class="brand-nav">
+                    <a href="https://breez.technology" target="_blank" rel="noopener">Home</a>
+                    <a href="https://github.com/breez/spark-sdk" target="_blank" rel="noopener">GitHub</a>
+                    <a href="https://t.me/breezsdk" target="_blank" rel="noopener" aria-label="Telegram">
+                      <img src="../assets/icons/telegram-icon.svg" alt="">
+                    </a>
+                  </nav>
+                
+                  <!-- brand-header.js relocates #sidebar-toggle, #theme-toggle, #theme-list and
+                       #search-toggle into this container so they read as one bar. -->
+                  <div id="brand-controls" class="brand-controls"></div>
+                
+                  <a class="brand-cta" href="https://breez.technology/request-api-key/#contact-us-form-sdk" target="_blank" rel="noopener">
+                    Request API Key
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                  </a>
+                </div>
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Breez SDK - Spark</h1>
+
+                    <div class="right-buttons">
+                        <a href="https://github.com/breez/spark-sdk" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/src/guide/passkey_setup.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="setup"><a class="header" href="#setup">Setup</a></h1>
+<p>Passkey Login uses a Relying Party (RP) to tie passkeys to your apps. Each platform you target (Web, Android, iOS / macOS) needs a configuration file declaring your app under the RP. Platform authenticators validate the RP association against these files before any WebAuthn ceremony.</p>
+<h2 id="hosting-the-configuration-files"><a class="header" href="#hosting-the-configuration-files">Hosting the configuration files</a></h2>
+<p>Two ways to set up the RP:</p>
+<ul>
+<li><strong>Shared with the Breez ecosystem (Breez-hosted).</strong> A passkey registered in one Breez-registered app works in every other Breez-registered app on the same device, with no re-registration. <a href="mailto:contact@breez.technology?subject=Passkey%20configuration">Contact us</a> to register your app, then pass <code>PasskeyProvider.BREEZ_RP_ID</code> as your <code>rpId</code>.</li>
+<li><strong>Scoped to your ecosystem (self-hosted).</strong> A passkey registered against your RP works across the apps and web origins you list in your configuration files. You host the well-known files yourself on an HTTPS domain you control. Pass that domain as your <code>rpId</code> (for example, <code>"&lt;your-rp-domain&gt;"</code>).</li>
+</ul>
+<p>Same code paths in either case; only the <code>rpId</code> value and who hosts the JSON differs.</p>
+<h2 id="web-related-origins"><a class="header" href="#web-related-origins">Web: Related Origins</a></h2>
+<p><strong>Path</strong>: <code>/.well-known/webauthn</code></p>
+<pre><code class="language-json">{
+  "related_origins": [
+    "https://keys.breez.technology",
+    "https://your-app.example.com"
+  ]
+}
+</code></pre>
+<p><strong>Requirements</strong>: Chrome 116+, Safari 18+, Edge 116+. HTTPS required (localhost exempt during development).</p>
+<div class="warning">
+<h4 id="related-origins-developer-notes"><a class="header" href="#related-origins-developer-notes">Related Origins: developer notes</a></h4>
+<p><strong>Firefox does not implement Related Origins.</strong> Its users register fresh on each origin. For multi-domain support, host a separate RP ID per domain.</p>
+<p><strong>Chrome and Edge cap the number of distinct origins</strong> in <code>related_origins</code> (around 5 per RP). For larger app families, partition into multiple RP IDs.</p>
+<p><strong>Browsers cache <code>.well-known/webauthn</code> aggressively.</strong> Adding or removing an origin takes effect only after the cache TTL expires.</p>
+</div>
+<h2 id="android-asset-links"><a class="header" href="#android-asset-links">Android: Asset Links</a></h2>
+<p><strong>Path</strong>: <code>/.well-known/assetlinks.json</code></p>
+<pre><code class="language-json">[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls",
+      "delegate_permission/common.get_login_creds"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.example.yourapp",
+      "sha256_cert_fingerprints": [
+        "B6:16:AD:FE:C5:C6:D3:4C:93:01:5B:4A:79:20:21:4E:62:43:AB:29:28:EE:34:9A:F2:46:55:4B:54:FC:42:DF"
+      ]
+    }
+  }
+]
+</code></pre>
+<p>Replace <code>com.example.yourapp</code> with your application's package name and the fingerprint with your app's signing certificate SHA256. See the <a target="_blank" href="https://developers.google.com/digital-asset-links/v1/getting-started">Digital Asset Links</a> documentation and <a target="_blank" href="https://developer.android.com/identity/credential-manager/prerequisites">Credential Manager prerequisites</a>.</p>
+<p><strong>Requirements</strong>: Android 9+ (API 28) with Google Play Services, or Android 14+ (API 34) with any compatible authenticator. <code>compileSdkVersion</code> must be at least 34 (required by the <code>androidx.credentials</code> library, not the device).</p>
+<h2 id="ios--macos-apple-app-site-association"><a class="header" href="#ios--macos-apple-app-site-association">iOS / macOS: Apple App Site Association</a></h2>
+<p><strong>Path</strong>: <code>/.well-known/apple-app-site-association</code></p>
+<pre><code class="language-json">{
+  "webcredentials": {
+    "apps": [
+      "TEAMID.com.example.yourapp"
+    ]
+  }
+}
+</code></pre>
+<p>Replace <code>TEAMID</code> with your Apple Developer Team ID and <code>com.example.yourapp</code> with your bundle identifier. Your app must also declare the <a target="_blank" href="https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.associated-domains">Associated Domains</a> capability in Xcode (<strong>Signing &amp; Capabilities</strong>, then <strong>Associated Domains</strong>, then add <code>webcredentials:&lt;your-rp-domain&gt;</code>).</p>
+<div class="warning">
+<h4 id="ios--macos-associated-domains-entitlement-required"><a class="header" href="#ios--macos-associated-domains-entitlement-required">iOS / macOS: Associated Domains entitlement required</a></h4>
+Without the Associated Domains entitlement declared in Xcode, passkey operations on iOS / macOS fail with a configuration error, even when <code class="lang-fn"><span class="fn-rust">PasskeyClient.check_availability</span><span class="fn-python">PasskeyClient.check_availability</span><span class="fn-swift">PasskeyClient.checkAvailability</span><span class="fn-kotlin">PasskeyClient.checkAvailability</span><span class="fn-javascript">PasskeyClient.checkAvailability</span><span class="fn-react-native">PasskeyClient.checkAvailability</span><span class="fn-flutter">PasskeyClient.checkAvailability</span><span class="fn-go">PasskeyClient.CheckAvailability</span><span class="fn-csharp">PasskeyClient.CheckAvailability</span></code> returns <code class="lang-fn"><span class="fn-rust">PasskeyAvailability::Available</span><span class="fn-python">PasskeyAvailability.AVAILABLE</span><span class="fn-swift">PasskeyAvailability.available</span><span class="fn-kotlin">PasskeyAvailability.Available</span><span class="fn-javascript">PasskeyAvailability.Available</span><span class="fn-react-native">PasskeyAvailability.Available</span><span class="fn-flutter">PasskeyAvailability.Available</span><span class="fn-go">PasskeyAvailabilityAvailable</span><span class="fn-csharp">PasskeyAvailability.Available</span></code>.
+</div>
+<div class="warning">
+<h4 id="ios--macos-expo-managed-workflow"><a class="header" href="#ios--macos-expo-managed-workflow">iOS / macOS: Expo Managed Workflow</a></h4>
+If you're using Expo, the Breez SDK plugin can configure the Associated Domains entitlement automatically. See the <a href="install_react_native.html#plugin-options">React Native/Expo installation guide</a> for details on the <code>enablePasskey</code> option.
+</div>
+<p><strong>Requirements</strong>: iOS 18.0+, macOS 15.0+.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../guide/passkey.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../guide/passkey_onboarding.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../guide/passkey.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../guide/passkey_onboarding.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../tabs.js"></script>
+        <script src="../theme/pagetoc.js"></script>
+        <script src="../brand-header.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
