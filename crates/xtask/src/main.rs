@@ -1,6 +1,7 @@
 mod docs;
 mod package;
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,6 +15,56 @@ use crate::docs::{DocSnippetsPackage, check_doc_snippets_cmd};
 use crate::package::{TargetPackage, package_cmd};
 
 const OUT_OF_WORKSPACE_PACKAGES: &[&str] = &["crates/breez-sdk/lnurl/Cargo.toml"];
+
+/// Which features a package's extra clippy pass turns on.
+enum ClippyFeatures {
+    All,
+    Only(&'static [&'static str]),
+}
+
+/// Extra clippy passes, one per package whose features the workspace passes leave
+/// off: gated code they never build is neither compiled nor linted there. Scoped
+/// per package on purpose: enabling everything workspace-wide drags the wasm
+/// chain-service into the host build, which fails clippy's `Send` checks.
+const FEATURE_CLIPPY_PASSES: &[(&str, ClippyFeatures)] = &[
+    // Every native feature. Not `--all-features`: `uniffi` compiles only against
+    // `uniffi/tokio`, which breez-sdk-bindings turns on.
+    (
+        "breez-sdk-spark",
+        ClippyFeatures::Only(&[
+            "turnkey",
+            "turnkey-p256",
+            "sqlite",
+            "postgres",
+            "mysql",
+            "passkey",
+            "span-trace",
+            "test-utils",
+        ]),
+    ),
+    // `fido2` hardware-key support.
+    ("cli", ClippyFeatures::All),
+    // `uniffi-cli` and `span-trace`.
+    ("breez-sdk-bindings", ClippyFeatures::All),
+    // The Turnkey harness and the local-operator-cluster (unilateral exit) cases.
+    ("breez-sdk-itest", ClippyFeatures::All),
+];
+
+/// Features no clippy pass builds, as `(package, feature)`. Each is compiled by
+/// another target, so its code still cannot rot unnoticed.
+const UNLINTED_FEATURES: &[(&str, &str)] = &[
+    // `cargo xtask test` runs the spark tests a second time with it on.
+    ("spark", "test-arbitrary-precision"),
+    // `cargo xtask wasm-test` passes it to wasm-pack.
+    ("breez-sdk-spark", "browser-tests"),
+    ("breez-sdk-common", "browser-tests"),
+    ("breez-sdk-spark-wasm", "browser-tests"),
+    ("platform-utils", "browser-tests"),
+    ("spark", "browser-tests"),
+    ("spark-wallet", "browser-tests"),
+    ("flashnet", "browser-tests"),
+];
+
 #[derive(Parser, Debug)]
 #[command(name = "xtask")]
 #[command(about = "Workspace tasks")]
@@ -630,7 +681,79 @@ fn packages_wasm_capable(meta: &Metadata) -> Vec<Package> {
         .collect()
 }
 
+/// Fails when a workspace package declares a feature that no clippy pass builds.
+/// Feature-gated code that compiles nowhere is free to rot: a signature change in
+/// a lower crate breaks it and nothing notices until someone enables the feature.
+fn check_feature_clippy_coverage() -> Result<()> {
+    let meta = workspace_metadata()?;
+    let members: Vec<&Package> = meta
+        .packages
+        .iter()
+        .filter(|p| meta.workspace_members.contains(&p.id))
+        .collect();
+
+    let mut gaps = Vec::new();
+    for pkg in &members {
+        // A feature a dependent turns on is built whenever that dependent is.
+        let mut enabled: Vec<String> = members
+            .iter()
+            .flat_map(|m| &m.dependencies)
+            .filter(|dep| dep.name == pkg.name)
+            .flat_map(|dep| dep.features.iter().cloned())
+            .collect();
+        enabled.push("default".to_string());
+        for (_, features) in FEATURE_CLIPPY_PASSES
+            .iter()
+            .filter(|(package, _)| *package == pkg.name.as_str())
+        {
+            match features {
+                ClippyFeatures::All => enabled.extend(pkg.features.keys().cloned()),
+                ClippyFeatures::Only(list) => {
+                    enabled.extend(list.iter().map(ToString::to_string));
+                }
+            }
+        }
+        let built = expand_features(pkg, enabled);
+        gaps.extend(
+            pkg.features
+                .keys()
+                .filter(|f| {
+                    !built.contains(*f)
+                        && !UNLINTED_FEATURES.contains(&(pkg.name.as_str(), f.as_str()))
+                })
+                .map(|f| format!("{}/{f}", pkg.name)),
+        );
+    }
+
+    if !gaps.is_empty() {
+        bail!(
+            "no clippy pass builds these features: {}. Add them to \
+             FEATURE_CLIPPY_PASSES, or to UNLINTED_FEATURES if another target \
+             already compiles them.",
+            gaps.join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// Expands `seeds` into every feature of `pkg` they enable, directly or through
+/// another feature.
+fn expand_features(pkg: &Package, seeds: Vec<String>) -> HashSet<String> {
+    let mut queue = seeds;
+    let mut enabled = HashSet::new();
+    while let Some(feature) = queue.pop() {
+        let Some(implied) = pkg.features.get(&feature) else {
+            continue;
+        };
+        if enabled.insert(feature) {
+            queue.extend(implied.iter().cloned());
+        }
+    }
+    enabled
+}
+
 fn clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
+    check_feature_clippy_coverage()?;
     let exclude_args = workspace_exclude_wasm();
 
     // Helper function to run clippy with specific target type
@@ -685,29 +808,24 @@ fn clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
         run_single_crate_clippy(package, "--tests", &rest)?;
     }
 
-    // The unilateral-exit itests sit behind the `local-itest` feature, so the
-    // workspace passes above (feature off) never compile or lint them. Lint that
-    // crate with the feature on. Scoped to the one package on purpose: enabling
-    // it workspace-wide drags the wasm chain-service into the host build, which
-    // fails clippy's `Send` checks.
-    {
+    for (package, features) in FEATURE_CLIPPY_PASSES {
+        let selection = match features {
+            ClippyFeatures::All => "--all-features".to_string(),
+            ClippyFeatures::Only(list) => format!("--features={}", list.join(",")),
+        };
         let mut c = Command::new("cargo");
-        c.arg("clippy").args([
-            "-p",
-            "breez-sdk-itest",
-            "--all-targets",
-            "--features",
-            "local-itest",
-        ]);
+        c.arg("clippy")
+            .args(["-p", package, "--all-targets"])
+            .arg(&selection);
         if fix {
             c.arg("--fix");
         }
         c.arg("--").arg("-D").arg("warnings").args(&rest);
         let status = c
             .status()
-            .context("failed to run cargo clippy -p breez-sdk-itest --features local-itest")?;
+            .with_context(|| format!("failed to run cargo clippy -p {package} {selection}"))?;
         if !status.success() {
-            bail!("clippy breez-sdk-itest --features local-itest failed");
+            bail!("clippy {package} {selection} failed");
         }
     }
     Ok(())

@@ -32,6 +32,7 @@ pub fn turnkey_config_from_env() -> Option<TurnkeyConfig> {
         identity_public_key: None,
         retry: None,
         max_rps: None,
+        proxy: None,
     })
 }
 
