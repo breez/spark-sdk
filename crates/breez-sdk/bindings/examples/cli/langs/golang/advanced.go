@@ -272,8 +272,10 @@ func parseCpfpInput(s string, kindStr string) (breez_sdk_spark.CpfpInput, error)
 }
 
 func printExitTransactions(response breez_sdk_spark.UnilateralExitResponse) {
-	fmt.Printf("Recoverable %d sats, total fee %d sats, %d transaction(s):\n",
-		response.RecoverableValueSat, response.TotalFeeSat, len(response.Transactions))
+	fmt.Printf("Recoverable %d sats, total fee %d sats (cpfp %d, fanout %d, sweep %d), %d transaction(s):\n",
+		response.RecoverableValueSat, response.TotalFeeSat,
+		response.CpfpFeeSat, response.FanoutFeeSat, response.SweepFeeSat,
+		len(response.Transactions))
 	for i, tx := range response.Transactions {
 		after := ""
 		if len(tx.DependsOn) > 0 {
@@ -285,9 +287,25 @@ func printExitTransactions(response breez_sdk_spark.UnilateralExitResponse) {
 		}
 		fmt.Printf("  [%d] %v status=%v txid=%s%s%s\n",
 			i, tx.Kind, tx.Status, tx.Txid, after, csv)
-		if _, ok := tx.Status.(breez_sdk_spark.ExitTransactionStatusConfirmed); ok {
-			fmt.Println("      (already confirmed, nothing to broadcast)")
+		switch s := tx.Status.(type) {
+		case breez_sdk_spark.ExitTransactionStatusConfirmed:
+			if s.BlockHeight != nil {
+				fmt.Printf("      (confirmed in block %d, nothing to broadcast)\n", *s.BlockHeight)
+			} else {
+				fmt.Println("      (already confirmed, nothing to broadcast)")
+			}
 			continue
+		case breez_sdk_spark.ExitTransactionStatusWaitingForDependencies:
+			fmt.Println("      (waiting on the transactions it depends on)")
+		case breez_sdk_spark.ExitTransactionStatusWaitingForTimelock:
+			if s.SpendableAtHeight != nil {
+				fmt.Printf("      (waiting for its timelock, until block %d)\n", *s.SpendableAtHeight)
+			} else {
+				fmt.Println("      (waiting for its timelock)")
+			}
+		case breez_sdk_spark.ExitTransactionStatusReady:
+		case breez_sdk_spark.ExitTransactionStatusUnverified:
+		default:
 		}
 		pkg := tx.TxHex
 		if tx.CpfpTxHex != nil {

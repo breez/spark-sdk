@@ -235,7 +235,8 @@ suspend fun handleImportUnilateralExitState(sdk: BreezSdk, reader: LineReader, a
 fun printExitTransactions(response: UnilateralExitResponse) {
     println(
         "Recoverable ${response.recoverableValueSat} sats, " +
-        "total fee ${response.totalFeeSat} sats, " +
+        "total fee ${response.totalFeeSat} sats " +
+        "(cpfp ${response.cpfpFeeSat}, fanout ${response.fanoutFeeSat}, sweep ${response.sweepFeeSat}), " +
         "${response.transactions.size} transaction(s):"
     )
     for ((i, tx) in response.transactions.withIndex()) {
@@ -246,9 +247,29 @@ fun printExitTransactions(response: UnilateralExitResponse) {
         }
         val csv = tx.csvTimelockBlocks?.let { ", csv $it blocks" } ?: ""
         println("  [$i] ${tx.kind} status=${tx.status} txid=${tx.txid}$after$csv")
-        if (tx.status is ExitTransactionStatus.Confirmed) {
-            println("      (already confirmed, nothing to broadcast)")
-            continue
+        when (val status = tx.status) {
+            is ExitTransactionStatus.Confirmed -> {
+                val height = status.blockHeight
+                if (height != null) {
+                    println("      (confirmed in block $height, nothing to broadcast)")
+                } else {
+                    println("      (already confirmed, nothing to broadcast)")
+                }
+                continue
+            }
+            is ExitTransactionStatus.WaitingForDependencies -> {
+                println("      (waiting on the transactions it depends on)")
+            }
+            is ExitTransactionStatus.WaitingForTimelock -> {
+                val height = status.spendableAtHeight
+                if (height != null) {
+                    println("      (waiting for its timelock, until block $height)")
+                } else {
+                    println("      (waiting for its timelock)")
+                }
+            }
+            is ExitTransactionStatus.Ready,
+            is ExitTransactionStatus.Unverified -> {}
         }
         val pkg = if (tx.cpfpTxHex != null) {
             "${tx.txHex},${tx.cpfpTxHex}"

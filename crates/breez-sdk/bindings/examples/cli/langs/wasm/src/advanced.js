@@ -49,7 +49,10 @@ function parseCpfpInput(s, kind) {
  */
 function printExitTransactions(response) {
   console.log(
-    `Recoverable ${response.recoverableValueSat} sats, total fee ${response.totalFeeSat} sats, ${response.transactions.length} transaction(s):`
+    `Recoverable ${response.recoverableValueSat} sats, ` +
+    `total fee ${response.totalFeeSat} sats ` +
+    `(cpfp ${response.cpfpFeeSat}, fanout ${response.fanoutFeeSat}, sweep ${response.sweepFeeSat}), ` +
+    `${response.transactions.length} transaction(s):`
   )
   for (let i = 0; i < response.transactions.length; i++) {
     const tx = response.transactions[i]
@@ -59,10 +62,24 @@ function printExitTransactions(response) {
     const csv = tx.csvTimelockBlocks != null
       ? `, csv ${tx.csvTimelockBlocks} blocks`
       : ''
-    console.log(`  [${i}] ${tx.kind} status=${tx.status} txid=${tx.txid}${after}${csv}`)
+    console.log(`  [${i}] ${tx.kind} status=${JSON.stringify(tx.status)} txid=${tx.txid}${after}${csv}`)
     if (tx.status.type === 'confirmed') {
-      console.log('      (already confirmed, nothing to broadcast)')
+      if (tx.status.blockHeight != null) {
+        console.log(`      (confirmed in block ${tx.status.blockHeight}, nothing to broadcast)`)
+      } else {
+        console.log('      (already confirmed, nothing to broadcast)')
+      }
       continue
+    }
+    if (tx.status.type === 'waitingForDependencies') {
+      console.log('      (waiting on the transactions it depends on)')
+    }
+    if (tx.status.type === 'waitingForTimelock') {
+      if (tx.status.spendableAtHeight != null) {
+        console.log(`      (waiting for its timelock, until block ${tx.status.spendableAtHeight})`)
+      } else {
+        console.log('      (waiting for its timelock)')
+      }
     }
     const pkg = tx.cpfpTxHex
       ? `${tx.txHex},${tx.cpfpTxHex}`
