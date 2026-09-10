@@ -191,7 +191,13 @@ async fn test_01_htlc_success(
 }
 
 /// Test 2: Send payment from Alice to Bob using Spark transfer and fail to claim before expiry
+///
+/// TODO: re-enable once direct HTLCs are available again. While they are
+/// disabled, the operators stop serving a returned HTLC's preimage request, so
+/// the refunded transfer syncs with no HTLC details and the
+/// `SparkHtlcStatus::Returned` filter below matches nothing.
 #[rstest]
+#[ignore = "direct HTLCs are disabled; the refund carries no HTLC details"]
 #[test_log::test(tokio::test)]
 async fn test_02_htlc_refund(
     #[future] alice_sdk: Result<SdkInstance>,
