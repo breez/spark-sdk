@@ -17,7 +17,7 @@ It’s a nodeless integration that offers a non-custodial, end-to-end solution f
 **Key Features**
 - [x] Send and receive Lightning payments
 - [x] Send and receive via LNURL-pay & Lightning addresses
-- [x] Send USDT/USDC
+- [x] Send and receive USDT/USDC
 - [x] Cash App on-ramp & Cash App to USDC/USDT payments
 - [x] Send and receive Spark payments (BTC)
 - [x] Passkey login for seedless experience
@@ -147,8 +147,8 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] Partner portal analytics
 - [x] Unilateral exit
 - [x] Cash App to USDC/USDT
-- [ ] USDT receive support
-- [ ] USDC receive support
+- [x] USDT receive support
+- [x] USDC receive support
 - [ ] Detect pending mempool deposits
 - [ ] Instant claim of on-chain deposits
 - [ ] Add additional fees via the partner portal
