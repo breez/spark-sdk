@@ -6,6 +6,7 @@ use serde_with::DisplayFromStr;
 use serde_with::serde_as;
 use spark::Network;
 use spark_wallet::{PublicKey, TransferId};
+use tracing::warn;
 
 use super::api::BTC_ASSET_ADDRESS;
 use super::utils::decode_token_identifier;
@@ -99,8 +100,10 @@ pub struct ListClawbackTransfersResponse {
 pub struct ClawbackTransfer {
     /// Spark `transfer_id` for BTC swaps, or token transaction hash for token swaps.
     pub id: String,
-    #[serde_as(as = "DisplayFromStr")]
-    pub lp_identity_public_key: PublicKey,
+    /// The pool holding the transfer. Omitted when the backend cannot
+    /// attribute it.
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    pub lp_identity_public_key: Option<PublicKey>,
     /// Optional RFC 3339 timestamp emitted by the Flashnet backend.
     pub created_at: Option<String>,
 }
@@ -473,6 +476,7 @@ impl ListPoolsRequest {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ListPoolsResponse {
+    #[serde(deserialize_with = "deserialize_pools")]
     pub pools: Vec<Pool>,
     pub total_count: u32,
 }
@@ -551,7 +555,7 @@ pub(crate) struct PingResponse {
 pub struct Pool {
     #[serde_as(as = "DisplayFromStr")]
     pub lp_public_key: PublicKey,
-    pub host_name: String,
+    pub host_name: Option<String>,
     pub host_fee_bps: u32,
     pub lp_fee_bps: u32,
     pub asset_a_address: String,
@@ -580,10 +584,10 @@ pub struct Pool {
     pub bonding_progress_percent: Option<f64>,
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub graduation_threshold_amount: Option<u64>,
-    /// RFC 3339 timestamp emitted by the Flashnet backend.
-    pub created_at: String,
-    /// RFC 3339 timestamp emitted by the Flashnet backend.
-    pub updated_at: String,
+    /// Matches `time::OffsetDateTime`'s Display, e.g.
+    /// `2026-02-08 2:27:34.451349 +00:00:00`.
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
     /// The pool's price, as the exponent in `1.0001^tick`. Sent only for
     /// concentrated-liquidity pools, as are the two fields below.
     pub current_tick: Option<i32>,
@@ -768,10 +772,21 @@ impl Pool {
         } else {
             self.asset_a_reserve
         };
-        if held_out.is_some_and(|held| amount_out_before_output_fees >= held) {
-            return Err(FlashnetError::Generic(format!(
-                "Amount out {amount_out_before_output_fees} is more than the pool holds"
-            )));
+        match held_out {
+            Some(held) if amount_out_before_output_fees >= held => {
+                return Err(FlashnetError::Generic(format!(
+                    "Amount out {amount_out_before_output_fees} is more than the pool holds"
+                )));
+            }
+            // V3 is priced from the advertised price alone, so quoting it
+            // needs reserves or liquidity.
+            None if is_v3 && self.total_liquidity.is_none_or(|liquidity| liquidity == 0) => {
+                return Err(FlashnetError::Generic(format!(
+                    "Pool {} advertises no depth to quote against",
+                    self.lp_public_key
+                )));
+            }
+            _ => {}
         }
 
         // Calculate amount_in before input fees
@@ -1050,6 +1065,24 @@ where
     }
 }
 
+/// Drops pools that fail to deserialize instead of failing the whole listing.
+fn deserialize_pools<'de, D>(deserializer: D) -> Result<Vec<Pool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let values: Vec<serde_json::Value> = Deserialize::deserialize(deserializer)?;
+    Ok(values
+        .into_iter()
+        .filter_map(|value| match serde_json::from_value(value) {
+            Ok(pool) => Some(pool),
+            Err(e) => {
+                warn!("Skipping unparsable pool: {e}");
+                None
+            }
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -1081,7 +1114,7 @@ mod test {
                 "02894808873b896e21d29856a6d7bb346fb13c019739adb9bf0b6a8b7e28da53da",
             )
             .unwrap(),
-            host_name: "flashnet".to_string(),
+            host_name: Some("flashnet".to_string()),
             host_fee_bps,
             lp_fee_bps,
             asset_a_address: a_address.to_string(),
@@ -1099,12 +1132,31 @@ mod test {
             initial_reserve_a: None,
             bonding_progress_percent: None,
             graduation_threshold_amount: None,
-            created_at: "2025-09-22T19:09:36.661269Z".to_string(),
-            updated_at: "2025-12-03T12:43:53.903531Z".to_string(),
+            created_at: Some("2025-09-22T19:09:36.661269Z".to_string()),
+            updated_at: Some("2025-12-03T12:43:53.903531Z".to_string()),
             current_tick: None,
             tick_spacing: None,
             total_liquidity: None,
         }
+    }
+
+    #[test]
+    fn a_clawback_listing_survives_an_omitted_pool() {
+        // The pool is optional in the listing, and a row missing it must not
+        // deny the reconcile pass every other row it returned.
+        let json = r#"{"transfers":[
+          {"id":"transfer123",
+           "lpIdentityPublicKey":"02894808873b896e21d29856a6d7bb346fb13c019739adb9bf0b6a8b7e28da53da",
+           "createdAt":"2025-11-21T12:34:56Z"},
+          {"id":"transfer456","createdAt":"2025-11-21T12:34:56Z"},
+          {"id":"transfer789","lpIdentityPublicKey":null}
+         ]}"#;
+        let listing: ListClawbackTransfersResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(listing.transfers.len(), 3);
+        assert!(listing.transfers[0].lp_identity_public_key.is_some());
+        assert!(listing.transfers[1].lp_identity_public_key.is_none());
+        assert!(listing.transfers[2].lp_identity_public_key.is_none());
+        assert!(listing.transfers[2].created_at.is_none());
     }
 
     #[test]
@@ -1289,6 +1341,7 @@ mod test {
 
         // Only concentrated liquidity is priced off the advertised price.
         pool.curve_type = Some(CurveType::V3Concentrated);
+        pool.total_liquidity = Some(5_150_839_635_149);
         let result = pool.calculate_amount_in(
             "020202020202020202020202020202020202020202020202020202020202020202",
             amount_out,
@@ -1327,6 +1380,7 @@ mod test {
 
         // Only concentrated liquidity is priced off the advertised price.
         pool.curve_type = Some(CurveType::V3Concentrated);
+        pool.total_liquidity = Some(5_150_839_635_149);
         let result = pool.calculate_amount_in(
             "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
             amount_out,
@@ -1365,6 +1419,7 @@ mod test {
 
         // Only concentrated liquidity is priced off the advertised price.
         pool.curve_type = Some(CurveType::V3Concentrated);
+        pool.total_liquidity = Some(5_150_839_635_149);
         let result = pool.calculate_amount_in(
             "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
             amount_out,
@@ -1408,6 +1463,7 @@ mod test {
         // Swapping A→B (token → BTC)
         // Only concentrated liquidity is priced off the advertised price.
         pool.curve_type = Some(CurveType::V3Concentrated);
+        pool.total_liquidity = Some(5_150_839_635_149);
         let result = pool.calculate_amount_in(
             "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
             amount_out,

@@ -262,7 +262,7 @@ mod tests {
                 "02894808873b896e21d29856a6d7bb346fb13c019739adb9bf0b6a8b7e28da53da",
             )
             .unwrap(),
-            host_name: "flashnet".to_string(),
+            host_name: Some("flashnet".to_string()),
             host_fee_bps: 0,
             lp_fee_bps: 20,
             asset_a_address: BTC_ASSET_ADDRESS.to_string(),
@@ -280,8 +280,8 @@ mod tests {
             initial_reserve_a: None,
             bonding_progress_percent: None,
             graduation_threshold_amount: None,
-            created_at: "2025-09-22 19:09:36".to_string(),
-            updated_at: "2026-08-04 15:03:38".to_string(),
+            created_at: Some("2025-09-22 19:09:36".to_string()),
+            updated_at: Some("2026-08-04 15:03:38".to_string()),
             current_tick: None,
             tick_spacing: None,
             total_liquidity: None,
@@ -535,6 +535,167 @@ mod tests {
             assert!(p.validate_for_swap(&a, &b, Network::Mainnet).is_ok());
             assert!(p.validate_for_swap(&b, &a, Network::Mainnet).is_ok());
         }
+    }
+
+    /// Verbatim mainnet `/v1/pools` entries for BTC <-> USDB on 2026-09-11,
+    /// one per distinct shape in the listing: the real V3 pool, the
+    /// constant-product pool, the two zero-liquidity V3 pools priced at the
+    /// ends of the tick range, a bonding curve, and a pool with a null host.
+    const POISONED_LISTING: &str = r#"{"pools":[
+      {"lpPublicKey":"037579aee81891fc3a28cbe7b13e565031d46248b420fb39dcb308598f472b4513",
+       "hostName":"flashnet","hostFeeBps":0,"lpFeeBps":5,
+       "assetAAddress":"020202020202020202020202020202020202020202020202020202020202020202",
+       "assetBAddress":"3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+       "assetAReserve":"130478433","assetBReserve":"211013962738",
+       "currentPriceAInB":"771.214383288967004757","tvlAssetB":"311640806977",
+       "volume24hAssetB":"106650467945223","priceChangePercent24h":"0.14",
+       "curveType":"V3_CONCENTRATED","createdAt":"2026-02-08","updatedAt":"2026-09-11",
+       "currentTick":66482,"tickSpacing":10,"totalLiquidity":"7482426271107"},
+      {"lpPublicKey":"02894808873b896e21d29856a6d7bb346fb13c019739adb9bf0b6a8b7e28da53da",
+       "hostName":"flashnet","hostFeeBps":0,"lpFeeBps":20,
+       "assetAAddress":"020202020202020202020202020202020202020202020202020202020202020202",
+       "assetBAddress":"3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+       "assetAReserve":"245114","assetBReserve":"182181589",
+       "currentPriceAInB":"743.251877296693857441","tvlAssetB":"364363030",
+       "volume24hAssetB":"0","priceChangePercent24h":"0.00",
+       "curveType":"CONSTANT_PRODUCT","createdAt":"2025-09-22","updatedAt":"2026-09-09"},
+      {"lpPublicKey":"0381f57ce8d84bf1d1e8023ea6048dba26e0975d526a4858286b561ca13e33f80a",
+       "hostName":"auditlab","hostFeeBps":50,"lpFeeBps":30,
+       "assetAAddress":"020202020202020202020202020202020202020202020202020202020202020202",
+       "assetBAddress":"3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+       "assetAReserve":"0","assetBReserve":"0",
+       "currentPriceAInB":"1.000000000000000000E-30","tvlAssetB":"0",
+       "volume24hAssetB":"0","priceChangePercent24h":"0.00",
+       "curveType":"V3_CONCENTRATED","createdAt":"2026-09-07","updatedAt":"2026-09-07",
+       "currentTick":-690811,"tickSpacing":10,"totalLiquidity":"0"},
+      {"lpPublicKey":"038e629c9de27f0b82ea9e649850ef46f3fa861fa9f7afb832ed386097305a8a5c",
+       "hostName":"auditlab","hostFeeBps":50,"lpFeeBps":30,
+       "assetAAddress":"020202020202020202020202020202020202020202020202020202020202020202",
+       "assetBAddress":"3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+       "assetAReserve":"0","assetBReserve":"0",
+       "currentPriceAInB":"1000000000000000000000000000000.000000000000000000","tvlAssetB":"0",
+       "volume24hAssetB":"0","priceChangePercent24h":"0.00",
+       "curveType":"V3_CONCENTRATED","createdAt":"2026-09-07","updatedAt":"2026-09-07",
+       "currentTick":690810,"tickSpacing":10,"totalLiquidity":"0"},
+      {"lpPublicKey":"024bb431d831dd165aec35570f07ae5ad2a3a5b8e04c714048cbe290fac5757125",
+       "hostName":"race5cef3583","hostFeeBps":100,"lpFeeBps":100,
+       "assetAAddress":"3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+       "assetBAddress":"020202020202020202020202020202020202020202020202020202020202020202",
+       "assetAReserve":"100000","assetBReserve":"0",
+       "currentPriceAInB":"0.000444444444444444","tvlAssetB":"44",
+       "volume24hAssetB":"0","priceChangePercent24h":"0.00",
+       "curveType":"SINGLE_SIDED","createdAt":"2026-09-10","updatedAt":"2026-09-10",
+       "virtualReserveA":"112500","virtualReserveB":"50","thresholdPct":75,
+       "initialReserveA":"100000","bondingProgressPercent":"0.0000",
+       "graduationThresholdAmount":"75000"},
+      {"lpPublicKey":"034f31eb0f56231f4eef456e3729c6c0ea38b22bd17dde67381347013db86e5bad",
+       "hostName":null,"hostFeeBps":10,"lpFeeBps":30,
+       "assetAAddress":"3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+       "assetBAddress":"020202020202020202020202020202020202020202020202020202020202020202",
+       "assetAReserve":"0","assetBReserve":"0",
+       "currentPriceAInB":"1.000000000000000000","tvlAssetB":"0",
+       "volume24hAssetB":"0","priceChangePercent24h":"0.00",
+       "curveType":"V3_CONCENTRATED","createdAt":"2026-09-11","updatedAt":"2026-09-11",
+       "currentTick":0,"tickSpacing":60,"totalLiquidity":"0"}
+     ],"totalCount":6}"#;
+
+    /// A null host took down every conversion on the pair: the API documents
+    /// the field as nullable, and one pool rejecting it failed the listing.
+    #[test]
+    fn a_null_host_name_does_not_fail_the_listing() {
+        let listing: crate::ListPoolsResponse = serde_json::from_str(POISONED_LISTING).unwrap();
+        assert_eq!(listing.pools.len(), 6);
+        assert!(
+            listing
+                .pools
+                .iter()
+                .any(|p| p.host_name.is_none() && p.tick_spacing == Some(60))
+        );
+    }
+
+    #[test]
+    fn an_unparsable_pool_is_skipped_rather_than_failing_the_listing() {
+        let broken = POISONED_LISTING.replacen(
+            r#""lpPublicKey":"037579aee81891fc3a28cbe7b13e565031d46248b420fb39dcb308598f472b4513""#,
+            r#""lpPublicKey":null"#,
+            1,
+        );
+        let listing: crate::ListPoolsResponse = serde_json::from_str(&broken).unwrap();
+        assert_eq!(listing.pools.len(), 5);
+        // The count is the server's, so it still reports what was sent.
+        assert_eq!(listing.total_count, 6);
+    }
+
+    #[test]
+    fn the_zero_liquidity_pools_are_refused_by_the_quote_not_by_validate() {
+        let listing: crate::ListPoolsResponse = serde_json::from_str(POISONED_LISTING).unwrap();
+        let btc = BTC_ASSET_ADDRESS;
+        let zero_liquidity: Vec<_> = listing
+            .pools
+            .iter()
+            .filter(|p| p.total_liquidity == Some(0))
+            .collect();
+        assert_eq!(zero_liquidity.len(), 3);
+        for p in zero_liquidity {
+            // Their prices sit exactly on MIN_PRICE / MAX_PRICE and their ticks
+            // corroborate them, so structural validation cannot be what rejects
+            // them. Tightening the price bound would reject real tiny-priced
+            // tokens instead.
+            assert!(p.validate().is_ok(), "{} failed validate", p.lp_public_key);
+            assert!(
+                p.calculate_amount_in(USDB, 50_000, 10, 0, Network::Mainnet)
+                    .is_err(),
+                "{} quoted a swap it cannot honour",
+                p.lp_public_key
+            );
+            assert!(
+                p.calculate_amount_in(btc, 50_000, 10, 0, Network::Mainnet)
+                    .is_err(),
+                "{} quoted a swap it cannot honour",
+                p.lp_public_key
+            );
+        }
+    }
+
+    #[test]
+    fn selection_takes_the_real_pool_over_the_zero_liquidity_ones() {
+        let listing: crate::ListPoolsResponse = serde_json::from_str(POISONED_LISTING).unwrap();
+        let best = crate::select_best_pool(
+            &listing.pools,
+            USDB,
+            BTC_ASSET_ADDRESS,
+            50_000,
+            10,
+            0,
+            Network::Mainnet,
+        )
+        .unwrap();
+        assert_eq!(
+            best.lp_public_key.to_string(),
+            "037579aee81891fc3a28cbe7b13e565031d46248b420fb39dcb308598f472b4513"
+        );
+    }
+
+    #[test]
+    fn a_v3_pool_advertising_no_depth_at_all_is_refused() {
+        let mut p = v3_pool();
+        p.asset_a_reserve = None;
+        p.asset_b_reserve = None;
+
+        p.total_liquidity = None;
+        assert!(
+            p.calculate_amount_in(USDB, 50_000, 10, 0, Network::Mainnet)
+                .is_err(),
+            "quoted a pool that advertises neither reserves nor liquidity"
+        );
+
+        // Liquidity alone still prices: reserves are not always populated for
+        // this curve, and refusing on their absence would drop real pools.
+        p.total_liquidity = Some(5_150_839_635_149);
+        assert!(
+            p.calculate_amount_in(USDB, 50_000, 10, 0, Network::Mainnet)
+                .is_ok()
+        );
     }
 
     /// The live V3 pool, whose tick and price are both real.
