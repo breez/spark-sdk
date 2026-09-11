@@ -5,7 +5,8 @@ use std::sync::Arc;
 use tracing::{debug, error, info, trace, warn};
 
 use super::{
-    BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncType, deposits::InstantClaimOutcome,
+    BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncType,
+    deposits::{InstantClaimOutcome, is_already_claimed_error},
 };
 use crate::utils::time::now_secs;
 use crate::{
@@ -38,6 +39,13 @@ fn instant_claim_worth_attempting(
         }) => confirmations > *declined_at || max_fee_sats.is_some_and(|prev| ceiling_sats > prev),
         _ => true,
     }
+}
+
+/// Whether an early claim has already gone out for this deposit. The provider
+/// credits it asynchronously and keeps reporting the UTXO, eventually as mature,
+/// so both claim paths have to leave such a deposit alone.
+fn claim_already_submitted(status: Option<&InstantClaimStatus>) -> bool {
+    matches!(status, Some(InstantClaimStatus::Submitted { .. }))
 }
 
 /// Indexes the deposits that carry an instant-claim status by their outpoint.
@@ -399,6 +407,13 @@ impl BreezSdk {
             let Some(_claim_guard) = self.claim_guards.try_acquire(key.clone()) else {
                 continue;
             };
+            // An early claim has already gone out. The provider credits it
+            // asynchronously and keeps reporting the UTXO, eventually as mature,
+            // so without this the claim at maturity re-submits every pass and is
+            // rejected every time.
+            if claim_already_submitted(instant_status.get(&key)) {
+                continue;
+            }
             let res = if is_mature {
                 // Mature deposit: claim via the normal path.
                 self.claim_utxo_and_resolve_deposit(
@@ -477,6 +492,18 @@ impl BreezSdk {
                     .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
                     .await?;
                 claimed_deposits.push(detailed_utxo.clone().into_deposit_info(true));
+            }
+            // The deposit is settled, not failed: a claim from another instance
+            // sharing this wallet took it. Recording a claim error here would
+            // surface a credited deposit as needing manual intervention.
+            Err(e) if is_already_claimed_error(&e.to_string()) => {
+                info!(
+                    "Deposit {}:{} was already claimed, dropping it",
+                    detailed_utxo.txid, detailed_utxo.vout
+                );
+                self.storage
+                    .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
+                    .await?;
             }
             Err(e) => {
                 warn!(
@@ -727,7 +754,7 @@ impl BreezSdk {
 
 #[cfg(test)]
 mod tests {
-    use super::instant_claim_worth_attempting;
+    use super::{claim_already_submitted, instant_claim_worth_attempting};
     use crate::InstantClaimStatus;
 
     fn declined(max_fee_sats: Option<u64>, confirmations: u32) -> InstantClaimStatus {
@@ -777,6 +804,17 @@ mod tests {
             1,
             500
         ));
-        // An in-flight submission is never re-attempted.
+    }
+
+    #[test]
+    fn an_in_flight_submission_is_recognised() {
+        // The cascade skips these before either claim path runs, so this is the
+        // guard rather than a second opinion alongside one.
+        let submitted = InstantClaimStatus::Submitted {
+            claim_id: "claim-1".to_string(),
+        };
+        assert!(claim_already_submitted(Some(&submitted)));
+        assert!(!claim_already_submitted(None));
+        assert!(!claim_already_submitted(Some(&declined(Some(500), 1))));
     }
 }

@@ -500,6 +500,19 @@ class MigrationManager {
         name: "Add refund state to unclaimed_deposits",
         sql: [`ALTER TABLE unclaimed_deposits ADD COLUMN refund_state TEXT`],
       },
+      {
+        // Deposit addresses polled on-chain for deposits still in the mempool.
+        // Rows are removed once watching them can no longer lead to an early
+        // claim, so the table holds only the live watch set.
+        name: "Add watched_deposit_addresses",
+        sql: [
+          `CREATE TABLE IF NOT EXISTS watched_deposit_addresses (
+              address TEXT PRIMARY KEY,
+              issued_at INTEGER NOT NULL,
+              seen INTEGER NOT NULL DEFAULT 0
+          )`,
+        ],
+      },
     ];
   }
 }

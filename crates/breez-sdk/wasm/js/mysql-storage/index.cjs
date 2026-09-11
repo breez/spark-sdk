@@ -880,6 +880,59 @@ class MysqlStorage {
     }
   }
 
+  async listWatchedDepositAddresses() {
+    try {
+      const [rows] = await this.pool.query(
+        `SELECT address, issued_at, seen FROM brz_watched_deposit_addresses
+           WHERE user_id = ? ORDER BY issued_at DESC`,
+        [this.identity]
+      );
+      return rows.map((row) => ({
+        address: row.address,
+        issuedAt: BigInt(row.issued_at),
+        seen: toBool(row.seen) ?? false,
+      }));
+    } catch (error) {
+      throw new StorageError(
+        `Failed to list watched deposit addresses: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  async updateWatchedDepositAddress(address, payload) {
+    try {
+      if (payload.type === "watch") {
+        await this.pool.query(
+          `INSERT INTO brz_watched_deposit_addresses (user_id, address, issued_at, seen)
+             VALUES (?, ?, ?, FALSE)
+             ON DUPLICATE KEY UPDATE issued_at = VALUES(issued_at), seen = FALSE`,
+          [this.identity, address, String(payload.issuedAt)]
+        );
+      } else if (payload.type === "seen") {
+        await this.pool.query(
+          `UPDATE brz_watched_deposit_addresses SET seen = TRUE
+             WHERE user_id = ? AND address = ?`,
+          [this.identity, address]
+        );
+      } else if (payload.type === "unwatch") {
+        await this.pool.query(
+          `DELETE FROM brz_watched_deposit_addresses
+             WHERE user_id = ? AND address = ? AND issued_at = ?`,
+          [this.identity, address, String(payload.issuedAt)]
+        );
+      } else {
+        throw new StorageError(`Unknown payload type: ${payload.type}`);
+      }
+    } catch (error) {
+      if (error instanceof StorageError) throw error;
+      throw new StorageError(
+        `Failed to update watched deposit address '${address}': ${error.message}`,
+        error
+      );
+    }
+  }
+
   async setLnurlMetadata(metadata) {
     try {
       await this._withTransaction(async (conn) => {
