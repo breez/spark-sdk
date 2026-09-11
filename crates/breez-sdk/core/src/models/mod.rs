@@ -719,7 +719,8 @@ pub struct Config {
     pub lnurl_domain: Option<String>,
 
     /// Whether to settle over Spark rather than Lightning where both are
-    /// possible, for lower fees and faster settlement.
+    /// possible: lower fees and faster settlement, at the cost of revealing the
+    /// receiver's Spark identity to the payer. Off by default.
     ///
     /// Sending pays a Bolt11 invoice by Spark transfer when the invoice offers a
     /// Spark destination. Receiving embeds one in the Bolt11 invoices it creates,
