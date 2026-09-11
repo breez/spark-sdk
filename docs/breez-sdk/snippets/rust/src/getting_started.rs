@@ -103,6 +103,15 @@ impl EventListener for SdkEventListener {
                 // The unilateral exit state changed, so a previously exported
                 // one is now out of date. Export it again.
             }
+            SdkEvent::StableBalanceConversionFailed {
+                conversion,
+                error,
+                retry_in_secs,
+            } => {
+                // A Stable Balance sweep or deactivation conversion failed and
+                // will be retried after `retry_in_secs`. Balances are unchanged.
+                // Deactivate Stable Balance here to stop retrying instead.
+            }
         }
     }
 }

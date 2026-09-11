@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, Notify, watch};
 use tracing::{Instrument, debug, info, warn};
 
+use crate::events::{SdkEvent, StableBalanceConversionKind};
 use crate::models::ConversionStatus;
 use crate::persist::{ObjectCacheRepository, PaymentMetadata, Storage};
 use crate::utils::time::now_secs;
@@ -154,9 +155,14 @@ impl ConversionQueue {
 
     /// Queue a deactivation conversion task. Overrides any pending auto-convert
     /// and any backoff it was under: this is the user acting, so it runs now.
+    /// Persisted so a conversion that has not yet succeeded survives a restart.
     pub async fn push_deactivation(&self, token_identifier: String) {
         let mut state = self.state.lock().await;
         debug!("Queuing deactivation conversion for token {token_identifier}");
+        let cache = ObjectCacheRepository::new(self.storage.clone());
+        if let Err(e) = cache.save_pending_deactivation(&token_identifier).await {
+            warn!("Failed to persist pending deactivation: {e:?}");
+        }
         state.pending_task = Some(ConversionTask::Deactivation(token_identifier));
         state.reset_backoff();
         self.notify.notify_one();
@@ -186,6 +192,9 @@ impl ConversionQueue {
     pub async fn clear_queue(&self) -> Vec<String> {
         let mut state = self.state.lock().await;
         let cleared: Vec<String> = state.per_receive.drain(..).map(|p| p.payment_id).collect();
+        if matches!(state.pending_task, Some(ConversionTask::Deactivation(_))) {
+            self.forget_pending_deactivation().await;
+        }
         state.pending_task = None;
         state.reset_backoff();
         self.persist_pending(&state).await;
@@ -265,6 +274,13 @@ impl ConversionQueue {
         (delay, state.task_failures)
     }
 
+    async fn forget_pending_deactivation(&self) {
+        let cache = ObjectCacheRepository::new(self.storage.clone());
+        if let Err(e) = cache.delete_pending_deactivation().await {
+            warn!("Failed to clear persisted pending deactivation: {e:?}");
+        }
+    }
+
     /// Remove a completed task from the queue.
     /// Persists the updated pending list for per-receive tasks.
     pub async fn complete_task(&self, task: &ConversionTask) {
@@ -274,9 +290,14 @@ impl ConversionQueue {
                 state.per_receive.retain(|p| p.payment_id != *id);
                 self.persist_pending(&state).await;
             }
-            ConversionTask::AutoConvert | ConversionTask::Deactivation(_) => {
+            ConversionTask::AutoConvert => {
                 state.pending_task = None;
                 state.reset_backoff();
+            }
+            ConversionTask::Deactivation(_) => {
+                state.pending_task = None;
+                state.reset_backoff();
+                self.forget_pending_deactivation().await;
             }
         }
     }
@@ -451,8 +472,12 @@ impl StableBalance {
                     }
                 }
                 Err(e) => {
-                    self.schedule_retry(task, "Auto-convert", format!("{e:?}"))
-                        .await;
+                    self.schedule_retry(
+                        task,
+                        StableBalanceConversionKind::AutoConvert,
+                        format!("{e:?}"),
+                    )
+                    .await;
                 }
             },
             ConversionTask::Deactivation(token_id) => {
@@ -467,8 +492,12 @@ impl StableBalance {
                         }
                     }
                     Err(e) => {
-                        self.schedule_retry(task, "Deactivation", format!("{e:?}"))
-                            .await;
+                        self.schedule_retry(
+                            task,
+                            StableBalanceConversionKind::Deactivation,
+                            format!("{e:?}"),
+                        )
+                        .await;
                     }
                 }
             }
@@ -518,23 +547,46 @@ impl StableBalance {
         }
     }
 
-    /// A failed auto-convert or deactivation: keep it queued under backoff. The
-    /// AMM refunds a failed swap, so balances are unchanged.
-    async fn schedule_retry(&self, task: &ConversionTask, conversion: &str, error: String) {
+    /// A failed auto-convert or deactivation: keep it queued under backoff and
+    /// tell the integrator. The AMM refunds a failed swap, so balances are
+    /// unchanged; what the user sees without this is a toggle that reads "off"
+    /// over a token holding that never moved, or a sweep that silently isn't.
+    async fn schedule_retry(
+        &self,
+        task: &ConversionTask,
+        conversion: StableBalanceConversionKind,
+        error: String,
+    ) {
         let (retry_in_secs, failures) = self.core.queue.retry_later(task).await;
         warn!(
-            "{conversion} conversion failed ({failures} in a row), retrying in \
+            "{conversion:?} conversion failed ({failures} in a row), retrying in \
              {retry_in_secs}s: {error}"
         );
+        self.event_emitter
+            .emit(&SdkEvent::StableBalanceConversionFailed {
+                conversion,
+                error,
+                retry_in_secs,
+            })
+            .await;
     }
 
     /// Recover pending per-receive conversions from a previous session.
     ///
     /// Loads persisted pending conversions and restores them into the queue.
     /// Stale deferred tasks are cleaned up by `clear_expired_tasks()` on the
-    /// first `Synced` event.
+    /// first `Synced` event. A deactivation that had not yet moved the token
+    /// back to bitcoin is re-queued too.
     async fn recover_pending_conversions(&self) {
         let cache = ObjectCacheRepository::new(self.core.storage.clone());
+        match cache.fetch_pending_deactivation().await {
+            Ok(Some(token_identifier)) => {
+                info!("Recovering pending deactivation conversion for {token_identifier}");
+                self.core.queue.push_deactivation(token_identifier).await;
+            }
+            Ok(None) => {}
+            Err(e) => warn!("Failed to load pending deactivation for recovery: {e:?}"),
+        }
         match cache.fetch_pending_conversions().await {
             Ok(Some(pending)) => {
                 if !pending.is_empty() {
@@ -642,8 +694,9 @@ mod queue_tests {
     }
 
     #[tokio::test]
-    async fn a_deactivation_runs_now_even_while_an_auto_convert_is_backing_off() {
-        let (queue, _storage) = queue("deactivation_now");
+    async fn a_deactivation_runs_now_and_is_persisted_until_it_succeeds() {
+        let (queue, storage) = queue("deactivation_persist");
+        let cache = ObjectCacheRepository::new(Arc::clone(&storage));
         let token = "btkn1usdb".to_string();
 
         // An auto-convert under backoff does not delay the user's deactivation.
@@ -655,24 +708,39 @@ mod queue_tests {
             Some(ConversionTask::Deactivation(ref t)) if *t == token
         ));
         assert_eq!(queue.retry_delay().await, None);
+        assert_eq!(
+            cache.fetch_pending_deactivation().await.unwrap().as_deref(),
+            Some("btkn1usdb")
+        );
 
-        // A failure keeps it queued and backed off like an auto-convert.
+        // A failure keeps it queued, backed off, and still persisted.
         let task = ConversionTask::Deactivation(token.clone());
         assert_eq!(queue.retry_later(&task).await, (30, 1));
         assert!(queue.next_task().await.is_none());
+        assert_eq!(
+            cache.fetch_pending_deactivation().await.unwrap().as_deref(),
+            Some("btkn1usdb")
+        );
+
+        // Success forgets it.
         queue.complete_task(&task).await;
+        assert_eq!(cache.fetch_pending_deactivation().await.unwrap(), None);
         assert_eq!(queue.retry_delay().await, None);
     }
 
     #[tokio::test]
-    async fn clearing_the_queue_drops_the_backoff() {
-        let (queue, _storage) = queue("backoff_cleared");
+    async fn clearing_the_queue_drops_the_persisted_deactivation_and_backoff() {
+        // The user re-activates a token while its deactivation is still being
+        // retried: the holding is wanted as the token again, so stop trying.
+        let (queue, storage) = queue("deactivation_cleared");
+        let cache = ObjectCacheRepository::new(Arc::clone(&storage));
         queue.push_deactivation("btkn1usdb".to_string()).await;
         let _ = queue
             .retry_later(&ConversionTask::Deactivation("btkn1usdb".to_string()))
             .await;
 
         queue.clear_queue().await;
+        assert_eq!(cache.fetch_pending_deactivation().await.unwrap(), None);
         assert_eq!(queue.retry_delay().await, None);
         assert!(queue.next_task().await.is_none());
     }
