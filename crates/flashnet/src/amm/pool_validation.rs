@@ -262,7 +262,7 @@ mod tests {
                 "02894808873b896e21d29856a6d7bb346fb13c019739adb9bf0b6a8b7e28da53da",
             )
             .unwrap(),
-            host_name: "flashnet".to_string(),
+            host_name: Some("flashnet".to_string()),
             host_fee_bps: 0,
             lp_fee_bps: 20,
             asset_a_address: BTC_ASSET_ADDRESS.to_string(),
