@@ -2,7 +2,10 @@ use std::{
     collections::HashMap,
     fmt::{Display, Formatter},
     str::FromStr,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use breez_sdk_common::sync::{
@@ -112,6 +115,10 @@ pub struct SyncedRecordHandler {
     storage: Arc<dyn Storage>,
     event_emitter: Arc<EventEmitter>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
+    /// The session's first pull is the catch-up, replaying everything missed
+    /// since the last one. Pulls after it are notification-driven and emit,
+    /// including the one carrying whatever a dropped subscription missed.
+    emit_updates: AtomicBool,
 }
 
 #[macros::async_trait]
@@ -141,6 +148,7 @@ impl NewRecordHandler for SyncedRecordHandler {
         if incoming_count.is_none() {
             return Ok(());
         }
+        self.emit_updates.store(true, Ordering::Relaxed);
 
         self.event_emitter
             .emit_synced(&InternalSyncedEvent {
@@ -281,6 +289,7 @@ impl SyncedRecordHandler {
             storage,
             event_emitter,
             lnurl_server_client,
+            emit_updates: AtomicBool::new(false),
         }
     }
 
@@ -382,9 +391,21 @@ impl SyncedRecordHandler {
         )
         .map_err(|e| StorageError::Serialization(e.to_string()))?;
 
-        self.storage
-            .insert_payment_metadata(data_id, metadata)
-            .await?;
+        // Written to the raw inner storage, so this is the only place the
+        // receiving device learns the metadata changed.
+        if self
+            .storage
+            .insert_payment_metadata(data_id.clone(), metadata)
+            .await?
+            && self.emit_updates.load(Ordering::Relaxed)
+        {
+            crate::utils::payments::emit_payment_updated_if_terminal(
+                &self.storage,
+                &self.event_emitter,
+                data_id,
+            )
+            .await;
+        }
         Ok(())
     }
 
@@ -538,7 +559,7 @@ impl Storage for SyncedStorage {
         &self,
         payment_id: String,
         metadata: PaymentMetadata,
-    ) -> Result<(), StorageError> {
+    ) -> Result<bool, StorageError> {
         // Set the outgoing record for sync before updating local storage.
         self.sync_service
             .set_outgoing_record(&RecordChangeRequest {
@@ -769,8 +790,42 @@ mod tests {
     }
 
     fn create_test_record_handler(storage: Arc<dyn Storage>) -> SyncedRecordHandler {
+        create_test_record_handler_with_emitter(storage).0
+    }
+
+    fn create_test_record_handler_with_emitter(
+        storage: Arc<dyn Storage>,
+    ) -> (SyncedRecordHandler, Arc<EventEmitter>) {
         let event_emitter = Arc::new(EventEmitter::new(true));
-        SyncedRecordHandler::new(storage, event_emitter, None)
+        (
+            SyncedRecordHandler::new(storage, Arc::clone(&event_emitter), None),
+            event_emitter,
+        )
+    }
+
+    struct RecordingListener {
+        events: Arc<tokio::sync::Mutex<Vec<crate::SdkEvent>>>,
+    }
+
+    async fn payment_updated_ids(
+        events: &Arc<tokio::sync::Mutex<Vec<crate::SdkEvent>>>,
+    ) -> Vec<String> {
+        events
+            .lock()
+            .await
+            .iter()
+            .filter_map(|e| match e {
+                crate::SdkEvent::PaymentUpdated { payment } => Some(payment.id.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[macros::async_trait]
+    impl crate::EventListener for RecordingListener {
+        async fn on_event(&self, event: crate::SdkEvent) {
+            self.events.lock().await.push(event);
+        }
     }
 
     fn make_incoming_change(
@@ -1351,5 +1406,142 @@ mod tests {
         cache.delete_lightning_address(true).await.unwrap();
 
         assert_eq!(lightning_address_outgoing_count(&storage).await, 0);
+    }
+
+    /// Metadata synced from another device lands on a payment that already
+    /// settled here, so this device surfaces it as `PaymentUpdated`. The first
+    /// pull is silent (restoring a wallet replays its whole history), and an
+    /// identical replay writes nothing and stays silent.
+    #[tokio::test]
+    async fn test_incoming_payment_metadata_emits_payment_updated_once() {
+        let temp_dir = create_temp_dir("incoming_pm_emits_updated");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let (handler, event_emitter) =
+            create_test_record_handler_with_emitter(Arc::clone(&storage));
+
+        let events = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        event_emitter
+            .add_external_listener(Box::new(RecordingListener {
+                events: Arc::clone(&events),
+            }))
+            .await;
+
+        for id in ["restored-pay", "synced-pay"] {
+            storage
+                .apply_payment_update(make_test_lightning_payment(id))
+                .await
+                .unwrap();
+        }
+
+        let metadata_change = |data_id: &str, address: &str| {
+            let mut data = HashMap::new();
+            data.insert(
+                "lnurl_pay_info".to_string(),
+                serde_json::json!({ "ln_address": address }),
+            );
+            make_incoming_change(
+                "PaymentMetadata",
+                data_id,
+                RecordType::PaymentMetadata.schema_version(),
+                data,
+            )
+        };
+
+        // Records arriving before the first pull completes are a restore
+        // replaying history, not news.
+        let _ = handler
+            .handle_incoming_change(metadata_change("restored-pay", "restored@example.com"))
+            .await
+            .unwrap();
+        assert!(
+            payment_updated_ids(&events).await.is_empty(),
+            "records from the first pull must not emit"
+        );
+
+        handler.on_sync_completed(Some(1), None).await.unwrap();
+
+        let _ = handler
+            .handle_incoming_change(metadata_change("synced-pay", "synced@example.com"))
+            .await
+            .unwrap();
+        assert_eq!(
+            payment_updated_ids(&events).await,
+            vec!["synced-pay".to_string()],
+            "a later record on a settled payment emits exactly once"
+        );
+
+        // Replaying the same record is a no-op write, so nothing is emitted.
+        let _ = handler
+            .handle_incoming_change(metadata_change("synced-pay", "synced@example.com"))
+            .await
+            .unwrap();
+        assert_eq!(
+            payment_updated_ids(&events).await,
+            vec!["synced-pay".to_string()],
+            "replay of an identical record must not re-emit"
+        );
+    }
+
+    /// A dropped subscription re-establishes without triggering a pull, so the
+    /// records it missed arrive in the next notification-driven pull. That pull
+    /// is not the session's catch-up, so none of it may be swallowed.
+    #[tokio::test]
+    async fn test_pull_after_reconnect_emits() {
+        let temp_dir = create_temp_dir("incoming_pm_after_reconnect");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let (handler, event_emitter) =
+            create_test_record_handler_with_emitter(Arc::clone(&storage));
+
+        let events = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        event_emitter
+            .add_external_listener(Box::new(RecordingListener {
+                events: Arc::clone(&events),
+            }))
+            .await;
+
+        for id in ["catchup-pay", "reconnect-pay"] {
+            storage
+                .apply_payment_update(make_test_lightning_payment(id))
+                .await
+                .unwrap();
+        }
+
+        let metadata_change = |data_id: &str, address: &str| {
+            let mut data = HashMap::new();
+            data.insert(
+                "lnurl_pay_info".to_string(),
+                serde_json::json!({ "ln_address": address }),
+            );
+            make_incoming_change(
+                "PaymentMetadata",
+                data_id,
+                RecordType::PaymentMetadata.schema_version(),
+                data,
+            )
+        };
+
+        // The session's catch-up pull.
+        let _ = handler
+            .handle_incoming_change(metadata_change("catchup-pay", "catchup@example.com"))
+            .await
+            .unwrap();
+        handler.on_sync_completed(Some(1), None).await.unwrap();
+        assert!(
+            payment_updated_ids(&events).await.is_empty(),
+            "the session catch-up must stay silent"
+        );
+
+        // A later pull, such as the one that carries what a dropped
+        // subscription missed, is news.
+        let _ = handler
+            .handle_incoming_change(metadata_change("reconnect-pay", "reconnect@example.com"))
+            .await
+            .unwrap();
+        handler.on_sync_completed(Some(1), None).await.unwrap();
+        assert_eq!(
+            payment_updated_ids(&events).await,
+            vec!["reconnect-pay".to_string()],
+            "a pull after the catch-up must not be swallowed"
+        );
     }
 }

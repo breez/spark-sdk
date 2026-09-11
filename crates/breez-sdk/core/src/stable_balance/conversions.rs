@@ -111,26 +111,26 @@ impl StableBalance {
             .await?;
 
         // Link both conversion payments to the received parent payment
-        self.core
-            .storage
-            .insert_payment_metadata(
-                response.sent_payment_id.clone(),
-                PaymentMetadata {
-                    parent_payment_id: Some(parent_payment_id.to_string()),
-                    ..Default::default()
-                },
-            )
-            .await?;
-        self.core
-            .storage
-            .insert_payment_metadata(
-                response.received_payment_id.clone(),
-                PaymentMetadata {
-                    parent_payment_id: Some(parent_payment_id.to_string()),
-                    ..Default::default()
-                },
-            )
-            .await?;
+        crate::utils::payments::record_payment_metadata_update_by_id(
+            &self.core.storage,
+            &self.event_emitter,
+            response.sent_payment_id.clone(),
+            PaymentMetadata {
+                parent_payment_id: Some(parent_payment_id.to_string()),
+                ..Default::default()
+            },
+        )
+        .await?;
+        crate::utils::payments::record_payment_metadata_update_by_id(
+            &self.core.storage,
+            &self.event_emitter,
+            response.received_payment_id.clone(),
+            PaymentMetadata {
+                parent_payment_id: Some(parent_payment_id.to_string()),
+                ..Default::default()
+            },
+        )
+        .await?;
 
         info!(
             "Per-receive conversion completed: converted {amount_sats} sats for {parent_payment_id} (sent={}, received={})",
@@ -218,16 +218,16 @@ impl StableBalance {
             .await?;
 
         // Link sent payment as child of received payment
-        self.core
-            .storage
-            .insert_payment_metadata(
-                response.sent_payment_id.clone(),
-                PaymentMetadata {
-                    parent_payment_id: Some(response.received_payment_id.clone()),
-                    ..Default::default()
-                },
-            )
-            .await?;
+        crate::utils::payments::record_payment_metadata_update_by_id(
+            &self.core.storage,
+            &self.event_emitter,
+            response.sent_payment_id.clone(),
+            PaymentMetadata {
+                parent_payment_id: Some(response.received_payment_id.clone()),
+                ..Default::default()
+            },
+        )
+        .await?;
 
         info!(
             "Auto-conversion completed: converted {} sats (sent_payment_id={}, received_payment_id={})",
@@ -235,16 +235,16 @@ impl StableBalance {
         );
 
         // Persist Completed status for the received token payment
-        self.core
-            .storage
-            .insert_payment_metadata(
-                response.received_payment_id.clone(),
-                PaymentMetadata {
-                    conversion_status: Some(ConversionStatus::Completed),
-                    ..Default::default()
-                },
-            )
-            .await?;
+        crate::utils::payments::record_payment_metadata_update_by_id(
+            &self.core.storage,
+            &self.event_emitter,
+            response.received_payment_id.clone(),
+            PaymentMetadata {
+                conversion_status: Some(ConversionStatus::Completed),
+                ..Default::default()
+            },
+        )
+        .await?;
 
         Ok(true)
     }
@@ -316,28 +316,28 @@ impl StableBalance {
             .await?;
 
         // Link sent payment as child of received payment (same pattern as auto_convert)
-        self.core
-            .storage
-            .insert_payment_metadata(
-                response.sent_payment_id.clone(),
-                PaymentMetadata {
-                    parent_payment_id: Some(response.received_payment_id.clone()),
-                    ..Default::default()
-                },
-            )
-            .await?;
+        crate::utils::payments::record_payment_metadata_update_by_id(
+            &self.core.storage,
+            &self.event_emitter,
+            response.sent_payment_id.clone(),
+            PaymentMetadata {
+                parent_payment_id: Some(response.received_payment_id.clone()),
+                ..Default::default()
+            },
+        )
+        .await?;
 
         // Persist Completed status for the received BTC payment
-        self.core
-            .storage
-            .insert_payment_metadata(
-                response.received_payment_id.clone(),
-                PaymentMetadata {
-                    conversion_status: Some(ConversionStatus::Completed),
-                    ..Default::default()
-                },
-            )
-            .await?;
+        crate::utils::payments::record_payment_metadata_update_by_id(
+            &self.core.storage,
+            &self.event_emitter,
+            response.received_payment_id.clone(),
+            PaymentMetadata {
+                conversion_status: Some(ConversionStatus::Completed),
+                ..Default::default()
+            },
+        )
+        .await?;
 
         info!(
             "Deactivation conversion completed: converted {token_balance} tokens (sent={}, received={})",

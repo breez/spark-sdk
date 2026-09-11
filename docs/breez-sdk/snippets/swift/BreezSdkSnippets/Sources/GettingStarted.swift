@@ -80,6 +80,11 @@ class SdkEventListener: EventListener {
             // A payment failed. payment.details carries the method-specific
             // context to show the user.
             let _ = paymentFailed
+        case .paymentUpdated(let payment):
+            // Metadata on an already-settled payment changed (e.g. cross-chain
+            // conversion info attached after the payment succeeded). Re-render
+            // the payment to surface the updated details.
+            let _ = payment
         case .autoOptimization(let optimizationEvent):
             // Background optimizer progress: started, round completed, or a
             // terminal outcome. Manual optimizeLeaves calls do not emit these.

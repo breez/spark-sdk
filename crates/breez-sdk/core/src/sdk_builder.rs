@@ -627,6 +627,7 @@ impl SdkBuilder {
             &spark_wallet,
             &storage,
             Arc::clone(&fiat_service),
+            &event_emitter,
             shutdown_sender.subscribe(),
         );
 
@@ -1108,6 +1109,7 @@ async fn build_stable_balance(
 
 /// Builds the cross-chain context: provider registry + shared cached fiat
 /// service. Returns an empty registry when `config.cross_chain_config` is unset.
+#[allow(clippy::too_many_arguments)]
 fn build_cross_chain_context(
     config: &Config,
     breez_server: &Arc<BreezServer>,
@@ -1115,6 +1117,7 @@ fn build_cross_chain_context(
     spark_wallet: &Arc<SparkWallet>,
     storage: &Arc<dyn crate::persist::Storage>,
     fiat_service: Arc<dyn breez_sdk_common::fiat::FiatService>,
+    event_emitter: &Arc<EventEmitter>,
     shutdown_receiver: watch::Receiver<()>,
 ) -> crate::cross_chain::CrossChainContext {
     // Cache scoped to cross-chain: providers + dispatcher share one TTL window.
@@ -1144,6 +1147,7 @@ fn build_cross_chain_context(
                 Arc::clone(storage),
                 Arc::clone(&cached_fiat),
                 Arc::clone(http_client),
+                Arc::clone(event_emitter),
                 shutdown_receiver,
             )),
         );

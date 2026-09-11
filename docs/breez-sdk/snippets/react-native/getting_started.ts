@@ -88,6 +88,11 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
         // A payment failed. payment.details carries the method-specific
         // context to show the user.
         const failedPayment = event.inner.payment
+      } else if (event.tag === SdkEvent_Tags.PaymentUpdated) {
+        // Metadata on an already-settled payment changed (e.g. cross-chain
+        // conversion info attached after the payment succeeded). Re-render the
+        // payment to surface the updated details.
+        const updatedPayment = event.inner.payment
       } else if (event.tag === SdkEvent_Tags.AutoOptimization) {
         // Background optimizer progress: started, round completed, or a
         // terminal outcome. Manual optimizeLeaves calls do not emit these.
