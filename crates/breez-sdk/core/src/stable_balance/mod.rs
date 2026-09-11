@@ -650,26 +650,6 @@ impl EventMiddleware for StableBalanceMiddleware {
         match event {
             // Sync completed → wake the startup gate, sweep timed-out deferred tasks
             SdkEvent::Synced => {
-                // Clean up deferred tasks that have exceeded the timeout
-                let expired_payment_ids = self.core.queue.clear_expired_tasks().await;
-                for expired_payment_id in expired_payment_ids {
-                    warn!("Per-receive conversion timed out for {expired_payment_id}");
-                    if let Err(e) = self
-                        .core
-                        .storage
-                        .insert_payment_metadata(
-                            expired_payment_id.clone(),
-                            PaymentMetadata {
-                                conversion_status: Some(ConversionStatus::Failed),
-                                ..Default::default()
-                            },
-                        )
-                        .await
-                    {
-                        warn!("Failed to persist Failed status for {expired_payment_id}: {e:?}");
-                    }
-                }
-
                 self.core.synced_notify.notify_one();
 
                 // Re-assess balance after sync — may have changed due to external activity

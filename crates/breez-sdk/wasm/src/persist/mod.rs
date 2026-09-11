@@ -556,7 +556,11 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
      * replace an already-terminal status.
      */
     applyPaymentUpdate: (payment: Payment) => Promise<boolean>;
-    insertPaymentMetadata: (paymentId: string, metadata: PaymentMetadata) => Promise<void>;
+    /**
+     * Resolves `true` when the stored row actually changed, `false` when the
+     * call was a no-op against the existing row.
+     */
+    insertPaymentMetadata: (paymentId: string, metadata: PaymentMetadata) => Promise<boolean>;
     getPaymentById: (id: string) => Promise<Payment>;
     getPaymentByInvoice: (invoice: string) => Promise<Payment>;
     addDeposit: (txid: string, vout: number, amount_sats: number, isMature: boolean) => Promise<void>;
