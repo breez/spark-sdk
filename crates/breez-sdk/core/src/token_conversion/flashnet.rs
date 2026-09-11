@@ -537,13 +537,16 @@ impl FlashnetTokenConverter {
                 res.skipped = res.skipped.saturating_add(1);
                 continue;
             }
+            let Some(pool_id) = self.resolve_clawback_pool(&transfer).await else {
+                warn!(
+                    "Reconcile: cannot claw back {}: no pool in the listing or the local record",
+                    transfer.id
+                );
+                res.failed = res.failed.saturating_add(1);
+                continue;
+            };
             match self
-                .clawback_and_record_refunded(
-                    &transfer.id,
-                    transfer.lp_identity_public_key,
-                    None,
-                    None,
-                )
+                .clawback_and_record_refunded(&transfer.id, pool_id, None, None)
                 .await
             {
                 Ok(true) => res.refunded = res.refunded.saturating_add(1),
@@ -565,6 +568,22 @@ impl FlashnetTokenConverter {
     /// rejected, local state untouched for a retry; `Err` = the clawback call
     /// failed (funds not returned). `payment_id` skips row-id resolution;
     /// `prior_info` skips the metadata re-read.
+    /// The pool a listed clawback transfer belongs to, taken from the listing
+    /// or, when it omits one, from the conversion record for that transfer.
+    async fn resolve_clawback_pool(&self, transfer: &ClawbackTransfer) -> Option<PublicKey> {
+        if let Some(pool_id) = transfer.lp_identity_public_key {
+            return Some(pool_id);
+        }
+        let payment_id = resolve_payment_id(&transfer.id, &self.spark_wallet, &self.storage, true)
+            .await
+            .ok()?;
+        let payment = self.storage.get_payment_by_id(payment_id).await.ok()?;
+        match crate::utils::conversions::extract_conversion_info(payment.details)? {
+            ConversionInfo::Amm { pool_id, .. } => PublicKey::from_str(&pool_id).ok(),
+            _ => None,
+        }
+    }
+
     async fn clawback_and_record_refunded(
         &self,
         clawback_id: &str,
@@ -693,15 +712,16 @@ impl FlashnetTokenConverter {
         });
         let (a_in_pools_res, b_in_pools_res) = tokio::join!(a_in_pools_fut, b_in_pools_fut);
 
-        // Merge pools by pool_id to avoid duplicates
-        let mut pools = a_in_pools_res.map_or(HashMap::new(), |res| {
-            res.pools
-                .into_iter()
-                .map(|pool| (pool.lp_public_key, pool))
-                .collect::<HashMap<_, _>>()
-        });
-        if let Ok(res) = b_in_pools_res {
-            pools.extend(res.pools.into_iter().map(|pool| (pool.lp_public_key, pool)));
+        // Merge pools by pool_id to avoid duplicates. A failed listing is
+        // logged rather than read as an empty one.
+        let mut pools = HashMap::new();
+        for res in [a_in_pools_res, b_in_pools_res] {
+            match res {
+                Ok(res) => {
+                    pools.extend(res.pools.into_iter().map(|pool| (pool.lp_public_key, pool)));
+                }
+                Err(e) => warn!("Failed to list conversion pools: {e}"),
+            }
         }
         let pools = pools.into_values().collect::<Vec<_>>();
 
@@ -1788,10 +1808,12 @@ mod tests {
     fn transfer(id: &str, created_at: Option<&str>) -> ClawbackTransfer {
         ClawbackTransfer {
             id: id.to_string(),
-            lp_identity_public_key: PublicKey::from_str(
-                "02894808873b896e21d29856a6d7bb346fb13c019739adb9bf0b6a8b7e28da53da",
-            )
-            .unwrap(),
+            lp_identity_public_key: Some(
+                PublicKey::from_str(
+                    "02894808873b896e21d29856a6d7bb346fb13c019739adb9bf0b6a8b7e28da53da",
+                )
+                .unwrap(),
+            ),
             created_at: created_at.map(str::to_string),
         }
     }
