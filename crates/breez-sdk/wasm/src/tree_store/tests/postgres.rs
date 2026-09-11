@@ -120,12 +120,9 @@ async fn test_store_ancestors_backfills_chain() {
 }
 
 #[wasm_bindgen_test]
-async fn test_stored_chain_survives_refresh_and_dies_with_its_leaf() {
+async fn test_stored_chain_survives_every_refresh() {
     let store = create_test_tree_store("pg_tree_store_chain_survives").await;
-    breez_sdk_spark::tree_store_tests::test_stored_chain_survives_refresh_and_dies_with_its_leaf(
-        &store,
-    )
-    .await;
+    breez_sdk_spark::tree_store_tests::test_stored_chain_survives_every_refresh(&store).await;
 }
 
 #[wasm_bindgen_test]
@@ -142,15 +139,39 @@ async fn test_store_ancestors_for_absent_leaf() {
 }
 
 #[wasm_bindgen_test]
-async fn test_unshared_ancestor_deleted_with_leaf() {
+async fn test_absent_leaf_is_kept_for_its_exit_chain() {
     let store = create_test_tree_store("pg_tree_ancestor_deleted").await;
-    breez_sdk_spark::tree_store_tests::test_unshared_ancestor_deleted_with_leaf(&store).await;
+    breez_sdk_spark::tree_store_tests::test_absent_leaf_is_kept_for_its_exit_chain(&store).await;
 }
 
 #[wasm_bindgen_test]
-async fn test_shared_ancestor_survives_leaf_deletion() {
+async fn test_remove_leaves_spares_a_revived_leaf() {
+    let store = create_test_tree_store("pg_tree_ancestor_deleted").await;
+    breez_sdk_spark::tree_store_tests::test_remove_leaves_spares_a_revived_leaf(&store).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_kept_leaf_cannot_back_a_payment() {
+    let store = create_test_tree_store("pg_tree_ancestor_deleted").await;
+    breez_sdk_spark::tree_store_tests::test_kept_leaf_cannot_back_a_payment(&store).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_cancel_keeps_an_unverified_leaf() {
+    let store = create_test_tree_store("pg_tree_ancestor_deleted").await;
+    breez_sdk_spark::tree_store_tests::test_cancel_keeps_an_unverified_leaf(&store).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_deleted_leaves_are_listed_and_removable() {
+    let store = create_test_tree_store("pg_tree_ancestor_deleted").await;
+    breez_sdk_spark::tree_store_tests::test_deleted_leaves_are_listed_and_removable(&store).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_absent_leaf_keeps_shared_ancestor() {
     let store = create_test_tree_store("pg_tree_ancestor_shared").await;
-    breez_sdk_spark::tree_store_tests::test_shared_ancestor_survives_leaf_deletion(&store).await;
+    breez_sdk_spark::tree_store_tests::test_absent_leaf_keeps_shared_ancestor(&store).await;
 }
 
 #[wasm_bindgen_test]
