@@ -23,10 +23,10 @@ use tokio::{select, sync::watch, time::sleep};
 use tracing::{debug, error, info, warn};
 
 use super::{
-    CrossChainFeeMode, CrossChainProvider, CrossChainProviderContext, CrossChainRouteFilter,
-    CrossChainRoutePair, CrossChainSendPrepared, CrossChainService, DeliveryMethod, SparkAsset,
-    boltz_storage_adapter::PROVIDER_TAG_BOLTZ, derive_btc_leg_transfer_id,
-    payment_with_conversion_info,
+    CrossChainAcceptedAsset, CrossChainFeeMode, CrossChainProvider, CrossChainProviderContext,
+    CrossChainRouteFilter, CrossChainRoutePair, CrossChainSendPrepared, CrossChainService,
+    DeliveryMethod, SparkAsset, boltz_storage_adapter::PROVIDER_TAG_BOLTZ,
+    derive_btc_leg_transfer_id, payment_with_conversion_info,
 };
 use crate::{
     ConversionInfo, ConversionStatus, CrossChainAddressDetails, Network, PaymentMetadata,
@@ -919,7 +919,10 @@ fn destination_to_route_pair(
         contract_address: dest.dest_token_address.clone(),
         decimals: 6,
         exact_out_eligible: false,
-        accepted_assets: vec![SparkAsset::Bitcoin],
+        accepted_assets: vec![CrossChainAcceptedAsset {
+            asset: SparkAsset::Bitcoin,
+            limits: None,
+        }],
         delivery_methods: vec![DeliveryMethod::Lightning],
     }
 }
@@ -1062,7 +1065,10 @@ mod tests {
             contract_address: contract.map(str::to_string),
             decimals: 6,
             exact_out_eligible: false,
-            accepted_assets: vec![SparkAsset::Bitcoin],
+            accepted_assets: vec![CrossChainAcceptedAsset {
+                asset: SparkAsset::Bitcoin,
+                limits: None,
+            }],
             delivery_methods: vec![DeliveryMethod::Lightning],
         }
     }

@@ -548,6 +548,21 @@ pub enum _CrossChainFeeMode {
     FeesIncluded,
 }
 
+#[frb(mirror(CrossChainRouteLimits))]
+pub struct _CrossChainRouteLimits {
+    pub min_amount: Option<u128>,
+    pub max_amount: Option<u128>,
+    pub min_usd_cents: Option<u64>,
+    pub max_usd_cents: Option<u64>,
+    pub dynamic_limits_possible: bool,
+}
+
+#[frb(mirror(CrossChainAcceptedAsset))]
+pub struct _CrossChainAcceptedAsset {
+    pub asset: SparkAsset,
+    pub limits: Option<CrossChainRouteLimits>,
+}
+
 #[frb(mirror(CrossChainRoutePair))]
 pub struct _CrossChainRoutePair {
     pub provider: CrossChainProvider,
@@ -557,7 +572,7 @@ pub struct _CrossChainRoutePair {
     pub contract_address: Option<String>,
     pub decimals: u8,
     pub exact_out_eligible: bool,
-    pub accepted_assets: Vec<SparkAsset>,
+    pub accepted_assets: Vec<CrossChainAcceptedAsset>,
     pub delivery_methods: Vec<DeliveryMethod>,
 }
 

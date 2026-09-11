@@ -32,6 +32,21 @@ async def get_cross_chain_routes(sdk: BreezSdk):
             logging.debug(
                 f"Route via {route.provider}: {route.chain}/{route.asset}"
             )
+            # Amount bounds are published per accepted asset. Read the ones
+            # for the asset you intend to pay with, before quoting.
+            for accepted in route.accepted_assets:
+                limits = accepted.limits
+                if limits is None:
+                    continue
+                logging.debug(
+                    f"  {accepted.asset} minimum: {limits.min_amount} "
+                    f"base units / {limits.min_usd_cents} USD cents"
+                )
+                if limits.dynamic_limits_possible:
+                    logging.debug(
+                        "  The provider may enforce a higher minimum "
+                        "than published"
+                    )
     except Exception as error:
         logging.error(error)
         raise

@@ -57,6 +57,22 @@ URIs whose recipient address doesn't match the scheme's address family (e.g. a `
 
 The provider tag on each {{#name CrossChainRoutePair}} is the source of truth. When the same destination is offered by multiple providers, every route is returned; the caller picks one based on supported source/destination assets, fees, or other preferences.
 
+## Amount limits
+
+Each entry in {{#name CrossChainRoutePair.accepted_assets}} carries an optional {{#name limits}} block: the amount bounds the provider publishes for moving that route with that Spark-side asset. Read them before quoting so an out-of-range amount is caught at entry rather than at prepare.
+
+| Field                          | Meaning                                                              |
+| ------------------------------ | -------------------------------------------------------------------- |
+| {{#name min_amount}} / {{#name max_amount}}     | Bounds in the base units of the asset paid in: the Spark-side asset on a send, the external asset on a receive |
+| {{#name min_usd_cents}} / {{#name max_usd_cents}} | Bounds on the order's value, in USD cents                          |
+| {{#name dynamic_limits_possible}} | Whether the provider can reject an amount that satisfies the bounds |
+
+Bounds are per asset rather than per route, because the same external endpoint can carry a dust floor when moved as sats and none when moved as a token. Either denomination can be absent, and a provider may publish none at all, so treat a missing bound as "no published limit" rather than as zero.
+
+Where {{#name dynamic_limits_possible}} is set, the published minimum is a floor on what will be rejected, not the whole truth: the route is carried over legs with their own moving minimums and liquidity ceilings, and those can sit well above the published number. Preparing the payment is what validates a concrete amount.
+
+A rejected amount surfaces as {{#enum SdkError::CrossChainAmountOutOfRange}}, carrying {{#name too_small}} for the direction and the published bound in whichever denominations the provider publishes.
+
 ## Slippage
 
 Cross-chain slippage protects against price movement between quote and delivery. Values are expressed in basis points (1 bps = 0.01%).

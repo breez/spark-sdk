@@ -23,6 +23,13 @@ pub enum FlashnetError {
         outbound_asset_transfer: Option<Box<AssetTransfer>>,
     },
 
+    /// The provider rejected the amount as outside what it accepts for the
+    /// route. `too_small` separates a rejection below the minimum from one
+    /// above the maximum or beyond available liquidity. Orchestra does not
+    /// report the bound it applied, so there is no number to carry here.
+    #[error("{reason}")]
+    AmountOutOfRange { reason: String, too_small: bool },
+
     #[error("Session: {0}")]
     Session(#[from] SessionStoreError),
 

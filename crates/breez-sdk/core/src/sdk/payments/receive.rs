@@ -257,7 +257,7 @@ async fn resolve_receive_destination(
     requested: Option<SparkAsset>,
 ) -> Result<SparkAsset, SdkError> {
     if let Some(asset) = requested {
-        if route.accepted_assets.contains(&asset) {
+        if route.accepts_asset(&asset) {
             return Ok(asset);
         }
         return Err(SdkError::InvalidInput(format!(
@@ -269,11 +269,11 @@ async fn resolve_receive_destination(
         && let Some(token_identifier) = sb.get_active_token_identifier().await
     {
         let token_asset = SparkAsset::Token { token_identifier };
-        if route.accepted_assets.contains(&token_asset) {
+        if route.accepts_asset(&token_asset) {
             return Ok(token_asset);
         }
     }
-    if route.accepted_assets.contains(&SparkAsset::Bitcoin) {
+    if route.accepts_asset(&SparkAsset::Bitcoin) {
         return Ok(SparkAsset::Bitcoin);
     }
     Err(SdkError::InvalidInput(
