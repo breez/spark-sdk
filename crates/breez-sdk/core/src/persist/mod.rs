@@ -48,6 +48,7 @@ const PUBLISHED_PACKAGE_KEY_PREFIX: &str = "published_package_";
 const SPARK_PRIVATE_MODE_INITIALIZED_KEY: &str = "spark_private_mode_initialized";
 pub(crate) const STABLE_BALANCE_ACTIVE_LABEL_KEY: &str = "stable_balance_active_label";
 const PENDING_CONVERSIONS_KEY: &str = "pending_conversions";
+const PENDING_DEACTIVATION_KEY: &str = "pending_deactivation";
 const PENDING_LIGHTNING_SENDS_KEY: &str = "pending_lightning_sends";
 
 /// Wrapper stored in the cache that carries context about whether the value
@@ -928,6 +929,34 @@ impl ObjectCacheRepository {
     pub(crate) async fn delete_pending_conversions(&self) -> Result<(), StorageError> {
         self.storage
             .delete_cached_item(PENDING_CONVERSIONS_KEY.to_string())
+            .await
+    }
+
+    /// The token a deactivation conversion still has to move back to bitcoin.
+    /// Set when Stable Balance is switched off, cleared when the conversion
+    /// succeeds, so a conversion that keeps failing (or a restart in between)
+    /// doesn't strand the holding behind a toggle that reads "off".
+    pub(crate) async fn save_pending_deactivation(
+        &self,
+        token_identifier: &str,
+    ) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(
+                PENDING_DEACTIVATION_KEY.to_string(),
+                token_identifier.to_string(),
+            )
+            .await
+    }
+
+    pub(crate) async fn fetch_pending_deactivation(&self) -> Result<Option<String>, StorageError> {
+        self.storage
+            .get_cached_item(PENDING_DEACTIVATION_KEY.to_string())
+            .await
+    }
+
+    pub(crate) async fn delete_pending_deactivation(&self) -> Result<(), StorageError> {
+        self.storage
+            .delete_cached_item(PENDING_DEACTIVATION_KEY.to_string())
             .await
     }
 

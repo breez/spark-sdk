@@ -56,6 +56,28 @@ pub enum SdkEvent {
     /// Emitted when the data a unilateral exit is built from has changed, so an
     /// exit state exported earlier is out of date and should be exported again.
     UnilateralExitStateChanged,
+    /// Emitted when a Stable Balance conversion the SDK runs on its own failed:
+    /// sweeping received bitcoin into the stable token, or converting the token
+    /// back to bitcoin on deactivation. The SDK keeps retrying with backoff;
+    /// `retry_in_secs` is how long until the next attempt. Balances are
+    /// unchanged: the AMM refunds a failed swap. Integrators that would rather
+    /// stop than wait can deactivate Stable Balance in response.
+    StableBalanceConversionFailed {
+        conversion: StableBalanceConversionKind,
+        error: String,
+        retry_in_secs: u64,
+    },
+}
+
+/// Which Stable Balance conversion an [`SdkEvent::StableBalanceConversionFailed`]
+/// refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum StableBalanceConversionKind {
+    /// Bitcoin above the threshold being swept into the stable token.
+    AutoConvert,
+    /// The stable token being converted back to bitcoin after deactivation.
+    Deactivation,
 }
 
 impl SdkEvent {
@@ -99,6 +121,14 @@ impl fmt::Display for SdkEvent {
                 write!(f, "NewDeposits[{}]", new_deposits.len())
             }
             SdkEvent::UnilateralExitStateChanged => write!(f, "UnilateralExitStateChanged"),
+            SdkEvent::StableBalanceConversionFailed {
+                conversion,
+                retry_in_secs,
+                ..
+            } => write!(
+                f,
+                "StableBalanceConversionFailed({conversion:?}, retry in {retry_in_secs}s)"
+            ),
         }
     }
 }
