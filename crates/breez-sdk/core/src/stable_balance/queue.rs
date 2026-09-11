@@ -223,7 +223,6 @@ impl ConversionQueue {
     }
 
     /// Remove deferred tasks that have exceeded the timeout and return their `payment_ids`.
-    /// Called on `Synced` events to clean up tasks that were never resolved.
     pub async fn clear_expired_tasks(&self) -> Vec<String> {
         let now = now_secs();
         let mut state = self.state.lock().await;
@@ -282,7 +281,7 @@ impl StableBalance {
                 }
 
                 // Restore pending conversions before waiting for sync, so the
-                // first Synced event can expire any stale deferred tasks.
+                // first sweep below can expire any stale deferred tasks.
                 stable_balance.recover_pending_conversions().await;
 
                 // Wait for initial sync before processing any tasks
@@ -304,6 +303,8 @@ impl StableBalance {
                 loop {
                     // Register notify future BEFORE checking the queue to avoid missed wakeups
                     let notified = stable_balance.core.queue.notify.notified();
+
+                    stable_balance.expire_deferred_tasks().await;
 
                     // Drain all available tasks
                     while let Some(task) = stable_balance.core.queue.next_task().await {
@@ -381,6 +382,28 @@ impl StableBalance {
         );
     }
 
+    /// Fails per-receive tasks that outlived the deferral window. Runs here
+    /// rather than on the `Synced` event so the emitter is in scope, and a
+    /// timed-out conversion surfaces the same way a completed one does.
+    async fn expire_deferred_tasks(&self) {
+        for payment_id in self.core.queue.clear_expired_tasks().await {
+            warn!("Per-receive conversion timed out for {payment_id}");
+            if let Err(e) = crate::utils::payments::record_payment_metadata_update_by_id(
+                &self.core.storage,
+                &self.event_emitter,
+                payment_id.clone(),
+                PaymentMetadata {
+                    conversion_status: Some(ConversionStatus::Failed),
+                    ..Default::default()
+                },
+            )
+            .await
+            {
+                warn!("Failed to persist Failed status for {payment_id}: {e:?}");
+            }
+        }
+    }
+
     /// Process a per-receive conversion task.
     ///
     /// On failure, returns `Retry` so the task is deferred until resolved by either
@@ -427,7 +450,7 @@ impl StableBalance {
     ///
     /// Loads persisted pending conversions and restores them into the queue.
     /// Stale deferred tasks are cleaned up by `clear_expired_tasks()` on the
-    /// first `Synced` event.
+    /// conversion worker's next pass.
     async fn recover_pending_conversions(&self) {
         let cache = ObjectCacheRepository::new(self.core.storage.clone());
         match cache.fetch_pending_conversions().await {
