@@ -11,13 +11,12 @@ use spark::services::{
     TransferType,
 };
 use spark::signer::{Signer, SignerError};
-use spark::tree::TreeStore;
 use spark::utils::htlc_transactions::create_htlc_taproot_address;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::handover::is_refusal;
-use crate::leaves::{IncomingTransfer, LeafSigningKeys, claim_into_pool};
+use crate::leaves::{IncomingLeafStore, IncomingTransfer, LeafSigningKeys, claim_into_pool};
 use crate::wakeup::Wakeup;
 
 use super::node::{LightningNode, LightningNodeError, LightningPaymentId, PaymentState};
@@ -421,7 +420,8 @@ pub struct SendWorkerDeps {
     pub signer: Arc<dyn Signer>,
     pub transfer_service: Arc<TransferService>,
     pub htlc_service: Arc<HtlcService>,
-    pub tree_store: Arc<dyn TreeStore>,
+    pub incoming: Arc<dyn IncomingLeafStore>,
+    pub admission: Wakeup,
     pub leaf_signing_keys: Arc<dyn LeafSigningKeys>,
     pub network: spark::Network,
     pub wakeup: Wakeup,
@@ -624,7 +624,8 @@ async fn settle_send(
     let claimed = claim_into_pool(
         &deps.transfer_service,
         deps.leaf_signing_keys.as_ref(),
-        deps.tree_store.as_ref(),
+        deps.incoming.as_ref(),
+        &deps.admission,
         &claimed_transfer,
     )
     .await?;

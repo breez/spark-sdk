@@ -8,11 +8,12 @@ use bitcoin::secp256k1::PublicKey;
 use spark::bitcoin::BitcoinService;
 use spark::operator::rpc::{ConnectionManager, DefaultConnectionManager};
 use spark::operator::{OperatorConfig, OperatorPool, OperatorPoolConfig};
-use spark::services::{DepositService, TimelockManager, TransferService};
+use spark::services::TimelockManager;
+use spark::services::{DepositService, TransferService};
 use spark::session_store::InMemorySessionStore;
 use spark::signer::{DefaultSigner, Signer, SparkSigner, SparkSignerAdapter};
 use spark::ssp::{RetryConfig, ServiceProvider, ServiceProviderConfig};
-use spark::tree::{SynchronousTreeService, TreeService, TreeStore};
+use spark::tree::{ExitChainResolver, SynchronousTreeService, TreeService, TreeStore};
 use spark_postgres::{PostgresStorageConfig, PostgresTreeStore};
 use sqlx::PgPool;
 use thiserror::Error;
@@ -51,6 +52,8 @@ pub struct SparkServices {
     pub transfer_service: Arc<TransferService>,
     pub deposit_service: Arc<DepositService>,
     pub tree_deposit_service: TreeDepositService,
+    pub timelocks: Arc<TimelockManager>,
+    pub exit_chains: Arc<ExitChainResolver>,
     pub tree_service: Arc<dyn TreeService>,
     pub identity_public_key: PublicKey,
     pub network: spark::Network,
@@ -146,21 +149,23 @@ impl<R: ChainRepository + Send + Sync + 'static> SspWallet<R> {
             PostgresTreeStore::from_config(leaf_store, &identity_public_key.serialize()).await?,
         );
 
+        let timelocks = Arc::new(TimelockManager::new(
+            spark_signer.clone(),
+            spark_network,
+            operator_pool.clone(),
+        ));
         let tree_service: Arc<dyn TreeService> = Arc::new(SynchronousTreeService::new(
             identity_public_key,
             spark_network,
             operator_pool.clone(),
             Arc::clone(&tree_store),
-            Arc::new(TimelockManager::new(
-                spark_signer.clone(),
-                spark_network,
-                operator_pool.clone(),
-            )),
+            Arc::clone(&timelocks),
             spark_signer.clone(),
             // The SSP is the service provider, so it has none to swap with.
             None,
             None,
         ));
+        let exit_chains = Arc::new(ExitChainResolver::new(Arc::clone(&tree_service)));
 
         let tree_deposit_service = TreeDepositService::new(
             identity_public_key,
@@ -181,6 +186,8 @@ impl<R: ChainRepository + Send + Sync + 'static> SspWallet<R> {
                 transfer_service,
                 deposit_service,
                 tree_deposit_service,
+                timelocks,
+                exit_chains,
                 tree_service,
                 identity_public_key,
                 network: spark_network,

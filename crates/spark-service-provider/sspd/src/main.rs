@@ -40,6 +40,11 @@ use sspd_lib::{
     postgresql, shutdown, static_deposit, swap, wakeup, wallet,
 };
 
+/// How often held leaves are tried again. Arriving leaves do not wait for it.
+const LEAF_ADMISSION_INTERVAL: Duration = Duration::from_secs(30);
+
+const EXIT_CHAIN_RESOLVE_INTERVAL: Duration = Duration::from_secs(60);
+
 const DEPENDENCY_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 #[serde_as]
@@ -288,6 +293,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let pool_repo = Arc::new(postgresql::PoolRepository::new(Arc::clone(&pgpool)));
+    let incoming: Arc<dyn leaves::IncomingLeafStore> = Arc::new(
+        postgresql::PostgresIncomingLeafStore::new(Arc::clone(&pgpool)),
+    );
+    let admission = wakeup::Wakeup::new();
     let swap_repo = Arc::new(postgresql::SwapRepository::new(Arc::clone(&pgpool)));
     let lightning_store = Arc::new(postgresql::PostgresLightningStore::new(Arc::clone(&pgpool)))
         as Arc<dyn lightning::repository::LightningStore>;
@@ -352,6 +361,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let swap_claim_wakeup = wakeup::Wakeup::new();
     spawn_swap_claimer(
         &tracker,
+        &incoming,
+        &admission,
         &ssp_wallet,
         &swap_repo,
         &pool_repo,
@@ -360,6 +371,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     spawn_coop_exit_worker(
         &tracker,
+        &incoming,
+        &admission,
         &ssp_wallet,
         &chain_client,
         &chain_repository,
@@ -396,6 +409,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let lightning = build_lightning(
+        &incoming,
+        &admission,
         &tracker,
         &lightning_config,
         &ssp_wallet,
@@ -429,6 +444,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &token,
         &shutdown,
     );
+
+    spawn_exit_chain_resolver(&tracker, &ssp_wallet, &token);
+    spawn_leaf_admission(&tracker, &ssp_wallet, &incoming, admission.clone(), &token);
 
     info!("sspd started");
 
@@ -584,8 +602,11 @@ fn spawn_pool_loops(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_swap_claimer(
     tracker: &TaskTracker,
+    incoming: &Arc<dyn leaves::IncomingLeafStore>,
+    admission: &wakeup::Wakeup,
     ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
     swap_repo: &Arc<postgresql::SwapRepository>,
     pool_repo: &Arc<postgresql::PoolRepository>,
@@ -594,6 +615,8 @@ fn spawn_swap_claimer(
 ) {
     let claim_repo = Arc::clone(swap_repo) as Arc<dyn swap::SwapStore>;
     let transfer_service = Arc::clone(&ssp_wallet.spark.transfer_service);
+    let incoming = Arc::clone(incoming);
+    let admission = admission.clone();
     let tree_store = Arc::clone(&ssp_wallet.spark.tree_store);
     let leaf_signing_keys = Arc::clone(pool_repo) as Arc<dyn leaves::LeafSigningKeys>;
     let claim_token = token.clone();
@@ -603,6 +626,8 @@ fn spawn_swap_claimer(
                 swap_repo: claim_repo,
                 tree_store,
                 transfer_service,
+                incoming,
+                admission,
                 leaf_signing_keys,
                 wakeup,
             },
@@ -617,7 +642,8 @@ struct SparkCoopExitExecutor {
     chain_client: Arc<BitcoindClient>,
     chain_repository: Arc<postgresql::ChainRepository>,
     transfer_service: Arc<spark::services::TransferService>,
-    tree_store: Arc<dyn spark::tree::TreeStore>,
+    incoming: Arc<dyn leaves::IncomingLeafStore>,
+    admission: wakeup::Wakeup,
     leaf_signing_keys: Arc<dyn leaves::LeafSigningKeys>,
 }
 
@@ -649,7 +675,8 @@ impl coop_exit::CoopExitExecutor for SparkCoopExitExecutor {
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         coop_exit::claim_user_transfer(
             &self.transfer_service,
-            &self.tree_store,
+            &self.incoming,
+            &self.admission,
             &self.leaf_signing_keys,
             transfer_id,
         )
@@ -692,6 +719,8 @@ impl coop_exit::CoopExitExecutor for SparkCoopExitExecutor {
 #[allow(clippy::too_many_arguments)]
 fn spawn_coop_exit_worker(
     tracker: &TaskTracker,
+    incoming: &Arc<dyn leaves::IncomingLeafStore>,
+    admission: &wakeup::Wakeup,
     ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
     chain_client: &Arc<BitcoindClient>,
     chain_repository: &Arc<postgresql::ChainRepository>,
@@ -706,7 +735,8 @@ fn spawn_coop_exit_worker(
         chain_client: Arc::clone(chain_client),
         chain_repository: Arc::clone(chain_repository),
         transfer_service: Arc::clone(&ssp_wallet.spark.transfer_service),
-        tree_store: Arc::clone(&ssp_wallet.spark.tree_store),
+        incoming: Arc::clone(incoming),
+        admission: admission.clone(),
         leaf_signing_keys: Arc::clone(pool_repo) as Arc<dyn leaves::LeafSigningKeys>,
     }) as Arc<dyn coop_exit::CoopExitExecutor>;
     let deps = coop_exit::CoopExitWorkerDeps {
@@ -923,8 +953,12 @@ fn invoice_signing_key(
     Ok(Some(key))
 }
 
-#[allow(clippy::too_many_lines)]
+/// Lightning is enabled once ldk-server is reachable and matches the configuration,
+/// so an outage at startup leaves the rest of the daemon running.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn build_lightning(
+    incoming: &Arc<dyn leaves::IncomingLeafStore>,
+    admission: &wakeup::Wakeup,
     tracker: &TaskTracker,
     config: &LightningConfig,
     ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
@@ -1005,7 +1039,8 @@ fn build_lightning(
         signer: Arc::clone(&ssp_wallet.spark.signer),
         transfer_service: Arc::clone(&ssp_wallet.spark.transfer_service),
         htlc_service: Arc::clone(&htlc_service),
-        tree_store: Arc::clone(&ssp_wallet.spark.tree_store),
+        incoming: Arc::clone(incoming),
+        admission: admission.clone(),
         leaf_signing_keys: Arc::clone(pool_repo) as Arc<dyn leaves::LeafSigningKeys>,
         network: ssp_wallet.spark.network,
         wakeup: send_wakeup,
@@ -1253,6 +1288,72 @@ fn spawn_internal_server(
         match res {
             Ok(()) => shutdown.stop("the internal server finished"),
             Err(e) => shutdown.fail("internal server", &format!("{e:?}")),
+        }
+    });
+}
+
+fn spawn_exit_chain_resolver(
+    tracker: &TaskTracker,
+    ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
+    token: &CancellationToken,
+) {
+    let resolver = Arc::clone(&ssp_wallet.spark.exit_chains);
+    let token = token.clone();
+    tracker.spawn(async move {
+        let mut interval = tokio::time::interval(EXIT_CHAIN_RESOLVE_INTERVAL);
+        loop {
+            tokio::select! {
+                () = token.cancelled() => {
+                    info!("Exit chain resolver cancelled");
+                    return;
+                }
+                _ = interval.tick() => {
+                    if let Err(e) = resolver.resolve_missing_chains().await {
+                        tracing::warn!("could not resolve exit chains: {e:?}");
+                    }
+                }
+            }
+        }
+    });
+}
+
+fn spawn_leaf_admission(
+    tracker: &TaskTracker,
+    ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
+    incoming: &Arc<dyn leaves::IncomingLeafStore>,
+    admission: wakeup::Wakeup,
+    token: &CancellationToken,
+) {
+    let deps = pool::incoming::AdmissionDeps {
+        store: Arc::clone(incoming),
+        tree_service: Arc::clone(&ssp_wallet.spark.tree_service),
+        tree_store: Arc::clone(&ssp_wallet.spark.tree_store),
+        timelocks: Arc::clone(&ssp_wallet.spark.timelocks),
+        identity: ssp_wallet.spark.identity_public_key,
+    };
+    let token = token.clone();
+    tracker.spawn(async move {
+        let mut interval = tokio::time::interval(LEAF_ADMISSION_INTERVAL);
+        loop {
+            // Drains the backlog: a large arrival should not need one wake per batch.
+            while !token.is_cancelled() {
+                match pool::incoming::admit_once(&deps).await {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(e) => {
+                        tracing::warn!("could not admit claimed leaves: {e:?}");
+                        break;
+                    }
+                }
+            }
+            tokio::select! {
+                () = token.cancelled() => {
+                    info!("Leaf admission cancelled");
+                    return;
+                }
+                () = admission.waited() => {}
+                _ = interval.tick() => {}
+            }
         }
     });
 }

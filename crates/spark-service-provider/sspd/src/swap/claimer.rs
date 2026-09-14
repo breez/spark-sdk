@@ -3,11 +3,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use spark::services::{TransferId, TransferService, TransferStatus};
-use spark::tree::{TreeNodeId, TreeStore};
+use spark::tree::TreeNodeId;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
-use crate::leaves::{LeafSigningKeys, claim_into_pool, release_reserved_leaves};
+use crate::leaves::{IncomingLeafStore, LeafSigningKeys, claim_into_pool, release_reserved_leaves};
 use crate::swap::SwapStore;
 use crate::swap::repository::{SwapDetail, SwapLeaf};
 use crate::wakeup::Wakeup;
@@ -20,8 +20,10 @@ const CLAIM_BACKUP_INTERVAL: Duration = Duration::from_secs(60);
 
 pub struct SwapClaimDeps {
     pub swap_repo: Arc<dyn SwapStore>,
-    pub tree_store: Arc<dyn TreeStore>,
+    pub tree_store: Arc<dyn spark::tree::TreeStore>,
     pub transfer_service: Arc<TransferService>,
+    pub incoming: Arc<dyn IncomingLeafStore>,
+    pub admission: Wakeup,
     pub leaf_signing_keys: Arc<dyn LeafSigningKeys>,
     pub wakeup: Wakeup,
 }
@@ -102,7 +104,8 @@ async fn claim_one_swap(deps: &SwapClaimDeps, detail: SwapDetail) -> Result<(), 
     let claimed = claim_into_pool(
         &deps.transfer_service,
         deps.leaf_signing_keys.as_ref(),
-        deps.tree_store.as_ref(),
+        deps.incoming.as_ref(),
+        &deps.admission,
         &transfer,
     )
     .await?;
