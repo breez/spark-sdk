@@ -28,11 +28,12 @@ use sqlx::postgres::PgPoolOptions;
 #[cfg(not(unix))]
 use tokio::signal;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
-use tracing::{info, warn};
+use tracing::{field, info, warn};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use sspd_lib::{
-    bitcoind, chain, coop_exit, fees, leaves, pool, postgresql, shutdown, swap, wakeup, wallet,
+    auth, bitcoind, chain, coop_exit, fees, graphql, leaves, lightning, pool, postgresql, shutdown,
+    static_deposit, swap, wakeup, wallet,
 };
 
 const DEPENDENCY_RETRY_INTERVAL: Duration = Duration::from_secs(5);
@@ -43,6 +44,16 @@ const DEPENDENCY_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 struct Args {
     #[arg(long, default_value = "sspd.conf")]
     pub config: PathBuf,
+
+    /// Address the public GraphQL API server will listen on.
+    #[arg(long, default_value = "127.0.0.1:59049")]
+    pub address: core::net::SocketAddr,
+
+    /// Address the internal grpc server will listen on. That API has no
+    /// authentication: whoever reaches it can stop the daemon and spend its
+    /// on-chain funds restocking the pool, so keep it on a loopback address.
+    #[arg(long, default_value = "127.0.0.1:59050")]
+    pub internal_address: core::net::SocketAddr,
 
     /// Bitcoin network. Valid values are bitcoin, testnet, signet, regtest.
     #[arg(long, default_value = "bitcoin")]
@@ -102,15 +113,59 @@ struct Args {
     #[arg(long, default_value = "600")]
     pub replenish_interval_seconds: u64,
 
+    /// How long, in seconds, the SSP's leaves stay fronted to a user who has not
+    /// revealed a HODL preimage before the operators return them. Hold invoices
+    /// demand enough CLTV to outlast it.
+    #[arg(long, default_value = "1800")]
+    pub receive_leaf_transfer_expiry_seconds: u64,
+
     /// Nodes the operators allow one tree-creation round to carry. A larger tree
     /// is built in layers, so this decides how many calls creating one takes.
     #[arg(long, default_value = "1000")]
     pub max_nodes_per_request: usize,
 
+    /// ldk-server gRPC endpoint (host:port, no scheme). When empty, Lightning is
+    /// disabled and the lightning operations report "not configured".
+    #[arg(long, default_value = "")]
+    pub ldk_server_url: String,
+
+    /// API key for ldk-server HMAC authentication. Config file or
+    /// `SSPD_LDK_SERVER_API_KEY` only.
+    #[arg(skip)]
+    pub ldk_server_api_key: String,
+
+    /// Path to ldk-server's self-signed TLS certificate (PEM).
+    #[arg(long, default_value = "")]
+    pub ldk_server_cert_path: String,
+
+    /// The ldk-server node's secret key (hex), to re-sign invoices that advertise a
+    /// Spark address: ldk-server's hold invoice API takes no route hints. Config
+    /// file or `SSPD_LDK_SERVER_INVOICE_SIGNING_KEY` only.
+    #[arg(skip)]
+    pub ldk_server_invoice_signing_key: String,
+
     /// The signing operators. Unset uses the network's default operators. Not a
     /// command-line flag: it is a list.
     #[arg(skip)]
     pub operators: Option<Vec<wallet::OperatorSetting>>,
+
+    /// SSP flat base fee (sats) for fronting a lightning send. With the proportional
+    /// fee, it is the least a user must commit beyond the amount. A route may charge
+    /// up to what the user committed beyond the amount.
+    #[arg(long, default_value = "2")]
+    pub lightning_send_base_fee_sats: u64,
+
+    /// Credit a static deposit through an instant claim before the deposit
+    /// confirms. A deposit double-spent before it confirms leaves the SSP with
+    /// nothing to collect for the leaves it credited.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub accept_unconfirmed_deposits: bool,
+
+    /// SSP proportional fee (parts per million) for fronting a lightning send.
+    /// Sized above a typical route so a retry down a dearer path still fits inside
+    /// what the user committed.
+    #[arg(long, default_value = "4000")]
+    pub lightning_send_fee_ppm: u64,
 }
 
 #[tokio::main]
@@ -127,6 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_denomination_power: args.max_denomination_power,
         replenish_interval: Duration::from_secs(args.replenish_interval_seconds),
     };
+    let lightning_config = LightningConfig::from_args(&args, pool_config.largest_denomination());
 
     tracing_subscriber::registry()
         .with(EnvFilter::new(&args.log_level))
@@ -169,6 +225,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let replenish_wakeup = wakeup::Wakeup::new();
     let pooling_wakeup = wakeup::Wakeup::new();
     let coop_exit_wakeup = wakeup::Wakeup::new();
+    let static_deposit_blocks = wakeup::Wakeup::new();
+    let htlc_sweep_blocks = wakeup::Wakeup::new();
+    let static_deposit_claims = wakeup::Wakeup::new();
 
     let chain_info = loop {
         match chain_client.chain_info().await {
@@ -201,6 +260,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             replenish_wakeup.clone(),
             pooling_wakeup.clone(),
             coop_exit_wakeup.clone(),
+            static_deposit_blocks.clone(),
+            htlc_sweep_blocks.clone(),
         ],
         &token,
     );
@@ -223,9 +284,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let pool_repo = Arc::new(postgresql::PoolRepository::new(Arc::clone(&pgpool)));
+    let swap_repo = Arc::new(postgresql::SwapRepository::new(Arc::clone(&pgpool)));
+    let lightning_store = Arc::new(postgresql::PostgresLightningStore::new(Arc::clone(&pgpool)))
+        as Arc<dyn lightning::repository::LightningStore>;
+    let coop_exit_store = Arc::new(postgresql::PostgresCoopExitStore::new(Arc::clone(&pgpool)))
+        as Arc<dyn coop_exit::repository::CoopExitStore>;
     let fee_rates = Arc::new(chain::CachedFeeRates::new(
         Arc::clone(&chain_client) as Arc<_>
     )) as Arc<dyn fees::FeeRateSource>;
+    let coop_exit_service = Arc::new(coop_exit::CoopExitService::new(
+        Arc::clone(&coop_exit_store),
+        Arc::clone(&ssp_wallet.spark.operator_pool),
+        Arc::clone(&ssp_wallet.spark.signer),
+        Arc::clone(&ssp_wallet.spark.transfer_service),
+        Arc::clone(&ssp_wallet.onchain) as Arc<dyn coop_exit::CoopExitOnchainWallet>,
+        Arc::clone(&fee_rates),
+        ssp_wallet.spark.network,
+        coop_exit_wakeup.clone(),
+    ));
+    let static_deposit_store = Arc::new(postgresql::PostgresStaticDepositClaimStore::new(
+        Arc::clone(&pgpool),
+    ))
+        as Arc<dyn static_deposit::repository::StaticDepositClaimStore>;
+    let instant_quote_store = Arc::new(postgresql::PostgresInstantStaticDepositQuoteStore::new(
+        Arc::clone(&pgpool),
+    ))
+        as Arc<dyn static_deposit::repository::InstantStaticDepositQuoteStore>;
+    let static_deposit_chain = Arc::new(BitcoindStaticDepositChain {
+        chain_client: Arc::clone(&chain_client),
+        chain_repository: Arc::clone(&chain_repository),
+        onchain: Arc::clone(&ssp_wallet.onchain),
+        network: args.network,
+    }) as Arc<dyn static_deposit::StaticDepositChain>;
+    let static_deposit_service = Arc::new(static_deposit::StaticDepositService::new(
+        Arc::clone(&static_deposit_store),
+        Arc::clone(&instant_quote_store),
+        Arc::clone(&ssp_wallet.spark.transfer_service),
+        Arc::clone(&ssp_wallet.spark.tree_store),
+        Arc::clone(&ssp_wallet.spark.operator_pool),
+        Arc::clone(&ssp_wallet.spark.signer),
+        Arc::clone(&static_deposit_chain),
+        Arc::clone(&fee_rates),
+        Arc::clone(&pool_repo) as Arc<dyn leaves::LeafSigningKeys>,
+        args.accept_unconfirmed_deposits,
+        pool_config.largest_denomination(),
+        static_deposit_claims.clone(),
+    ));
 
     let restock = Arc::new(pool::restock::RestockService::new(replenish_wakeup.clone()));
     spawn_pool_loops(
@@ -241,8 +345,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pooling_wakeup,
         &token,
     );
-
-    let swap_repo = Arc::new(postgresql::SwapRepository::new(Arc::clone(&pgpool)));
     let swap_claim_wakeup = wakeup::Wakeup::new();
     spawn_swap_claimer(
         &tracker,
@@ -252,19 +354,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         swap_claim_wakeup.clone(),
         &token,
     );
-
-    let coop_exit_store: Arc<dyn coop_exit::repository::CoopExitStore> =
-        Arc::new(postgresql::PostgresCoopExitStore::new(Arc::clone(&pgpool)));
-    let coop_exit_service = Arc::new(coop_exit::CoopExitService::new(
-        Arc::clone(&coop_exit_store),
-        Arc::clone(&ssp_wallet.spark.operator_pool),
-        Arc::clone(&ssp_wallet.spark.signer),
-        Arc::clone(&ssp_wallet.spark.transfer_service),
-        Arc::clone(&ssp_wallet.onchain) as Arc<dyn coop_exit::CoopExitOnchainWallet>,
-        Arc::clone(&fee_rates),
-        ssp_wallet.spark.network,
-        coop_exit_wakeup.clone(),
-    ));
     spawn_coop_exit_worker(
         &tracker,
         &ssp_wallet,
@@ -275,6 +364,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &pool_repo,
         &coop_exit_wakeup,
         &token,
+    );
+    spawn_static_deposit_worker(
+        &tracker,
+        &static_deposit_service,
+        &static_deposit_store,
+        &instant_quote_store,
+        &static_deposit_chain,
+        &ssp_wallet,
+        static_deposit_blocks,
+        static_deposit_claims,
+        &token,
+    );
+
+    let htlc_sweep = lightning::htlc_sweep::HtlcSweepDeps {
+        store: Arc::clone(&lightning_store),
+        chain_client: Arc::clone(&chain_client) as Arc<dyn chain::ChainClient + Send + Sync>,
+        fee_rates: Arc::clone(&fee_rates),
+        signer: Arc::clone(&ssp_wallet.spark.signer),
+        onchain: Arc::clone(&ssp_wallet.onchain),
+        network: ssp_wallet.spark.network,
+        blocks: htlc_sweep_blocks,
+    };
+    let htlc_sweep_token = token.clone();
+    tracker.spawn(async move {
+        lightning::htlc_sweep::run_htlc_sweep_loop(htlc_sweep, htlc_sweep_token).await;
+    });
+
+    let lightning = build_lightning(
+        &tracker,
+        &lightning_config,
+        &ssp_wallet,
+        &pool_repo,
+        &lightning_store,
+        &token,
+        &shutdown,
+    )?;
+
+    let auth = Arc::new(auth::AuthService::from_seed(&seed));
+    spawn_servers(
+        &tracker,
+        args.address,
+        args.network,
+        &ssp_wallet,
+        &chain_client,
+        &pool_repo,
+        &swap_repo,
+        swap_claim_wakeup,
+        &lightning_store,
+        &coop_exit_service,
+        &static_deposit_service,
+        lightning,
+        auth,
+        &fee_rates,
+        &pool_config,
+        &token,
+        &shutdown,
     );
 
     info!("sspd started");
@@ -351,6 +496,7 @@ async fn wait_for_shutdown_signal() -> std::io::Result<&'static str> {
     signal::ctrl_c().await?;
     Ok("ctrl-c")
 }
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_chain_monitor(
     tracker: &TaskTracker,
@@ -563,5 +709,469 @@ fn spawn_coop_exit_worker(
     let wakeup = wakeup.clone();
     tracker.spawn(async move {
         coop_exit::run_coop_exit_loop(deps, wakeup, worker_token).await;
+    });
+}
+
+struct BitcoindStaticDepositChain {
+    chain_client: Arc<BitcoindClient>,
+    chain_repository: Arc<postgresql::ChainRepository>,
+    onchain: Arc<wallet::OnchainWallet<postgresql::ChainRepository>>,
+    network: Network,
+}
+
+#[async_trait::async_trait]
+impl static_deposit::StaticDepositChain for BitcoindStaticDepositChain {
+    async fn deposit_output(
+        &self,
+        txid: &bitcoin::Txid,
+        vout: u32,
+    ) -> Result<Option<static_deposit::DepositOutput>, Box<dyn std::error::Error + Send + Sync>>
+    {
+        let outpoint = bitcoin::OutPoint { txid: *txid, vout };
+        Ok(self
+            .chain_client
+            .unspent_output(&outpoint)
+            .await?
+            .map(|output| static_deposit::DepositOutput {
+                tx_out: output.tx_out,
+                confirmations: output.confirmations,
+            }))
+    }
+
+    async fn new_address(
+        &self,
+    ) -> Result<bitcoin::Address, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(self.onchain.next_address().await?.0)
+    }
+
+    async fn is_confirmed(
+        &self,
+        tx: &bitcoin::Transaction,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        use chain::ChainRepository as _;
+        // The chain monitor records the outputs paying the wallet's addresses as
+        // their blocks are applied.
+        let output = tx.output.first().ok_or("transaction has no output")?;
+        let address = bitcoin::Address::from_script(&output.script_pubkey, self.network)?;
+        let outpoint = bitcoin::OutPoint {
+            txid: tx.compute_txid(),
+            vout: 0,
+        };
+        Ok(self
+            .chain_repository
+            .get_txos_for_address(&address)
+            .await?
+            .iter()
+            .any(|txo| txo.outpoint == outpoint))
+    }
+
+    async fn broadcast(
+        &self,
+        tx: &bitcoin::Transaction,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use chain::ChainClient as _;
+        match self.chain_client.broadcast_tx(tx.clone()).await {
+            Ok(()) | Err(chain::BroadcastError::AlreadyKnown) => Ok(()),
+            Err(e) => Err(Box::new(e)),
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_static_deposit_worker(
+    tracker: &TaskTracker,
+    static_deposit_service: &Arc<static_deposit::StaticDepositService>,
+    static_deposit_store: &Arc<dyn static_deposit::repository::StaticDepositClaimStore>,
+    instant_quote_store: &Arc<dyn static_deposit::repository::InstantStaticDepositQuoteStore>,
+    static_deposit_chain: &Arc<dyn static_deposit::StaticDepositChain>,
+    ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
+    blocks: wakeup::Wakeup,
+    claims: wakeup::Wakeup,
+    token: &CancellationToken,
+) {
+    let finalizer = Arc::new(static_deposit::SparkStaticDepositSpendFinalizer::new(
+        Arc::clone(&ssp_wallet.spark.signer),
+    )) as Arc<dyn static_deposit::StaticDepositSpendFinalizer>;
+    let spend_cosigner = Arc::new(static_deposit::SparkStaticDepositSpendCosigner::new(
+        Arc::clone(static_deposit_store),
+        Arc::clone(&ssp_wallet.spark.operator_pool),
+        Arc::clone(&ssp_wallet.spark.signer),
+        Arc::clone(static_deposit_chain),
+    )) as Arc<dyn static_deposit::StaticDepositSpendCosigner>;
+    let deps = static_deposit::StaticDepositWorkerDeps {
+        store: Arc::clone(static_deposit_store),
+        quotes: Arc::clone(instant_quote_store),
+        chain: Arc::clone(static_deposit_chain),
+        finalizer,
+        spend_cosigner,
+        credit_settler: Arc::clone(static_deposit_service) as Arc<_>,
+        blocks,
+        claims,
+    };
+    let worker_token = token.clone();
+    tracker.spawn(async move {
+        static_deposit::run_static_deposit_loop(deps, worker_token).await;
+    });
+}
+
+struct LightningConfig {
+    network: Network,
+    ldk_server_url: String,
+    ldk_server_api_key: String,
+    ldk_server_cert_path: String,
+    invoice_signing_key: String,
+    send_base_fee_sats: u64,
+    send_fee_ppm: u64,
+    receive_leaf_transfer_expiry: Duration,
+    largest_denomination: u64,
+}
+
+impl LightningConfig {
+    fn from_args(args: &Args, largest_denomination: u64) -> Self {
+        Self {
+            network: args.network,
+            ldk_server_url: args.ldk_server_url.clone(),
+            ldk_server_api_key: args.ldk_server_api_key.clone(),
+            ldk_server_cert_path: args.ldk_server_cert_path.clone(),
+            invoice_signing_key: args.ldk_server_invoice_signing_key.clone(),
+            send_base_fee_sats: args.lightning_send_base_fee_sats,
+            send_fee_ppm: args.lightning_send_fee_ppm,
+            receive_leaf_transfer_expiry: Duration::from_secs(
+                args.receive_leaf_transfer_expiry_seconds,
+            ),
+            largest_denomination,
+        }
+    }
+}
+
+const LDK_SERVER_CHECK_RETRY_DELAY: Duration = Duration::from_secs(10);
+
+enum LdkServerCheck {
+    Unreachable(String),
+    Misconfigured(String),
+}
+
+async fn check_ldk_server(
+    network: Network,
+    invoice_signing_key: Option<&bitcoin::secp256k1::SecretKey>,
+    ldk: &lightning::ldk::LdkServerNode,
+) -> Result<(), LdkServerCheck> {
+    let node_network = ldk.network().await.map_err(|e| {
+        LdkServerCheck::Unreachable(format!("could not read the ldk-server network: {e}"))
+    })?;
+    if node_network != network {
+        return Err(LdkServerCheck::Misconfigured(format!(
+            "ldk-server is on {node_network}, but the daemon is configured for {network}"
+        )));
+    }
+    let Some(key) = invoice_signing_key else {
+        return Ok(());
+    };
+    let derived = key.public_key(&bitcoin::secp256k1::Secp256k1::new());
+    let node_id = ldk.node_id().await.map_err(|e| {
+        LdkServerCheck::Unreachable(format!("could not read the ldk-server node id: {e}"))
+    })?;
+    if derived != node_id {
+        return Err(LdkServerCheck::Misconfigured(format!(
+            "the configured invoice signing key is for {derived}, but the ldk-server node is \
+             {node_id}; invoices signed with it would name a payee that cannot be paid"
+        )));
+    }
+    Ok(())
+}
+
+/// Returns `false` when cancelled first.
+async fn await_ldk_server(
+    network: Network,
+    invoice_signing_key: Option<&bitcoin::secp256k1::SecretKey>,
+    ldk: &lightning::ldk::LdkServerNode,
+    token: &CancellationToken,
+) -> Result<bool, String> {
+    loop {
+        match check_ldk_server(network, invoice_signing_key, ldk).await {
+            Ok(()) => return Ok(true),
+            Err(LdkServerCheck::Misconfigured(e)) => return Err(e),
+            Err(LdkServerCheck::Unreachable(e)) => {
+                warn!("Lightning waits for ldk-server: {e}");
+            }
+        }
+        tokio::select! {
+            () = token.cancelled() => return Ok(false),
+            () = tokio::time::sleep(LDK_SERVER_CHECK_RETRY_DELAY) => {}
+        }
+    }
+}
+
+fn invoice_signing_key(
+    config: &LightningConfig,
+) -> Result<Option<bitcoin::secp256k1::SecretKey>, Box<dyn std::error::Error>> {
+    if config.invoice_signing_key.is_empty() {
+        return Ok(None);
+    }
+    let bytes = hex::decode(&config.invoice_signing_key)
+        .map_err(|e| format!("ldk-server invoice signing key is not hex: {e}"))?;
+    let key = bitcoin::secp256k1::SecretKey::from_slice(&bytes)
+        .map_err(|e| format!("invalid ldk-server invoice signing key: {e}"))?;
+    Ok(Some(key))
+}
+
+#[allow(clippy::too_many_lines)]
+fn build_lightning(
+    tracker: &TaskTracker,
+    config: &LightningConfig,
+    ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
+    pool_repo: &Arc<postgresql::PoolRepository>,
+    lightning_store: &Arc<dyn lightning::repository::LightningStore>,
+    token: &CancellationToken,
+    shutdown: &Arc<shutdown::Shutdown>,
+) -> Result<graphql::Lightning, Box<dyn std::error::Error>> {
+    let lightning = graphql::Lightning::default();
+    if config.ldk_server_url.is_empty() {
+        info!("Lightning disabled: no ldk-server configured");
+        return Ok(lightning);
+    }
+    let cltv_delta =
+        lightning::receive::hold_invoice_cltv_delta(config.receive_leaf_transfer_expiry)?;
+    let invoice_signing_key = invoice_signing_key(config)?;
+
+    let cert = std::fs::read(&config.ldk_server_cert_path).map_err(|e| {
+        format!(
+            "failed to read ldk-server cert '{}': {e}",
+            config.ldk_server_cert_path
+        )
+    })?;
+    let send_wakeup = wakeup::Wakeup::new();
+    let receive_wakeup = wakeup::Wakeup::new();
+    let ldk = Arc::new(lightning::ldk::LdkServerNode::new(
+        config.ldk_server_url.clone(),
+        config.ldk_server_api_key.clone(),
+        &cert,
+        send_wakeup.clone(),
+        receive_wakeup.clone(),
+    )?);
+    let node = Arc::clone(&ldk) as Arc<dyn lightning::node::LightningNode>;
+
+    let htlc_service = Arc::new(spark::services::HtlcService::new(
+        Arc::clone(&ssp_wallet.spark.operator_pool),
+        ssp_wallet.spark.network,
+        Arc::clone(&ssp_wallet.spark.spark_signer),
+        Arc::clone(&ssp_wallet.spark.transfer_service),
+        None,
+    ));
+
+    let send_service = Arc::new(lightning::send::LightningSendService::new(
+        Arc::clone(&node),
+        Arc::clone(lightning_store),
+        Arc::clone(&ssp_wallet.spark.operator_pool),
+        Arc::clone(&ssp_wallet.spark.signer),
+        Arc::clone(&ssp_wallet.spark.transfer_service),
+        ssp_wallet.spark.network,
+        lightning::send::LightningSendFeePolicy {
+            base_sats: config.send_base_fee_sats,
+            ppm: config.send_fee_ppm,
+        },
+        send_wakeup.clone(),
+    ));
+    let receive_service = Arc::new(lightning::receive::LightningReceiveService::new(
+        Arc::clone(&node),
+        Arc::clone(lightning_store),
+        invoice_signing_key,
+        cltv_delta,
+    ));
+
+    let listener_node = Arc::clone(&ldk);
+    let listener_token = token.clone();
+    tracker.spawn(async move { listener_node.run_event_listener(listener_token).await });
+    let refresh_node = Arc::clone(&ldk);
+    let refresh_token = token.clone();
+    tracker.spawn(async move {
+        refresh_node
+            .run_paid_hold_invoices_refresh(refresh_token)
+            .await;
+    });
+
+    let send_deps = lightning::send::SendWorkerDeps {
+        store: Arc::clone(lightning_store),
+        node: Arc::clone(&node),
+        operator_pool: Arc::clone(&ssp_wallet.spark.operator_pool),
+        signer: Arc::clone(&ssp_wallet.spark.signer),
+        transfer_service: Arc::clone(&ssp_wallet.spark.transfer_service),
+        htlc_service: Arc::clone(&htlc_service),
+        tree_store: Arc::clone(&ssp_wallet.spark.tree_store),
+        leaf_signing_keys: Arc::clone(pool_repo) as Arc<dyn leaves::LeafSigningKeys>,
+        network: ssp_wallet.spark.network,
+        wakeup: send_wakeup,
+    };
+
+    let receive_deps = lightning::receive::ReceiveWorkerDeps {
+        store: Arc::clone(lightning_store),
+        node: Arc::clone(&node),
+        operator_pool: Arc::clone(&ssp_wallet.spark.operator_pool),
+        signer: Arc::clone(&ssp_wallet.spark.signer),
+        htlc_service: Arc::clone(&htlc_service),
+        tree_service: Arc::clone(&ssp_wallet.spark.tree_service),
+        tree_store: Arc::clone(&ssp_wallet.spark.tree_store),
+        key_resolver: Arc::clone(pool_repo) as Arc<dyn leaves::LeafSigningKeys>,
+        network: ssp_wallet.spark.network,
+        wakeup: receive_wakeup.clone(),
+        leaf_transfer_expiry: config.receive_leaf_transfer_expiry,
+        largest_denomination: config.largest_denomination,
+    };
+
+    let identity_public_key = ssp_wallet.spark.identity_public_key;
+    let operator_pool = Arc::clone(&ssp_wallet.spark.operator_pool);
+    let network = config.network;
+    let url = config.ldk_server_url.clone();
+    let enabled = lightning.clone();
+    let workers = tracker.clone();
+    let token = token.clone();
+    let shutdown = Arc::clone(shutdown);
+    tracker.spawn(async move {
+        match await_ldk_server(network, invoice_signing_key.as_ref(), &ldk, &token).await {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(e) => return shutdown.fail("Lightning", &e),
+        }
+        let send_token = token.clone();
+        workers.spawn(async move { lightning::send::run_send_loop(send_deps, send_token).await });
+        let events_token = token.clone();
+        workers.spawn(async move {
+            lightning::receive::wake_on_handover_events(
+                identity_public_key,
+                operator_pool,
+                receive_wakeup,
+                events_token,
+            )
+            .await;
+        });
+        workers.spawn(async move {
+            lightning::receive::run_receive_loop(receive_deps, token).await;
+        });
+        enabled.enable(graphql::LightningServices {
+            send: send_service,
+            receive: receive_service,
+        });
+        info!(url = %url, "Lightning enabled via ldk-server");
+    });
+    Ok(lightning)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_servers(
+    tracker: &TaskTracker,
+    graphql_address: core::net::SocketAddr,
+    network: Network,
+    ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
+    chain_client: &Arc<BitcoindClient>,
+    pool_repo: &Arc<postgresql::PoolRepository>,
+    swap_repo: &Arc<postgresql::SwapRepository>,
+    swap_claim_wakeup: wakeup::Wakeup,
+    lightning_store: &Arc<dyn lightning::repository::LightningStore>,
+    coop_exit_service: &Arc<coop_exit::CoopExitService>,
+    static_deposit_service: &Arc<static_deposit::StaticDepositService>,
+    lightning: graphql::Lightning,
+    auth: Arc<auth::AuthService>,
+    fee_rates: &Arc<dyn fees::FeeRateSource>,
+    pool_config: &pool::config::PoolConfig,
+    token: &CancellationToken,
+    shutdown: &Arc<shutdown::Shutdown>,
+) {
+    let regtest_funder = matches!(network, Network::Regtest)
+        .then(|| Arc::clone(chain_client) as Arc<dyn graphql::RegtestFunder>);
+    spawn_graphql_server(
+        tracker,
+        graphql_address,
+        ssp_wallet,
+        pool_repo,
+        swap_repo,
+        swap_claim_wakeup,
+        lightning_store,
+        coop_exit_service,
+        static_deposit_service,
+        lightning,
+        auth,
+        fee_rates,
+        regtest_funder,
+        pool_config.largest_denomination(),
+        token,
+        shutdown,
+    );
+}
+
+fn graphql_network(network: spark::Network) -> graphql::BitcoinNetwork {
+    match network {
+        spark::Network::Mainnet => graphql::BitcoinNetwork::Mainnet,
+        spark::Network::Regtest => graphql::BitcoinNetwork::Regtest,
+        spark::Network::Testnet => graphql::BitcoinNetwork::Testnet,
+        spark::Network::Signet => graphql::BitcoinNetwork::Signet,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_graphql_server(
+    tracker: &TaskTracker,
+    graphql_address: core::net::SocketAddr,
+    ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
+    pool_repo: &Arc<postgresql::PoolRepository>,
+    swap_repo: &Arc<postgresql::SwapRepository>,
+    swap_claim_wakeup: wakeup::Wakeup,
+    lightning_store: &Arc<dyn lightning::repository::LightningStore>,
+    coop_exit_service: &Arc<coop_exit::CoopExitService>,
+    static_deposit_service: &Arc<static_deposit::StaticDepositService>,
+    lightning: graphql::Lightning,
+    auth: Arc<auth::AuthService>,
+    fee_rates: &Arc<dyn fees::FeeRateSource>,
+    regtest_funder: Option<Arc<dyn graphql::RegtestFunder>>,
+    largest_denomination: u64,
+    token: &CancellationToken,
+    shutdown: &Arc<shutdown::Shutdown>,
+) {
+    let shutdown = Arc::clone(shutdown);
+    let graphql_token = token.clone();
+    let swap_service = Arc::new(swap::SwapService::new(
+        Arc::clone(&ssp_wallet.spark.tree_store),
+        Arc::clone(&ssp_wallet.spark.transfer_service),
+        Arc::clone(&ssp_wallet.spark.operator_pool),
+        Arc::clone(&ssp_wallet.spark.signer),
+        ssp_wallet.spark.network,
+        Arc::clone(pool_repo) as Arc<dyn leaves::LeafSigningKeys>,
+        Arc::clone(swap_repo) as Arc<dyn swap::SwapStore>,
+        swap_claim_wakeup,
+        largest_denomination,
+    ));
+    let schema = graphql::build_schema(graphql::SchemaContext {
+        swap_service,
+        coop_exit_service: Arc::clone(coop_exit_service),
+        static_deposit_service: Arc::clone(static_deposit_service),
+        lightning,
+        ln_store: Arc::clone(lightning_store),
+        network: graphql_network(ssp_wallet.spark.network),
+        auth: Arc::clone(&auth),
+        fee_rates: Arc::clone(fee_rates),
+        regtest_funder,
+    });
+    let app = graphql::router(schema, auth);
+    tracker.spawn(async move {
+        info!(
+            address = field::display(&graphql_address),
+            "Starting GraphQL API server"
+        );
+        let listener = match tokio::net::TcpListener::bind(graphql_address).await {
+            Ok(l) => l,
+            Err(e) => {
+                shutdown.fail(
+                    "GraphQL API server",
+                    &format!("failed to bind {graphql_address}: {e}"),
+                );
+                return;
+            }
+        };
+        let res = axum::serve(listener, app)
+            .with_graceful_shutdown(async move { graphql_token.cancelled().await })
+            .await;
+        match res {
+            Ok(()) => shutdown.stop("the GraphQL API server finished"),
+            Err(e) => shutdown.fail("GraphQL API server", &format!("{e:?}")),
+        }
     });
 }
