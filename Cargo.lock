@@ -7880,6 +7880,8 @@ dependencies = [
  "frost-secp256k1-tr",
  "futures",
  "hex",
+ "lightning",
+ "lightning-invoice 0.33.2",
  "prost",
  "reqwest",
  "serde",

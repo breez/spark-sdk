@@ -18,6 +18,7 @@ pub mod chain;
 pub mod fees;
 pub mod graphql;
 pub mod leaves;
+pub mod lightning;
 pub mod operator_rpc;
 pub mod pool;
 pub mod postgresql;
