@@ -28,6 +28,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
 spark = { workspace = true }
+frost-secp256k1-tr = { workspace = true }
 sqlx = { version = "0.8.2", features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki", "chrono", "json"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "time"] }
