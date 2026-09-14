@@ -200,6 +200,7 @@ fn build_refund_job(
         .map_err(|e| SignerError::Generic(e.to_string()))?;
     Ok(build_refund_signing_job(
         &leaf.node.id,
+        &leaf.signing_key,
         &leaf.node.verifying_public_key,
         &signing_public_key,
         refund_tx,

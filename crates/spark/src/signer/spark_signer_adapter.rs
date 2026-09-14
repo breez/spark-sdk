@@ -273,7 +273,7 @@ impl SparkSigner for SparkSignerAdapter {
         let mut new_leaf_keys = Vec::with_capacity(leaves.len());
 
         for leaf in &leaves {
-            let signing_key = SecretSource::Derived(signing_path(&leaf.node.id)?);
+            let signing_key = self.secret_source_for(&leaf.signing_key)?;
             let new_signing_key = SecretSource::Derived(signing_path(&leaf.new_leaf_id)?);
 
             new_leaf_keys.push(NewLeafKey {

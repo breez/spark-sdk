@@ -28,12 +28,12 @@ use crate::signer::external_types::{
 };
 use crate::{Network, SdkError, Seed};
 use spark_wallet::{
-    ClaimLeafInput, DefaultSigner, PrepareClaimRequest, PrepareLightningReceiveRequest,
-    PrepareStaticDepositClaimRequest, PrepareStaticDepositRequest, PrepareTokenTransactionRequest,
-    PrepareTransferRequest, SignSparkInvoiceRequest, SignStaticDepositRefundRequest,
-    SigningKeyshare, SparkInvoiceKind, SparkSigner, SparkSignerAdapter,
-    StartStaticDepositRefundRequest, TokenTransactionKind, TransferLeafInput, TreeNode, TreeNodeId,
-    TreeNodeStatus,
+    ClaimLeafInput, DefaultSigner, FrostDerivation, PrepareClaimRequest,
+    PrepareLightningReceiveRequest, PrepareStaticDepositClaimRequest, PrepareStaticDepositRequest,
+    PrepareTokenTransactionRequest, PrepareTransferRequest, SignSparkInvoiceRequest,
+    SignStaticDepositRefundRequest, SigningKeyshare, SparkInvoiceKind, SparkSigner,
+    SparkSignerAdapter, StartStaticDepositRefundRequest, TokenTransactionKind, TransferLeafInput,
+    TreeNode, TreeNodeId, TreeNodeStatus,
 };
 
 /// Default `ExternalSparkSigner` backed by the in-process `DefaultSigner`.
@@ -214,8 +214,14 @@ impl ExternalSparkSigner for DefaultExternalSparkSigner {
                 .leaves
                 .iter()
                 .map(|l| {
+                    let node_id = l.node_id.to_tree_node_id().map_err(err)?;
                     Ok(TransferLeafInput {
-                        node: node_with_id(l.node_id.to_tree_node_id().map_err(err)?),
+                        // The external protocol names leaves by id alone, so a
+                        // leaf reaching it is held under its own id.
+                        signing_key: FrostDerivation::SigningLeaf {
+                            leaf_id: node_id.clone(),
+                        },
+                        node: node_with_id(node_id),
                         new_leaf_id: l.new_leaf_id.to_tree_node_id().map_err(err)?,
                     })
                 })

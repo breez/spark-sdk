@@ -14,6 +14,7 @@ use crate::services::models::{
 };
 use crate::services::{TransferId, TransferObserver, TransferStatus};
 use crate::signer::EncryptedSecret;
+use crate::signer::FrostDerivation;
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::paging::{PagingFilter, PagingResult, pager};
 use crate::utils::refund::{SignRefundsParams, SignedRefundTransactions, sign_refunds};
@@ -393,6 +394,7 @@ impl TransferService {
                 .map(|l| TransferLeafInput {
                     node: l.node.clone(),
                     new_leaf_id: TreeNodeId::generate(),
+                    signing_key: l.signing_key.clone(),
                 })
                 .collect(),
             operator_recipients: self.operator_recipients(),
@@ -743,8 +745,12 @@ impl TransferService {
                 continue;
             };
 
+            let node = leaf.leaf_with_intermediate_txs();
             leaves_to_claim.push(LeafKeyTweak {
-                node: leaf.leaf_with_intermediate_txs(),
+                signing_key: FrostDerivation::SigningLeaf {
+                    leaf_id: node.id.clone(),
+                },
+                node,
                 incoming_key: Some(leaf_key.clone()),
             });
         }
@@ -1019,6 +1025,7 @@ impl TransferService {
             let cpfp_sighash = sighash_from_tx(&cpfp_refund_tx, 0, node_tx_out)?;
             let cpfp = build_refund_signing_job(
                 &leaf.node.id,
+                &leaf.signing_key,
                 &verifying_key,
                 &signing_public_key,
                 cpfp_refund_tx,
@@ -1035,6 +1042,7 @@ impl TransferService {
                 let sighash = sighash_from_tx(&direct_refund_tx, 0, direct_tx_out)?;
                 Some(build_refund_signing_job(
                     &leaf.node.id,
+                    &leaf.signing_key,
                     &verifying_key,
                     &signing_public_key,
                     direct_refund_tx,
@@ -1051,6 +1059,7 @@ impl TransferService {
                 let sighash = sighash_from_tx(&dfc_refund_tx, 0, node_tx_out)?;
                 Some(build_refund_signing_job(
                     &leaf.node.id,
+                    &leaf.signing_key,
                     &verifying_key,
                     &signing_public_key,
                     dfc_refund_tx,

@@ -93,6 +93,8 @@ pub struct FrostShareResult {
 pub struct TransferLeafInput {
     pub node: TreeNode,
     pub new_leaf_id: TreeNodeId,
+    /// The key this leaf is currently held under, which is what signs it away.
+    pub signing_key: FrostDerivation,
 }
 
 #[derive(Debug, Clone)]
