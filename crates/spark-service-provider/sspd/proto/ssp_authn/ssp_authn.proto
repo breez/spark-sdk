@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package ssp_authn;
+
+// Must match the spark crate's protos/ssp/ssp_authn.proto: SDK clients decode
+// the daemon's challenges with it.
+
+message Challenge {
+    int32 version = 1;
+
+    // When the challenge was issued (UTC Unix seconds).
+    int64 timestamp = 10;
+
+    bytes nonce = 20;
+
+    // The public key this challenge is intended for (compressed secp256k1).
+    bytes public_key = 30;
+}
+
+// Only the server can verify `server_hmac`, so the client returns the message
+// untouched.
+message ProtectedChallenge {
+    int32 version = 1;
+
+    Challenge challenge = 10;
+
+    bytes server_hmac = 20;
+}

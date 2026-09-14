@@ -7566,7 +7566,9 @@ name = "sspd"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "bitcoin",
+ "chrono",
  "clap",
  "figment",
  "frost-secp256k1-tr",

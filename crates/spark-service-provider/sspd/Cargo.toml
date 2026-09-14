@@ -16,8 +16,10 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+base64 = { workspace = true }
 async-trait = { workspace = true }
 bitcoin = { workspace = true }
+chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 figment = { workspace = true, features = ["env", "toml"] }
 futures = { workspace = true, features = ["alloc"] }
