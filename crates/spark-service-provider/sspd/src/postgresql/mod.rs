@@ -1,5 +1,6 @@
 mod chain_repository;
 mod coop_exit_store;
+mod incoming_leaf_store;
 mod instant_quote_store;
 mod lightning_store;
 mod pool_store;
@@ -8,6 +9,7 @@ mod swap_store;
 
 pub use chain_repository::ChainRepository;
 pub use coop_exit_store::PostgresCoopExitStore;
+pub use incoming_leaf_store::PostgresIncomingLeafStore;
 pub use instant_quote_store::PostgresInstantStaticDepositQuoteStore;
 pub use lightning_store::PostgresLightningStore;
 pub use pool_store::PoolRepository;

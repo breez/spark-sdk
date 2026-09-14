@@ -6,6 +6,8 @@ use spark::services::{ClaimTransferConfig, ServiceError, Transfer, TransferId, T
 use spark::signer::{SecretSource, Signer};
 use spark::tree::{LeavesReservationId, TreeNode, TreeNodeId, TreeServiceError, TreeStore};
 
+use crate::wakeup::Wakeup;
+
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Which id derives a pool leaf's signing key. A deposit-tree leaf signs under the
@@ -118,18 +120,14 @@ fn held_under_after_tweak(
         .ok()
 }
 
-/// Claims a transfer made to the SSP and takes its leaves into the pool.
-///
-/// Every claim goes through here, because claiming is what moves a leaf onto the
-/// key derived from its node id: a leaf the SSP had fronted from a deposit tree
-/// stops signing under the deposit leaf id the moment it comes back. Recording
-/// that before the leaves reach the pool is what keeps the two in step, since a
-/// spend that read the stale id would sign with a key the operators reject and
-/// the leaf would be stuck.
+/// Claiming moves each leaf onto the key derived from its node id, so that is
+/// recorded before the leaves are held: a spend reading the stale id would sign
+/// with a key the operators reject.
 pub async fn claim_into_pool(
     transfer_service: &TransferService,
     signing_keys: &dyn LeafSigningKeys,
-    tree_store: &dyn TreeStore,
+    incoming: &dyn IncomingLeafStore,
+    admission: &Wakeup,
     transfer: &Transfer,
 ) -> Result<Vec<TreeNode>, BoxError> {
     // One attempt: retrying a failed claim is left to the caller.
@@ -144,8 +142,25 @@ pub async fn claim_into_pool(
         .await?;
     let node_ids: Vec<String> = claimed.iter().map(|node| node.id.to_string()).collect();
     signing_keys.mark_signing_under_node_id(&node_ids).await?;
-    tree_store.add_leaves(&claimed).await?;
+    hold_for_admission(incoming, admission, claimed.clone()).await?;
     Ok(claimed)
+}
+
+pub struct IncomingLeaf {
+    pub leaf: TreeNode,
+    pub attempts: i32,
+}
+
+#[async_trait::async_trait]
+pub trait IncomingLeafStore: Send + Sync {
+    async fn hold(&self, leaves: &[TreeNode]) -> Result<(), BoxError>;
+
+    /// At most `limit` leaves, fewest failed attempts first, then oldest first.
+    async fn held(&self, limit: i64) -> Result<Vec<IncomingLeaf>, BoxError>;
+
+    async fn admitted(&self, leaf_ids: &[TreeNodeId]) -> Result<(), BoxError>;
+
+    async fn failed(&self, leaf_ids: &[TreeNodeId]) -> Result<(), BoxError>;
 }
 
 /// Safe to run again for a reservation already released: a leaf another
@@ -163,6 +178,23 @@ pub async fn release_reserved_leaves(
         .filter(|leaf| leaf_ids.contains(&leaf.id))
         .collect();
     tree_store.cancel_reservation(reservation_id, &leaves).await
+}
+
+pub fn is_fit(leaf: &TreeNode) -> Result<bool, BoxError> {
+    Ok(!leaf.needs_refund_tx_renewed()?)
+}
+
+pub async fn hold_for_admission(
+    store: &dyn IncomingLeafStore,
+    admission: &Wakeup,
+    claimed: Vec<TreeNode>,
+) -> Result<(), BoxError> {
+    if claimed.is_empty() {
+        return Ok(());
+    }
+    store.hold(&claimed).await?;
+    admission.wake();
+    Ok(())
 }
 
 #[cfg(test)]

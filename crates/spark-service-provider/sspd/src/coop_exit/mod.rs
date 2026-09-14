@@ -16,13 +16,12 @@ use spark::services::{
     ServiceError, Transfer, TransferId, TransferService, TransferStatus, TransferType,
 };
 use spark::signer::{Signer, SignerError};
-use spark::tree::TreeStore;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::graphql::types::RequestCoopExitInput;
-use crate::leaves::{IncomingTransfer, LeafSigningKeys, claim_into_pool};
+use crate::leaves::{IncomingLeafStore, IncomingTransfer, LeafSigningKeys, claim_into_pool};
 use crate::wakeup::Wakeup;
 
 use self::repository::{CoopExitPrevout, CoopExitRecord, CoopExitStore};
@@ -921,15 +920,11 @@ async fn process_coop_exit(
     Ok(())
 }
 
-/// Claims the user's committed leaf transfer into the SSP pool, mirroring the
-/// swap claimer: query the transfer, and once it is claimable, claim it and add
-/// its leaves to the pool. Returns whether the leaves were claimed (`false` =
-/// not yet claimable, retry later). A transfer the operators already finalized
-/// is claimed again, which hands back the leaves the SSP still owns: a claim that
-/// finished at the operators but not here is finished on a later pass.
+/// Returns `false` when the transfer is missing or not claimable.
 pub async fn claim_user_transfer(
     transfer_service: &TransferService,
-    tree_store: &Arc<dyn TreeStore>,
+    incoming: &Arc<dyn IncomingLeafStore>,
+    admission: &Wakeup,
     leaf_signing_keys: &Arc<dyn LeafSigningKeys>,
     transfer_id: &TransferId,
 ) -> Result<bool, BoxError> {
@@ -942,7 +937,8 @@ pub async fn claim_user_transfer(
     claim_into_pool(
         transfer_service,
         leaf_signing_keys.as_ref(),
-        tree_store.as_ref(),
+        incoming.as_ref(),
+        admission,
         &transfer,
     )
     .await?;

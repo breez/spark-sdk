@@ -1,5 +1,6 @@
 pub mod config;
 pub mod deficit;
+pub mod incoming;
 pub mod replenish;
 pub mod repository;
 pub mod restock;
