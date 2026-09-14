@@ -31,7 +31,7 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
-use sspd_lib::{bitcoind, chain, fees, pool, postgresql, shutdown, wakeup, wallet};
+use sspd_lib::{bitcoind, chain, fees, leaves, pool, postgresql, shutdown, swap, wakeup, wallet};
 
 const DEPENDENCY_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -235,6 +235,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &token,
     );
 
+    let swap_repo = Arc::new(postgresql::SwapRepository::new(Arc::clone(&pgpool)));
+    let swap_claim_wakeup = wakeup::Wakeup::new();
+    spawn_swap_claimer(
+        &tracker,
+        &ssp_wallet,
+        &swap_repo,
+        &pool_repo,
+        swap_claim_wakeup.clone(),
+        &token,
+    );
+
     info!("sspd started");
 
     tracker.close();
@@ -383,6 +394,34 @@ fn spawn_pool_loops(
             pooling_restock,
             pooling_wakeup,
             pooling_token,
+        )
+        .await;
+    });
+}
+
+fn spawn_swap_claimer(
+    tracker: &TaskTracker,
+    ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
+    swap_repo: &Arc<postgresql::SwapRepository>,
+    pool_repo: &Arc<postgresql::PoolRepository>,
+    wakeup: wakeup::Wakeup,
+    token: &CancellationToken,
+) {
+    let claim_repo = Arc::clone(swap_repo) as Arc<dyn swap::SwapStore>;
+    let transfer_service = Arc::clone(&ssp_wallet.spark.transfer_service);
+    let tree_store = Arc::clone(&ssp_wallet.spark.tree_store);
+    let leaf_signing_keys = Arc::clone(pool_repo) as Arc<dyn leaves::LeafSigningKeys>;
+    let claim_token = token.clone();
+    tracker.spawn(async move {
+        swap::claimer::run_swap_claim_loop(
+            swap::claimer::SwapClaimDeps {
+                swap_repo: claim_repo,
+                tree_store,
+                transfer_service,
+                leaf_signing_keys,
+                wakeup,
+            },
+            claim_token,
         )
         .await;
     });

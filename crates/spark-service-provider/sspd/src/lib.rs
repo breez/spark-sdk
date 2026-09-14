@@ -22,6 +22,7 @@ pub mod operator_rpc;
 pub mod pool;
 pub mod postgresql;
 pub mod shutdown;
+pub mod swap;
 pub mod tree;
 pub mod wakeup;
 pub mod wallet;
