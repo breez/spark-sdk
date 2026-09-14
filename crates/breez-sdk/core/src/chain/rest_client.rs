@@ -1,7 +1,7 @@
 use bitcoin::{Address, address::NetworkUnchecked};
 use platform_utils::tokio;
 use platform_utils::{
-    ContentType, HttpClient, HttpError, HttpResponse, add_basic_auth_header,
+    ContentType, HttpClient, HttpError, HttpResponse, REQUEST_TIMEOUT, add_basic_auth_header,
     add_content_type_header,
 };
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,10 @@ pub const RETRYABLE_ERROR_CODES: [u16; 3] = [
 
 /// Base backoff in milliseconds.
 const BASE_BACKOFF_MILLIS: Duration = Duration::from_millis(256);
+
+/// Ceiling on a whole retrying call, so retries cost attempts rather than
+/// multiplying how long a caller can be blocked for.
+const TOTAL_BUDGET: Duration = Duration::from_secs(REQUEST_TIMEOUT);
 
 #[derive(Serialize, Deserialize, Clone)]
 struct TxInfo {
@@ -217,6 +221,14 @@ impl RestClientChainServiceInner {
         url: &str,
         client: &dyn HttpClient,
     ) -> Result<(String, u16), ChainServiceError> {
+        within_budget(TOTAL_BUDGET, self.get_attempts(url, client)).await
+    }
+
+    async fn get_attempts(
+        &self,
+        url: &str,
+        client: &dyn HttpClient,
+    ) -> Result<(String, u16), ChainServiceError> {
         let mut delay = BASE_BACKOFF_MILLIS;
         let mut attempts = 0;
 
@@ -248,6 +260,14 @@ impl RestClientChainServiceInner {
     }
 
     async fn post(&self, url: &str, body: Option<String>) -> Result<String, ChainServiceError> {
+        within_budget(TOTAL_BUDGET, self.post_attempts(url, body)).await
+    }
+
+    async fn post_attempts(
+        &self,
+        url: &str,
+        body: Option<String>,
+    ) -> Result<String, ChainServiceError> {
         info!("Posting to {}", url);
         debug!(
             "Posting to {} with body {}",
@@ -460,16 +480,23 @@ fn is_status_retryable(status: u16) -> bool {
     RETRYABLE_ERROR_CODES.contains(&status)
 }
 
-/// Whether a failure that produced no response at all is worth another attempt.
-///
-/// A shared esplora endpoint reaping idle HTTP/2 flows answers the next request
-/// off that connection with a broken pipe, which reqwest reports as a request
-/// error. Timeouts stay out: the per-request budget is already 60s, so retrying
-/// one stalls the caller for minutes rather than riding out a blip. So does
-/// `Body`, which a response over the size cap shares with a truncated one, and
-/// the cap is refused the same way every attempt.
 fn is_transport_retryable(error: &HttpError) -> bool {
-    matches!(error, HttpError::Request(_) | HttpError::Connect(_))
+    matches!(error, HttpError::Request(_))
+}
+
+/// Fails `work` once `budget` is gone, whatever attempt it is on.
+async fn within_budget<T>(
+    budget: Duration,
+    work: impl std::future::Future<Output = Result<T, ChainServiceError>>,
+) -> Result<T, ChainServiceError> {
+    match tokio::time::timeout(budget, work).await {
+        Ok(result) => result,
+        Err(_) => Err(HttpError::Timeout(format!(
+            "gave up after {}s of attempts",
+            budget.as_secs()
+        ))
+        .into()),
+    }
 }
 
 #[cfg(test)]
@@ -798,6 +825,23 @@ mod tests {
             Err(ChainServiceError::ServiceConnectivity(_))
         ));
         assert_eq!(*transport.attempts.lock().unwrap(), 1);
+    }
+
+    /// The budget covers the whole call, so a transport that keeps failing
+    /// cannot stretch it by one more attempt.
+    #[async_test_all]
+    async fn test_budget_bounds_the_whole_call() {
+        let slow = async {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            Ok::<_, ChainServiceError>(())
+        };
+
+        let result = within_budget(Duration::from_millis(50), slow).await;
+
+        assert!(matches!(
+            result,
+            Err(ChainServiceError::ServiceConnectivity(_))
+        ));
     }
 
     /// A body over the size cap is refused identically every attempt, so it is
