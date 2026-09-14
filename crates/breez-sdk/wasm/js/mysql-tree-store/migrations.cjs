@@ -536,6 +536,17 @@ class MysqlTreeStoreMigrationManager {
            WHERE verifying_public_key = ''`,
         ],
       },
+      {
+        name: "Keep a leaf no operator reports, for its exit chain",
+        sql: [
+          {
+            op: "addColumn",
+            table: "brz_tree_leaves",
+            name: "is_deleted",
+            definition: "BOOLEAN NOT NULL DEFAULT FALSE",
+          },
+        ],
+      },
     ];
   }
 }
