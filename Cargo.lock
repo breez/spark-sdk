@@ -7578,14 +7578,17 @@ dependencies = [
  "serde_json",
  "serde_with",
  "spark",
+ "spark-postgres",
  "sqlx",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
+ "toml 0.8.23",
  "tonic",
  "tonic-build",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

@@ -27,6 +27,7 @@ reqwest = { workspace = true, features = ["stream"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
+spark-postgres = { workspace = true }
 spark = { workspace = true }
 frost-secp256k1-tr = { workspace = true }
 sqlx = { version = "0.8.2", features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki", "chrono", "json"] }
@@ -36,5 +37,9 @@ tokio-util = { workspace = true, features = ["rt"] }
 tonic = { workspace = true, features = ["transport", "tls", "codegen", "prost"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+uuid = { workspace = true }
 [build-dependencies]
 tonic-build = { workspace = true }
+
+[dev-dependencies]
+toml = "0.8"

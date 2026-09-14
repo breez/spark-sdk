@@ -31,7 +31,7 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
-use sspd_lib::{bitcoind, chain, postgresql, shutdown, wakeup};
+use sspd_lib::{bitcoind, chain, postgresql, shutdown, wakeup, wallet};
 
 const DEPENDENCY_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -78,7 +78,7 @@ struct Args {
     #[arg(long, default_value = "60")]
     pub chain_poll_interval_seconds: u64,
 
-    /// Apply the database migrations at startup.
+    /// Apply the database migrations, the leaf store's included, at startup.
     #[arg(long)]
     pub auto_migrate: bool,
 
@@ -86,11 +86,26 @@ struct Args {
     /// a command-line flag would show in the process list.
     #[arg(skip)]
     pub wallet_seed: String,
+
+    /// Nodes the operators allow one tree-creation round to carry. A larger tree
+    /// is built in layers, so this decides how many calls creating one takes.
+    #[arg(long, default_value = "1000")]
+    pub max_nodes_per_request: usize,
+
+    /// The signing operators. Unset uses the network's default operators. Not a
+    /// command-line flag: it is a list.
+    #[arg(skip)]
+    pub operators: Option<Vec<wallet::OperatorSetting>>,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (args, config_file) = load_args()?;
+    if args.wallet_seed.is_empty() {
+        return Err("wallet_seed is required, in the config file or SSPD_WALLET_SEED".into());
+    }
+    let seed =
+        hex::decode(&args.wallet_seed).map_err(|e| format!("invalid wallet seed hex: {e}"))?;
 
     tracing_subscriber::registry()
         .with(EnvFilter::new(&args.log_level))
@@ -159,6 +174,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &chain_repository,
         Vec::new(),
         &token,
+    );
+
+    let _ssp_wallet = Arc::new(
+        wallet::SspWallet::new(
+            &seed,
+            args.network,
+            spark_postgres::PostgresStorageConfig {
+                run_migration: args.auto_migrate,
+                ..spark_postgres::PostgresStorageConfig::with_defaults(&args.db_url)
+            },
+            Arc::clone(&chain_repository),
+            Arc::clone(&pgpool),
+            args.operators.clone(),
+            args.max_nodes_per_request,
+        )
+        .await
+        .map_err(|e| format!("failed to initialize wallet: {e}"))?,
     );
 
     info!("sspd started");
