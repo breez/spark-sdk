@@ -2,7 +2,7 @@ use crate::address::SparkAddress;
 use crate::core::Network;
 use crate::operator::OperatorPool;
 use crate::operator::rpc::spark::{
-    InitiatePreimageSwapResponse, StartTransferRequest, StorePreimageShareV2Request,
+    InitiatePreimageSwapResponse, SecretShare, StartTransferRequest, StorePreimageShareV2Request,
 };
 use crate::services::{
     ServiceError, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
@@ -10,6 +10,7 @@ use crate::services::{
 };
 use crate::signer::{
     OperatorRecipient, PrepareLightningReceiveRequest, PrepareTransferRequest, PreparedTransfer,
+    SecretToSplit, Signer,
 };
 use crate::ssp::{
     LightningReceiveRequestStatus, RequestLightningReceiveInput, RequestLightningSendInput,
@@ -23,7 +24,9 @@ use bitcoin::secp256k1::PublicKey;
 use hex::ToHex;
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescriptionRef};
 use platform_utils::time::SystemTime;
+use prost::Message as _;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,6 +37,70 @@ use super::models::LightningSendRequestStatus;
 const DEFAULT_RECEIVE_EXPIRY_SECS: u32 = 60 * 60 * 24 * 30; // 30 days
 const DEFAULT_SEND_EXPIRY_SECS: u64 = 60 * 60 * 24 * 16; // 16 days
 const RECEIVER_IDENTITY_PUBLIC_KEY_SHORT_CHANNEL_ID: u64 = 17592187092992000001;
+
+/// Splits `preimage` into verifiable secret shares, encrypts each for its operator,
+/// and stores them at the coordinator under `payment_hash`. Storing the shares is
+/// what makes an invoice a normal (non-HODL) invoice: with the shares present, the
+/// operators reconstruct the preimage during the receiver-side `Reason::Receive`
+/// preimage swap and return it atomically with the leaf transfer (a HODL invoice
+/// has no shares, so the operators front the leaves and hold for the preimage).
+///
+/// `invoice_string` is the bolt11 the operators validate the swap amount against;
+/// `identity_pubkey` is the share owner (the receiver), which the operators check
+/// against the swap's receiver.
+pub async fn store_preimage_shares(
+    operator_pool: &OperatorPool,
+    signer: &Arc<dyn Signer>,
+    split_secret_threshold: u32,
+    payment_hash: sha256::Hash,
+    preimage: Vec<u8>,
+    invoice_string: String,
+    identity_pubkey: PublicKey,
+) -> Result<(), ServiceError> {
+    let shares = signer
+        .split_secret_with_proofs(
+            &SecretToSplit::Preimage(preimage),
+            split_secret_threshold,
+            operator_pool.len(),
+        )
+        .await?;
+
+    // Build the encrypted preimage shares map for the V2 endpoint: one ECIES blob
+    // per operator, keyed by that operator's identifier.
+    let mut encrypted_shares: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    for (operator, share) in operator_pool.get_all_operators().zip(shares) {
+        let secret_share_proto = SecretShare {
+            secret_share: share.secret_share.share.to_bytes().to_vec(),
+            proofs: share
+                .proofs
+                .iter()
+                .map(|p| p.to_sec1_bytes().to_vec())
+                .collect(),
+        };
+        let proto_bytes = secret_share_proto.encode_to_vec();
+        let public_key_bytes = operator.identity_public_key.serialize_uncompressed();
+        let encrypted = ::utils::ecies::encrypt(&public_key_bytes, &proto_bytes)
+            .map_err(|e| ServiceError::Generic(format!("ECIES encryption failed: {e}")))?;
+        let operator_identifier = hex::encode(operator.identifier.serialize());
+        encrypted_shares.insert(operator_identifier, encrypted);
+    }
+
+    operator_pool
+        .get_coordinator()
+        .client
+        .store_preimage_share_v2(StorePreimageShareV2Request {
+            payment_hash: payment_hash.to_byte_array().to_vec(),
+            encrypted_preimage_shares: encrypted_shares.into_iter().collect(),
+            threshold: split_secret_threshold,
+            invoice_string,
+            user_identity_public_key: identity_pubkey.serialize().to_vec(),
+        })
+        .await
+        .map_err(|e: crate::operator::rpc::OperatorRpcError| {
+            ServiceError::PreimageShareStoreFailed(e.to_string())
+        })?;
+    Ok(())
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub enum InvoiceDescription {
