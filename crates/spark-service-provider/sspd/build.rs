@@ -15,6 +15,15 @@ fn main() {
         )
         .unwrap();
 
+    // No generated client: a tonic interceptor cannot read the request body, which
+    // the HMAC in ldk-server's `x-auth` header covers.
+    tonic_build::configure()
+        .build_server(false)
+        .build_client(false)
+        .compile_protos(&["proto/ldk_server/api.proto"], &["proto/ldk_server"])
+        .unwrap();
+    println!("cargo:rerun-if-changed=proto/ldk_server");
+
     tonic_build::configure()
         .build_server(false)
         .build_client(false)
