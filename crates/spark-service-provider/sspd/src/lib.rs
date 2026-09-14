@@ -16,6 +16,7 @@ pub mod auth;
 pub mod bitcoind;
 pub mod chain;
 pub mod fees;
+pub mod graphql;
 pub mod leaves;
 pub mod operator_rpc;
 pub mod pool;

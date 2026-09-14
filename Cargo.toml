@@ -161,6 +161,7 @@ arithmetic_side_effects = "warn"
 [workspace.dependencies]
 aes = "0.8.4"
 anyhow = "1.0.98"
+async-graphql = { version = "7", features = ["chrono", "uuid"] }
 async-trait = "0.1.88"
 base64 = "0.22.1"
 bech32 = "0.11.0"
