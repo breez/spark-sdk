@@ -31,7 +31,7 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
-use sspd_lib::{bitcoind, chain, postgresql, shutdown, wakeup, wallet};
+use sspd_lib::{bitcoind, chain, fees, pool, postgresql, shutdown, wakeup, wallet};
 
 const DEPENDENCY_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -87,6 +87,19 @@ struct Args {
     #[arg(skip)]
     pub wallet_seed: String,
 
+    /// Target number of Spark leaves to maintain per power-of-two denomination.
+    #[arg(long, default_value = "50")]
+    pub leaves_per_denomination: u32,
+
+    /// Highest power of two for leaf denominations (e.g. 20 means up to 2^20 = 1,048,576 sats).
+    #[arg(long, default_value = "20")]
+    pub max_denomination_power: u32,
+
+    /// Interval in seconds between pool replenishment checks. Blocks, changes to the
+    /// pool and restock requests start one sooner.
+    #[arg(long, default_value = "600")]
+    pub replenish_interval_seconds: u64,
+
     /// Nodes the operators allow one tree-creation round to carry. A larger tree
     /// is built in layers, so this decides how many calls creating one takes.
     #[arg(long, default_value = "1000")]
@@ -99,6 +112,7 @@ struct Args {
 }
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (args, config_file) = load_args()?;
     if args.wallet_seed.is_empty() {
@@ -106,6 +120,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let seed =
         hex::decode(&args.wallet_seed).map_err(|e| format!("invalid wallet seed hex: {e}"))?;
+    let pool_config = pool::config::PoolConfig {
+        leaves_per_denomination: args.leaves_per_denomination,
+        max_denomination_power: args.max_denomination_power,
+        replenish_interval: Duration::from_secs(args.replenish_interval_seconds),
+    };
 
     tracing_subscriber::registry()
         .with(EnvFilter::new(&args.log_level))
@@ -145,6 +164,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tracker = TaskTracker::new();
     spawn_shutdown_signal_handler(Arc::clone(&shutdown));
 
+    let replenish_wakeup = wakeup::Wakeup::new();
+    let pooling_wakeup = wakeup::Wakeup::new();
+
     let chain_info = loop {
         match chain_client.chain_info().await {
             Ok(info) => break info,
@@ -172,11 +194,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Duration::from_secs(args.chain_poll_interval_seconds),
         &chain_client,
         &chain_repository,
-        Vec::new(),
+        vec![replenish_wakeup.clone(), pooling_wakeup.clone()],
         &token,
     );
 
-    let _ssp_wallet = Arc::new(
+    let ssp_wallet = Arc::new(
         wallet::SspWallet::new(
             &seed,
             args.network,
@@ -191,6 +213,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await
         .map_err(|e| format!("failed to initialize wallet: {e}"))?,
+    );
+
+    let pool_repo = Arc::new(postgresql::PoolRepository::new(Arc::clone(&pgpool)));
+    let fee_rates = Arc::new(chain::CachedFeeRates::new(
+        Arc::clone(&chain_client) as Arc<_>
+    )) as Arc<dyn fees::FeeRateSource>;
+
+    let restock = Arc::new(pool::restock::RestockService::new(replenish_wakeup.clone()));
+    spawn_pool_loops(
+        &tracker,
+        &pool_config,
+        &restock,
+        &ssp_wallet,
+        &chain_client,
+        &chain_repository,
+        &pool_repo,
+        &fee_rates,
+        replenish_wakeup,
+        pooling_wakeup,
+        &token,
     );
 
     info!("sspd started");
@@ -288,5 +330,60 @@ fn spawn_chain_monitor(
     tracker.spawn(async move {
         info!("Starting chain monitor");
         chain_monitor.start(chain_monitor_token).await;
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_pool_loops(
+    tracker: &TaskTracker,
+    pool_config: &pool::config::PoolConfig,
+    restock: &Arc<pool::restock::RestockService>,
+    ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
+    chain_client: &Arc<BitcoindClient>,
+    chain_repository: &Arc<postgresql::ChainRepository>,
+    pool_repo: &Arc<postgresql::PoolRepository>,
+    fee_rates: &Arc<dyn fees::FeeRateSource>,
+    replenish_wakeup: wakeup::Wakeup,
+    pooling_wakeup: wakeup::Wakeup,
+    token: &CancellationToken,
+) {
+    let replenish_wallet = Arc::clone(ssp_wallet);
+    let replenish_client = Arc::clone(chain_client);
+    let replenish_chain_repo = Arc::clone(chain_repository);
+    let replenish_repo = Arc::clone(pool_repo);
+    let replenish_fee_rates = Arc::clone(fee_rates);
+    let replenish_config = pool_config.clone();
+    let replenish_restock = Arc::clone(restock);
+    let replenish_token = token.clone();
+    tracker.spawn(async move {
+        pool::replenish::run_replenish_loop(
+            replenish_config,
+            replenish_wallet,
+            replenish_client,
+            replenish_chain_repo,
+            replenish_repo,
+            replenish_fee_rates,
+            replenish_restock,
+            replenish_wakeup,
+            replenish_token,
+        )
+        .await;
+    });
+
+    let pooling_wallet = Arc::clone(ssp_wallet);
+    let pooling_chain_repo = Arc::clone(chain_repository);
+    let pooling_repo = Arc::clone(pool_repo);
+    let pooling_restock = Arc::clone(restock);
+    let pooling_token = token.clone();
+    tracker.spawn(async move {
+        pool::tree_pooling::run_tree_pooling_loop(
+            pooling_wallet,
+            pooling_chain_repo,
+            pooling_repo,
+            pooling_restock,
+            pooling_wakeup,
+            pooling_token,
+        )
+        .await;
     });
 }
