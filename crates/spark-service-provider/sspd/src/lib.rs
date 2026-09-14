@@ -19,6 +19,7 @@ pub mod coop_exit;
 pub mod fees;
 pub mod graphql;
 pub mod handover;
+pub mod internal_server;
 pub mod leaves;
 pub mod lightning;
 pub mod operator_rpc;
