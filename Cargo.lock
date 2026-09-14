@@ -7898,6 +7898,7 @@ dependencies = [
  "tonic-build",
  "tracing",
  "tracing-subscriber",
+ "utils",
  "uuid",
 ]
 

@@ -1,8 +1,10 @@
 mod chain_repository;
+mod lightning_store;
 mod pool_store;
 mod swap_store;
 
 pub use chain_repository::ChainRepository;
+pub use lightning_store::PostgresLightningStore;
 pub use pool_store::PoolRepository;
 use sqlx::{Pool, Postgres};
 pub use swap_store::SwapRepository;
