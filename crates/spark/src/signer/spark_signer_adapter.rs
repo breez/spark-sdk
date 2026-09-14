@@ -158,7 +158,7 @@ fn transfer_id_bytes(transfer_id: &crate::services::TransferId) -> Result<Vec<u8
 /// by a hardened child derived from the node id (sha256 of the id, first 4 bytes
 /// mod 2^31). Reproduces the derivation the low-level signer did before the path
 /// computation moved up into this adapter.
-fn signing_path(node_id: &crate::tree::TreeNodeId) -> Result<DerivationPath, SignerError> {
+pub fn signing_path(node_id: &crate::tree::TreeNodeId) -> Result<DerivationPath, SignerError> {
     let hash = sha256::Hash::hash(node_id.to_string().as_bytes());
     let u32_bytes: [u8; 4] = hash.as_byte_array()[..4]
         .try_into()

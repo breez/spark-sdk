@@ -704,7 +704,16 @@ impl SparkRpcClient {
             .max_decoding_message_size(MAX_DECODING_MESSAGE_SIZE)
     }
 
-    async fn build_interceptor(&self, force_refresh: bool) -> Result<HeaderInterceptor> {
+    /// The connection to this operator, so a caller outside this crate can build
+    /// a client for a service this one does not speak.
+    pub fn transport(&self) -> &Transport {
+        &self.transport
+    }
+
+    /// The headers an authenticated call to this operator carries, refreshing the
+    /// session first when the last attempt was rejected. Pair it with
+    /// [`Self::transport`] to call a service this client does not wrap.
+    pub async fn build_interceptor(&self, force_refresh: bool) -> Result<HeaderInterceptor> {
         let raw_headers = if force_refresh {
             self.header_provider.headers_refresh().await
         } else {

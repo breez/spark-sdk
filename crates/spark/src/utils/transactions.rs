@@ -22,7 +22,7 @@ pub(crate) struct NodeTransactions {
     pub direct_tx: Transaction,
 }
 
-pub(crate) struct RefundTransactions {
+pub struct RefundTransactions {
     pub cpfp_tx: Transaction,
     pub direct_tx: Option<Transaction>,
     pub direct_from_cpfp_tx: Option<Transaction>,
@@ -52,7 +52,7 @@ pub(crate) struct ConnectorRefundTxsParams<'a> {
 /// * `script_pubkey` - The output script to pay to
 /// * `apply_fee` - Whether to subtract a fee from the value (using `DEFAULT_FEE_SATS`)
 /// * `include_anchor` - Whether to include an ephemeral anchor output (for CPFP)
-pub(crate) fn create_spark_tx(
+pub fn create_spark_tx(
     previous_output: OutPoint,
     sequence: Sequence,
     value: Amount,
@@ -286,7 +286,7 @@ pub(crate) fn create_refund_txs(
     }
 }
 
-pub(crate) fn create_initial_timelock_refund_txs(
+pub fn create_initial_timelock_refund_txs(
     node_tx: &Transaction,
     direct_tx: Option<&Transaction>,
     receiving_pubkey: &PublicKey,
@@ -430,7 +430,7 @@ pub(crate) fn create_static_deposit_refund_tx(
     }
 }
 
-fn ephemeral_anchor_output() -> TxOut {
+pub fn ephemeral_anchor_output() -> TxOut {
     TxOut {
         script_pubkey: ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]), // Pay-to-anchor (P2A) ephemeral anchor output
         value: Amount::from_sat(0),
