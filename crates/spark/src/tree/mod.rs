@@ -284,6 +284,22 @@ impl TreeNode {
         Ok(sequence_num <= 100)
     }
 
+    /// Whether this leaf's refund timelock can be renewed once more.
+    ///
+    /// Renewal steps a refund timelock down one interval at a time and refuses
+    /// below the last one, so a leaf under that floor can be neither spent
+    /// safely nor renewed. A leaf already at zero is not stuck: it renews by a
+    /// different route, so it answers `true`.
+    ///
+    /// For an owner deciding whether to take a leaf on at all: one that cannot
+    /// be renewed is one that cannot be exited later.
+    pub fn can_renew_refund_tx(&self) -> Result<bool, TreeServiceError> {
+        if self.is_zero_timelock() {
+            return Ok(true);
+        }
+        Ok(crate::core::next_sequence(self.refund_sequence()?).is_some())
+    }
+
     pub fn is_zero_timelock(&self) -> bool {
         let sequence_num = self.node_sequence().to_consensus_u32() as u16;
         sequence_num == 0
