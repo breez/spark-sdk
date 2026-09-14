@@ -2,4 +2,5 @@
 //! creates one leaf per output.
 
 pub mod builder;
+pub mod deposit;
 pub mod frost;
