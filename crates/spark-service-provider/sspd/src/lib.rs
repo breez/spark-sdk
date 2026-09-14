@@ -17,3 +17,4 @@ pub mod chain;
 pub mod postgresql;
 pub mod shutdown;
 pub mod wakeup;
+pub mod wallet;

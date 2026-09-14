@@ -81,6 +81,11 @@ struct Args {
     /// Apply the database migrations at startup.
     #[arg(long)]
     pub auto_migrate: bool,
+
+    /// Hex-encoded seed for the SSP wallet. Config file or `SSPD_WALLET_SEED` only:
+    /// a command-line flag would show in the process list.
+    #[arg(skip)]
+    pub wallet_seed: String,
 }
 
 #[tokio::main]
