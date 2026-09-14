@@ -42,7 +42,10 @@ pub struct SynchronousTreeService {
     state: Arc<dyn TreeStore>,
     timelock_manager: Arc<TimelockManager>,
     spark_signer: Arc<dyn SparkSigner>,
-    swap_service: Arc<Swap>,
+    /// Absent for an owner with no service provider to swap with, which is what
+    /// a service provider itself is. Swapping is then refused; nothing else on
+    /// the service depends on it.
+    swap_service: Option<Arc<Swap>>,
     leaves_added: broadcast::Sender<()>,
     /// Published to when a timelock renewal rebuilds the transactions a leaf is
     /// exited with, replacing the data a unilateral exit is built from.
@@ -551,7 +554,10 @@ impl SynchronousTreeService {
         state: Arc<dyn TreeStore>,
         timelock_manager: Arc<TimelockManager>,
         spark_signer: Arc<dyn SparkSigner>,
-        swap_service: Arc<Swap>,
+        // Absent for an owner with no service provider to swap with, which is
+        // what a service provider itself is. Swapping is then refused; nothing
+        // else on the service depends on it.
+        swap_service: Option<Arc<Swap>>,
         exit_state_changed: Option<tokio::sync::watch::Sender<()>>,
     ) -> Self {
         SynchronousTreeService {
@@ -1058,6 +1064,12 @@ impl SynchronousTreeService {
         });
         let claimed_nodes = self
             .swap_service
+            .as_ref()
+            .ok_or_else(|| {
+                TreeServiceError::Generic(
+                    "leaves cannot be swapped without a service provider to swap with".to_string(),
+                )
+            })?
             .swap_leaves(leaves, target_amounts)
             .await?;
 
@@ -1323,7 +1335,7 @@ mod tests {
             store,
             timelock_manager,
             spark_signer,
-            swap_service,
+            Some(swap_service),
             exit_state_changed,
         )
     }
