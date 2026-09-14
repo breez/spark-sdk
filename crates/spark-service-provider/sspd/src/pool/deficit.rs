@@ -26,7 +26,6 @@ pub(crate) struct Plan {
 /// Plans at most `max_trees` whole trees for the largest deficits first, within
 /// `budget_sats` with `output_fee_sats` charged per tree. `pending_creations`
 /// counts towards the target, and `requested` is on top of it.
-#[allow(dead_code)]
 pub(crate) fn compute_trees_needed(
     current_leaves: &Leaves,
     config: &PoolConfig,
