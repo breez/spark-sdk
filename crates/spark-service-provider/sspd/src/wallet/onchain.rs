@@ -355,3 +355,30 @@ fn outpoint(tx_id: &str, output_index: i64) -> Result<OutPoint, OnchainWalletErr
         })?,
     })
 }
+
+#[async_trait::async_trait]
+impl<R: ChainRepository + Send + Sync + 'static> crate::coop_exit::CoopExitOnchainWallet
+    for OnchainWallet<R>
+{
+    fn network(&self) -> Network {
+        OnchainWallet::network(self)
+    }
+
+    async fn select_coins(
+        &self,
+        need: &(dyn Fn(usize) -> u64 + Send + Sync),
+    ) -> Result<(Vec<Utxo>, HeldCoins), Box<dyn std::error::Error + Send + Sync>> {
+        Ok(OnchainWallet::select_coins(self, need).await?)
+    }
+
+    async fn next_address(&self) -> Result<Address, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(OnchainWallet::next_address(self).await?.0)
+    }
+
+    async fn derive_keypair_for_address(
+        &self,
+        address: &Address,
+    ) -> Result<secp256k1::SecretKey, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(OnchainWallet::derive_keypair_for_address(self, address).await?)
+    }
+}

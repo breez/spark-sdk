@@ -31,7 +31,9 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
-use sspd_lib::{bitcoind, chain, fees, leaves, pool, postgresql, shutdown, swap, wakeup, wallet};
+use sspd_lib::{
+    bitcoind, chain, coop_exit, fees, leaves, pool, postgresql, shutdown, swap, wakeup, wallet,
+};
 
 const DEPENDENCY_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -166,6 +168,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let replenish_wakeup = wakeup::Wakeup::new();
     let pooling_wakeup = wakeup::Wakeup::new();
+    let coop_exit_wakeup = wakeup::Wakeup::new();
 
     let chain_info = loop {
         match chain_client.chain_info().await {
@@ -194,7 +197,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Duration::from_secs(args.chain_poll_interval_seconds),
         &chain_client,
         &chain_repository,
-        vec![replenish_wakeup.clone(), pooling_wakeup.clone()],
+        vec![
+            replenish_wakeup.clone(),
+            pooling_wakeup.clone(),
+            coop_exit_wakeup.clone(),
+        ],
         &token,
     );
 
@@ -243,6 +250,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &swap_repo,
         &pool_repo,
         swap_claim_wakeup.clone(),
+        &token,
+    );
+
+    let coop_exit_store: Arc<dyn coop_exit::repository::CoopExitStore> =
+        Arc::new(postgresql::PostgresCoopExitStore::new(Arc::clone(&pgpool)));
+    let coop_exit_service = Arc::new(coop_exit::CoopExitService::new(
+        Arc::clone(&coop_exit_store),
+        Arc::clone(&ssp_wallet.spark.operator_pool),
+        Arc::clone(&ssp_wallet.spark.signer),
+        Arc::clone(&ssp_wallet.spark.transfer_service),
+        Arc::clone(&ssp_wallet.onchain) as Arc<dyn coop_exit::CoopExitOnchainWallet>,
+        Arc::clone(&fee_rates),
+        ssp_wallet.spark.network,
+        coop_exit_wakeup.clone(),
+    ));
+    spawn_coop_exit_worker(
+        &tracker,
+        &ssp_wallet,
+        &chain_client,
+        &chain_repository,
+        &coop_exit_service,
+        &coop_exit_store,
+        &pool_repo,
+        &coop_exit_wakeup,
         &token,
     );
 
@@ -424,5 +455,113 @@ fn spawn_swap_claimer(
             claim_token,
         )
         .await;
+    });
+}
+
+struct SparkCoopExitExecutor {
+    service: Arc<coop_exit::CoopExitService>,
+    chain_client: Arc<BitcoindClient>,
+    chain_repository: Arc<postgresql::ChainRepository>,
+    transfer_service: Arc<spark::services::TransferService>,
+    tree_store: Arc<dyn spark::tree::TreeStore>,
+    leaf_signing_keys: Arc<dyn leaves::LeafSigningKeys>,
+}
+
+#[async_trait::async_trait]
+impl coop_exit::CoopExitExecutor for SparkCoopExitExecutor {
+    async fn sign(
+        &self,
+        record: &coop_exit::repository::CoopExitRecord,
+    ) -> Result<(Vec<u8>, String), Box<dyn std::error::Error + Send + Sync>> {
+        Ok(self.service.sign_coop_exit_tx(record).await?)
+    }
+
+    async fn broadcast(
+        &self,
+        signed_tx: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use chain::ChainClient as _;
+        let tx: bitcoin::Transaction = bitcoin::consensus::deserialize(signed_tx)
+            .map_err(|e| format!("invalid signed coop-exit tx: {e}"))?;
+        match self.chain_client.broadcast_tx(tx).await {
+            Ok(()) | Err(chain::BroadcastError::AlreadyKnown) => Ok(()),
+            Err(e) => Err(Box::new(e)),
+        }
+    }
+
+    async fn claim(
+        &self,
+        transfer_id: &spark::services::TransferId,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        coop_exit::claim_user_transfer(
+            &self.transfer_service,
+            &self.tree_store,
+            &self.leaf_signing_keys,
+            transfer_id,
+        )
+        .await
+    }
+
+    async fn committed_transfer_is_valid(
+        &self,
+        record: &coop_exit::repository::CoopExitRecord,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(self.service.committed_transfer_is_valid(record).await?)
+    }
+
+    async fn exit_confirmations(
+        &self,
+        record: &coop_exit::repository::CoopExitRecord,
+    ) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+        use chain::ChainRepository as _;
+        let tx: bitcoin::Transaction = bitcoin::consensus::deserialize(&record.raw_coop_exit_tx)?;
+        let txid = tx.compute_txid();
+        // The exit's second output funds the connector and pays a watched address.
+        let output = tx
+            .output
+            .get(1)
+            .ok_or("the exit tx has no connector funding output")?;
+        let address = bitcoin::Address::from_script(&output.script_pubkey, self.service.network())?;
+        let Some(tip) = self.chain_repository.get_tip().await? else {
+            return Ok(0);
+        };
+        Ok(self
+            .chain_repository
+            .get_txos_for_address(&address)
+            .await?
+            .iter()
+            .find(|txo| txo.outpoint == bitcoin::OutPoint { txid, vout: 1 })
+            .map_or(0, |txo| txo.confirmations(tip.height)))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_coop_exit_worker(
+    tracker: &TaskTracker,
+    ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
+    chain_client: &Arc<BitcoindClient>,
+    chain_repository: &Arc<postgresql::ChainRepository>,
+    coop_exit_service: &Arc<coop_exit::CoopExitService>,
+    coop_exit_store: &Arc<dyn coop_exit::repository::CoopExitStore>,
+    pool_repo: &Arc<postgresql::PoolRepository>,
+    wakeup: &wakeup::Wakeup,
+    token: &CancellationToken,
+) {
+    let executor = Arc::new(SparkCoopExitExecutor {
+        service: Arc::clone(coop_exit_service),
+        chain_client: Arc::clone(chain_client),
+        chain_repository: Arc::clone(chain_repository),
+        transfer_service: Arc::clone(&ssp_wallet.spark.transfer_service),
+        tree_store: Arc::clone(&ssp_wallet.spark.tree_store),
+        leaf_signing_keys: Arc::clone(pool_repo) as Arc<dyn leaves::LeafSigningKeys>,
+    }) as Arc<dyn coop_exit::CoopExitExecutor>;
+    let deps = coop_exit::CoopExitWorkerDeps {
+        store: Arc::clone(coop_exit_store),
+        executor,
+    };
+    let worker_token = token.clone();
+    let wakeup = wakeup.clone();
+    tracker.spawn(async move {
+        coop_exit::run_coop_exit_loop(deps, wakeup, worker_token).await;
     });
 }
