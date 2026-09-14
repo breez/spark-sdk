@@ -47,6 +47,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 utils = { workspace = true }
 uuid = { workspace = true }
+
 [build-dependencies]
 tonic-build = { workspace = true }
 

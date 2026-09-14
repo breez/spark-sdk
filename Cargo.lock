@@ -7810,6 +7810,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ssp-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "hex",
+ "prost",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tonic",
+ "tonic-build",
+]
+
+[[package]]
 name = "sspd"
 version = "0.1.0"
 dependencies = [
