@@ -1,3 +1,8 @@
+//! TODO: re-enable every test here once Spark allows direct HTLCs again. They
+//! are temporarily restricted to transfers to and from the SSP, so creating one
+//! between two wallets is refused with `PermissionDenied`. See
+//! github.com/breez/spark-sdk/issues/1123.
+
 use anyhow::Result;
 use breez_sdk_itest::*;
 use breez_sdk_spark::*;
@@ -125,6 +130,7 @@ async fn send_htlc_alice_to_bob(
 
 /// Test 1: Send payment from Alice to Bob using Spark transfer
 #[rstest]
+#[ignore = "direct Spark HTLCs are temporarily disabled"]
 #[test_log::test(tokio::test)]
 async fn test_01_htlc_success(
     #[future] alice_sdk: Result<SdkInstance>,
@@ -191,13 +197,8 @@ async fn test_01_htlc_success(
 }
 
 /// Test 2: Send payment from Alice to Bob using Spark transfer and fail to claim before expiry
-///
-/// TODO: re-enable once direct HTLCs are available again. While they are
-/// disabled, the operators stop serving a returned HTLC's preimage request, so
-/// the refunded transfer syncs with no HTLC details and the
-/// `SparkHtlcStatus::Returned` filter below matches nothing.
 #[rstest]
-#[ignore = "direct HTLCs are disabled; the refund carries no HTLC details"]
+#[ignore = "direct Spark HTLCs are temporarily disabled"]
 #[test_log::test(tokio::test)]
 async fn test_02_htlc_refund(
     #[future] alice_sdk: Result<SdkInstance>,
@@ -324,6 +325,7 @@ async fn test_02_htlc_refund(
 /// A payment stored as Pending at an older sync offset never transitions to Failed
 /// because the offset-based sync skips it on subsequent syncs.
 #[rstest]
+#[ignore = "direct Spark HTLCs are temporarily disabled"]
 #[test_log::test(tokio::test)]
 async fn test_03_reconcile_stale_pending_payment(
     #[future] alice_sdk: Result<SdkInstance>,

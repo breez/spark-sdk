@@ -477,7 +477,11 @@ async fn test_03_bitcoin_idempotency_key(
 }
 
 /// Test 4: Send payment from Alice to Bob using Spark HTLC with idempotency key
+///
+/// TODO: re-enable once Spark allows direct HTLCs again. See
+/// github.com/breez/spark-sdk/issues/1123.
 #[rstest]
+#[ignore = "direct Spark HTLCs are temporarily disabled"]
 #[test_log::test(tokio::test)]
 async fn test_04_spark_htlc_idempotency_key(
     #[future] alice_sdk: Result<SdkInstance>,

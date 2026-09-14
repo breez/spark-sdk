@@ -394,6 +394,8 @@ impl RestClientChainServiceInner {
         Ok(outspend)
     }
 
+    /// Safe to retry: a re-broadcast of a transaction the server did accept is
+    /// answered "already known" rather than acted on twice.
     async fn do_broadcast_transaction(&self, tx: String) -> Result<(), ChainServiceError> {
         let url = format!("{}{}", self.base_url, "/tx");
         self.post(&url, Some(tx)).await?;
@@ -462,14 +464,12 @@ fn is_status_retryable(status: u16) -> bool {
 ///
 /// A shared esplora endpoint reaping idle HTTP/2 flows answers the next request
 /// off that connection with a broken pipe, which reqwest reports as a request
-/// error. Retrying the POST is safe for the same reason: the caller was about to
-/// see an error either way, and a re-broadcast of a transaction the server did
-/// accept is answered "already known" rather than acted on twice.
+/// error. Timeouts stay out: the per-request budget is already 60s, so retrying
+/// one stalls the caller for minutes rather than riding out a blip. So does
+/// `Body`, which a response over the size cap shares with a truncated one, and
+/// the cap is refused the same way every attempt.
 fn is_transport_retryable(error: &HttpError) -> bool {
-    matches!(
-        error,
-        HttpError::Request(_) | HttpError::Connect(_) | HttpError::Timeout(_) | HttpError::Body(_)
-    )
+    matches!(error, HttpError::Request(_) | HttpError::Connect(_))
 }
 
 #[cfg(test)]
@@ -655,26 +655,30 @@ mod tests {
     /// Answers with `failures` transport errors before serving `response`.
     struct FlakyTransport {
         remaining_failures: Mutex<usize>,
+        attempts: Mutex<usize>,
+        error: HttpError,
         response: String,
     }
 
     impl FlakyTransport {
-        fn new(failures: usize, response: &str) -> Self {
+        fn new(failures: usize, error: HttpError, response: &str) -> Self {
             Self {
                 remaining_failures: Mutex::new(failures),
+                attempts: Mutex::new(0),
+                error,
                 response: response.to_string(),
             }
         }
 
         fn answer(&self) -> Result<HttpResponse, HttpError> {
+            {
+                let mut attempts = self.attempts.lock().unwrap();
+                *attempts = attempts.saturating_add(1);
+            }
             let mut remaining = self.remaining_failures.lock().unwrap();
             if *remaining > 0 {
                 *remaining = remaining.saturating_sub(1);
-                return Err(HttpError::Request(
-                    "client error (SendRequest) : connection error : stream closed because of a \
-                     broken pipe"
-                        .to_string(),
-                ));
+                return Err(self.error.clone());
             }
             Ok(HttpResponse {
                 status: 200,
@@ -682,6 +686,14 @@ mod tests {
                 headers: HashMap::new(),
             })
         }
+    }
+
+    fn broken_pipe() -> HttpError {
+        HttpError::Request(
+            "client error (SendRequest) : connection error : stream closed because of a \
+             broken pipe"
+                .to_string(),
+        )
     }
 
     #[macros::async_trait]
@@ -713,15 +725,21 @@ mod tests {
         }
     }
 
-    fn flaky_service(failures: usize, response: &str) -> RestClientChainService {
-        RestClientChainService::new(
+    fn flaky_service(
+        failures: usize,
+        error: HttpError,
+        response: &str,
+    ) -> (RestClientChainService, Arc<FlakyTransport>) {
+        let transport = Arc::new(FlakyTransport::new(failures, error, response));
+        let service = RestClientChainService::new(
             "http://localhost:8080".to_string(),
             Network::Mainnet,
             3,
-            Arc::new(FlakyTransport::new(failures, response)),
+            transport.clone(),
             None,
             ChainApiType::Esplora,
-        )
+        );
+        (service, transport)
     }
 
     const TX_STATUS_RESPONSE: &str = r#"{
@@ -731,7 +749,7 @@ mod tests {
 
     #[async_test_all]
     async fn test_get_retries_transport_errors() {
-        let service = flaky_service(3, TX_STATUS_RESPONSE);
+        let (service, _) = flaky_service(3, broken_pipe(), TX_STATUS_RESPONSE);
 
         let status = service
             .get_transaction_status("aaaa".to_string())
@@ -743,7 +761,7 @@ mod tests {
 
     #[async_test_all]
     async fn test_get_gives_up_past_the_retry_budget() {
-        let service = flaky_service(4, TX_STATUS_RESPONSE);
+        let (service, _) = flaky_service(4, broken_pipe(), TX_STATUS_RESPONSE);
 
         let result = service.get_transaction_status("aaaa".to_string()).await;
 
@@ -755,11 +773,49 @@ mod tests {
 
     #[async_test_all]
     async fn test_broadcast_retries_transport_errors() {
-        let service = flaky_service(3, "aaaa");
+        let (service, _) = flaky_service(3, broken_pipe(), "aaaa");
 
         service
             .broadcast_transaction("00".to_string())
             .await
             .unwrap();
+    }
+
+    /// A timeout has already cost the full per-request budget, so it is surfaced
+    /// rather than spent again.
+    #[async_test_all]
+    async fn test_get_does_not_retry_timeouts() {
+        let (service, transport) = flaky_service(
+            1,
+            HttpError::Timeout("operation timed out".to_string()),
+            TX_STATUS_RESPONSE,
+        );
+
+        let result = service.get_transaction_status("aaaa".to_string()).await;
+
+        assert!(matches!(
+            result,
+            Err(ChainServiceError::ServiceConnectivity(_))
+        ));
+        assert_eq!(*transport.attempts.lock().unwrap(), 1);
+    }
+
+    /// A body over the size cap is refused identically every attempt, so it is
+    /// not worth spending the budget on.
+    #[async_test_all]
+    async fn test_get_does_not_retry_body_errors() {
+        let (service, transport) = flaky_service(
+            1,
+            HttpError::Body("response exceeds the 10485760 byte limit".to_string()),
+            TX_STATUS_RESPONSE,
+        );
+
+        let result = service.get_transaction_status("aaaa".to_string()).await;
+
+        assert!(matches!(
+            result,
+            Err(ChainServiceError::ServiceConnectivity(_))
+        ));
+        assert_eq!(*transport.attempts.lock().unwrap(), 1);
     }
 }
