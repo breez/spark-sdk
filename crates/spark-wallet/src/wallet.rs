@@ -528,7 +528,7 @@ impl SparkWallet {
             tree_store.clone(),
             Arc::clone(&timelock_manager),
             Arc::clone(&spark_signer),
-            Arc::clone(&swap_service),
+            Some(Arc::clone(&swap_service)),
             Some(exit_state_changed_tx),
         ));
 
