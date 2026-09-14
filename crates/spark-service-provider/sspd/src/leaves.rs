@@ -148,12 +148,8 @@ pub async fn claim_into_pool(
     Ok(claimed)
 }
 
-/// Returns the leaves a reservation holds to the pool, given their ids.
-///
-/// The store returns a leaf it is told to keep even when that reservation is
-/// gone, so this must not run twice for one reservation: its leaves may have been
-/// reserved again in between. Callers forget a reservation before releasing it,
-/// leaving its leaves reserved if the release does not happen.
+/// Safe to run again for a reservation already released: a leaf another
+/// reservation has taken since keeps that reservation.
 pub async fn release_reserved_leaves(
     tree_store: &dyn TreeStore,
     reservation_id: &LeavesReservationId,
