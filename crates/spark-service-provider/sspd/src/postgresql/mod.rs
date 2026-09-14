@@ -1,9 +1,11 @@
 mod chain_repository;
+mod coop_exit_store;
 mod lightning_store;
 mod pool_store;
 mod swap_store;
 
 pub use chain_repository::ChainRepository;
+pub use coop_exit_store::PostgresCoopExitStore;
 pub use lightning_store::PostgresLightningStore;
 pub use pool_store::PoolRepository;
 use sqlx::{Pool, Postgres};
