@@ -2,6 +2,15 @@ fn main() {
     println!("cargo:rerun-if-changed=src/postgresql/migrations");
 
     tonic_build::configure()
+        .emit_rerun_if_changed(true)
+        .build_server(true)
+        .compile_protos(
+            &["proto/ssp_internal/ssp_internal.proto"],
+            &["proto/ssp_internal"],
+        )
+        .unwrap();
+
+    tonic_build::configure()
         .build_server(false)
         .build_client(true)
         .extern_path(".spark", "::spark::operator::rpc::spark")

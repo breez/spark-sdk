@@ -22,18 +22,22 @@ use figment::{
     Figment,
     providers::{Env, Format, Serialized, Toml},
 };
+use internal_server::ssp_internal_api::onchain_wallet_server::OnchainWalletServer;
+use internal_server::ssp_internal_api::pool_server::PoolServer;
+use internal_server::ssp_internal_api::ssp_manager_server::SspManagerServer;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use sqlx::postgres::PgPoolOptions;
 #[cfg(not(unix))]
 use tokio::signal;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use tonic::transport::Server;
 use tracing::{field, info, warn};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use sspd_lib::{
-    auth, bitcoind, chain, coop_exit, fees, graphql, leaves, lightning, pool, postgresql, shutdown,
-    static_deposit, swap, wakeup, wallet,
+    auth, bitcoind, chain, coop_exit, fees, graphql, internal_server, leaves, lightning, pool,
+    postgresql, shutdown, static_deposit, swap, wakeup, wallet,
 };
 
 const DEPENDENCY_RETRY_INTERVAL: Duration = Duration::from_secs(5);
@@ -405,6 +409,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     spawn_servers(
         &tracker,
         args.address,
+        args.internal_address,
         args.network,
         &ssp_wallet,
         &chain_client,
@@ -412,11 +417,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &swap_repo,
         swap_claim_wakeup,
         &lightning_store,
+        &coop_exit_store,
+        &static_deposit_store,
         &coop_exit_service,
         &static_deposit_service,
         lightning,
         auth,
         &fee_rates,
+        &restock,
         &pool_config,
         &token,
         &shutdown,
@@ -1060,6 +1068,7 @@ fn build_lightning(
 fn spawn_servers(
     tracker: &TaskTracker,
     graphql_address: core::net::SocketAddr,
+    internal_address: core::net::SocketAddr,
     network: Network,
     ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
     chain_client: &Arc<BitcoindClient>,
@@ -1067,11 +1076,14 @@ fn spawn_servers(
     swap_repo: &Arc<postgresql::SwapRepository>,
     swap_claim_wakeup: wakeup::Wakeup,
     lightning_store: &Arc<dyn lightning::repository::LightningStore>,
+    coop_exit_store: &Arc<dyn coop_exit::repository::CoopExitStore>,
+    static_deposit_store: &Arc<dyn static_deposit::repository::StaticDepositClaimStore>,
     coop_exit_service: &Arc<coop_exit::CoopExitService>,
     static_deposit_service: &Arc<static_deposit::StaticDepositService>,
     lightning: graphql::Lightning,
     auth: Arc<auth::AuthService>,
     fee_rates: &Arc<dyn fees::FeeRateSource>,
+    restock: &Arc<pool::restock::RestockService>,
     pool_config: &pool::config::PoolConfig,
     token: &CancellationToken,
     shutdown: &Arc<shutdown::Shutdown>,
@@ -1093,6 +1105,21 @@ fn spawn_servers(
         fee_rates,
         regtest_funder,
         pool_config.largest_denomination(),
+        token,
+        shutdown,
+    );
+    spawn_internal_server(
+        tracker,
+        internal_address,
+        network,
+        ssp_wallet,
+        chain_client,
+        lightning_store,
+        coop_exit_store,
+        static_deposit_store,
+        &(Arc::clone(swap_repo) as Arc<dyn swap::SwapStore>),
+        restock,
+        pool_config,
         token,
         shutdown,
     );
@@ -1172,6 +1199,60 @@ fn spawn_graphql_server(
         match res {
             Ok(()) => shutdown.stop("the GraphQL API server finished"),
             Err(e) => shutdown.fail("GraphQL API server", &format!("{e:?}")),
+        }
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_internal_server(
+    tracker: &TaskTracker,
+    internal_address: core::net::SocketAddr,
+    network: Network,
+    ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
+    chain_client: &Arc<BitcoindClient>,
+    lightning_store: &Arc<dyn lightning::repository::LightningStore>,
+    coop_exit_store: &Arc<dyn coop_exit::repository::CoopExitStore>,
+    static_deposit_store: &Arc<dyn static_deposit::repository::StaticDepositClaimStore>,
+    swap_store: &Arc<dyn swap::SwapStore>,
+    restock: &Arc<pool::restock::RestockService>,
+    pool_config: &pool::config::PoolConfig,
+    token: &CancellationToken,
+    shutdown: &Arc<shutdown::Shutdown>,
+) {
+    let shutdown = Arc::clone(shutdown);
+    let internal_server_token = token.child_token();
+    let params = internal_server::ServerParams {
+        chain_client: Arc::clone(chain_client),
+        network,
+        token: token.clone(),
+        wallet: Arc::clone(ssp_wallet),
+        lightning_store: Arc::clone(lightning_store),
+        coop_exit_store: Arc::clone(coop_exit_store),
+        static_deposit_store: Arc::clone(static_deposit_store),
+        swap_store: Arc::clone(swap_store),
+    };
+    let manager_server = SspManagerServer::new(internal_server::Server::new(&params));
+    let wallet_server = OnchainWalletServer::new(internal_server::WalletServer::new(&params));
+    let pool_server = PoolServer::new(internal_server::PoolServer::new(
+        Arc::clone(restock),
+        Arc::clone(&ssp_wallet.spark.tree_store),
+        pool_config.denominations(),
+        token.clone(),
+    ));
+    tracker.spawn(async move {
+        info!(
+            address = field::display(&internal_address),
+            "Starting internal server"
+        );
+        let res = Server::builder()
+            .add_service(manager_server)
+            .add_service(wallet_server)
+            .add_service(pool_server)
+            .serve_with_shutdown(internal_address, internal_server_token.cancelled())
+            .await;
+        match res {
+            Ok(()) => shutdown.stop("the internal server finished"),
+            Err(e) => shutdown.fail("internal server", &format!("{e:?}")),
         }
     });
 }
