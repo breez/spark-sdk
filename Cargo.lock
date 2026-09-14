@@ -7236,6 +7236,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "sspd"
+version = "0.1.0"
+dependencies = [
+ "bitcoin",
+ "clap",
+ "figment",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
