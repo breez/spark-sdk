@@ -1,7 +1,7 @@
 pub mod byte_padding;
 pub mod frost;
 pub mod htlc_transactions;
-pub(crate) mod leaf_key_tweak;
+pub mod leaf_key_tweak;
 pub mod paging;
 pub(crate) mod preimage_swap;
 pub(crate) mod refund;

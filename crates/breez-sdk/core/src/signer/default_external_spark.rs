@@ -20,7 +20,7 @@ use crate::signer::external_spark_types::{
     ExternalPreparedStaticDepositClaim, ExternalPreparedTokenTransaction, ExternalPreparedTransfer,
     ExternalSignSparkInvoiceRequest, ExternalSignStaticDepositRefundRequest,
     ExternalSignedSparkInvoice, ExternalSparkInvoiceKind, ExternalStartStaticDepositRefundRequest,
-    ExternalStartedStaticDepositRefund, ExternalTokenTransactionKind,
+    ExternalStartedStaticDepositRefund, ExternalTokenTransactionKind, ExternalTransferLeafInput,
 };
 use crate::signer::external_types::{
     EcdsaSignatureBytes, ExternalFrostCommitments, ExternalFrostSignature, ExternalTreeNodeId,
@@ -78,9 +78,9 @@ fn public_key(bytes: &[u8]) -> Result<bitcoin::secp256k1::PublicKey, SignerError
 }
 
 /// The native leaf inputs carry a full `TreeNode` so policy-enforcing signers
-/// can inspect it, but the external request conveys only the leaf id (which is
-/// all the in-process signer consults: keys are derived from it). The
-/// remaining fields are placeholders.
+/// can inspect it, but the external request conveys only the leaf's id, which is
+/// all of the node the in-process signer consults. The remaining fields are
+/// placeholders.
 fn node_with_id(id: TreeNodeId) -> TreeNode {
     let placeholder_key =
         bitcoin::secp256k1::PublicKey::from_slice(&[2; 33]).expect("valid placeholder public key");
@@ -108,6 +108,18 @@ fn node_with_id(id: TreeNodeId) -> TreeNode {
             public_key: placeholder_key,
         },
         status: TreeNodeStatus::Available,
+    }
+}
+
+impl TryFrom<&ExternalTransferLeafInput> for TransferLeafInput {
+    type Error = SignerError;
+
+    fn try_from(leaf: &ExternalTransferLeafInput) -> Result<Self, Self::Error> {
+        Ok(TransferLeafInput {
+            node: node_with_id(leaf.node_id.to_tree_node_id().map_err(err)?),
+            new_leaf_id: leaf.new_leaf_id.to_tree_node_id().map_err(err)?,
+            signing_key: leaf.signing_key.to_leaf_signing_key().map_err(err)?,
+        })
     }
 }
 
@@ -213,12 +225,7 @@ impl ExternalSparkSigner for DefaultExternalSparkSigner {
             leaves: request
                 .leaves
                 .iter()
-                .map(|l| {
-                    Ok(TransferLeafInput {
-                        node: node_with_id(l.node_id.to_tree_node_id().map_err(err)?),
-                        new_leaf_id: l.new_leaf_id.to_tree_node_id().map_err(err)?,
-                    })
-                })
+                .map(TransferLeafInput::try_from)
                 .collect::<Result<Vec<_>, SignerError>>()?,
             operator_recipients: operator_recipients(&request.operator_recipients)?,
             threshold: request.threshold,
@@ -456,5 +463,51 @@ impl ExternalSparkSigner for DefaultExternalSparkSigner {
             deposit_secret_key: SecretBytes::from_secret_key(&prepared.deposit_secret_key),
             user_signature: EcdsaSignatureBytes::from_signature(&prepared.user_signature),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use spark_wallet::{LeafSigningKey, TransferLeafInput, TreeNodeId};
+
+    use super::node_with_id;
+    use crate::signer::external_spark_types::{ExternalLeafSigningKey, ExternalTransferLeafInput};
+
+    #[test]
+    fn a_leaf_signing_key_crosses_the_ffi_unchanged() {
+        let key = LeafSigningKey {
+            derived_from: TreeNodeId::generate(),
+        };
+
+        let external = ExternalLeafSigningKey::from_leaf_signing_key(&key).unwrap();
+
+        assert_eq!(external.derived_from.id, key.derived_from.to_string());
+        assert_eq!(external.to_leaf_signing_key().unwrap(), key);
+    }
+
+    /// A leaf sent through an external signer keeps the key it is held under
+    /// on the way out and on the way back, next to its node id and new leaf id.
+    #[test]
+    fn a_sent_leaf_keeps_its_key_across_the_ffi() {
+        let node_id: TreeNodeId = "leaf".parse().unwrap();
+        let native = TransferLeafInput {
+            node: node_with_id(node_id.clone()),
+            new_leaf_id: TreeNodeId::generate(),
+            signing_key: LeafSigningKey {
+                derived_from: TreeNodeId::generate(),
+            },
+        };
+
+        let external = ExternalTransferLeafInput::from_transfer_leaf_input(&native).unwrap();
+        assert_eq!(external.node_id.id, "leaf");
+        assert_eq!(
+            external.signing_key.derived_from.id,
+            native.signing_key.derived_from.to_string()
+        );
+
+        let back = TransferLeafInput::try_from(&external).unwrap();
+        assert_eq!(back.node.id, node_id);
+        assert_eq!(back.new_leaf_id, native.new_leaf_id);
+        assert_eq!(back.signing_key, native.signing_key);
     }
 }

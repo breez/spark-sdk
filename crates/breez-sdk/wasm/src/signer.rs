@@ -755,11 +755,19 @@ pub struct ExternalOperatorPackage {
 }
 
 #[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalLeafSigningKey
+)]
+pub struct ExternalLeafSigningKey {
+    pub derived_from: ExternalTreeNodeId,
+}
+
+#[macros::extern_wasm_bindgen(
     breez_sdk_spark::signer::external_spark_types::ExternalTransferLeafInput
 )]
 pub struct ExternalTransferLeafInput {
     pub node_id: ExternalTreeNodeId,
     pub new_leaf_id: ExternalTreeNodeId,
+    pub signing_key: ExternalLeafSigningKey,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalNewLeafKey)]

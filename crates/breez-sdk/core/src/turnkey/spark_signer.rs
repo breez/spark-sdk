@@ -51,9 +51,9 @@ use crate::signer::{
     ExternalPreparedStaticDepositClaim, ExternalPreparedTokenTransaction, ExternalPreparedTransfer,
     ExternalSignSparkInvoiceRequest, ExternalSignStaticDepositRefundRequest,
     ExternalSignedSparkInvoice, ExternalSparkSigner, ExternalStartStaticDepositRefundRequest,
-    ExternalStartedStaticDepositRefund, ExternalTreeNodeId, IdentifierCommitmentPair,
-    IdentifierPublicKeyPair, IdentifierSignaturePair, PublicKeyBytes, SchnorrSignatureBytes,
-    SecretBytes,
+    ExternalStartedStaticDepositRefund, ExternalTransferLeafInput, ExternalTreeNodeId,
+    IdentifierCommitmentPair, IdentifierPublicKeyPair, IdentifierSignaturePair, PublicKeyBytes,
+    SchnorrSignatureBytes, SecretBytes,
 };
 
 use super::accounts::{
@@ -89,6 +89,24 @@ fn frost_derivation(derivation: &FrostDerivation) -> SparkKeyDerivation {
         FrostDerivation::HtlcPreimage => SparkKeyDerivation::htlc_preimage(),
         FrostDerivation::Identity => SparkKeyDerivation::identity(),
     }
+}
+
+fn transfer_leaf(leaf: &ExternalTransferLeafInput) -> Result<SparkTransferLeaf, SignerError> {
+    let node_id = leaf.node_id.to_tree_node_id().map_err(to_spark_err)?;
+    let held_under = leaf
+        .signing_key
+        .derived_from
+        .to_tree_node_id()
+        .map_err(to_spark_err)?;
+    let new_leaf_id = leaf.new_leaf_id.to_tree_node_id().map_err(to_spark_err)?;
+    Ok(SparkTransferLeaf {
+        leaf_id: node_id.to_string(),
+        old_leaf_derivation: SparkKeyDerivation::signing_leaf(held_under.to_string()),
+        new_leaf_derivation: SparkKeyDerivation::signing_leaf(new_leaf_id.to_string()),
+        refund_signature: None,
+        direct_refund_signature: None,
+        direct_from_cpfp_refund_signature: None,
+    })
 }
 
 /// Converts a native FROST job into the request shape, hex-encoding the sighash,
@@ -654,18 +672,7 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
         let leaves = request
             .leaves
             .iter()
-            .map(|leaf| {
-                let node_id = leaf.node_id.to_tree_node_id().map_err(to_spark_err)?;
-                let new_leaf_id = leaf.new_leaf_id.to_tree_node_id().map_err(to_spark_err)?;
-                Ok(SparkTransferLeaf {
-                    leaf_id: node_id.to_string(),
-                    old_leaf_derivation: SparkKeyDerivation::signing_leaf(node_id.to_string()),
-                    new_leaf_derivation: SparkKeyDerivation::signing_leaf(new_leaf_id.to_string()),
-                    refund_signature: None,
-                    direct_refund_signature: None,
-                    direct_from_cpfp_refund_signature: None,
-                })
-            })
+            .map(transfer_leaf)
             .collect::<Result<Vec<_>, SignerError>>()?;
         let intent = SparkPrepareTransferIntent {
             sign_with,
@@ -1059,6 +1066,36 @@ mod tests {
             post_calls.load(Ordering::SeqCst),
             after_first,
             "a memoized denial must not trigger another export"
+        );
+    }
+
+    /// Turnkey is asked to tweak a sent leaf away from the key it is held under
+    /// and towards the key derived from its new leaf id, naming the leaf by its
+    /// node id.
+    #[test]
+    fn a_sent_leaf_goes_to_turnkey_under_the_key_it_is_held_under() {
+        use crate::signer::{
+            ExternalLeafSigningKey, ExternalTransferLeafInput, ExternalTreeNodeId,
+        };
+
+        let id = |id: &str| ExternalTreeNodeId { id: id.to_string() };
+        let leaf = ExternalTransferLeafInput {
+            node_id: id("leaf"),
+            new_leaf_id: id("new"),
+            signing_key: ExternalLeafSigningKey {
+                derived_from: id("held"),
+            },
+        };
+
+        let request = serde_json::to_value(super::transfer_leaf(&leaf).unwrap()).unwrap();
+
+        assert_eq!(
+            request,
+            serde_json::json!({
+                "leafId": "leaf",
+                "oldLeafDerivation": { "signingLeaf": { "leafId": "held" } },
+                "newLeafDerivation": { "signingLeaf": { "leafId": "new" } },
+            })
         );
     }
 }

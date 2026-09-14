@@ -154,12 +154,11 @@ fn transfer_id_bytes(transfer_id: &crate::services::TransferId) -> Result<Vec<u8
         .map_err(|e| SignerError::Generic(format!("Failed to decode transfer ID: {e}")))
 }
 
-/// Derivation path for a leaf's signing key: the `1'` signing purpose followed
-/// by a hardened child derived from the node id (sha256 of the id, first 4 bytes
-/// mod 2^31). Reproduces the derivation the low-level signer did before the path
-/// computation moved up into this adapter.
-pub fn signing_path(node_id: &crate::tree::TreeNodeId) -> Result<DerivationPath, SignerError> {
-    let hash = sha256::Hash::hash(node_id.to_string().as_bytes());
+/// Derivation path for the leaf signing key derived from `leaf_id`: the `1'`
+/// signing purpose followed by a hardened child from the id (sha256 of the id,
+/// first 4 bytes mod 2^31).
+pub fn signing_path(leaf_id: &crate::tree::TreeNodeId) -> Result<DerivationPath, SignerError> {
+    let hash = sha256::Hash::hash(leaf_id.to_string().as_bytes());
     let u32_bytes: [u8; 4] = hash.as_byte_array()[..4]
         .try_into()
         .map_err(|_| SignerError::InvalidHash)?;
@@ -273,7 +272,7 @@ impl SparkSigner for SparkSignerAdapter {
         let mut new_leaf_keys = Vec::with_capacity(leaves.len());
 
         for leaf in &leaves {
-            let signing_key = SecretSource::Derived(signing_path(&leaf.node.id)?);
+            let signing_key = SecretSource::Derived(signing_path(&leaf.signing_key.derived_from)?);
             let new_signing_key = SecretSource::Derived(signing_path(&leaf.new_leaf_id)?);
 
             new_leaf_keys.push(NewLeafKey {
@@ -634,5 +633,136 @@ impl SparkSigner for SparkSignerAdapter {
             .sign_hash_schnorr(&identity_path()?, &request.digest)
             .await?;
         Ok(PreparedTokenTransaction { signature })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+    use frost_secp256k1_tr::Identifier;
+    use macros::async_test_all;
+    use prost::Message as _;
+
+    use super::SparkSignerAdapter;
+    use crate::operator::rpc::spark as proto;
+    use crate::services::TransferId;
+    use crate::signer::{
+        LeafSigningKey, OperatorRecipient, PrepareTransferRequest, SparkSigner, TransferLeafInput,
+        create_test_signer,
+    };
+    use crate::tree::TreeNodeId;
+    use crate::tree::tests::create_test_tree_node;
+
+    /// Operators whose identity keys the test holds, so it can open the
+    /// packages the adapter encrypts to them.
+    fn operators() -> Vec<(OperatorRecipient, SecretKey)> {
+        let secp = Secp256k1::new();
+        (0..3u16)
+            .map(|id| {
+                let secret = SecretKey::from_slice(&[id as u8 + 1; 32]).unwrap();
+                let recipient = OperatorRecipient {
+                    id: usize::from(id),
+                    identifier: Identifier::try_from(id + 1).unwrap(),
+                    public_key: PublicKey::from_secret_key(&secp, &secret),
+                };
+                (recipient, secret)
+            })
+            .collect()
+    }
+
+    /// Sends one leaf held under the key derived from `held_under`, and returns
+    /// the leaf's key tweak as each operator reads it (the public key of the
+    /// split secret, `proofs[0]`), plus the new key it tweaks towards.
+    async fn tweak_seen_by_operators(
+        adapter: &SparkSignerAdapter,
+        node_id: &str,
+        held_under: &TreeNodeId,
+    ) -> (Vec<PublicKey>, PublicKey) {
+        let operators = operators();
+        let new_leaf_id = TreeNodeId::generate();
+        let prepared = adapter
+            .prepare_transfer(PrepareTransferRequest {
+                transfer_id: TransferId::generate(),
+                receiver_public_key: adapter.get_identity_public_key().await.unwrap(),
+                leaves: vec![TransferLeafInput {
+                    node: create_test_tree_node(node_id, 1_000),
+                    new_leaf_id: new_leaf_id.clone(),
+                    signing_key: LeafSigningKey {
+                        derived_from: held_under.clone(),
+                    },
+                }],
+                operator_recipients: operators.iter().map(|(r, _)| r.clone()).collect(),
+                threshold: 2,
+            })
+            .await
+            .unwrap();
+
+        let new_key = prepared.new_leaf_keys[0].new_signing_public_key;
+        assert_eq!(
+            new_key,
+            adapter.get_public_key_for_leaf(&new_leaf_id).await.unwrap(),
+            "the leaf moves to the key derived from the new leaf id"
+        );
+
+        let mut tweaks = Vec::new();
+        for (recipient, secret) in &operators {
+            let package = prepared
+                .operator_packages
+                .iter()
+                .find(|p| p.operator_identifier == recipient.identifier)
+                .expect("a package for every operator");
+            let plain = utils::ecies::decrypt(&secret.secret_bytes(), &package.encrypted_package)
+                .expect("the package opens with the operator's key");
+            let leaves = proto::SendLeafKeyTweaks::decode(plain.as_slice())
+                .unwrap()
+                .leaves_to_send;
+            assert_eq!(leaves.len(), 1);
+            assert_eq!(
+                leaves[0].leaf_id, node_id,
+                "the operators know the leaf by its node id"
+            );
+            let proofs = &leaves[0].secret_share_tweak.as_ref().unwrap().proofs;
+            tweaks.push(PublicKey::from_slice(&proofs[0]).unwrap());
+        }
+        (tweaks, new_key)
+    }
+
+    /// A leaf held under a key derived from another id is tweaked away from that
+    /// key: the operators' view of the tweak plus the new key adds back up to
+    /// it, not to the key derived from the node id.
+    #[async_test_all]
+    async fn a_transfer_tweaks_away_from_the_key_the_leaf_is_held_under() {
+        let adapter = SparkSignerAdapter::new(Arc::new(create_test_signer()));
+        let held_under = TreeNodeId::generate();
+        let held_key = adapter.get_public_key_for_leaf(&held_under).await.unwrap();
+        let node_key = adapter
+            .get_public_key_for_leaf(&"leaf".parse().unwrap())
+            .await
+            .unwrap();
+
+        let (tweaks, new_key) = tweak_seen_by_operators(&adapter, "leaf", &held_under).await;
+
+        for tweak in tweaks {
+            let old_key = tweak.combine(&new_key).unwrap();
+            assert_eq!(old_key, held_key);
+            assert_ne!(old_key, node_key);
+        }
+    }
+
+    /// A leaf held under the key derived from its own node id, as every leaf a
+    /// wallet receives is, is tweaked away from that key.
+    #[async_test_all]
+    async fn a_transfer_of_a_received_leaf_tweaks_away_from_its_node_id_key() {
+        let adapter = SparkSignerAdapter::new(Arc::new(create_test_signer()));
+        let node_id: TreeNodeId = "leaf".parse().unwrap();
+        let node_key = adapter.get_public_key_for_leaf(&node_id).await.unwrap();
+
+        let (tweaks, new_key) = tweak_seen_by_operators(&adapter, "leaf", &node_id).await;
+
+        for tweak in tweaks {
+            assert_eq!(tweak.combine(&new_key).unwrap(), node_key);
+        }
     }
 }

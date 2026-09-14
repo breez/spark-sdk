@@ -30,10 +30,13 @@ use crate::{
         LeavesReservation, LeavesReservationId, TargetAmounts, TreeNodeId, TreeService, TreeStore,
         assemble_exit_chains, chain_reaches_root, select_helper,
     },
-    utils::paging::{PagingFilter, PagingResult, pager},
+    utils::{
+        leaf_key_tweak::with_node_id_keys,
+        paging::{PagingFilter, PagingResult, pager},
+    },
 };
 
-use super::{TreeNode, error::TreeServiceError};
+use super::{LeafKeyTweak, TreeNode, error::TreeServiceError};
 
 pub struct SynchronousTreeService {
     identity_pubkey: PublicKey,
@@ -509,6 +512,22 @@ impl TreeService for SynchronousTreeService {
 
     async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
         self.state.get_available_balance().await
+    }
+
+    async fn leaves_to_send(
+        &self,
+        leaves: Vec<TreeNode>,
+    ) -> Result<Vec<LeafKeyTweak>, TreeServiceError> {
+        let owned = self
+            .retain_owned(&leaves.iter().collect::<Vec<_>>())
+            .await?;
+        if let Some(leaf) = leaves.iter().find(|leaf| !owned.contains(&leaf.id)) {
+            return Err(TreeServiceError::Generic(format!(
+                "leaf {} is not held under the key derived from its node id",
+                leaf.id
+            )));
+        }
+        Ok(with_node_id_keys(leaves))
     }
 }
 
@@ -1070,7 +1089,7 @@ impl SynchronousTreeService {
                     "leaves cannot be swapped without a service provider to swap with".to_string(),
                 )
             })?
-            .swap_leaves(leaves, target_amounts)
+            .swap_leaves(&self.leaves_to_send(leaves.to_vec()).await?, target_amounts)
             .await?;
 
         // The swap outputs go on without their chains: resolving them here would
@@ -1839,5 +1858,65 @@ mod tests {
 
         let result = find_exact_multiple_match(&leaves, 3080);
         assert!(result.is_none());
+    }
+
+    /// A leaf held under a key other than the one derived from its node id, the
+    /// key the service signs with.
+    async fn leaf_held_elsewhere(service: &SynchronousTreeService, id: &str) -> TreeNode {
+        let mut leaf = create_test_node_with_parent(id, Some("root"), TreeNodeStatus::Available);
+        let elsewhere = service
+            .spark_signer
+            .get_public_key_for_leaf(&TreeNodeId::generate())
+            .await
+            .unwrap();
+        leaf.verifying_public_key = elsewhere
+            .combine(&leaf.signing_keyshare.public_key)
+            .unwrap();
+        set_refund_sequence(&mut leaf, 2_000);
+        leaf
+    }
+
+    /// The service sends a leaf under the key derived from its node id only
+    /// once it has checked the leaf is held under that key.
+    #[async_test_all]
+    async fn leaves_are_sent_only_under_the_key_they_are_held_under() {
+        let service = service_over(Arc::new(InMemoryTreeStore::new()), None).await;
+        let ours = owned_leaf(&service, "ours", Some("root"), TreeNodeStatus::Available).await;
+        let elsewhere = leaf_held_elsewhere(&service, "elsewhere").await;
+
+        let tweaks = service.leaves_to_send(vec![ours.clone()]).await.unwrap();
+        assert_eq!(tweaks.len(), 1);
+        assert_eq!(tweaks[0].node, ours);
+        assert_eq!(tweaks[0].signing_key.derived_from, ours.id);
+
+        let refused = service.leaves_to_send(vec![ours, elsewhere]).await;
+        assert!(
+            matches!(&refused, Err(TreeServiceError::Generic(message)) if message.contains("elsewhere")),
+            "{refused:?}"
+        );
+    }
+
+    /// A payment that needs a swap refuses a leaf held under another key before
+    /// asking the service provider for anything.
+    #[async_test_all]
+    async fn a_swap_refuses_a_leaf_held_under_another_key() {
+        let store = Arc::new(InMemoryTreeStore::new());
+        let service = service_over(Arc::clone(&store) as Arc<dyn TreeStore>, None).await;
+        let elsewhere = leaf_held_elsewhere(&service, "elsewhere").await;
+        store.add_leaves(&[elsewhere]).await.unwrap();
+
+        let result = service
+            .select_leaves(
+                Some(&TargetAmounts::new_amount_and_fee(600, None)),
+                ReservationPurpose::Payment,
+                SelectLeavesOptions::no_wait(),
+            )
+            .await;
+
+        assert!(
+            matches!(&result, Err(TreeServiceError::Generic(message))
+                if message.contains("not held under the key derived from its node id")),
+            "{result:?}"
+        );
     }
 }

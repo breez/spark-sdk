@@ -70,7 +70,10 @@ use spark::{
         TreeNodeId, TreeNodeStatus, TreeService, TreeStore, chain_reaches_root,
         select_leaves_by_target_amounts, with_reserved_leaves,
     },
-    utils::paging::{PagingFilter, PagingResult},
+    utils::{
+        leaf_key_tweak::with_node_id_keys,
+        paging::{PagingFilter, PagingResult},
+    },
 };
 use tokio::sync::{broadcast, watch};
 use tonic_types::StatusExt;
@@ -676,7 +679,7 @@ impl SparkWallet {
             |leaves_reservation| self.lightning_service.pay_lightning_invoice(
                 invoice,
                 amount_to_send,
-                &leaves_reservation.leaves,
+                &with_node_id_keys(leaves_reservation.leaves.clone()),
                 transfer_id.clone(),
             )
         )?;
@@ -1104,7 +1107,7 @@ impl SparkWallet {
             Some(&target_amounts),
             "Transfer",
             |leaves_reservation| self.transfer_service.transfer_leaves_to(
-                leaves_reservation.leaves.clone(),
+                &with_node_id_keys(leaves_reservation.leaves.clone()),
                 &receiver_address.identity_public_key,
                 transfer_id.clone(),
                 spark_invoice.clone(),
@@ -1173,7 +1176,7 @@ impl SparkWallet {
             Some(&target_amounts),
             "HTLC creation",
             |leaves_reservation| self.htlc_service.create_htlc(
-                leaves_reservation.leaves.clone(),
+                &with_node_id_keys(leaves_reservation.leaves.clone()),
                 &receiver_address.identity_public_key,
                 payment_hash,
                 expiry_time,
@@ -1562,12 +1565,12 @@ impl SparkWallet {
         let transfer = self
             .coop_exit_service
             .coop_exit(CoopExitParams {
-                leaves: withdraw_leaves,
+                leaves: with_node_id_keys(withdraw_leaves),
                 withdrawal_address: &address,
                 withdraw_all,
                 exit_speed,
                 fee_quote_id,
-                fee_leaves,
+                fee_leaves: fee_leaves.map(with_node_id_keys),
                 fee_sats,
                 transfer_id,
             })

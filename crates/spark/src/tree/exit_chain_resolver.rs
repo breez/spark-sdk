@@ -205,6 +205,7 @@ impl ExitChainResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::LeafKeyTweak;
     use crate::tree::tests::create_test_node_with_parent;
     use crate::tree::{
         LeafSelection, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose,
@@ -278,6 +279,13 @@ mod tests {
         }
 
         async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
+            unimplemented!("not exercised by ExitChainResolver")
+        }
+
+        async fn leaves_to_send(
+            &self,
+            _leaves: Vec<TreeNode>,
+        ) -> Result<Vec<LeafKeyTweak>, TreeServiceError> {
             unimplemented!("not exercised by ExitChainResolver")
         }
 

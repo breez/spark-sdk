@@ -10,8 +10,6 @@ use crate::operator::rpc as operator_rpc;
 use crate::operator::rpc::spark::ProvidePreimageRequest;
 use crate::services::models::convert_page;
 use crate::services::{Preimage, Transfer, TransferId, TransferObserver};
-use crate::tree::TreeNode;
-use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::preimage_swap::{SwapNodesForPreimageRequest, swap_nodes_for_preimage};
 use crate::{
     Network,
@@ -50,7 +48,7 @@ impl HtlcService {
 
     pub async fn create_htlc(
         &self,
-        leaves: Vec<TreeNode>,
+        leaves: &[LeafKeyTweak],
         receiver_id: &PublicKey,
         payment_hash: &Hash,
         expiry_time: SystemTime,
@@ -65,7 +63,7 @@ impl HtlcService {
             let identity_public_key = &self.spark_signer.get_identity_public_key().await?;
             if identity_public_key != receiver_id {
                 let receiver_address = SparkAddress::new(*receiver_id, self.network, None);
-                let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
+                let amount_sats: u64 = leaves.iter().map(|l| l.node.value).sum();
                 transfer_observer
                     .before_send_transfer(
                         &unwrapped_transfer_id,
@@ -78,13 +76,11 @@ impl HtlcService {
             }
         }
 
-        let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(leaves);
-
         let prepared_transfer_request = self
             .transfer_service
             .prepare_transfer_request(
                 &unwrapped_transfer_id,
-                &leaf_key_tweaks,
+                leaves,
                 receiver_id,
                 Some(payment_hash),
                 Some(expiry_time),
@@ -92,7 +88,7 @@ impl HtlcService {
             )
             .await?;
 
-        let amount_sats = leaf_key_tweaks.iter().map(|l| l.node.value).sum();
+        let amount_sats = leaves.iter().map(|l| l.node.value).sum();
 
         let transfer: Transfer = match swap_nodes_for_preimage(
             &self.operator_pool,

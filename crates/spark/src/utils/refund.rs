@@ -200,6 +200,7 @@ fn build_refund_job(
         .map_err(|e| SignerError::Generic(e.to_string()))?;
     Ok(build_refund_signing_job(
         &leaf.node.id,
+        &leaf.signing_key,
         &leaf.node.verifying_public_key,
         &signing_public_key,
         refund_tx,
@@ -208,4 +209,82 @@ fn build_refund_job(
         adaptor_public_key,
         network,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use bitcoin::secp256k1::PublicKey;
+    use macros::async_test_all;
+
+    use super::{SignRefundsParams, sign_refunds};
+    use crate::Network;
+    use crate::services::LeafKeyTweak;
+    use crate::signer::testing::{RecordingSparkSigner, operator_commitments};
+    use crate::signer::{FrostDerivation, LeafSigningKey, SparkSigner};
+    use crate::tree::TreeNodeId;
+    use crate::tree::tests::create_test_leaf_held_under;
+
+    /// Signs the refunds that send one leaf held under the key derived from
+    /// `held_under`. Returns the key each FROST job asked for, the public key
+    /// each signed refund is recorded under, and the held key's public key.
+    async fn sign_sending_refunds(
+        held_under: &TreeNodeId,
+    ) -> (Vec<FrostDerivation>, Vec<PublicKey>, PublicKey) {
+        let recorder = Arc::new(RecordingSparkSigner::new());
+        let signer: Arc<dyn SparkSigner> = recorder.clone();
+        let held_key = signer.get_public_key_for_leaf(held_under).await.unwrap();
+        let leaf = LeafKeyTweak {
+            node: create_test_leaf_held_under("leaf", held_key),
+            signing_key: LeafSigningKey {
+                derived_from: held_under.clone(),
+            },
+        };
+        let receiver = signer.get_identity_public_key().await.unwrap();
+
+        let signed = sign_refunds(SignRefundsParams {
+            spark_signer: &signer,
+            leaves: std::slice::from_ref(&leaf),
+            cpfp_signing_commitments: vec![operator_commitments(3).await],
+            direct_signing_commitments: vec![operator_commitments(3).await],
+            direct_from_cpfp_signing_commitments: vec![operator_commitments(3).await],
+            receiver_pubkey: &receiver,
+            payment_hash: None,
+            network: Network::Regtest,
+            cpfp_adaptor_public_key: None,
+        })
+        .await
+        .unwrap();
+
+        let signed_under = signed
+            .cpfp_signed_tx
+            .iter()
+            .chain(&signed.direct_signed_tx)
+            .chain(&signed.direct_from_cpfp_signed_tx)
+            .map(|tx| tx.signing_public_key)
+            .collect();
+        (recorder.frost_derivations(), signed_under, held_key)
+    }
+
+    /// Every refund that sends a leaf away is signed with the key the leaf is
+    /// held under, and recorded under that key's public key, whatever id the
+    /// key derives from.
+    #[async_test_all]
+    async fn sending_signs_every_refund_with_the_key_the_leaf_is_held_under() {
+        for held_under in [TreeNodeId::generate(), "leaf".parse().unwrap()] {
+            let (derivations, signed_under, held_key) = sign_sending_refunds(&held_under).await;
+
+            assert!(!derivations.is_empty());
+            assert!(
+                derivations.iter().all(|d| *d
+                    == FrostDerivation::SigningLeaf {
+                        leaf_id: held_under.clone()
+                    }),
+                "{derivations:?}"
+            );
+            assert_eq!(signed_under.len(), derivations.len());
+            assert!(signed_under.iter().all(|key| *key == held_key));
+        }
+    }
 }

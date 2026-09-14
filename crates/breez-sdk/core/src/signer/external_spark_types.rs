@@ -233,13 +233,37 @@ fn sighash_32(bytes: &[u8]) -> Result<[u8; 32], SdkError> {
 
 // ─── prepare_transfer ───────────────────────────────────────────────────────
 
-/// FFI-safe representation of `spark_wallet::TransferLeafInput`. Conveys the old
-/// leaf id and the new (post-transfer) leaf id; the signer derives keys from them.
+/// FFI-safe representation of `spark_wallet::LeafSigningKey`: the leaf signing
+/// key derived from `derived_from`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ExternalLeafSigningKey {
+    pub derived_from: ExternalTreeNodeId,
+}
+
+impl ExternalLeafSigningKey {
+    pub fn from_leaf_signing_key(key: &spark_wallet::LeafSigningKey) -> Result<Self, SdkError> {
+        Ok(Self {
+            derived_from: ExternalTreeNodeId::from_tree_node_id(&key.derived_from)?,
+        })
+    }
+
+    pub fn to_leaf_signing_key(&self) -> Result<spark_wallet::LeafSigningKey, SdkError> {
+        Ok(spark_wallet::LeafSigningKey {
+            derived_from: self.derived_from.to_tree_node_id()?,
+        })
+    }
+}
+
+/// FFI-safe representation of `spark_wallet::TransferLeafInput`. Conveys the
+/// leaf id, the key the leaf is held under and the new (post-transfer) leaf id;
+/// the signer derives the keys from them.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ExternalTransferLeafInput {
     pub node_id: ExternalTreeNodeId,
     pub new_leaf_id: ExternalTreeNodeId,
+    pub signing_key: ExternalLeafSigningKey,
 }
 
 impl ExternalTransferLeafInput {
@@ -249,6 +273,7 @@ impl ExternalTransferLeafInput {
         Ok(Self {
             node_id: ExternalTreeNodeId::from_tree_node_id(&leaf.node.id)?,
             new_leaf_id: ExternalTreeNodeId::from_tree_node_id(&leaf.new_leaf_id)?,
+            signing_key: ExternalLeafSigningKey::from_leaf_signing_key(&leaf.signing_key)?,
         })
     }
 }
@@ -796,6 +821,11 @@ mod tests {
                 },
                 new_leaf_id: ExternalTreeNodeId {
                     id: "33333333-3333-3333-3333-333333333333".to_string(),
+                },
+                signing_key: ExternalLeafSigningKey {
+                    derived_from: ExternalTreeNodeId {
+                        id: "22222222-2222-2222-2222-222222222222".to_string(),
+                    },
                 },
             }],
             operator_recipients: vec![],
