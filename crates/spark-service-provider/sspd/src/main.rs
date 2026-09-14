@@ -12,9 +12,11 @@
     )
 )]
 
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use bitcoin::Network;
+use bitcoind::BitcoindClient;
+use chain::ChainMonitor;
 use clap::{CommandFactory, FromArgMatches, Parser, parser::ValueSource};
 use figment::{
     Figment,
@@ -25,10 +27,13 @@ use serde_with::{DisplayFromStr, serde_as};
 use sqlx::postgres::PgPoolOptions;
 #[cfg(not(unix))]
 use tokio::signal;
-use tracing::info;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
-use sspd_lib::postgresql;
+use sspd_lib::{bitcoind, chain, postgresql, shutdown, wakeup};
+
+const DEPENDENCY_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize, Parser)]
@@ -56,6 +61,22 @@ struct Args {
     /// counting the leaf store's own pool.
     #[arg(long, default_value = "10")]
     pub db_max_connections: u32,
+
+    /// Address to the bitcoind rpc.
+    #[arg(long, default_value = "http://localhost:8332")]
+    pub bitcoind_rpc_address: String,
+
+    /// Bitcoind rpc username.
+    #[arg(long, default_value = "")]
+    pub bitcoind_rpc_user: String,
+
+    /// Bitcoind rpc password. Config file or `SSPD_BITCOIND_RPC_PASSWORD` only.
+    #[arg(skip)]
+    pub bitcoind_rpc_password: String,
+
+    /// The longest the chain monitor waits for a new block before syncing again.
+    #[arg(long, default_value = "60")]
+    pub chain_poll_interval_seconds: u64,
 
     /// Apply the database migrations at startup.
     #[arg(long)]
@@ -88,14 +109,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         postgresql::migrate(&pgpool).await?;
     }
 
-    let _chain_repository = Arc::new(postgresql::ChainRepository::new(
+    let chain_client = Arc::new(BitcoindClient::new(
+        args.bitcoind_rpc_address,
+        args.bitcoind_rpc_user,
+        args.bitcoind_rpc_password,
+    )?);
+
+    let chain_repository = Arc::new(postgresql::ChainRepository::new(
         Arc::clone(&pgpool),
         args.network,
     ));
+
+    let shutdown = shutdown::Shutdown::new();
+    let token = shutdown.child();
+    let tracker = TaskTracker::new();
+    spawn_shutdown_signal_handler(Arc::clone(&shutdown));
+
+    let chain_info = loop {
+        match chain_client.chain_info().await {
+            Ok(info) => break info,
+            Err(e) => warn!("bitcoind is unavailable, retrying: {e}"),
+        }
+        tokio::select! {
+            () = token.cancelled() => return Ok(()),
+            () = tokio::time::sleep(DEPENDENCY_RETRY_INTERVAL) => {}
+        }
+    };
+    if chain_info.network != args.network {
+        return Err(format!(
+            "bitcoind is on {}, but the daemon is configured for {}",
+            chain_info.network, args.network
+        )
+        .into());
+    }
+    if chain_info.pruned {
+        return Err("bitcoind is pruned, but the daemon reads every block since it started".into());
+    }
+
+    spawn_chain_monitor(
+        &tracker,
+        args.network,
+        Duration::from_secs(args.chain_poll_interval_seconds),
+        &chain_client,
+        &chain_repository,
+        Vec::new(),
+        &token,
+    );
+
     info!("sspd started");
 
-    let signal = wait_for_shutdown_signal().await?;
-    info!("shutdown complete: {signal}");
+    tracker.close();
+
+    tracker.wait().await;
+    if shutdown.is_failure() {
+        return Err("sspd shut down after a subsystem failed".into());
+    }
+    info!("shutdown complete");
     Ok(())
 }
 
@@ -133,6 +202,15 @@ fn load_args() -> Result<(Args, Option<PathBuf>), Box<dyn std::error::Error>> {
     Ok((args, config_file))
 }
 
+fn spawn_shutdown_signal_handler(shutdown: Arc<shutdown::Shutdown>) {
+    tokio::spawn(async move {
+        match wait_for_shutdown_signal().await {
+            Ok(signal) => shutdown.stop(signal),
+            Err(err) => shutdown.fail("shutdown signal handler", &err),
+        }
+    });
+}
+
 /// Docker, systemd and Kubernetes stop a process with SIGTERM by default, and
 /// SIGTERM's default action ends the process without a graceful shutdown.
 #[cfg(unix)]
@@ -151,4 +229,27 @@ async fn wait_for_shutdown_signal() -> std::io::Result<&'static str> {
 async fn wait_for_shutdown_signal() -> std::io::Result<&'static str> {
     signal::ctrl_c().await?;
     Ok("ctrl-c")
+}
+#[allow(clippy::too_many_arguments)]
+fn spawn_chain_monitor(
+    tracker: &TaskTracker,
+    network: Network,
+    poll_interval: Duration,
+    chain_client: &Arc<BitcoindClient>,
+    chain_repository: &Arc<postgresql::ChainRepository>,
+    chain_advanced: Vec<wakeup::Wakeup>,
+    token: &CancellationToken,
+) {
+    let chain_monitor_token = token.child_token();
+    let chain_monitor = Arc::new(ChainMonitor::new(
+        network,
+        Arc::clone(chain_client),
+        Arc::clone(chain_repository),
+        poll_interval,
+        chain_advanced,
+    ));
+    tracker.spawn(async move {
+        info!("Starting chain monitor");
+        chain_monitor.start(chain_monitor_token).await;
+    });
 }

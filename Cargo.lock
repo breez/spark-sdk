@@ -7570,12 +7570,15 @@ dependencies = [
  "clap",
  "figment",
  "futures",
+ "hex",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_with",
  "sqlx",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
@@ -8244,6 +8247,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]
