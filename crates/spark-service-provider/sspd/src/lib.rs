@@ -16,6 +16,7 @@ pub mod bitcoind;
 pub mod chain;
 pub mod leaves;
 pub mod operator_rpc;
+pub mod pool;
 pub mod postgresql;
 pub mod shutdown;
 pub mod tree;
