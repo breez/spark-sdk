@@ -136,6 +136,7 @@ members = [
   "crates/internal",
   "crates/nip65-publisher",
   "crates/spark-service-provider/sspd",
+  "crates/spark-service-provider/ssp-cli",
 ]
 # spark-compat-itest links the previous SDK release (git tag) next to the
 # workspace crates; it builds standalone so normal workspace commands don't
