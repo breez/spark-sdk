@@ -1,6 +1,6 @@
 # $USER name to be used in the `final` image
 ARG USER=so
-ARG VERSION=ee60d305b756d466647567c93ba47f0a65c0767e
+ARG VERSION=0b3a32a05c9ac06cc411683551dd1f1bde9d0caa
 ARG REPOSITORY=https://github.com/buildonspark/spark.git
 
 FROM debian:bookworm-20250721-slim AS downloader
@@ -21,7 +21,7 @@ RUN git init && \
     git checkout FETCH_HEAD
 
 
-FROM golang:1.26.3-bookworm AS operator-builder
+FROM golang:1.27.0-bookworm AS operator-builder
 
 # Install required dependencies for building
 RUN apt-get update -qq && \
