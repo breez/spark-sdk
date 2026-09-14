@@ -12,7 +12,7 @@
     )
 )]
 
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use bitcoin::Network;
 use clap::{CommandFactory, FromArgMatches, Parser, parser::ValueSource};
@@ -22,10 +22,13 @@ use figment::{
 };
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
+use sqlx::postgres::PgPoolOptions;
 #[cfg(not(unix))]
 use tokio::signal;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+
+use sspd_lib::postgresql;
 
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize, Parser)]
@@ -43,6 +46,20 @@ struct Args {
     /// format.
     #[arg(long, default_value = "info")]
     pub log_level: String,
+
+    /// Connection string to the postgres database. Config file or `SSPD_DB_URL`
+    /// only, since it can carry a password.
+    #[arg(skip)]
+    pub db_url: String,
+
+    /// The most connections the daemon holds open to the postgres database, not
+    /// counting the leaf store's own pool.
+    #[arg(long, default_value = "10")]
+    pub db_max_connections: u32,
+
+    /// Apply the database migrations at startup.
+    #[arg(long)]
+    pub auto_migrate: bool,
 }
 
 #[tokio::main]
@@ -60,6 +77,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("starting sspd without config file");
     }
 
+    let pgpool = Arc::new(
+        PgPoolOptions::new()
+            .max_connections(args.db_max_connections)
+            .connect(&args.db_url)
+            .await
+            .map_err(|e| format!("failed to connect to postgres: {e:?}"))?,
+    );
+    if args.auto_migrate {
+        postgresql::migrate(&pgpool).await?;
+    }
+
+    let _chain_repository = Arc::new(postgresql::ChainRepository::new(
+        Arc::clone(&pgpool),
+        args.network,
+    ));
     info!("sspd started");
 
     let signal = wait_for_shutdown_signal().await?;

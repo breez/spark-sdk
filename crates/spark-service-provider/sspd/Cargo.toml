@@ -16,12 +16,16 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+async-trait = { workspace = true }
 bitcoin = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 figment = { workspace = true, features = ["env", "toml"] }
+futures = { workspace = true, features = ["alloc"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
+sqlx = { version = "0.8.2", features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki", "chrono", "json"] }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
