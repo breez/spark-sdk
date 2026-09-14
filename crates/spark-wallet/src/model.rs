@@ -382,6 +382,12 @@ pub enum SparkInvoiceStatus {
     Pending,
     Finalized,
     Returned,
+    /// A payment exists for this invoice id, but the invoice the operators hold
+    /// may name a different receiver, amount, payment kind or token than the one
+    /// asked about. Compare the returned invoice before acting on the payment.
+    MismatchedInvoicePending,
+    MismatchedInvoiceFinalized,
+    MismatchedInvoiceReturned,
 }
 
 impl From<InvoiceStatus> for SparkInvoiceStatus {
@@ -391,6 +397,13 @@ impl From<InvoiceStatus> for SparkInvoiceStatus {
             InvoiceStatus::Pending => SparkInvoiceStatus::Pending,
             InvoiceStatus::Finalized => SparkInvoiceStatus::Finalized,
             InvoiceStatus::Returned => SparkInvoiceStatus::Returned,
+            InvoiceStatus::MismatchedInvoicePending => SparkInvoiceStatus::MismatchedInvoicePending,
+            InvoiceStatus::MismatchedInvoiceFinalized => {
+                SparkInvoiceStatus::MismatchedInvoiceFinalized
+            }
+            InvoiceStatus::MismatchedInvoiceReturned => {
+                SparkInvoiceStatus::MismatchedInvoiceReturned
+            }
         }
     }
 }

@@ -72,16 +72,14 @@ pub(super) async fn send(
         .as_ref()
         .map(|idempotency_key| TransferId::from_str(idempotency_key))
         .transpose()?;
-    let response = sdk
-        .spark_wallet
-        .withdraw(
-            &address.address,
-            Some(amount_sats),
-            exit_speed,
-            fee_quote.into(),
-            transfer_id,
-        )
-        .await?;
+    let response = Box::pin(sdk.spark_wallet.withdraw(
+        &address.address,
+        Some(amount_sats),
+        exit_speed,
+        fee_quote.into(),
+        transfer_id,
+    ))
+    .await?;
 
     let payment: Payment = response.try_into()?;
 

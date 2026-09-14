@@ -826,6 +826,7 @@ impl DepositService {
                         txid: deposit_txid.as_byte_array().to_vec(),
                     }),
                     root_tx_signing_job: Some(operator_rpc::spark::UserSignedTxSigningJob {
+                        subuser_contributions: Vec::new(),
                         leaf_id: String::new(),
                         signing_public_key: signing_public_key.serialize().to_vec(),
                         raw_tx: serialize(&cpfp_root_tx),
@@ -841,6 +842,7 @@ impl DepositService {
                         additional_inputs: Vec::new(),
                     }),
                     refund_tx_signing_job: Some(operator_rpc::spark::UserSignedTxSigningJob {
+                        subuser_contributions: Vec::new(),
                         leaf_id: String::new(),
                         signing_public_key: signing_public_key.serialize().to_vec(),
                         raw_tx: serialize(&cpfp_refund_tx),
@@ -857,6 +859,7 @@ impl DepositService {
                     }),
                     direct_from_cpfp_refund_tx_signing_job: Some(
                         operator_rpc::spark::UserSignedTxSigningJob {
+                            subuser_contributions: Vec::new(),
                             leaf_id: String::new(),
                             signing_public_key: signing_public_key.serialize().to_vec(),
                             raw_tx: serialize(&direct_from_cpfp_refund_tx),

@@ -393,6 +393,7 @@ impl CoopExitService {
         };
 
         let signed_package = operator_rpc::spark::TransferPackage {
+            delegation_intent: None,
             leaves_to_send: cpfp_jobs,
             direct_leaves_to_send: direct_jobs,
             direct_from_cpfp_leaves_to_send: direct_from_cpfp_jobs,

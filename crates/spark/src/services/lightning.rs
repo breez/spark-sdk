@@ -5,8 +5,8 @@ use crate::operator::rpc::spark::{
     InitiatePreimageSwapResponse, StartTransferRequest, StorePreimageShareV2Request,
 };
 use crate::services::{
-    LeafKeyTweak, ServiceError, Transfer, TransferId, TransferObserver, TransferService,
-    TransferStatus, TransferType,
+    ServiceError, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
+    TransferType,
 };
 use crate::signer::{
     OperatorRecipient, PrepareLightningReceiveRequest, PrepareTransferRequest, PreparedTransfer,
@@ -580,12 +580,9 @@ impl LightningService {
 
         let initiate_preimage_swap_res = self
             .initiate_lightning_preimage_swap(
-                transfer_id,
-                &leaf_key_tweaks,
                 &payment_hash,
                 invoice,
                 amount_sats,
-                &expiry_time,
                 prepared_transfer_request.transfer_request,
             )
             .await;
@@ -659,30 +656,22 @@ impl LightningService {
     #[allow(clippy::too_many_arguments)]
     async fn initiate_lightning_preimage_swap(
         &self,
-        transfer_id: &TransferId,
-        leaf_tweaks: &[LeafKeyTweak],
         payment_hash: &sha256::Hash,
         invoice: &str,
         amount_sats: u64,
-        expiry_time: &SystemTime,
         transfer_request: StartTransferRequest,
     ) -> Result<InitiatePreimageSwapResponse, ServiceError> {
         let receiver_pubkey = self.ssp_client.identity_public_key();
         swap_nodes_for_preimage(
             &self.operator_pool,
-            &self.spark_signer,
-            self.network,
             SwapNodesForPreimageRequest {
-                transfer_id,
-                leaves: leaf_tweaks,
                 receiver_pubkey: &receiver_pubkey,
                 payment_hash,
                 invoice_str: Some(invoice),
                 amount_sats,
                 fee_sats: 0,
                 is_inbound_payment: false,
-                transfer_request: Some(transfer_request),
-                expiry_time,
+                transfer_request,
             },
         )
         .await

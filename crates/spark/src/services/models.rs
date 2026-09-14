@@ -138,6 +138,7 @@ impl TryFrom<&SignedTx> for operator_rpc::spark::UserSignedTxSigningJob {
 
     fn try_from(signed_tx: &SignedTx) -> Result<Self, Self::Error> {
         Ok(operator_rpc::spark::UserSignedTxSigningJob {
+            subuser_contributions: Vec::new(),
             leaf_id: signed_tx.node_id.to_string(),
             signing_public_key: signed_tx.signing_public_key.serialize().to_vec(),
             raw_tx: bitcoin::consensus::serialize(&signed_tx.tx),
@@ -649,14 +650,23 @@ impl TryFrom<operator_rpc::spark::TransferLeaf> for TransferLeaf {
                 )
             };
 
-        let signature = match leaf.signature.len() {
+        // The operators send the signature as raw bytes or as a typed signature;
+        // both carry the same DER or compact encoding.
+        let signature_bytes = match &leaf.sig {
+            Some(operator_rpc::spark::transfer_leaf::Sig::Signature(bytes)) => bytes.as_slice(),
+            Some(operator_rpc::spark::transfer_leaf::Sig::TypedSignature(typed)) => {
+                typed.signature.as_slice()
+            }
+            None => &[],
+        };
+        let signature = match signature_bytes.len() {
             0 => None,
             64 => Some(
-                bitcoin::secp256k1::ecdsa::Signature::from_compact(&leaf.signature)
+                bitcoin::secp256k1::ecdsa::Signature::from_compact(signature_bytes)
                     .map_err(|_| ServiceError::Generic("Invalid signature format".to_string()))?,
             ),
             _ => Some(
-                bitcoin::secp256k1::ecdsa::Signature::from_der(&leaf.signature)
+                bitcoin::secp256k1::ecdsa::Signature::from_der(signature_bytes)
                     .map_err(|_| ServiceError::Generic("Invalid signature format".to_string()))?,
             ),
         };

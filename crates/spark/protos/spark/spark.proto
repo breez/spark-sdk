@@ -1,3 +1,6 @@
+// Vendored from buildonspark/spark, protos/spark.proto. Re-vendor by copying it
+// over and re-rooting its imports: this crate keeps the operator protos under
+// protos/spark/, so "common.proto" there is "spark/common.proto" here.
 syntax = "proto3";
 
 package spark;
@@ -25,6 +28,7 @@ service SparkService {
 
     rpc query_pending_transfers(TransferFilter) returns (QueryTransfersResponse) {}
     rpc query_all_transfers(TransferFilter) returns (QueryTransfersResponse) {}
+    rpc query_transfers_by_id(QueryTransfersByIdRequest) returns (QueryTransfersResponse) {}
     rpc claim_transfer_tweak_keys(ClaimTransferTweakKeysRequest) returns (google.protobuf.Empty) {}
 
     rpc store_preimage_share(StorePreimageShareRequest) returns (google.protobuf.Empty) {}
@@ -52,8 +56,6 @@ service SparkService {
 
     rpc query_balance(QueryBalanceRequest) returns (QueryBalanceResponse) {}
 
-    rpc query_user_signed_refunds(QueryUserSignedRefundsRequest) returns (QueryUserSignedRefundsResponse) {}
-
     rpc query_unused_deposit_addresses(QueryUnusedDepositAddressesRequest) returns (QueryUnusedDepositAddressesResponse) {}
     rpc query_static_deposit_addresses(QueryStaticDepositAddressesRequest) returns (QueryStaticDepositAddressesResponse) {}
 
@@ -67,6 +69,16 @@ service SparkService {
 
     rpc exit_single_node_trees(ExitSingleNodeTreesRequest) returns (ExitSingleNodeTreesResponse) {}
 
+    // Co-signs a transaction spending the on-chain output a watchtower exit left
+    // behind, for a leaf whose own exit path that exit destroyed. The caller
+    // supplies the transaction and aggregates the SE's FROST shares with its own
+    // to broadcast on L1. The leaf becomes WATCHTOWER_EXIT_RECOVERED in the same
+    // operation, so its value cannot also move off-chain.
+    //
+    // Calling again re-signs a new transaction, to raise the fee say; every such
+    // transaction spends the same output, so at most one can confirm.
+    rpc recover_watchtower_exited_leaf(RecoverWatchtowerExitedLeafRequest) returns (RecoverWatchtowerExitedLeafResponse) {}
+
     // The following endpoints enforce inclusion of Direct Transactions used
     // for unilateral exits
     rpc cooperative_exit_v2(CooperativeExitRequest) returns (CooperativeExitResponse) {}
@@ -75,9 +87,14 @@ service SparkService {
     rpc finalize_node_signatures_v2(FinalizeNodeSignaturesRequest) returns (FinalizeNodeSignaturesResponse) {}
     rpc initiate_preimage_swap_v2(InitiatePreimageSwapRequest) returns (InitiatePreimageSwapResponse) {}
     rpc initiate_preimage_swap_v3(InitiatePreimageSwapRequest) returns (InitiatePreimageSwapResponse) {}
-    rpc start_leaf_swap_v2(StartTransferRequest) returns (StartTransferResponse) {}
+    rpc initiate_preimage_swap_v4(InitiatePreimageSwapV4Request) returns (InitiatePreimageSwapResponse) {}
     rpc start_transfer_v2(StartTransferRequest) returns (StartTransferResponse) {}
     rpc start_transfer_v3(StartTransferV3Request) returns (StartTransferResponse) {}
+
+    // Initiates a transfer whose sender is a multiparty (user-side MPC)
+    // group. The receiver may be any Spark user: everything receiver-facing
+    // is byte-identical to a single-party send.
+    rpc start_transfer_mpc(StartTransferMpcRequest) returns (StartTransferResponse) {}
 
     rpc claim_transfer(ClaimTransferRequest) returns (ClaimTransferResponse) {}
 
@@ -94,7 +111,18 @@ service SparkService {
     rpc update_wallet_setting(UpdateWalletSettingRequest) returns (UpdateWalletSettingResponse) {}
     rpc query_wallet_setting(QueryWalletSettingRequest) returns (QueryWalletSettingResponse) {}
 
-    rpc query_spark_transaction_volumes(QuerySparkTransactionVolumesRequest) returns (QuerySparkTransactionVolumesResponse) {}
+    // Spark Pull: delegated spending via parallel key decomposition. An owner
+    // installs a second key decomposition (delegate share + SE2 keyshare)
+    // alongside the primary one, bounded by an owner-signed grant the SO
+    // federation enforces at signing time.
+    rpc create_delegation_grant(CreateDelegationGrantRequest) returns (CreateDelegationGrantResponse) {}
+    rpc revoke_delegation_grant(RevokeDelegationGrantRequest) returns (RevokeDelegationGrantResponse) {}
+    rpc query_delegation_grants(QueryDelegationGrantsRequest) returns (QueryDelegationGrantsResponse) {}
+    rpc install_leaf_decompositions(InstallLeafDecompositionsRequest) returns (InstallLeafDecompositionsResponse) {}
+    // Owner-signed addition / removal of an authorized spender on an existing
+    // grant's delegate path. No new key material — a metering record only.
+    rpc add_delegation_spender(AddDelegationSpenderRequest) returns (AddDelegationSpenderResponse) {}
+    rpc revoke_delegation_spender(RevokeDelegationSpenderRequest) returns (RevokeDelegationSpenderResponse) {}
 }
 
 message SubscribeToEventsRequest {
@@ -376,6 +404,21 @@ message RenewLeafRequest {
       // This case is mostly used for user-created trees from L1 deposits.
       RenewNodeZeroTimelockSigningJob renew_node_zero_timelock_signing_job = 4;
     }
+
+    // When set, the renewal is authorized via a delegate decomposition (Spark
+    // Pull) identified by the grant rather than the owner's primary path. Renew
+    // mints fresh exit transactions, so a delegate renewal MUST be grant-gated
+    // (exit-pinning invariant): the handler validates the grant is ACTIVE,
+    // unexpired, scoped for renew, and that the leaf's ACTIVE decomposition
+    // belongs to it (see validateRenewDelegationPath), and pins the renewed
+    // exit outputs to the owner.
+    optional DelegationPathSelector delegation_path = 5;
+}
+
+// DelegationPathSelector identifies the delegation grant whose decomposition
+// authorizes a cooperative operation on a leaf.
+message DelegationPathSelector {
+    string grant_id = 1 [(validate.rules).string.uuid = true];
 }
 
 message RenewNodeTimelockSigningJob {
@@ -680,6 +723,11 @@ message UserSignedTxSigningJob {
     // the signing data for one additional root tx input (inputs 1..N).
     // Input 0 uses the fields above for backward compatibility.
     repeated InputSigningData additional_inputs = 7;
+    // Multiparty (user-side MPC) senders only: per-sub-user FROST
+    // contributions in place of the single-signer pair
+    // (signing_nonce_commitment, user_signature). Exactly one of the two
+    // forms may be present.
+    repeated SubUserSigningContribution subuser_contributions = 8;
 }
 
 // InputSigningData carries the per-input signing data for additional root tx
@@ -698,16 +746,6 @@ message LeafRefundTxSigningResult {
     bytes verifying_key = 3;
     SigningResult direct_refund_tx_signing_result = 4;
     SigningResult direct_from_cpfp_refund_tx_signing_result = 5;
-}
-
-message StartUserSignedTransferRequest {
-    string transfer_id = 1;
-    bytes owner_identity_public_key = 2;
-    repeated UserSignedTxSigningJob leaves_to_send = 3;
-    bytes receiver_identity_public_key = 4;
-    google.protobuf.Timestamp expiry_time = 5;
-    repeated UserSignedTxSigningJob direct_leaves_to_send = 6;
-    repeated UserSignedTxSigningJob direct_from_cpfp_leaves_to_send = 7;
 }
 
 
@@ -740,6 +778,9 @@ message SenderTransferPackage {
     // The transfer package contains leaves that may be meant for multiple receivers.
     // This maps leaf_id to receiver_identity_public_key for each leaf.
     map<string, bytes> receiver_identity_public_keys = 3;
+    // This sender's strict-DER, low-S ECDSA signature over the transfer_manifest
+    // hash, made with its identity key.
+    bytes manifest_hash_signature = 4;
 }
 
 // Request to transfer leaves from multiple senders to multiple receivers
@@ -750,6 +791,9 @@ message StartTransferV3Request {
     repeated SenderTransferPackage sender_packages = 2;
     // Expiry time for the entire transfer
     google.protobuf.Timestamp expiry_time = 3;
+    // Every sender contributing leaves must include a `manifest_hash_signature` over
+    // the hash of this manifest with their `SenderTransferPackage`.
+    TransferManifest transfer_manifest = 4;
 }
 
 /**
@@ -770,6 +814,24 @@ message TransferPackage {
     repeated UserSignedTxSigningJob direct_from_cpfp_leaves_to_send = 5;
     // The hash variant to use for computing the transfer package signing payload.
     HashVariant hash_variant = 6;
+    // Present when this transfer spends via a delegate decomposition (Spark
+    // Pull). Bound into the V3 signing payload so every SO can check the
+    // delegate's intent (amount and recipients) against the cited grant.
+    DelegationIntent delegation_intent = 7;
+}
+
+// DelegationIntent binds a delegated (Spark Pull) transfer to the grant it
+// spends under, the delegate authorizing it, and the exact amounts flowing to
+// each receiver. It is bound into the V3 transfer-package signing payload so no
+// SO co-signs a delegate spend that exceeds or diverges from what the delegate
+// signed for.
+message DelegationIntent {
+    string grant_id = 1 [(validate.rules).string.uuid = true];
+    // The acting spender's identity key (authorized on the grant).
+    bytes spender_identity_public_key = 2 [(validate.rules).bytes.len = 33];
+    uint64 total_amount_sats = 3;
+    // Hex-encoded receiver identity public key -> sats delivered to that receiver.
+    map<string, uint64> receiver_amounts_sats = 4;
 }
 
 message SendLeafKeyTweaks {
@@ -781,11 +843,182 @@ message SendLeafKeyTweak {
     SecretShare secret_share_tweak = 2;
     map<string, bytes> pubkey_shares_tweak = 3;
     bytes secret_cipher = 4;
-    // Signature over Sha256(leaf_id||transfer_id||secret_cipher)
-    bytes signature = 5;
+    // Signature over Sha256(leaf_id||transfer_id||secret_cipher).
+    oneof sig {
+        bytes signature = 5;
+        common.Signature typed_signature = 9;
+    }
     bytes refund_signature = 6;
     bytes direct_refund_signature = 7;
     bytes direct_from_cpfp_refund_signature = 8;
+}
+
+// -----------------------------------------------------------------------------
+// User-side MPC transfer send.
+//
+// A multiparty sender is a group of sub-users holding Shamir shares of the
+// user's identity and leaf signing keys; an untrusted user-side coordinator
+// assembles their contributions into one submission. Two contracts shape the
+// messages: the group's signature covers the whole submission — directly for
+// its facts, participant positions, commitment vectors, and secret_cipher,
+// and through the perfectly-binding commitments for the value of every
+// operator's sealed sub-share — and every operator verifies it before its
+// prepare succeeds; and everything past operator-side verification is
+// byte-identical to a single-party transfer, so receivers are unaffected.
+//
+// Scalars are 32-byte big-endian, canonically reduced; points are 33-byte
+// SEC1 compressed unless noted. Operator-identifier map keys use the same
+// encoding as TransferPackage.key_tweak_package. Per-sub-user lists align to
+// MpcTransferPackage.positions: entry i belongs to positions[i].
+// -----------------------------------------------------------------------------
+
+// A transfer-send submission from a multiparty sender. Single-sender only.
+message StartTransferMpcRequest {
+    // Must equal mpc_transfer_package.authorization.transfer_id.
+    string transfer_id = 1;
+    // The sender group's identity public key. Must match the authenticated
+    // session identity.
+    bytes owner_identity_public_key = 2;
+    MpcTransferPackage mpc_transfer_package = 3;
+}
+
+// The MPC analogue of TransferPackage: per-leaf material travels in the clear
+// once for all operators (it is non-confidential), sealing moves to sub-share
+// granularity, and the single-signer user_signature + hash_variant pair is
+// replaced by the group-signed TransferAuthorization.
+message MpcTransferPackage {
+    // The leaf-id sets here, in the signing jobs, and in authorization.leaves
+    // must all be identical.
+    repeated MpcSendLeaf leaves = 1;
+    // Sealed key-tweak sub-shares: exactly one entry per operator in the
+    // cluster, keyed by operator identifier, readable only by that operator.
+    map<string, MpcOperatorShares> key_tweaks = 2;
+    // Refund-tx signing jobs in multi-sub-user form: subuser_contributions
+    // populated, the single-signer pair absent.
+    repeated UserSignedTxSigningJob leaves_to_send = 3;
+    repeated UserSignedTxSigningJob direct_leaves_to_send = 4;
+    repeated UserSignedTxSigningJob direct_from_cpfp_leaves_to_send = 5;
+    TransferAuthorization authorization = 6;
+    // The participating sub-users' Shamir positions: >= 1, strictly
+    // ascending. The single participant set for the whole submission; every
+    // per-sub-user list in this package aligns to it (entry i belongs to
+    // positions[i]).
+    repeated uint32 positions = 7;
+}
+
+// Public (non-sealed) per-leaf sender material. secret_cipher and signature
+// carry the same semantics and byte formats as their SendLeafKeyTweak
+// counterparts; only the carrier message differs. Refund authorization is not
+// carried here — it travels as the sub-users' FROST signing contributions in
+// the per-leaf signing jobs.
+message MpcSendLeaf {
+    string leaf_id = 1;
+    // Feldman commitment vectors, aligned to the package positions.
+    repeated SubUserCommitment subuser_commitments = 2;
+    // ECIES encryption of the transfer mask to the receiver's identity public
+    // key — byte-identical to SendLeafKeyTweak.secret_cipher.
+    bytes secret_cipher = 3;
+    // Sender identity signature over Sha256(leaf_id||transfer_id||secret_cipher),
+    // verified by the receiver. Scheme-tagged so a multiparty sender may sign
+    // by threshold-Schnorr (FROST); a deployed single-party receiver verifies
+    // ECDSA only, so any sender — multiparty or not — that cannot assume a
+    // scheme-aware receiver should sign ECDSA.
+    common.Signature signature = 4;
+}
+
+// One sub-user's Feldman commitment vector for one leaf's key-tweak resharing.
+message SubUserCommitment {
+    // The coefficient commitments of the sub-user's resharing polynomial,
+    // constant term first; length equals the operator group's signing
+    // threshold.
+    repeated bytes proofs = 1;
+}
+
+// All sealed key-tweak sub-shares destined for one operator, aligned to the
+// package positions. Per-leaf coverage is validated after unsealing (the leaf
+// structure is inside the ciphertext).
+message MpcOperatorShares {
+    repeated MpcSealedShare shares = 1;
+}
+
+// One sub-user's key-tweak sub-shares for one operator, across all leaves,
+// ECIES encrypted by the sub-user directly to that operator's identity public
+// key — the user-side coordinator routes it but cannot read it. The plaintext
+// is a serialized MpcSealedSharePayload. No further slot binding is needed: a
+// blob moved to another operator fails to decrypt, and one moved to another
+// position slot fails validation against that slot's signed commitments.
+message MpcSealedShare {
+    bytes ecies = 1;
+}
+
+// The plaintext of MpcSealedShare.ecies.
+message MpcSealedSharePayload {
+    // Must equal the enclosing submission's transfer_id: pins the sub-shares
+    // to one transfer even if resharing material is ever reused across
+    // transfers.
+    string transfer_id = 1;
+    // One entry per leaf being sent.
+    repeated MpcLeafSubShare leaf_shares = 2;
+}
+
+// One leaf's sub-share within a sealed payload.
+message MpcLeafSubShare {
+    string leaf_id = 1;
+    // The sub-share scalar: the sub-user's resharing polynomial evaluated at
+    // the operator's identifier.
+    bytes secret_share = 2;
+}
+
+// The group-signed statement of intent for a multiparty send. It names every
+// fact the submission commits; operators verify each named fact against state
+// they independently hold or rebuild, aborting on any mismatch.
+message TransferAuthorization {
+    // Must equal the enclosing request's transfer_id.
+    string transfer_id = 1;
+    // One entry per leaf being sent.
+    repeated LeafAuthorization leaves = 2;
+    // Digest over the BIP-341 sighashes of all leaves' refund transactions
+    // (all three variants) — the sighash commits to every spending-relevant
+    // field while staying invariant to unsigned-tx serialization freedom.
+    // Operators recompute it from transactions they rebuild; the construction
+    // is fixed by the operator-side verifier.
+    bytes refund_sighashes_digest = 3;
+    // The transfer's expiry. Nanos must be 0.
+    google.protobuf.Timestamp expiry_time = 4;
+    // The sender group's identity-key threshold signature, over a
+    // domain-separated structured hash binding this authorization's fields,
+    // the package's participant positions, and each leaf's commitment vectors
+    // and secret_cipher — and thereby, since Feldman commitments fix the
+    // sub-shares they commit to, the contents of every operator's sealed
+    // key-tweak slice. The exact construction is fixed by the operator-side
+    // verifier. Scheme-tagged: operators accept ECDSA or Schnorr.
+    common.Signature signature = 5;
+}
+
+// The signed per-leaf facts of a TransferAuthorization.
+message LeafAuthorization {
+    string leaf_id = 1;
+    // The leaf's value in satoshis.
+    uint64 amount_sats = 2;
+    // The leaf's current owner signing public key.
+    bytes owner_signing_public_key = 3;
+    // Commitment to the leaf's transfer mask (mask * G).
+    bytes mask_commitment = 4;
+    // Who can claim this leaf. Per-leaf so multi-receiver MPC sends are a
+    // later validation relaxation rather than a schema change; initial
+    // validation requires all leaves to name the same receiver.
+    bytes receiver_identity_public_key = 5;
+}
+
+// One sub-user's FROST contribution to one refund-tx signing job, aligned to
+// the package positions. There is deliberately no client-side pre-aggregation
+// into one user pair: every contributing sub-user's nonce commitment must be
+// visible to the operators' aggregator.
+message SubUserSigningContribution {
+    common.SigningCommitment nonce_commitment = 1;
+    // 32-byte FROST signature share scalar, with the signer's within-group
+    // Lagrange coefficient already applied.
+    bytes partial_signature = 2;
 }
 
 message FinalizeTransferRequest {
@@ -886,13 +1119,81 @@ message Transfer {
 message TransferLeaf {
     TreeNode leaf = 1;
     bytes secret_cipher = 2;
-    bytes signature = 3;
+    oneof sig {
+        bytes signature = 3;
+        common.Signature typed_signature = 10;
+    }
     bytes intermediate_refund_tx = 4;
     bytes intermediate_direct_refund_tx = 5;
     bytes intermediate_direct_from_cpfp_refund_tx = 6;
     bytes pending_key_tweak_public_key = 7;
     string transfer_receiver_id = 8;
     string transfer_sender_id = 9;
+}
+
+
+// Describes how a transfer redistributes value across its senders and receivers.
+message TransferManifest {
+    // Manifest format version.
+    uint32 version = 1 [(validate.rules).uint32 = {gt: 0}];
+
+    // The transfer this manifest describes (uuid_v7).
+    string transfer_id = 2 [(validate.rules).string.uuid = true];
+
+    // The network this transfer operates within.
+    Network network = 3 [(validate.rules).enum = {not_in: [0]}];
+
+    // The transfer's refund timelock.
+    google.protobuf.Timestamp transfer_expiry_time = 4;
+
+    // Directed (sender -> receiver) gross amounts — the value movement.
+    repeated ManifestEdge edges = 5 [(validate.rules).repeated.min_items = 1];
+
+    // Per-component fee breakdown.
+    repeated FeeComponent fees = 6;
+
+    // When the SSP's quote expires.
+    google.protobuf.Timestamp quote_expiry_time = 7;
+}
+
+// An amount as absolute sats, or as basis points of what the sats amounts leave behind.
+message ManifestAmount {
+    oneof amount {
+        uint64 sats = 1;
+        // Basis points of the gross less every sats-denominated edge.
+        uint32 bps = 2;
+    }
+}
+
+// One directed amount from a sender to a receiver.
+message ManifestEdge {
+    bytes sender_identity_public_key = 1 [(validate.rules).bytes.len = 33];
+    bytes receiver_identity_public_key = 2 [(validate.rules).bytes.len = 33];
+    ManifestAmount amount = 3;
+}
+
+// One fee: category, amount, and receiver.
+message FeeComponent {
+    FeeSource source = 1;
+    FeeRole role = 2;  // markup split role
+    ManifestAmount amount = 3;
+    bytes receiver_identity_public_key = 4 [(validate.rules).bytes.len = 33];
+}
+
+// The kind of fee.
+enum FeeSource {
+    FEE_SOURCE_UNSPECIFIED = 0;
+    FEE_SOURCE_PARTNER_MARKUP = 1;  // configurable markup
+    FEE_SOURCE_BASE = 2;  // platform usage fee
+    FEE_SOURCE_NETWORK = 3;  // network security fee
+}
+
+// Markup split role (for PARTNER_MARKUP).
+enum FeeRole {
+    FEE_ROLE_UNSPECIFIED = 0;
+    FEE_ROLE_AFFILIATE = 1;
+    FEE_ROLE_PARTNER = 2;
+    FEE_ROLE_LS = 3;
 }
 
 
@@ -922,6 +1223,12 @@ message TransferFilter {
 message QueryTransfersResponse {
     repeated Transfer transfers = 1;
     int64 offset = 2;
+}
+
+// Deliberately narrow by-ID shape; no participant/status/type/pagination filters.
+message QueryTransfersByIdRequest {
+    repeated string transfer_ids = 1 [(validate.rules).repeated = {min_items: 1, max_items: 1000, items: {string: {uuid: true}}}];
+    Network network = 2 [(validate.rules).enum = {defined_only: true, not_in: [0]}];
 }
 
 message ClaimLeafKeyTweak {
@@ -1029,15 +1336,6 @@ message SigningCommitments {
     map<string, common.SigningCommitment> signing_commitments = 1;
 }
 
-message UserSignedRefund {
-    string node_id = 1;
-    bytes refund_tx = 2;
-    bytes user_signature = 3;
-    SigningCommitments signing_commitments = 4;
-    common.SigningCommitment user_signature_commitment = 5;
-    Network network = 6 [(validate.rules).enum = {not_in: [0]}];
-}
-
 message InvoiceAmountProof {
     string bolt11_invoice = 1;
 }
@@ -1048,6 +1346,8 @@ message InvoiceAmount {
 }
 
 message InitiatePreimageSwapRequest {
+    reserved 4;
+    reserved "transfer";
     bytes payment_hash = 1;
     InvoiceAmount invoice_amount = 2;
     enum Reason {
@@ -1057,10 +1357,23 @@ message InitiatePreimageSwapRequest {
         REASON_RECEIVE = 1;
     }
     Reason reason = 3;
-    StartUserSignedTransferRequest transfer = 4;
     bytes receiver_identity_public_key = 5;
     uint64 fee_sats = 6;
     StartTransferRequest transfer_request = 7;
+}
+
+// The preimage swap whose transfer_manifest the operator binds.
+message InitiatePreimageSwapV4Request {
+    bytes payment_hash = 1 [(validate.rules).bytes.len = 32];
+    InvoiceAmount invoice_amount = 2;
+    InitiatePreimageSwapRequest.Reason reason = 3;
+    // Owns this invoice's preimage share and attests to the quoted terms. Not necessarily a
+    // payee: a delegated receive pays a wallet that never signed anything.
+    bytes attestor_identity_public_key = 4 [(validate.rules).bytes.len = 33];
+    // The attestor's signature over the quote envelope under QuoteRole.ATTESTOR, whose target
+    // binds payment_hash. Required on REASON_RECEIVE, unset on REASON_SEND.
+    bytes attestor_signature = 5;
+    StartTransferV3Request transfer_v3_request = 6 [(validate.rules).message.required = true];
 }
 
 message InitiatePreimageSwapResponse {
@@ -1213,17 +1526,6 @@ message SigningOperatorInfo {
 
 message GetSigningOperatorListResponse {
     map<string, SigningOperatorInfo> signing_operators = 1;
-}
-
-message QueryUserSignedRefundsRequest {
-    bytes payment_hash = 1;
-    bytes identity_public_key = 2;
-}
-
-message QueryUserSignedRefundsResponse {
-    repeated UserSignedRefund user_signed_refunds = 1;
-    reserved 2;
-    Transfer transfer = 3;
 }
 
 enum PreimageRequestStatus {
@@ -1415,7 +1717,10 @@ enum UtxoSwapStatus {
 // Which hash variant to use in cryptographic operations.
 enum HashVariant {
   HASH_VARIANT_UNSPECIFIED = 0; // Legacy
-  HASH_VARIANT_V2 = 1; // Structured hashing
+  // Structured hashing. Binds the delegation intent (Spark Pull) too when the
+  // transfer package carries one; a package without an intent hashes exactly as
+  // it did before delegation existed, so already-released SDKs keep verifying.
+  HASH_VARIANT_V2 = 1;
 }
 
 
@@ -1498,6 +1803,43 @@ message ExitSingleNodeTreesResponse {
     repeated ExitSingleNodeTreeSigningResult signing_results = 1;
 }
 
+message RecoverWatchtowerExitedLeafRequest {
+    // The leaf to recover. Must be owned by the authenticated caller and be
+    // WATCHTOWER_EXITED, or WATCHTOWER_EXIT_RECOVERED to re-sign.
+    string leaf_id = 1;
+    // The recovery transaction, plus the caller's FROST nonce commitment. Its
+    // single input names the outpoint being recovered, which the SE checks
+    // against its own record of the leaf. The destination is unconstrained: the
+    // SE's shares are useless without the caller's own.
+    SigningJob recovery_tx_signing_job = 2;
+    // Signature of a statement authorising this recovery, under the leaf owner's
+    // identity key. Required in addition to the session: the operator-internal
+    // channel carrying this to the other SOs has none, so it is the only
+    // evidence of intent that survives the hop.
+    //
+    // The statement is the SHA-256 of, concatenated in order:
+    // 1. Action name: "recover_watchtower_exited_leaf" (UTF-8 string)
+    // 2. Network: the upper-case network name, e.g. "MAINNET" or "REGTEST"
+    //   (UTF-8 string). Note this differs from the lower-case, Bitcoin-style
+    //   naming the static deposit statements use.
+    // 3. Leaf ID: the leaf's UUID in canonical hyphenated form (UTF-8 string)
+    // 4. Signing payload: the recovery transaction's sighash (32 bytes)
+    //
+    // Signed with ECDSA using the owner's identity private key. Because the
+    // sighash is part of the statement, each re-signed transaction needs its own
+    // signature — an earlier authorisation cannot be replayed onto a new one.
+    bytes user_signature = 3;
+}
+
+message RecoverWatchtowerExitedLeafResponse {
+    // The SE's FROST shares over the recovery transaction's sighash. Aggregate
+    // with the caller's own share under verifying_key to finish the signature.
+    SigningResult recovery_tx_signing_result = 1;
+    // The leaf's verifying public key: the FROST aggregate of the SE keyshare
+    // and the owner's signing key, which is what the recovered output pays to.
+    bytes verifying_key = 2;
+}
+
 message QueryNodesDistributionRequest {
     bytes owner_identity_public_key = 1;
 }
@@ -1578,8 +1920,19 @@ enum InvoiceStatus {
 
     NOT_FOUND = 0;
     PENDING = 1;
+    // Payment for this id is complete and the stored invoice's money fields
+    // (receiver, payment kind, amount, token identifier) match the invoice
+    // you queried.
     FINALIZED = 2;
     RETURNED = 4;
+    // A payment exists for this invoice id, but the money fields (receiver,
+    // payment kind, amount, token identifier) of the stored invoice may differ
+    // from the invoice you queried. Compare response.invoice to the invoice
+    // you queried and confirm it matches what you expect before relying on
+    // this result.
+    MISMATCHED_INVOICE_FINALIZED = 5;
+    MISMATCHED_INVOICE_PENDING = 6;
+    MISMATCHED_INVOICE_RETURNED = 7;
 }
 
 message InitiateSwapPrimaryTransferRequest {
@@ -1619,6 +1972,19 @@ enum TreeNodeStatus {
     TREE_NODE_STATUS_RENEW_LOCKED = 10;
     TREE_NODE_STATUS_UNAVAILABLE = 11;
     TREE_NODE_STATUS_PARENT_EXITED = 12;
+    // The node's subtree was aggregated back into it (AggregateLeaves): it
+    // carries live exit transactions signed under the aggregated leaf key and
+    // is exit-only — not transferable, renewable, or splittable. It may be
+    // aggregated further up the tree.
+    TREE_NODE_STATUS_CONSOLIDATED = 13;
+    // A node below one whose watchtower transaction confirmed, which spends the
+    // output this node's own transaction claims. Terminal; recovery moves to L1.
+    TREE_NODE_STATUS_WATCHTOWER_EXITED = 14;
+    // A watchtower-exited node whose owner has co-signed a transaction spending
+    // the swept output with the SE. Written when that signature is issued, not
+    // when it confirms — the SE never observes the broadcast. Terminal: the leaf
+    // can no longer be used off-chain, and recovery is on L1.
+    TREE_NODE_STATUS_WATCHTOWER_EXIT_RECOVERED = 15;
 }
 
 message WalletSetting {
@@ -1647,38 +2013,179 @@ message QueryWalletSettingResponse {
     WalletSetting wallet_setting = 1;
 }
 
-enum SparkTransactionType {
-    SPARK_TRANSACTION_TYPE_UNSPECIFIED = 0;
-    SPARK_TRANSACTION_TYPE_TRANSFER = 1;
-    SPARK_TRANSACTION_TYPE_LIGHTNING_SEND = 2;
-    SPARK_TRANSACTION_TYPE_LIGHTNING_RECEIVE = 3;
-    SPARK_TRANSACTION_TYPE_COOPERATIVE_EXIT = 4;
-    SPARK_TRANSACTION_TYPE_DEPOSIT = 5;
+// DelegationStatus is the server-derived lifecycle status of a delegation
+// grant or one of its spenders. Output-only: ignored on create/add requests.
+enum DelegationStatus {
+    DELEGATION_STATUS_UNSPECIFIED = 0;
+    DELEGATION_STATUS_ACTIVE = 1;
+    // Tombstone after an owner-signed revoke; never deleted, never resurrected.
+    DELEGATION_STATUS_REVOKED = 2;
 }
 
-message QuerySparkTransactionVolumesRequest {
-    string start_date = 1 [(validate.rules).string = {len: 10, pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}];
-    string end_date = 2 [(validate.rules).string = {len: 10, pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}];
-    // If empty, results include all transaction types. Otherwise results are
-    // scoped to the listed types (e.g. [LIGHTNING_SEND, LIGHTNING_RECEIVE]).
-    repeated SparkTransactionType transaction_types = 3 [(validate.rules).repeated = {items: {enum: {defined_only: true, not_in: [0]}}}];
-    // If unset, results include all networks. When set, results are scoped to that
-    // single network. All defined networks (MAINNET, REGTEST, TESTNET, SIGNET) are allowed.
-    optional Network network = 4 [(validate.rules).enum = {defined_only: true, not_in: [0]}];
+// DelegationGrant is the owner-signed policy object for Spark Pull. It defines a
+// single delegate key path (one decomposition per leaf) and the set of
+// authorized spenders (e.g. merchants) allowed to spend on it, each fenced by
+// its own limits. Every SO validates it independently at signing time.
+//
+// Authorization is a policy layer: multiple spenders share one delegate path, so
+// adding merchant N+1 is a metering record, not a new key ceremony. This keeps
+// the related-key FROST surface bounded to one delegate decomposition per leaf.
+message DelegationGrant {
+    string grant_id = 1 [(validate.rules).string.uuid = true];
+    // Owner's root identity key. Signs grants, spender changes, and revocations;
+    // never shared.
+    bytes owner_identity_public_key = 2 [(validate.rules).bytes.len = 33];
+    // Authorized spenders on this grant's delegate path, each with its own caps
+    // and (server-side) meter. max_items is a wire-level hard bound; the
+    // effective policy cap is the (lower) per-grant spender quota knob.
+    repeated DelegationSpender spenders = 3 [(validate.rules).repeated.max_items = 256];
+    // Wall-clock expiry, matching existing expiry precedent.
+    google.protobuf.Timestamp expiry_time = 4 [(validate.rules).timestamp.required = true];
+    bool scope_transfer = 5;
+    bool scope_renew = 6;
+    bool scope_claim = 7;
+    // Flat fee (sats) the delegate settlement must pay the fee collector.
+    uint64 fee_flat_sats = 8;
+    optional bytes fee_collector_identity_public_key = 9 [(validate.rules).bytes.len = 33];
+    // Monotonic version; owner-signed re-versions supersede lower versions.
+    uint64 version = 10 [(validate.rules).uint64.gte = 1];
+    // ECDSA DER signature (64-73 bytes) by owner_identity_public_key over the
+    // grant statement (see common.CreateDelegationGrantStatement).
+    bytes owner_signature = 11 [(validate.rules).bytes.min_len = 64, (validate.rules).bytes.max_len = 73];
+    // Output-only: server-populated grant status. Ignored on create requests.
+    DelegationStatus status = 12;
+    // Bitcoin network this grant applies to. Bound into the signed statement, so
+    // it must ride the wire message; carried here rather than the request so it
+    // is echoed back on query.
+    Network network = 13 [(validate.rules).enum = {not_in: [0]}];
 }
 
-message SparkTransactionVolume {
-    SparkTransactionType transaction_type = 1;
-    int64 volume_sats = 2;
-    int64 transaction_count = 3;
+// DelegationSpender is one authorized spender on a grant, with its own limits.
+// The federation meters each spender independently.
+message DelegationSpender {
+    bytes spender_identity_public_key = 1 [(validate.rules).bytes.len = 33];
+    // Maximum sats a single delegated transaction by this spender may spend.
+    // Must be 0 when per_tx_unlimited is true, and > 0 otherwise.
+    uint64 per_tx_cap_sats = 2;
+    // Maximum sats this spender may spend within rolling_window_seconds.
+    // Must be 0 when rolling_unlimited is true, and > 0 otherwise.
+    uint64 rolling_limit_sats = 3;
+    uint64 rolling_window_seconds = 4;
+    // Output-only: server-populated spender status. Ignored on create/add
+    // requests.
+    DelegationStatus status = 5;
+    // Waives the per-transaction ceiling for this spender. Bound into the
+    // owner-signed grant / spender-add statements (v2); absent/false always
+    // means bounded, so a stripped flag fails closed.
+    bool per_tx_unlimited = 6;
+    // Waives the rolling-window ceiling for this spender. The meter still
+    // records spend within the window for observability. Bound into the
+    // owner-signed statements (v2) like per_tx_unlimited.
+    bool rolling_unlimited = 7;
 }
 
-message QuerySparkTransactionVolumesResponse {
-    string partner_id = 1;
-    string label = 2;
-    string start_date = 3;
-    string end_date = 4;
-    repeated SparkTransactionVolume transaction_types = 5;
-    int64 total_volume_sats = 6;
-    int64 total_transaction_count = 7;
+message CreateDelegationGrantRequest {
+    DelegationGrant grant = 1 [(validate.rules).message.required = true];
+}
+
+message CreateDelegationGrantResponse {
+    DelegationGrant grant = 1;
+}
+
+message RevokeDelegationGrantRequest {
+    string grant_id = 1 [(validate.rules).string.uuid = true];
+    bytes owner_identity_public_key = 2 [(validate.rules).bytes.len = 33];
+    // Must match the current grant version; guards against unordered replays.
+    uint64 version = 3 [(validate.rules).uint64.gte = 1];
+    // ECDSA DER signature (64-73 bytes) by owner_identity_public_key over the
+    // revoke statement (see common.CreateDelegationRevokeStatement).
+    bytes owner_signature = 4 [(validate.rules).bytes.min_len = 64, (validate.rules).bytes.max_len = 73];
+}
+
+message RevokeDelegationGrantResponse {
+    DelegationGrant grant = 1;
+}
+
+message AddDelegationSpenderRequest {
+    string grant_id = 1 [(validate.rules).string.uuid = true];
+    // The spender to authorize (caps included; status ignored).
+    DelegationSpender spender = 2 [(validate.rules).message.required = true];
+    // Monotonic version for this spender change; guards unordered replays.
+    uint64 version = 3 [(validate.rules).uint64.gte = 1];
+    // ECDSA DER signature (64-73 bytes) by the grant owner over the spender-add
+    // statement (see common.CreateDelegationSpenderAddStatement).
+    bytes owner_signature = 4 [(validate.rules).bytes.min_len = 64, (validate.rules).bytes.max_len = 73];
+}
+
+message AddDelegationSpenderResponse {
+    DelegationGrant grant = 1;
+}
+
+message RevokeDelegationSpenderRequest {
+    string grant_id = 1 [(validate.rules).string.uuid = true];
+    bytes spender_identity_public_key = 2 [(validate.rules).bytes.len = 33];
+    // Monotonic version for this spender change; guards unordered replays.
+    uint64 version = 3 [(validate.rules).uint64.gte = 1];
+    // ECDSA DER signature (64-73 bytes) by the grant owner over the
+    // spender-revoke statement (see common.CreateDelegationSpenderRevokeStatement).
+    bytes owner_signature = 4 [(validate.rules).bytes.min_len = 64, (validate.rules).bytes.max_len = 73];
+}
+
+message RevokeDelegationSpenderResponse {
+    DelegationGrant grant = 1;
+}
+
+message QueryDelegationGrantsRequest {
+    // Filter grants by the owner or the delegate identity key.
+    oneof filter {
+        bytes owner_identity_public_key = 1 [(validate.rules).bytes.len = 33];
+        bytes delegate_identity_public_key = 2 [(validate.rules).bytes.len = 33];
+    }
+}
+
+// DelegationGrantInfo pairs a grant with its current runtime metering state.
+message DelegationGrantInfo {
+    DelegationGrant grant = 1;
+    // Hex-encoded spender identity public key -> sats spent within that
+    // spender's current rolling window.
+    map<string, uint64> spent_sats_by_spender = 2;
+}
+
+message QueryDelegationGrantsResponse {
+    repeated DelegationGrantInfo grants = 1;
+}
+
+// LeafDecompositionInstall names one leaf and the delegate-path user signing
+// public key (the "50") to register for it. The matching SE2 share is delivered
+// encrypted per-SO in InstallLeafDecompositionsRequest.key_tweak_package.
+message LeafDecompositionInstall {
+    string leaf_id = 1 [(validate.rules).string.uuid = true];
+    bytes delegate_signing_public_key = 2 [(validate.rules).bytes.len = 33];
+}
+
+message InstallLeafDecompositionsRequest {
+    string grant_id = 1 [(validate.rules).string.uuid = true];
+    bytes owner_identity_public_key = 2 [(validate.rules).bytes.len = 33];
+    // The effective batch cap is the (lower) max_install_batch knob, enforced
+    // server-side on every SO.
+    repeated LeafDecompositionInstall installs = 3 [(validate.rules).repeated.min_items = 1];
+    // Map of SO identifier to the ECIES ciphertext of that SO's SendLeafKeyTweaks
+    // batch for the delegate-path (SE2) share install. Mirrors
+    // TransferPackage.key_tweak_package: each SO can only decrypt its own slice,
+    // so the coordinator never sees another SO's plaintext shares.
+    map<string, bytes> key_tweak_package = 4;
+    // ECDSA DER signature (64-73 bytes) by owner_identity_public_key over the
+    // install statement (see common.CreateDecompositionInstallStatement).
+    bytes owner_signature = 5 [(validate.rules).bytes.min_len = 64, (validate.rules).bytes.max_len = 73];
+}
+
+// InstallLeafDecompositionProgress reports whether a given operator has
+// installed its delegate-path share for the request.
+message InstallLeafDecompositionProgress {
+    string operator_identifier = 1;
+    bool installed = 2;
+}
+
+message InstallLeafDecompositionsResponse {
+    repeated InstallLeafDecompositionProgress progress = 1;
 }

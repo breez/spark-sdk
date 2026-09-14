@@ -369,6 +369,7 @@ impl TimelockManager {
             .client
             .renew_leaf(
                 RenewLeafRequest {
+                    delegation_path: None,
                     leaf_id: node.id.to_string(),
                     signing_jobs: Some(SigningJobs::RenewNodeTimelockSigningJob(
                         RenewNodeTimelockSigningJob {
@@ -537,6 +538,7 @@ impl TimelockManager {
             .client
             .renew_leaf(
                 RenewLeafRequest {
+                    delegation_path: None,
                     leaf_id: node.id.to_string(),
                     signing_jobs: Some(SigningJobs::RenewRefundTimelockSigningJob(
                         RenewRefundTimelockSigningJob {
@@ -682,6 +684,7 @@ impl TimelockManager {
             .client
             .renew_leaf(
                 RenewLeafRequest {
+                    delegation_path: None,
                     leaf_id: node.id.to_string(),
                     signing_jobs: Some(SigningJobs::RenewNodeZeroTimelockSigningJob(
                         RenewNodeZeroTimelockSigningJob {

@@ -324,7 +324,9 @@ impl SparkSigner for SparkSignerAdapter {
                     secret_share_tweak: Some(Self::proto_secret_share(share)),
                     pubkey_shares_tweak: pubkey_shares_tweak.clone().into_iter().collect(),
                     secret_cipher: secret_cipher.clone(),
-                    signature: signature.serialize_compact().to_vec(),
+                    sig: Some(proto::send_leaf_key_tweak::Sig::Signature(
+                        signature.serialize_compact().to_vec(),
+                    )),
                     refund_signature: Vec::new(),
                     direct_refund_signature: Vec::new(),
                     direct_from_cpfp_refund_signature: Vec::new(),

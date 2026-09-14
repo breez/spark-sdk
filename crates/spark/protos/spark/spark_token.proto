@@ -1,3 +1,6 @@
+// Vendored from buildonspark/spark, protos/spark_token.proto. Re-vendor by copying it over
+// and re-rooting its imports: this crate keeps the operator protos under
+// protos/spark/, so "x.proto" there is "spark/x.proto" here.
 syntax = "proto3";
 
 package spark_token;
@@ -33,6 +36,18 @@ service SparkTokenService {
     // Replaces start_transaction and commit_transaction in single phase transaction flow.
     rpc broadcast_transaction(BroadcastTransactionRequest)
         returns (BroadcastTransactionResponse) {}
+
+    // Install an owner-signed spending allowance granting a spender bounded
+    // authority over the owner's token outputs. Coordinated across all SOs.
+    rpc create_token_allowance(CreateTokenAllowanceRequest)
+        returns (CreateTokenAllowanceResponse) {}
+
+    // Tombstone an existing allowance so no further delegated spends succeed.
+    rpc revoke_token_allowance(RevokeTokenAllowanceRequest)
+        returns (RevokeTokenAllowanceResponse) {}
+
+    rpc query_token_allowances(QueryTokenAllowancesRequest)
+        returns (QueryTokenAllowancesResponse) {}
 }
 
 // This proto is constructed by the wallet to specify leaves it wants to spend
@@ -193,13 +208,22 @@ message FinalTokenTransaction {
     }
     repeated FinalTokenOutput final_token_outputs = 6;
     // Optional client-specified deadline for transaction execution.
-    // Included in the final hash to prevent malleability — an attacker cannot
+    // Included in the final hash to prevent malleability - an attacker cannot
     // change the deadline without invalidating operator signatures.
     optional google.protobuf.Timestamp execute_before = 7;
 }
 
 message InvoiceAttachment {
     string spark_invoice = 1;
+}
+
+// A spender's authorization to spend an input TTXO under a delegated
+// allowance. Cited in place of the owner's own signature; the SO validates
+// spender_signature against the spender key recorded in the referenced
+// allowance rather than against the TTXO owner key.
+message AllowanceSignature {
+    bytes allowance_id = 1 [(validate.rules).bytes.len = 16];
+    multisig.KeyedSignature spender_signature = 2 [(validate.rules).message.required = true];
 }
 
 message SignatureWithIndex {
@@ -211,10 +235,11 @@ message SignatureWithIndex {
     ];
     // The index of the TTXO associated with this signature.
     uint32 input_index = 2;
-    // Supports single-key or multisig signatures.
+    // Supports single-key, multisig, or delegated allowance signatures.
     oneof authority_signatures {
         multisig.KeyedSignature single_signature = 3;
         multisig.MultisigSignatureSet multisig_signatures = 4;
+        AllowanceSignature allowance_signature = 5;
     }
 }
 
@@ -443,4 +468,122 @@ message FreezeTokensResponse {
     bytes impacted_token_amount = 2;  // Decoded uint128
     repeated TokenOutputRef impacted_token_outputs = 3;
     FreezeProgress freeze_progress = 4;
+}
+
+// Owner-signed policy object granting a spender bounded authority to spend the
+// owner's token outputs. Replicated to every SO, which independently enforces
+// it at prepare. Deterministically hashed to produce the message the owner
+// signs; see HashCreateTokenAllowancePayload.
+message TokenAllowancePayload {
+    uint32 version = 1;
+    // Client-generated UUID (16 bytes) identifying the allowance across all SOs.
+    bytes allowance_id = 2 [(validate.rules).bytes.len = 16];
+    bytes owner_public_key = 3 [(validate.rules).bytes.len = 33];
+    bytes spender_public_key = 4 [(validate.rules).bytes.len = 33];
+    bytes token_identifier = 5 [(validate.rules).bytes.len = 32];
+    // Maximum value a single delegated transaction may move; uint128 big-endian.
+    bytes per_transaction_cap = 6 [(validate.rules).bytes.len = 16];
+    // Cumulative value the spender may move over the allowance lifetime; uint128 big-endian.
+    bytes total_limit = 7 [(validate.rules).bytes.len = 16];
+    // Recipient keys the spender may pay. Empty permits any recipient. Capped
+    // at 256 entries: generous for real merchant/payout sets while bounding
+    // stored row size and the per-spend allowlist scan (DoS hardening).
+    repeated bytes recipient_allowlist = 8 [(validate.rules).repeated = {max_items: 256, items: {bytes: {len: 33}}}];
+    google.protobuf.Timestamp expiry_time = 9;
+    // Fees are deliberately absent from the owner-signed grant: a pull settles at
+    // face value, so the owner's debit always equals the authorized pull amount.
+    // TODO(spark-pull): add the merchant-side network-fee layer (fee carved from
+    // the merchant's proceeds at a network-set rate; no owner approval).
+    spark.Network network = 13 [(validate.rules).enum = { not_in: [ 0 ] }];
+    // Wallet-provided creation timestamp in milliseconds, used to order updates.
+    uint64 owner_provided_timestamp = 14;
+    // Waives the per-transaction ceiling. Requires a per_transaction_cap of all
+    // zero bytes; the statement hash always binds this flag. Absent/false always
+    // means bounded, so a stripped flag fails closed.
+    bool per_transaction_unlimited = 15;
+    // Waives the lifetime total ceiling. Same zero-cap rule as
+    // per_transaction_unlimited; spent_amount still accumulates for observability.
+    bool total_unlimited = 16;
+}
+
+message CreateTokenAllowanceRequest {
+    TokenAllowancePayload allowance_payload = 1;
+    // Schnorr or ECDSA DER signature (64-73 bytes) by the owner over the payload hash.
+    bytes owner_signature = 2 [(validate.rules).bytes.min_len = 64, (validate.rules).bytes.max_len = 73];
+}
+
+// AllowanceProgress tracks the coordinated allowance status across operators.
+message AllowanceProgress {
+    repeated bytes applied_operator_public_keys = 1 [(validate.rules).repeated.items.bytes.len = 33];
+}
+
+message CreateTokenAllowanceResponse {
+    TokenAllowanceInfo allowance = 1;
+}
+
+message RevokeTokenAllowancePayload {
+    uint32 version = 1;
+    bytes allowance_id = 2 [(validate.rules).bytes.len = 16];
+    bytes owner_public_key = 3 [(validate.rules).bytes.len = 33];
+    // Wallet-provided revoke timestamp in milliseconds, used to order updates.
+    uint64 owner_provided_timestamp = 4;
+}
+
+message RevokeTokenAllowanceRequest {
+    RevokeTokenAllowancePayload revoke_allowance_payload = 1;
+    // Schnorr or ECDSA DER signature (64-73 bytes) by the owner over the payload hash.
+    bytes owner_signature = 2 [(validate.rules).bytes.min_len = 64, (validate.rules).bytes.max_len = 73];
+}
+
+message RevokeTokenAllowanceResponse {
+    AllowanceProgress allowance_progress = 1;
+}
+
+enum TokenAllowanceStatus {
+    TOKEN_ALLOWANCE_STATUS_UNSPECIFIED = 0;
+    TOKEN_ALLOWANCE_STATUS_ACTIVE = 1;
+    TOKEN_ALLOWANCE_STATUS_REVOKED = 2;
+    TOKEN_ALLOWANCE_STATUS_EXHAUSTED = 3;
+    // The owner-signed expiry has passed and an operator retired the grant. Spends past the
+    // expiry are refused regardless of stored status; this value exists so a retired grant
+    // stops occupying the owner's quota and uniqueness slots.
+    TOKEN_ALLOWANCE_STATUS_EXPIRED = 4;
+}
+
+message TokenAllowanceInfo {
+    TokenAllowancePayload allowance_payload = 1;
+    bytes spent_amount = 2;  // Decoded uint128
+    TokenAllowanceStatus status = 3;
+    // The owner's signature over the create statement hash. Lets clients
+    // recompute HashCreateTokenAllowancePayload from the returned payload and
+    // verify the owner authored these policy terms - the queried SO cannot
+    // fabricate or alter grant terms.
+    bytes owner_signature = 4;
+    // The owner's signature over the revoke statement hash, present once the
+    // allowance is REVOKED. Together with owner_provided_revoke_timestamp and
+    // revoke_version, clients can reconstruct RevokeTokenAllowancePayload,
+    // recompute HashRevokeTokenAllowancePayload, and verify the owner
+    // authorized the revocation.
+    bytes revoke_signature = 5;
+    // Wallet-provided revoke timestamp in milliseconds, set once REVOKED.
+    uint64 owner_provided_revoke_timestamp = 6;
+    // Version of the revoke payload the owner signed, set once REVOKED.
+    uint32 revoke_version = 7;
+}
+
+// Request constraints are combined using an AND relation.
+message QueryTokenAllowancesRequest {
+    optional bytes owner_public_key = 1 [(validate.rules).bytes.len = 33];
+    optional bytes spender_public_key = 2 [(validate.rules).bytes.len = 33];
+    optional bytes token_identifier = 3 [(validate.rules).bytes.len = 32];
+    // When false, only ACTIVE allowances are returned.
+    bool include_inactive = 4;
+    // Page size; defaults to 100 if not set, values above 100 are clamped to 100.
+    int64 limit = 5;
+    int64 offset = 6; // defaults to 0 if not set.
+}
+
+message QueryTokenAllowancesResponse {
+    repeated TokenAllowanceInfo allowances = 1;
+    int64 offset = 2; // defaults to -1 if there are no more results
 }

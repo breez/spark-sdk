@@ -94,19 +94,14 @@ impl HtlcService {
 
         let transfer: Transfer = match swap_nodes_for_preimage(
             &self.operator_pool,
-            &self.spark_signer,
-            self.network,
             SwapNodesForPreimageRequest {
-                transfer_id: &unwrapped_transfer_id,
-                leaves: &leaf_key_tweaks,
                 receiver_pubkey: receiver_id,
                 payment_hash,
                 invoice_str: None,
                 amount_sats,
                 fee_sats: 0,
                 is_inbound_payment: false,
-                transfer_request: Some(prepared_transfer_request.transfer_request),
-                expiry_time: &expiry_time,
+                transfer_request: prepared_transfer_request.transfer_request,
             },
         )
         .await

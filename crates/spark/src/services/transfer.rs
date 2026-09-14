@@ -457,6 +457,7 @@ impl TransferService {
         .await?;
 
         let transfer_package = operator_rpc::spark::TransferPackage {
+            delegation_intent: None,
             leaves_to_send: cpfp_signed_tx
                 .iter()
                 .map(|l| l.try_into())
