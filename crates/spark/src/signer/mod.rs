@@ -13,7 +13,7 @@ use frost_secp256k1_tr::round2::SignatureShare;
 
 pub use default_signer::{
     DefaultSigner, DefaultSignerError, account_master_key, default_account_number,
-    identity_master_key, identity_public_key,
+    derive_identity_public_key, identity_master_key, identity_public_key,
 };
 pub use error::SignerError;
 pub use models::*;
@@ -116,4 +116,25 @@ pub trait Signer: Send + Sync + 'static {
         &self,
         request: SignFrostRequest<'a>,
     ) -> Result<SignatureShare, SignerError>;
+
+    /// Splits `parent_key` into `n` child keys whose secrets sum to the parent's.
+    ///
+    /// Generates `n-1` random keys and sets the last to `parent - sum(others)`,
+    /// so the children aggregate back to the parent. Used for top-down tree key
+    /// derivation (e.g. building an SSP pool deposit tree).
+    async fn split_signing_key(
+        &self,
+        parent_key: &SecretSource,
+        n: usize,
+    ) -> Result<Vec<(SecretSource, PublicKey)>, SignerError>;
+
+    /// Combines multiple signing keys into one by summing their secrets.
+    ///
+    /// The inverse of [`split_signing_key`](Signer::split_signing_key): given
+    /// child keys, produces the parent whose secret is their scalar sum. Used for
+    /// bottom-up tree key derivation where leaf keys derive from their node ids.
+    async fn combine_signing_keys(
+        &self,
+        keys: &[SecretSource],
+    ) -> Result<(SecretSource, PublicKey), SignerError>;
 }
