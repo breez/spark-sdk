@@ -184,11 +184,13 @@ async fn settled_bolt11_for_receive(
 
 /// The Spark invoice a received transfer settled.
 ///
-/// The event announcing a claim can carry a transfer without the invoice it
-/// settled, where the operator query that the sync uses returns it. A
-/// [`SettledInvoiceLookup::Remote`] re-reads the transfer in that case, but only for a
-/// wallet that has issued a Bolt11 advertising a Spark destination: for any
-/// other, an incoming transfer with no invoice on it simply has none.
+/// The claim event never carries it: upstream's `buildTransferEvent`
+/// (buildonspark/spark, spark/so/stream/event_handler.go) queries the transfer
+/// without eager-loading the invoice edge, which then marshals as empty rather
+/// than erroring. The operator query the sync uses does load it, so
+/// [`SettledInvoiceLookup::Remote`] re-reads the transfer, and only for a wallet
+/// that has minted such a Bolt11: for any other, an incoming transfer with no
+/// invoice on it simply has none.
 async fn settled_spark_invoice(
     spark_wallet: &SparkWallet,
     storage: &Arc<dyn Storage>,
