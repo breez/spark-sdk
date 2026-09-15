@@ -156,7 +156,14 @@ impl FlashnetClient {
             return Ok(list_pools_cache);
         }
         // If it's not in the cache, make an API request
-        let response = self.get_request("v1/pools", Some(request)).await?;
+        let response: ListPoolsResponse = self.get_request("v1/pools", Some(request)).await?;
+        // Every pool dropped is a schema problem, not an empty market.
+        if response.pools.is_empty() && response.total_count > 0 {
+            warn!(
+                "Listing reported {} pools, none of which could be parsed",
+                response.total_count
+            );
+        }
         self.cache_store
             .set(&cache_key, &response, LIST_POOLS_TTL_MS.into())
             .await?;
