@@ -50,7 +50,8 @@ pub struct RouteWithLimits {
 }
 
 /// Only the bounds the SDK surfaces are modelled. The `constraints` array and
-/// the `fiatUsd` / `exactOut` groups are ignored on deserialization.
+/// the `fiatUsd` / `exactOut` / `dynamicProviderLimits` groups are ignored on
+/// deserialization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteLimits {
@@ -58,8 +59,6 @@ pub struct RouteLimits {
     pub order_notional_usd: Option<UsdBounds>,
     #[serde(default)]
     pub exact_in: Option<ModeLimits>,
-    #[serde(default)]
-    pub dynamic_provider_limits: Option<DynamicProviderLimits>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,17 +96,6 @@ pub struct RequestAmountLimits {
     pub min_usd_cents: Option<String>,
     #[serde(default)]
     pub max_usd_cents: Option<String>,
-}
-
-/// Whether live routing legs can reject an amount that sits inside the static
-/// bounds. `true` means the published minimum is a floor, not the real one.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DynamicProviderLimits {
-    /// Unset when Orchestra does not report it. Distinct from `false`, which is
-    /// a positive claim that the published bounds are the whole truth.
-    #[serde(default)]
-    pub possible: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------
@@ -451,15 +439,6 @@ mod limits_response_tests {
                 .as_ref()
                 .and_then(|b| b.max_cents.as_deref()),
             Some("9030000")
-        );
-        assert_eq!(
-            entry
-                .limits
-                .dynamic_provider_limits
-                .as_ref()
-                .expect("dynamic block present")
-                .possible,
-            Some(true)
         );
     }
 

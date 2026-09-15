@@ -30,9 +30,6 @@ async fn get_cross_chain_routes(sdk: &BreezSdk) -> Result<()> {
                 "  {:?} minimum: {:?} base units / {:?} USD cents",
                 accepted.asset, limits.min_amount, limits.min_usd_cents
             );
-            if limits.dynamic_limits_possible {
-                info!("  The provider may enforce a higher minimum than published");
-            }
         }
     }
     // ANCHOR_END: cross-chain-get-routes

@@ -59,17 +59,18 @@ The provider tag on each {{#name CrossChainRoutePair}} is the source of truth. W
 
 ## Amount limits
 
-Each entry in {{#name CrossChainRoutePair.accepted_assets}} carries an optional {{#name limits}} block: the amount bounds the provider publishes for moving that route with that Spark-side asset. Read them before quoting so an out-of-range amount is caught at entry rather than at prepare.
+Each entry in {{#name CrossChainRoutePair.accepted_assets}} carries an optional {{#name limits}} block: the amount bounds the provider publishes for moving that route with that Spark-side asset.
 
 | Field                          | Meaning                                                              |
 | ------------------------------ | -------------------------------------------------------------------- |
 | {{#name min_amount}} / {{#name max_amount}}     | Bounds in the base units of the asset paid in: the Spark-side asset on a send, the external asset on a receive |
 | {{#name min_usd_cents}} / {{#name max_usd_cents}} | Bounds on the order's value, in USD cents                          |
-| {{#name dynamic_limits_possible}} | Whether the provider can reject an amount that satisfies the bounds |
 
 Bounds are per asset rather than per route, because the same external endpoint can carry a dust floor when moved as sats and none when moved as a token. Either denomination can be absent, and a provider may publish none at all, so treat a missing bound as "no published limit" rather than as zero.
 
-Where {{#name dynamic_limits_possible}} is set, the published minimum is a floor on what will be rejected, not the whole truth: the route is carried over legs with their own moving minimums and liquidity ceilings, and those can sit well above the published number. Preparing the payment is what validates a concrete amount.
+**The bounds are a reliable no, never a reliable yes.** Reject an amount that falls outside a published bound before preparing the payment: the provider rejects it too, so the check costs nothing and never blocks a payment that would have gone through. Satisfying the bounds is not a guarantee. Some routes enforce a tighter bound than they publish, so a payment inside the published band can still be rejected, and preparing it is what decides a concrete amount.
+
+Because of that, the bounds are for catching an amount the user could not have meant, not for guiding them to a sensible one. Fees weigh heavily near the floor, so the smallest amount worth sending is usually well above the smallest one accepted.
 
 A rejected amount surfaces as {{#enum SdkError::CrossChainAmountOutOfRange}}, carrying {{#name too_small}} for the direction and the published bound in whichever denominations the provider publishes.
 

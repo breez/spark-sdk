@@ -27,9 +27,6 @@ class CrossChain {
                     val limits = accepted.limits ?: continue
                     // Log.v("Breez", "  ${accepted.asset} minimum: ${limits.minAmount} " +
                     //     "base units / ${limits.minUsdCents} USD cents")
-                    if (limits.dynamicLimitsPossible) {
-                        // Log.v("Breez", "  The provider may enforce a higher minimum")
-                    }
                 }
             }
         } catch (e: Exception) {

@@ -25,9 +25,6 @@ func getCrossChainRoutes(sdk: BreezSdk) async throws {
                 "  \(accepted.asset) minimum: \(String(describing: limits.minAmount)) "
                     + "base units / \(String(describing: limits.minUsdCents)) USD cents"
             )
-            if limits.dynamicLimitsPossible {
-                print("  The provider may enforce a higher minimum than published")
-            }
         }
     }
     // ANCHOR_END: cross-chain-get-routes

@@ -42,11 +42,6 @@ async def get_cross_chain_routes(sdk: BreezSdk):
                     f"  {accepted.asset} minimum: {limits.min_amount} "
                     f"base units / {limits.min_usd_cents} USD cents"
                 )
-                if limits.dynamic_limits_possible:
-                    logging.debug(
-                        "  The provider may enforce a higher minimum "
-                        "than published"
-                    )
     except Exception as error:
         logging.error(error)
         raise

@@ -34,12 +34,6 @@ namespace BreezSdkSnippets
                         $"  {accepted.asset} minimum: {limits.minAmount} "
                             + $"base units / {limits.minUsdCents} USD cents"
                     );
-                    if (limits.dynamicLimitsPossible)
-                    {
-                        Console.WriteLine(
-                            "  The provider may enforce a higher minimum than published"
-                        );
-                    }
                 }
             }
             // ANCHOR_END: cross-chain-get-routes

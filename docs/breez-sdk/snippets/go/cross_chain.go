@@ -47,9 +47,6 @@ func GetCrossChainRoutes(sdk *breez_sdk_spark.BreezSdk) ([]breez_sdk_spark.Cross
 			if limits.MinUsdCents != nil {
 				log.Printf("  %v minimum: %d USD cents", accepted.Asset, *limits.MinUsdCents)
 			}
-			if limits.DynamicLimitsPossible {
-				log.Printf("  The provider may enforce a higher minimum than published")
-			}
 		}
 	}
 	// ANCHOR_END: cross-chain-get-routes

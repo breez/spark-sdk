@@ -995,7 +995,6 @@ fn attach_route_limits(
         too_small,
         bound_amount,
         bound_usd_cents,
-        dynamic_limits_possible: limits.is_some_and(|l| l.dynamic_limits_possible),
     }
 }
 
@@ -1039,16 +1038,6 @@ fn to_route_limits(limits: &RouteLimits) -> Option<CrossChainRouteLimits> {
                 .ok()
         });
 
-    // Default to "the route may enforce more" when Orchestra does not report
-    // it. Claiming a bound is exact on no evidence is the failure worth
-    // avoiding here: the whole point of the flag is to say when the published
-    // number can be trusted.
-    let dynamic_limits_possible = limits
-        .dynamic_provider_limits
-        .as_ref()
-        .and_then(|d| d.possible)
-        .unwrap_or(true);
-
     if min_amount.is_none()
         && max_amount.is_none()
         && min_usd_cents.is_none()
@@ -1061,7 +1050,6 @@ fn to_route_limits(limits: &RouteLimits) -> Option<CrossChainRouteLimits> {
         max_amount,
         min_usd_cents,
         max_usd_cents,
-        dynamic_limits_possible,
     })
 }
 
@@ -2238,7 +2226,7 @@ mod tests {
     use breez_sdk_common::error::ServiceConnectivityError;
     use breez_sdk_common::fiat::{FiatCurrency, Rate};
 
-    use flashnet::orchestra::{DynamicProviderLimits, ModeLimits, RequestAmountLimits, UsdBounds};
+    use flashnet::orchestra::{ModeLimits, RequestAmountLimits, UsdBounds};
 
     use super::*;
     use macros::{async_test_all, test_all};
@@ -2560,7 +2548,6 @@ mod tests {
         RouteLimits {
             order_notional_usd: None,
             exact_in: None,
-            dynamic_provider_limits: None,
         }
     }
 
@@ -2580,12 +2567,7 @@ mod tests {
     /// Shaped after a live `/limits` entry: Orchestra publishes the USD band on
     /// both the route and the `exactIn` leg, and a base-unit floor only on the
     /// legs that have one.
-    fn limits(
-        min_amount: Option<&str>,
-        min_usd: &str,
-        max_usd: &str,
-        dynamic: bool,
-    ) -> RouteLimits {
+    fn limits(min_amount: Option<&str>, min_usd: &str, max_usd: &str) -> RouteLimits {
         RouteLimits {
             order_notional_usd: Some(UsdBounds {
                 min_cents: Some(min_usd.to_string()),
@@ -2600,54 +2582,28 @@ mod tests {
                     max_usd_cents: Some(max_usd.to_string()),
                 }),
             }),
-            dynamic_provider_limits: Some(DynamicProviderLimits {
-                possible: Some(dynamic),
-            }),
         }
     }
 
     #[test_all]
     fn to_route_limits_reads_both_denominations() {
-        let parsed = to_route_limits(&limits(Some("1200"), "80", "8980000", true))
+        let parsed = to_route_limits(&limits(Some("1200"), "80", "8980000"))
             .expect("published bounds should survive");
         assert_eq!(parsed.min_amount, Some(1200));
         assert_eq!(parsed.max_amount, None);
         assert_eq!(parsed.min_usd_cents, Some(80));
         assert_eq!(parsed.max_usd_cents, Some(8_980_000));
-        assert!(parsed.dynamic_limits_possible);
     }
 
     #[test_all]
     fn to_route_limits_falls_back_to_the_route_level_usd_band() {
         // No `exactIn` leg: the route-level notional band still applies.
-        let mut raw = limits(None, "500", "1200000000", false);
+        let mut raw = limits(None, "500", "1200000000");
         raw.exact_in = None;
         let parsed = to_route_limits(&raw).expect("route-level band should survive");
         assert_eq!(parsed.min_usd_cents, Some(500));
         assert_eq!(parsed.max_usd_cents, Some(1_200_000_000));
         assert_eq!(parsed.min_amount, None);
-        assert!(!parsed.dynamic_limits_possible);
-    }
-
-    #[test_all]
-    fn to_route_limits_assumes_moving_limits_when_orchestra_does_not_say() {
-        // Orchestra reports this field on every route today. If it stops, a
-        // published bound we cannot vouch for must not read as exact.
-        let mut raw = limits(Some("1200"), "80", "8980000", false);
-        raw.dynamic_provider_limits = None;
-        assert!(
-            to_route_limits(&raw)
-                .expect("bounds present")
-                .dynamic_limits_possible
-        );
-
-        raw.dynamic_provider_limits = Some(DynamicProviderLimits { possible: None });
-        assert!(
-            to_route_limits(&raw)
-                .expect("bounds present")
-                .dynamic_limits_possible,
-            "an unset `possible` is not the same as false"
-        );
     }
 
     #[test_all]
@@ -2657,7 +2613,7 @@ mod tests {
 
     #[test_all]
     fn to_route_limits_drops_unparseable_values() {
-        let mut raw = limits(Some("not-a-number"), "80", "8980000", false);
+        let mut raw = limits(Some("not-a-number"), "80", "8980000");
         raw.order_notional_usd = None;
         let parsed = to_route_limits(&raw).expect("the USD band should still survive");
         assert_eq!(parsed.min_amount, None, "garbage must not fail discovery");
@@ -2675,14 +2631,14 @@ mod tests {
                     ra("spark", "BTC", None),
                     ra("tron", "USDT", Some("TXYZtronUsdt")),
                 ),
-                limits: limits(Some("1200"), "80", "8980000", true),
+                limits: limits(Some("1200"), "80", "8980000"),
             },
             RouteWithLimits {
                 route: route(
                     ra("spark", "USDB", Some(usdb)),
                     ra("tron", "USDT", Some("TXYZtronUsdt")),
                 ),
-                limits: limits(None, "80", "8980000", true),
+                limits: limits(None, "80", "8980000"),
             },
         ];
 
@@ -2711,7 +2667,7 @@ mod tests {
                     ra("spark", "BTC", None),
                     ra("tron", "USDT", Some("TXYZtronUsdt")),
                 ),
-                limits: limits(Some("1200"), "80", "8980000", true),
+                limits: limits(Some("1200"), "80", "8980000"),
             }],
             true,
             None,
@@ -2724,7 +2680,6 @@ mod tests {
                 too_small: true,
                 bound_amount: None,
                 bound_usd_cents: None,
-                dynamic_limits_possible: false,
             },
             &pairs[0],
             &SparkAsset::Bitcoin,
@@ -2733,7 +2688,6 @@ mod tests {
         let SdkError::CrossChainAmountOutOfRange {
             bound_amount,
             bound_usd_cents,
-            dynamic_limits_possible,
             ..
         } = enriched
         else {
@@ -2741,7 +2695,6 @@ mod tests {
         };
         assert_eq!(bound_amount, Some(1200));
         assert_eq!(bound_usd_cents, Some(80));
-        assert!(dynamic_limits_possible);
     }
 
     #[test_all]
@@ -2773,7 +2726,7 @@ mod tests {
                 ra("arbitrum", "USDC", Some("0xUSDC")),
                 ra("spark", "USDB", Some("btkn1usdb")),
             ),
-            limits: limits(None, "80", "8980000", false),
+            limits: limits(None, "80", "8980000"),
         }];
 
         let pairs = dedupe_routes(&routes, false, None, None);

@@ -37,18 +37,13 @@ pub enum SdkError {
     /// for the route.
     ///
     /// The bound fields carry what the route publishes in the direction that
-    /// failed, in whichever denominations the provider publishes. They can be
-    /// looser than what it actually enforces: when `dynamic_limits_possible` is
-    /// set, the route is carried over legs with their own moving minimums and
-    /// liquidity ceilings, so an amount inside the published bound can still
-    /// land here.
+    /// failed, in whichever denominations the provider publishes. A route can
+    /// enforce a tighter bound than it publishes, so an amount inside the
+    /// published one can still land here.
     ///
     /// The message is the provider's own rejection text with the published
     /// bound appended, so it already names the direction.
-    #[error(
-        "{reason}{}",
-        render_bound(*too_small, *bound_amount, *bound_usd_cents, *dynamic_limits_possible)
-    )]
+    #[error("{reason}{}", render_bound(*too_small, *bound_amount, *bound_usd_cents))]
     CrossChainAmountOutOfRange {
         reason: String,
         /// `true` for a rejection below the minimum, `false` for one above the
@@ -59,8 +54,6 @@ pub enum SdkError {
         bound_amount: Option<u128>,
         /// The published bound as an order value in USD cents.
         bound_usd_cents: Option<u64>,
-        /// Whether the provider can reject an amount that satisfies the bound.
-        dynamic_limits_possible: bool,
     },
 
     /// Network error
@@ -159,7 +152,6 @@ impl From<flashnet::FlashnetError> for SdkError {
                     too_small,
                     bound_amount: None,
                     bound_usd_cents: None,
-                    dynamic_limits_possible: false,
                 }
             }
             flashnet::FlashnetError::Network { reason, code } => {
@@ -430,11 +422,12 @@ impl From<&str> for SignerError {
 ///
 /// Both denominations are named when both are published: which one the provider
 /// applied is not reported, and they are not interconvertible without a rate.
+/// The bound is the published one, which a route can enforce more tightly than,
+/// so the wording says "published" rather than naming it as the limit.
 fn render_bound(
     too_small: bool,
     bound_amount: Option<u128>,
     bound_usd_cents: Option<u64>,
-    dynamic_limits_possible: bool,
 ) -> String {
     let mut bounds = Vec::new();
     if let Some(amount) = bound_amount {
@@ -447,14 +440,7 @@ fn render_bound(
         return String::new();
     }
     let label = if too_small { "minimum" } else { "maximum" };
-    // Live legs move the bound in whichever direction failed: their own
-    // minimums raise the floor, their liquidity lowers the ceiling.
-    let caveat = match (dynamic_limits_possible, too_small) {
-        (true, true) => "; the route can enforce a higher one",
-        (true, false) => "; the route can enforce a lower one",
-        (false, _) => "",
-    };
-    format!(" (published {label}: {}{caveat})", bounds.join(" or "))
+    format!(" (published {label}: {})", bounds.join(" or "))
 }
 
 #[cfg(test)]
@@ -467,7 +453,6 @@ mod render_bound_tests {
         too_small: bool,
         bound_amount: Option<u128>,
         bound_usd_cents: Option<u64>,
-        dynamic_limits_possible: bool,
     ) -> String {
         // Orchestra's own wording for each direction.
         let reason = if too_small {
@@ -480,7 +465,6 @@ mod render_bound_tests {
             too_small,
             bound_amount,
             bound_usd_cents,
-            dynamic_limits_possible,
         }
         .to_string()
     }
@@ -488,41 +472,26 @@ mod render_bound_tests {
     #[test]
     fn names_both_denominations_when_both_are_published() {
         assert_eq!(
-            message(true, Some(1200), Some(80), false),
+            message(true, Some(1200), Some(80)),
             "Amount too small (published minimum: 1200 base units or 0.80 USD)"
         );
     }
 
     #[test]
-    fn flags_a_route_that_can_enforce_a_higher_minimum() {
-        assert_eq!(
-            message(true, None, Some(80), true),
-            "Amount too small (published minimum: 0.80 USD; the route can enforce a higher one)"
-        );
-    }
-
-    #[test]
     fn a_too_large_rejection_reads_as_a_maximum() {
-        // A liquidity rejection lands here, and live liquidity sits below the
-        // published ceiling, so the caveat qualifies a maximum too.
         assert_eq!(
-            message(false, None, Some(8_980_000), true),
-            "Amount too large (published maximum: 89800.00 USD; the route can enforce a lower one)"
-        );
-        assert_eq!(
-            message(false, None, Some(8_980_000), false),
-            "Amount too large (published maximum: 89800.00 USD)",
-            "a route that publishes exact bounds carries no caveat"
+            message(false, None, Some(8_980_000)),
+            "Amount too large (published maximum: 89800.00 USD)"
         );
     }
 
     #[test]
     fn says_nothing_when_the_provider_publishes_no_bound() {
-        assert_eq!(message(true, None, None, true), "Amount too small");
+        assert_eq!(message(true, None, None), "Amount too small");
     }
 
     #[test]
     fn pads_a_sub_dollar_bound_to_two_decimals() {
-        assert!(message(true, None, Some(5), false).ends_with("(published minimum: 0.05 USD)"));
+        assert!(message(true, None, Some(5)).ends_with("(published minimum: 0.05 USD)"));
     }
 }

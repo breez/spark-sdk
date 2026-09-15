@@ -554,7 +554,6 @@ pub struct _CrossChainRouteLimits {
     pub max_amount: Option<u128>,
     pub min_usd_cents: Option<u64>,
     pub max_usd_cents: Option<u64>,
-    pub dynamic_limits_possible: bool,
 }
 
 #[frb(mirror(CrossChainAcceptedAsset))]

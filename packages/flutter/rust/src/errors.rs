@@ -33,7 +33,6 @@ pub enum _SdkError {
         too_small: bool,
         bound_amount: Option<u128>,
         bound_usd_cents: Option<u64>,
-        dynamic_limits_possible: bool,
     },
     NetworkError(String),
     StorageError(String),
