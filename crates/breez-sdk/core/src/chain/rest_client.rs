@@ -29,7 +29,7 @@ const BASE_BACKOFF_MILLIS: Duration = Duration::from_millis(256);
 
 /// Ceiling on a whole retrying call, so retries cost attempts rather than
 /// multiplying how long a caller can be blocked for.
-const TOTAL_BUDGET: Duration = Duration::from_secs(REQUEST_TIMEOUT);
+const TOTAL_TIMEOUT: Duration = Duration::from_secs(REQUEST_TIMEOUT);
 
 #[derive(Serialize, Deserialize, Clone)]
 struct TxInfo {
@@ -205,7 +205,7 @@ impl RestClientChainServiceInner {
     }
 
     /// Sleeps out the current backoff and charges an attempt, or reports that
-    /// the budget is spent so the caller surfaces the error it is holding.
+    /// the retry budget is spent so the caller surfaces the error it is holding.
     async fn backoff(&self, attempts: &mut usize, delay: &mut Duration) -> bool {
         if *attempts >= self.max_retries {
             return false;
@@ -221,7 +221,7 @@ impl RestClientChainServiceInner {
         url: &str,
         client: &dyn HttpClient,
     ) -> Result<(String, u16), ChainServiceError> {
-        within_budget(TOTAL_BUDGET, self.get_attempts(url, client)).await
+        within_timeout(TOTAL_TIMEOUT, self.get_attempts(url, client)).await
     }
 
     async fn get_attempts(
@@ -260,7 +260,7 @@ impl RestClientChainServiceInner {
     }
 
     async fn post(&self, url: &str, body: Option<String>) -> Result<String, ChainServiceError> {
-        within_budget(TOTAL_BUDGET, self.post_attempts(url, body)).await
+        within_timeout(TOTAL_TIMEOUT, self.post_attempts(url, body)).await
     }
 
     async fn post_attempts(
@@ -484,16 +484,16 @@ fn is_transport_retryable(error: &HttpError) -> bool {
     matches!(error, HttpError::Request(_))
 }
 
-/// Fails `work` once `budget` is gone, whatever attempt it is on.
-async fn within_budget<T>(
-    budget: Duration,
+/// Fails `work` once `timeout` has elapsed, whatever attempt it is on.
+async fn within_timeout<T>(
+    timeout: Duration,
     work: impl std::future::Future<Output = Result<T, ChainServiceError>>,
 ) -> Result<T, ChainServiceError> {
-    match tokio::time::timeout(budget, work).await {
+    match tokio::time::timeout(timeout, work).await {
         Ok(result) => result,
         Err(_) => Err(HttpError::Timeout(format!(
             "gave up after {}s of attempts",
-            budget.as_secs()
+            timeout.as_secs()
         ))
         .into()),
     }
@@ -808,7 +808,7 @@ mod tests {
             .unwrap();
     }
 
-    /// A timeout has already cost the full per-request budget, so it is surfaced
+    /// A timeout has already cost the full per-request wait, so it is surfaced
     /// rather than spent again.
     #[async_test_all]
     async fn test_get_does_not_retry_timeouts() {
@@ -827,16 +827,16 @@ mod tests {
         assert_eq!(*transport.attempts.lock().unwrap(), 1);
     }
 
-    /// The budget covers the whole call, so a transport that keeps failing
+    /// The timeout covers the whole call, so a transport that keeps failing
     /// cannot stretch it by one more attempt.
     #[async_test_all]
-    async fn test_budget_bounds_the_whole_call() {
+    async fn test_timeout_bounds_the_whole_call() {
         let slow = async {
             tokio::time::sleep(Duration::from_secs(30)).await;
             Ok::<_, ChainServiceError>(())
         };
 
-        let result = within_budget(Duration::from_millis(50), slow).await;
+        let result = within_timeout(Duration::from_millis(50), slow).await;
 
         assert!(matches!(
             result,
@@ -845,7 +845,7 @@ mod tests {
     }
 
     /// A body over the size cap is refused identically every attempt, so it is
-    /// not worth spending the budget on.
+    /// not worth another one.
     #[async_test_all]
     async fn test_get_does_not_retry_body_errors() {
         let (service, transport) = flaky_service(
