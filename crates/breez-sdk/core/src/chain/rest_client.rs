@@ -1,7 +1,7 @@
 use bitcoin::{Address, address::NetworkUnchecked};
 use platform_utils::tokio;
 use platform_utils::{
-    ContentType, HttpClient, HttpError, HttpResponse, add_basic_auth_header,
+    ContentType, HttpClient, HttpError, HttpResponse, REQUEST_TIMEOUT, add_basic_auth_header,
     add_content_type_header,
 };
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,10 @@ pub const RETRYABLE_ERROR_CODES: [u16; 3] = [
 
 /// Base backoff in milliseconds.
 const BASE_BACKOFF_MILLIS: Duration = Duration::from_millis(256);
+
+/// Ceiling on a whole retrying call, so retries cost attempts rather than
+/// multiplying how long a caller can be blocked for.
+const TOTAL_TIMEOUT: Duration = Duration::from_secs(REQUEST_TIMEOUT);
 
 #[derive(Serialize, Deserialize, Clone)]
 struct TxInfo {
@@ -200,7 +204,27 @@ impl RestClientChainServiceInner {
         Ok(response)
     }
 
+    /// Sleeps out the current backoff and charges an attempt, or reports that
+    /// the retry budget is spent so the caller surfaces the error it is holding.
+    async fn backoff(&self, attempts: &mut usize, delay: &mut Duration) -> bool {
+        if *attempts >= self.max_retries {
+            return false;
+        }
+        tokio::time::sleep(*delay).await;
+        *attempts = attempts.saturating_add(1);
+        *delay = delay.saturating_mul(2);
+        true
+    }
+
     async fn get_with_retry(
+        &self,
+        url: &str,
+        client: &dyn HttpClient,
+    ) -> Result<(String, u16), ChainServiceError> {
+        within_timeout(TOTAL_TIMEOUT, self.get_attempts(url, client)).await
+    }
+
+    async fn get_attempts(
         &self,
         url: &str,
         client: &dyn HttpClient,
@@ -214,45 +238,76 @@ impl RestClientChainServiceInner {
                 add_basic_auth_header(&mut headers, &basic_auth.username, &basic_auth.password);
             }
 
-            let HttpResponse { body, status, .. } =
-                client.get(url.to_string(), Some(headers)).await?;
-            match status {
-                status if attempts < self.max_retries && is_status_retryable(status) => {
-                    tokio::time::sleep(delay).await;
-                    attempts = attempts.saturating_add(1);
-                    delay = delay.saturating_mul(2);
-                }
-                _ => {
-                    if !(200..300).contains(&status) {
-                        return Err(HttpError::Status { status, body }.into());
+            let response = match client.get(url.to_string(), Some(headers)).await {
+                Ok(response) => response,
+                Err(e) => {
+                    if is_transport_retryable(&e) && self.backoff(&mut attempts, &mut delay).await {
+                        continue;
                     }
-                    return Ok((body, status));
+                    return Err(e.into());
                 }
+            };
+
+            let HttpResponse { body, status, .. } = response;
+            if is_status_retryable(status) && self.backoff(&mut attempts, &mut delay).await {
+                continue;
             }
+            if !(200..300).contains(&status) {
+                return Err(HttpError::Status { status, body }.into());
+            }
+            return Ok((body, status));
         }
     }
 
     async fn post(&self, url: &str, body: Option<String>) -> Result<String, ChainServiceError> {
-        let mut headers: HashMap<String, String> = HashMap::new();
-        add_content_type_header(&mut headers, ContentType::TextPlain);
-        if let Some(basic_auth) = &self.basic_auth {
-            add_basic_auth_header(&mut headers, &basic_auth.username, &basic_auth.password);
-        }
+        within_timeout(TOTAL_TIMEOUT, self.post_attempts(url, body)).await
+    }
+
+    async fn post_attempts(
+        &self,
+        url: &str,
+        body: Option<String>,
+    ) -> Result<String, ChainServiceError> {
         info!("Posting to {}", url);
         debug!(
             "Posting to {} with body {}",
             url,
             body.clone().unwrap_or_default()
         );
-        let HttpResponse { body, status, .. } = self
-            .client
-            .post(url.to_string(), Some(headers), body)
-            .await?;
-        if !(200..300).contains(&status) {
-            return Err(HttpError::Status { status, body }.into());
-        }
 
-        Ok(body)
+        let mut delay = BASE_BACKOFF_MILLIS;
+        let mut attempts = 0;
+
+        loop {
+            let mut headers: HashMap<String, String> = HashMap::new();
+            add_content_type_header(&mut headers, ContentType::TextPlain);
+            if let Some(basic_auth) = &self.basic_auth {
+                add_basic_auth_header(&mut headers, &basic_auth.username, &basic_auth.password);
+            }
+
+            let response = match self
+                .client
+                .post(url.to_string(), Some(headers), body.clone())
+                .await
+            {
+                Ok(response) => response,
+                Err(e) => {
+                    if is_transport_retryable(&e) && self.backoff(&mut attempts, &mut delay).await {
+                        continue;
+                    }
+                    return Err(e.into());
+                }
+            };
+
+            let HttpResponse { body, status, .. } = response;
+            if is_status_retryable(status) && self.backoff(&mut attempts, &mut delay).await {
+                continue;
+            }
+            if !(200..300).contains(&status) {
+                return Err(HttpError::Status { status, body }.into());
+            }
+            return Ok(body);
+        }
     }
 
     async fn recommended_fees_esplora(&self) -> Result<RecommendedFees, ChainServiceError> {
@@ -359,6 +414,8 @@ impl RestClientChainServiceInner {
         Ok(outspend)
     }
 
+    /// Safe to retry: a re-broadcast of a transaction the server did accept is
+    /// answered "already known" rather than acted on twice.
     async fn do_broadcast_transaction(&self, tx: String) -> Result<(), ChainServiceError> {
         let url = format!("{}{}", self.base_url, "/tx");
         self.post(&url, Some(tx)).await?;
@@ -423,10 +480,30 @@ fn is_status_retryable(status: u16) -> bool {
     RETRYABLE_ERROR_CODES.contains(&status)
 }
 
+fn is_transport_retryable(error: &HttpError) -> bool {
+    matches!(error, HttpError::Request(_))
+}
+
+/// Fails `work` once `timeout` has elapsed, whatever attempt it is on.
+async fn within_timeout<T>(
+    timeout: Duration,
+    work: impl std::future::Future<Output = Result<T, ChainServiceError>>,
+) -> Result<T, ChainServiceError> {
+    match tokio::time::timeout(timeout, work).await {
+        Ok(result) => result,
+        Err(_) => Err(HttpError::Timeout(format!(
+            "gave up after {}s of attempts",
+            timeout.as_secs()
+        ))
+        .into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Network;
+    use std::sync::Mutex;
 
     use macros::async_test_all;
 
@@ -600,5 +677,189 @@ mod tests {
         assert_eq!(result[0].vout, 0);
         assert_eq!(result[0].value, 50000);
         assert!(result[0].status.confirmed);
+    }
+
+    /// Answers with `failures` transport errors before serving `response`.
+    struct FlakyTransport {
+        remaining_failures: Mutex<usize>,
+        attempts: Mutex<usize>,
+        error: HttpError,
+        response: String,
+    }
+
+    impl FlakyTransport {
+        fn new(failures: usize, error: HttpError, response: &str) -> Self {
+            Self {
+                remaining_failures: Mutex::new(failures),
+                attempts: Mutex::new(0),
+                error,
+                response: response.to_string(),
+            }
+        }
+
+        fn answer(&self) -> Result<HttpResponse, HttpError> {
+            {
+                let mut attempts = self.attempts.lock().unwrap();
+                *attempts = attempts.saturating_add(1);
+            }
+            let mut remaining = self.remaining_failures.lock().unwrap();
+            if *remaining > 0 {
+                *remaining = remaining.saturating_sub(1);
+                return Err(self.error.clone());
+            }
+            Ok(HttpResponse {
+                status: 200,
+                body: self.response.clone(),
+                headers: HashMap::new(),
+            })
+        }
+    }
+
+    fn broken_pipe() -> HttpError {
+        HttpError::Request(
+            "client error (SendRequest) : connection error : stream closed because of a \
+             broken pipe"
+                .to_string(),
+        )
+    }
+
+    #[macros::async_trait]
+    impl HttpClient for FlakyTransport {
+        async fn get(
+            &self,
+            _url: String,
+            _headers: Option<HashMap<String, String>>,
+        ) -> Result<HttpResponse, HttpError> {
+            self.answer()
+        }
+
+        async fn post(
+            &self,
+            _url: String,
+            _headers: Option<HashMap<String, String>>,
+            _body: Option<String>,
+        ) -> Result<HttpResponse, HttpError> {
+            self.answer()
+        }
+
+        async fn delete(
+            &self,
+            _url: String,
+            _headers: Option<HashMap<String, String>>,
+            _body: Option<String>,
+        ) -> Result<HttpResponse, HttpError> {
+            self.answer()
+        }
+    }
+
+    fn flaky_service(
+        failures: usize,
+        error: HttpError,
+        response: &str,
+    ) -> (RestClientChainService, Arc<FlakyTransport>) {
+        let transport = Arc::new(FlakyTransport::new(failures, error, response));
+        let service = RestClientChainService::new(
+            "http://localhost:8080".to_string(),
+            Network::Mainnet,
+            3,
+            transport.clone(),
+            None,
+            ChainApiType::Esplora,
+        );
+        (service, transport)
+    }
+
+    const TX_STATUS_RESPONSE: &str = r#"{
+        "txid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "status": { "confirmed": true, "block_height": 100 }
+    }"#;
+
+    #[async_test_all]
+    async fn test_get_retries_transport_errors() {
+        let (service, _) = flaky_service(3, broken_pipe(), TX_STATUS_RESPONSE);
+
+        let status = service
+            .get_transaction_status("aaaa".to_string())
+            .await
+            .unwrap();
+
+        assert!(status.confirmed);
+    }
+
+    #[async_test_all]
+    async fn test_get_gives_up_past_the_retry_budget() {
+        let (service, _) = flaky_service(4, broken_pipe(), TX_STATUS_RESPONSE);
+
+        let result = service.get_transaction_status("aaaa".to_string()).await;
+
+        assert!(matches!(
+            result,
+            Err(ChainServiceError::ServiceConnectivity(_))
+        ));
+    }
+
+    #[async_test_all]
+    async fn test_broadcast_retries_transport_errors() {
+        let (service, _) = flaky_service(3, broken_pipe(), "aaaa");
+
+        service
+            .broadcast_transaction("00".to_string())
+            .await
+            .unwrap();
+    }
+
+    /// A timeout has already cost the full per-request wait, so it is surfaced
+    /// rather than spent again.
+    #[async_test_all]
+    async fn test_get_does_not_retry_timeouts() {
+        let (service, transport) = flaky_service(
+            1,
+            HttpError::Timeout("operation timed out".to_string()),
+            TX_STATUS_RESPONSE,
+        );
+
+        let result = service.get_transaction_status("aaaa".to_string()).await;
+
+        assert!(matches!(
+            result,
+            Err(ChainServiceError::ServiceConnectivity(_))
+        ));
+        assert_eq!(*transport.attempts.lock().unwrap(), 1);
+    }
+
+    /// The timeout covers the whole call, so a transport that keeps failing
+    /// cannot stretch it by one more attempt.
+    #[async_test_all]
+    async fn test_timeout_bounds_the_whole_call() {
+        let slow = async {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            Ok::<_, ChainServiceError>(())
+        };
+
+        let result = within_timeout(Duration::from_millis(50), slow).await;
+
+        assert!(matches!(
+            result,
+            Err(ChainServiceError::ServiceConnectivity(_))
+        ));
+    }
+
+    /// A body over the size cap is refused identically every attempt, so it is
+    /// not worth another one.
+    #[async_test_all]
+    async fn test_get_does_not_retry_body_errors() {
+        let (service, transport) = flaky_service(
+            1,
+            HttpError::Body("response exceeds the 10485760 byte limit".to_string()),
+            TX_STATUS_RESPONSE,
+        );
+
+        let result = service.get_transaction_status("aaaa".to_string()).await;
+
+        assert!(matches!(
+            result,
+            Err(ChainServiceError::ServiceConnectivity(_))
+        ));
+        assert_eq!(*transport.attempts.lock().unwrap(), 1);
     }
 }

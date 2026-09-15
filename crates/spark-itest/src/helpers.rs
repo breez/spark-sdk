@@ -402,8 +402,11 @@ pub async fn deposit_with_amount(
 /// Funds `wallet` through its static deposit address and returns the credited
 /// amount, which is the deposited amount minus the SSP's claim fee.
 ///
-/// The SSP will not quote a claim until it has seen the funding transaction,
-/// so the quote is retried until it is served or `quote_timeout_secs` elapses.
+/// Neither the SSP nor the operators are ready the moment the faucet funds the
+/// address: the SSP will not quote a claim until it has seen the funding
+/// transaction, and the operators refuse the claim until every one of them has
+/// the UTXO at the required depth. Both are retried, with a fresh quote each
+/// round, until the claim goes through or `quote_timeout_secs` elapses.
 pub async fn fund_wallet_via_static_deposit(
     wallet: &SparkWallet,
     faucet: &RegtestFaucet,
@@ -431,31 +434,33 @@ pub async fn fund_wallet_via_static_deposit(
         as u32;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(quote_timeout_secs);
-    let quote = loop {
-        match wallet
-            .fetch_static_deposit_claim_quote(tx.clone(), Some(vout))
-            .await
-        {
-            Ok(quote) => break quote,
+    loop {
+        let attempt = async {
+            let quote = wallet
+                .fetch_static_deposit_claim_quote(tx.clone(), Some(vout))
+                .await?;
+            let credit_amount_sats = quote.credit_amount_sats;
+            let transfer_id = wallet.claim_static_deposit(&tx, quote).await?;
+            Ok::<_, anyhow::Error>((credit_amount_sats, transfer_id))
+        };
+
+        match attempt.await {
+            Ok((credit_amount_sats, transfer_id)) => {
+                info!(
+                    "Claimed static deposit {txid}:{vout} for {credit_amount_sats} sats, \
+                     transfer {transfer_id}"
+                );
+                return Ok(credit_amount_sats);
+            }
             Err(e) if tokio::time::Instant::now() < deadline => {
-                debug!("Claim quote for {txid}:{vout} not ready yet ({e}), retrying");
+                debug!("Claim of {txid}:{vout} not ready yet ({e}), retrying");
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
-            Err(e) => bail!(
-                "Timeout after {quote_timeout_secs}s waiting for a claim quote for \
-                 {txid}:{vout}: {e}"
-            ),
+            Err(e) => {
+                bail!("Timeout after {quote_timeout_secs}s waiting to claim {txid}:{vout}: {e}")
+            }
         }
-    };
-
-    let credit_amount_sats = quote.credit_amount_sats;
-    let transfer_id = wallet.claim_static_deposit(&tx, quote).await?;
-    info!(
-        "Claimed static deposit {txid}:{vout} for {credit_amount_sats} sats, \
-         transfer {transfer_id}"
-    );
-
-    Ok(credit_amount_sats)
+    }
 }
 
 /// Polls a condition function every 50ms until it returns true or the timeout is reached.

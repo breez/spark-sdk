@@ -1,9 +1,14 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use bitcoin::{Transaction, consensus::encode::deserialize_hex};
-use platform_utils::{DefaultHttpClient, HttpClient, add_basic_auth_header};
+use platform_utils::{DefaultHttpClient, HttpClient, HttpResponse, add_basic_auth_header};
 use tracing::info;
+
+const MAX_RETRIES: usize = 5;
+const BASE_BACKOFF: Duration = Duration::from_millis(256);
+const RETRYABLE_STATUSES: [u16; 3] = [429, 500, 503];
 
 /// Configuration for the mempool/esplora API client
 #[derive(Debug, Clone)]
@@ -62,14 +67,7 @@ impl MempoolClient {
         let url = format!("{}/tx/{}/hex", self.config.url, txid);
         info!("Fetching transaction from: {}", url);
 
-        let mut headers = HashMap::new();
-        add_basic_auth_header(&mut headers, &self.config.username, &self.config.password);
-
-        let response = self
-            .http_client
-            .get(url.clone(), Some(headers))
-            .await
-            .context("Failed to fetch transaction")?;
+        let response = self.get_with_retry(&url).await?;
 
         if !response.is_success() {
             bail!(
@@ -86,6 +84,39 @@ impl MempoolClient {
 
         info!("Successfully fetched transaction: {}", txid);
         Ok(tx)
+    }
+
+    /// The shared regtest esplora reaps idle HTTP/2 flows, so the next request
+    /// off a pooled connection can come back as a broken pipe with no response
+    /// at all. Those, and the endpoint's own transient statuses, get another
+    /// attempt before the caller sees a failure.
+    async fn get_with_retry(&self, url: &str) -> Result<HttpResponse> {
+        let mut delay = BASE_BACKOFF;
+        let mut last_error;
+
+        for attempt in 0..=MAX_RETRIES {
+            let mut headers = HashMap::new();
+            add_basic_auth_header(&mut headers, &self.config.username, &self.config.password);
+
+            match self.http_client.get(url.to_string(), Some(headers)).await {
+                Ok(response) if !RETRYABLE_STATUSES.contains(&response.status) => {
+                    return Ok(response);
+                }
+                Ok(response) => {
+                    last_error =
+                        anyhow::anyhow!("status {}, body: {}", response.status, response.body);
+                }
+                Err(e) => last_error = anyhow::anyhow!("{e}"),
+            }
+
+            if attempt == MAX_RETRIES {
+                return Err(last_error).context("Failed to fetch transaction");
+            }
+            tokio::time::sleep(delay).await;
+            delay = delay.saturating_mul(2);
+        }
+
+        unreachable!("the loop returns on its final attempt")
     }
 }
 
