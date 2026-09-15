@@ -158,6 +158,11 @@ pub enum SparkAsset {
 /// Amount bounds a provider publishes for moving a route with one Spark-side
 /// asset.
 ///
+/// The bounds are a reliable no, never a reliable yes. An amount outside them
+/// is always rejected, so reject it before preparing the payment. An amount
+/// inside them can still be rejected: some routes enforce a tighter bound than
+/// they publish, so preparing the payment is what decides a concrete amount.
+///
 /// The two groups are independent, and either can be absent: a route may
 /// publish a base-unit floor (a dust minimum on a sats-funded route), a USD
 /// notional band, both, or neither.
@@ -177,12 +182,6 @@ pub struct CrossChainRouteLimits {
     pub min_usd_cents: Option<u64>,
     /// Largest order value accepted, in USD cents.
     pub max_usd_cents: Option<u64>,
-    /// Whether the provider can still reject an amount that satisfies the
-    /// bounds above. Live routing legs impose moving minimums and liquidity
-    /// ceilings that the published bounds do not capture, so when this is set
-    /// the bounds are a floor on what will be rejected, not the whole truth.
-    /// Validate a concrete amount by preparing the payment.
-    pub dynamic_limits_possible: bool,
 }
 
 /// A Spark-side asset a route accepts, with the amount bounds that apply to it.

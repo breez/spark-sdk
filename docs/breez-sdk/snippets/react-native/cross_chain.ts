@@ -37,9 +37,6 @@ const exampleGetCrossChainRoutes = async (sdk: BreezSdk) => {
         `  ${accepted.asset.tag} minimum: ${limits.minAmount} base units / ` +
           `${limits.minUsdCents} USD cents`
       )
-      if (limits.dynamicLimitsPossible) {
-        console.debug('  The provider may enforce a higher minimum than published')
-      }
     }
   }
   // ANCHOR_END: cross-chain-get-routes
