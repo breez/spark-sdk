@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 470" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13">
+  <title>Multi-leaf unilateral exit: fan-out, per-branch CPFP chains, and one sweep</title>
+  <desc>A funding UTXO feeds a fan-out transaction with one output per branch. Each output funds that branch's own CPFP chain. The shared root is broadcast as part of the first branch; the second branch depends on it. Every branch's refund is pulled into a single sweep.</desc>
+  <style>
+    text { font-size: 13px; }
+    .bg { fill: none; }
+    .lbl { fill: #6B7280; } .mut { fill: #9CA3AF; }
+    .numc { fill: #374151; } .num { fill: #FFFFFF; font-weight: 600; }
+    .ahf { fill: #6B7280; }
+    .con { stroke: #6B7280; } .dcon { stroke: #9CA3AF; }
+    .rail { fill: #F3F4F6; stroke: #D1D5DB; } .rail-t { fill: #6B7280; }
+    .cpfp { fill: #F3F4F6; stroke: #D1D5DB; } .cpfp-t { fill: #374151; font-weight: 600; } .cpfp-s { fill: #6B7280; }
+    .pre { fill: #EEF2FF; stroke: #A5B4FC; } .pre-t { fill: #3730A3; font-weight: 600; } .pre-s { fill: #6366F1; }
+    .ref { fill: #FEF3C7; stroke: #FCD34D; } .ref-t { fill: #92400E; font-weight: 600; } .ref-s { fill: #B45309; }
+    .swp { fill: #ECFDF5; stroke: #6EE7B7; } .swp-t { fill: #065F46; font-weight: 600; } .swp-s { fill: #059669; }
+    .fund { fill: #F9FAFB; stroke: #9CA3AF; } .fund-t { fill: #374151; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #1c1c1f; }
+      .lbl { fill: #A1A1AA; } .mut { fill: #8B8B94; }
+      .numc { fill: #E5E7EB; } .num { fill: #111827; }
+      .ahf { fill: #A1A1AA; } .con { stroke: #A1A1AA; } .dcon { stroke: #8B8B94; }
+      .rail { fill: #3F3F46; stroke: #71717A; } .rail-t { fill: #D4D4D8; }
+      .cpfp { fill: #3F3F46; stroke: #71717A; } .cpfp-t { fill: #F4F4F5; } .cpfp-s { fill: #D4D4D8; }
+      .pre { fill: #312E81; stroke: #818CF8; } .pre-t { fill: #E0E7FF; } .pre-s { fill: #C7D2FE; }
+      .ref { fill: #78350F; stroke: #FBBF24; } .ref-t { fill: #FEF3C7; } .ref-s { fill: #FDE68A; }
+      .swp { fill: #064E3B; stroke: #34D399; } .swp-t { fill: #D1FAE5; } .swp-s { fill: #6EE7B7; }
+      .fund { fill: #27272A; stroke: #71717A; } .fund-t { fill: #E4E4E7; }
+    }
+  </style>
+  <defs>
+    <marker id="ah" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <path class="ahf" d="M0.5,0.5 L8,3.5 L0.5,6.5 Z"/>
+    </marker>
+  </defs>
+  <rect class="bg" x="0" y="0" width="720" height="470" rx="12"/>
+
+  <!-- order spine -->
+  <g class="numc"><circle cx="16" cy="88" r="10"/><circle cx="16" cy="167" r="10"/><circle cx="16" cy="237" r="10"/><circle cx="16" cy="307" r="10"/><circle cx="16" cy="381" r="10"/></g>
+  <g class="num" text-anchor="middle" font-size="11"><text x="16" y="92">1</text><text x="16" y="171">2</text><text x="16" y="241">3</text><text x="16" y="311">4</text><text x="16" y="385">5</text></g>
+  <g class="con" stroke-width="1.5" fill="none">
+    <line x1="16" y1="98" x2="16" y2="157" marker-end="url(#ah)"/>
+    <line x1="16" y1="177" x2="16" y2="227" marker-end="url(#ah)"/>
+    <line x1="16" y1="247" x2="16" y2="297" marker-end="url(#ah)"/>
+    <line x1="16" y1="317" x2="16" y2="371" marker-end="url(#ah)"/>
+  </g>
+
+  <!-- funding + fan-out -->
+  <rect class="fund" x="300" y="20" width="120" height="28" rx="9" stroke-dasharray="5 4"/>
+  <text class="fund-t" x="360" y="39" text-anchor="middle" font-size="11">Funding UTXO</text>
+  <line class="con" x1="360" y1="48" x2="360" y2="66" stroke-width="1.6" marker-end="url(#ah)"/>
+  <rect class="cpfp" x="278" y="66" width="164" height="44" rx="9"/>
+  <text class="cpfp-t" x="360" y="87" text-anchor="middle">Fan-out tx</text>
+  <text class="cpfp-s" x="360" y="104" text-anchor="middle" font-size="11">one output per branch</text>
+
+  <!-- CPFP chain rails, fed by the fan-out outputs -->
+  <rect class="rail" x="262" y="146" width="40" height="182" rx="9"/>
+  <text class="rail-t" x="282" y="237" text-anchor="middle" font-size="11" transform="rotate(90 282 237)">CPFP chain A</text>
+  <rect class="rail" x="632" y="216" width="40" height="112" rx="9"/>
+  <text class="rail-t" x="652" y="272" text-anchor="middle" font-size="11" transform="rotate(90 652 272)">CPFP chain B</text>
+
+  <g class="dcon" stroke-width="1.5" fill="none" stroke-dasharray="4 3">
+    <path d="M320,110 C300,126 288,130 285,144" marker-end="url(#ah)"/>
+    <path d="M442,92 L652,92 L652,214" marker-end="url(#ah)"/>
+  </g>
+  <text class="mut" x="308" y="131" font-size="10.5">output A</text>
+  <text class="mut" x="548" y="86" font-size="10.5">output B</text>
+
+  <!-- branch A tree chain (root lives on this branch) -->
+  <rect class="pre" x="70" y="146" width="180" height="42" rx="9"/>
+  <text class="pre-t" x="160" y="172" text-anchor="middle">Root node tx</text>
+  <rect class="pre" x="70" y="216" width="180" height="42" rx="9"/>
+  <text class="pre-t" x="160" y="242" text-anchor="middle">Leaf A node tx</text>
+  <rect class="ref" x="70" y="286" width="180" height="42" rx="9"/>
+  <text class="ref-t" x="160" y="307" text-anchor="middle">Refund A</text>
+  <text class="ref-s" x="160" y="322" text-anchor="middle" font-size="10.5">timelock</text>
+  <g class="con" stroke-width="1.6" fill="none">
+    <line x1="160" y1="188" x2="160" y2="216" marker-end="url(#ah)"/>
+    <line x1="160" y1="258" x2="160" y2="286" marker-end="url(#ah)"/>
+  </g>
+  <text class="mut" x="170" font-size="10"><tspan y="200">+ intermediate</tspan><tspan x="170" y="211">nodes</tspan></text>
+
+  <!-- branch B tree chain (shares the root) -->
+  <rect class="pre" x="440" y="216" width="180" height="42" rx="9"/>
+  <text class="pre-t" x="530" y="242" text-anchor="middle">Leaf B node tx</text>
+  <rect class="ref" x="440" y="286" width="180" height="42" rx="9"/>
+  <text class="ref-t" x="530" y="307" text-anchor="middle">Refund B</text>
+  <text class="ref-s" x="530" y="322" text-anchor="middle" font-size="10.5">timelock</text>
+  <line class="con" x1="530" y1="258" x2="530" y2="286" stroke-width="1.6" fill="none" marker-end="url(#ah)"/>
+  <path class="con" d="M250,170 C360,176 380,196 440,224" stroke-width="1.6" fill="none" marker-end="url(#ah)"/>
+  <text class="mut" x="360" y="162" text-anchor="middle" font-size="10.5">shares the root</text>
+
+  <!-- converge to sweep -->
+  <path class="con" d="M160,328 C160,348 250,352 290,362" stroke-width="1.6" fill="none" marker-end="url(#ah)"/>
+  <path class="con" d="M530,328 C530,348 440,352 430,362" stroke-width="1.6" fill="none" marker-end="url(#ah)"/>
+  <rect class="swp" x="275" y="360" width="170" height="44" rx="9"/>
+  <text class="swp-t" x="360" y="381" text-anchor="middle">Sweep tx</text>
+  <text class="swp-s" x="360" y="397" text-anchor="middle" font-size="10.5">every refund, one payment</text>
+
+  <!-- legend -->
+  <g font-size="11">
+    <rect class="pre" x="70" y="424" width="12" height="12" rx="3"/><text class="lbl" x="88" y="434">pre-signed node</text>
+    <rect class="ref" x="200" y="424" width="12" height="12" rx="3"/><text class="lbl" x="218" y="434">timelocked refund</text>
+    <rect class="rail" x="336" y="424" width="12" height="12" rx="3"/><text class="lbl" x="354" y="434">caller-built</text>
+    <rect class="swp" x="492" y="424" width="12" height="12" rx="3"/><text class="lbl" x="510" y="434">sweep</text>
+    <text class="mut" x="70" y="452" font-size="9">The fan-out is caller-built too; each output funds one branch's CPFP chain (see the single-leaf diagram).</text>
+  </g>
+</svg>
