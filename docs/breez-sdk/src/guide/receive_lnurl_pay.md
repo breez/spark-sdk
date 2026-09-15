@@ -39,7 +39,8 @@ Configure your domain in the SDK by passing the {{#name lnurl_domain}} parameter
 {{#tabs lightning_address:config-lightning-address}}
 
 <h2 id="managing-lightning-address">
-    <a class="header" href="#managing-lightning-address">Managing Lightning addresses</a></h2>
+    <a class="header" href="#managing-lightning-address">Managing Lightning addresses</a>
+</h2>
 
 The SDK provides several functions to manage Lightning addresses:
 

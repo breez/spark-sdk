@@ -1,5 +1,6 @@
 <h1 id="lnurl-withdraw">
-    <a class="header" href="#lnurl-withdraw">Receiving payments using LNURL-Withdraw</a></h1>
+    <a class="header" href="#lnurl-withdraw">Receiving payments using LNURL-Withdraw</a>
+</h1>
 
 After [parsing](parse.md) an LNURL-Withdraw input, you can use the resulting input data to initiate a withdrawal from an LNURL service.
 

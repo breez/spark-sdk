@@ -1,5 +1,6 @@
 <h1 id="initializing">
-    <a class="header" href="#initializing">Initializing the SDK</a></h1>
+    <a class="header" href="#initializing">Initializing the SDK</a>
+</h1>
 
 ## Basic Initialization
 

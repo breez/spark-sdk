@@ -26,7 +26,8 @@ The package tells the user exactly what they are approving: the amount, the fee 
 {{#tabs client_signing:client-signing-sign-package}}
 
 <h2 id="driving-the-send">
-    <a class="header" href="#driving-the-send">Driving the send from the server</a></h2>
+    <a class="header" href="#driving-the-send">Driving the send from the server</a>
+</h2>
 
 Prepare once, then repeat build, sign and publish until the payment is sent:
 

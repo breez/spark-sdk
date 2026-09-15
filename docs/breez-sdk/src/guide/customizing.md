@@ -126,7 +126,8 @@ When wrapping the backend's store, pass the same storage backend to both {{#name
 </div>
 
 <h2 id="with-context">
-    <a class="header" href="#with-shared-context">With Shared SDK Context</a></h2>
+    <a class="header" href="#with-shared-context">With Shared SDK Context</a>
+</h2>
 
 An SDK Context bundles every process-shareable resource: the HTTP client (used for SSP GraphQL, chain service and LNURL), the gRPC channels to the Spark operators, the gRPC client to the Breez backend, and — optionally — a PostgreSQL or MySQL connection pool. By default each SDK builds its own. Server processes hosting many wallets at once can construct one SDK Context and pass it to every {{#name SdkBuilder}} so they reuse the same pooled clients instead of each opening fresh ones.
 
