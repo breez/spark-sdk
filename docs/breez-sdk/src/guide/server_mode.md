@@ -1,7 +1,4 @@
-<h1 id="server-mode">
-    <a class="header" href="#server-mode">Server mode</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/fn.default_server_config.html">API docs</a>
-</h1>
+# Server mode
 
 Server mode is the SDK profile for **multi-tenant server deployments** where a single process hosts many wallets and builds an ephemeral SDK instance per request. The SDK is treated as a library: the host orchestrates sync, claiming, and event delivery (typically via webhooks) explicitly, so each per-request SDK stays cheap, predictable, and returns fresh state.
 

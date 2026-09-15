@@ -4,10 +4,7 @@ A single transaction can pay multiple recipients at once. The batch API is separ
 
 A batch currently pays tokens only. Sending sats to several recipients at once is not supported yet, so every recipient must resolve to a token.
 
-<h2 id="preparing-the-batch">
-    <a class="header" href="#preparing-the-batch">Preparing the batch</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.prepare_send_batch">API docs</a>
-</h2>
+## Preparing the batch
 
 Each recipient is identified by a {{#name payment_request}}, which is either a Spark address or a Spark invoice, and the two may be mixed freely in one batch:
 
@@ -22,10 +19,7 @@ The response resolves every recipient into the concrete {{#name destination}}, a
 
 {{#tabs tokens:send-batch}}
 
-<h2 id="sending-the-batch">
-    <a class="header" href="#sending-the-batch">Sending the batch</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.send_batch">API docs</a>
-</h2>
+## Sending the batch
 
 Sending returns one payment per recipient, in the order the recipients were requested. Every payment carries the same transaction hash, so your application can group them later by filtering the payment list on that hash. See [Listing payments](./list_payments.md).
 

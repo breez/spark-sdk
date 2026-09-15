@@ -1,7 +1,5 @@
 <h1 id="lnurl-auth">
-    <a class="header" href="#lnurl-auth">Using LNURL-Auth</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.lnurl_auth">API docs</a>
-</h1>
+    <a class="header" href="#lnurl-auth">Using LNURL-Auth</a></h1>
 
 LNURL-Auth allows users to authenticate with services using their Lightning app, without requiring passwords or usernames. The Breez SDK supports LNURL-Auth following the LUD-04 and LUD-05 specifications.
 

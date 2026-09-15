@@ -17,10 +17,7 @@ Sometimes the wallet first needs to re-shape its funds so it can send the exact 
 
 The server keeps no state between these steps. Everything needed to complete the payment travels inside the requests and responses, so building and publishing can happen in different processes or on different instances. This fits [Server mode](server_mode.md) deployments, where an SDK instance is built per request.
 
-<h2 id="signing-on-the-users-side">
-    <a class="header" href="#signing-on-the-users-side">Signing on the user's side</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/signer/trait.ExternalSparkSigner.html">API docs</a>
-</h2>
+## Signing on the user's side
 
 The user's side does not need a connected SDK, only a signer that holds the user's key: any {{#name ExternalSparkSigner}} implementation (see [Using an External Signer](external_signer.md)), whether it runs on the user's device or fronts a remote signing service.
 
@@ -29,9 +26,7 @@ The package tells the user exactly what they are approving: the amount, the fee 
 {{#tabs client_signing:client-signing-sign-package}}
 
 <h2 id="driving-the-send">
-    <a class="header" href="#driving-the-send">Driving the send from the server</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.build_unsigned_transfer_package">API docs</a>
-</h2>
+    <a class="header" href="#driving-the-send">Driving the send from the server</a></h2>
 
 Prepare once, then repeat build, sign and publish until the payment is sent:
 
@@ -53,10 +48,7 @@ For BOLT11 invoices the build options work like the send options in [Sending pay
 
 Token payments follow the same loop. Prepare with a token identifier as in [Token payments](token_payments.md). The package amounts are in the token's base units, and the user signs with {{#name prepare_token_transaction}}. A Token package with {{#name is_swap}} set means the wallet first needs to combine token outputs: publishing it returns {{#enum PublishSignedTransferPackageResponse::SwapCompleted}}, just like the Bitcoin case.
 
-<h2 id="lnurl-pay">
-    <a class="header" href="#lnurl-pay">LNURL-Pay</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.build_unsigned_lnurl_pay_package">API docs</a>
-</h2>
+## LNURL-Pay
 
 LNURL payments have their own pair of methods, because completing them includes the LNURL exchange with the recipient's service. Prepare with {{#name prepare_lnurl_pay}} as in [LNURL-Pay](lnurl_pay.md), then run the same loop with {{#name build_unsigned_lnurl_pay_package}} and {{#name publish_signed_lnurl_pay_package}}. The result carries the LNURL response, including any success action:
 

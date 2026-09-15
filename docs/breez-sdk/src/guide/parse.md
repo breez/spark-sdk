@@ -2,7 +2,7 @@
 
 The SDK provides a versatile and extensible parsing module designed to process a wide range of input strings and return parsed data in various standardized formats.
 
-Natively supported formats include: BOLT11 invoices, LNURLs of different types, Bitcoin addresses, Spark addresses, and others. For the complete list, consult the [API documentation](https://breez.github.io/spark-sdk/breez_sdk_spark/enum.InputType.html).
+Natively supported formats include: BOLT11 invoices, LNURLs of different types, Bitcoin addresses, Spark addresses, and others. Each one parses to a variant of {{#name InputType}}.
 
 Cross-chain destinations on EVM, Solana, and Tron — bare addresses or chain-prefixed URIs — parse to {{#enum InputType::CrossChainAddress}}, carrying the parsed address family along with any token contract address and amount embedded in the URI. Use the resulting {{#name CrossChainAddressDetails}} to discover available routes; see [Send USDC/USDT](./send_payment.md#usdc-usdt) for the send flow.
 
@@ -48,4 +48,4 @@ When parsing an input that isn't recognized as one of the native input types, th
 
 ### Default external parsers
 
-The SDK ships with some embedded default external parsers. If you prefer not to use them, you can disable them in the SDK's configuration. See the available default parsers in the [API Documentation](https://breez.github.io/spark-sdk/breez_sdk_spark/constant.DEFAULT_EXTERNAL_INPUT_PARSERS.html) by checking the source of the constant.
+The SDK ships with some embedded default external parsers. If you prefer not to use them, you can disable them in the SDK's configuration.

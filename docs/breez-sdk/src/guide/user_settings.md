@@ -2,10 +2,7 @@
 
 The SDK exposes a set of user settings that are shared across all SDK instances, even from different partners.
 
-<h2 id="available-user-settings">
-    <a class="header" href="#available-user-settings">Available user settings</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.UserSettings.html">API docs</a>
-</h2>
+## Available user settings
 
 The following user settings are available:
 
@@ -17,17 +14,11 @@ The following user settings are available:
 
 - **Spark master identity public key**: A second public key that Spark accepts as a reader of the wallet while private mode is enabled. It enables watch-only views of a private wallet: designate a key you control, and a Spark client authenticating with the corresponding private key can query the wallet's Bitcoin balance and payment history. The master identity is read-only, so making payments still requires the wallet's own keys. The same public key can be designated across many wallets.
 
-<h2 id="getting-the-current-user-settings">
-    <a class="header" href="#getting-the-current-user-settings">Getting the current user settings</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.get_user_settings">API docs</a>
-</h2>
+## Getting the current user settings
 
 {{#tabs user_settings:get-user-settings}}
 
-<h2 id="updating-the-user-settings">
-    <a class="header" href="#updating-the-user-settings">Updating the user settings</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.update_user_settings">API docs</a>
-</h2>
+## Updating the user settings
 
 Every field of {{#name UpdateUserSettingsRequest}} is optional, and a field left unset is not changed. Settings that hold a value use an enum to distinguish assigning one from clearing it: {{#enum SparkMasterIdentityPublicKey::Set}} and {{#enum StableBalanceActiveLabel::Set}} assign, {{#enum SparkMasterIdentityPublicKey::Unset}} and {{#enum StableBalanceActiveLabel::Unset}} clear.
 
