@@ -14,6 +14,7 @@ use crate::{
         ExternalPrepareTransferRequest, ExternalPreparedTokenTransaction, ExternalPreparedTransfer,
     },
     token_conversion::{ConversionAmount, TokenConversionResponse},
+    utils::payments::{SettledInvoiceLookup, resolve_spark_settled_bolt11},
     utils::token::map_and_persist_token_transaction,
 };
 
@@ -124,7 +125,17 @@ pub(super) async fn send_signed(
         )
         .await?;
 
-    let payment: Payment = transfer.try_into()?;
+    let mut payment: Payment = transfer.try_into()?;
+    // The package drops the Bolt11 on its way to the signer, so a send that
+    // settled one is reported as that invoice from the row recorded when the
+    // package was built.
+    resolve_spark_settled_bolt11(
+        &sdk.spark_wallet,
+        &sdk.storage,
+        &mut payment,
+        SettledInvoiceLookup::Local,
+    )
+    .await;
     sdk.storage.apply_payment_update(payment.clone()).await?;
     Ok(SendPaymentResponse { payment })
 }
