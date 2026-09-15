@@ -57,7 +57,13 @@ pub async fn handle_command(
         } => {
             let desc = description.map(InvoiceDescription::Memo);
             let payment = wallet
-                .create_lightning_invoice(amount_sat, desc, None, expiry_secs, true)
+                .create_lightning_invoice(
+                    amount_sat,
+                    desc,
+                    None,
+                    expiry_secs,
+                    spark_wallet::LightningReceiveFallback::Address,
+                )
                 .await?;
             let qr = QrCode::with_error_correction_level(&payment.invoice, EcLevel::L)
                 .unwrap()

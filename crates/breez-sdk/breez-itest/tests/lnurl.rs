@@ -1114,7 +1114,8 @@ async fn test_11_lnurl_spark_address_payment(
     let payment_amount_sats = 5_000;
     let payment_comment = "Spark address LNURL payment from Alice";
 
-    // Bob registers a Lightning address (LNURL server has include_spark_address=true)
+    // Bob registers a Lightning address. The server advertises a Spark
+    // destination on the invoices it mints for him.
     let bob_lightning_address = async {
         let register_response = bob
             .sdk
@@ -1159,10 +1160,8 @@ async fn test_11_lnurl_spark_address_payment(
     let amount_sats = prepare_response.amount_sats;
     info!("Alice prepared payment for {amount_sats} sats to {bob_lightning_address}");
 
-    // Alice sends the payment via lnurl_pay
-    // This is the key part: the LNURL server returns an invoice with a Spark routing hint,
-    // so the SDK pays via Spark transfer. Previously this returned
-    // "Expected Lightning payment details" error.
+    // The invoice the LNURL server returns advertises a Spark destination, so
+    // the SDK settles it with a transfer rather than routing over Lightning.
     let pay_response = alice
         .sdk
         .lnurl_pay(LnurlPayRequest {
@@ -1193,15 +1192,38 @@ async fn test_11_lnurl_spark_address_payment(
     assert_eq!(alice_payment.payment_type, PaymentType::Send);
     assert_eq!(alice_payment.amount, payment_amount_sats as u128);
     assert_eq!(alice_payment.status, PaymentStatus::Completed);
-    // The payment went via Spark, so method should be Spark
-    assert_eq!(alice_payment.method, PaymentMethod::Spark);
 
-    // The payment went via Spark, so details should be Spark variant
+    // A transfer carried it, but Alice paid the Bolt11 the LNURL server minted,
+    // so that is what her payment reports. The LNURL metadata rides on the
+    // Lightning details, which the Spark variant has nowhere to carry.
+    assert_eq!(alice_payment.method, PaymentMethod::Lightning);
+    let Some(PaymentDetails::Lightning {
+        htlc_details,
+        lnurl_pay_info,
+        ..
+    }) = &alice_payment.details
+    else {
+        anyhow::bail!(
+            "Expected Lightning payment details, got: {:?}",
+            alice_payment.details
+        );
+    };
     assert!(
-        matches!(&alice_payment.details, Some(PaymentDetails::Spark { .. })),
-        "Expected Spark payment details, got: {:?}",
-        alice_payment.details,
+        htlc_details.is_none(),
+        "a Spark-settled invoice has no HTLC"
     );
+    let lnurl_pay_info = lnurl_pay_info
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Expected LNURL pay info on the payment"))?;
+    assert_eq!(
+        lnurl_pay_info.ln_address.as_deref(),
+        Some(bob_lightning_address.as_str())
+    );
+    assert_eq!(lnurl_pay_info.comment.as_deref(), Some(payment_comment));
+
+    // Bob's receive is not asserted here: the lnurl server minted his Bolt11, so
+    // nothing ties the transfer back to it. Attribution covers invoices a wallet
+    // mints itself, which `bolt11_spark_fallback` covers.
 
     info!("=== Test test_11_lnurl_spark_address_payment PASSED ===");
     Ok(())

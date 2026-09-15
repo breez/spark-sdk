@@ -15,7 +15,8 @@ use tracing::{Instrument, debug, error, warn};
 
 use crate::{
     Contact, DepositInfo, EventEmitter, ListContactsRequest, Payment, PaymentDetails,
-    PaymentMetadata, Storage, StorageError, UpdateDepositPayload,
+    PaymentMetadata, SparkSettledBolt11Receive, SparkSettledBolt11Send, Storage, StorageError,
+    UpdateDepositPayload,
     events::{InternalSyncedEvent, SdkEvent},
     lnurl::LnurlServerClient,
     persist::{
@@ -695,6 +696,43 @@ impl Storage for SyncedStorage {
         self.inner.list_active_cross_chain_swaps(provider).await
     }
 
+    async fn set_spark_settled_bolt11_send(
+        &self,
+        send: SparkSettledBolt11Send,
+    ) -> Result<(), StorageError> {
+        self.inner.set_spark_settled_bolt11_send(send).await
+    }
+
+    async fn get_spark_settled_bolt11_send(
+        &self,
+        payment_id: String,
+    ) -> Result<Option<SparkSettledBolt11Send>, StorageError> {
+        self.inner.get_spark_settled_bolt11_send(payment_id).await
+    }
+
+    async fn set_spark_settled_bolt11_receive(
+        &self,
+        receive: SparkSettledBolt11Receive,
+    ) -> Result<(), StorageError> {
+        self.inner.set_spark_settled_bolt11_receive(receive).await
+    }
+
+    async fn get_spark_settled_bolt11_receive(
+        &self,
+        id: String,
+    ) -> Result<Option<SparkSettledBolt11Receive>, StorageError> {
+        self.inner.get_spark_settled_bolt11_receive(id).await
+    }
+
+    async fn delete_expired_spark_settled_bolt11_receives(
+        &self,
+        before: u64,
+    ) -> Result<(), StorageError> {
+        self.inner
+            .delete_expired_spark_settled_bolt11_receives(before)
+            .await
+    }
+
     async fn add_outgoing_change(
         &self,
         record: UnversionedRecordChange,
@@ -820,12 +858,12 @@ mod tests {
                 invoice: "lnbc1test".to_string(),
                 destination_pubkey: "02def456".to_string(),
                 description: None,
-                htlc_details: SparkHtlcDetails {
+                htlc_details: Some(SparkHtlcDetails {
                     payment_hash: "abc123".to_string(),
                     preimage: None,
                     expiry_time: 0,
                     status: crate::SparkHtlcStatus::WaitingForPreimage,
-                },
+                }),
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,

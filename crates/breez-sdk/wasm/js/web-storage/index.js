@@ -611,6 +611,26 @@ class MigrationManager {
           };
         },
       },
+      {
+        // Bolt11s settled over Spark, one store per direction. Sends are keyed
+        // by the transfer that paid. Receives are keyed by the Spark invoice
+        // the Bolt11 embeds, written when it is minted and dropped once it has
+        // expired, through the expiresAt index.
+        name: "Create spark_settled_bolt11 stores",
+        upgrade: (db) => {
+          if (!db.objectStoreNames.contains("spark_settled_bolt11_sends")) {
+            db.createObjectStore("spark_settled_bolt11_sends", {
+              keyPath: "paymentId",
+            });
+          }
+          if (!db.objectStoreNames.contains("spark_settled_bolt11_receives")) {
+            const store = db.createObjectStore("spark_settled_bolt11_receives", {
+              keyPath: "id",
+            });
+            store.createIndex("expiresAt", "expiresAt", { unique: false });
+          }
+        },
+      },
     ];
   }
 }
@@ -2268,6 +2288,131 @@ class IndexedDBStorage {
     });
   }
 
+  // ===== Spark-Settled Bolt11 Operations =====
+
+  async setSparkSettledBolt11Send(send) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("spark_settled_bolt11_sends", "readwrite");
+      const store = transaction.objectStore("spark_settled_bolt11_sends");
+      const request = store.put({ paymentId: send.paymentId, bolt11: send.bolt11 });
+      request.onsuccess = () => resolve();
+      request.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to set spark-settled bolt11 send '${send.paymentId}': ${request.error?.message || "Unknown error"}`,
+            request.error
+          )
+        );
+      };
+    });
+  }
+
+  async getSparkSettledBolt11Send(paymentId) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("spark_settled_bolt11_sends", "readonly");
+      const store = transaction.objectStore("spark_settled_bolt11_sends");
+      const request = store.get(paymentId);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to get spark-settled bolt11 send '${paymentId}': ${request.error?.message || "Unknown error"}`,
+            request.error
+          )
+        );
+      };
+    });
+  }
+
+  async setSparkSettledBolt11Receive(receive) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("spark_settled_bolt11_receives", "readwrite");
+      const store = transaction.objectStore("spark_settled_bolt11_receives");
+      // The expiry is an index key, and IndexedDB indexes neither BigInt nor
+      // null, so it is stored as a number and left out when absent.
+      const request = store.put({
+        id: receive.id,
+        sparkInvoice: receive.sparkInvoice,
+        bolt11: receive.bolt11,
+        expiresAt: receive.expiresAt == null ? undefined : Number(receive.expiresAt),
+      });
+      request.onsuccess = () => resolve();
+      request.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to set spark-settled bolt11 receive '${receive.id}': ${request.error?.message || "Unknown error"}`,
+            request.error
+          )
+        );
+      };
+    });
+  }
+
+  async getSparkSettledBolt11Receive(id) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("spark_settled_bolt11_receives", "readonly");
+      const store = transaction.objectStore("spark_settled_bolt11_receives");
+      const request = store.get(id);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to get spark-settled bolt11 receive '${id}': ${request.error?.message || "Unknown error"}`,
+            request.error
+          )
+        );
+      };
+    });
+  }
+
+  async deleteExpiredSparkSettledBolt11Receives(before) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("spark_settled_bolt11_receives", "readwrite");
+      const store = transaction.objectStore("spark_settled_bolt11_receives");
+      // Entries with no expiry are absent from the index, so they stay.
+      const request = store
+        .index("expiresAt")
+        .openCursor(IDBKeyRange.upperBound(Number(before), true));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          resolve();
+          return;
+        }
+        cursor.delete();
+        cursor.continue();
+      };
+      request.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to delete expired spark-settled bolt11 receives: ${request.error?.message || "Unknown error"}`,
+            request.error
+          )
+        );
+      };
+    });
+  }
+
   // ===== Cross-Chain Swap Operations =====
 
   async setCrossChainSwap(swap) {
@@ -2568,12 +2713,6 @@ class IndexedDBStorage {
           e
         );
       }
-    }
-
-    if (details && details.type === "lightning" && !details.htlcDetails) {
-      throw new StorageError(
-        `htlc_details is required for Lightning payment ${payment.id}`
-      );
     }
 
     if (metadata && details) {

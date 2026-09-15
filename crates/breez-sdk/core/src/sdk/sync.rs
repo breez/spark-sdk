@@ -18,7 +18,7 @@ use crate::{
     sync::SparkSyncService,
     utils::{
         deposit_chain_syncer::{DepositChainSyncer, TxOutput},
-        payments::update_balances,
+        payments::{prune_expired_spark_settled_bolt11_receives, update_balances},
         utxo_fetcher::DetailedUtxo,
     },
 };
@@ -318,6 +318,13 @@ impl BreezSdk {
             self.event_emitter.clone(),
         );
         sync_service.sync_payments(initial_sync_complete).await?;
+
+        // After the payments, so a transfer settling an invoice right before it
+        // expired has been through the row before the row goes.
+        if let Err(e) = prune_expired_spark_settled_bolt11_receives(&self.storage, now_secs()).await
+        {
+            warn!("Failed to prune expired Spark-settled Bolt11 receives: {e:?}");
+        }
 
         Ok(())
     }

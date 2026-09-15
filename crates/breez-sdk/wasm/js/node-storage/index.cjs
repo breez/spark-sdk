@@ -25,6 +25,25 @@ try {
 }
 
 const { StorageError } = require("./errors.cjs");
+
+/**
+ * Rebuilds the HTLC details of a Lightning payment row.
+ *
+ * No HTLC status means the invoice was settled by a transfer to the Spark
+ * destination it advertised, which creates no HTLC.
+ */
+function htlcDetailsFromRow(row) {
+  if (!row.lightning_htlc_status) {
+    return null;
+  }
+  return {
+    paymentHash: row.lightning_payment_hash,
+    preimage: row.lightning_preimage || null,
+    expiryTime: row.lightning_htlc_expiry_time ?? 0,
+    status: row.lightning_htlc_status,
+  };
+}
+
 const { MigrationManager } = require("./migrations.cjs");
 
 /**
@@ -212,7 +231,9 @@ class SqliteStorage {
           } else if (paymentDetailsFilter.type === "token") {
             paymentDetailsClauses.push("p.spark IS NULL AND t.tx_hash IS NOT NULL");
           } else if (paymentDetailsFilter.type === "lightning") {
-            paymentDetailsClauses.push("l.htlc_status IS NOT NULL");
+            // Not htlc_status: a payment settled over the Spark destination its
+            // invoice advertised is a Lightning payment with no HTLC.
+            paymentDetailsClauses.push("l.invoice IS NOT NULL");
           }
           // Filter by HTLC status (Spark or Lightning)
           const htlcAlias =
@@ -417,8 +438,8 @@ class SqliteStorage {
           destination_pubkey=excluded.destination_pubkey,
           description=excluded.description,
           preimage=COALESCE(excluded.preimage, payment_details_lightning.preimage),
-          htlc_status=COALESCE(excluded.htlc_status, payment_details_lightning.htlc_status),
-          htlc_expiry_time=COALESCE(excluded.htlc_expiry_time, payment_details_lightning.htlc_expiry_time)`
+          htlc_status=excluded.htlc_status,
+          htlc_expiry_time=excluded.htlc_expiry_time`
     );
     const tokenInsert = this.db.prepare(
       `INSERT INTO payment_details_token
@@ -480,12 +501,12 @@ class SqliteStorage {
       lightningInsert.run({
         id: payment.id,
         invoice: payment.details.invoice,
-        paymentHash: payment.details.htlcDetails.paymentHash,
+        paymentHash: payment.details.htlcDetails?.paymentHash ?? null,
         destinationPubkey: payment.details.destinationPubkey,
         description: payment.details.description,
         preimage: payment.details.htlcDetails?.preimage,
         htlcStatus: payment.details.htlcDetails?.status ?? null,
-        htlcExpiryTime: payment.details.htlcDetails?.expiryTime ?? 0,
+        htlcExpiryTime: payment.details.htlcDetails?.expiryTime ?? null,
       });
     }
 
@@ -787,7 +808,7 @@ class SqliteStorage {
   setLnurlMetadata(metadata) {
     try {
       const stmt = this.db.prepare(
-        "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment) VALUES (?, ?, ?, ?)"
+"INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment) VALUES (?, ?, ?, ?)"
       );
 
       const transaction = this.db.transaction(() => {
@@ -823,14 +844,7 @@ class SqliteStorage {
         invoice: row.lightning_invoice,
         destinationPubkey: row.lightning_destination_pubkey,
         description: row.lightning_description,
-        htlcDetails: row.lightning_htlc_status
-          ? {
-              paymentHash: row.lightning_payment_hash,
-              preimage: row.lightning_preimage || null,
-              expiryTime: row.lightning_htlc_expiry_time ?? 0,
-              status: row.lightning_htlc_status,
-            }
-          : (() => { throw new StorageError(`htlc_status is required for Lightning payment ${row.id}`); })(),
+        htlcDetails: htlcDetailsFromRow(row),
       };
 
       if (row.lnurl_pay_info) {
@@ -1439,6 +1453,95 @@ class SqliteStorage {
     }
   }
 
+  // ===== Spark-Settled Bolt11 Operations =====
+
+  setSparkSettledBolt11Send(send) {
+    try {
+      const stmt = this.db.prepare(
+        `INSERT INTO spark_settled_bolt11_sends (payment_id, bolt11) VALUES (?, ?)
+         ON CONFLICT(payment_id) DO UPDATE SET bolt11 = excluded.bolt11`
+      );
+      stmt.run(send.paymentId, send.bolt11);
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(`Failed to set spark-settled bolt11 send: ${error.message}`, error)
+      );
+    }
+  }
+
+  getSparkSettledBolt11Send(paymentId) {
+    try {
+      const stmt = this.db.prepare(
+        `SELECT payment_id, bolt11 FROM spark_settled_bolt11_sends WHERE payment_id = ?`
+      );
+      const row = stmt.get(paymentId);
+      return Promise.resolve(
+        row ? { paymentId: row.payment_id, bolt11: row.bolt11 } : null
+      );
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(`Failed to get spark-settled bolt11 send: ${error.message}`, error)
+      );
+    }
+  }
+
+  setSparkSettledBolt11Receive(receive) {
+    try {
+      const stmt = this.db.prepare(
+        `INSERT INTO spark_settled_bolt11_receives (id, spark_invoice, bolt11, expires_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           spark_invoice = excluded.spark_invoice,
+           bolt11 = excluded.bolt11,
+           expires_at = excluded.expires_at`
+      );
+      stmt.run(
+        receive.id,
+        receive.sparkInvoice,
+        receive.bolt11,
+        receive.expiresAt == null ? null : Number(receive.expiresAt)
+      );
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(`Failed to set spark-settled bolt11 receive: ${error.message}`, error)
+      );
+    }
+  }
+
+  getSparkSettledBolt11Receive(id) {
+    try {
+      const stmt = this.db.prepare(
+        `SELECT id, spark_invoice, bolt11, expires_at
+         FROM spark_settled_bolt11_receives WHERE id = ?`
+      );
+      const row = stmt.get(id);
+      return Promise.resolve(row ? sparkSettledBolt11ReceiveFromRow(row) : null);
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(`Failed to get spark-settled bolt11 receive: ${error.message}`, error)
+      );
+    }
+  }
+
+  deleteExpiredSparkSettledBolt11Receives(before) {
+    try {
+      const stmt = this.db.prepare(
+        `DELETE FROM spark_settled_bolt11_receives WHERE expires_at < ?`
+      );
+      stmt.run(Number(before));
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(
+          `Failed to delete expired spark-settled bolt11 receives: ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
   // ===== Cross-Chain Swap Operations =====
 
   setCrossChainSwap(swap) {
@@ -1497,6 +1600,17 @@ class SqliteStorage {
       );
     }
   }
+}
+
+/// Maps a `spark_settled_bolt11_receives` row to the camelCase shape the SDK
+/// expects. A NULL expiry comes back absent.
+function sparkSettledBolt11ReceiveFromRow(row) {
+  return {
+    id: row.id,
+    sparkInvoice: row.spark_invoice,
+    bolt11: row.bolt11,
+    expiresAt: row.expires_at == null ? undefined : Number(row.expires_at),
+  };
 }
 
 /// Maps a `cross_chain_swaps` row to a StoredCrossChainSwap, parsing `data` and

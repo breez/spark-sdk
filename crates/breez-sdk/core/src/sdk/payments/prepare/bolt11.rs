@@ -1,5 +1,3 @@
-use spark_wallet::SparkAddress;
-
 use crate::{
     Bolt11InvoiceDetails, ConversionOptions, ConversionType, FeePolicy, SendPaymentMethod,
     error::SdkError,
@@ -96,13 +94,7 @@ pub(super) async fn prepare(
 ) -> Result<PrepareSendPaymentResponse, SdkError> {
     validate_request(detailed_bolt11_invoice, request)?;
 
-    let spark_address: Option<SparkAddress> = sdk.spark_wallet.extract_spark_address(input)?;
-
-    let spark_transfer_fee_sats = if spark_address.is_some() {
-        Some(0)
-    } else {
-        None
-    };
+    let spark_transfer_fee_sats = sdk.spark_wallet.extract_spark_fallback(input)?.map(|_| 0);
 
     if let Some(opts) = request.conversion_options.as_ref()
         && conversion::is_token_denominated(request.amount, Some(opts), token_identifier.as_ref())

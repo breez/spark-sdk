@@ -19,9 +19,10 @@ use crate::{
     PaymentMethod, PaymentStatus, SparkHtlcDetails, SparkHtlcStatus,
     error::DepositClaimError,
     persist::{
-        Payment, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,
-        StorageListPaymentsRequest, StoragePaymentDetailsFilter, StoredCrossChainSwap,
-        UpdateDepositPayload, parse_payment_status,
+        Payment, PaymentMetadata, SetLnurlMetadataItem, SparkSettledBolt11Receive,
+        SparkSettledBolt11Send, Storage, StorageError, StorageListPaymentsRequest,
+        StoragePaymentDetailsFilter, StoredCrossChainSwap, UpdateDepositPayload,
+        parse_payment_status,
     },
     sync_storage::{
         IncomingChange, OutgoingChange, Record, RecordChange, RecordId, UnversionedRecordChange,
@@ -554,6 +555,41 @@ impl MysqlStorage {
                 column: "refund_state",
                 definition: "JSON NULL",
             }],
+            // Migration 24: A Lightning payment settled by a transfer to the Spark
+            // destination its invoice advertised involves no HTLC, so the columns
+            // describing one become nullable.
+            vec![Migration::sql(
+                "ALTER TABLE brz_payment_details_lightning
+                   MODIFY payment_hash VARCHAR(255) NULL,
+                   MODIFY htlc_status VARCHAR(64) NULL,
+                   MODIFY htlc_expiry_time BIGINT NULL",
+            )],
+            // Migration 25: Bolt11s settled over Spark, one table per direction.
+            // Sends are keyed by the transfer that paid. Receives are keyed by
+            // the Spark invoice the Bolt11 embeds, written when it is minted and
+            // dropped once it has expired. Born multi-tenant.
+            vec![
+                Migration::sql(
+                    "CREATE TABLE IF NOT EXISTS brz_spark_settled_bolt11_sends (
+                        user_id VARBINARY(33) NOT NULL,
+                        payment_id VARCHAR(255) NOT NULL,
+                        bolt11 TEXT NOT NULL,
+                        PRIMARY KEY (user_id, payment_id)
+                    )",
+                ),
+                Migration::sql(
+                    "CREATE TABLE IF NOT EXISTS brz_spark_settled_bolt11_receives (
+                        user_id VARBINARY(33) NOT NULL,
+                        id VARCHAR(64) NOT NULL,
+                        spark_invoice TEXT NOT NULL,
+                        bolt11 TEXT NOT NULL,
+                        expires_at BIGINT NULL,
+                        PRIMARY KEY (user_id, id),
+                        INDEX brz_idx_spark_settled_bolt11_receives_user_expires_at
+                            (user_id, expires_at)
+                    )",
+                ),
+            ],
         ]
     }
 }
@@ -889,10 +925,13 @@ impl MysqlStorage {
                 htlc_details,
                 ..
             }) => {
-                let payment_hash = htlc_details.payment_hash.clone();
-                let preimage = htlc_details.preimage.clone();
-                let htlc_status = htlc_details.status.to_string();
-                let htlc_expiry_time = i64::try_from(htlc_details.expiry_time)?;
+                let preimage = htlc_details.as_ref().and_then(|d| d.preimage.clone());
+                let payment_hash = htlc_details.as_ref().map(|d| d.payment_hash.clone());
+                let htlc_status = htlc_details.as_ref().map(|d| d.status.to_string());
+                let htlc_expiry_time = htlc_details
+                    .as_ref()
+                    .map(|d| i64::try_from(d.expiry_time))
+                    .transpose()?;
                 tx.exec_drop(
                     "INSERT INTO brz_payment_details_lightning (user_id, payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -902,8 +941,8 @@ impl MysqlStorage {
                             destination_pubkey = VALUES(destination_pubkey),
                             description = VALUES(description),
                             preimage = COALESCE(VALUES(preimage), preimage),
-                            htlc_status = COALESCE(VALUES(htlc_status), htlc_status),
-                            htlc_expiry_time = COALESCE(VALUES(htlc_expiry_time), htlc_expiry_time)",
+                            htlc_status = VALUES(htlc_status),
+                            htlc_expiry_time = VALUES(htlc_expiry_time)",
                     (
                         identity.to_vec(),
                         &payment.id,
@@ -1664,6 +1703,105 @@ impl Storage for MysqlStorage {
         rows.into_iter().map(cross_chain_swap_from_parts).collect()
     }
 
+    async fn set_spark_settled_bolt11_send(
+        &self,
+        send: SparkSettledBolt11Send,
+    ) -> Result<(), StorageError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
+        conn.exec_drop(
+            "INSERT INTO brz_spark_settled_bolt11_sends (user_id, payment_id, bolt11)
+             VALUES (?, ?, ?)
+             ON DUPLICATE KEY UPDATE bolt11 = VALUES(bolt11)",
+            (self.identity.clone(), send.payment_id, send.bolt11),
+        )
+        .await
+        .map_err(map_db_error)?;
+        Ok(())
+    }
+
+    async fn get_spark_settled_bolt11_send(
+        &self,
+        payment_id: String,
+    ) -> Result<Option<SparkSettledBolt11Send>, StorageError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
+        let row: Option<(String, String)> = conn
+            .exec_first(
+                "SELECT payment_id, bolt11 FROM brz_spark_settled_bolt11_sends
+                 WHERE user_id = ? AND payment_id = ?",
+                (self.identity.clone(), payment_id),
+            )
+            .await
+            .map_err(map_db_error)?;
+        Ok(row.map(|(payment_id, bolt11)| SparkSettledBolt11Send { payment_id, bolt11 }))
+    }
+
+    async fn set_spark_settled_bolt11_receive(
+        &self,
+        receive: SparkSettledBolt11Receive,
+    ) -> Result<(), StorageError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
+        let expires_at = receive.expires_at.map(i64::try_from).transpose()?;
+        conn.exec_drop(
+            "INSERT INTO brz_spark_settled_bolt11_receives
+               (user_id, id, spark_invoice, bolt11, expires_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+               spark_invoice = VALUES(spark_invoice),
+               bolt11 = VALUES(bolt11),
+               expires_at = VALUES(expires_at)",
+            (
+                self.identity.clone(),
+                receive.id,
+                receive.spark_invoice,
+                receive.bolt11,
+                expires_at,
+            ),
+        )
+        .await
+        .map_err(map_db_error)?;
+        Ok(())
+    }
+
+    async fn get_spark_settled_bolt11_receive(
+        &self,
+        id: String,
+    ) -> Result<Option<SparkSettledBolt11Receive>, StorageError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
+        let row: Option<(String, String, String, Option<i64>)> = conn
+            .exec_first(
+                "SELECT id, spark_invoice, bolt11, expires_at
+                 FROM brz_spark_settled_bolt11_receives
+                 WHERE user_id = ? AND id = ?",
+                (self.identity.clone(), id),
+            )
+            .await
+            .map_err(map_db_error)?;
+        match row {
+            Some((id, spark_invoice, bolt11, expires_at)) => Ok(Some(SparkSettledBolt11Receive {
+                id,
+                spark_invoice,
+                bolt11,
+                expires_at: expires_at.map(u64::try_from).transpose()?,
+            })),
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_expired_spark_settled_bolt11_receives(
+        &self,
+        before: u64,
+    ) -> Result<(), StorageError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
+        conn.exec_drop(
+            "DELETE FROM brz_spark_settled_bolt11_receives
+             WHERE user_id = ? AND expires_at < ?",
+            (self.identity.clone(), i64::try_from(before)?),
+        )
+        .await
+        .map_err(map_db_error)?;
+        Ok(())
+    }
+
     async fn add_outgoing_change(
         &self,
         record: UnversionedRecordChange,
@@ -2101,27 +2239,30 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
         token_metadata,
     ) {
         (Some(invoice), _, _, _, _) => {
-            let payment_hash: String = get_str(row, 12)?;
+            let payment_hash: Option<String> = get_opt_str(row, 12);
             let destination_pubkey: String = get_str(row, 13)?;
             let description: Option<String> = get_opt_str(row, 14);
             let preimage: Option<String> = get_opt_str(row, 15);
-            let htlc_status_str: Option<String> = get_opt_str(row, 16);
-            let htlc_status: SparkHtlcStatus = htlc_status_str
-                .ok_or_else(|| {
-                    StorageError::Implementation(
-                        "htlc_status is required for Lightning payments".to_string(),
-                    )
-                })
-                .and_then(|s| {
-                    s.parse()
-                        .map_err(|e: String| StorageError::Serialization(e))
-                })?;
-            let htlc_expiry_time: i64 = get_i64(row, 17)?;
-            let htlc_details = SparkHtlcDetails {
-                payment_hash,
-                preimage,
-                expiry_time: u64::try_from(htlc_expiry_time)?,
-                status: htlc_status,
+            // No HTLC status means the invoice was settled by a transfer to the
+            // Spark destination it advertised, which creates no HTLC.
+            let htlc_details = match get_opt_str(row, 16) {
+                Some(status) => {
+                    let status: SparkHtlcStatus = status
+                        .parse()
+                        .map_err(|e: String| StorageError::Serialization(e))?;
+                    let payment_hash = payment_hash.ok_or_else(|| {
+                        StorageError::Implementation(
+                            "payment_hash is required alongside an HTLC status".to_string(),
+                        )
+                    })?;
+                    Some(SparkHtlcDetails {
+                        payment_hash,
+                        preimage,
+                        expiry_time: u64::try_from(get_i64(row, 17).unwrap_or_default())?,
+                        status,
+                    })
+                }
+                None => None,
             };
             let lnurl_pay_info_str: Option<String> = get_opt_str(row, 18);
             let lnurl_withdraw_info_str: Option<String> = get_opt_str(row, 19);
@@ -2424,6 +2565,19 @@ mod tests {
             fixture.storage,
         ))
         .await;
+    }
+
+    #[tokio::test]
+    async fn test_lightning_payment_settled_over_spark() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_lightning_payment_settled_over_spark(Box::new(fixture.storage))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_spark_settled_bolt11_crud() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_spark_settled_bolt11_crud(Box::new(fixture.storage)).await;
     }
 
     #[tokio::test]
@@ -2736,12 +2890,12 @@ mod tests {
                 invoice: "lnbc_a".to_string(),
                 destination_pubkey: "pkA".to_string(),
                 description: None,
-                htlc_details: SparkHtlcDetails {
+                htlc_details: Some(SparkHtlcDetails {
                     payment_hash: "shared_payment_hash".to_string(),
                     preimage: Some("preimage_a".to_string()),
                     expiry_time: 0,
                     status: SparkHtlcStatus::PreimageShared,
-                },
+                }),
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
@@ -3050,7 +3204,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(23), "migration version must advance to 23");
+        assert_eq!(version, Some(25), "migration version must advance to 25");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())
@@ -3322,7 +3476,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(23), "migration must advance to 23");
+        assert_eq!(version, Some(25), "migration must advance to 25");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())

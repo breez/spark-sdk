@@ -38,6 +38,25 @@ try {
 }
 
 const { StorageError } = require("./errors.cjs");
+
+/**
+ * Rebuilds the HTLC details of a Lightning payment row.
+ *
+ * No HTLC status means the invoice was settled by a transfer to the Spark
+ * destination it advertised, which creates no HTLC.
+ */
+function htlcDetailsFromRow(row) {
+  if (!row.lightning_htlc_status) {
+    return null;
+  }
+  return {
+    paymentHash: row.lightning_payment_hash,
+    preimage: row.lightning_preimage || null,
+    expiryTime: Number(row.lightning_htlc_expiry_time) || 0,
+    status: row.lightning_htlc_status,
+  };
+}
+
 const { MysqlMigrationManager } = require("./migrations.cjs");
 
 const PAYMENT_UPDATE_LOCK_TIMEOUT_SECS = 10;
@@ -109,6 +128,17 @@ function toBool(value) {
  * Maps a brz_cross_chain_swaps row to the camelCase StoredCrossChainSwap shape
  * the SDK expects, coercing TINYINT(1) to a boolean.
  */
+/// Maps a `brz_spark_settled_bolt11_receives` row to the camelCase shape the
+/// SDK expects. A NULL expiry comes back absent.
+function sparkSettledBolt11ReceiveFromRow(row) {
+  return {
+    id: row.id,
+    sparkInvoice: row.spark_invoice,
+    bolt11: row.bolt11,
+    expiresAt: row.expires_at == null ? undefined : Number(row.expires_at),
+  };
+}
+
 function crossChainSwapFromRow(row) {
   return {
     provider: row.provider,
@@ -283,7 +313,9 @@ class MysqlStorage {
           } else if (paymentDetailsFilter.type === "token") {
             paymentDetailsClauses.push("p.spark IS NULL AND t.tx_hash IS NOT NULL");
           } else if (paymentDetailsFilter.type === "lightning") {
-            paymentDetailsClauses.push("l.htlc_status IS NOT NULL");
+            // Not htlc_status: a payment settled over the Spark destination its
+            // invoice advertised is a Lightning payment with no HTLC.
+            paymentDetailsClauses.push("l.invoice IS NOT NULL");
           }
 
           const htlcAlias =
@@ -580,18 +612,18 @@ class MysqlStorage {
             destination_pubkey=VALUES(destination_pubkey),
             description=VALUES(description),
             preimage=COALESCE(VALUES(preimage), preimage),
-            htlc_status=COALESCE(VALUES(htlc_status), htlc_status),
-            htlc_expiry_time=COALESCE(VALUES(htlc_expiry_time), htlc_expiry_time)`,
+            htlc_status=VALUES(htlc_status),
+            htlc_expiry_time=VALUES(htlc_expiry_time)`,
         [
           this.identity,
           payment.id,
           payment.details.invoice,
-          payment.details.htlcDetails.paymentHash,
+          payment.details.htlcDetails?.paymentHash ?? null,
           payment.details.destinationPubkey,
           payment.details.description,
           payment.details.htlcDetails?.preimage,
           payment.details.htlcDetails?.status ?? null,
-          payment.details.htlcDetails?.expiryTime ?? 0,
+          payment.details.htlcDetails?.expiryTime ?? null,
         ]
       );
     }
@@ -920,18 +952,7 @@ class MysqlStorage {
         invoice: row.lightning_invoice,
         destinationPubkey: row.lightning_destination_pubkey,
         description: row.lightning_description,
-        htlcDetails: row.lightning_htlc_status
-          ? {
-              paymentHash: row.lightning_payment_hash,
-              preimage: row.lightning_preimage || null,
-              expiryTime: Number(row.lightning_htlc_expiry_time) ?? 0,
-              status: row.lightning_htlc_status,
-            }
-          : (() => {
-              throw new StorageError(
-                `htlc_status is required for Lightning payment ${row.id}`
-              );
-            })(),
+        htlcDetails: htlcDetailsFromRow(row),
       };
 
       if (row.lnurl_pay_info) {
@@ -1107,6 +1128,104 @@ class MysqlStorage {
   }
 
   // ===== Cross-Chain Swap Operations =====
+
+  // ===== Spark-Settled Bolt11 Operations =====
+
+  async setSparkSettledBolt11Send(send) {
+    try {
+      await this.pool.query(
+        `INSERT INTO brz_spark_settled_bolt11_sends (user_id, payment_id, bolt11)
+         VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE bolt11 = VALUES(bolt11)`,
+        [this.identity, send.paymentId, send.bolt11]
+      );
+    } catch (error) {
+      throw new StorageError(
+        `Failed to set spark-settled bolt11 send: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  async getSparkSettledBolt11Send(paymentId) {
+    try {
+      const [rows] = await this.pool.query(
+        `SELECT payment_id, bolt11 FROM brz_spark_settled_bolt11_sends
+         WHERE user_id = ? AND payment_id = ?`,
+        [this.identity, paymentId]
+      );
+      if (rows.length === 0) {
+        return null;
+      }
+      return { paymentId: rows[0].payment_id, bolt11: rows[0].bolt11 };
+    } catch (error) {
+      throw new StorageError(
+        `Failed to get spark-settled bolt11 send: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  async setSparkSettledBolt11Receive(receive) {
+    try {
+      await this.pool.query(
+        `INSERT INTO brz_spark_settled_bolt11_receives
+           (user_id, id, spark_invoice, bolt11, expires_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           spark_invoice = VALUES(spark_invoice),
+           bolt11 = VALUES(bolt11),
+           expires_at = VALUES(expires_at)`,
+        [
+          this.identity,
+          receive.id,
+          receive.sparkInvoice,
+          receive.bolt11,
+          receive.expiresAt == null ? null : Number(receive.expiresAt),
+        ]
+      );
+    } catch (error) {
+      throw new StorageError(
+        `Failed to set spark-settled bolt11 receive: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  async getSparkSettledBolt11Receive(id) {
+    try {
+      const [rows] = await this.pool.query(
+        `SELECT id, spark_invoice, bolt11, expires_at
+         FROM brz_spark_settled_bolt11_receives
+         WHERE user_id = ? AND id = ?`,
+        [this.identity, id]
+      );
+      if (rows.length === 0) {
+        return null;
+      }
+      return sparkSettledBolt11ReceiveFromRow(rows[0]);
+    } catch (error) {
+      throw new StorageError(
+        `Failed to get spark-settled bolt11 receive: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  async deleteExpiredSparkSettledBolt11Receives(before) {
+    try {
+      await this.pool.query(
+        `DELETE FROM brz_spark_settled_bolt11_receives
+         WHERE user_id = ? AND expires_at < ?`,
+        [this.identity, Number(before)]
+      );
+    } catch (error) {
+      throw new StorageError(
+        `Failed to delete expired spark-settled bolt11 receives: ${error.message}`,
+        error
+      );
+    }
+  }
 
   async setCrossChainSwap(swap) {
     try {

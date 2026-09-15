@@ -44,6 +44,28 @@ const TX_CACHE_KEY: &str = "tx_cache";
 // Note: the key "static_deposit_address" may still exist in storage from older versions.
 const TOKEN_METADATA_KEY_PREFIX: &str = "token_metadata_";
 const PAYMENT_METADATA_KEY_PREFIX: &str = "payment_metadata";
+const HAS_SPARK_SETTLED_BOLT11_RECEIVES_KEY: &str = "has_spark_settled_bolt11_receives";
+
+/// The id of the [`SparkSettledBolt11Receive`] row for `spark_invoice`: a
+/// digest, since a Spark invoice runs to a few hundred characters and the
+/// `MySQL` backend cannot key on that.
+pub(crate) fn spark_invoice_digest(spark_invoice: &str) -> String {
+    use bitcoin::hashes::Hash as _;
+    bitcoin::hashes::sha256::Hash::hash(spark_invoice.as_bytes()).to_string()
+}
+
+/// When `spark_invoice` expires, as Unix seconds. `None` when it never does,
+/// or when it does not parse.
+pub(crate) fn spark_invoice_expiry_secs(spark_invoice: &str) -> Option<u64> {
+    let address: spark_wallet::SparkAddress = spark_invoice.parse().ok()?;
+    let expiry = address.spark_invoice_fields?.expiry_time?;
+    Some(
+        expiry
+            .duration_since(platform_utils::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs(),
+    )
+}
 const PUBLISHED_PACKAGE_KEY_PREFIX: &str = "published_package_";
 const SPARK_PRIVATE_MODE_INITIALIZED_KEY: &str = "spark_private_mode_initialized";
 pub(crate) const STABLE_BALANCE_ACTIVE_LABEL_KEY: &str = "stable_balance_active_label";
@@ -383,6 +405,33 @@ pub struct StoredCrossChainSwap {
     pub secrets: String,
 }
 
+/// The Bolt11 a Spark transfer was sent to settle. The payer's half of a
+/// Bolt11 settled over Spark, written when the send is made.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[serde(rename_all = "camelCase")]
+pub struct SparkSettledBolt11Send {
+    /// The transfer id, which is also the payment id.
+    pub payment_id: String,
+    pub bolt11: String,
+}
+
+/// A Bolt11 that can settle over Spark, with the Spark invoice it embeds. The
+/// receiver's half of a Bolt11 settled over Spark, written when the Bolt11 is
+/// minted: a transfer carrying the Spark invoice is reported as the Bolt11.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[serde(rename_all = "camelCase")]
+pub struct SparkSettledBolt11Receive {
+    /// A digest of `spark_invoice`, which is too long to key on directly.
+    pub id: String,
+    pub spark_invoice: String,
+    pub bolt11: String,
+    /// When the Spark invoice expires, as Unix seconds. Absent when it never
+    /// does. A row is dropped once its invoice has been expired for a while.
+    pub expires_at: Option<u64>,
+}
+
 /// Trait for persistent storage
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[async_trait]
@@ -557,6 +606,40 @@ pub trait Storage: Send + Sync {
         &self,
         provider: String,
     ) -> Result<Vec<StoredCrossChainSwap>, StorageError>;
+
+    /// Inserts or overwrites the Bolt11 a Spark transfer was sent to settle
+    /// (upsert by payment id).
+    async fn set_spark_settled_bolt11_send(
+        &self,
+        send: SparkSettledBolt11Send,
+    ) -> Result<(), StorageError>;
+
+    /// Gets the Bolt11 a Spark transfer was sent to settle, or `None` if the
+    /// send settled nothing over Spark.
+    async fn get_spark_settled_bolt11_send(
+        &self,
+        payment_id: String,
+    ) -> Result<Option<SparkSettledBolt11Send>, StorageError>;
+
+    /// Inserts or overwrites a Bolt11 that can settle over Spark (upsert by id).
+    async fn set_spark_settled_bolt11_receive(
+        &self,
+        receive: SparkSettledBolt11Receive,
+    ) -> Result<(), StorageError>;
+
+    /// Gets a Bolt11 that can settle over Spark by the id of the Spark invoice
+    /// it embeds, or `None` if no Bolt11 embeds it.
+    async fn get_spark_settled_bolt11_receive(
+        &self,
+        id: String,
+    ) -> Result<Option<SparkSettledBolt11Receive>, StorageError>;
+
+    /// Deletes every Bolt11 that can settle over Spark whose Spark invoice
+    /// expired before `before`, as Unix seconds. Rows with no expiry stay.
+    async fn delete_expired_spark_settled_bolt11_receives(
+        &self,
+        before: u64,
+    ) -> Result<(), StorageError>;
 
     // Sync storage methods
     async fn add_outgoing_change(
@@ -782,6 +865,28 @@ impl ObjectCacheRepository {
             Some(value) => Ok(Some(serde_json::from_str(&value)?)),
             None => Ok(None),
         }
+    }
+
+    /// Notes that this wallet has minted a Bolt11 that can settle over Spark.
+    pub(crate) async fn mark_spark_settled_bolt11_receives(&self) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(
+                HAS_SPARK_SETTLED_BOLT11_RECEIVES_KEY.to_string(),
+                "true".to_string(),
+            )
+            .await
+    }
+
+    /// Whether this wallet has minted a Bolt11 that can settle over Spark.
+    ///
+    /// Answers whether an incoming transfer is worth a second look, so a wallet
+    /// that never issues such invoices pays nothing for the feature.
+    pub(crate) async fn has_spark_settled_bolt11_receives(&self) -> Result<bool, StorageError> {
+        Ok(self
+            .storage
+            .get_cached_item(HAS_SPARK_SETTLED_BOLT11_RECEIVES_KEY.to_string())
+            .await?
+            .is_some())
     }
 
     pub(crate) async fn save_payment_metadata(

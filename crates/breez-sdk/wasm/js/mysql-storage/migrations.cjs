@@ -584,6 +584,43 @@ class MysqlMigrationManager {
           `ALTER TABLE brz_unclaimed_deposits ADD COLUMN refund_state JSON NULL`,
         ],
       },
+      {
+        // A Lightning payment settled by a transfer to the Spark destination its
+        // invoice advertised involves no HTLC, so the columns describing one
+        // become nullable.
+        name: "Allow lightning payments with no HTLC",
+        sql: [
+          `ALTER TABLE brz_payment_details_lightning
+             MODIFY payment_hash VARCHAR(255) NULL,
+             MODIFY htlc_status VARCHAR(64) NULL,
+             MODIFY htlc_expiry_time BIGINT NULL`,
+        ],
+      },
+      {
+        // Bolt11s settled over Spark, one table per direction. Sends are keyed
+        // by the transfer that paid. Receives are keyed by the Spark invoice
+        // the Bolt11 embeds, written when it is minted and dropped once it has
+        // expired. Born multi-tenant.
+        name: "Create brz_spark_settled_bolt11 tables",
+        sql: [
+          `CREATE TABLE IF NOT EXISTS brz_spark_settled_bolt11_sends (
+              user_id VARBINARY(33) NOT NULL,
+              payment_id VARCHAR(255) NOT NULL,
+              bolt11 TEXT NOT NULL,
+              PRIMARY KEY (user_id, payment_id)
+          )`,
+          `CREATE TABLE IF NOT EXISTS brz_spark_settled_bolt11_receives (
+              user_id VARBINARY(33) NOT NULL,
+              id VARCHAR(64) NOT NULL,
+              spark_invoice TEXT NOT NULL,
+              bolt11 TEXT NOT NULL,
+              expires_at BIGINT NULL,
+              PRIMARY KEY (user_id, id),
+              INDEX brz_idx_spark_settled_bolt11_receives_user_expires_at
+                  (user_id, expires_at)
+          )`,
+        ],
+      },
     ];
   }
 }
