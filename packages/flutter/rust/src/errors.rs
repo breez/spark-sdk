@@ -28,6 +28,12 @@ pub enum _SdkError {
     },
     InvalidUuid(String),
     InvalidInput(String),
+    CrossChainAmountOutOfRange {
+        reason: String,
+        too_small: bool,
+        bound_amount: Option<u128>,
+        bound_usd_cents: Option<u64>,
+    },
     NetworkError(String),
     StorageError(String),
     ChainServiceError(String),

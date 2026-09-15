@@ -57,6 +57,23 @@ URIs whose recipient address doesn't match the scheme's address family (e.g. a `
 
 The provider tag on each {{#name CrossChainRoutePair}} is the source of truth. When the same destination is offered by multiple providers, every route is returned; the caller picks one based on supported source/destination assets, fees, or other preferences.
 
+## Amount limits
+
+Each entry in {{#name CrossChainRoutePair.accepted_assets}} carries an optional {{#name limits}} block: the amount bounds the provider publishes for moving that route with that Spark-side asset.
+
+| Field                          | Meaning                                                              |
+| ------------------------------ | -------------------------------------------------------------------- |
+| {{#name min_amount}} / {{#name max_amount}}     | Bounds in the base units of the asset paid in: the Spark-side asset on a send, the external asset on a receive |
+| {{#name min_usd_cents}} / {{#name max_usd_cents}} | Bounds on the order's value, in USD cents                          |
+
+Bounds are per asset rather than per route, because the same external endpoint can carry a dust floor when moved as sats and none when moved as a token. Either denomination can be absent, and a provider may publish none at all, so treat a missing bound as "no published limit" rather than as zero.
+
+**The bounds are a reliable no, never a reliable yes.** Reject an amount that falls outside a published bound before preparing the payment: the provider rejects it too, so the check costs nothing and never blocks a payment that would have gone through. Satisfying the bounds is not a guarantee. Some routes enforce a tighter bound than they publish, so a payment inside the published band can still be rejected, and preparing it is what decides a concrete amount.
+
+Because of that, the bounds are for catching an amount the user could not have meant, not for guiding them to a sensible one. Fees weigh heavily near the floor, so the smallest amount worth sending is usually well above the smallest one accepted.
+
+A rejected amount surfaces as {{#enum SdkError::CrossChainAmountOutOfRange}}, carrying {{#name too_small}} for the direction and the published bound in whichever denominations the provider publishes.
+
 ## Slippage
 
 Cross-chain slippage protects against price movement between quote and delivery. Values are expressed in basis points (1 bps = 0.01%).
