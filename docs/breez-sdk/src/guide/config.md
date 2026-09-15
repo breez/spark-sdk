@@ -62,8 +62,8 @@ The LNURL domain to be used for receiving LNURL and Lightning address payments. 
 
 When enabled, the SDK will settle Lightning invoice payments using the Spark protocol instead of Lightning where possible. It's not recommended to enable it because of the following trade-offs:
 
-- **Sending:** No proof of payment (no Lightning preimage). Invoice metadata (the invoice itself, its description) is not persisted with the payment.
-- **Receiving:** The SDK [embeds a Spark address](https://docs.spark.money/api-reference/wallet/create-lightning-invoice) in the invoice's fallback field. If the payer uses this Spark address, the received payment cannot be linked back to the invoice.
+- **Sending:** No proof of payment: a Spark transfer produces no Lightning preimage or payment hash, so an LNURL success action encrypted with the preimage cannot be decrypted. The payment is otherwise reported as the Bolt11 invoice it paid, keeping its description and any LNURL metadata.
+- **Receiving:** The SDK [embeds a Spark destination](https://docs.spark.money/api-reference/wallet/create-lightning-invoice) in the invoice's fallback field, revealing the receiver's Spark identity to the payer. A payment that settles over Spark is reported as the invoice it paid.
 
 ## External input parsing
 

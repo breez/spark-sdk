@@ -160,7 +160,9 @@ func ListClaimableHtlcPayments(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spar
 					log.Printf("Spark HTLC expiry time: %v", details.HtlcDetails.ExpiryTime)
 				}
 			case breez_sdk_spark.PaymentDetailsLightning:
-				log.Printf("Lightning HTLC expiry time: %v", details.HtlcDetails.ExpiryTime)
+				if details.HtlcDetails != nil {
+					log.Printf("Lightning HTLC expiry time: %v", details.HtlcDetails.ExpiryTime)
+				}
 			}
 		}
 	}

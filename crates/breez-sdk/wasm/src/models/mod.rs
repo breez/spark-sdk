@@ -572,7 +572,7 @@ pub enum PaymentDetails {
         description: Option<String>,
         invoice: String,
         destination_pubkey: String,
-        htlc_details: SparkHtlcDetails,
+        htlc_details: Option<SparkHtlcDetails>,
         lnurl_pay_info: Option<LnurlPayInfo>,
         lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
         lnurl_receive_metadata: Option<LnurlReceiveMetadata>,
@@ -2242,6 +2242,20 @@ pub struct StoredCrossChainSwap {
     pub updated_at: u64,
     pub data: String,
     pub secrets: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkSettledBolt11Send)]
+pub struct SparkSettledBolt11Send {
+    pub payment_id: String,
+    pub bolt11: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkSettledBolt11Receive)]
+pub struct SparkSettledBolt11Receive {
+    pub id: String,
+    pub spark_invoice: String,
+    pub bolt11: String,
+    pub expires_at: Option<u64>,
 }
 
 #[allow(clippy::enum_variant_names)]

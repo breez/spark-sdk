@@ -540,6 +540,42 @@ class PostgresMigrationManager {
           `ALTER TABLE brz_unclaimed_deposits ADD COLUMN refund_state JSONB`,
         ],
       },
+      {
+        // A Lightning payment settled by a transfer to the Spark destination its
+        // invoice advertised involves no HTLC, so the columns describing one
+        // become nullable.
+        name: "Allow lightning payments with no HTLC",
+        sql: [
+          `ALTER TABLE brz_payment_details_lightning ALTER COLUMN payment_hash DROP NOT NULL`,
+          `ALTER TABLE brz_payment_details_lightning ALTER COLUMN htlc_status DROP NOT NULL`,
+          `ALTER TABLE brz_payment_details_lightning ALTER COLUMN htlc_expiry_time DROP NOT NULL`,
+        ],
+      },
+      {
+        // Bolt11s settled over Spark, one table per direction. Sends are keyed
+        // by the transfer that paid. Receives are keyed by the Spark invoice
+        // the Bolt11 embeds, written when it is minted and dropped once it has
+        // expired. Born multi-tenant.
+        name: "Create brz_spark_settled_bolt11 tables",
+        sql: [
+          `CREATE TABLE IF NOT EXISTS brz_spark_settled_bolt11_sends (
+              user_id BYTEA NOT NULL,
+              payment_id TEXT NOT NULL,
+              bolt11 TEXT NOT NULL,
+              PRIMARY KEY (user_id, payment_id)
+          )`,
+          `CREATE TABLE IF NOT EXISTS brz_spark_settled_bolt11_receives (
+              user_id BYTEA NOT NULL,
+              id TEXT NOT NULL,
+              spark_invoice TEXT NOT NULL,
+              bolt11 TEXT NOT NULL,
+              expires_at BIGINT,
+              PRIMARY KEY (user_id, id)
+          )`,
+          `CREATE INDEX IF NOT EXISTS brz_idx_spark_settled_bolt11_receives_user_expires_at
+             ON brz_spark_settled_bolt11_receives(user_id, expires_at)`,
+        ],
+      },
     ];
   }
 }

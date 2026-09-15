@@ -26,6 +26,8 @@ use spark::operator::rpc::spark::{
     QueryNodesRequest, TreeNodeStatus as ProtoTreeNodeStatus,
     query_nodes_request::Source as QueryNodesSource,
 };
+use spark::services::LightningReceiveFallback;
+use spark::utils::bolt11_fallback::SparkFallback;
 use spark::{
     address::{
         SatsPayment, SparkAddress, SparkAddressPaymentType, SparkInvoiceFields, TokensPayment,
@@ -630,17 +632,26 @@ impl SparkWallet {
             .validate_payment(invoice, max_fee_sat, amount_to_send, prefer_spark)
             .await?;
 
-        // In case the invoice is for a spark address, we can just transfer the amount to the receiver.
-        if let Some(receiver_spark_address) = receiver_spark_address {
+        // The invoice advertises a Spark destination, so settle it with a
+        // transfer instead of routing over Lightning. An advertised invoice is
+        // carried on the transfer, which is what lets the receiver tell which
+        // Bolt11 was paid.
+        if let Some(fallback) = receiver_spark_address {
             if !self.config.self_payment_allowed
-                && receiver_spark_address.identity_public_key == self.identity_public_key
+                && fallback.address.identity_public_key == self.identity_public_key
             {
                 return Err(SparkWalletError::SelfPaymentNotAllowed);
             }
 
+            let spark_invoice = fallback.is_invoice().then(|| fallback.encoded.clone());
             return Ok(PayLightningInvoiceResult {
                 transfer: self
-                    .transfer(total_amount_sat, &receiver_spark_address, transfer_id)
+                    .transfer_with_invoice(
+                        total_amount_sat,
+                        &fallback.receiver_address(),
+                        transfer_id,
+                        spark_invoice,
+                    )
                     .await?,
                 lightning_payment: None,
             });
@@ -743,7 +754,7 @@ impl SparkWallet {
         description: Option<InvoiceDescription>,
         public_key: Option<PublicKey>,
         expiry_secs: Option<u32>,
-        include_spark_address: bool,
+        fallback: LightningReceiveFallback,
     ) -> Result<LightningReceivePayment, SparkWalletError> {
         Ok(self
             .lightning_service
@@ -752,7 +763,7 @@ impl SparkWallet {
                 description,
                 None,
                 expiry_secs,
-                include_spark_address,
+                fallback,
                 public_key,
             )
             .await?)
@@ -838,13 +849,14 @@ impl SparkWallet {
             .await?)
     }
 
-    pub fn extract_spark_address(
+    /// The Spark destination a Bolt11 invoice advertises, if any.
+    pub fn extract_spark_fallback(
         &self,
         invoice: &str,
-    ) -> Result<Option<SparkAddress>, SparkWalletError> {
+    ) -> Result<Option<SparkFallback>, SparkWalletError> {
         Ok(self
             .lightning_service
-            .extract_spark_address_from_invoice(invoice)?)
+            .extract_spark_fallback_from_invoice(invoice)?)
     }
 
     pub async fn fetch_lightning_receive_payment(

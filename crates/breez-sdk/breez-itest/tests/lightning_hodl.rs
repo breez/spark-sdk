@@ -104,7 +104,7 @@ async fn test_01_lightning_hodl_success(
     assert!(matches!(
         &alice_pending_payment.details,
         Some(PaymentDetails::Lightning {
-            htlc_details: details, ..
+            htlc_details: Some(details), ..
         })
         if details.payment_hash == payment_hash
             && details.preimage.is_none()
@@ -140,7 +140,7 @@ async fn test_01_lightning_hodl_success(
     assert!(matches!(
         &alice_completed.details,
         Some(PaymentDetails::Lightning {
-            htlc_details: details, ..
+            htlc_details: Some(details), ..
         })
         if details.payment_hash == payment_hash
             && details.preimage == Some(preimage.clone())
