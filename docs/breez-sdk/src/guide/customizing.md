@@ -18,10 +18,7 @@ The shared-pool, shared-chain-service, and shared-connection-manager components 
 
 {{#tabs sdk_building:init-sdk-advanced}}
 
-<h2 id="with-storage">
-    <a class="header" href="#with-storage">With Storage</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_storage">API docs</a>
-</h2>
+## With Storage
 
 When using the SDK Builder, you either have to provide a Storage implementation or use the default storage from the SDK.
 
@@ -29,7 +26,6 @@ When using the SDK Builder, you either have to provide a Storage implementation 
 
 <h2 id="with-postgres-backend">
     <a class="header" href="#with-postgres-backend">With PostgreSQL Backend</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_storage_backend">API docs</a>
 </h2>
 
 The SDK includes a PostgreSQL backend as an alternative to file-based storage. Build a storage config with {{#name postgres_storage}} and pass it to the builder via {{#name with_storage_backend}} — this configures PostgreSQL for all stores (storage, tree store, and token store), which is suitable for server-side deployments with horizontal scaling. To share a single connection pool across multiple SDK instances, supply the same config through a [Shared SDK Context](#with-shared-context); per-tenant scoping (rows isolated by seed identity) is preserved either way.
@@ -51,10 +47,7 @@ The PostgreSQL tree store can use the same or a separate PostgreSQL database as 
 
 </div>
 
-<h2 id="with-mysql-backend">
-    <a class="header" href="#with-mysql-backend">With MySQL Backend</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_storage_backend">API docs</a>
-</h2>
+## With MySQL Backend
 
 The SDK includes a MySQL backend (MySQL 8.0+) as an alternative to file-based storage. Build a storage config with {{#name mysql_storage}} and pass it to the builder via {{#name with_storage_backend}} — this configures MySQL for all stores (storage, tree store, and token store), which is suitable for server-side deployments with horizontal scaling. To share a single connection pool across multiple SDK instances, supply the same config through a [Shared SDK Context](#with-shared-context); per-tenant scoping (rows isolated by seed identity) is preserved either way.
 
@@ -75,58 +68,37 @@ The MySQL tree store can use the same or a separate MySQL database as the MySQL 
 
 </div>
 
-<h2 id="with-chain-service">
-    <a class="header" href="#with-chain-service">With Chain Service</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_chain_service">API docs</a>
-</h2>
+## With Chain Service
 
 The SDK provides a default Bitcoin Chain Service implementation. If you want to use your own, you can provide it either by using [With REST Chain Service](#with-rest-chain-service) or by implementing the Bitcoin Chain Service interface.
 
-<h2 id="with-rest-chain-service">
-    <a class="header" href="#with-rest-chain-service">With REST Chain Service</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_rest_chain_service">API docs</a>
-</h2>
+## With REST Chain Service
 
 The SDK provides a default Bitcoin Chain Service implementation. If you want to use your own, you can provide it either by using [With Chain Service](#with-chain-service) or by providing a URL and optional credentials.
 
 {{#tabs sdk_building:with-rest-chain-service}}
 
-<h2 id="with-shared-rest-chain-service">
-    <a class="header" href="#with-shared-rest-chain-service">With Shared REST Chain Service</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/fn.new_rest_chain_service.html">API docs</a>
-</h2>
+## With Shared REST Chain Service
 
 [With REST Chain Service](#with-rest-chain-service) builds a fresh chain service inside each SDK instance. Server processes hosting many wallets at once can share a single REST chain service between every SDK, so they reuse the same pooled HTTP client (and its HTTP/2 connection pool) instead of each opening a fresh one.
 
 Construct one via {{#name new_rest_chain_service}} and pass it to each {{#name SdkBuilder}} via {{#name with_chain_service}}. All SDK instances sharing the chain service must be configured for the same network.
 
-<h2 id="with-fiat-service">
-    <a class="header" href="#with-fiat-service">With Fiat Service</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_fiat_service">API docs</a>
-</h2>
+## With Fiat Service
 
 The SDK by default provides a list of available Fiat currencies and current exchange rates. If you want to use your own, you can provide it by implementing the Fiat Service interface.
 
-<h2 id="with-lnurl-client">
-    <a class="header" href="#with-lnurl-client">With LNURL Client</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_lnurl_client">API docs</a>
-</h2>
+## With LNURL Client
 
 The LNURL Client is used to make REST requests specifically when interacting with LNURL. If you want to use your own, you can it provide by implementing the REST Service interface.
 
-<h2 id="with-account-number">
-    <a class="header" href="#with-account-number">With Account Number</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_account_number">API docs</a>
-</h2>
+## With Account Number
 
 The SDK derives all wallet keys from the seed at the derivation path `m/8797555'/<account number>'`. By default the account number is 0 on Regtest and 1 on all other networks. Set a different account number to derive an independent wallet from the same seed:
 
 {{#tabs sdk_building:with-account-number}}
 
-<h2 id="with-payment-observer">
-    <a class="header" href="#with-payment-observer">With Payment Observer</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_payment_observer">API docs</a>
-</h2>
+## With Payment Observer
 
 By implementing the Payment Observer interface you can be notified before a payment is sent. It includes information about the provisional payment including the payment ID, amount to be sent (in satoshis or token base units) and payment details based on the payment method.
 
@@ -134,10 +106,7 @@ By implementing the Payment Observer interface you can be notified before a paym
 
 {{#tabs sdk_building:with-payment-observer}}
 
-<h2 id="with-session-store">
-    <a class="header" href="#with-session-store">With Session Store</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_session_store">API docs</a>
-</h2>
+## With Session Store
 
 The SDK caches the auth tokens it obtains from the Spark operators and the SSP in a session store, keyed by each service's identity. By default the store is provided by the storage backend (a `brz_`-prefixed table on the PostgreSQL/MySQL backends, an in-memory store otherwise), and tokens are stored as-is.
 
@@ -158,7 +127,6 @@ When wrapping the backend's store, pass the same storage backend to both {{#name
 
 <h2 id="with-context">
     <a class="header" href="#with-shared-context">With Shared SDK Context</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkContext.html">API docs</a>
 </h2>
 
 An SDK Context bundles every process-shareable resource: the HTTP client (used for SSP GraphQL, chain service and LNURL), the gRPC channels to the Spark operators, the gRPC client to the Breez backend, and — optionally — a PostgreSQL or MySQL connection pool. By default each SDK builds its own. Server processes hosting many wallets at once can construct one SDK Context and pass it to every {{#name SdkBuilder}} so they reuse the same pooled clients instead of each opening fresh ones.
