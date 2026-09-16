@@ -26,7 +26,7 @@
 //! │                     │                                               │
 //! │                     └─► Otherwise ──────────────────► AutoConvert   │
 //! │                                                                     │
-//! │  Synced ──────────────► Expire deferred tasks older than 120s       │
+//! │  Synced ──────────────► AutoConvert                                 │
 //! └─────────────────────────────────────────────────────────────────────┘
 //!                                   │
 //!                                   ▼
@@ -78,6 +78,10 @@
 //! │    │  • Token → BTC conversion (amount = full token balance) │      │
 //! │    │  • On success → emit completion event                   │      │
 //! │    └─────────────────────────────────────────────────────────┘      │
+//! │                                                                     │
+//! │  Before each pass it expires deferred tasks past the 120s window,   │
+//! │  sleeping until the next one falls due so the timeout holds without │
+//! │  an outside wake-up.                                                │
 //! │                                                                     │
 //! └─────────────────────────────────────────────────────────────────────┘
 //!
@@ -648,13 +652,12 @@ impl StableBalance {
 impl EventMiddleware for StableBalanceMiddleware {
     async fn process(&self, event: SdkEvent) -> Option<SdkEvent> {
         match event {
-            // Sync completed → wake the startup gate, sweep timed-out deferred tasks
+            // Sync completed → wake the startup gate, re-assess the balance
             SdkEvent::Synced => {
                 self.core.synced_notify.notify_one();
 
                 // Re-assess balance after sync — may have changed due to external activity
                 self.core.queue.push_auto_convert().await;
-
                 Some(SdkEvent::Synced)
             }
 
@@ -715,5 +718,173 @@ impl EventMiddleware for StableBalanceMiddleware {
 
             _ => Some(event),
         }
+    }
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::persist::sqlite::SqliteStorage;
+
+    fn create_temp_dir(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!("breez-test-{}-{}", name, uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    struct StubConverter;
+
+    #[macros::async_trait]
+    impl crate::token_conversion::TokenConverter for StubConverter {
+        async fn convert(
+            &self,
+            _event_emitter: Arc<EventEmitter>,
+            _options: &crate::ConversionOptions,
+            _purpose: &crate::token_conversion::ConversionPurpose,
+            _token_identifier: Option<&String>,
+            _amount: crate::token_conversion::ConversionAmount,
+            _transfer_id: Option<spark_wallet::TransferId>,
+        ) -> Result<
+            crate::token_conversion::TokenConversionResponse,
+            crate::token_conversion::ConversionError,
+        > {
+            unimplemented!("not exercised by the wake-up test")
+        }
+
+        async fn validate(
+            &self,
+            _options: Option<&crate::ConversionOptions>,
+            _token_identifier: Option<&String>,
+            _amount: crate::token_conversion::ConversionAmount,
+        ) -> Result<Option<crate::ConversionEstimate>, crate::token_conversion::ConversionError>
+        {
+            unimplemented!("not exercised by the wake-up test")
+        }
+
+        async fn fetch_limits(
+            &self,
+            _request: &crate::FetchConversionLimitsRequest,
+        ) -> Result<crate::FetchConversionLimitsResponse, crate::token_conversion::ConversionError>
+        {
+            unimplemented!("not exercised by the wake-up test")
+        }
+
+        async fn refund_pending(
+            &self,
+        ) -> Result<crate::RefundPendingConversionsResponse, crate::token_conversion::ConversionError>
+        {
+            unimplemented!("not exercised by the wake-up test")
+        }
+
+        async fn refund_local_pending(
+            &self,
+        ) -> Result<crate::RefundPendingConversionsResponse, crate::token_conversion::ConversionError>
+        {
+            unimplemented!("not exercised by the wake-up test")
+        }
+    }
+
+    fn test_core(storage: Arc<dyn Storage>) -> Arc<StableBalanceCore> {
+        Arc::new(StableBalanceCore {
+            config: StableBalanceConfig {
+                tokens: Vec::new(),
+                default_active_label: None,
+                threshold_sats: None,
+                max_slippage_bps: None,
+            },
+            active_token: RwLock::new(None),
+            token_converter: Arc::new(StubConverter),
+            storage: Arc::clone(&storage),
+            effective_values: crate::utils::expiring_cell::ExpiringCell::new(),
+            queue: ConversionQueue::new(storage),
+            synced_notify: Notify::new(),
+        })
+    }
+
+    /// The queue knows when its own next deferral falls due, so the worker can
+    /// sleep to that deadline instead of depending on an outside wake-up.
+    #[tokio::test]
+    async fn queue_reports_its_own_expiry_deadline() {
+        let dir = create_temp_dir("stable_balance_expiry_deadline");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&dir).unwrap());
+        let core = test_core(Arc::clone(&storage));
+
+        assert!(
+            core.queue.next_expiry_in().await.is_none(),
+            "nothing deferred means no deadline to wake for"
+        );
+
+        core.queue.push_per_receive("pay1".to_string()).await;
+        assert!(
+            core.queue.next_expiry_in().await.is_none(),
+            "a queued task is not deferred, so it has no expiry"
+        );
+
+        core.queue.defer_task("pay1").await;
+        let due_in = core
+            .queue
+            .next_expiry_in()
+            .await
+            .expect("a deferred task must report a deadline");
+        assert!(
+            due_in.as_secs() <= super::queue::DEFERRED_TASK_TIMEOUT_SECS,
+            "deadline {due_in:?} must fall within the deferral window"
+        );
+    }
+
+    /// Every per-receive entry being deferred is the one state where the worker
+    /// parks with work still outstanding: `next_task` yields nothing and
+    /// `push_auto_convert` goes quiet once a task is pending. The queue has to
+    /// carry its own deadline out of it, because no external event will.
+    #[tokio::test]
+    async fn deferred_only_queue_parks_the_worker_but_reports_a_deadline() {
+        let dir = create_temp_dir("stable_balance_deferred_deadline");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&dir).unwrap());
+        let core = test_core(Arc::clone(&storage));
+
+        core.queue.push_per_receive("pay1".to_string()).await;
+        core.queue.defer_task("pay1").await;
+        core.queue.push_auto_convert().await;
+
+        assert!(
+            core.queue.next_task().await.is_none(),
+            "a deferred-only queue must yield no task, parking the worker"
+        );
+
+        // Drain wake-ups left by the setup, so what follows reflects steady state.
+        while tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            core.queue.notify.notified(),
+        )
+        .await
+        .is_ok()
+        {}
+
+        // Nothing external re-arms the worker from here: a further trigger is
+        // silent because a task is already pending.
+        core.queue.push_auto_convert().await;
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                core.queue.notify.notified()
+            )
+            .await
+            .is_err(),
+            "push_auto_convert must stay quiet once a task is pending"
+        );
+
+        // The deadline is the way out, and it is the queue's own.
+        let due_in = core
+            .queue
+            .next_expiry_in()
+            .await
+            .expect("a parked worker with deferred entries must have a deadline to wake for");
+        assert!(
+            due_in.as_secs() <= super::queue::DEFERRED_TASK_TIMEOUT_SECS,
+            "deadline {due_in:?} must fall within the deferral window"
+        );
     }
 }
