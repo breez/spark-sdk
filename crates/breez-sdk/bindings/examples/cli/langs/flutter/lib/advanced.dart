@@ -335,7 +335,7 @@ ExitTransactionStatus _statusFromJson(Map<String, dynamic> j) {
 }
 
 Map<String, dynamic> _cpfpInputToJson(CpfpInput input) {
-  if (input is CpfpInput_P2Tr) {
+  if (input is CpfpInput_P2tr) {
     return {
       'type': 'P2tr',
       'txid': input.txid,
@@ -343,7 +343,7 @@ Map<String, dynamic> _cpfpInputToJson(CpfpInput input) {
       'value': input.value.toString(),
       'pubkey': input.pubkey,
     };
-  } else if (input is CpfpInput_P2Wpkh) {
+  } else if (input is CpfpInput_P2wpkh) {
     return {
       'type': 'P2wpkh',
       'txid': input.txid,
@@ -358,7 +358,7 @@ Map<String, dynamic> _cpfpInputToJson(CpfpInput input) {
       'vout': input.vout,
       'value': input.value.toString(),
       'scriptPubkeyHex': input.scriptPubkeyHex,
-      'signedInputWeight': input.signedInputWeight,
+      'signedInputWeight': input.signedInputWeight.toString(),
     };
   }
   throw StateError('Unknown CpfpInput variant: ${input.runtimeType}');
@@ -387,7 +387,7 @@ CpfpInput _cpfpInputFromJson(Map<String, dynamic> j) {
         vout: j['vout'] as int,
         value: value,
         scriptPubkeyHex: j['scriptPubkeyHex'] as String,
-        signedInputWeight: j['signedInputWeight'] as int,
+        signedInputWeight: BigInt.parse(j['signedInputWeight'] as String),
       );
     default:
       throw StateError("Unknown CpfpInput type: ${j['type']}");
