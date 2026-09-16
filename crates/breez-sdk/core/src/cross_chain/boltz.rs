@@ -783,11 +783,10 @@ impl CrossChainService for BoltzService {
                     conversion_info.clone(),
                     &swap,
                 ) {
-                    match crate::utils::payments::record_payment_metadata_update(
+                    match crate::utils::payments::record_payment_metadata_update_by_id(
                         &self.storage,
                         &self.event_emitter,
                         payment_id.clone(),
-                        &payment_id,
                         updated,
                     )
                     .await
