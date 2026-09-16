@@ -211,8 +211,8 @@ impl SdkBuilder {
     /// the seed at `m/8797555'/<account number>'`, so each account number
     /// yields an independent wallet from the same seed.
     ///
-    /// When unset, the account number defaults to 0 on Regtest and 1 on all
-    /// other networks.
+    /// When unset, the account number defaults to 0 on Regtest and Signet,
+    /// and 1 on Mainnet.
     ///
     /// Note: This only applies when using a seed-based signer. It has no effect
     /// when using an external signer (created with `new_with_signer`).
@@ -501,6 +501,12 @@ impl SdkBuilder {
 
         let creates_context = self.context.is_none();
         let context = resolve_context(self.context, &self.config).await?;
+        let chain_service = resolve_chain_service(
+            self.chain_service,
+            self.rest_chain_service_config,
+            &context,
+            self.config.network,
+        )?;
         let stores = resolve_storage(self.storage, &context, &signers.spark, &self.config).await?;
         // Start the partner-JWT provider now that storage is resolved. When the builder
         // creates its own context (no shared context supplied), bind the resolved
@@ -509,12 +515,6 @@ impl SdkBuilder {
         if let Some(provider) = &context.jwt_header_provider {
             provider.start(creates_context.then(|| Arc::clone(&stores.storage)));
         }
-        let chain_service = resolve_chain_service(
-            self.chain_service,
-            self.rest_chain_service_config,
-            &context,
-            self.config.network,
-        );
 
         let user_agent = crate::default_user_agent();
         info!("Building sdk with user agent: {}", user_agent);
@@ -870,6 +870,7 @@ async fn resolve_storage(
 
 /// Resolves the chain service: caller-supplied override → REST config → network
 /// default (mempool.space on mainnet, a hosted mempool instance on regtest).
+/// Signet requires an explicit override or REST configuration.
 /// Whichever backend is resolved is wrapped in a [`ValidatingChainService`],
 /// so every transaction it serves is rebound to the requested txid.
 fn resolve_chain_service(
@@ -877,7 +878,7 @@ fn resolve_chain_service(
     rest_config: Option<RestChainServiceConfig>,
     context: &SdkContext,
     network: Network,
-) -> Arc<dyn BitcoinChainService> {
+) -> Result<Arc<dyn BitcoinChainService>, SdkError> {
     let inner: Arc<dyn BitcoinChainService> = if let Some(service) = supplied {
         service
     } else if let Some(cfg) = rest_config {
@@ -901,6 +902,9 @@ fn resolve_chain_service(
                 None,
                 ChainApiType::MempoolSpace,
             )),
+            Network::Signet => return Err(SdkError::InvalidInput(
+                "Signet requires an explicit chain service via with_chain_service or with_rest_chain_service".to_string(),
+            )),
             Network::Regtest => Arc::new(RestClientChainService::new(
                 "https://regtest-mempool.us-west-2.sparkinfra.net/api".to_string(),
                 network,
@@ -920,7 +924,7 @@ fn resolve_chain_service(
             )),
         }
     };
-    Arc::new(ValidatingChainService::new(inner))
+    Ok(Arc::new(ValidatingChainService::new(inner)))
 }
 
 /// Builds the full [`SparkWalletConfig`] with user-agent and SDK-level
@@ -1157,6 +1161,172 @@ fn build_cross_chain_context(
 mod tests {
     use super::SdkBuilder;
     use crate::{Network, SdkError, default_config};
+
+    fn signet_test_spark_config() -> crate::SparkConfig {
+        let identifier = format!("{:064x}", 1);
+        let public_key = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+        crate::SparkConfig {
+            coordinator_identifier: identifier.clone(),
+            threshold: 1,
+            signing_operators: vec![crate::SparkSigningOperator {
+                id: 0,
+                identifier,
+                address: "https://signet-operator.invalid".to_string(),
+                identity_public_key: public_key.to_string(),
+                ca_cert_pem: None,
+            }],
+            ssp_config: crate::SparkSspConfig {
+                base_url: "https://signet-ssp.invalid".to_string(),
+                identity_public_key: public_key.to_string(),
+                schema_endpoint: None,
+            },
+            expected_withdraw_bond_sats: 10_000,
+            expected_withdraw_relative_block_locktime: 1_000,
+            max_token_transaction_inputs: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn signet_requires_explicit_spark_config() {
+        for config in [
+            default_config(Network::Signet),
+            crate::default_server_config(Network::Signet),
+        ] {
+            assert!(config.spark_config.is_none());
+            assert!(matches!(
+                config.validate(),
+                Err(SdkError::InvalidInput(message)) if message.contains("spark_config")
+            ));
+            assert!(matches!(
+                SdkBuilder::new(config, test_seed()).build().await,
+                Err(SdkError::InvalidInput(message)) if message.contains("spark_config")
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn signet_requires_explicit_chain_service() {
+        for mut config in [
+            default_config(Network::Signet),
+            crate::default_server_config(Network::Signet),
+        ] {
+            config.spark_config = Some(signet_test_spark_config());
+            assert!(matches!(
+                SdkBuilder::new(config, test_seed()).build().await,
+                Err(SdkError::InvalidInput(message)) if message.contains("explicit chain service")
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn signet_sdk_builds_without_api_key_and_preserves_network() {
+        let mut config = crate::default_server_config("signet".parse().unwrap());
+        config.spark_config = Some(signet_test_spark_config());
+        assert!(config.api_key.is_none());
+        assert!(config.lnurl_domain.is_none());
+        let sdk = SdkBuilder::new(config, test_seed())
+            .with_rest_chain_service(
+                "https://signet-chain.invalid/api".to_string(),
+                crate::ChainApiType::Esplora,
+                None,
+            )
+            .with_default_storage(unique_storage_dir("signet"))
+            .build()
+            .await
+            .expect("Signet SDK should initialize without a Breez API key");
+
+        let address = sdk.spark_wallet.get_spark_address().unwrap();
+        assert_eq!(address.network, spark_wallet::Network::Signet);
+        let encoded = address.to_address_string().unwrap();
+        let decoded: spark_wallet::SparkAddress = encoded.parse().unwrap();
+        assert_eq!(decoded.network, spark_wallet::Network::Signet);
+        assert_eq!(
+            bitcoin::Network::from(Network::Signet),
+            bitcoin::Network::Signet
+        );
+        assert!(matches!(
+            crate::BitcoinNetwork::from(Network::Signet),
+            crate::BitcoinNetwork::Signet
+        ));
+        assert!(matches!(
+            breez_sdk_common::network::BitcoinNetwork::from(Network::Signet),
+            breez_sdk_common::network::BitcoinNetwork::Signet
+        ));
+        sdk.disconnect().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn signet_explicit_chain_service_uses_esplora() {
+        use platform_utils::{HttpClient, HttpError, HttpResponse};
+        use std::{collections::HashMap, sync::Arc};
+
+        struct SignetChainClient;
+
+        #[macros::async_trait]
+        impl HttpClient for SignetChainClient {
+            async fn get(
+                &self,
+                url: String,
+                headers: Option<HashMap<String, String>>,
+            ) -> Result<HttpResponse, HttpError> {
+                assert_eq!(url, "https://signet-chain.invalid/api/fee-estimates");
+                assert!(
+                    !headers
+                        .unwrap_or_default()
+                        .keys()
+                        .any(|key| key.eq_ignore_ascii_case("authorization"))
+                );
+                Ok(HttpResponse {
+                    status: 200,
+                    body: r#"{"1":5.0,"3":3.0,"6":2.0,"144":1.0}"#.to_string(),
+                    headers: HashMap::new(),
+                })
+            }
+
+            async fn post(
+                &self,
+                _url: String,
+                _headers: Option<HashMap<String, String>>,
+                _body: Option<String>,
+            ) -> Result<HttpResponse, HttpError> {
+                panic!("fee estimation must not POST")
+            }
+
+            async fn delete(
+                &self,
+                _url: String,
+                _headers: Option<HashMap<String, String>>,
+                _body: Option<String>,
+            ) -> Result<HttpResponse, HttpError> {
+                panic!("fee estimation must not DELETE")
+            }
+        }
+
+        let mut context =
+            crate::new_shared_sdk_context(crate::SdkContextConfig::new(Network::Signet))
+                .await
+                .unwrap();
+        Arc::get_mut(&mut context).unwrap().http_client = Arc::new(SignetChainClient);
+        let chain_service = super::resolve_chain_service(
+            None,
+            Some(super::RestChainServiceConfig {
+                url: "https://signet-chain.invalid/api".to_string(),
+                api_type: crate::ChainApiType::Esplora,
+                credentials: None,
+            }),
+            &context,
+            Network::Signet,
+        )
+        .unwrap();
+        // A caller-supplied trait implementation must also satisfy the requirement.
+        let chain_service =
+            super::resolve_chain_service(Some(chain_service), None, &context, Network::Signet)
+                .unwrap();
+        let fees = chain_service.recommended_fees().await.unwrap();
+        assert_eq!(fees.fastest_fee, 5);
+        assert_eq!(fees.half_hour_fee, 3);
+        assert_eq!(fees.hour_fee, 2);
+    }
 
     #[test]
     fn default_config_spark_config_builds_valid_wallet_config() {

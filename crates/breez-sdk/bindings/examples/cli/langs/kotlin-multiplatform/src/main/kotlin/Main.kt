@@ -405,6 +405,7 @@ suspend fun runInteractiveMode(
     val networkLabel = when (network) {
         Network.MAINNET -> "mainnet"
         Network.REGTEST -> "regtest"
+        Network.SIGNET -> "signet"
     }
     val prompt = "breez-spark-cli [$networkLabel]> "
 

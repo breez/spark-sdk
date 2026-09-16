@@ -37,7 +37,7 @@ impl DefaultExternalSigner {
     /// # Arguments
     /// * `mnemonic` - BIP39 mnemonic phrase (12 or 24 words)
     /// * `passphrase` - Optional passphrase for the mnemonic
-    /// * `network` - Network to use (Mainnet or Regtest)
+    /// * `network` - Network to use (Mainnet, Signet, or Regtest)
     /// * `account_number` - Optional account number for key derivation
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn new(

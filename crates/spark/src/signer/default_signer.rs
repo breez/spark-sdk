@@ -30,8 +30,8 @@ use super::VerifiableSecretShare;
 /// same default so a wallet seed derives the same keys regardless of backend.
 pub fn default_account_number(network: Network) -> u32 {
     match network {
-        Network::Regtest => 0,
-        _ => 1,
+        Network::Regtest | Network::Signet | Network::Testnet => 0,
+        Network::Mainnet => 1,
     }
 }
 
@@ -471,6 +471,7 @@ impl SecretSource {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::{account_master_key, default_account_number, identity_public_key};
     use bitcoin::secp256k1::rand::thread_rng;
     use bitcoin::secp256k1::{self, PublicKey, Secp256k1, SecretKey};
     use macros::async_test_all;
@@ -487,6 +488,37 @@ pub(crate) mod tests {
     pub(crate) fn create_test_signer() -> DefaultSigner {
         let test_seed = [42u8; 32]; // Deterministic seed for testing
         DefaultSigner::new(&test_seed, Network::Regtest).expect("Failed to create test signer")
+    }
+
+    #[test]
+    fn signet_defaults_to_regtest_account() {
+        let seed = [42; 32];
+        for (network, account) in [
+            (Network::Mainnet, 1),
+            (Network::Testnet, 0),
+            (Network::Regtest, 0),
+            (Network::Signet, 0),
+        ] {
+            assert_eq!(default_account_number(network), account);
+            assert_eq!(
+                account_master_key(&seed, network, None).unwrap(),
+                account_master_key(&seed, network, Some(account)).unwrap()
+            );
+        }
+        let signet_key = identity_public_key(&seed, Network::Signet, None).unwrap();
+        assert_eq!(
+            signet_key,
+            identity_public_key(&seed, Network::Regtest, None).unwrap()
+        );
+        assert_ne!(
+            signet_key,
+            identity_public_key(&seed, Network::Mainnet, None).unwrap()
+        );
+        // Pinning account 1 still recovers wallets created with the old default.
+        assert_eq!(
+            identity_public_key(&seed, Network::Signet, Some(1)).unwrap(),
+            identity_public_key(&seed, Network::Mainnet, None).unwrap()
+        );
     }
 
     #[async_test_all]
