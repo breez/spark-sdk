@@ -81,6 +81,7 @@ pub struct TurnkeyConfig {
     pub wallet_id: String,
     /// Network the wallet operates on; selects the Spark address format
     /// (mainnet or regtest) used for Spark-protocol and Schnorr signing.
+    /// Signet is unsupported by Turnkey's Spark account formats.
     pub network: crate::Network,
     /// Spark account number: the `{account}` in every derivation path
     /// (`m/8797555'/{account}'/...`). Unset uses the network default, matching

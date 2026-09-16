@@ -1242,6 +1242,7 @@ pub struct _UrlSuccessActionData {
 pub enum _Network {
     Mainnet,
     Regtest,
+    Signet,
 }
 
 /// Flutter-side counterpart of

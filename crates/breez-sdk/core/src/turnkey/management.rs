@@ -140,7 +140,7 @@ impl TurnkeyWalletManager {
             wallet_name: wallet_name.clone(),
             accounts: vec![
                 identity_account(ADDRESS_FORMAT_COMPRESSED),
-                identity_account(spark_address_format(self.network)),
+                identity_account(spark_address_format(self.network)?),
             ],
             mnemonic_length: 24,
         };
