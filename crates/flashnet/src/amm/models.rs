@@ -473,8 +473,40 @@ impl ListPoolsRequest {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ListPoolsResponse {
+    /// Pools are parsed one at a time and a pool that doesn't parse is
+    /// skipped, not fatal. Pool creation is permissionless and the listing is
+    /// server-shaped, so a single entry with a field this client doesn't
+    /// expect must not empty the whole listing: on mainnet BTC/USDB on
+    /// 2026-09-11 a pool with `"hostName": null` did exactly that, and every
+    /// conversion for every client failed with `NoPoolsAvailable`.
+    #[serde(deserialize_with = "deserialize_pools_leniently")]
     pub pools: Vec<Pool>,
     pub total_count: u32,
+}
+
+fn deserialize_pools_leniently<'de, D>(deserializer: D) -> Result<Vec<Pool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw: Vec<serde_json::Value> = Vec::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(
+            |value| match serde_json::from_value::<Pool>(value.clone()) {
+                Ok(pool) => Some(pool),
+                Err(e) => {
+                    tracing::warn!(
+                        "Skipping pool {} in listing: {e}",
+                        value
+                            .get("lpPublicKey")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("<unknown>")
+                    );
+                    None
+                }
+            },
+        )
+        .collect())
 }
 
 #[serde_as]
@@ -551,7 +583,10 @@ pub(crate) struct PingResponse {
 pub struct Pool {
     #[serde_as(as = "DisplayFromStr")]
     pub lp_public_key: PublicKey,
-    pub host_name: String,
+    /// The host that created the pool. The backend serialises `null` for a
+    /// pool created without one, so this cannot be a plain `String`.
+    #[serde(default)]
+    pub host_name: Option<String>,
     pub host_fee_bps: u32,
     pub lp_fee_bps: u32,
     pub asset_a_address: String,
@@ -1081,7 +1116,7 @@ mod test {
                 "02894808873b896e21d29856a6d7bb346fb13c019739adb9bf0b6a8b7e28da53da",
             )
             .unwrap(),
-            host_name: "flashnet".to_string(),
+            host_name: Some("flashnet".to_string()),
             host_fee_bps,
             lp_fee_bps,
             asset_a_address: a_address.to_string(),
@@ -1133,6 +1168,37 @@ mod test {
         let serialized = serde_json::to_string(&intent).unwrap();
         let expected_json = r#"{"userPublicKey":"0315299b3f9f4e2beb8576ea2bf72ea1bc741eb255bfc3f6387de4d47b5c05972d","lpIdentityPublicKey":"02a1633caf0d6d2a8b3f4e1f5e6d7c8b9a0b1c2d3e4f5061728394a5b6c7d8e9fa","assetInSparkTransferId":"transfer123","assetInAddress":"03b06b7c3e39bf922be19b7ad5f19554bb7991cae585ed2e3374d51213ff4eeb3c","assetOutAddress":"020202020202020202020202020202020202020202020202020202020202020202","amountIn":"1000000","minAmountOut":"950000","maxSlippageBps":"500","nonce":"nonce123","totalIntegratorFeeRateBps":"50"}"#;
         assert_eq!(serialized, expected_json);
+    }
+
+    /// Two real entries from the mainnet BTC/USDB listing of 2026-09-11: the
+    /// live pool, and a pool created that afternoon with no host name. The
+    /// second used to fail the whole response.
+    const LISTING_WITH_NULL_HOST: &str = r#"{"pools":[
+        {"lpPublicKey":"037579aee81891fc3a28cbe7b13e565031d46248b420fb39dcb308598f472b4513","hostName":"flashnet","hostFeeBps":0,"lpFeeBps":5,"assetAAddress":"020202020202020202020202020202020202020202020202020202020202020202","assetBAddress":"3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca","assetAReserve":"161696297","assetBReserve":"136228013439","currentPriceAInB":"773.289419987554237059","tvlAssetB":"261266049160","volume24hAssetB":"86460624462161","priceChangePercent24h":"-1.10","curveType":"V3_CONCENTRATED","createdAt":"2026-02-08 2:27:34.451349 +00:00:00","updatedAt":"2026-09-11 7:17:47.835038 +00:00:00","currentTick":66509,"tickSpacing":10,"totalLiquidity":"6239943064049"},
+        {"lpPublicKey":"034f31eb0f56231f4eef456e3729c6c0ea38b22bd17dde67381347013db86e5bad","hostName":null,"hostFeeBps":10,"lpFeeBps":30,"assetAAddress":"3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca","assetBAddress":"020202020202020202020202020202020202020202020202020202020202020202","assetAReserve":"0","assetBReserve":"0","currentPriceAInB":"1.000000000000000000","tvlAssetB":"0","volume24hAssetB":"0","priceChangePercent24h":"0.00","curveType":"V3_CONCENTRATED","createdAt":"2026-09-11 16:19:12.514742 +00:00:00","updatedAt":"2026-09-11 16:34:25.352728 +00:00:00","currentTick":0,"tickSpacing":60,"totalLiquidity":"0"}
+    ],"totalCount":2}"#;
+
+    #[test]
+    fn a_pool_without_a_host_name_parses() {
+        let listing: ListPoolsResponse = serde_json::from_str(LISTING_WITH_NULL_HOST).unwrap();
+        assert_eq!(listing.pools.len(), 2);
+        assert_eq!(listing.pools[0].host_name.as_deref(), Some("flashnet"));
+        assert_eq!(listing.pools[1].host_name, None);
+    }
+
+    #[test]
+    fn a_pool_that_does_not_parse_is_skipped_not_fatal() {
+        // The same listing with one entry mangled beyond this client's model:
+        // the other pool must still come through.
+        let mangled = LISTING_WITH_NULL_HOST.replace(
+            r#""lpPublicKey":"034f31eb0f56231f4eef456e3729c6c0ea38b22bd17dde67381347013db86e5bad""#,
+            r#""lpPublicKey":"not-a-public-key""#,
+        );
+        let listing: ListPoolsResponse = serde_json::from_str(&mangled).unwrap();
+        assert_eq!(listing.pools.len(), 1);
+        assert_eq!(listing.pools[0].host_name.as_deref(), Some("flashnet"));
+        // `totalCount` is the server's figure and is left alone.
+        assert_eq!(listing.total_count, 2);
     }
 
     #[test]
