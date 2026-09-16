@@ -659,7 +659,7 @@ class IndexedDBStorage {
     // so existing databases depend on indices never shifting. Never insert,
     // reorder, or delete a migration — only append. dbVersion MUST equal the
     // number of migrations (enforced by the guard in initialize()).
-    this.dbVersion = 21; // Current schema version (= migration count)
+    this.dbVersion = 22; // Current schema version (= migration count)
   }
 
   /**
