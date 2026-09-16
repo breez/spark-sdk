@@ -323,7 +323,18 @@ impl StableBalance {
 
     /// Sets the active token by label, or deactivates stable balance if `None`.
     pub(crate) async fn set_active_token(&self, label: Option<String>) -> Result<(), SdkError> {
-        self.core.set_active_token(label).await
+        let changed_payment_ids = self.core.set_active_token(label).await?;
+        // The cleared payments already carry their Failed status; surface it on
+        // the ones whose success reached the app.
+        for payment_id in changed_payment_ids {
+            crate::utils::payments::emit_payment_updated_if_terminal(
+                &self.core.storage,
+                &self.event_emitter,
+                payment_id,
+            )
+            .await;
+        }
+        Ok(())
     }
 
     /// Acquires a payment guard that suppresses auto-convert while held.
@@ -367,7 +378,10 @@ impl StableBalanceCore {
     /// Validates that the label exists in the configured tokens list.
     /// Clears the conversion queue (pending conversions for the old token are no longer
     /// relevant), marks cleared per-receive tasks as Failed, and caches the choice locally.
-    async fn set_active_token(&self, label: Option<String>) -> Result<(), SdkError> {
+    ///
+    /// Returns the payment ids whose stored status actually changed, for the
+    /// caller to surface.
+    async fn set_active_token(&self, label: Option<String>) -> Result<Vec<String>, SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
 
         // Clear the queue — pending conversions for the old token are no longer relevant
@@ -378,8 +392,9 @@ impl StableBalanceCore {
                 cleared_payment_ids.len()
             );
         }
+        let mut changed_payment_ids = Vec::new();
         for payment_id in &cleared_payment_ids {
-            if let Err(e) = self
+            match self
                 .storage
                 .insert_payment_metadata(
                     payment_id.clone(),
@@ -390,7 +405,13 @@ impl StableBalanceCore {
                 )
                 .await
             {
-                warn!("Failed to persist Failed status for cleared conversion {payment_id}: {e:?}");
+                Ok(true) => changed_payment_ids.push(payment_id.clone()),
+                Ok(false) => {}
+                Err(e) => {
+                    warn!(
+                        "Failed to persist Failed status for cleared conversion {payment_id}: {e:?}"
+                    );
+                }
             }
         }
 
@@ -437,7 +458,7 @@ impl StableBalanceCore {
             self.queue.push_auto_convert().await;
         }
 
-        Ok(())
+        Ok(changed_payment_ids)
     }
 
     /// Resolves the initial active token from the local cache and config.
@@ -629,26 +650,6 @@ impl EventMiddleware for StableBalanceMiddleware {
         match event {
             // Sync completed → wake the startup gate, sweep timed-out deferred tasks
             SdkEvent::Synced => {
-                // Clean up deferred tasks that have exceeded the timeout
-                let expired_payment_ids = self.core.queue.clear_expired_tasks().await;
-                for expired_payment_id in expired_payment_ids {
-                    warn!("Per-receive conversion timed out for {expired_payment_id}");
-                    if let Err(e) = self
-                        .core
-                        .storage
-                        .insert_payment_metadata(
-                            expired_payment_id.clone(),
-                            PaymentMetadata {
-                                conversion_status: Some(ConversionStatus::Failed),
-                                ..Default::default()
-                            },
-                        )
-                        .await
-                    {
-                        warn!("Failed to persist Failed status for {expired_payment_id}: {e:?}");
-                    }
-                }
-
                 self.core.synced_notify.notify_one();
 
                 // Re-assess balance after sync — may have changed due to external activity

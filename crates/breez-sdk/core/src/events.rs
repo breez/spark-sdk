@@ -35,6 +35,14 @@ pub enum SdkEvent {
     PaymentPending { payment: Payment },
     /// Emitted when a payment failed.
     PaymentFailed { payment: Payment },
+    /// Emitted when metadata on a payment that has already reached a terminal
+    /// status (`Completed` or `Failed`) is mutated. Most commonly fires when
+    /// cross-chain conversion info attaches after the underlying Spark transfer
+    /// has already settled.
+    ///
+    /// Does not fire when the payment's top-level status changes: use
+    /// `PaymentSucceeded` / `PaymentFailed` for that.
+    PaymentUpdated { payment: Payment },
     /// Emitted while the background auto-optimizer is running.
     ///
     /// Only fired from the auto path (enabled via
@@ -86,6 +94,9 @@ impl fmt::Display for SdkEvent {
             }
             SdkEvent::PaymentFailed { payment } => {
                 write!(f, "PaymentFailed({})", payment.id)
+            }
+            SdkEvent::PaymentUpdated { payment } => {
+                write!(f, "PaymentUpdated({})", payment.id)
             }
             SdkEvent::AutoOptimization {
                 optimization_event: event,

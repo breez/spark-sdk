@@ -158,15 +158,20 @@ impl breez_sdk_spark::Storage for WasmStorage {
         &self,
         payment_id: String,
         metadata: breez_sdk_spark::PaymentMetadata,
-    ) -> Result<(), StorageError> {
+    ) -> Result<bool, StorageError> {
         let metadata: PaymentMetadata = metadata.clone().into();
         let promise = self
             .storage
             .insert_payment_metadata(payment_id, metadata)
             .map_err(js_error_to_storage_error)?;
         let future = JsFuture::from(promise);
-        future.await.map_err(js_error_to_storage_error)?;
-        Ok(())
+        let resolved = future.await.map_err(js_error_to_storage_error)?;
+        resolved.as_bool().ok_or_else(|| {
+            StorageError::Implementation(
+                "insertPaymentMetadata must return a boolean indicating whether the row changed"
+                    .to_string(),
+            )
+        })
     }
 
     async fn get_payment_by_id(
@@ -551,7 +556,11 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
      * replace an already-terminal status.
      */
     applyPaymentUpdate: (payment: Payment) => Promise<boolean>;
-    insertPaymentMetadata: (paymentId: string, metadata: PaymentMetadata) => Promise<void>;
+    /**
+     * Resolves `true` when the stored row actually changed, `false` when the
+     * call was a no-op against the existing row.
+     */
+    insertPaymentMetadata: (paymentId: string, metadata: PaymentMetadata) => Promise<boolean>;
     getPaymentById: (id: string) => Promise<Payment>;
     getPaymentByInvoice: (invoice: string) => Promise<Payment>;
     addDeposit: (txid: string, vout: number, amount_sats: number, isMature: boolean) => Promise<void>;
