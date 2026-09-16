@@ -16,7 +16,9 @@ use crate::utils::preimage_swap::{SwapNodesForPreimageRequest, swap_nodes_for_pr
 use crate::{
     Network,
     operator::{OperatorPool, rpc::spark::QueryHtlcRequest},
-    services::{PreimageRequestWithTransfer, QueryHtlcFilter, ServiceError, TransferService},
+    services::{
+        LeafKeyTweak, PreimageRequestWithTransfer, QueryHtlcFilter, ServiceError, TransferService,
+    },
     signer::SparkSigner,
     utils::paging::{PagingFilter, PagingResult, pager},
 };
@@ -120,6 +122,81 @@ impl HtlcService {
         };
 
         Ok(transfer)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn receive_htlc_with_tweaks(
+        &self,
+        leaf_key_tweaks: Vec<LeafKeyTweak>,
+        receiver_id: &PublicKey,
+        payment_hash: &Hash,
+        invoice: &str,
+        amount_sats: u64,
+        expiry_time: SystemTime,
+        transfer_id: Option<TransferId>,
+    ) -> Result<(Transfer, Option<Preimage>), ServiceError> {
+        let unwrapped_transfer_id = match &transfer_id {
+            Some(transfer_id) => transfer_id.clone(),
+            None => TransferId::generate(),
+        };
+
+        let prepared_transfer_request = self
+            .transfer_service
+            .prepare_transfer_request(
+                &unwrapped_transfer_id,
+                &leaf_key_tweaks,
+                receiver_id,
+                // Plain P2TR refunds paying the receiver, not hash-locked ones: the
+                // operators validate a receive swap's refunds against the receiver's
+                // identity key and reject HTLC outputs (only a send's refunds are
+                // hash-locked). The fronted leaves are backed by the transfer's
+                // `expiry_time` instead, which returns them if no preimage follows.
+                None,
+                Some(expiry_time),
+                None, // No adaptor public key for HTLC transfers
+            )
+            .await?;
+
+        match swap_nodes_for_preimage(
+            &self.operator_pool,
+            SwapNodesForPreimageRequest {
+                receiver_pubkey: receiver_id,
+                payment_hash,
+                invoice_str: Some(invoice),
+                amount_sats,
+                fee_sats: 0,
+                is_inbound_payment: true,
+                transfer_request: prepared_transfer_request.transfer_request,
+            },
+        )
+        .await
+        {
+            Ok(response) => {
+                let transfer: Transfer = response
+                    .transfer
+                    .ok_or(ServiceError::SSPswapError(
+                        "Swap response did not contain a transfer".to_string(),
+                    ))?
+                    .try_into()?;
+                // Empty preimage means the share was not present (a HODL invoice):
+                // the transfer is committed but the preimage must be provided later.
+                let preimage = if response.preimage.is_empty() {
+                    None
+                } else {
+                    Some(Preimage::try_from(response.preimage)?)
+                };
+                Ok((transfer, preimage))
+            }
+            // On a connection error the transfer may have committed; recover it and
+            // let the caller learn the preimage via `query_htlc`.
+            Err(e) => {
+                let transfer = self
+                    .transfer_service
+                    .recover_transfer_on_rpc_connection_error(&unwrapped_transfer_id, e)
+                    .await?;
+                Ok((transfer, None))
+            }
+        }
     }
 
     /// Provides a preimage to the operator to claim an HTLC.
