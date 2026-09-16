@@ -606,6 +606,24 @@ impl Storage for SyncedStorage {
         self.inner.update_deposit(txid, vout, payload).await
     }
 
+    // Local-only: the watch list is a per-instance chain-polling optimization,
+    // so it is not replicated the way the deposits themselves are.
+    async fn list_watched_deposit_addresses(
+        &self,
+    ) -> Result<Vec<crate::persist::WatchedDepositAddress>, StorageError> {
+        self.inner.list_watched_deposit_addresses().await
+    }
+
+    async fn update_watched_deposit_address(
+        &self,
+        address: String,
+        payload: crate::persist::UpdateWatchedAddressPayload,
+    ) -> Result<(), StorageError> {
+        self.inner
+            .update_watched_deposit_address(address, payload)
+            .await
+    }
+
     async fn set_lnurl_metadata(
         &self,
         metadata: Vec<crate::persist::SetLnurlMetadataItem>,

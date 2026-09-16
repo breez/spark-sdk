@@ -22,7 +22,8 @@ use crate::{
     persist::{
         Payment, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,
         StorageListPaymentsRequest, StoragePaymentDetailsFilter, StoredCrossChainSwap,
-        UpdateDepositPayload, parse_payment_status,
+        UpdateDepositPayload, UpdateWatchedAddressPayload, WatchedDepositAddress,
+        parse_payment_status,
     },
     sync_storage::{
         IncomingChange, OutgoingChange, Record, RecordChange, RecordId, UnversionedRecordChange,
@@ -486,6 +487,19 @@ impl PostgresStorage {
             // JSON-encoded RefundState. NULL on refunds created before this column
             // existed, which is read as BroadcastPending.
             vec!["ALTER TABLE brz_unclaimed_deposits ADD COLUMN refund_state JSONB".to_string()],
+            // Migration 23: Deposit addresses polled on-chain for deposits still in
+            // the mempool. Rows are removed once watching them can no longer lead to
+            // an early claim, so the table holds only the live watch set.
+            vec![
+                "CREATE TABLE IF NOT EXISTS brz_watched_deposit_addresses (
+                    user_id BYTEA NOT NULL,
+                    address TEXT NOT NULL,
+                    issued_at BIGINT NOT NULL,
+                    seen BOOLEAN NOT NULL DEFAULT FALSE,
+                    PRIMARY KEY (user_id, address)
+                 )"
+                .to_string(),
+            ],
         ]
     }
 }
@@ -1367,6 +1381,65 @@ impl Storage for PostgresStorage {
         Ok(())
     }
 
+    async fn list_watched_deposit_addresses(
+        &self,
+    ) -> Result<Vec<WatchedDepositAddress>, StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        let rows = client
+            .query(
+                "SELECT address, issued_at, seen FROM brz_watched_deposit_addresses
+                 WHERE user_id = $1 ORDER BY issued_at DESC",
+                &[&self.identity],
+            )
+            .await?;
+        rows.iter()
+            .map(|row| {
+                Ok(WatchedDepositAddress {
+                    address: row.get(0),
+                    issued_at: u64::try_from(row.get::<_, i64>(1))?,
+                    seen: row.get(2),
+                })
+            })
+            .collect()
+    }
+
+    async fn update_watched_deposit_address(
+        &self,
+        address: String,
+        payload: UpdateWatchedAddressPayload,
+    ) -> Result<(), StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        match payload {
+            UpdateWatchedAddressPayload::Watch { issued_at } => {
+                client
+                    .execute(
+                        "INSERT INTO brz_watched_deposit_addresses (user_id, address, issued_at, seen)
+                         VALUES ($1, $2, $3, FALSE)
+                         ON CONFLICT(user_id, address) DO UPDATE SET issued_at = EXCLUDED.issued_at, seen = FALSE",
+                        &[&self.identity, &address, &i64::try_from(issued_at)?],
+                    )
+                    .await?;
+            }
+            UpdateWatchedAddressPayload::Seen => {
+                client
+                    .execute(
+                        "UPDATE brz_watched_deposit_addresses SET seen = TRUE WHERE user_id = $1 AND address = $2",
+                        &[&self.identity, &address],
+                    )
+                    .await?;
+            }
+            UpdateWatchedAddressPayload::Unwatch { issued_at } => {
+                client
+                    .execute(
+                        "DELETE FROM brz_watched_deposit_addresses WHERE user_id = $1 AND address = $2 AND issued_at = $3",
+                        &[&self.identity, &address, &i64::try_from(issued_at)?],
+                    )
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn set_lnurl_metadata(
         &self,
         metadata: Vec<SetLnurlMetadataItem>,
@@ -2190,6 +2263,12 @@ mod tests {
             fixture.storage,
         )))
         .await;
+    }
+
+    #[tokio::test]
+    async fn test_watched_deposit_addresses() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_watched_deposit_addresses(Box::new(fixture.storage)).await;
     }
 
     #[tokio::test]
@@ -3242,7 +3321,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 22, "migration version must advance to 22");
+        assert_eq!(version, 23, "migration version must advance to 23");
 
         // Seed payment row is preserved on the renamed table — proves the
         // table + PK constraint rename worked and the columns line up.
@@ -3538,7 +3617,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 22, "migration must advance to 22");
+        assert_eq!(version, 23, "migration must advance to 23");
 
         // Seed data preserved (multi-tenant backfilled user_id to current tenant).
         let payment_count: i64 = client

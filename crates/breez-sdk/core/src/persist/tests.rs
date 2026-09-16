@@ -6,6 +6,7 @@ use crate::{
     DepositClaimError, InstantClaimStatus, LnurlWithdrawInfo, Payment, PaymentDetails,
     PaymentMetadata, PaymentMethod, PaymentStatus, PaymentType, RefundState, SparkHtlcDetails,
     SparkHtlcStatus, Storage, TokenMetadata, TokenTransactionType, UpdateDepositPayload,
+    UpdateWatchedAddressPayload,
     persist::{ObjectCacheRepository, StorageListPaymentsRequest},
     sync_storage::{Record, RecordId, UnversionedRecordChange},
 };
@@ -1297,6 +1298,130 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         }
         _ => panic!("Expected Lightning payment"),
     }
+}
+
+#[allow(clippy::too_many_lines)]
+pub async fn test_watched_deposit_addresses(storage: Box<dyn Storage>) {
+    assert!(
+        storage
+            .list_watched_deposit_addresses()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // Watch inserts.
+    storage
+        .update_watched_deposit_address(
+            "addr_a".to_string(),
+            UpdateWatchedAddressPayload::Watch { issued_at: 100 },
+        )
+        .await
+        .unwrap();
+    let watched = storage.list_watched_deposit_addresses().await.unwrap();
+    assert_eq!(watched.len(), 1);
+    assert_eq!(watched[0].address, "addr_a");
+    assert_eq!(watched[0].issued_at, 100);
+    assert!(!watched[0].seen);
+
+    // Seen sets the flag.
+    storage
+        .update_watched_deposit_address("addr_a".to_string(), UpdateWatchedAddressPayload::Seen)
+        .await
+        .unwrap();
+    let watched = storage.list_watched_deposit_addresses().await.unwrap();
+    assert_eq!(watched.len(), 1);
+    assert!(watched[0].seen);
+
+    // Re-watching restarts the window and clears the flag.
+    storage
+        .update_watched_deposit_address(
+            "addr_a".to_string(),
+            UpdateWatchedAddressPayload::Watch { issued_at: 300 },
+        )
+        .await
+        .unwrap();
+    let watched = storage.list_watched_deposit_addresses().await.unwrap();
+    assert_eq!(watched.len(), 1);
+    assert_eq!(watched[0].issued_at, 300);
+    assert!(!watched[0].seen);
+
+    // Listing is newest first.
+    storage
+        .update_watched_deposit_address(
+            "addr_b".to_string(),
+            UpdateWatchedAddressPayload::Watch { issued_at: 400 },
+        )
+        .await
+        .unwrap();
+    let watched = storage.list_watched_deposit_addresses().await.unwrap();
+    assert_eq!(watched.len(), 2);
+    assert_eq!(watched[0].address, "addr_b");
+    assert_eq!(watched[1].address, "addr_a");
+
+    // Seen on an address that is not watched is a no-op, not an error: the
+    // watch may have been retired between the read and the write.
+    storage
+        .update_watched_deposit_address(
+            "addr_missing".to_string(),
+            UpdateWatchedAddressPayload::Seen,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .list_watched_deposit_addresses()
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+
+    // A stale issued_at means the address was handed out again since the caller
+    // read it, so the retirement it decided no longer applies.
+    storage
+        .update_watched_deposit_address(
+            "addr_a".to_string(),
+            UpdateWatchedAddressPayload::Unwatch { issued_at: 100 },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .list_watched_deposit_addresses()
+            .await
+            .unwrap()
+            .len(),
+        2,
+        "a stale unwatch must not retire a re-issued address"
+    );
+
+    // Unwatch removes only its own row.
+    storage
+        .update_watched_deposit_address(
+            "addr_a".to_string(),
+            UpdateWatchedAddressPayload::Unwatch { issued_at: 300 },
+        )
+        .await
+        .unwrap();
+    let watched = storage.list_watched_deposit_addresses().await.unwrap();
+    assert_eq!(watched.len(), 1);
+    assert_eq!(watched[0].address, "addr_b");
+
+    storage
+        .update_watched_deposit_address(
+            "addr_b".to_string(),
+            UpdateWatchedAddressPayload::Unwatch { issued_at: 400 },
+        )
+        .await
+        .unwrap();
+    assert!(
+        storage
+            .list_watched_deposit_addresses()
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 pub async fn test_unclaimed_deposits_crud(storage: Box<dyn Storage>) {
