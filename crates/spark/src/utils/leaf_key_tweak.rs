@@ -1,4 +1,4 @@
-use crate::{services::LeafKeyTweak, tree::TreeNode};
+use crate::{services::LeafKeyTweak, signer::FrostDerivation, tree::TreeNode};
 
 /// Builds the leaf key tweaks to send for a transfer.
 ///
@@ -10,6 +10,9 @@ pub fn prepare_leaf_key_tweaks_to_send(leaves: Vec<TreeNode>) -> Vec<LeafKeyTwea
     leaves
         .into_iter()
         .map(|leaf| LeafKeyTweak {
+            signing_key: FrostDerivation::SigningLeaf {
+                leaf_id: leaf.id.clone(),
+            },
             node: leaf,
             incoming_key: None,
         })

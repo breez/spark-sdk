@@ -334,6 +334,7 @@ fn to_jobs(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_refund_signing_job(
     node_id: &TreeNodeId,
+    signing_key: &FrostDerivation,
     verifying_key: &PublicKey,
     signing_public_key: &PublicKey,
     refund_tx: Transaction,
@@ -343,9 +344,7 @@ pub(crate) fn build_refund_signing_job(
     network: Network,
 ) -> RefundJob {
     let job = FrostJob {
-        derivation: FrostDerivation::SigningLeaf {
-            leaf_id: node_id.clone(),
-        },
+        derivation: signing_key.clone(),
         sighash,
         verifying_key: *verifying_key,
         operator_commitments: operator_commitments.clone(),
@@ -474,9 +473,13 @@ pub(crate) fn split_signing_commitments_by_variant<T>(
 pub struct LeafKeyTweak {
     pub node: TreeNode,
     /// For a claim, the incoming leaf key (ECIES-encrypted to our identity key
-    /// by the sender). `None` for outbound leaves, whose signing key is derived
-    /// from `node.id`.
+    /// by the sender). `None` for outbound leaves.
     pub incoming_key: Option<EncryptedSecret>,
+    /// The key this leaf is currently held under. Usually
+    /// `SigningLeaf { leaf_id: node.id }`, which is where a leaf received in a
+    /// transfer ends up, but a leaf created under an id its owner chose is held
+    /// under that one instead.
+    pub signing_key: FrostDerivation,
 }
 
 // TODO: verify if the optional times should be optional
@@ -1648,13 +1651,14 @@ mod tests {
     use bitcoin::{Transaction, absolute::LockTime, transaction::Version};
     use frost_secp256k1_tr::Identifier;
     use macros::test_all;
+    use std::collections::BTreeMap;
 
-    use super::{ServiceError, convert_page};
+    use super::{FrostDerivation, ServiceError, build_refund_signing_job, convert_page};
     use crate::Network;
     use crate::operator::rpc as operator_rpc;
     use crate::token::TokenOutputWithPrevOut;
     use crate::token::bech32m_decode_token_id;
-    use crate::tree::TreeNode;
+    use crate::tree::{TreeNode, TreeNodeId};
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
@@ -1708,6 +1712,45 @@ mod tests {
 
     fn create_proto_tree_node(owner_identity_public_key: Vec<u8>) -> operator_rpc::spark::TreeNode {
         create_proto_tree_node_full(owner_identity_public_key, TEST_PUBKEY_BYTES.to_vec())
+    }
+
+    /// A refund is signed with the key the leaf is held under, not with one
+    /// derived from the id the operators know it by. A leaf created under an id
+    /// its owner chose is held under that id's key, and signing with the
+    /// operator's id would produce a share the operators reject.
+    #[test_all]
+    fn test_refund_signing_job_uses_the_key_the_leaf_is_held_under() {
+        let node = TreeNode::try_from(create_proto_tree_node(TEST_PUBKEY_BYTES.to_vec())).unwrap();
+        let held_under = TreeNodeId::generate();
+        let verifying_key = PublicKey::from_slice(&TEST_PUBKEY_BYTES).unwrap();
+
+        let job = build_refund_signing_job(
+            &node.id,
+            &FrostDerivation::SigningLeaf {
+                leaf_id: held_under.clone(),
+            },
+            &verifying_key,
+            &verifying_key,
+            Transaction {
+                version: Version::non_standard(3),
+                lock_time: LockTime::ZERO,
+                input: vec![],
+                output: vec![],
+            },
+            [0u8; 32],
+            BTreeMap::new(),
+            None,
+            Network::Regtest,
+        );
+
+        match job.job.derivation {
+            FrostDerivation::SigningLeaf { leaf_id } => assert_eq!(leaf_id, held_under),
+            other => panic!("expected a signing-leaf derivation, got {other:?}"),
+        }
+        assert_eq!(
+            job.pending.node_id, node.id,
+            "the operator-facing node id must not move with the key"
+        );
     }
 
     #[test_all]

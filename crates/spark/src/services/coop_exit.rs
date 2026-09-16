@@ -383,6 +383,7 @@ impl CoopExitService {
                             .map(|l| TransferLeafInput {
                                 node: l.node.clone(),
                                 new_leaf_id: TreeNodeId::generate(),
+                                signing_key: l.signing_key.clone(),
                             })
                             .collect(),
                         operator_recipients: self.operator_recipients(),
@@ -536,6 +537,7 @@ impl CoopExitService {
             }?;
             let cpfp = build_refund_signing_job(
                 &leaf.node.id,
+                &leaf.signing_key,
                 &verifying_key,
                 &signing_public_key,
                 cpfp_refund_tx,
@@ -561,6 +563,7 @@ impl CoopExitService {
                 }?;
                 Some(build_refund_signing_job(
                     &leaf.node.id,
+                    &leaf.signing_key,
                     &verifying_key,
                     &signing_public_key,
                     direct_refund_tx,
@@ -584,6 +587,7 @@ impl CoopExitService {
                 }?;
                 Some(build_refund_signing_job(
                     &leaf.node.id,
+                    &leaf.signing_key,
                     &verifying_key,
                     &signing_public_key,
                     dfc_refund_tx,

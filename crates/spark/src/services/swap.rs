@@ -9,6 +9,7 @@ use rand::rngs::OsRng;
 use tracing::{debug, warn};
 
 use crate::bitcoin::sighash_from_tx;
+use crate::signer::FrostDerivation;
 use crate::{
     Network,
     operator::{
@@ -131,6 +132,9 @@ impl Swap {
             .map(|leaf| LeafKeyTweak {
                 node: leaf.clone(),
                 incoming_key: None,
+                signing_key: FrostDerivation::SigningLeaf {
+                    leaf_id: leaf.id.clone(),
+                },
             })
             .collect();
         let expiry_time =
