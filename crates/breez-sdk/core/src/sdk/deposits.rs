@@ -121,16 +121,22 @@ impl BreezSdk {
                     payment: Some(payment),
                 })
             }
-            // An earlier claim took it, so the deposit is settled and its row
-            // goes. The caller still gets the error: the claim they asked for
-            // did not happen here.
+            // An earlier claim took it, so the deposit is settled rather than
+            // failed and records no claim error. The caller still gets the error:
+            // the claim they asked for did not happen here.
             Err(e) if is_already_claimed_error(&e.to_string()) => {
                 info!(
-                    "Deposit {}:{} was already claimed, dropping it",
+                    "Deposit {}:{} was already claimed, marking it",
                     detailed_utxo.txid, detailed_utxo.vout
                 );
                 self.storage
-                    .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
+                    .update_deposit(
+                        detailed_utxo.txid.to_string(),
+                        detailed_utxo.vout,
+                        UpdateDepositPayload::InstantClaim {
+                            status: InstantClaimStatus::Claimed,
+                        },
+                    )
                     .await?;
                 Err(e)
             }
@@ -596,12 +602,19 @@ impl BreezSdk {
         max_fee: Option<MaxFee>,
         confirmations: u32,
     ) -> Result<ClaimDepositResponse, SdkError> {
-        let row_exists = self
+        let stored = self
             .storage
             .list_deposits()
             .await?
-            .iter()
-            .any(|d| d.txid == detailed_utxo.txid.to_string() && d.vout == detailed_utxo.vout);
+            .into_iter()
+            .find(|d| d.txid == detailed_utxo.txid.to_string() && d.vout == detailed_utxo.vout);
+        let row_exists = stored.is_some();
+        let claim_already_made = stored.is_some_and(|d| {
+            matches!(
+                d.instant_claim_status,
+                Some(InstantClaimStatus::Submitted { .. } | InstantClaimStatus::Claimed)
+            )
+        });
 
         let resolved_max_fee = self.resolve_max_claim_fee(max_fee).await?;
         let outcome = match self
@@ -631,15 +644,21 @@ impl BreezSdk {
                 )
                 .await?;
         }
-        self.storage
-            .update_deposit(
-                detailed_utxo.txid.to_string(),
-                detailed_utxo.vout,
-                UpdateDepositPayload::InstantClaim {
-                    status: outcome.status(confirmations),
-                },
-            )
-            .await?;
+        // A deposit already claimed keeps that status. Replacing it with a
+        // decline would let the cascade submit a second claim, and let
+        // reconciliation drop the record while the first claim is still settling.
+        let status = outcome.status(confirmations);
+        let downgrades_existing_claim =
+            claim_already_made && matches!(status, InstantClaimStatus::Declined { .. });
+        if !downgrades_existing_claim {
+            self.storage
+                .update_deposit(
+                    detailed_utxo.txid.to_string(),
+                    detailed_utxo.vout,
+                    UpdateDepositPayload::InstantClaim { status },
+                )
+                .await?;
+        }
 
         match outcome {
             InstantClaimOutcome::Submitted(claim_id) => {

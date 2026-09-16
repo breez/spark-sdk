@@ -21,13 +21,20 @@ pub enum ChainServiceError {
     InvalidAddress(String),
     #[error("Service connectivity: {0}")]
     ServiceConnectivity(String),
+    /// The backend does not know this transaction or output. Distinct from a
+    /// connectivity failure: it is an answer, not the absence of one.
+    #[error("Not found: {0}")]
+    NotFound(String),
     #[error("Generic: {0}")]
     Generic(String),
 }
 
 impl From<platform_utils::HttpError> for ChainServiceError {
     fn from(value: platform_utils::HttpError) -> Self {
-        ChainServiceError::ServiceConnectivity(value.to_string())
+        match value.status() {
+            Some(404) => ChainServiceError::NotFound(value.to_string()),
+            _ => ChainServiceError::ServiceConnectivity(value.to_string()),
+        }
     }
 }
 
@@ -190,4 +197,41 @@ pub async fn new_rest_chain_service(
         credentials.map(|c| BasicAuth::new(c.username, c.password)),
         api_type,
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ChainServiceError;
+    use platform_utils::HttpError;
+
+    fn status(status: u16) -> ChainServiceError {
+        HttpError::Status {
+            status,
+            body: "body".to_string(),
+        }
+        .into()
+    }
+
+    #[test]
+    fn a_404_is_an_answer_not_a_connectivity_failure() {
+        assert!(matches!(status(404), ChainServiceError::NotFound(_)));
+    }
+
+    #[test]
+    fn every_other_status_stays_connectivity() {
+        for code in [400, 429, 500, 503] {
+            assert!(
+                matches!(status(code), ChainServiceError::ServiceConnectivity(_)),
+                "{code} should not read as not-found"
+            );
+        }
+    }
+
+    #[test]
+    fn the_body_survives_either_way() {
+        // The error-string classifiers match on the response body, so both
+        // variants have to keep carrying it.
+        assert!(status(404).to_string().contains("body"));
+        assert!(status(400).to_string().contains("body"));
+    }
 }

@@ -1721,6 +1721,7 @@ pub async fn test_deposit_refunds(storage: Box<dyn Storage>) {
     assert_claim_error_keeps_refund(storage.as_ref()).await;
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn test_instant_claim_status(storage: Box<dyn Storage>) {
     // A freshly-added deposit has no instant-claim status.
     storage
@@ -1802,6 +1803,39 @@ pub async fn test_instant_claim_status(storage: Box<dyn Storage>) {
             claim_id: "claim-123".to_string()
         })
     );
+
+    // Settling replaces the in-flight status. The record outlives the credit, so
+    // this is what keeps the deposit from being claimed again while the provider
+    // still reports the UTXO.
+    storage
+        .update_deposit(
+            "tx_instant".to_string(),
+            0,
+            UpdateDepositPayload::InstantClaim {
+                status: InstantClaimStatus::Claimed,
+            },
+        )
+        .await
+        .unwrap();
+    let deposits = storage.list_deposits().await.unwrap();
+    assert_eq!(deposits.len(), 1);
+    assert_eq!(
+        deposits[0].instant_claim_status,
+        Some(InstantClaimStatus::Claimed)
+    );
+
+    storage
+        .update_deposit(
+            "tx_instant".to_string(),
+            0,
+            UpdateDepositPayload::InstantClaim {
+                status: InstantClaimStatus::Submitted {
+                    claim_id: "claim-123".to_string(),
+                },
+            },
+        )
+        .await
+        .unwrap();
 
     // Re-observing the UTXO (the syncer upserts is_mature/amount) must preserve
     // the status, otherwise a still-in-flight deposit could be re-claimed.

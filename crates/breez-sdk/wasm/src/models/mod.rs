@@ -231,6 +231,7 @@ pub enum InstantClaimStatus {
     Submitted {
         claim_id: String,
     },
+    Claimed,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::InputType)]

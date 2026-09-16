@@ -38,6 +38,104 @@ async fn wait_for_unclaimed_event(
 }
 
 /// Waits for `txid` to be announced through a `NewDeposits` event.
+/// After an early claim is credited, the chain and the operators keep reporting
+/// the UTXO until the provider spends it, so the deposit stays listed. Through
+/// that window it must read as claimed rather than failed: it reaches
+/// `Claimed` once the credit lands, never carries a claim error, is never named
+/// by an `UnclaimedDeposits`, and is never deleted and re-announced.
+async fn assert_settled_while_reported(
+    sdk: &BreezSdk,
+    event_rx: &mut tokio::sync::mpsc::Receiver<SdkEvent>,
+    txid: &str,
+    window: u64,
+) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(window);
+    let mut went_absent = false;
+    let mut saw_claimed = false;
+    while tokio::time::Instant::now() < deadline {
+        while let Ok(event) = event_rx.try_recv() {
+            if let SdkEvent::UnclaimedDeposits { unclaimed_deposits } = event {
+                assert!(
+                    !unclaimed_deposits.iter().any(|d| d.txid == txid),
+                    "a credited early claim was reported as unclaimed: {unclaimed_deposits:?}"
+                );
+            }
+        }
+        let listed = sdk
+            .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
+            .await?
+            .deposits;
+        match listed.iter().find(|d| d.txid == txid) {
+            Some(deposit) => {
+                // Gone and then back means a claim deleted the row while the
+                // operators were still reporting the UTXO, so the next pass
+                // re-announced it and claimed it again.
+                assert!(
+                    !went_absent,
+                    "the deposit was deleted and re-announced while still reported"
+                );
+                assert!(
+                    deposit.claim_error.is_none(),
+                    "a credited early claim recorded a claim error: {:?}",
+                    deposit.claim_error
+                );
+                // A decline here is a second claim's rejection overwriting the
+                // status the first claim left.
+                assert!(
+                    !matches!(
+                        deposit.instant_claim_status,
+                        Some(InstantClaimStatus::Declined { .. })
+                    ),
+                    "a credited early claim was marked declined"
+                );
+                saw_claimed |= matches!(
+                    deposit.instant_claim_status,
+                    Some(InstantClaimStatus::Claimed)
+                );
+            }
+            // The provider spent the output and both sources stopped reporting it.
+            None => went_absent = true,
+        }
+        sleep(Duration::from_secs(2)).await;
+    }
+    // Which branch held decides what the run proved: seeing the deposit marked
+    // claimed verifies the mark, going absent only means the output was spent
+    // before the first poll.
+    info!("settled while reported: saw_claimed={saw_claimed} went_absent={went_absent}");
+    assert!(
+        saw_claimed || went_absent,
+        "a credited deposit was never marked claimed"
+    );
+    Ok(())
+}
+
+/// Drives syncs instead of waiting on the background interval. The 0-conf window
+/// on regtest is shorter than a sync tick, so discovery has to be pushed or the
+/// deposit confirms first and there is nothing left to observe.
+async fn sync_until_new_deposit(
+    sdk: &BreezSdk,
+    event_rx: &mut tokio::sync::mpsc::Receiver<SdkEvent>,
+    txid: &str,
+    timeout: u64,
+) -> Result<DepositInfo> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("the mempool deposit {txid} was never announced as a new deposit");
+        }
+        if let Err(e) = sdk.sync_wallet(SyncWalletRequest {}).await {
+            warn!("sync while waiting for the mempool deposit failed: {e}");
+        }
+        while let Ok(event) = event_rx.try_recv() {
+            if let SdkEvent::NewDeposits { new_deposits } = event
+                && let Some(deposit) = new_deposits.into_iter().find(|d| d.txid == txid)
+            {
+                return Ok(deposit);
+            }
+        }
+    }
+}
+
 async fn wait_for_new_deposit(
     event_rx: &mut tokio::sync::mpsc::Receiver<SdkEvent>,
     txid: &str,
@@ -895,9 +993,9 @@ async fn test_manual_instant_deposit_claim(
 
     // Mark-not-delete contract. claim_deposit marks the deposit Submitted, creating
     // the row first if the background sync has not (the create-if-missing path), so
-    // right after the call the deposit is present and Submitted. reconcile_deposits
-    // only removes it once the claim settles, which the settle-poll below waits for,
-    // so the row is checked here first, while it is guaranteed present.
+    // right after the call the deposit is present and Submitted. It leaves the
+    // list once the credit settles, which the poll below waits for, so it is
+    // checked here first.
     let deposits = bob
         .sdk
         .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
@@ -1244,9 +1342,9 @@ async fn test_zero_conf_deposit_auto_claim(
     let txid = faucet.fund_address(&addr, fund_amount).await?;
     info!("Funded watched deposit address, txid: {txid}");
 
-    // The background sync runs the address watch on its own interval, and
-    // announces what it finds through NewDeposits.
-    let discovered = wait_for_new_deposit(&mut bob.events, &txid, 120).await?;
+    // Push the syncs: the address watch has to look while the deposit is still
+    // unconfirmed, and a block lands well inside the background interval.
+    let discovered = sync_until_new_deposit(&bob.sdk, &mut bob.events, &txid, 120).await?;
 
     // Regtest mines fast, so the deposit can confirm before any sync observes it.
     // That is the pre-existing path, not a discovery failure, and it leaves this
@@ -1279,6 +1377,10 @@ async fn test_zero_conf_deposit_auto_claim(
                 balance < start_balance + fund_amount,
                 "a claim before maturity takes the SSP spread: {balance}"
             );
+            // The deposit is credited but the operators go on reporting it, and
+            // once they report it mature the claim at maturity is attempted and
+            // refused. That must stay invisible to the app.
+            assert_settled_while_reported(&bob.sdk, &mut bob.events, &txid, 60).await?;
         }
         Err(e) => warn!(
             "SKIP claim assertions: the deposit was discovered but not credited within the timeout: {e}"

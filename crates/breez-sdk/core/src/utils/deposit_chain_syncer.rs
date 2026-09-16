@@ -8,7 +8,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     BitcoinChainService, DepositInfo, InstantClaimStatus, RefundState, SdkError,
-    chain::{Outspend, TxStatus, Utxo},
+    chain::{ChainServiceError, Outspend, TxStatus, Utxo},
     persist::{Storage, UpdateDepositPayload, UpdateWatchedAddressPayload},
     utils::deposit_address_watch::{
         AddressObservation, now_secs, observed_actions, plan_watch, unreported_utxos,
@@ -186,7 +186,7 @@ impl DepositChainSyncer {
                 None => {
                     if !incomplete
                         && deposit_unobserved(&key, all_utxos, confirmed_onchain)
-                        && self.can_drop_unobserved_deposit(&deposit).await
+                        && can_drop_unobserved_deposit(self.chain_service.as_ref(), &deposit).await
                     {
                         self.storage
                             .delete_deposit(deposit.txid, deposit.vout)
@@ -201,43 +201,6 @@ impl DepositChainSyncer {
         }
 
         Ok(refunded)
-    }
-
-    /// Whether a deposit neither the operators nor the chain watch reported this
-    /// pass can be deleted.
-    ///
-    /// Only a submitted instant claim is held back. Such a deposit leaves both
-    /// sources for as long as the provider takes to sweep the UTXO, and its
-    /// status is the only guard against claiming it twice, so it is kept until
-    /// the outpoint is spent.
-    ///
-    /// Anything else is dropped. That is not a guarantee the deposit is settled:
-    /// the two sources are read one after the other, so a block landing between
-    /// them hides a deposit from both, and the row is deleted and re-announced
-    /// next pass. Transient and self-healing, at the cost of losing whatever
-    /// claim error or decline was recorded against it.
-    async fn can_drop_unobserved_deposit(&self, deposit: &DepositInfo) -> bool {
-        if !matches!(
-            deposit.instant_claim_status,
-            Some(InstantClaimStatus::Submitted { .. })
-        ) {
-            return true;
-        }
-        match self
-            .chain_service
-            .get_outspend(deposit.txid.clone(), deposit.vout)
-            .await
-        {
-            Ok(Outspend::Spent { status, .. }) if status.confirmed => true,
-            Ok(_) => false,
-            Err(e) => {
-                warn!(
-                    "Outspend lookup failed for claimed deposit {}:{}, keeping it: {e}",
-                    deposit.txid, deposit.vout
-                );
-                false
-            }
-        }
     }
 
     /// Drives one refunded deposit towards a settled refund: drops it once its
@@ -443,13 +406,13 @@ pub(crate) async fn sync_chain_watch(
 
     let mut observations = HashMap::new();
     let mut complete = true;
-    'watch_loop: for address in plan.poll {
+    for address in plan.poll {
         let utxos = match chain_service.get_address_utxos(address.clone()).await {
             Ok(utxos) => utxos,
             Err(e) => {
                 warn!("Failed to read the UTXOs of watched address {address}: {e}");
                 complete = false;
-                break;
+                continue;
             }
         };
         let (confirmed_utxos, unconfirmed_utxos): (Vec<Utxo>, Vec<Utxo>) =
@@ -491,7 +454,6 @@ pub(crate) async fn sync_chain_watch(
                         new_utxo.txid, new_utxo.vout
                     );
                     complete = false;
-                    break 'watch_loop;
                 }
             }
         }
@@ -505,6 +467,56 @@ pub(crate) async fn sync_chain_watch(
         unconfirmed,
         confirmed,
         complete,
+    }
+}
+
+/// Whether a deposit neither the operators nor the chain watch reported this
+/// pass can be deleted.
+///
+/// A deposit already claimed is held back, settling or credited. It leaves both
+/// sources for as long as the provider takes to sweep the UTXO, and its status
+/// is the only guard against claiming it twice, so it is kept until the outpoint
+/// is spent.
+///
+/// Anything else is dropped. That is not a guarantee the deposit is settled:
+/// the two sources are read one after the other, so a block landing between
+/// them hides a deposit from both, and the row is deleted and re-announced
+/// next pass. Transient and self-healing, at the cost of losing whatever
+/// claim error or decline was recorded against it.
+async fn can_drop_unobserved_deposit(
+    chain_service: &dyn BitcoinChainService,
+    deposit: &DepositInfo,
+) -> bool {
+    if !matches!(
+        deposit.instant_claim_status,
+        Some(InstantClaimStatus::Submitted { .. } | InstantClaimStatus::Claimed)
+    ) {
+        return true;
+    }
+    match chain_service
+        .get_outspend(deposit.txid.clone(), deposit.vout)
+        .await
+    {
+        Ok(Outspend::Spent { status, .. }) if status.confirmed => true,
+        Ok(_) => false,
+        // The backend does not know the outpoint, so the funding transaction
+        // has left the mempool without confirming and there is nothing left
+        // to protect. Only the built-in chain service reports this: a custom
+        // one answers with a connectivity error and the row is kept.
+        Err(ChainServiceError::NotFound(reason)) => {
+            info!(
+                "Funding transaction for claimed deposit {}:{} is gone, dropping it: {reason}",
+                deposit.txid, deposit.vout
+            );
+            true
+        }
+        Err(e) => {
+            warn!(
+                "Outspend lookup failed for claimed deposit {}:{}, keeping it: {e}",
+                deposit.txid, deposit.vout
+            );
+            false
+        }
     }
 }
 
@@ -789,6 +801,10 @@ mod chain_watch_tests {
         by_address: HashMap<String, Vec<Utxo>>,
         txs: HashMap<String, String>,
         fail_addresses: bool,
+        /// Addresses whose lookup errors while the rest still answer.
+        failing_addresses: HashSet<String>,
+        /// What `get_outspend` answers, when a test drives that path.
+        outspend: Option<Result<Outspend, ChainServiceError>>,
     }
 
     impl WatchChainService {
@@ -816,14 +832,26 @@ mod chain_watch_tests {
                 by_address,
                 txs,
                 fail_addresses,
+                failing_addresses: HashSet::new(),
+                outspend: None,
             }
+        }
+
+        fn failing(mut self, address: &str) -> Self {
+            self.failing_addresses.insert(address.to_string());
+            self
+        }
+
+        fn with_outspend(mut self, outspend: Result<Outspend, ChainServiceError>) -> Self {
+            self.outspend = Some(outspend);
+            self
         }
     }
 
     #[macros::async_trait]
     impl BitcoinChainService for WatchChainService {
         async fn get_address_utxos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError> {
-            if self.fail_addresses {
+            if self.fail_addresses || self.failing_addresses.contains(&address) {
                 return Err(ChainServiceError::Generic("boom".to_string()));
             }
             Ok(self.by_address.get(&address).cloned().unwrap_or_default())
@@ -852,7 +880,11 @@ mod chain_watch_tests {
             _txid: String,
             _vout: u32,
         ) -> Result<Outspend, ChainServiceError> {
-            unreachable!()
+            match &self.outspend {
+                Some(Ok(outspend)) => Ok(outspend.clone()),
+                Some(Err(e)) => Err(e.clone()),
+                None => unreachable!(),
+            }
         }
 
         async fn broadcast_transaction(&self, _tx: String) -> Result<(), ChainServiceError> {
@@ -993,6 +1025,55 @@ mod chain_watch_tests {
         assert!(storage.list_deposits().await.unwrap().is_empty());
     }
 
+    /// Drives reconciliation for a deposit neither source reported, with the
+    /// given `get_outspend` answer, and reports whether the row survived.
+    async fn row_survives_reconcile(outspend: Result<Outspend, ChainServiceError>) -> bool {
+        let tx = test_tx(50_000);
+        let txid = tx.compute_txid();
+        let storage = test_storage();
+        storage
+            .add_deposit(txid.to_string(), 0, 50_000, false)
+            .await
+            .unwrap();
+        storage
+            .update_deposit(
+                txid.to_string(),
+                0,
+                UpdateDepositPayload::InstantClaim {
+                    status: InstantClaimStatus::Submitted {
+                        claim_id: "claim-1".to_string(),
+                    },
+                },
+            )
+            .await
+            .unwrap();
+
+        let chain = WatchChainService::new(&[], false).with_outspend(outspend);
+        let deposit = storage.list_deposits().await.unwrap().remove(0);
+        !can_drop_unobserved_deposit(&chain, &deposit).await
+    }
+
+    #[tokio::test]
+    async fn a_claimed_deposit_is_kept_while_its_outpoint_is_unspent() {
+        assert!(row_survives_reconcile(Ok(Outspend::Unspent)).await);
+    }
+
+    #[tokio::test]
+    async fn a_claimed_deposit_is_kept_when_the_lookup_fails() {
+        // A connectivity failure says nothing about the deposit.
+        assert!(
+            row_survives_reconcile(Err(ChainServiceError::ServiceConnectivity("down".into())))
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn a_claimed_deposit_is_dropped_when_its_funding_tx_is_gone() {
+        // The backend answers that it does not know the outpoint, so the
+        // transaction left the mempool without confirming.
+        assert!(!row_survives_reconcile(Err(ChainServiceError::NotFound("404".into()))).await);
+    }
+
     #[tokio::test]
     async fn a_confirmed_output_is_reported_apart_from_the_claimable_ones() {
         // It must not reach the claim cascade: the operators own anything
@@ -1072,6 +1153,40 @@ mod chain_watch_tests {
 
         assert!(!complete);
         assert!(unconfirmed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn one_unreadable_address_does_not_stop_the_others() {
+        let tx = test_tx(50_000);
+        let storage = test_storage();
+        // Addresses are polled newest first, so the failing one is read first and
+        // used to stop the pass before the readable one was reached.
+        for (address, issued_at) in [("good", 1_000), ("bad", 2_000)] {
+            storage
+                .update_watched_deposit_address(
+                    address.to_string(),
+                    UpdateWatchedAddressPayload::Watch { issued_at },
+                )
+                .await
+                .unwrap();
+        }
+        let chain = WatchChainService::new(&[("good", &tx, false)], false).failing("bad");
+        let fetcher = CachedUtxoFetcher::new(
+            Arc::new(WatchChainService::new(&[("good", &tx, false)], false)),
+            storage.clone(),
+        );
+
+        let watch = sync_chain_watch(&chain, &fetcher, &storage, &HashSet::new(), 1_000).await;
+
+        assert!(
+            !watch.complete,
+            "an unreadable address leaves the pass incomplete"
+        );
+        assert_eq!(
+            watch.unconfirmed.len(),
+            1,
+            "the readable address still had to be polled"
+        );
     }
 
     #[tokio::test]
