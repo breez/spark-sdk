@@ -162,7 +162,7 @@ impl ExternalSigningSigner for TurnkeySigningSigner {
             .client
             .create_account(
                 self.identity_rooted_path(&path),
-                spark_address_format(self.network),
+                spark_address_format(self.network).map_err(to_signer_err)?,
             )
             .await
             .map_err(to_signer_err)?;

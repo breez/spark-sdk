@@ -28,12 +28,12 @@ impl RTSyncSigner {
     ) -> Result<Self, bitcoin::bip32::Error> {
         let signing_path: DerivationPath = match network {
             Network::Mainnet => SIGNING_DERIVATION_PATH,
-            Network::Regtest => SIGNING_DERIVATION_PATH_TEST,
+            Network::Signet | Network::Regtest => SIGNING_DERIVATION_PATH_TEST,
         }
         .parse()?;
         let encryption_path: DerivationPath = match network {
             Network::Mainnet => ENCRYPTION_DERIVATION_PATH,
-            Network::Regtest => ENCRYPTION_DERIVATION_PATH_TEST,
+            Network::Signet | Network::Regtest => ENCRYPTION_DERIVATION_PATH_TEST,
         }
         .parse()?;
 
@@ -82,5 +82,27 @@ impl SyncSigner for RTSyncSigner {
             .decrypt_ecies(&msg, &self.encryption_path)
             .await
             .map_err(|e| anyhow!(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::signer::breez::BreezSignerImpl;
+    use bitcoin::bip32::Xpriv;
+
+    #[test]
+    fn signet_sync_uses_test_network_derivation_paths() {
+        let master = Xpriv::new_master(bitcoin::Network::Signet, &[7; 32]).unwrap();
+        let signer = Arc::new(BreezSignerImpl::new(master));
+        let sync = RTSyncSigner::new(signer.clone(), signer, Network::Signet).unwrap();
+        assert_eq!(
+            sync.signing_path,
+            SIGNING_DERIVATION_PATH_TEST.parse().unwrap()
+        );
+        assert_eq!(
+            sync.encryption_path,
+            ENCRYPTION_DERIVATION_PATH_TEST.parse().unwrap()
+        );
     }
 }

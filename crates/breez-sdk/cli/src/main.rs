@@ -30,7 +30,7 @@ struct Cli {
     #[arg(short, long, default_value = "./.data")]
     data_dir: String,
 
-    /// Network to use (mainnet, regtest)
+    /// Network to use (mainnet, signet, regtest)
     #[arg(long, default_value = "regtest")]
     network: String,
 
@@ -277,6 +277,7 @@ async fn run_interactive_mode(
     let cli_prompt = match network {
         Network::Mainnet => "breez-spark-cli [mainnet]> ",
         Network::Regtest => "breez-spark-cli [regtest]> ",
+        Network::Signet => "breez-spark-cli [signet]> ",
     };
 
     loop {
@@ -342,7 +343,12 @@ async fn main() -> Result<(), anyhow::Error> {
     let network = match cli.network.to_lowercase().as_str() {
         "regtest" => Network::Regtest,
         "mainnet" => Network::Mainnet,
-        _ => return Err(anyhow!("Invalid network. Use 'regtest' or 'mainnet'")),
+        "signet" => Network::Signet,
+        _ => {
+            return Err(anyhow!(
+                "Invalid network. Use 'regtest', 'signet', or 'mainnet'"
+            ));
+        }
     };
     let stable_balance_config = if cli.stable_balance_tokens.is_empty() {
         None
