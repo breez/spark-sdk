@@ -67,6 +67,7 @@ const COMMAND_NAMES = [
   'stable-balance unset',
   'pay-batch',
   'advanced unilateral-exit',
+  'advanced check-unilateral-exit',
   'advanced export-unilateral-exit-state',
   'advanced import-unilateral-exit-state'
 ]

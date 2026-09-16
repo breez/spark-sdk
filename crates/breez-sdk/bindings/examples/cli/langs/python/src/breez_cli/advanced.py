@@ -1,6 +1,8 @@
 import argparse
+import json
 
 from breez_sdk_spark import (
+    CheckUnilateralExitRequest,
     CpfpFundingKind,
     CpfpInput,
     ExitLeafSelection,
@@ -8,14 +10,16 @@ from breez_sdk_spark import (
     ImportUnilateralExitStateRequest,
     PrepareUnilateralExitRequest,
     UnilateralExitRequest,
+    UnilateralExitVerdict,
     single_key_cpfp_signer,
 )
 
-from breez_cli.serialization import print_value
+from breez_cli.serialization import print_value, serialize
 
 # Advanced subcommand names (used for REPL completion)
 ADVANCED_COMMAND_NAMES = [
     "advanced unilateral-exit",
+    "advanced check-unilateral-exit",
     "advanced export-unilateral-exit-state",
     "advanced import-unilateral-exit-state",
 ]
@@ -40,6 +44,8 @@ def _build_unilateral_exit_parser():
                    help="Destination address for the swept funds")
     p.add_argument("--leaf", dest="leaf_ids", action="append", default=None,
                    help="Leaf id to exit (repeatable). Omit to auto-select every profitable leaf.")
+    p.add_argument("--output-file", default=None,
+                   help="File to write the signed exit to, for check-unilateral-exit to read back")
     return p
 
 
@@ -99,6 +105,18 @@ def _print_exit_transactions(response):
         print(f"      Package: {package}")
 
 
+def _build_check_unilateral_exit_parser():
+    p = _parser(
+        "check-unilateral-exit",
+        "Read a signed exit back against the chain: which transactions confirmed, what is ready to broadcast, and whether the exit still holds.",
+    )
+    p.add_argument("--input-file", required=True,
+                   help="File the exit was written to")
+    p.add_argument("--output-file", default=None,
+                   help="File to write the updated exit to. Defaults to --input-file.")
+    return p
+
+
 def _build_export_unilateral_exit_state_parser():
     p = _parser(
         "export-unilateral-exit-state",
@@ -117,6 +135,30 @@ def _build_import_unilateral_exit_state_parser():
     p.add_argument("--input-file", required=True,
                    help="File the exit state was exported to")
     return p
+
+
+def _read_exit(path):
+    with open(path) as f:
+        return json.loads(f.read())
+
+
+def _write_exit(path, response):
+    with open(path, "w") as f:
+        f.write(serialize(response))
+    print(f"Wrote the exit to {path}")
+
+
+async def _handle_check_unilateral_exit(sdk, _session, args):
+    exit_data = _read_exit(args.input_file)
+    checked = await sdk.check_unilateral_exit(
+        request=CheckUnilateralExitRequest(exit=exit_data)
+    )
+    print(f"Verdict: {checked.verdict}")
+    if isinstance(checked.verdict, UnilateralExitVerdict.REDO):
+        print("  (this exit cannot be finished, quote and build it again)")
+    _print_exit_transactions(checked.exit)
+    output_file = args.output_file if args.output_file else args.input_file
+    _write_exit(output_file, checked.exit)
 
 
 async def _handle_export_unilateral_exit_state(sdk, _session, args):
@@ -186,6 +228,8 @@ async def _handle_unilateral_exit(sdk, session, args):
         signer=signer,
     )
     _print_exit_transactions(response)
+    if args.output_file:
+        _write_exit(args.output_file, response)
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +239,7 @@ async def _handle_unilateral_exit(sdk, session, args):
 def _build_advanced_registry():
     return {
         "unilateral-exit": (_build_unilateral_exit_parser(), _handle_unilateral_exit),
+        "check-unilateral-exit": (_build_check_unilateral_exit_parser(), _handle_check_unilateral_exit),
         "export-unilateral-exit-state": (_build_export_unilateral_exit_state_parser(), _handle_export_unilateral_exit_state),
         "import-unilateral-exit-state": (_build_import_unilateral_exit_state_parser(), _handle_import_unilateral_exit_state),
     }

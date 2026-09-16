@@ -20,6 +20,7 @@ private val variantPrefixes = listOf(
     "SparkHtlcStatus", "PaymentStatus", "PaymentType",
     "ServiceStatus", "SdkEvent", "InputType",
     "AssetFilter", "FeePolicy", "MaxFee", "Fee",
+    "ExitTransactionStatus", "CpfpInput",
 )
 
 /**
