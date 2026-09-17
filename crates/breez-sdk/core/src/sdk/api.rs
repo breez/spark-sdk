@@ -441,7 +441,7 @@ impl BreezSdk {
                 }
                 let receive_response = self
                     .receive_bolt11_invoice(
-                        "Buy Bitcoin via CashApp".to_string(),
+                        "breez-onramp".to_string(),
                         Some(amount_sats),
                         None,
                         None,
