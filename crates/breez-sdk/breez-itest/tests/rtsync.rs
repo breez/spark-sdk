@@ -53,7 +53,7 @@ async fn alice_sdks(
     Ok((alice1, alice2))
 }
 
-/// Fixture: Bob, minting Bolt11s that advertise a Spark destination so a payer
+/// Fixture: Bob, creating Bolt11s that advertise a Spark destination so a payer
 /// settles them with a transfer.
 #[fixture]
 async fn bob_spark_sdk() -> Result<SdkInstance> {
@@ -459,7 +459,7 @@ async fn test_03_rtsync_spark_settled_bolt11_send_sync(
 /// A Bolt11 settled over Spark is attributed on the receiver's other devices
 /// too.
 ///
-/// Only the device that minted the Bolt11 knows which Spark invoice it
+/// Only the device that created the Bolt11 knows which Spark invoice it
 /// embedded, and the SSP never saw the settlement, so the mapping has to travel
 /// over data-sync for the second device to report anything but a bare Spark
 /// receive.
@@ -477,7 +477,7 @@ async fn test_04_rtsync_spark_settled_bolt11_receive_sync(
 
     receive_and_fund(&mut bob, 50_000, false).await?;
 
-    // Minted on alice1, so alice2 only learns the mapping over data-sync.
+    // Created on alice1, so alice2 only learns the mapping over data-sync.
     let invoice = alice1
         .sdk
         .receive_payment(ReceivePaymentRequest {

@@ -627,7 +627,7 @@ class MigrationManager {
       {
         // Bolt11s settled over Spark, one store per direction. Sends are keyed
         // by the transfer that paid. Receives are keyed by the Spark invoice
-        // the Bolt11 embeds, written when it is minted and dropped once it has
+        // the Bolt11 embeds, written when it is created and dropped once it has
         // expired, through the expiresAt index.
         name: "Create spark_settled_bolt11 stores",
         upgrade: (db) => {

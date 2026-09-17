@@ -22,8 +22,7 @@ use crate::{
         Payment, PaymentMetadata, SetLnurlMetadataItem, SparkSettledBolt11Receive,
         SparkSettledBolt11Send, Storage, StorageError, StorageListPaymentsRequest,
         StoragePaymentDetailsFilter, StoredCrossChainSwap, UpdateDepositPayload,
-        UpdateWatchedAddressPayload, WatchedDepositAddress,
-        parse_payment_status,
+        UpdateWatchedAddressPayload, WatchedDepositAddress, parse_payment_status,
     },
     sync_storage::{
         IncomingChange, OutgoingChange, Record, RecordChange, RecordId, UnversionedRecordChange,
@@ -579,7 +578,7 @@ impl MysqlStorage {
             )],
             // Migration 26: Bolt11s settled over Spark, one table per direction.
             // Sends are keyed by the transfer that paid. Receives are keyed by
-            // the Spark invoice the Bolt11 embeds, written when it is minted and
+            // the Spark invoice the Bolt11 embeds, written when it is created and
             // dropped once it has expired. Born multi-tenant.
             vec![
                 Migration::sql(

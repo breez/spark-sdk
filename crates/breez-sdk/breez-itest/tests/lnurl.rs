@@ -1115,7 +1115,7 @@ async fn test_11_lnurl_spark_address_payment(
     let payment_comment = "Spark address LNURL payment from Alice";
 
     // Bob registers a Lightning address. The server advertises a Spark
-    // destination on the invoices it mints for him.
+    // destination on the invoices it creates for him.
     let bob_lightning_address = async {
         let register_response = bob
             .sdk
@@ -1193,7 +1193,7 @@ async fn test_11_lnurl_spark_address_payment(
     assert_eq!(alice_payment.amount, payment_amount_sats as u128);
     assert_eq!(alice_payment.status, PaymentStatus::Completed);
 
-    // A transfer carried it, but Alice paid the Bolt11 the LNURL server minted,
+    // A transfer carried it, but Alice paid the Bolt11 the LNURL server created,
     // so that is what her payment reports. The LNURL metadata rides on the
     // Lightning details, which the Spark variant has nowhere to carry.
     assert_eq!(alice_payment.method, PaymentMethod::Lightning);
@@ -1221,9 +1221,9 @@ async fn test_11_lnurl_spark_address_payment(
     );
     assert_eq!(lnurl_pay_info.comment.as_deref(), Some(payment_comment));
 
-    // Bob's receive is not asserted here: the lnurl server minted his Bolt11, so
+    // Bob's receive is not asserted here: the lnurl server created his Bolt11, so
     // nothing ties the transfer back to it. Attribution covers invoices a wallet
-    // mints itself, which `bolt11_spark_fallback` covers.
+    // creates itself, which `bolt11_spark_fallback` covers.
 
     info!("=== Test test_11_lnurl_spark_address_payment PASSED ===");
     Ok(())

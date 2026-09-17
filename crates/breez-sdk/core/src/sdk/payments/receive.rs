@@ -423,10 +423,10 @@ pub(super) async fn receive_bolt11_invoice_inner(
     Ok(receive)
 }
 
-/// Mints the Spark invoice to embed, mirroring the BOLT11 so a payer settling
+/// Creates the Spark invoice to embed, mirroring the BOLT11 so a payer settling
 /// over Spark pays the same amount for the same thing.
 ///
-/// Nothing is embedded in an invoice minted for another identity: only its
+/// Nothing is embedded in an invoice created for another identity: only its
 /// holder can sign for it, and a transfer paying it settles into their wallet,
 /// where this one cannot tie it back to the BOLT11.
 async fn build_fallback(

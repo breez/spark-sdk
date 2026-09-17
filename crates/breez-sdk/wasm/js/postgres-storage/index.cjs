@@ -1731,17 +1731,6 @@ class PostgresStorage {
  * Maps a brz_cross_chain_swaps row to the camelCase StoredCrossChainSwap shape
  * the SDK expects.
  */
-/// Maps a `brz_spark_settled_bolt11_receives` row to the camelCase shape the
-/// SDK expects. A NULL expiry comes back absent.
-function sparkSettledBolt11ReceiveFromRow(row) {
-  return {
-    id: row.id,
-    sparkInvoice: row.spark_invoice,
-    bolt11: row.bolt11,
-    expiresAt: row.expires_at == null ? undefined : Number(row.expires_at),
-  };
-}
-
 function crossChainSwapFromRow(row) {
   return {
     provider: row.provider,
@@ -1750,6 +1739,19 @@ function crossChainSwapFromRow(row) {
     updatedAt: Number(row.updated_at),
     data: row.data,
     secrets: row.secrets,
+  };
+}
+
+/**
+ * Maps a brz_spark_settled_bolt11_receives row to the camelCase shape the SDK
+ * expects. A NULL expiry comes back absent.
+ */
+function sparkSettledBolt11ReceiveFromRow(row) {
+  return {
+    id: row.id,
+    sparkInvoice: row.spark_invoice,
+    bolt11: row.bolt11,
+    expiresAt: row.expires_at == null ? undefined : Number(row.expires_at),
   };
 }
 

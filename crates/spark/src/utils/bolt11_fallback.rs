@@ -29,7 +29,7 @@ const RECEIVER_IDENTITY_PUBLIC_KEY_SHORT_CHANNEL_ID: u64 = 17592187092992000001;
 pub struct SparkFallback {
     pub address: SparkAddress,
     /// The destination as the invoice carried it. Forwarded verbatim when paying
-    /// so the receiver sees back exactly what it minted, whatever encoding it
+    /// so the receiver sees back exactly what it created, whatever encoding it
     /// chose.
     pub encoded: String,
 }

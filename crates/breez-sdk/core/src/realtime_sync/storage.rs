@@ -452,7 +452,7 @@ impl SyncedRecordHandler {
     }
 
     /// Applies a [`SparkSettledBolt11Receive`] another device recorded when
-    /// it minted the Bolt11.
+    /// it created the Bolt11.
     ///
     /// The row is stored whether or not the transfer settling the invoice is
     /// here yet: arriving first, the sync attributes the payment from the row
@@ -475,7 +475,7 @@ impl SyncedRecordHandler {
 
         // Nothing indexes payments by the Spark invoice they settled, so the
         // candidates are narrowed by when one could have: between the invoice
-        // being minted and it expiring, both of which the invoice carries.
+        // being created and it expiring, both of which the invoice carries.
         let (from_timestamp, to_timestamp) =
             spark_invoice_settlement_window(&receive.spark_invoice);
         let candidates = self
@@ -861,7 +861,7 @@ impl Storage for SyncedStorage {
         self.inner.get_spark_settled_bolt11_send(payment_id).await
     }
 
-    /// The receiver's half: only the device that minted the Bolt11 knows which
+    /// The receiver's half: only the device that created the Bolt11 knows which
     /// Spark invoice it embedded, and a transfer settling that invoice can be
     /// claimed on any of the account's devices.
     async fn set_spark_settled_bolt11_receive(
@@ -962,7 +962,7 @@ fn spark_invoice_settlement_window(spark_invoice: &str) -> (Option<u64>, Option<
     let Some(fields) = address.spark_invoice_fields else {
         return (None, None);
     };
-    let minted = fields
+    let created = fields
         .id
         .get_timestamp()
         .map(|timestamp| timestamp.to_unix().0.saturating_sub(SLACK_SECS));
@@ -972,7 +972,7 @@ fn spark_invoice_settlement_window(spark_invoice: &str) -> (Option<u64>, Option<
             .ok()
             .map(|since_epoch| since_epoch.as_secs().saturating_add(SLACK_SECS))
     });
-    (minted, expires)
+    (created, expires)
 }
 
 #[cfg(all(test, feature = "sqlite"))]
@@ -1589,7 +1589,7 @@ mod tests {
     const TEST_SPARK_INVOICE: &str = "sparkrt1pgss8cf4gru7ece2ryn8ym3vm3yz8leeend2589m7svq2mgv0xncfyx8zf8ssqgjzqqe5pmwfwyh9u4u6wgrepzk7j6j5prdv4kk7v3pqdur4y4c5nlcyr7lksm4mhrhdzakas9yt8gz4levtnfe49sgkqknywstpzxd8hk8qcgvp7x22q3qxz8gqudyp7rmuglc2axjqnlzz7d047gndmxff6ud02fvdgasdsq2en2aah6g52rq4qq7peler4s4d85s7prhm6sqzqj7gvc9nlzucy4yfh206fyqpk9zez";
 
     /// A receive settling `spark_invoice`, timestamped when the invoice was
-    /// minted: inside the window a transfer paying it can fall in.
+    /// created: inside the window a transfer paying it can fall in.
     fn make_spark_invoice_receive(id: &str, spark_invoice: &str) -> crate::Payment {
         let (window_start, _) = spark_invoice_settlement_window(spark_invoice);
         crate::Payment {

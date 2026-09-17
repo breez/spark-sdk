@@ -44,6 +44,11 @@ const TX_CACHE_KEY: &str = "tx_cache";
 // Note: the key "static_deposit_address" may still exist in storage from older versions.
 const TOKEN_METADATA_KEY_PREFIX: &str = "token_metadata_";
 const PAYMENT_METADATA_KEY_PREFIX: &str = "payment_metadata";
+const PUBLISHED_PACKAGE_KEY_PREFIX: &str = "published_package_";
+const SPARK_PRIVATE_MODE_INITIALIZED_KEY: &str = "spark_private_mode_initialized";
+pub(crate) const STABLE_BALANCE_ACTIVE_LABEL_KEY: &str = "stable_balance_active_label";
+const PENDING_CONVERSIONS_KEY: &str = "pending_conversions";
+const PENDING_LIGHTNING_SENDS_KEY: &str = "pending_lightning_sends";
 
 /// The id of the [`SparkSettledBolt11Receive`] row for `spark_invoice`: a
 /// digest, since a Spark invoice runs to a few hundred characters and the
@@ -65,11 +70,6 @@ pub(crate) fn spark_invoice_expiry_secs(spark_invoice: &str) -> Option<u64> {
             .as_secs(),
     )
 }
-const PUBLISHED_PACKAGE_KEY_PREFIX: &str = "published_package_";
-const SPARK_PRIVATE_MODE_INITIALIZED_KEY: &str = "spark_private_mode_initialized";
-pub(crate) const STABLE_BALANCE_ACTIVE_LABEL_KEY: &str = "stable_balance_active_label";
-const PENDING_CONVERSIONS_KEY: &str = "pending_conversions";
-const PENDING_LIGHTNING_SENDS_KEY: &str = "pending_lightning_sends";
 
 /// Wrapper stored in the cache that carries context about whether the value
 /// was written as part of a recovery or a client-initiated change.
@@ -443,7 +443,7 @@ pub struct SparkSettledBolt11Send {
 
 /// A Bolt11 that can settle over Spark, with the Spark invoice it embeds. The
 /// receiver's half of a Bolt11 settled over Spark, written when the Bolt11 is
-/// minted: a transfer carrying the Spark invoice is reported as the Bolt11.
+/// created: a transfer carrying the Spark invoice is reported as the Bolt11.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]

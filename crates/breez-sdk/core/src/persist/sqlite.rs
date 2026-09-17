@@ -425,7 +425,7 @@ impl SqliteStorage {
              CREATE INDEX idx_payment_details_lightning_payment_hash ON payment_details_lightning(payment_hash);",
             // Bolt11s settled over Spark, one table per direction. Sends are
             // keyed by the transfer that paid. Receives are keyed by the Spark
-            // invoice the Bolt11 embeds, written when it is minted and dropped
+            // invoice the Bolt11 embeds, written when it is created and dropped
             // once it has expired.
             "CREATE TABLE spark_settled_bolt11_sends (
                 payment_id TEXT PRIMARY KEY,

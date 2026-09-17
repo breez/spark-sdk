@@ -31,7 +31,7 @@ use crate::{
 /// settles it with a transfer, so nothing reaches the SSP and both ends are left
 /// holding a transfer where a Lightning payment belongs. Each end recorded the
 /// Bolt11 itself: the payer when it paid, as a [`SparkSettledBolt11Send`], and
-/// the receiver when it minted the invoice, as a [`SparkSettledBolt11Receive`].
+/// the receiver when it created the invoice, as a [`SparkSettledBolt11Receive`].
 /// Both travel over data-sync to the wallet's other devices.
 ///
 /// Leaves the payment untouched when neither is found: it is still a correct
@@ -148,7 +148,7 @@ pub(crate) async fn prune_expired_spark_settled_bolt11_receives(
 /// The Bolt11 an incoming Spark transfer settled.
 ///
 /// The transfer names the Spark invoice it paid, and the row left behind when
-/// the Bolt11 was minted maps that invoice back to it.
+/// the Bolt11 was created maps that invoice back to it.
 async fn settled_bolt11_for_receive(
     storage: &Arc<dyn Storage>,
     payment: &Payment,
