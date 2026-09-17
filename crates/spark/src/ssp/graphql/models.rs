@@ -169,6 +169,51 @@ pub enum SparkCoopExitRequestStatus {
     Unknown,
 }
 
+/// Where a cooperative exit sits relative to the SSP taking responsibility for
+/// the on-chain payout.
+///
+/// The exit's funds leave the wallet when the transfer commits, but the payout
+/// is broadcast only by the SSP, and only once it has been asked to. Until then
+/// the withdrawal is neither done nor safely abandonable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoopExitAcceptance {
+    /// The SSP has not taken the payout on. Nothing will be broadcast until the
+    /// completion request reaches it.
+    AwaitingCompletion,
+    /// The SSP owns the payout from here, whether or not it is on chain yet.
+    Accepted,
+    /// The exit will not pay out.
+    Failed,
+}
+
+impl SparkCoopExitRequestStatus {
+    /// Whether the SSP has taken responsibility for broadcasting the payout.
+    ///
+    /// An unrecognised status reads as `AwaitingCompletion`: treating an exit as
+    /// unfinished costs a redundant completion request, treating an unfinished
+    /// one as accepted strands the funds.
+    pub fn acceptance(self) -> CoopExitAcceptance {
+        match self {
+            Self::CompleteRequestReceived
+            | Self::InboundTransferChecked
+            | Self::TxBroadcasted
+            | Self::OnChainTxConfirmed
+            | Self::Succeeded => CoopExitAcceptance::Accepted,
+            Self::InboundTransferClaimingFailed
+            | Self::ExpiringFailed
+            | Self::Expired
+            | Self::FailingFailed
+            | Self::Failed => CoopExitAcceptance::Failed,
+            // Scheduled, not settled: the provider has queued the exit to be
+            // given up on, and still completes one that is asked for before
+            // that runs.
+            Self::Initiated | Self::ExpiringScheduled | Self::FailingScheduled | Self::Unknown => {
+                CoopExitAcceptance::AwaitingCompletion
+            }
+        }
+    }
+}
+
 /// Leaves swap request status enum
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -827,5 +872,110 @@ mod tests {
              Error: {:?}",
             result.err()
         );
+    }
+}
+
+#[cfg(test)]
+mod coop_exit_acceptance_tests {
+    use super::{CoopExitAcceptance, SparkCoopExitRequestStatus as Status};
+
+    /// Every status the SSP can report, so a new one added to the enum has to be
+    /// classified here rather than inheriting a catch-all.
+    const ALL: [Status; 14] = [
+        Status::Initiated,
+        Status::CompleteRequestReceived,
+        Status::InboundTransferChecked,
+        Status::TxBroadcasted,
+        Status::OnChainTxConfirmed,
+        Status::InboundTransferClaimingFailed,
+        Status::Succeeded,
+        Status::ExpiringScheduled,
+        Status::ExpiringFailed,
+        Status::Expired,
+        Status::FailingScheduled,
+        Status::FailingFailed,
+        Status::Failed,
+        Status::Unknown,
+    ];
+
+    #[test]
+    fn an_initiated_exit_is_not_yet_the_provider_s_to_pay_out() {
+        // The transfer has committed, but the provider was never asked to
+        // broadcast, so nothing is owed on chain yet.
+        assert_eq!(
+            Status::Initiated.acceptance(),
+            CoopExitAcceptance::AwaitingCompletion
+        );
+    }
+
+    #[test]
+    fn an_accepted_exit_pays_out_without_the_client() {
+        for status in [
+            Status::CompleteRequestReceived,
+            Status::InboundTransferChecked,
+            Status::TxBroadcasted,
+            Status::OnChainTxConfirmed,
+            Status::Succeeded,
+        ] {
+            assert_eq!(
+                status.acceptance(),
+                CoopExitAcceptance::Accepted,
+                "{status:?} should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn an_exit_that_has_been_given_up_on_is_not_accepted() {
+        for status in [
+            Status::InboundTransferClaimingFailed,
+            Status::ExpiringFailed,
+            Status::Expired,
+            Status::FailingFailed,
+            Status::Failed,
+        ] {
+            assert_eq!(
+                status.acceptance(),
+                CoopExitAcceptance::Failed,
+                "{status:?} should read as failed"
+            );
+        }
+    }
+
+    #[test]
+    fn an_exit_queued_to_be_given_up_on_can_still_be_completed() {
+        // The provider schedules expiry within seconds of a completion request
+        // failing, but still honours one that arrives before the scheduled job
+        // runs. Reading these as settled is what leaves a withdrawal stranded
+        // with its funds committed.
+        for status in [Status::ExpiringScheduled, Status::FailingScheduled] {
+            assert_eq!(
+                status.acceptance(),
+                CoopExitAcceptance::AwaitingCompletion,
+                "{status:?} should still be awaiting completion"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unrecognised_status_reads_as_unfinished() {
+        // Erring towards unfinished keeps the funds visible as in-flight rather
+        // than reporting a payout the provider may never have taken on.
+        assert_eq!(
+            Status::Unknown.acceptance(),
+            CoopExitAcceptance::AwaitingCompletion
+        );
+    }
+
+    #[test]
+    fn every_status_is_classified() {
+        let (accepted, awaiting, failed) =
+            ALL.into_iter()
+                .fold((0, 0, 0), |(a, w, f), status| match status.acceptance() {
+                    CoopExitAcceptance::Accepted => (a + 1, w, f),
+                    CoopExitAcceptance::AwaitingCompletion => (a, w + 1, f),
+                    CoopExitAcceptance::Failed => (a, w, f + 1),
+                });
+        assert_eq!((accepted, awaiting, failed), (5, 4, 5));
     }
 }

@@ -5,9 +5,9 @@ use std::{collections::HashMap, sync::Arc};
 use crate::Network;
 use crate::address::SparkAddress;
 use crate::operator::OperatorPool;
+use crate::operator::rpc as operator_rpc;
 use crate::operator::rpc::spark::transfer_filter::Participant;
 use crate::operator::rpc::spark::{HashVariant, StartTransferRequest, TransferFilter};
-use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
 use crate::services::models::{
     LeafKeyTweak, Transfer, convert_page, map_signing_nonce_commitments,
     split_signing_commitments_by_variant,
@@ -193,7 +193,6 @@ impl TransferService {
         transfer_id: Option<TransferId>,
         spark_invoice: Option<String>,
     ) -> Result<Transfer, ServiceError> {
-        let recover_on_error = transfer_id.is_some();
         let unwrapped_transfer_id = transfer_id.unwrap_or_else(TransferId::generate);
         self.send_transfer_inner(
             &unwrapped_transfer_id,
@@ -201,7 +200,6 @@ impl TransferService {
             receiver_id,
             spark_invoice,
             None,
-            recover_on_error,
         )
         .await
     }
@@ -213,7 +211,6 @@ impl TransferService {
         receiver_id: &PublicKey,
         spark_invoice: Option<String>,
         prepared: Option<PreparedTransfer>,
-        recover_on_error: bool,
     ) -> Result<Transfer, ServiceError> {
         self.notify_before_send_transfer(transfer_id, receiver_id, &leaves, spark_invoice.as_ref())
             .await?;
@@ -241,52 +238,68 @@ impl TransferService {
             .await
         {
             Ok(transfer) => Ok(transfer),
-            Err(e) if recover_on_error => {
-                self.recover_transfer_on_rpc_connection_error(transfer_id, e)
-                    .await
-            }
-            Err(e) => Err(e),
+            // The transfer id is ours whether the caller supplied it or it was
+            // generated here, so a lost response is always recoverable.
+            Err(e) => self.recover_committed_transfer(transfer_id, e).await,
         }
     }
 
-    pub(crate) async fn recover_transfer_on_rpc_connection_error(
+    /// Resolves a submission whose outcome is unknown: if the operators already
+    /// hold `transfer_id`, returns that transfer, otherwise returns `error`.
+    ///
+    /// A failed submission does not mean the operators rejected it. The response
+    /// can be lost after they committed, and the status code does not say which
+    /// happened: a severed connection surfaces as `Unknown` ("transport error")
+    /// and the endpoint's own request timeout as `Cancelled`, neither of which is
+    /// distinguishable from a pre-commit failure. So the transfer's existence is
+    /// the only sound test, and every error is put to it. A transfer id is
+    /// single-use, so a probe that finds nothing costs one query and a probe that
+    /// finds something recovers funds that would otherwise be stranded.
+    pub(crate) async fn recover_committed_transfer(
         &self,
         transfer_id: &TransferId,
         error: ServiceError,
     ) -> Result<Transfer, ServiceError> {
-        if let ServiceError::ServiceConnectionError(operator_rpc_error) = &error
-            && let OperatorRpcError::Connection(status) = operator_rpc_error.as_ref()
-            && matches!(
-                status.code(),
-                tonic::Code::Internal | tonic::Code::AlreadyExists
-            )
-        {
-            // There was an RPC connection error. Check if the transfer already exists remotely.
-            let operator_transfers = self
-                .operator_pool
-                .get_coordinator()
-                .client
-                .query_all_transfers(TransferFilter {
-                    transfer_ids: vec![transfer_id.to_string()],
-                    network: self.network.to_proto_network() as i32,
-                    participant: Some(Participant::SenderIdentityPublicKey(
-                        self.spark_signer
-                            .get_identity_public_key()
-                            .await?
-                            .serialize()
-                            .to_vec(),
-                    )),
-                    ..Default::default()
-                })
-                .await?;
-            if let Some(transfer) = operator_transfers.transfers.into_iter().nth(0) {
-                debug!("Recovered transfer {} after connection error", transfer.id);
-
-                return transfer.try_into();
+        match self.query_own_transfer(transfer_id).await {
+            Ok(Some(transfer)) => {
+                debug!("Recovered committed transfer {transfer_id} after a failed submission");
+                transfer.try_into()
+            }
+            Ok(None) => Err(error),
+            // The probe is a diagnosis of `error`, so its own failure must not
+            // replace it: the caller needs the reason the submission failed.
+            Err(probe_error) => {
+                warn!(
+                    "Could not determine whether transfer {transfer_id} committed: {probe_error:?}"
+                );
+                Err(error)
             }
         }
+    }
 
-        Err(error)
+    /// Looks up a transfer the local identity sent, by id.
+    async fn query_own_transfer(
+        &self,
+        transfer_id: &TransferId,
+    ) -> Result<Option<operator_rpc::spark::Transfer>, ServiceError> {
+        let operator_transfers = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .query_all_transfers(TransferFilter {
+                transfer_ids: vec![transfer_id.to_string()],
+                network: self.network.to_proto_network() as i32,
+                participant: Some(Participant::SenderIdentityPublicKey(
+                    self.spark_signer
+                        .get_identity_public_key()
+                        .await?
+                        .serialize()
+                        .to_vec(),
+                )),
+                ..Default::default()
+            })
+            .await?;
+        Ok(operator_transfers.transfers.into_iter().next())
     }
 
     async fn notify_before_send_transfer(
@@ -340,7 +353,6 @@ impl TransferService {
             receiver_public_key,
             spark_invoice,
             Some(prepared),
-            true,
         )
         .await
     }
