@@ -1,5 +1,10 @@
+use bitcoin::{
+    Transaction,
+    consensus::serde::{Hex, With},
+    secp256k1::PublicKey,
+};
 use serde::{Deserialize, Serialize};
-use spark_wallet::{LeafPedigree, Network};
+use spark_wallet::{LeafPedigree, Network, SigningKeyshare, TreeNode, TreeNodeId, TreeNodeStatus};
 use tracing::{debug, warn};
 
 use crate::{
@@ -12,37 +17,160 @@ use crate::{
 
 use super::BreezSdk;
 
-const EXIT_STATE_VERSION: u32 = 1;
+/// The layout exports are written in: transactions as consensus hex.
+const EXIT_STATE_VERSION: u32 = 2;
+/// The layout with transactions in rust-bitcoin's serde struct form. Still read:
+/// exports taken in it stay valid backups.
+const STRUCT_TX_EXIT_STATE_VERSION: u32 = 1;
 
-/// The exported payload. It embeds `LeafPedigree`'s own serde representation,
-/// so `version` is what keeps an export readable once those internals change.
+/// The exported payload. Its pedigrees follow the SDK's internal node types, so
+/// `version` is what keeps an export readable once those internals change.
 #[derive(Debug, Serialize, Deserialize)]
-struct ExitStateEnvelope {
+struct ExitStateEnvelope<P> {
     version: u32,
     network: Network,
     identity_public_key: String,
-    pedigrees: Vec<LeafPedigree>,
+    pedigrees: Vec<P>,
 }
 
-/// Rejects a payload this build cannot read at all: a version whose layout is
-/// unknown, or another network's state.
-fn check_envelope_readable(
-    envelope: &ExitStateEnvelope,
-    wallet_network: Network,
-) -> Result<(), SdkError> {
-    if envelope.version != EXIT_STATE_VERSION {
-        return Err(SdkError::InvalidInput(format!(
-            "Unsupported exit state version {}, expected {EXIT_STATE_VERSION}",
-            envelope.version
-        )));
+/// The field every layout shares, read first to pick the layout.
+#[derive(Deserialize)]
+struct ExitStateVersion {
+    version: u32,
+}
+
+/// `TreeNode` as version 2 writes it: transactions as consensus hex, the form
+/// bitcoin tooling decodes and broadcasts.
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "TreeNode")]
+struct HexTreeNode {
+    id: TreeNodeId,
+    tree_id: String,
+    value: u64,
+    parent_node_id: Option<TreeNodeId>,
+    #[serde(with = "With::<Hex>")]
+    node_tx: Transaction,
+    #[serde(with = "optional_tx_hex")]
+    refund_tx: Option<Transaction>,
+    #[serde(with = "optional_tx_hex")]
+    direct_tx: Option<Transaction>,
+    #[serde(with = "optional_tx_hex")]
+    direct_refund_tx: Option<Transaction>,
+    #[serde(with = "optional_tx_hex")]
+    direct_from_cpfp_refund_tx: Option<Transaction>,
+    vout: u32,
+    verifying_public_key: PublicKey,
+    owner_identity_public_key: Option<PublicKey>,
+    signing_keyshare: SigningKeyshare,
+    status: TreeNodeStatus,
+}
+
+/// Lets a `Vec` hold `HexTreeNode`s: a remote definition only applies through a
+/// field attribute.
+#[derive(Serialize, Deserialize)]
+struct HexNode(#[serde(with = "HexTreeNode")] TreeNode);
+
+/// `LeafPedigree` as version 2 writes it.
+#[derive(Serialize, Deserialize)]
+struct HexLeafPedigree {
+    leaf: HexNode,
+    ancestors: Vec<HexNode>,
+}
+
+impl From<LeafPedigree> for HexLeafPedigree {
+    fn from(LeafPedigree { leaf, ancestors }: LeafPedigree) -> Self {
+        Self {
+            leaf: HexNode(leaf),
+            ancestors: ancestors.into_iter().map(HexNode).collect(),
+        }
     }
+}
+
+impl From<HexLeafPedigree> for LeafPedigree {
+    fn from(HexLeafPedigree { leaf, ancestors }: HexLeafPedigree) -> Self {
+        Self {
+            leaf: leaf.0,
+            ancestors: ancestors.into_iter().map(|node| node.0).collect(),
+        }
+    }
+}
+
+mod optional_tx_hex {
+    use bitcoin::{Transaction, consensus::encode};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
+
+    #[allow(clippy::ref_option)]
+    pub(super) fn serialize<S: Serializer>(
+        tx: &Option<Transaction>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        tx.as_ref().map(encode::serialize_hex).serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Transaction>, D::Error> {
+        Option::<String>::deserialize(deserializer)?
+            .map(|hex| encode::deserialize_hex(&hex).map_err(D::Error::custom))
+            .transpose()
+    }
+}
+
+fn encode_exit_state(
+    network: Network,
+    identity_public_key: String,
+    pedigrees: Vec<LeafPedigree>,
+) -> Result<String, SdkError> {
+    let envelope = ExitStateEnvelope {
+        version: EXIT_STATE_VERSION,
+        network,
+        identity_public_key,
+        pedigrees: pedigrees.into_iter().map(HexLeafPedigree::from).collect(),
+    };
+    serde_json::to_string(&envelope)
+        .map_err(|e| SdkError::Generic(format!("Failed to serialize exit state: {e}")))
+}
+
+/// Reads an exit state in any layout this build knows. Rejects one it cannot
+/// use: an unknown version, or another network's state.
+fn decode_exit_state(
+    exit_state: &str,
+    wallet_network: Network,
+) -> Result<ExitStateEnvelope<LeafPedigree>, SdkError> {
+    let ExitStateVersion { version } = parse_exit_state(exit_state)?;
+    let envelope = match version {
+        EXIT_STATE_VERSION => {
+            let envelope: ExitStateEnvelope<HexLeafPedigree> = parse_exit_state(exit_state)?;
+            ExitStateEnvelope {
+                version: envelope.version,
+                network: envelope.network,
+                identity_public_key: envelope.identity_public_key,
+                pedigrees: envelope
+                    .pedigrees
+                    .into_iter()
+                    .map(LeafPedigree::from)
+                    .collect(),
+            }
+        }
+        STRUCT_TX_EXIT_STATE_VERSION => parse_exit_state(exit_state)?,
+        _ => {
+            return Err(SdkError::InvalidInput(format!(
+                "Unsupported exit state version {version}"
+            )));
+        }
+    };
     if envelope.network != wallet_network {
         return Err(SdkError::InvalidInput(format!(
             "Exit state is for network {}, this wallet is on {wallet_network}",
             envelope.network
         )));
     }
-    Ok(())
+    Ok(envelope)
+}
+
+fn parse_exit_state<'a, T: Deserialize<'a>>(exit_state: &'a str) -> Result<T, SdkError> {
+    serde_json::from_str(exit_state)
+        .map_err(|e| SdkError::InvalidInput(format!("Invalid exit state: {e}")))
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
@@ -59,15 +187,11 @@ impl BreezSdk {
     ) -> Result<ExportUnilateralExitStateResponse, SdkError> {
         let export = self.spark_wallet.export_exit_state().await?;
         let leaves = export.pedigrees.len();
-        let envelope = ExitStateEnvelope {
-            version: EXIT_STATE_VERSION,
-            network: self.config.network.into(),
-            identity_public_key: self.spark_wallet.get_identity_public_key().to_string(),
-            pedigrees: export.pedigrees,
-        };
-
-        let exit_state = serde_json::to_string(&envelope)
-            .map_err(|e| SdkError::Generic(format!("Failed to serialize exit state: {e}")))?;
+        let exit_state = encode_exit_state(
+            self.config.network.into(),
+            self.spark_wallet.get_identity_public_key().to_string(),
+            export.pedigrees,
+        )?;
         debug!(
             leaves,
             "export_unilateral_exit_state: exit state serialized"
@@ -95,9 +219,7 @@ impl BreezSdk {
         &self,
         request: ImportUnilateralExitStateRequest,
     ) -> Result<ImportUnilateralExitStateResponse, SdkError> {
-        let envelope: ExitStateEnvelope = serde_json::from_str(&request.exit_state)
-            .map_err(|e| SdkError::InvalidInput(format!("Invalid exit state: {e}")))?;
-        check_envelope_readable(&envelope, self.config.network.into())?;
+        let envelope = decode_exit_state(&request.exit_state, self.config.network.into())?;
         if envelope.identity_public_key != self.spark_wallet.get_identity_public_key().to_string() {
             // Not a rejection: the wallet filters leaf by leaf and reports what
             // it dropped.
@@ -132,6 +254,11 @@ impl BreezSdk {
 
 #[cfg(test)]
 mod tests {
+    use bitcoin::{
+        Amount, OutPoint, ScriptBuf, Sequence, TxIn, TxOut, Txid, Witness, absolute::LockTime,
+        consensus::encode::serialize_hex, hashes::Hash, transaction::Version,
+    };
+    use serde_json::Value;
     use spark_wallet::{TreeNodeStatus, tree_store_tests::create_test_node_with_parent};
 
     use super::*;
@@ -139,55 +266,111 @@ mod tests {
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
-    fn regtest_envelope() -> ExitStateEnvelope {
+    /// Shaped like a pre-signed Spark transaction: a key path spend, so it
+    /// carries a witness and takes the segwit encoding.
+    fn signed_tx(sequence: u32) -> Transaction {
+        Transaction {
+            version: Version::non_standard(3),
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::new(Txid::from_byte_array([1; 32]), 0),
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence(sequence),
+                witness: Witness::from_slice(&[[2u8; 64]]),
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(1_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        }
+    }
+
+    fn regtest_pedigree() -> LeafPedigree {
         let root = create_test_node_with_parent("root", None, TreeNodeStatus::Splitted);
-        let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
-        let identity_public_key = leaf.owner_identity_public_key.unwrap().to_string();
-        let pedigrees = vec![LeafPedigree {
+        let mut leaf =
+            create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);
+        leaf.node_tx = signed_tx(0);
+        leaf.refund_tx = Some(signed_tx(1_900));
+        LeafPedigree {
             leaf,
             ancestors: vec![root],
-        }];
-        ExitStateEnvelope {
-            version: EXIT_STATE_VERSION,
-            network: Network::Regtest,
-            identity_public_key,
-            pedigrees,
         }
+    }
+
+    fn identity_of(pedigree: &LeafPedigree) -> String {
+        pedigree.leaf.owner_identity_public_key.unwrap().to_string()
+    }
+
+    fn encode_regtest(pedigree: &LeafPedigree) -> String {
+        encode_exit_state(
+            Network::Regtest,
+            identity_of(pedigree),
+            vec![pedigree.clone()],
+        )
+        .unwrap()
+    }
+
+    fn assert_same_pedigree(decoded: &LeafPedigree, original: &LeafPedigree) {
+        assert_eq!(decoded.leaf, original.leaf);
+        assert_eq!(decoded.ancestors, original.ancestors);
     }
 
     #[test]
     fn envelope_round_trips_through_json() {
-        let envelope = regtest_envelope();
-        let json = serde_json::to_string(&envelope).unwrap();
-        let decoded: ExitStateEnvelope = serde_json::from_str(&json).unwrap();
+        let pedigree = regtest_pedigree();
+        let decoded = decode_exit_state(&encode_regtest(&pedigree), Network::Regtest).unwrap();
 
-        assert_eq!(decoded.version, envelope.version);
-        assert_eq!(decoded.network, envelope.network);
-        assert_eq!(decoded.identity_public_key, envelope.identity_public_key);
+        assert_eq!(decoded.version, EXIT_STATE_VERSION);
+        assert_eq!(decoded.network, Network::Regtest);
+        assert_eq!(decoded.identity_public_key, identity_of(&pedigree));
         assert_eq!(decoded.pedigrees.len(), 1);
+        assert_same_pedigree(&decoded.pedigrees[0], &pedigree);
+    }
 
-        let pedigree = &decoded.pedigrees[0];
-        let original = &envelope.pedigrees[0];
-        assert_eq!(pedigree.leaf.id, original.leaf.id);
-        assert_eq!(pedigree.leaf.parent_node_id, original.leaf.parent_node_id);
-        assert_eq!(pedigree.leaf.node_tx, original.leaf.node_tx);
-        assert_eq!(pedigree.leaf.value, original.leaf.value);
-        let ancestor_ids: Vec<String> = pedigree
-            .ancestors
-            .iter()
-            .map(|a| a.id.to_string())
-            .collect();
-        assert_eq!(ancestor_ids, vec!["root".to_string()]);
+    #[test]
+    fn envelope_writes_transactions_as_consensus_hex() {
+        let pedigree = regtest_pedigree();
+        let json: Value = serde_json::from_str(&encode_regtest(&pedigree)).unwrap();
+        let leaf = &json["pedigrees"][0]["leaf"];
+        let root = &json["pedigrees"][0]["ancestors"][0];
 
-        check_envelope_readable(&decoded, Network::Regtest).unwrap();
+        assert_eq!(leaf["node_tx"], serialize_hex(&pedigree.leaf.node_tx));
+        assert_eq!(
+            leaf["refund_tx"],
+            serialize_hex(pedigree.leaf.refund_tx.as_ref().unwrap())
+        );
+        assert_eq!(leaf["direct_tx"], Value::Null);
+        assert_eq!(
+            root["node_tx"],
+            serialize_hex(&pedigree.ancestors[0].node_tx)
+        );
+    }
+
+    #[test]
+    fn envelope_with_struct_form_transactions_is_still_read() {
+        let pedigree = regtest_pedigree();
+        let exit_state = serde_json::to_string(&ExitStateEnvelope {
+            version: STRUCT_TX_EXIT_STATE_VERSION,
+            network: Network::Regtest,
+            identity_public_key: identity_of(&pedigree),
+            pedigrees: vec![pedigree.clone()],
+        })
+        .unwrap();
+        let json: Value = serde_json::from_str(&exit_state).unwrap();
+        assert!(json["pedigrees"][0]["leaf"]["node_tx"].is_object());
+
+        let decoded = decode_exit_state(&exit_state, Network::Regtest).unwrap();
+
+        assert_eq!(decoded.pedigrees.len(), 1);
+        assert_same_pedigree(&decoded.pedigrees[0], &pedigree);
     }
 
     #[test]
     fn envelope_with_unknown_version_is_rejected() {
-        let mut envelope = regtest_envelope();
-        envelope.version = EXIT_STATE_VERSION + 1;
+        let mut json: Value = serde_json::from_str(&encode_regtest(&regtest_pedigree())).unwrap();
+        json["version"] = (EXIT_STATE_VERSION + 1).into();
 
-        match check_envelope_readable(&envelope, Network::Regtest) {
+        match decode_exit_state(&json.to_string(), Network::Regtest) {
             Err(SdkError::InvalidInput(message)) => assert!(
                 message.contains("version"),
                 "expected a version complaint, got {message}"
@@ -198,9 +381,7 @@ mod tests {
 
     #[test]
     fn envelope_from_another_network_is_rejected() {
-        let envelope = regtest_envelope();
-
-        match check_envelope_readable(&envelope, Network::Mainnet) {
+        match decode_exit_state(&encode_regtest(&regtest_pedigree()), Network::Mainnet) {
             Err(SdkError::InvalidInput(message)) => assert!(
                 message.contains("network"),
                 "expected a network complaint, got {message}"
