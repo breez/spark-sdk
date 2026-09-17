@@ -17,7 +17,7 @@ breez-sdk-spark = { path = "../../../crates/breez-sdk/core", features = [
     "sqlite",
 ] }
 extend = "1.2.0"
-flutter_rust_bridge = "=2.11.1"
+flutter_rust_bridge = "=2.13.0"
 futures = { version = "0.3", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
