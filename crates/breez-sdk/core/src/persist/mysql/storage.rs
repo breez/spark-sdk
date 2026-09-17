@@ -22,6 +22,7 @@ use crate::{
         Payment, PaymentMetadata, SetLnurlMetadataItem, SparkSettledBolt11Receive,
         SparkSettledBolt11Send, Storage, StorageError, StorageListPaymentsRequest,
         StoragePaymentDetailsFilter, StoredCrossChainSwap, UpdateDepositPayload,
+        UpdateWatchedAddressPayload, WatchedDepositAddress,
         parse_payment_status,
     },
     sync_storage::{
@@ -555,7 +556,19 @@ impl MysqlStorage {
                 column: "refund_state",
                 definition: "JSON NULL",
             }],
-            // Migration 24: A Lightning payment settled by a transfer to the Spark
+            // Migration 24: Deposit addresses polled on-chain for deposits still in
+            // the mempool. Rows are removed once watching them can no longer lead to
+            // an early claim, so the table holds only the live watch set.
+            vec![Migration::sql(
+                "CREATE TABLE IF NOT EXISTS brz_watched_deposit_addresses (
+                    user_id VARBINARY(33) NOT NULL,
+                    address VARCHAR(255) NOT NULL,
+                    issued_at BIGINT NOT NULL,
+                    seen BOOLEAN NOT NULL DEFAULT FALSE,
+                    PRIMARY KEY (user_id, address)
+                )",
+            )],
+            // Migration 25: A Lightning payment settled by a transfer to the Spark
             // destination its invoice advertised involves no HTLC, so the columns
             // describing one become nullable.
             vec![Migration::sql(
@@ -564,7 +577,7 @@ impl MysqlStorage {
                    MODIFY htlc_status VARCHAR(64) NULL,
                    MODIFY htlc_expiry_time BIGINT NULL",
             )],
-            // Migration 25: Bolt11s settled over Spark, one table per direction.
+            // Migration 26: Bolt11s settled over Spark, one table per direction.
             // Sends are keyed by the transfer that paid. Receives are keyed by
             // the Spark invoice the Bolt11 embeds, written when it is minted and
             // dropped once it has expired. Born multi-tenant.
@@ -1533,6 +1546,71 @@ impl Storage for MysqlStorage {
         Ok(())
     }
 
+    async fn list_watched_deposit_addresses(
+        &self,
+    ) -> Result<Vec<WatchedDepositAddress>, StorageError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
+        let rows: Vec<Row> = conn
+            .exec(
+                "SELECT address, issued_at, seen FROM brz_watched_deposit_addresses
+                 WHERE user_id = ? ORDER BY issued_at DESC",
+                (self.identity.clone(),),
+            )
+            .await
+            .map_err(map_db_error)?;
+
+        let mut watched = Vec::new();
+        for row in &rows {
+            watched.push(WatchedDepositAddress {
+                address: get_str(row, 0)?,
+                issued_at: u64::try_from(
+                    get_opt_i64(row, 1)
+                        .ok_or_else(|| StorageError::Implementation("issued_at is NULL".into()))?,
+                )?,
+                seen: get_opt_bool(row, 2)
+                    .ok_or_else(|| StorageError::Implementation("seen is NULL".into()))?,
+            });
+        }
+        Ok(watched)
+    }
+
+    async fn update_watched_deposit_address(
+        &self,
+        address: String,
+        payload: UpdateWatchedAddressPayload,
+    ) -> Result<(), StorageError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
+        match payload {
+            UpdateWatchedAddressPayload::Watch { issued_at } => {
+                conn.exec_drop(
+                    "INSERT INTO brz_watched_deposit_addresses (user_id, address, issued_at, seen)
+                     VALUES (?, ?, ?, FALSE)
+                     ON DUPLICATE KEY UPDATE issued_at = VALUES(issued_at), seen = FALSE",
+                    (self.identity.clone(), address, i64::try_from(issued_at)?),
+                )
+                .await
+                .map_err(map_db_error)?;
+            }
+            UpdateWatchedAddressPayload::Seen => {
+                conn.exec_drop(
+                    "UPDATE brz_watched_deposit_addresses SET seen = TRUE WHERE user_id = ? AND address = ?",
+                    (self.identity.clone(), address),
+                )
+                .await
+                .map_err(map_db_error)?;
+            }
+            UpdateWatchedAddressPayload::Unwatch { issued_at } => {
+                conn.exec_drop(
+                    "DELETE FROM brz_watched_deposit_addresses WHERE user_id = ? AND address = ? AND issued_at = ?",
+                    (self.identity.clone(), address, i64::try_from(issued_at)?),
+                )
+                .await
+                .map_err(map_db_error)?;
+            }
+        }
+        Ok(())
+    }
+
     async fn set_lnurl_metadata(
         &self,
         metadata: Vec<SetLnurlMetadataItem>,
@@ -2487,6 +2565,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_watched_deposit_addresses() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_watched_deposit_addresses(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
     async fn test_unclaimed_deposits_crud() {
         let fixture = MysqlTestFixture::new().await;
         crate::persist::tests::test_unclaimed_deposits_crud(Box::new(fixture.storage)).await;
@@ -3204,7 +3288,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(25), "migration version must advance to 25");
+        assert_eq!(version, Some(26), "migration version must advance to 26");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())
@@ -3476,7 +3560,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(25), "migration must advance to 25");
+        assert_eq!(version, Some(26), "migration must advance to 26");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())

@@ -23,6 +23,7 @@ use crate::{
         Payment, PaymentMetadata, SetLnurlMetadataItem, SparkSettledBolt11Receive,
         SparkSettledBolt11Send, Storage, StorageError, StorageListPaymentsRequest,
         StoragePaymentDetailsFilter, StoredCrossChainSwap, UpdateDepositPayload,
+        UpdateWatchedAddressPayload, WatchedDepositAddress,
         parse_payment_status,
     },
     sync_storage::{
@@ -487,7 +488,20 @@ impl PostgresStorage {
             // JSON-encoded RefundState. NULL on refunds created before this column
             // existed, which is read as BroadcastPending.
             vec!["ALTER TABLE brz_unclaimed_deposits ADD COLUMN refund_state JSONB".to_string()],
-            // Migration 23: A Lightning payment settled by a transfer to the Spark
+            // Migration 23: Deposit addresses polled on-chain for deposits still in
+            // the mempool. Rows are removed once watching them can no longer lead to
+            // an early claim, so the table holds only the live watch set.
+            vec![
+                "CREATE TABLE IF NOT EXISTS brz_watched_deposit_addresses (
+                    user_id BYTEA NOT NULL,
+                    address TEXT NOT NULL,
+                    issued_at BIGINT NOT NULL,
+                    seen BOOLEAN NOT NULL DEFAULT FALSE,
+                    PRIMARY KEY (user_id, address)
+                 )"
+                .to_string(),
+            ],
+            // Migration 24: A Lightning payment settled by a transfer to the Spark
             // destination its invoice advertised involves no HTLC, so the columns
             // describing one become nullable.
             vec![
@@ -498,7 +512,7 @@ impl PostgresStorage {
                 "ALTER TABLE brz_payment_details_lightning ALTER COLUMN htlc_expiry_time DROP NOT NULL"
                     .to_string(),
             ],
-            // Migration 24: Bolt11s settled over Spark, one table per direction.
+            // Migration 25: Bolt11s settled over Spark, one table per direction.
             // Sends are keyed by the transfer that paid. Receives are keyed by
             // the Spark invoice the Bolt11 embeds, written when it is minted and
             // dropped once it has expired. Born multi-tenant.
@@ -1397,6 +1411,65 @@ impl Storage for PostgresStorage {
                     .execute(
                         "UPDATE brz_unclaimed_deposits SET refund_state = $1 WHERE user_id = $2 AND txid = $3 AND vout = $4 AND refund_tx_id = $5",
                         &[&state_json, &self.identity, &txid, &i32::try_from(vout)?, &refund_txid],
+                    )
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn list_watched_deposit_addresses(
+        &self,
+    ) -> Result<Vec<WatchedDepositAddress>, StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        let rows = client
+            .query(
+                "SELECT address, issued_at, seen FROM brz_watched_deposit_addresses
+                 WHERE user_id = $1 ORDER BY issued_at DESC",
+                &[&self.identity],
+            )
+            .await?;
+        rows.iter()
+            .map(|row| {
+                Ok(WatchedDepositAddress {
+                    address: row.get(0),
+                    issued_at: u64::try_from(row.get::<_, i64>(1))?,
+                    seen: row.get(2),
+                })
+            })
+            .collect()
+    }
+
+    async fn update_watched_deposit_address(
+        &self,
+        address: String,
+        payload: UpdateWatchedAddressPayload,
+    ) -> Result<(), StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        match payload {
+            UpdateWatchedAddressPayload::Watch { issued_at } => {
+                client
+                    .execute(
+                        "INSERT INTO brz_watched_deposit_addresses (user_id, address, issued_at, seen)
+                         VALUES ($1, $2, $3, FALSE)
+                         ON CONFLICT(user_id, address) DO UPDATE SET issued_at = EXCLUDED.issued_at, seen = FALSE",
+                        &[&self.identity, &address, &i64::try_from(issued_at)?],
+                    )
+                    .await?;
+            }
+            UpdateWatchedAddressPayload::Seen => {
+                client
+                    .execute(
+                        "UPDATE brz_watched_deposit_addresses SET seen = TRUE WHERE user_id = $1 AND address = $2",
+                        &[&self.identity, &address],
+                    )
+                    .await?;
+            }
+            UpdateWatchedAddressPayload::Unwatch { issued_at } => {
+                client
+                    .execute(
+                        "DELETE FROM brz_watched_deposit_addresses WHERE user_id = $1 AND address = $2 AND issued_at = $3",
+                        &[&self.identity, &address, &i64::try_from(issued_at)?],
                     )
                     .await?;
             }
@@ -2335,6 +2408,12 @@ mod tests {
             fixture.storage,
         )))
         .await;
+    }
+
+    #[tokio::test]
+    async fn test_watched_deposit_addresses() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_watched_deposit_addresses(Box::new(fixture.storage)).await;
     }
 
     #[tokio::test]
@@ -3409,7 +3488,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 24, "migration version must advance to 24");
+        assert_eq!(version, 25, "migration version must advance to 25");
 
         // Seed payment row is preserved on the renamed table — proves the
         // table + PK constraint rename worked and the columns line up.
@@ -3705,7 +3784,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 24, "migration must advance to 24");
+        assert_eq!(version, 25, "migration must advance to 25");
 
         // Seed data preserved (multi-tenant backfilled user_id to current tenant).
         let payment_count: i64 = client

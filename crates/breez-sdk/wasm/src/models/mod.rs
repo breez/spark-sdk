@@ -231,6 +231,7 @@ pub enum InstantClaimStatus {
     Submitted {
         claim_id: String,
     },
+    Claimed,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::InputType)]
@@ -1712,6 +1713,20 @@ pub enum UpdateDepositPayload {
         refund_txid: String,
         state: RefundState,
     },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::WatchedDepositAddress)]
+pub struct WatchedDepositAddress {
+    pub address: String,
+    pub issued_at: u64,
+    pub seen: bool,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UpdateWatchedAddressPayload)]
+pub enum UpdateWatchedAddressPayload {
+    Watch { issued_at: u64 },
+    Seen,
+    Unwatch { issued_at: u64 },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CheckLightningAddressRequest)]

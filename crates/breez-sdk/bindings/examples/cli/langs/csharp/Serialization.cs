@@ -38,6 +38,106 @@ public static class Serialization
     }
 
     /// <summary>
+    /// Alias for Serialize (already pretty-printed).
+    /// </summary>
+    public static string SerializePretty(object? value) => Serialize(value);
+
+    /// <summary>
+    /// Deserializes a JSON string produced by Serialize back into a typed object.
+    /// </summary>
+    public static T Deserialize<T>(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        return (T)DeserializeElement(doc.RootElement, typeof(T))!;
+    }
+
+    private static object? DeserializeElement(JsonElement elem, Type targetType)
+    {
+        if (elem.ValueKind == JsonValueKind.Null || elem.ValueKind == JsonValueKind.Undefined)
+            return null;
+
+        var underlyingType = Nullable.GetUnderlyingType(targetType);
+        if (underlyingType != null)
+            return DeserializeElement(elem, underlyingType);
+
+        if (targetType == typeof(string)) return elem.GetString();
+        if (targetType == typeof(bool)) return elem.GetBoolean();
+        if (targetType == typeof(byte)) return elem.GetByte();
+        if (targetType == typeof(short)) return elem.GetInt16();
+        if (targetType == typeof(int)) return elem.GetInt32();
+        if (targetType == typeof(long)) return elem.GetInt64();
+        if (targetType == typeof(ushort)) return elem.GetUInt16();
+        if (targetType == typeof(uint)) return elem.GetUInt32();
+        if (targetType == typeof(ulong)) return elem.GetUInt64();
+        if (targetType == typeof(float)) return elem.GetSingle();
+        if (targetType == typeof(double)) return elem.GetDouble();
+        if (targetType == typeof(decimal)) return elem.GetDecimal();
+        if (targetType == typeof(BigInteger)) return BigInteger.Parse(elem.GetString()!);
+
+        if (targetType == typeof(byte[]))
+            return Convert.FromHexString(elem.GetString()!);
+
+        if (targetType.IsEnum)
+            return Enum.Parse(targetType, elem.GetString()!);
+
+        if (targetType.IsArray)
+        {
+            var elementType = targetType.GetElementType()!;
+            var jsonArray = elem.EnumerateArray().ToArray();
+            var arr = Array.CreateInstance(elementType, jsonArray.Length);
+            for (int i = 0; i < jsonArray.Length; i++)
+                arr.SetValue(DeserializeElement(jsonArray[i], elementType), i);
+            return arr;
+        }
+
+        if (elem.ValueKind == JsonValueKind.Object)
+        {
+            var actualType = targetType;
+
+            if (elem.TryGetProperty("type", out var typeElem))
+            {
+                var variantName = typeElem.GetString()!;
+                var nestedType = targetType.GetNestedType(
+                    variantName, BindingFlags.Public | BindingFlags.NonPublic);
+                if (nestedType != null)
+                    actualType = nestedType;
+            }
+
+            var ctors = actualType.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
+            if (ctors.Length == 0)
+                return Activator.CreateInstance(actualType);
+
+            var ctor = ctors.OrderByDescending(c => c.GetParameters().Length).First();
+            var parameters = ctor.GetParameters();
+            var args = new object?[parameters.Length];
+
+            for (int i = 0; i < parameters.Length; i++)
+            {
+                var param = parameters[i];
+                var jsonKey = ToSnakeCase(param.Name!);
+
+                if (elem.TryGetProperty(jsonKey, out var propElem))
+                {
+                    args[i] = DeserializeElement(propElem, param.ParameterType);
+                }
+                else if (param.HasDefaultValue)
+                {
+                    args[i] = param.DefaultValue;
+                }
+                else if (param.ParameterType.IsValueType
+                         && Nullable.GetUnderlyingType(param.ParameterType) == null)
+                {
+                    args[i] = Activator.CreateInstance(param.ParameterType);
+                }
+            }
+
+            return ctor.Invoke(args);
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Known enum/tagged-union base type prefixes used to detect variant types
     /// and extract their variant name.
     /// </summary>
@@ -50,6 +150,7 @@ public static class Serialization
         "SparkHtlcStatus+", "PaymentStatus+", "PaymentType+",
         "ServiceStatus+", "SdkEvent+", "InputType+",
         "AssetFilter+", "FeePolicy+", "MaxFee+", "Fee+", "Seed+",
+        "ExitTransactionStatus+", "CpfpInput+",
     };
 
     /// <summary>

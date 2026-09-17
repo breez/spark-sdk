@@ -6,6 +6,7 @@ use crate::{
     DepositClaimError, InstantClaimStatus, LnurlWithdrawInfo, Payment, PaymentDetails,
     PaymentMetadata, PaymentMethod, PaymentStatus, PaymentType, RefundState, SparkHtlcDetails,
     SparkHtlcStatus, Storage, TokenMetadata, TokenTransactionType, UpdateDepositPayload,
+    UpdateWatchedAddressPayload,
     persist::{ObjectCacheRepository, StorageListPaymentsRequest},
     sync_storage::{Record, RecordId, UnversionedRecordChange},
 };
@@ -1299,6 +1300,130 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
+pub async fn test_watched_deposit_addresses(storage: Box<dyn Storage>) {
+    assert!(
+        storage
+            .list_watched_deposit_addresses()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // Watch inserts.
+    storage
+        .update_watched_deposit_address(
+            "addr_a".to_string(),
+            UpdateWatchedAddressPayload::Watch { issued_at: 100 },
+        )
+        .await
+        .unwrap();
+    let watched = storage.list_watched_deposit_addresses().await.unwrap();
+    assert_eq!(watched.len(), 1);
+    assert_eq!(watched[0].address, "addr_a");
+    assert_eq!(watched[0].issued_at, 100);
+    assert!(!watched[0].seen);
+
+    // Seen sets the flag.
+    storage
+        .update_watched_deposit_address("addr_a".to_string(), UpdateWatchedAddressPayload::Seen)
+        .await
+        .unwrap();
+    let watched = storage.list_watched_deposit_addresses().await.unwrap();
+    assert_eq!(watched.len(), 1);
+    assert!(watched[0].seen);
+
+    // Re-watching restarts the window and clears the flag.
+    storage
+        .update_watched_deposit_address(
+            "addr_a".to_string(),
+            UpdateWatchedAddressPayload::Watch { issued_at: 300 },
+        )
+        .await
+        .unwrap();
+    let watched = storage.list_watched_deposit_addresses().await.unwrap();
+    assert_eq!(watched.len(), 1);
+    assert_eq!(watched[0].issued_at, 300);
+    assert!(!watched[0].seen);
+
+    // Listing is newest first.
+    storage
+        .update_watched_deposit_address(
+            "addr_b".to_string(),
+            UpdateWatchedAddressPayload::Watch { issued_at: 400 },
+        )
+        .await
+        .unwrap();
+    let watched = storage.list_watched_deposit_addresses().await.unwrap();
+    assert_eq!(watched.len(), 2);
+    assert_eq!(watched[0].address, "addr_b");
+    assert_eq!(watched[1].address, "addr_a");
+
+    // Seen on an address that is not watched is a no-op, not an error: the
+    // watch may have been retired between the read and the write.
+    storage
+        .update_watched_deposit_address(
+            "addr_missing".to_string(),
+            UpdateWatchedAddressPayload::Seen,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .list_watched_deposit_addresses()
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+
+    // A stale issued_at means the address was handed out again since the caller
+    // read it, so the retirement it decided no longer applies.
+    storage
+        .update_watched_deposit_address(
+            "addr_a".to_string(),
+            UpdateWatchedAddressPayload::Unwatch { issued_at: 100 },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .list_watched_deposit_addresses()
+            .await
+            .unwrap()
+            .len(),
+        2,
+        "a stale unwatch must not retire a re-issued address"
+    );
+
+    // Unwatch removes only its own row.
+    storage
+        .update_watched_deposit_address(
+            "addr_a".to_string(),
+            UpdateWatchedAddressPayload::Unwatch { issued_at: 300 },
+        )
+        .await
+        .unwrap();
+    let watched = storage.list_watched_deposit_addresses().await.unwrap();
+    assert_eq!(watched.len(), 1);
+    assert_eq!(watched[0].address, "addr_b");
+
+    storage
+        .update_watched_deposit_address(
+            "addr_b".to_string(),
+            UpdateWatchedAddressPayload::Unwatch { issued_at: 400 },
+        )
+        .await
+        .unwrap();
+    assert!(
+        storage
+            .list_watched_deposit_addresses()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
 pub async fn test_unclaimed_deposits_crud(storage: Box<dyn Storage>) {
     // Initially, list should be empty
     let deposits = storage.list_deposits().await.unwrap();
@@ -1596,6 +1721,7 @@ pub async fn test_deposit_refunds(storage: Box<dyn Storage>) {
     assert_claim_error_keeps_refund(storage.as_ref()).await;
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn test_instant_claim_status(storage: Box<dyn Storage>) {
     // A freshly-added deposit has no instant-claim status.
     storage
@@ -1677,6 +1803,39 @@ pub async fn test_instant_claim_status(storage: Box<dyn Storage>) {
             claim_id: "claim-123".to_string()
         })
     );
+
+    // Settling replaces the in-flight status. The record outlives the credit, so
+    // this is what keeps the deposit from being claimed again while the provider
+    // still reports the UTXO.
+    storage
+        .update_deposit(
+            "tx_instant".to_string(),
+            0,
+            UpdateDepositPayload::InstantClaim {
+                status: InstantClaimStatus::Claimed,
+            },
+        )
+        .await
+        .unwrap();
+    let deposits = storage.list_deposits().await.unwrap();
+    assert_eq!(deposits.len(), 1);
+    assert_eq!(
+        deposits[0].instant_claim_status,
+        Some(InstantClaimStatus::Claimed)
+    );
+
+    storage
+        .update_deposit(
+            "tx_instant".to_string(),
+            0,
+            UpdateDepositPayload::InstantClaim {
+                status: InstantClaimStatus::Submitted {
+                    claim_id: "claim-123".to_string(),
+                },
+            },
+        )
+        .await
+        .unwrap();
 
     // Re-observing the UTXO (the syncer upserts is_mature/amount) must preserve
     // the status, otherwise a still-in-flight deposit could be re-claimed.

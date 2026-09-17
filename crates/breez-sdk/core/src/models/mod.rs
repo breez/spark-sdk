@@ -1250,10 +1250,13 @@ pub enum InstantClaimStatus {
         #[serde(default)]
         confirmations: u32,
     },
-    /// An instant claim was submitted and is settling. The deposit must not be
-    /// re-claimed (instant or normal) until the claim settles and it is reconciled
-    /// out. Carries the SSP claim id.
+    /// An instant claim was submitted and is settling. Carries the SSP claim id.
     Submitted { claim_id: String },
+    /// A claim has taken the deposit: either its credit arrived here, or the
+    /// provider reports the deposit as already claimed. It stays listed until
+    /// the provider spends the output, so treat it as settled rather than as
+    /// awaiting action.
+    Claimed,
 }
 
 /// State of the deposit refund broadcast.

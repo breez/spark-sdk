@@ -121,6 +121,25 @@ impl BreezSdk {
                     payment: Some(payment),
                 })
             }
+            // An earlier claim took it, so the deposit is settled rather than
+            // failed and records no claim error. The caller still gets the error:
+            // the claim they asked for did not happen here.
+            Err(e) if is_already_claimed_error(&e.to_string()) => {
+                info!(
+                    "Deposit {}:{} was already claimed, marking it",
+                    detailed_utxo.txid, detailed_utxo.vout
+                );
+                self.storage
+                    .update_deposit(
+                        detailed_utxo.txid.to_string(),
+                        detailed_utxo.vout,
+                        UpdateDepositPayload::InstantClaim {
+                            status: InstantClaimStatus::Claimed,
+                        },
+                    )
+                    .await?;
+                Err(e)
+            }
             Err(e) => {
                 error!("Failed to claim deposit: {e:?}");
                 self.storage
@@ -583,12 +602,19 @@ impl BreezSdk {
         max_fee: Option<MaxFee>,
         confirmations: u32,
     ) -> Result<ClaimDepositResponse, SdkError> {
-        let row_exists = self
+        let stored = self
             .storage
             .list_deposits()
             .await?
-            .iter()
-            .any(|d| d.txid == detailed_utxo.txid.to_string() && d.vout == detailed_utxo.vout);
+            .into_iter()
+            .find(|d| d.txid == detailed_utxo.txid.to_string() && d.vout == detailed_utxo.vout);
+        let row_exists = stored.is_some();
+        let claim_already_made = stored.is_some_and(|d| {
+            matches!(
+                d.instant_claim_status,
+                Some(InstantClaimStatus::Submitted { .. } | InstantClaimStatus::Claimed)
+            )
+        });
 
         let resolved_max_fee = self.resolve_max_claim_fee(max_fee).await?;
         let outcome = match self
@@ -618,15 +644,21 @@ impl BreezSdk {
                 )
                 .await?;
         }
-        self.storage
-            .update_deposit(
-                detailed_utxo.txid.to_string(),
-                detailed_utxo.vout,
-                UpdateDepositPayload::InstantClaim {
-                    status: outcome.status(confirmations),
-                },
-            )
-            .await?;
+        // A deposit already claimed keeps that status. Replacing it with a
+        // decline would let the cascade submit a second claim, and let
+        // reconciliation drop the record while the first claim is still settling.
+        let status = outcome.status(confirmations);
+        let downgrades_existing_claim =
+            claim_already_made && matches!(status, InstantClaimStatus::Declined { .. });
+        if !downgrades_existing_claim {
+            self.storage
+                .update_deposit(
+                    detailed_utxo.txid.to_string(),
+                    detailed_utxo.vout,
+                    UpdateDepositPayload::InstantClaim { status },
+                )
+                .await?;
+        }
 
         match outcome {
             InstantClaimOutcome::Submitted(claim_id) => {
@@ -755,6 +787,14 @@ impl InstantClaimOutcome {
             },
         }
     }
+}
+
+/// Whether the provider rejected a claim because the deposit is already claimed,
+/// which is a settled deposit reported as a failure. Neither the SSP nor the
+/// operators return an error code for it, so the message is all there is to go
+/// on.
+pub(super) fn is_already_claimed_error(message: &str) -> bool {
+    message.to_lowercase().contains("already been claimed")
 }
 
 /// Message fragments of the depth rejections that clear on their own. Neither the
@@ -985,8 +1025,8 @@ mod tests {
 
     use super::{
         ClaimGuards, InstantClaimPlan, PendingRefund, SdkError, TxOutput, check_replacement_fee,
-        claim_deposit_quote, is_pending_confirmation_error, refund_fee_sats,
-        replacement_min_fee_sats, select_instant_claim_plan,
+        claim_deposit_quote, is_already_claimed_error, is_pending_confirmation_error,
+        refund_fee_sats, replacement_min_fee_sats, select_instant_claim_plan,
     };
 
     fn sats(value: u64) -> CurrencyAmount {
@@ -1411,5 +1451,21 @@ mod tests {
         // Paying exactly the floor is accepted.
         let exact = refund_paying_out(deposit - required);
         assert!(check_replacement_fee(&exact, deposit, Some(pending_refund)).is_ok());
+    }
+
+    #[test]
+    fn an_already_claimed_deposit_is_not_a_claim_failure() {
+        // What the SSP answers a claim at maturity with when an early claim has
+        // already taken the UTXO.
+        assert!(is_already_claimed_error(
+            "SparkSdkError: Service error: service provider error: graphql error: \
+             Static deposit has already been claimed, transaction_id: abc, output_index: 0, \
+             transfer_id: 01a0"
+        ));
+        // A genuine failure still records why.
+        assert!(!is_already_claimed_error(
+            "deposit does not have enough confirmations"
+        ));
+        assert!(!is_already_claimed_error("insufficient funds"));
     }
 }

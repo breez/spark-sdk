@@ -46,6 +46,7 @@ pub use persist::{
     ConversionFilter, PaymentMetadata, SetLnurlMetadataItem, SparkSettledBolt11Receive,
     SparkSettledBolt11Send, Storage, StorageError, StorageListPaymentsRequest,
     StoragePaymentDetailsFilter, StoredCrossChainSwap, UpdateDepositPayload,
+    UpdateWatchedAddressPayload, WatchedDepositAddress,
     backend::{
         PrebuiltBackend, ResolvedStores, StorageBackend, custom_storage, default_session_store,
     },
