@@ -2256,6 +2256,14 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_payment_by_invoice() {
+        let temp_dir = create_temp_dir("sqlite_storage_get_payment_by_invoice");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        crate::persist::tests::test_get_payment_by_invoice(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
     async fn test_lightning_payment_settled_over_spark() {
         let temp_dir = create_temp_dir("sqlite_storage_settled_over_spark");
         let storage = SqliteStorage::new(&temp_dir).unwrap();

@@ -377,14 +377,8 @@ pub(super) async fn receive_bolt11_invoice_inner(
             .await?);
     }
 
-    let fallback = build_fallback(
-        sdk,
-        amount_sats,
-        expiry_secs,
-        &description,
-        receiver_identity_public_key,
-    )
-    .await?;
+    let fallback =
+        build_fallback(sdk, amount_sats, expiry_secs, receiver_identity_public_key).await?;
 
     let receive = sdk
         .spark_wallet
@@ -423,8 +417,11 @@ pub(super) async fn receive_bolt11_invoice_inner(
     Ok(receive)
 }
 
-/// Creates the Spark invoice to embed, mirroring the BOLT11 so a payer settling
-/// over Spark pays the same amount for the same thing.
+/// Creates the Spark invoice to embed, for the same amount and expiry as the
+/// BOLT11 so a payer settling over Spark pays the same for the same thing.
+///
+/// Carries no memo: the description is already on the BOLT11, and repeating it
+/// only grows the field the invoice rides in.
 ///
 /// Nothing is embedded in an invoice created for another identity: only its
 /// holder can sign for it, and a transfer paying it settles into their wallet,
@@ -433,7 +430,6 @@ async fn build_fallback(
     sdk: &BreezSdk,
     amount_sats: Option<u64>,
     expiry_secs: Option<u32>,
-    description: &str,
     receiver_identity_public_key: Option<PublicKey>,
 ) -> Result<LightningReceiveFallback, SdkError> {
     if !sdk.config.prefer_spark_over_lightning || receiver_identity_public_key.is_some() {
@@ -447,13 +443,7 @@ async fn build_fallback(
     let expiry_time = SystemTime::now().checked_add(Duration::from_secs(u64::from(expiry_secs)));
     let invoice = sdk
         .spark_wallet
-        .create_spark_invoice(
-            amount_sats.map(u128::from),
-            None,
-            expiry_time,
-            Some(description.to_string()),
-            None,
-        )
+        .create_spark_invoice(amount_sats.map(u128::from), None, expiry_time, None, None)
         .await?;
     Ok(LightningReceiveFallback::Invoice(invoice))
 }

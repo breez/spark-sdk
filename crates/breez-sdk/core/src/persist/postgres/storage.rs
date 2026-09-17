@@ -1220,7 +1220,10 @@ impl Storage for PostgresStorage {
         invoice: String,
     ) -> Result<Option<Payment>, StorageError> {
         let client = self.pool.get().await.map_err(map_pool_error)?;
-        let query = format!("{SELECT_PAYMENT_SQL} WHERE p.user_id = $1 AND l.invoice = $2");
+        // Capped because two payments can name the same invoice, a self-payment
+        // being one: the SQLite and MySQL stores both take the first row, and
+        // `query_opt` errors on more than one.
+        let query = format!("{SELECT_PAYMENT_SQL} WHERE p.user_id = $1 AND l.invoice = $2 LIMIT 1");
         let row = client
             .query_opt(&query, &[&self.identity, &invoice])
             .await?;
@@ -2470,6 +2473,12 @@ mod tests {
             fixture.storage,
         ))
         .await;
+    }
+
+    #[tokio::test]
+    async fn test_get_payment_by_invoice() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_get_payment_by_invoice(Box::new(fixture.storage)).await;
     }
 
     #[tokio::test]

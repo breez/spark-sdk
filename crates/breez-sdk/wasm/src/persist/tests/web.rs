@@ -161,6 +161,13 @@ async fn test_lightning_htlc_details_and_status_filtering() {
 }
 
 #[wasm_bindgen_test]
+async fn test_get_payment_by_invoice() {
+    let storage = create_test_storage("get_payment_by_invoice").await;
+
+    breez_sdk_spark::storage_tests::test_get_payment_by_invoice(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_lightning_payment_settled_over_spark() {
     let storage = create_test_storage("settled_over_spark").await;
 

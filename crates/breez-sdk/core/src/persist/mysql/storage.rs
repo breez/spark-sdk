@@ -2651,6 +2651,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_payment_by_invoice() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_get_payment_by_invoice(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
     async fn test_lightning_payment_settled_over_spark() {
         let fixture = MysqlTestFixture::new().await;
         crate::persist::tests::test_lightning_payment_settled_over_spark(Box::new(fixture.storage))

@@ -644,6 +644,26 @@ class MigrationManager {
           }
         },
       },
+      {
+        // The index was keyed on `details.invoice`, but `details` is stored as
+        // a JSON string, so it never resolved and every lookup missed. Re-keys
+        // it on the top-level field the write path now fills in.
+        //
+        // Rows written before this are left to pick the field up when they are
+        // next written, which is what they already did: the index has never
+        // matched anything, so nothing regresses. Rewriting them here would
+        // mean reading them in this same upgrade, and a read queued here runs
+        // before the writes of every earlier data migration, so writing the
+        // rows back would undo those.
+        name: "Re-key the invoice index onto a stored field",
+        upgrade: (db, transaction) => {
+          const paymentStore = transaction.objectStore("payments");
+          if (paymentStore.indexNames.contains("invoice")) {
+            paymentStore.deleteIndex("invoice");
+          }
+          paymentStore.createIndex("invoice", "invoice", { unique: false });
+        },
+      },
     ];
   }
 }
@@ -672,7 +692,7 @@ class IndexedDBStorage {
     // so existing databases depend on indices never shifting. Never insert,
     // reorder, or delete a migration — only append. dbVersion MUST equal the
     // number of migrations (enforced by the guard in initialize()).
-    this.dbVersion = 23; // Current schema version (= migration count)
+    this.dbVersion = 24; // Current schema version (= migration count)
   }
 
   /**
@@ -2625,9 +2645,12 @@ class IndexedDBStorage {
   // ===== Private Helper Methods =====
 
   _paymentToStore(payment) {
-    // Ensure details and method are serialized properly
+    // Ensure details and method are serialized properly. The invoice is copied
+    // to the top level because `details` is stored as a JSON string, which an
+    // index cannot look inside.
     return {
       ...payment,
+      invoice: payment.details?.invoice ?? undefined,
       details: payment.details ? JSON.stringify(payment.details) : null,
       method: payment.method ? JSON.stringify(payment.method) : null,
     };

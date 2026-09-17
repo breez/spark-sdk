@@ -96,8 +96,9 @@ async fn test_bolt11_settled_over_spark_is_attributed(
     let received =
         wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
     assert_eq!(received.amount, u128::from(AMOUNT_SATS));
+    assert_bolt11_settled_over_spark(&received, &invoice)?;
 
-    // Read back rather than trusting the event: whichever ingestion path sees
+    // Read back as well as trusting the event: whichever ingestion path sees
     // the transfer first, storage is what a caller lists and waits on.
     let stored = bob
         .sdk

@@ -4306,6 +4306,47 @@ pub async fn test_update_boltz_status_to_completed(storage: Box<dyn Storage>) {
 /// A Bolt11 invoice settled by a Spark transfer to the destination it
 /// advertised has no HTLC, and must round-trip that way rather than being read
 /// back with invented HTLC details.
+/// Looking a payment up by its Bolt11, which is how a receive settled over
+/// Spark is found while waiting on the invoice.
+pub async fn test_get_payment_by_invoice(storage: Box<dyn Storage>) {
+    let payment = Payment {
+        id: "by_invoice".to_string(),
+        payment_type: PaymentType::Receive,
+        status: PaymentStatus::Completed,
+        amount: 10_000,
+        fees: 0,
+        timestamp: 1000,
+        method: PaymentMethod::Lightning,
+        details: Some(PaymentDetails::Lightning {
+            description: None,
+            invoice: "lnbc_looked_up".to_string(),
+            destination_pubkey: "02abc".to_string(),
+            htlc_details: None,
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: None,
+            lnurl_receive_metadata: None,
+            conversion_info: None,
+        }),
+        conversion_details: None,
+    };
+    storage.apply_payment_update(payment.clone()).await.unwrap();
+
+    let found = storage
+        .get_payment_by_invoice("lnbc_looked_up".to_string())
+        .await
+        .unwrap()
+        .expect("payment should be found by its invoice");
+    assert_eq!(found.id, payment.id);
+
+    assert!(
+        storage
+            .get_payment_by_invoice("lnbc_never_stored".to_string())
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
 pub async fn test_lightning_payment_settled_over_spark(storage: Box<dyn Storage>) {
     let over_spark = Payment {
         id: "settled_over_spark".to_string(),

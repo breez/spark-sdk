@@ -99,8 +99,8 @@ mod tests {
 
     /// A BOLT11 carrying a Spark invoice in the version-31 fallback field.
     const INVOICE_WITH_FALLBACK_INVOICE: &str = "lnbcrt10u1p57ljcepp5tj54la7l3lw0wn47pmu7m4ynewd9pxzswxxrj37nvhjujhqfz9gqsp5q6ewua5nmkqced2xrkcj7hz2wyxlaya29n3e0vt79fkntf6cv2nsxq9z0rgqnp4qtlyk6hxw5h4hrdfdkd4nh2rv0mwyyqvdtakr3dv6m4vvsmfshvg6rzjqgp0s738klwqef7yr8yu54vv3wfuk4psv46x5laf6l6v5x4lwwahvqqqqrusum7gtyqqqqqqqqqqqqqq9qfv9lwdcxzuntwf6rzur8wdehjct3dsens7t509a8qvmg0p48j7r4d4n8y6rjx5enxwfhwfknq7pn89e85et4x4585a3s8p4hvve48pc8xan6vah8xum3va485ut3v4kn2wfnw3ek2wrhxu68gct4v35rsamkv9h8z6njx4e8zemw0p3kgmf4w9u857n3waknwwf5w9nnxutc0guxwut4v3uhqar4wfmrwdrvxpk8qer98pkn2errwfnxgatdx568wenj0pnrymrvddhxwue5w4mhq7tndpekcdt2xa3hjuntdcekudtpxgc8ydt3vsu8gcfedfekcem2x4eh5vpedenrwvr3dcm8vvr6wumxkufnvvcxkmphxemnvum4wdexgwt68p4qcqzpudq5wdcxzuntd9h8vmmfvdjs9qyyssqkxvng3kw2rze8h774a3gd2nfhx2378t532ryrftjj59s26a6wtr8gc5knn2nl6cm33vv99wnt5202mp2s9n87jy4tkhctyjgflc6ywqqcdwv3x";
-    /// A BOLT11 carrying a bare Spark address in the version-31 fallback field.
-    const INVOICE_WITH_FALLBACK_ADDRESS: &str = "lnbcrt10u1p57lj4upp5qxa002jtss48lwgqrzqwhsr5388gv09k4tllfy9hlv78akygcmzssp5hkpfxyy7xrd7qwwc043cfjma9u4z5vasxuyrgqrh6wrvyx6xkevqxq9z0rgqnp4qtlyk6hxw5h4hrdfdkd4nh2rv0mwyyqvdtakr3dv6m4vvsmfshvg6rzjqf6plzwgkgyrrwdygdekj8w8frztu8k7dz2x9nefwyc70vergwrqeapyqr6zgqqqq8hxk2qqae4jsqyugqcqzpudqswfhh2ar9dp5kuarn9qyyssqn9tv97k2a24a45vkt3zvckjt80ph2luwjje5c8ymtf7qr3m4nkaqrqzuc9gzvjufxvvhk2lvzfxerccvtclakmyq43hfyfuwzgkx7hspfh5vzf";
+    /// A BOLT11 carrying a bare Spark address in the legacy route hint.
+    const INVOICE_WITH_ROUTE_HINT_ADDRESS: &str = "lnbcrt10u1p57lj4upp5qxa002jtss48lwgqrzqwhsr5388gv09k4tllfy9hlv78akygcmzssp5hkpfxyy7xrd7qwwc043cfjma9u4z5vasxuyrgqrh6wrvyx6xkevqxq9z0rgqnp4qtlyk6hxw5h4hrdfdkd4nh2rv0mwyyqvdtakr3dv6m4vvsmfshvg6rzjqf6plzwgkgyrrwdygdekj8w8frztu8k7dz2x9nefwyc70vergwrqeapyqr6zgqqqq8hxk2qqae4jsqyugqcqzpudqswfhh2ar9dp5kuarn9qyyssqn9tv97k2a24a45vkt3zvckjt80ph2luwjje5c8ymtf7qr3m4nkaqrqzuc9gzvjufxvvhk2lvzfxerccvtclakmyq43hfyfuwzgkx7hspfh5vzf";
 
     #[test_all]
     fn extracts_invoice_from_fallback_field() {
@@ -113,8 +113,8 @@ mod tests {
     }
 
     #[test_all]
-    fn extracts_address_from_fallback_field() {
-        let invoice = Bolt11Invoice::from_str(INVOICE_WITH_FALLBACK_ADDRESS).unwrap();
+    fn extracts_address_from_route_hint() {
+        let invoice = Bolt11Invoice::from_str(INVOICE_WITH_ROUTE_HINT_ADDRESS).unwrap();
         let expected = SparkAddress::from_str(
             "sparkrt1pgssyaql38ytyzp3hxjyxumfrhr53397rm0x39rzeu5hzv08kv358psvs7ph8y",
         )
