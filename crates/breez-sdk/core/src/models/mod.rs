@@ -2877,7 +2877,8 @@ pub enum ExitLeafSelection {
     /// `total_fee_sat`, or fund one UTXO per branch to avoid the fan-out. Leaves
     /// that fail the per-leaf test are skipped.
     Auto,
-    /// Exit exactly these leaves, regardless of profitability.
+    /// Exit exactly these leaves, regardless of profitability, apart from any
+    /// whose exit already finished.
     Specific { leaf_ids: Vec<String> },
 }
 
@@ -3058,6 +3059,9 @@ pub enum ExitRefundState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareUnilateralExitResponse {
+    /// The leaves the exit covers. A leaf whose exit already finished is left out,
+    /// even when named: `exit_chain_state` shows its refund swept or its branch
+    /// stopped.
     pub leaves: Vec<UnilateralExitLeaf>,
     /// Total value of the selected leaves, in satoshis.
     pub recoverable_value_sat: u64,

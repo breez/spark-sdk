@@ -67,7 +67,7 @@ impl BreezSdk {
         let selection = wallet_selection(request.selection)?;
 
         let (input_weight, output_script) = funding_kind_params(&request.funding_kind)?;
-        let context = self.spark_wallet.load_exit_context(selection).await?;
+        let mut context = self.spark_wallet.load_exit_context(selection).await?;
 
         // Ask the chain what these leaves have already done before pricing them,
         // so a leaf part-way out is quoted on the work it has left rather than on
@@ -85,6 +85,9 @@ impl BreezSdk {
             &refund_addresses,
         )
         .await?;
+        // A leaf whose exit already finished is not exited again, whether named or
+        // not; `exit_chain_state` still reports it as swept or stopped.
+        context.drop_finished_leaves(&exit_chain_state);
 
         let quote = self.spark_wallet.quote_unilateral_exit(
             &context,

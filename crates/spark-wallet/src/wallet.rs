@@ -67,8 +67,8 @@ use spark::{
         AutoOptimizationEvent, AutoOptimizationEventHandler, ExitChainResolver, InMemoryTreeStore,
         LeafOptimizer, LeafPedigree, LeafSelection, OptimizationError, OptimizationOutcome,
         ReservationPurpose, SelectLeavesOptions, SynchronousTreeService, TargetAmounts, TreeNode,
-        TreeNodeId, TreeService, TreeStore, chain_reaches_root, select_leaves_by_target_amounts,
-        with_reserved_leaves,
+        TreeNodeId, TreeNodeStatus, TreeService, TreeStore, chain_reaches_root,
+        select_leaves_by_target_amounts, with_reserved_leaves,
     },
     utils::paging::{PagingFilter, PagingResult},
 };
@@ -331,6 +331,26 @@ pub struct ExitContext {
     pub leaf_ids: Vec<TreeNodeId>,
     pub filter: UnilateralExitLeafFilter,
     pub tree_nodes: HashMap<TreeNodeId, TreeNode>,
+}
+
+impl ExitContext {
+    /// Leaves out every leaf whose exit already finished. Under `ProfitableOnly` it
+    /// also leaves out one the operators report exited whose chain could not be
+    /// read: it may already be swept, so it waits for a quote that can read it.
+    pub fn drop_finished_leaves(&mut self, on_chain: &ExitChainState) {
+        let tree_nodes = &self.tree_nodes;
+        let profitable_only = self.filter == UnilateralExitLeafFilter::ProfitableOnly;
+        self.leaf_ids.retain(|leaf_id| {
+            if on_chain.is_finished(leaf_id) {
+                return false;
+            }
+            let maybe_swept = on_chain.unverified_nodes.contains(leaf_id)
+                && tree_nodes
+                    .get(leaf_id)
+                    .is_some_and(|leaf| leaf.status != TreeNodeStatus::Available);
+            !(profitable_only && maybe_swept)
+        });
+    }
 }
 
 pub struct SparkWallet {
@@ -4139,6 +4159,68 @@ mod tests {
 
         let reexport = restored.export_exit_state().await.unwrap();
         assert_eq!(chain_ids(&reexport.pedigrees), chain_ids(&export.pedigrees));
+    }
+
+    /// A leaf whose exit finished (swept, or stopped with no refund) is left out
+    /// under either filter, and one with a refund still to sweep is kept. Under
+    /// `ProfitableOnly` an exited leaf whose chain could not be read is left out
+    /// too, while an available one is kept.
+    #[test]
+    fn exit_context_drops_finished_leaves() {
+        use spark::services::{ExitRefund, ExitRefundState};
+
+        let id = |s: &str| TreeNodeId::from_str(s).unwrap();
+        let nodes = [
+            ("swept", TreeNodeStatus::Exited),
+            ("stopped", TreeNodeStatus::Available),
+            ("adopted", TreeNodeStatus::Exited),
+            ("unread_exited", TreeNodeStatus::Exited),
+            ("unread_available", TreeNodeStatus::Available),
+        ]
+        .map(|(leaf_id, status)| create_test_node_with_parent(leaf_id, None, status));
+        let leaf_ids: Vec<TreeNodeId> = nodes.iter().map(|node| node.id.clone()).collect();
+        let tree_nodes: HashMap<TreeNodeId, TreeNode> = nodes
+            .into_iter()
+            .map(|node| (node.id.clone(), node))
+            .collect();
+        let on_chain = ExitChainState {
+            refunds: vec![
+                ExitRefund {
+                    leaf_id: id("swept"),
+                    state: ExitRefundState::Swept,
+                },
+                ExitRefund {
+                    leaf_id: id("adopted"),
+                    state: ExitRefundState::OnChain {
+                        tx: create_test_tree_node("refund", 0).node_tx,
+                        vout: 0,
+                        value: 1_000,
+                        block_height: None,
+                    },
+                },
+            ],
+            stopped_leaves: vec![id("stopped")],
+            unverified_nodes: vec![id("unread_exited"), id("unread_available")],
+            ..Default::default()
+        };
+        let kept = |filter| {
+            let mut context = ExitContext {
+                leaf_ids: leaf_ids.clone(),
+                filter,
+                tree_nodes: tree_nodes.clone(),
+            };
+            context.drop_finished_leaves(&on_chain);
+            context.leaf_ids
+        };
+
+        assert_eq!(
+            kept(UnilateralExitLeafFilter::ProfitableOnly),
+            vec![id("adopted"), id("unread_available")]
+        );
+        assert_eq!(
+            kept(UnilateralExitLeafFilter::All),
+            vec![id("adopted"), id("unread_exited"), id("unread_available")]
+        );
     }
 
     #[test]
