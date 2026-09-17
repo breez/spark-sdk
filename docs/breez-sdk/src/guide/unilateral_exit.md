@@ -91,7 +91,7 @@ Two rules keep an exit from ever costing more than it returns:
 
 If the single-UTXO total is not worth it, either fund per branch, or narrow the set: re-quote with {{#enum ExitLeafSelection::Specific}} naming only the higher-value leaves (dropping the marginal ones removes their cost and can turn the total positive), or wait for a lower fee rate.
 
-If nothing is selected (under {{#enum ExitLeafSelection::Auto}} no leaf is worth exiting at the given fee rate, or there is nothing to exit) the response comes back empty rather than as an error. Check {{#name leaves}} before gathering funding.
+If nothing is selected (under {{#enum ExitLeafSelection::Auto}} no leaf is worth exiting at the given fee rate, the leaves' exits already finished, or there is nothing to exit) the response comes back empty rather than as an error. Check {{#name leaves}} before gathering funding.
 
 {{#tabs unilateral_exit:prepare-unilateral-exit}}
 
@@ -215,7 +215,7 @@ Three things send you back to {{#name prepare_unilateral_exit}} and {{#name unil
 
 Name the leaves with {{#enum ExitLeafSelection::Specific}} rather than {{#enum ExitLeafSelection::Auto}} both times, taking the ids from your stored response. This is the dependable way to pick an exit back up, including a leaf still waiting out its refund timelock.
 
-Both calls read the chain, so both price only what is left. A leaf far enough along stays worth exiting under {{#enum ExitLeafSelection::Auto}} even when a fresh exit of it would not be.
+Both calls read the chain, so both price only what is left. A leaf far enough along stays worth exiting under {{#enum ExitLeafSelection::Auto}} even when a fresh exit of it would not be. A leaf whose refund was already swept has nothing left to exit, so both selections leave it out, and {{#name exit_chain_state}} shows its refund swept.
 
 ## Back up the exit data
 
@@ -243,7 +243,7 @@ An out of date value can restore leaves that have since been spent, so the balan
 
 | Problem | Cause | Solution |
 |---------|-------|----------|
-| {{#name prepare_unilateral_exit}} returns no {{#name leaves}} | Under {{#enum ExitLeafSelection::Auto}}, no leaf is worth exiting at the current rate | Lower {{#name fee_rate_sat_per_vbyte}} or wait for cheaper on-chain fees (this is not an error) |
+| {{#name prepare_unilateral_exit}} returns no {{#name leaves}} | Under {{#enum ExitLeafSelection::Auto}}, no leaf is worth exiting at the current rate, or the leaves' exits already finished | Lower {{#name fee_rate_sat_per_vbyte}} or wait for cheaper on-chain fees. A finished exit has nothing left to recover (this is not an error) |
 | A leaf you are mid-exit on is missing from a new {{#enum ExitLeafSelection::Auto}} quote | The new quote reselected leaves instead of naming them | Quote with {{#enum ExitLeafSelection::Specific}}, naming the leaves from your stored response |
 | {{#name check_unilateral_exit}} returns {{#enum UnilateralExitVerdict::Redo}} | Something on-chain no longer matches the transactions you hold | Quote and build again, naming the same leaves; see [Starting over](#starting-over) |
 | The exit has stopped confirming | On-chain fees rose above what its transactions pay | Quote and build again at a higher {{#name fee_rate_sat_per_vbyte}}; see [Starting over](#starting-over) |

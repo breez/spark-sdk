@@ -30,7 +30,7 @@ use breez_sdk_itest::{
 };
 use breez_sdk_spark::signer::{CpfpSigner, single_key_cpfp_signer};
 use breez_sdk_spark::{
-    CheckUnilateralExitRequest, CpfpFundingKind, CpfpInput, ExitLeafSelection,
+    CheckUnilateralExitRequest, CpfpFundingKind, CpfpInput, ExitLeafSelection, ExitRefundState,
     ExitTransactionStatus, ImportUnilateralExitStateRequest, PrepareUnilateralExitRequest,
     PrepareUnilateralExitResponse, SdkError, UnilateralExitRequest, UnilateralExitResponse,
     UnilateralExitTransaction, UnilateralExitTxKind, UnilateralExitVerdict,
@@ -675,13 +675,9 @@ async fn test_full_exit_and_sweep(#[case] backend: SignerBackend) -> Result<()> 
 }
 
 /// Re-running a completed exit re-drives nothing, and says so rather than going
-/// quiet. `Auto` drops the exited leaf from the available set once the exit is
-/// mined, but it is still sourceable by id, so forcing it back in with `Specific`
-/// runs the build rather than the empty-plan early return. The refund and the
-/// sweep that spent it come back `Confirmed` and carry no CPFP child: there is
-/// nothing left to broadcast. Reporting them is what lets a caller tell a
-/// finished exit from one that never started, rather than inferring it from
-/// their absence.
+/// quiet. The swept leaf is left out even when named by id, and the quote's
+/// `exit_chain_state` shows its refund swept: that is what tells a finished exit
+/// from one that never started.
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
 async fn test_completed_exit_rerun_builds_nothing(#[case] backend: SignerBackend) -> Result<()> {
@@ -699,8 +695,7 @@ async fn test_completed_exit_rerun_builds_nothing(#[case] backend: SignerBackend
             selection: ExitLeafSelection::Auto,
         })
         .await?;
-    // The wallet drops the leaf from its available set once the exit is mined, so
-    // capture its id now to force it back in on the retry.
+    // Captured before the quote is moved, to name the leaf on the retry.
     let exited_leaf_ids: Vec<String> = quote.leaves.iter().map(|l| l.leaf_id.clone()).collect();
     let built = sdk
         .sdk
@@ -713,49 +708,71 @@ async fn test_completed_exit_rerun_builds_nothing(#[case] backend: SignerBackend
         )
         .await?;
     assert_all_mined(&sdk, &built, &destination).await?;
-    let recoverable = built.recoverable_value_sat;
 
-    // The first pass spent the CPFP UTXO chain, so fund a fresh one for the retry.
-    let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(CPFP_SATS)).await?;
+    // The wallet still holds the exited leaf, but its value has been delivered, so
+    // a new exit covers only what arrived since.
+    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+    let requote = sdk
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: destination.to_string(),
+            selection: ExitLeafSelection::Auto,
+        })
+        .await?;
+    assert_eq!(
+        requote.recoverable_value_sat, LEAF_SATS,
+        "only the new deposit is recoverable, not the swept leaf on top"
+    );
+    assert!(
+        requote
+            .leaves
+            .iter()
+            .all(|l| !exited_leaf_ids.contains(&l.leaf_id)),
+        "a swept leaf is not quoted again"
+    );
+
     let rerun_quote = sdk
         .sdk
         .prepare_unilateral_exit(PrepareUnilateralExitRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: CpfpFundingKind::P2tr,
-            destination: cpfp.address.to_string(),
+            destination: destination.to_string(),
             selection: ExitLeafSelection::Specific {
-                leaf_ids: exited_leaf_ids,
+                leaf_ids: exited_leaf_ids.clone(),
             },
         })
         .await?;
+    assert!(
+        rerun_quote.leaves.is_empty(),
+        "a swept leaf is left out even when named: {:?}",
+        rerun_quote.leaves
+    );
+    assert!(
+        exited_leaf_ids.iter().all(|leaf_id| {
+            rerun_quote
+                .exit_chain_state
+                .refunds
+                .iter()
+                .any(|r| r.leaf_id == *leaf_id && matches!(r.state, ExitRefundState::Swept))
+        }),
+        "the quote shows the named leaf's refund swept: {:?}",
+        rerun_quote.exit_chain_state.refunds
+    );
     let rerun = sdk
         .sdk
         .unilateral_exit(
             UnilateralExitRequest {
                 prepared: rerun_quote,
-                funding_inputs: vec![cpfp_input(&cpfp)],
+                funding_inputs: Vec::new(),
             },
             signer_for(&cpfp.secret_key.secret_bytes())?,
         )
         .await?;
-
-    // The leaf is re-selected (recoverable value is unchanged), so the build ran
-    // rather than the empty-plan early return, yet it rebuilds no refund and
-    // re-attempts no sweep: the swept refund was recognized.
-    assert_eq!(
-        rerun.recoverable_value_sat, recoverable,
-        "the forced-in leaf is re-selected, so the build runs the swept-refund path"
-    );
     assert!(
-        rerun.transactions.iter().all(|t| !matches!(
-            t.kind,
-            UnilateralExitTxKind::Refund | UnilateralExitTxKind::Sweep
-        )),
-        "a completed exit rebuilds no refund and re-attempts no sweep"
-    );
-    assert!(
-        rerun.transactions.iter().all(|t| t.cpfp_tx_hex.is_none()),
-        "no fresh CPFP child: nothing needs broadcasting on a completed exit"
+        rerun.leaves.is_empty() && rerun.transactions.is_empty(),
+        "an empty quote builds nothing and needs no funding"
     );
 
     // Whether it finished is asked of the exit that was built, not read off one

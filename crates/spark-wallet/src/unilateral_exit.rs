@@ -1117,9 +1117,10 @@ fn interpret_refund(
         }
         _ => return,
     };
-    // The refund address receives exactly one output (the landed variant); no
-    // confirmed one means the refund is not on-chain yet.
-    let Some(txo) = txos.iter().find(|t| t.confirmed) else {
+    // Only one refund variant lands, but once it has the address is public and a
+    // later payment to it is listed first, so the refund is the largest confirmed
+    // output. No confirmed output means the refund is not on-chain yet.
+    let Some(txo) = txos.iter().filter(|t| t.confirmed).max_by_key(|t| t.value) else {
         return;
     };
     let refund_outpoint = OutPoint {
@@ -3447,11 +3448,25 @@ mod interpret_tests {
             txid: refund_txid,
             vout: 0,
         };
-        // The refund is confirmed and spent by a confirmed sweep: fully done.
+        // The refund is confirmed and spent by a confirmed sweep: fully done, even
+        // with a later payment to the address listed ahead of it.
+        let mut scan = refund_scan(&leaf_id, refund_txid, 42_000);
+        if let ChainResult::AddressUtxos(txos) = &mut scan.result {
+            txos.insert(
+                0,
+                AddressUtxo {
+                    txid: Txid::from_byte_array([9u8; 32]),
+                    vout: 0,
+                    value: 330,
+                    confirmed: true,
+                    block_height: None,
+                },
+            );
+        }
         let observed = vec![
             spent(deposit, root_txid),
             spent(leaf_parent_out, leaf_cpfp_txid),
-            refund_scan(&leaf_id, refund_txid, 42_000),
+            scan,
             spent(refund_outpoint, Txid::from_byte_array([7u8; 32])),
         ];
         let interp = interpret_chain(&prepared, &observed);

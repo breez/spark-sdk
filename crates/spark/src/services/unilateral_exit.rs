@@ -150,6 +150,17 @@ impl ExitChainState {
     pub fn has_refund(&self, leaf_id: &TreeNodeId) -> bool {
         self.refunds.iter().any(|refund| refund.leaf_id == *leaf_id)
     }
+
+    /// Whether nothing is left of this leaf's exit: its refund was swept, or its
+    /// branch was taken by a spend the exit cannot continue from and no refund
+    /// surfaced.
+    #[must_use]
+    pub fn is_finished(&self, leaf_id: &TreeNodeId) -> bool {
+        match self.refunds.iter().find(|r| r.leaf_id == *leaf_id) {
+            Some(refund) => matches!(refund.state, ExitRefundState::Swept),
+            None => self.stopped_leaves.contains(leaf_id),
+        }
+    }
 }
 
 /// Whether a leaf has nothing left to build: every node of its chain is on-chain
@@ -656,7 +667,7 @@ pub fn evaluate_unilateral_exit_leaf_costs(
     for (leaf_id, leaf) in &leaves {
         // No status gate here on purpose. A leaf's status is the operators' label
         // for it, not the state of its output: an already-exited leaf still has to
-        // be selectable so a re-run resolves it as swept and drives nothing, and a
+        // be selectable so a re-run can pick up the exit where it left off, and a
         // locked or degraded one is still perfectly exitable from its stored
         // transactions. What can and cannot be driven is settled by the on-chain
         // observation, which sees the real spends.
@@ -1826,8 +1837,7 @@ mod tests {
         /// Selection never consults the status. Gating on the operators' label used
         /// to strand a `TransferLocked` or `Lost` leaf whose pre-signed refund was
         /// still perfectly broadcastable, and an already-`Exited` one has to stay
-        /// selectable too so re-running a finished exit can resolve it as swept
-        /// instead of failing.
+        /// selectable too so re-running an exit part-way out picks it back up.
         #[test_all]
         fn selects_leaf_in_any_status() {
             for status in [
