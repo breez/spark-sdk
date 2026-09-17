@@ -7,8 +7,7 @@ use crate::{
     models::Payment,
     utils::{
         payments::{
-            SettledInvoiceLookup, fetch_and_process_payment, insert_payment_with_metadata,
-            resolve_spark_settled_bolt11,
+            fetch_and_process_payment, insert_payment_with_metadata, resolve_spark_settled_bolt11,
         },
         polling::{PollSchedule, poll_until},
     },
@@ -63,13 +62,7 @@ pub(super) async fn wait_for_incoming_payment(
 pub(super) async fn finalize_payment(sdk: &BreezSdk, mut payment: Payment) -> bool {
     // Must run first: the metadata below is keyed on the Bolt11 invoice, which a
     // Spark-settled payment only carries once this has attributed it.
-    resolve_spark_settled_bolt11(
-        &sdk.spark_wallet,
-        &sdk.storage,
-        &mut payment,
-        SettledInvoiceLookup::Remote,
-    )
-    .await;
+    resolve_spark_settled_bolt11(&sdk.storage, &mut payment).await;
 
     // No-op for non-Lightning-receive payments; for LNURL receives
     // this pulls the LNURL metadata into the payment record.

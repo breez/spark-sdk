@@ -27,8 +27,7 @@ use crate::{
     events::EventEmitter,
     persist::ObjectCacheRepository,
     utils::payments::{
-        SettledInvoiceLookup, record_payment_update, record_spark_settled_bolt11_send,
-        resolve_spark_settled_bolt11,
+        record_payment_update, record_spark_settled_bolt11_send, resolve_spark_settled_bolt11,
     },
 };
 
@@ -338,13 +337,7 @@ impl LightningSender {
     ) -> Result<Payment, SdkError> {
         let mut payment: Payment = transfer.try_into()?;
         record_spark_settled_bolt11_send(&self.storage, &payment.id, invoice).await;
-        resolve_spark_settled_bolt11(
-            &self.spark_wallet,
-            &self.storage,
-            &mut payment,
-            SettledInvoiceLookup::Local,
-        )
-        .await;
+        resolve_spark_settled_bolt11(&self.storage, &mut payment).await;
         Ok(payment)
     }
 

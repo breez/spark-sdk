@@ -24,19 +24,6 @@ use crate::{
     utils::token::token_transaction_to_payments,
 };
 
-/// How far [`resolve_spark_settled_bolt11`] goes for the Spark invoice a
-/// transfer settled.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SettledInvoiceLookup {
-    /// Take the transfer as the caller holds it.
-    ///
-    /// For a caller holding the transfer as the operators returned it, complete
-    /// with the invoice it settled.
-    Local,
-    /// Re-read the transfer when the caller's copy carries no invoice.
-    Remote,
-}
-
 /// Reports a Spark transfer that settled a Bolt11 invoice as that invoice being
 /// paid, rather than as a bare Spark payment.
 ///
@@ -50,15 +37,11 @@ pub(crate) enum SettledInvoiceLookup {
 /// Leaves the payment untouched when neither is found: it is still a correct
 /// Spark payment for the right amount, just not tied to the invoice it settled.
 pub(crate) async fn resolve_spark_settled_bolt11(
-    spark_wallet: &SparkWallet,
     storage: &Arc<dyn Storage>,
     payment: &mut Payment,
-    lookup: SettledInvoiceLookup,
 ) {
     let bolt11 = match payment.payment_type {
-        PaymentType::Receive => {
-            settled_bolt11_for_receive(spark_wallet, storage, payment, lookup).await
-        }
+        PaymentType::Receive => settled_bolt11_for_receive(storage, payment).await,
         PaymentType::Send => settled_bolt11_for_send(storage, payment).await,
     };
     let Some(bolt11) = bolt11 else {
@@ -140,10 +123,7 @@ pub(crate) async fn record_spark_settled_bolt11_receive(
         bolt11: bolt11.to_string(),
         expires_at: spark_invoice_expiry_secs(spark_invoice),
     };
-    storage.set_spark_settled_bolt11_receive(receive).await?;
-    ObjectCacheRepository::new(Arc::clone(storage))
-        .mark_spark_settled_bolt11_receives()
-        .await
+    storage.set_spark_settled_bolt11_receive(receive).await
 }
 
 /// How long past its expiry a [`SparkSettledBolt11Receive`] is kept, for a
@@ -166,71 +146,27 @@ pub(crate) async fn prune_expired_spark_settled_bolt11_receives(
 }
 
 /// The Bolt11 an incoming Spark transfer settled.
+///
+/// The transfer names the Spark invoice it paid, and the row left behind when
+/// the Bolt11 was minted maps that invoice back to it.
 async fn settled_bolt11_for_receive(
-    spark_wallet: &SparkWallet,
     storage: &Arc<dyn Storage>,
     payment: &Payment,
-    lookup: SettledInvoiceLookup,
 ) -> Option<String> {
-    let spark_invoice = settled_spark_invoice(spark_wallet, storage, payment, lookup).await?;
+    let Some(PaymentDetails::Spark {
+        invoice_details: Some(invoice_details),
+        ..
+    }) = &payment.details
+    else {
+        return None;
+    };
     storage
-        .get_spark_settled_bolt11_receive(spark_invoice_digest(&spark_invoice))
+        .get_spark_settled_bolt11_receive(spark_invoice_digest(&invoice_details.invoice))
         .await
         .inspect_err(|e| error!("Failed to read the Spark-settled Bolt11 receive: {e:?}"))
         .ok()
         .flatten()
         .map(|receive| receive.bolt11)
-}
-
-/// The Spark invoice a received transfer settled.
-///
-/// The claim event never carries it: upstream's `buildTransferEvent`
-/// (buildonspark/spark, `spark/so/stream/event_handler.go`) queries the transfer
-/// without eager-loading the invoice edge, which then marshals as empty rather
-/// than erroring. The operator query the sync uses does load it, so
-/// [`SettledInvoiceLookup::Remote`] re-reads the transfer, and only for a wallet
-/// that has minted such a Bolt11: for any other, an incoming transfer with no
-/// invoice on it simply has none.
-async fn settled_spark_invoice(
-    spark_wallet: &SparkWallet,
-    storage: &Arc<dyn Storage>,
-    payment: &Payment,
-    lookup: SettledInvoiceLookup,
-) -> Option<String> {
-    match &payment.details {
-        Some(PaymentDetails::Spark {
-            invoice_details: Some(invoice_details),
-            ..
-        }) => return Some(invoice_details.invoice.clone()),
-        Some(PaymentDetails::Spark {
-            invoice_details: None,
-            htlc_details: None,
-            ..
-        }) => {}
-        _ => return None,
-    }
-
-    if lookup == SettledInvoiceLookup::Local {
-        return None;
-    }
-    let cache = ObjectCacheRepository::new(Arc::clone(storage));
-    if !cache
-        .has_spark_settled_bolt11_receives()
-        .await
-        .unwrap_or(false)
-    {
-        return None;
-    }
-    let transfer_id = TransferId::from_str(&payment.id).ok()?;
-    let mut transfers = spark_wallet
-        .list_transfers(ListTransfersRequest {
-            transfer_ids: vec![transfer_id],
-            paging: None,
-        })
-        .await
-        .inspect_err(|e| warn!("Failed to re-read a claimed transfer: {e:?}"))
-        .ok()?;
-    transfers.items.pop()?.spark_invoice
 }
 
 /// Insert a payment through the storage status guard and emit when requested

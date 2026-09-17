@@ -472,9 +472,6 @@ impl SyncedRecordHandler {
         self.storage
             .set_spark_settled_bolt11_receive(receive.clone())
             .await?;
-        ObjectCacheRepository::new(Arc::clone(&self.storage))
-            .mark_spark_settled_bolt11_receives()
-            .await?;
 
         // Nothing indexes payments by the Spark invoice they settled, so the
         // candidates are narrowed by when one could have: between the invoice
@@ -1712,8 +1709,6 @@ mod tests {
                 .map(|receive| receive.bolt11),
             Some(TEST_BOLT11.to_string())
         );
-        let cache = ObjectCacheRepository::new(Arc::clone(&storage));
-        assert!(cache.has_spark_settled_bolt11_receives().await.unwrap());
     }
 
     #[tokio::test]

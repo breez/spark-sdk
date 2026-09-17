@@ -44,7 +44,6 @@ const TX_CACHE_KEY: &str = "tx_cache";
 // Note: the key "static_deposit_address" may still exist in storage from older versions.
 const TOKEN_METADATA_KEY_PREFIX: &str = "token_metadata_";
 const PAYMENT_METADATA_KEY_PREFIX: &str = "payment_metadata";
-const HAS_SPARK_SETTLED_BOLT11_RECEIVES_KEY: &str = "has_spark_settled_bolt11_receives";
 
 /// The id of the [`SparkSettledBolt11Receive`] row for `spark_invoice`: a
 /// digest, since a Spark invoice runs to a few hundred characters and the
@@ -865,28 +864,6 @@ impl ObjectCacheRepository {
             Some(value) => Ok(Some(serde_json::from_str(&value)?)),
             None => Ok(None),
         }
-    }
-
-    /// Notes that this wallet has minted a Bolt11 that can settle over Spark.
-    pub(crate) async fn mark_spark_settled_bolt11_receives(&self) -> Result<(), StorageError> {
-        self.storage
-            .set_cached_item(
-                HAS_SPARK_SETTLED_BOLT11_RECEIVES_KEY.to_string(),
-                "true".to_string(),
-            )
-            .await
-    }
-
-    /// Whether this wallet has minted a Bolt11 that can settle over Spark.
-    ///
-    /// Answers whether an incoming transfer is worth a second look, so a wallet
-    /// that never issues such invoices pays nothing for the feature.
-    pub(crate) async fn has_spark_settled_bolt11_receives(&self) -> Result<bool, StorageError> {
-        Ok(self
-            .storage
-            .get_cached_item(HAS_SPARK_SETTLED_BOLT11_RECEIVES_KEY.to_string())
-            .await?
-            .is_some())
     }
 
     pub(crate) async fn save_payment_metadata(

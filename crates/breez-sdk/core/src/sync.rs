@@ -10,7 +10,7 @@ use crate::{
     EventEmitter, Payment, PaymentDetails, PaymentStatus, SdkError, Storage,
     persist::{CachedSyncInfo, ObjectCacheRepository, StorageListPaymentsRequest},
     utils::{
-        payments::{SettledInvoiceLookup, record_payment_update, resolve_spark_settled_bolt11},
+        payments::{record_payment_update, resolve_spark_settled_bolt11},
         token::{token_transaction_to_payments, token_tx_inputs_are_ours},
     },
 };
@@ -86,13 +86,7 @@ impl SparkSyncService {
             for transfer in &transfers_response.items {
                 // Create a payment record
                 let mut payment: Payment = transfer.clone().try_into()?;
-                resolve_spark_settled_bolt11(
-                    &self.spark_wallet,
-                    &self.storage,
-                    &mut payment,
-                    SettledInvoiceLookup::Local,
-                )
-                .await;
+                resolve_spark_settled_bolt11(&self.storage, &mut payment).await;
                 // Apply any payment metadata for the payment
                 if let Err(e) = self.apply_payment_metadata(&payment).await {
                     error!(
@@ -205,13 +199,7 @@ impl SparkSyncService {
             if payment.status == PaymentStatus::Pending {
                 continue;
             }
-            resolve_spark_settled_bolt11(
-                &self.spark_wallet,
-                &self.storage,
-                &mut payment,
-                SettledInvoiceLookup::Local,
-            )
-            .await;
+            resolve_spark_settled_bolt11(&self.storage, &mut payment).await;
 
             info!(
                 "Reconciliation: payment {} status changed from Pending to {:?}",
