@@ -1283,11 +1283,28 @@ class IndexedDBStorage {
                 onFound(undefined);
                 return;
               }
-              const bySparkInvoice = paymentStore
+              // The payer's transfer carries the Spark invoice it paid, so a
+              // send matches this receive row too. Such a payment reports its
+              // own row's Bolt11, which is not the one asked for or the lookup
+              // above would have found it, so skip it.
+              const candidates = paymentStore
                 .index("sparkInvoice")
-                .get(byReceive.result.sparkInvoice);
-              bySparkInvoice.onsuccess = () => onFound(bySparkInvoice.result);
-              bySparkInvoice.onerror = () => onFound(undefined);
+                .getAll(byReceive.result.sparkInvoice);
+              candidates.onsuccess = () => {
+                const rows = candidates.result || [];
+                const pick = (index) => {
+                  if (index >= rows.length) {
+                    onFound(undefined);
+                    return;
+                  }
+                  const ownSend = sparkSettledSendsStore.get(rows[index].id);
+                  ownSend.onsuccess = () =>
+                    ownSend.result ? pick(index + 1) : onFound(rows[index]);
+                  ownSend.onerror = () => onFound(undefined);
+                };
+                pick(0);
+              };
+              candidates.onerror = () => onFound(undefined);
             };
             byReceive.onerror = () => onFound(undefined);
           };

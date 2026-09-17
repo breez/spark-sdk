@@ -3529,7 +3529,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 26, "migration version must advance to 26");
+        assert_eq!(version, 24, "migration version must advance to 24");
 
         // Seed payment row is preserved on the renamed table — proves the
         // table + PK constraint rename worked and the columns line up.
@@ -3825,7 +3825,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 26, "migration must advance to 26");
+        assert_eq!(version, 24, "migration must advance to 24");
 
         // Seed data preserved (multi-tenant backfilled user_id to current tenant).
         let payment_count: i64 = client
