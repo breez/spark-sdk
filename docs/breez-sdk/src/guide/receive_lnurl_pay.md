@@ -6,31 +6,34 @@ A Lightning address is a human-readable identifier formatted like an email addre
 
 ## Configuring a custom domain
 
-To use Lightning addresses with the Breez SDK, you first need to supply a domain. There are two options:
+To use Lightning addresses with the Breez SDK, you need a domain served by an LNURL server. You can either [use the LNURL server hosted by Breez](#using-the-breez-lnurl-server) or [run your own LNURL server](#running-your-own-lnurl-server).
 
-1. **Use a hosted LNURL server**: You can have your custom domain configured to an LNURL server run by Breez.
-2. **Self-hosted LNURL server**: You can run your own [LNURL server](https://github.com/breez/spark-sdk/tree/main/crates/breez-sdk/lnurl) in a self-hosted environment.
+### Using the Breez LNURL server
 
-In case you choose to point your domain to a hosted LNURL server, you will need to add a CNAME record in your domain's DNS settings.
+#### Step 1: Point your domain to the Breez LNURL server
 
-> **Note:**: If you're using Cloudflare, make sure the CNAME record is set to 'DNS only' (not 'Proxied').
+Add a CNAME record in your domain's DNS settings. You can use your root domain or a subdomain:
 
-**Option 1: Using your domain without any subdomain**
+| | Root domain | Subdomain |
+|---|---|---|
+| **Example address** | `user@yourdomain.com` | `user@pay.yourdomain.com` |
+| **Host/Name** | `@` | `pay` (or another prefix like `tip` or `donate`) |
+| **Type** | CNAME (or ALIAS if available) | CNAME |
+| **Value/Target** | `breez.tips` | `breez.tips` |
 
-This points yourdomain.com directly to the LNURL server. Some DNS providers do not support this method. If yours doesn't support CNAME or ALIAS records for the root domain, you will need to configure your domain at the registrar level to use an external DNS provider (like Google Cloud DNS).
-* **Host/Name**: @
-* **Type**: CNAME (or ALIAS if available)
-* **Value/Target**: breez.tips
+Some DNS providers do not support CNAME or ALIAS records on the root domain. If yours doesn't, either use a subdomain or configure your domain at the registrar level to use an external DNS provider (like Google Cloud DNS).
 
-**Option 2: Using a subdomain**
-This points a subdomain like pay.yourdomain.com to the LNURL server.
-* **Host/Name**: pay (or your chosen prefix like payment, tip, donate)
-* **Type**: CNAME
-* **Value/Target**: breez.tips
+> **Note:** If you're using Cloudflare, make sure the CNAME record is set to 'DNS only' (not 'Proxied').
+
+#### Step 2: Register your domain with Breez
 
 [Send us](mailto:contact@breez.technology) your domain name (e.g., yourdomain.com or pay.yourdomain.com), together with the Breez API key you want the LNURL payments on that domain to be associated with.
 
 We will verify and add it to our list of allowed domains.
+
+### Running your own LNURL server
+
+Alternatively, you can run the [LNURL server](https://github.com/breez/spark-sdk/tree/main/crates/breez-sdk/lnurl) yourself. In that case, point your domain to your own server and add it to the server's allowed domains. The steps above do not apply, and there is no need to contact Breez. See the server's README for how to build, configure and run it.
 
 ## Configuring Lightning addresses for users
 
