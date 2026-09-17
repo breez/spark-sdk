@@ -109,6 +109,16 @@ const exampleImportExitState = async (sdk: BreezSdk, exitState: string) => {
   // ANCHOR_END: import-unilateral-exit-state
 }
 
+const exampleSyncExitData = async (sdk: BreezSdk) => {
+  // ANCHOR: sync-exit-data
+  // With automatic collection off, an explicit sync is what collects the data
+  // a unilateral exit needs, and it waits for the collection to finish. Needs
+  // the Spark operators reachable, so run it on a schedule rather than at the
+  // moment an exit is needed.
+  await sdk.syncWallet({})
+  // ANCHOR_END: sync-exit-data
+}
+
 // ANCHOR: custom-cpfp-signer
 class CustomCpfpSigner {
   signPsbt = async (psbtBytes: ArrayBuffer): Promise<ArrayBuffer> => {

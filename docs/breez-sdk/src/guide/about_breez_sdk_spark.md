@@ -29,7 +29,7 @@ It’s a nodeless integration that offers a non-custodial, end-to-end solution f
 - [x] WebAssembly support
 - [x] Compatible with external signers
 - [x] Full Turnkey integration including client-side signing
-- [x] Multi-user server mode
+- [x] Multi-user server deployments
 - [x] Free open-source solution
 
 ## Pricing

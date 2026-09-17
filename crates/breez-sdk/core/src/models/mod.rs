@@ -723,15 +723,20 @@ pub struct Config {
     pub prefer_spark_over_lightning: bool,
 
     /// Whether the data needed to exit a payment unilaterally, without the Spark
-    /// operators, is collected as funds arrive. Collection runs in the background,
-    /// and a sync waits for a collection pass before returning, so syncing is how
-    /// to make that happen at a moment of your choosing. A leaf the operators
-    /// cannot complete stays un-exitable until a later attempt succeeds.
+    /// operators, is collected automatically as funds arrive. Collection runs in
+    /// the background, after an operation rather than during it. A leaf the
+    /// operators cannot complete stays un-exitable until a later attempt
+    /// succeeds.
     ///
-    /// Leave this on unless bandwidth matters more than being able to recover funds
-    /// when the operators are unreachable. With it off, chains are only collected
-    /// when an exit is prepared, which needs the operators reachable at that
-    /// moment: a leaf cannot be exited without them until one is collected.
+    /// Turn it off when collecting behind every operation costs more than it is
+    /// worth, on a busy wallet holding many leaves. `sync_wallet` collects
+    /// regardless of this flag, and waits for the pass before returning, so an
+    /// explicit sync on a cadence of your choosing is how the data is kept
+    /// current with the automatic collection off.
+    ///
+    /// Only that automatic collection is governed, so this has no effect at all
+    /// where none runs: with `background_tasks_enabled` off there is no
+    /// background collector, and every sync is an explicit one.
     ///
     /// Default value is true.
     pub exit_chain_auto_fetch_enabled: bool,

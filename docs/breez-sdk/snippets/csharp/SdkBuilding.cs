@@ -234,6 +234,40 @@ namespace BreezSdkSnippets
             // ANCHOR_END: init-sdk-server
         }
 
+        async Task InitSdkTreasury()
+        {
+            // ANCHOR: init-sdk-treasury
+            // Construct the seed using a mnemonic, entropy or passkey
+            var mnemonic = "<mnemonic words>";
+            var seed = new Seed.Mnemonic(mnemonic: mnemonic, passphrase: null);
+
+            // A treasury wallet is an ordinary long-lived SDK instance, so start
+            // from DefaultConfig and keep background tasks on.
+            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            {
+                apiKey = "<breez api key>"
+            };
+
+            // Keeps user data in step across devices that each hold their own
+            // storage, which a server-side wallet has no use for.
+            config = config with { realTimeSyncServerUrl = null };
+
+            // Stays connected, and syncs cost more with more leaves, so it can
+            // afford a longer interval.
+            config = config with { syncIntervalSecs = 300U };
+
+            // Optional: on a treasury that pays often and holds many leaves,
+            // collecting unilateral exit data behind every operation adds up.
+            // Turn it off and sync on a cadence of your own instead: a sync
+            // collects regardless of this flag.
+            config = config with { exitChainAutoFetchEnabled = false };
+
+            var builder = new SdkBuilder(config: config, seed: seed);
+            await builder.WithDefaultStorage(storageDir: "./.data");
+            var sdk = await builder.Build();
+            // ANCHOR_END: init-sdk-treasury
+        }
+
         async Task ServerModeRequestHandler(BreezSdk sdk)
         {
             // ANCHOR: server-mode-request-handler

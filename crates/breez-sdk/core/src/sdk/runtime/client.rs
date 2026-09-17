@@ -29,10 +29,14 @@ use crate::sdk::{BreezSdk, SyncCoordinator, SyncRequest, SyncType, helpers::Bala
 
 pub(super) struct ClientRuntime;
 
-/// Collects the data a unilateral exit needs, in the background, whenever an
-/// operation has changed the leaf set. Started by the client runtime only, and
-/// only when the config asks for collection: server mode runs no background
-/// work, and there `sync_wallet` is what collects.
+/// Collects the data a unilateral exit needs, whenever an operation has changed
+/// the leaf set or a caller asks. Started by the client runtime only: server mode
+/// runs no background work, and there the collection happens on the calling task.
+///
+/// Started whatever the config says, so that an explicit `sync_wallet` is served
+/// the same way however collection is configured. What the config decides is what
+/// wakes it: with automatic collection off, only a sync does, and it does not
+/// sweep at startup.
 fn spawn_exit_chain_downloader(sdk: &BreezSdk) {
     let span = tracing::Span::current();
     tokio::spawn(
@@ -40,6 +44,7 @@ fn spawn_exit_chain_downloader(sdk: &BreezSdk) {
             sdk.exit_chain_trigger.clone(),
             Arc::clone(&sdk.spark_wallet) as Arc<dyn ExitChainSource>,
             sdk.shutdown_sender.subscribe(),
+            sdk.config.exit_chain_auto_fetch_enabled,
         )
         .instrument(span),
     );
@@ -70,9 +75,7 @@ impl RuntimeProfile for ClientRuntime {
         if let Some(stable_balance) = &sdk.stable_balance {
             stable_balance.spawn_conversion_worker(sdk.shutdown_sender.subscribe());
         }
-        if sdk.config.exit_chain_auto_fetch_enabled {
-            spawn_exit_chain_downloader(sdk);
-        }
+        spawn_exit_chain_downloader(sdk);
     }
 
     async fn run_user_sync(
@@ -289,10 +292,13 @@ async fn on_sync_request(
 async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
     match event {
         WalletEvent::LeavesAdded => {
-            // The single wake-up for exit chain collection: the wallet raises
-            // this wherever leaves enter the pool, so no operation here has to
-            // remember to.
-            sdk.exit_chain_trigger.trigger();
+            // The single automatic wake-up for exit chain collection: the wallet
+            // raises this wherever leaves enter the pool, so no operation here
+            // has to remember to. Turning automatic collection off leaves the
+            // downloader to an explicit `sync_wallet` alone.
+            if sdk.config.exit_chain_auto_fetch_enabled {
+                sdk.exit_chain_trigger.trigger();
+            }
             false
         }
         WalletEvent::DepositConfirmed(_) => {

@@ -3,7 +3,6 @@ import {
   SdkBuilder,
   Seed,
   defaultConfig,
-  defaultServerConfig,
   defaultSessionStore,
   defaultStorage,
   Network,
@@ -12,8 +11,7 @@ import {
   type ProvisionalPayment,
   type Credentials,
   type Session,
-  type SessionStore,
-  ReceivePaymentMethod
+  type SessionStore
 } from '@breeztech/breez-sdk-spark-react-native'
 import RNFS from 'react-native-fs'
 
@@ -117,67 +115,6 @@ const exampleWithSessionStore = async (identity: ArrayBuffer): Promise<SdkBuilde
   return builder
 }
 // ANCHOR_END: with-session-store
-
-const exampleInitSdkServer = async () => {
-  // ANCHOR: init-sdk-server
-  // Construct the seed using a mnemonic, entropy or passkey
-  const mnemonic = '<mnemonics words>'
-  const seed = new Seed.Mnemonic({ mnemonic, passphrase: undefined })
-
-  // Build a server-mode config: same as defaultConfig(network) with
-  // backgroundTasksEnabled = false. No periodic sync, no real-time sync
-  // client, no leaf/token optimizer, no flashnet refunder, no lightning-
-  // address recovery, no spark private-mode init.
-  const config = defaultServerConfig(Network.Mainnet)
-  config.apiKey = '<breez api key>'
-
-  // Typically server-mode SDKs are built per request and share infrastructure
-  // (DB pool, REST chain service, SSP/Connection Manager) across instances.
-  // Pass the shared resources via the builder.
-  const builder = new SdkBuilder(config, seed)
-  await builder.withDefaultStorage(`${RNFS.DocumentDirectoryPath}/data`)
-  const sdk = await builder.build()
-  // ANCHOR_END: init-sdk-server
-  return sdk
-}
-
-const exampleServerModeRequestHandler = async (sdk: BreezSdk) => {
-  // ANCHOR: server-mode-request-handler
-  // User-facing request handler: do not call syncWallet here. Operations
-  // that read from local storage (getInfo, listPayments, etc.) do not need
-  // a defensive sync. Call syncWallet only from webhook handlers or
-  // reconciliation jobs that need to observe an external state change.
-  const response = await sdk.receivePayment({
-    paymentMethod: new ReceivePaymentMethod.Bolt11Invoice({
-      description: '<invoice description>',
-      amountSats: BigInt(5_000),
-      expirySecs: 3600,
-      paymentHash: undefined,
-      receiverIdentityPublicKey: undefined
-    })
-  })
-
-  // Always disconnect at the end of the request lifecycle to flush
-  // outstanding storage writes.
-  await sdk.disconnect()
-  // ANCHOR_END: server-mode-request-handler
-  return response.paymentRequest
-}
-
-const exampleServerModeProvisioning = async (sdk: BreezSdk) => {
-  // ANCHOR: server-mode-provisioning
-  // One-time setup when a wallet is first registered. The client-mode SDK
-  // would normally apply the private-mode preset itself on first startup;
-  // server-mode SDKs do not, so opt in once here via updateUserSettings.
-  await sdk.updateUserSettings({
-    sparkPrivateModeEnabled: true,
-    stableBalanceActiveLabel: undefined,
-    sparkMasterIdentityPublicKey: undefined
-  })
-
-  await sdk.disconnect()
-  // ANCHOR_END: server-mode-provisioning
-}
 
 const exampleRefundPendingConversions = async (sdk: BreezSdk) => {
   // ANCHOR: refund-pending-conversions
