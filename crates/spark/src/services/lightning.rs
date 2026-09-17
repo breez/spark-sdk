@@ -598,7 +598,7 @@ impl LightningService {
             // first effectful step, and the invoice it pays exists nowhere server-side.
             Err(e) => {
                 self.transfer_service
-                    .recover_transfer_on_rpc_connection_error(transfer_id, e)
+                    .recover_committed_transfer(transfer_id, e)
                     .await?
             }
         };

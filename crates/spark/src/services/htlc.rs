@@ -114,7 +114,7 @@ impl HtlcService {
                 .try_into()?,
             Err(e) => {
                 self.transfer_service
-                    .recover_transfer_on_rpc_connection_error(&unwrapped_transfer_id, e)
+                    .recover_committed_transfer(&unwrapped_transfer_id, e)
                     .await?
             }
         };
