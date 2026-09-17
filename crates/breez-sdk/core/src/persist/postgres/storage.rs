@@ -533,6 +533,18 @@ impl PostgresStorage {
                 "CREATE INDEX IF NOT EXISTS brz_idx_spark_settled_bolt11_receives_user_expires_at
                     ON brz_spark_settled_bolt11_receives (user_id, expires_at)".to_string(),
             ],
+            // Migration 26: A payment reports as the Bolt11 it settled by joining
+            // these rows when it is read, so the row carries what the details
+            // need and the Spark row carries the key the receive side joins on.
+            vec![
+                "ALTER TABLE brz_spark_settled_bolt11_sends ADD COLUMN description TEXT".to_string(),
+                "ALTER TABLE brz_spark_settled_bolt11_sends ADD COLUMN destination_pubkey TEXT NOT NULL DEFAULT ''".to_string(),
+                "ALTER TABLE brz_spark_settled_bolt11_receives ADD COLUMN description TEXT".to_string(),
+                "ALTER TABLE brz_spark_settled_bolt11_receives ADD COLUMN destination_pubkey TEXT NOT NULL DEFAULT ''".to_string(),
+                "ALTER TABLE brz_payment_details_spark ADD COLUMN spark_invoice_digest TEXT".to_string(),
+                "CREATE INDEX IF NOT EXISTS brz_idx_payment_details_spark_invoice_digest
+                    ON brz_payment_details_spark (user_id, spark_invoice_digest)".to_string(),
+            ],
         ]
     }
 }
@@ -760,13 +772,17 @@ impl PostgresStorage {
                 if invoice_details.is_some() || htlc_details.is_some() {
                     let invoice_json = to_json_opt(invoice_details.as_ref())?;
                     let htlc_json = to_json_opt(htlc_details.as_ref())?;
+                    let spark_invoice_digest = invoice_details
+                        .as_ref()
+                        .map(|d| crate::persist::spark_invoice_digest(&d.invoice));
                     tx.execute(
-                        "INSERT INTO brz_payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
-                             VALUES ($1, $2, $3, $4)
+                        "INSERT INTO brz_payment_details_spark (user_id, payment_id, invoice_details, htlc_details, spark_invoice_digest)
+                             VALUES ($1, $2, $3, $4, $5)
                              ON CONFLICT(user_id, payment_id) DO UPDATE SET
                                 invoice_details = COALESCE(EXCLUDED.invoice_details, brz_payment_details_spark.invoice_details),
-                                htlc_details = COALESCE(EXCLUDED.htlc_details, brz_payment_details_spark.htlc_details)",
-                        &[&identity, &payment.id, &invoice_json, &htlc_json],
+                                htlc_details = COALESCE(EXCLUDED.htlc_details, brz_payment_details_spark.htlc_details),
+                                spark_invoice_digest = COALESCE(EXCLUDED.spark_invoice_digest, brz_payment_details_spark.spark_invoice_digest)",
+                        &[&identity, &payment.id, &invoice_json, &htlc_json, &spark_invoice_digest],
                     )
                     .await
                     .map_err(map_db_error)?;
@@ -1223,7 +1239,12 @@ impl Storage for PostgresStorage {
         // Capped because two payments can name the same invoice, a self-payment
         // being one: the SQLite and MySQL stores both take the first row, and
         // `query_opt` errors on more than one.
-        let query = format!("{SELECT_PAYMENT_SQL} WHERE p.user_id = $1 AND l.invoice = $2 LIMIT 1");
+        // A payment settled over Spark has no lightning details row: it is
+        // reported as its Bolt11 by the joined row, so match that too.
+        let query = format!(
+            "{SELECT_PAYMENT_SQL} WHERE p.user_id = $1
+               AND (l.invoice = $2 OR COALESCE(sb.bolt11, rb.bolt11) = $2) LIMIT 1"
+        );
         let row = client
             .query_opt(&query, &[&self.identity, &invoice])
             .await?;
@@ -1663,10 +1684,20 @@ impl Storage for PostgresStorage {
         let client = self.pool.get().await.map_err(map_pool_error)?;
         client
             .execute(
-                "INSERT INTO brz_spark_settled_bolt11_sends (user_id, payment_id, bolt11)
-                 VALUES ($1, $2, $3)
-                 ON CONFLICT (user_id, payment_id) DO UPDATE SET bolt11 = EXCLUDED.bolt11",
-                &[&self.identity, &send.payment_id, &send.bolt11],
+                "INSERT INTO brz_spark_settled_bolt11_sends
+                   (user_id, payment_id, bolt11, description, destination_pubkey)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT (user_id, payment_id) DO UPDATE SET
+                   bolt11 = EXCLUDED.bolt11,
+                   description = EXCLUDED.description,
+                   destination_pubkey = EXCLUDED.destination_pubkey",
+                &[
+                    &self.identity,
+                    &send.payment_id,
+                    &send.bolt11,
+                    &send.description,
+                    &send.destination_pubkey,
+                ],
             )
             .await?;
         Ok(())
@@ -1679,7 +1710,8 @@ impl Storage for PostgresStorage {
         let client = self.pool.get().await.map_err(map_pool_error)?;
         let row = client
             .query_opt(
-                "SELECT payment_id, bolt11 FROM brz_spark_settled_bolt11_sends
+                "SELECT payment_id, bolt11, description, destination_pubkey
+                 FROM brz_spark_settled_bolt11_sends
                  WHERE user_id = $1 AND payment_id = $2",
                 &[&self.identity, &payment_id],
             )
@@ -1687,6 +1719,8 @@ impl Storage for PostgresStorage {
         Ok(row.map(|row| SparkSettledBolt11Send {
             payment_id: row.get(0),
             bolt11: row.get(1),
+            description: row.get(2),
+            destination_pubkey: row.get(3),
         }))
     }
 
@@ -1699,18 +1733,22 @@ impl Storage for PostgresStorage {
         client
             .execute(
                 "INSERT INTO brz_spark_settled_bolt11_receives
-                   (user_id, id, spark_invoice, bolt11, expires_at)
-                 VALUES ($1, $2, $3, $4, $5)
+                   (user_id, id, spark_invoice, bolt11, expires_at, description, destination_pubkey)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)
                  ON CONFLICT (user_id, id) DO UPDATE SET
                    spark_invoice = EXCLUDED.spark_invoice,
                    bolt11 = EXCLUDED.bolt11,
-                   expires_at = EXCLUDED.expires_at",
+                   expires_at = EXCLUDED.expires_at,
+                   description = EXCLUDED.description,
+                   destination_pubkey = EXCLUDED.destination_pubkey",
                 &[
                     &self.identity,
                     &receive.id,
                     &receive.spark_invoice,
                     &receive.bolt11,
                     &expires_at,
+                    &receive.description,
+                    &receive.destination_pubkey,
                 ],
             )
             .await?;
@@ -1724,7 +1762,7 @@ impl Storage for PostgresStorage {
         let client = self.pool.get().await.map_err(map_pool_error)?;
         let row = client
             .query_opt(
-                "SELECT id, spark_invoice, bolt11, expires_at
+                "SELECT id, spark_invoice, bolt11, expires_at, description, destination_pubkey
                  FROM brz_spark_settled_bolt11_receives
                  WHERE user_id = $1 AND id = $2",
                 &[&self.identity, &id],
@@ -1739,6 +1777,8 @@ impl Storage for PostgresStorage {
                     .get::<_, Option<i64>>(3)
                     .map(u64::try_from)
                     .transpose()?,
+                description: row.get(4),
+                destination_pubkey: row.get(5),
             })),
             None => Ok(None),
         }
@@ -2175,14 +2215,19 @@ const SELECT_PAYMENT_SQL: &str = "
            lrm.sender_comment AS lnurl_sender_comment,
            lrm.payment_hash AS lnurl_payment_hash,
            pm.conversion_status,
-           pm.parent_payment_id
+           pm.parent_payment_id,
+           COALESCE(sb.bolt11, rb.bolt11) AS settled_bolt11,
+           COALESCE(sb.description, rb.description) AS settled_description,
+           COALESCE(sb.destination_pubkey, rb.destination_pubkey) AS settled_destination_pubkey
       FROM brz_payments p
       LEFT JOIN brz_payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
       LEFT JOIN brz_payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
       LEFT JOIN brz_payment_details_spark s ON p.id = s.payment_id AND p.user_id = s.user_id
       LEFT JOIN brz_payment_details_deposit pd ON p.id = pd.payment_id AND p.user_id = pd.user_id
       LEFT JOIN brz_payment_metadata pm ON p.id = pm.payment_id AND p.user_id = pm.user_id
-      LEFT JOIN brz_lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash AND l.user_id = lrm.user_id";
+      LEFT JOIN brz_lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash AND l.user_id = lrm.user_id
+      LEFT JOIN brz_spark_settled_bolt11_sends sb ON p.id = sb.payment_id AND p.user_id = sb.user_id
+      LEFT JOIN brz_spark_settled_bolt11_receives rb ON rb.id = s.spark_invoice_digest AND p.user_id = rb.user_id";
 
 #[allow(clippy::too_many_lines)]
 fn map_payment(row: &Row) -> Result<Payment, StorageError> {
@@ -2312,6 +2357,29 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
     let fees_str: String = row.get(4);
     let method_str: Option<String> = row.get(6);
 
+    // A Spark transfer that settled a Bolt11 reports as that invoice. The row
+    // naming it is joined here rather than applied when the payment was written,
+    // so no ingest path can leave it off.
+    let settled_bolt11: Option<String> = row.get(33);
+    let settled_over_spark = settled_bolt11.is_some();
+    let details = match (details, settled_bolt11) {
+        (Some(PaymentDetails::Spark { .. }) | None, Some(bolt11)) => {
+            Some(PaymentDetails::Lightning {
+                description: row.get(34),
+                invoice: bolt11,
+                destination_pubkey: row.get(35),
+                // Settled by a transfer, so no HTLC was ever created.
+                htlc_details: None,
+                lnurl_pay_info: from_json_opt(row.get::<_, Option<serde_json::Value>>(18))?,
+                lnurl_withdraw_info: from_json_opt(row.get::<_, Option<serde_json::Value>>(19))?,
+                // Keyed on the payment hash, which a transfer never had.
+                lnurl_receive_metadata: None,
+                conversion_info: from_json_opt(row.get::<_, Option<serde_json::Value>>(20))?,
+            })
+        }
+        (details, _) => details,
+    };
+
     Ok(Payment {
         id: row.get(0),
         payment_type: payment_type_str
@@ -2328,12 +2396,16 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
             .map_err(|_| StorageError::Serialization("invalid fees".to_string()))?,
         timestamp: u64::try_from(row.get::<_, i64>(5))?,
         details,
-        method: method_str.map_or(PaymentMethod::Lightning, |s| {
-            s.trim_matches('"')
-                .to_lowercase()
-                .parse()
-                .unwrap_or(PaymentMethod::Lightning)
-        }),
+        method: if settled_over_spark {
+            PaymentMethod::Lightning
+        } else {
+            method_str.map_or(PaymentMethod::Lightning, |s| {
+                s.trim_matches('"')
+                    .to_lowercase()
+                    .parse()
+                    .unwrap_or(PaymentMethod::Lightning)
+            })
+        },
         conversion_details: {
             let conversion_status_str: Option<String> = row.get(31);
             conversion_status_str
@@ -2473,6 +2545,13 @@ mod tests {
             fixture.storage,
         ))
         .await;
+    }
+
+    #[tokio::test]
+    async fn test_spark_settled_bolt11_joins_at_read() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_spark_settled_bolt11_joins_at_read(Box::new(fixture.storage))
+            .await;
     }
 
     #[tokio::test]
@@ -3496,7 +3575,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 25, "migration version must advance to 25");
+        assert_eq!(version, 26, "migration version must advance to 26");
 
         // Seed payment row is preserved on the renamed table — proves the
         // table + PK constraint rename worked and the columns line up.
@@ -3792,7 +3871,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 25, "migration must advance to 25");
+        assert_eq!(version, 26, "migration must advance to 26");
 
         // Seed data preserved (multi-tenant backfilled user_id to current tenant).
         let payment_count: i64 = client

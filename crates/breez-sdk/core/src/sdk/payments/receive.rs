@@ -423,17 +423,21 @@ pub(super) async fn receive_bolt11_invoice_inner(
 /// Carries no memo: the description is already on the BOLT11, and repeating it
 /// only grows the field the invoice rides in.
 ///
-/// Nothing is embedded in an invoice created for another identity: only its
-/// holder can sign for it, and a transfer paying it settles into their wallet,
-/// where this one cannot tie it back to the BOLT11.
+/// An invoice created for another identity advertises a bare address instead:
+/// only its holder can sign for a Spark invoice, and a transfer paying it
+/// settles into their wallet, where this one cannot tie it back to the BOLT11.
+/// The payer can still settle over Spark, as it could before any of this.
 async fn build_fallback(
     sdk: &BreezSdk,
     amount_sats: Option<u64>,
     expiry_secs: Option<u32>,
     receiver_identity_public_key: Option<PublicKey>,
 ) -> Result<LightningReceiveFallback, SdkError> {
-    if !sdk.config.prefer_spark_over_lightning || receiver_identity_public_key.is_some() {
+    if !sdk.config.prefer_spark_over_lightning {
         return Ok(LightningReceiveFallback::None);
+    }
+    if receiver_identity_public_key.is_some() {
+        return Ok(LightningReceiveFallback::Address);
     }
 
     // Expires with the Bolt11 it rides on, falling back to the same default the

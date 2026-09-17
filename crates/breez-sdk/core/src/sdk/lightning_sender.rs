@@ -26,9 +26,7 @@ use crate::{
     error::SdkError,
     events::EventEmitter,
     persist::ObjectCacheRepository,
-    utils::payments::{
-        record_payment_update, record_spark_settled_bolt11_send, resolve_spark_settled_bolt11,
-    },
+    utils::payments::{record_payment_update, record_spark_settled_bolt11_send},
 };
 
 /// A Lightning send that has been recorded but not yet handed to the SSP.
@@ -321,7 +319,13 @@ impl LightningSender {
             }
         };
         self.storage.apply_payment_update(payment.clone()).await?;
-        Ok(payment)
+        // Read back, so a send that settled a Bolt11 over Spark is returned as
+        // that invoice: the row naming it is applied when a payment is read.
+        Ok(self
+            .storage
+            .get_payment_by_id(payment.id.clone())
+            .await
+            .unwrap_or(payment))
     }
 
     /// Builds the payment for a send that settled as a Spark transfer, reported
@@ -335,9 +339,8 @@ impl LightningSender {
         transfer: WalletTransfer,
         invoice: &str,
     ) -> Result<Payment, SdkError> {
-        let mut payment: Payment = transfer.try_into()?;
+        let payment: Payment = transfer.try_into()?;
         record_spark_settled_bolt11_send(&self.storage, &payment.id, invoice).await;
-        resolve_spark_settled_bolt11(&self.storage, &mut payment).await;
         Ok(payment)
     }
 

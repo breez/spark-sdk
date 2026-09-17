@@ -43,6 +43,14 @@ function htlcDetailsFromRow(row) {
   };
 }
 
+/**
+ * The key a spark-settled Bolt11 receive is stored under. The Spark invoice
+ * itself is too long to key on, so its digest stands in for it.
+ */
+function sparkInvoiceDigest(sparkInvoice) {
+  return crypto.createHash("sha256").update(sparkInvoice, "utf8").digest("hex");
+}
+
 const { PostgresMigrationManager } = require("./migrations.cjs");
 
 /**
@@ -83,14 +91,19 @@ const SELECT_PAYMENT_SQL = `
            lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt,
            lrm.sender_comment AS lnurl_sender_comment,
            lrm.payment_hash AS lnurl_payment_hash,
-           pm.parent_payment_id
+           pm.parent_payment_id,
+           COALESCE(sb.bolt11, rb.bolt11) AS settled_bolt11,
+           COALESCE(sb.description, rb.description) AS settled_description,
+           COALESCE(sb.destination_pubkey, rb.destination_pubkey) AS settled_destination_pubkey
       FROM brz_payments p
       LEFT JOIN brz_payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
       LEFT JOIN brz_payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
       LEFT JOIN brz_payment_details_spark s ON p.id = s.payment_id AND p.user_id = s.user_id
       LEFT JOIN brz_payment_details_deposit pd ON p.id = pd.payment_id AND p.user_id = pd.user_id
       LEFT JOIN brz_payment_metadata pm ON p.id = pm.payment_id AND p.user_id = pm.user_id
-      LEFT JOIN brz_lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash AND l.user_id = lrm.user_id`;
+      LEFT JOIN brz_lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash AND l.user_id = lrm.user_id
+      LEFT JOIN brz_spark_settled_bolt11_sends sb ON p.id = sb.payment_id AND p.user_id = sb.user_id
+      LEFT JOIN brz_spark_settled_bolt11_receives rb ON rb.id = s.spark_invoice_digest AND p.user_id = rb.user_id`;
 
 class PostgresStorage {
   /**
@@ -506,11 +519,12 @@ class PostgresStorage {
         payment.details.htlcDetails != null)
     ) {
       await client.query(
-        `INSERT INTO brz_payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO brz_payment_details_spark (user_id, payment_id, invoice_details, htlc_details, spark_invoice_digest)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT(user_id, payment_id) DO UPDATE SET
            invoice_details=COALESCE(EXCLUDED.invoice_details, brz_payment_details_spark.invoice_details),
-           htlc_details=COALESCE(EXCLUDED.htlc_details, brz_payment_details_spark.htlc_details)`,
+           htlc_details=COALESCE(EXCLUDED.htlc_details, brz_payment_details_spark.htlc_details),
+           spark_invoice_digest=COALESCE(EXCLUDED.spark_invoice_digest, brz_payment_details_spark.spark_invoice_digest)`,
         [
           this.identity,
           payment.id,
@@ -519,6 +533,9 @@ class PostgresStorage {
             : null,
           payment.details.htlcDetails
             ? JSON.stringify(payment.details.htlcDetails)
+            : null,
+          payment.details.invoiceDetails
+            ? sparkInvoiceDigest(payment.details.invoiceDetails.invoice)
             : null,
         ]
       );
@@ -616,7 +633,8 @@ class PostgresStorage {
       }
 
       const result = await this.pool.query(
-        `${SELECT_PAYMENT_SQL} WHERE p.user_id = $1 AND l.invoice = $2`,
+        `${SELECT_PAYMENT_SQL} WHERE p.user_id = $1
+           AND (l.invoice = $2 OR COALESCE(sb.bolt11, rb.bolt11) = $2)`,
         [this.identity, invoice]
       );
 
@@ -1005,6 +1023,41 @@ class PostgresStorage {
       };
     }
 
+    // A Spark transfer that settled a Bolt11 reports as that invoice. The row
+    // naming it is joined here rather than applied when the payment was written,
+    // so no ingest path can leave it off.
+    if (row.settled_bolt11 && (details === null || details.type === "spark")) {
+      details = {
+        type: "lightning",
+        invoice: row.settled_bolt11,
+        destinationPubkey: row.settled_destination_pubkey,
+        description: row.settled_description,
+        // Settled by a transfer, so no HTLC was ever created.
+        htlcDetails: null,
+      };
+
+      if (row.lnurl_pay_info) {
+        details.lnurlPayInfo =
+          typeof row.lnurl_pay_info === "string"
+            ? JSON.parse(row.lnurl_pay_info)
+            : row.lnurl_pay_info;
+      }
+
+      if (row.lnurl_withdraw_info) {
+        details.lnurlWithdrawInfo =
+          typeof row.lnurl_withdraw_info === "string"
+            ? JSON.parse(row.lnurl_withdraw_info)
+            : row.lnurl_withdraw_info;
+      }
+
+      if (row.conversion_info) {
+        details.conversionInfo =
+          typeof row.conversion_info === "string"
+            ? JSON.parse(row.conversion_info)
+            : row.conversion_info;
+      }
+    }
+
     let method = null;
     if (row.method) {
       try {
@@ -1027,7 +1080,9 @@ class PostgresStorage {
       amount: BigInt(row.amount),
       fees: BigInt(row.fees),
       timestamp: Number(row.timestamp),
-      method,
+      // Carried with the details, or the payment reports as Spark while its
+      // details say Lightning.
+      method: row.settled_bolt11 ? "lightning" : method,
       details,
       conversionDetails: row.conversion_status
         ? { status: row.conversion_status, from: null, to: null }
@@ -1142,10 +1197,20 @@ class PostgresStorage {
   async setSparkSettledBolt11Send(send) {
     try {
       await this.pool.query(
-        `INSERT INTO brz_spark_settled_bolt11_sends (user_id, payment_id, bolt11)
-         VALUES ($1, $2, $3)
-         ON CONFLICT(user_id, payment_id) DO UPDATE SET bolt11 = EXCLUDED.bolt11`,
-        [this.identity, send.paymentId, send.bolt11]
+        `INSERT INTO brz_spark_settled_bolt11_sends
+           (user_id, payment_id, bolt11, description, destination_pubkey)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT(user_id, payment_id) DO UPDATE SET
+           bolt11 = EXCLUDED.bolt11,
+           description = EXCLUDED.description,
+           destination_pubkey = EXCLUDED.destination_pubkey`,
+        [
+          this.identity,
+          send.paymentId,
+          send.bolt11,
+          send.description ?? null,
+          send.destinationPubkey ?? "",
+        ]
       );
     } catch (error) {
       throw new StorageError(
@@ -1158,14 +1223,15 @@ class PostgresStorage {
   async getSparkSettledBolt11Send(paymentId) {
     try {
       const result = await this.pool.query(
-        `SELECT payment_id, bolt11 FROM brz_spark_settled_bolt11_sends
+        `SELECT payment_id, bolt11, description, destination_pubkey
+         FROM brz_spark_settled_bolt11_sends
          WHERE user_id = $1 AND payment_id = $2`,
         [this.identity, paymentId]
       );
       if (result.rows.length === 0) {
         return null;
       }
-      return { paymentId: result.rows[0].payment_id, bolt11: result.rows[0].bolt11 };
+      return sparkSettledBolt11SendFromRow(result.rows[0]);
     } catch (error) {
       throw new StorageError(
         `Failed to get spark-settled bolt11 send: ${error.message}`,
@@ -1178,18 +1244,22 @@ class PostgresStorage {
     try {
       await this.pool.query(
         `INSERT INTO brz_spark_settled_bolt11_receives
-           (user_id, id, spark_invoice, bolt11, expires_at)
-         VALUES ($1, $2, $3, $4, $5)
+           (user_id, id, spark_invoice, bolt11, expires_at, description, destination_pubkey)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT(user_id, id) DO UPDATE SET
            spark_invoice = EXCLUDED.spark_invoice,
            bolt11 = EXCLUDED.bolt11,
-           expires_at = EXCLUDED.expires_at`,
+           expires_at = EXCLUDED.expires_at,
+           description = EXCLUDED.description,
+           destination_pubkey = EXCLUDED.destination_pubkey`,
         [
           this.identity,
           receive.id,
           receive.sparkInvoice,
           receive.bolt11,
           receive.expiresAt == null ? null : Number(receive.expiresAt),
+          receive.description ?? null,
+          receive.destinationPubkey ?? "",
         ]
       );
     } catch (error) {
@@ -1203,7 +1273,7 @@ class PostgresStorage {
   async getSparkSettledBolt11Receive(id) {
     try {
       const result = await this.pool.query(
-        `SELECT id, spark_invoice, bolt11, expires_at
+        `SELECT id, spark_invoice, bolt11, expires_at, description, destination_pubkey
          FROM brz_spark_settled_bolt11_receives
          WHERE user_id = $1 AND id = $2`,
         [this.identity, id]
@@ -1743,8 +1813,21 @@ function crossChainSwapFromRow(row) {
 }
 
 /**
+ * Maps a brz_spark_settled_bolt11_sends row to the camelCase shape the SDK
+ * expects. A NULL description comes back absent.
+ */
+function sparkSettledBolt11SendFromRow(row) {
+  return {
+    paymentId: row.payment_id,
+    bolt11: row.bolt11,
+    description: row.description == null ? undefined : row.description,
+    destinationPubkey: row.destination_pubkey,
+  };
+}
+
+/**
  * Maps a brz_spark_settled_bolt11_receives row to the camelCase shape the SDK
- * expects. A NULL expiry comes back absent.
+ * expects. A NULL expiry or description comes back absent.
  */
 function sparkSettledBolt11ReceiveFromRow(row) {
   return {
@@ -1752,6 +1835,8 @@ function sparkSettledBolt11ReceiveFromRow(row) {
     sparkInvoice: row.spark_invoice,
     bolt11: row.bolt11,
     expiresAt: row.expires_at == null ? undefined : Number(row.expires_at),
+    description: row.description == null ? undefined : row.description,
+    destinationPubkey: row.destination_pubkey,
   };
 }
 

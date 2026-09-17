@@ -591,6 +591,21 @@ class PostgresMigrationManager {
              ON brz_spark_settled_bolt11_receives(user_id, expires_at)`,
         ],
       },
+      {
+        // A payment reports as the Bolt11 it settled by joining these rows when
+        // it is read, so the row carries what the details need and the Spark
+        // row carries the key the receive side joins on.
+        name: "Join the settled bolt11 when a payment is read",
+        sql: [
+          `ALTER TABLE brz_spark_settled_bolt11_sends ADD COLUMN description TEXT`,
+          `ALTER TABLE brz_spark_settled_bolt11_sends ADD COLUMN destination_pubkey TEXT NOT NULL DEFAULT ''`,
+          `ALTER TABLE brz_spark_settled_bolt11_receives ADD COLUMN description TEXT`,
+          `ALTER TABLE brz_spark_settled_bolt11_receives ADD COLUMN destination_pubkey TEXT NOT NULL DEFAULT ''`,
+          `ALTER TABLE brz_payment_details_spark ADD COLUMN spark_invoice_digest TEXT`,
+          `CREATE INDEX IF NOT EXISTS brz_idx_payment_details_spark_invoice_digest
+             ON brz_payment_details_spark(user_id, spark_invoice_digest)`,
+        ],
+      },
     ];
   }
 }

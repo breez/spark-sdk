@@ -2263,6 +2263,8 @@ pub struct StoredCrossChainSwap {
 pub struct SparkSettledBolt11Send {
     pub payment_id: String,
     pub bolt11: String,
+    pub description: Option<String>,
+    pub destination_pubkey: String,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SparkSettledBolt11Receive)]
@@ -2271,6 +2273,8 @@ pub struct SparkSettledBolt11Receive {
     pub spark_invoice: String,
     pub bolt11: String,
     pub expires_at: Option<u64>,
+    pub description: Option<String>,
+    pub destination_pubkey: String,
 }
 
 #[allow(clippy::enum_variant_names)]

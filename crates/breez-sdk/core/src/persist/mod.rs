@@ -439,6 +439,10 @@ pub struct SparkSettledBolt11Send {
     /// The transfer id, which is also the payment id.
     pub payment_id: String,
     pub bolt11: String,
+    /// The Bolt11's description and payee, read off it once when the row is
+    /// written so that reporting the payment as the invoice costs no parsing.
+    pub description: Option<String>,
+    pub destination_pubkey: String,
 }
 
 /// A Bolt11 that can settle over Spark, with the Spark invoice it embeds. The
@@ -455,6 +459,10 @@ pub struct SparkSettledBolt11Receive {
     /// When the Spark invoice expires, as Unix seconds. Absent when it never
     /// does. A row is dropped once its invoice has been expired for a while.
     pub expires_at: Option<u64>,
+    /// The Bolt11's description and payee, read off it once when the row is
+    /// written so that reporting the payment as the invoice costs no parsing.
+    pub description: Option<String>,
+    pub destination_pubkey: String,
 }
 
 /// Trait for persistent storage

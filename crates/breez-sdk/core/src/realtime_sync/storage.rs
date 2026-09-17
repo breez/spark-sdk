@@ -15,8 +15,8 @@ use tracing::{Instrument, debug, error, warn};
 
 use crate::{
     Contact, DepositInfo, EventEmitter, ListContactsRequest, Payment, PaymentDetails,
-    PaymentMetadata, PaymentType, SparkSettledBolt11Receive, SparkSettledBolt11Send, Storage,
-    StorageError, UpdateDepositPayload,
+    PaymentMetadata, SparkSettledBolt11Receive, SparkSettledBolt11Send, Storage, StorageError,
+    UpdateDepositPayload,
     events::{InternalSyncedEvent, SdkEvent},
     lnurl::LnurlServerClient,
     persist::{
@@ -24,7 +24,6 @@ use crate::{
         StoredCrossChainSwap, parse_cached_lightning_address,
     },
     sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
-    utils::payments::attribute_to_bolt11,
     utils::time::now_secs,
 };
 use platform_utils::tokio;
@@ -434,20 +433,7 @@ impl SyncedRecordHandler {
         )
         .map_err(|e| StorageError::Serialization(e.to_string()))?;
 
-        self.storage
-            .set_spark_settled_bolt11_send(send.clone())
-            .await?;
-
-        let Ok(mut payment) = self.storage.get_payment_by_id(send.payment_id).await else {
-            return Ok(());
-        };
-        if payment.payment_type != PaymentType::Send
-            || !matches!(payment.details, Some(PaymentDetails::Spark { .. }))
-        {
-            return Ok(());
-        }
-        attribute_to_bolt11(&mut payment, send.bolt11);
-        self.storage.apply_payment_update(payment).await?;
+        self.storage.set_spark_settled_bolt11_send(send).await?;
         Ok(())
     }
 
@@ -470,37 +456,8 @@ impl SyncedRecordHandler {
         .map_err(|e| StorageError::Serialization(e.to_string()))?;
 
         self.storage
-            .set_spark_settled_bolt11_receive(receive.clone())
+            .set_spark_settled_bolt11_receive(receive)
             .await?;
-
-        // Nothing indexes payments by the Spark invoice they settled, so the
-        // candidates are narrowed by when one could have: between the invoice
-        // being created and it expiring, both of which the invoice carries.
-        let (from_timestamp, to_timestamp) =
-            spark_invoice_settlement_window(&receive.spark_invoice);
-        let candidates = self
-            .storage
-            .list_payments(StorageListPaymentsRequest {
-                type_filter: Some(vec![PaymentType::Receive]),
-                from_timestamp,
-                to_timestamp,
-                ..Default::default()
-            })
-            .await?;
-        let settled = candidates.into_iter().find(|payment| {
-            matches!(
-                &payment.details,
-                Some(PaymentDetails::Spark {
-                    invoice_details: Some(invoice_details),
-                    ..
-                }) if invoice_details.invoice == receive.spark_invoice
-            )
-        });
-        let Some(mut payment) = settled else {
-            return Ok(());
-        };
-        attribute_to_bolt11(&mut payment, receive.bolt11);
-        self.storage.apply_payment_update(payment).await?;
         Ok(())
     }
 
@@ -949,30 +906,6 @@ impl Storage for SyncedStorage {
     async fn update_record_from_incoming(&self, record: Record) -> Result<(), StorageError> {
         self.inner.update_record_from_incoming(record).await
     }
-}
-
-/// When a transfer settling `spark_invoice` can have been created, as Unix
-/// seconds, with an hour of slack either side for clocks that disagree. Open at
-/// whichever end the invoice does not pin down.
-fn spark_invoice_settlement_window(spark_invoice: &str) -> (Option<u64>, Option<u64>) {
-    const SLACK_SECS: u64 = 60 * 60;
-    let Ok(address) = spark_invoice.parse::<spark_wallet::SparkAddress>() else {
-        return (None, None);
-    };
-    let Some(fields) = address.spark_invoice_fields else {
-        return (None, None);
-    };
-    let created = fields
-        .id
-        .get_timestamp()
-        .map(|timestamp| timestamp.to_unix().0.saturating_sub(SLACK_SECS));
-    let expires = fields.expiry_time.and_then(|expiry| {
-        expiry
-            .duration_since(platform_utils::time::UNIX_EPOCH)
-            .ok()
-            .map(|since_epoch| since_epoch.as_secs().saturating_add(SLACK_SECS))
-    });
-    (created, expires)
 }
 
 #[cfg(all(test, feature = "sqlite"))]
@@ -1588,17 +1521,15 @@ mod tests {
     const TEST_BOLT11: &str = "lnbcrt10u1p42j5khpp57zyscpf43g90q9de4za4ptj6xpyp9snztynac9k7q2vet7kuknpssp58tfaf7uq5z6vgaphxg64zv9z69kd399llwvu0d760w8z48sd282qxqyz5vqnp4qtlyk6hxw5h4hrdfdkd4nh2rv0mwyyqvdtakr3dv6m4vvsmfshvg6cqzpudqq9qyyssq6gnvg355jjmqtw73pfevvkpf788j4xsftv2h7xhfyj4jvzkljxurmh7dydt2dyex7te49hfstkfg950vaepejaxf8gugft9fvequ7qsqu49at4";
     const TEST_SPARK_INVOICE: &str = "sparkrt1pgss8cf4gru7ece2ryn8ym3vm3yz8leeend2589m7svq2mgv0xncfyx8zf8ssqgjzqqe5pmwfwyh9u4u6wgrepzk7j6j5prdv4kk7v3pqdur4y4c5nlcyr7lksm4mhrhdzakas9yt8gz4levtnfe49sgkqknywstpzxd8hk8qcgvp7x22q3qxz8gqudyp7rmuglc2axjqnlzz7d047gndmxff6ud02fvdgasdsq2en2aah6g52rq4qq7peler4s4d85s7prhm6sqzqj7gvc9nlzucy4yfh206fyqpk9zez";
 
-    /// A receive settling `spark_invoice`, timestamped when the invoice was
-    /// created: inside the window a transfer paying it can fall in.
+    /// A receive settling `spark_invoice`.
     fn make_spark_invoice_receive(id: &str, spark_invoice: &str) -> crate::Payment {
-        let (window_start, _) = spark_invoice_settlement_window(spark_invoice);
         crate::Payment {
             id: id.to_string(),
             payment_type: crate::PaymentType::Receive,
             status: crate::PaymentStatus::Completed,
             amount: 1000,
             fees: 0,
-            timestamp: window_start.map_or_else(now_secs, |start| start.saturating_add(60 * 60)),
+            timestamp: now_secs(),
             method: crate::PaymentMethod::Spark,
             details: Some(crate::PaymentDetails::Spark {
                 invoice_details: Some(crate::SparkInvoicePaymentDetails {
@@ -1614,6 +1545,8 @@ mod tests {
 
     fn test_receive(spark_invoice: &str, bolt11: &str) -> SparkSettledBolt11Receive {
         SparkSettledBolt11Receive {
+            description: None,
+            destination_pubkey: String::new(),
             id: crate::persist::spark_invoice_digest(spark_invoice),
             spark_invoice: spark_invoice.to_string(),
             bolt11: bolt11.to_string(),
@@ -1681,6 +1614,8 @@ mod tests {
             .set_spark_settled_bolt11_send(SparkSettledBolt11Send {
                 payment_id: "transfer-1".to_string(),
                 bolt11: TEST_BOLT11.to_string(),
+                description: None,
+                destination_pubkey: String::new(),
             })
             .await
             .unwrap();

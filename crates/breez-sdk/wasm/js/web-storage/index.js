@@ -664,6 +664,43 @@ class MigrationManager {
           paymentStore.createIndex("invoice", "invoice", { unique: false });
         },
       },
+      {
+        // A payment that settled a Bolt11 over Spark is reported as that
+        // invoice by looking the row up when the payment is read. This store
+        // keys those rows by a digest of the Spark invoice, which cannot be
+        // computed synchronously here, so the invoice itself is indexed: unlike
+        // the SQL stores, IndexedDB has no key length limit.
+        name: "Index spark_settled_bolt11_receives by spark invoice",
+        upgrade: (db, transaction) => {
+          const store = transaction.objectStore("spark_settled_bolt11_receives");
+          if (!store.indexNames.contains("sparkInvoice")) {
+            store.createIndex("sparkInvoice", "sparkInvoice", { unique: false });
+          }
+        },
+      },
+      {
+        // A payment settled over Spark is found by its Bolt11 through the row
+        // naming it, since the payment itself never carries that invoice.
+        name: "Index the settled bolt11 rows and payments by spark invoice",
+        upgrade: (db, transaction) => {
+          const sends = transaction.objectStore("spark_settled_bolt11_sends");
+          if (!sends.indexNames.contains("bolt11")) {
+            sends.createIndex("bolt11", "bolt11", { unique: false });
+          }
+          const receives = transaction.objectStore(
+            "spark_settled_bolt11_receives"
+          );
+          if (!receives.indexNames.contains("bolt11")) {
+            receives.createIndex("bolt11", "bolt11", { unique: false });
+          }
+          const payments = transaction.objectStore("payments");
+          if (!payments.indexNames.contains("sparkInvoice")) {
+            payments.createIndex("sparkInvoice", "sparkInvoice", {
+              unique: false,
+            });
+          }
+        },
+      },
     ];
   }
 }
@@ -692,7 +729,7 @@ class IndexedDBStorage {
     // so existing databases depend on indices never shifting. Never insert,
     // reorder, or delete a migration — only append. dbVersion MUST equal the
     // number of migrations (enforced by the guard in initialize()).
-    this.dbVersion = 24; // Current schema version (= migration count)
+    this.dbVersion = 26; // Current schema version (= migration count)
   }
 
   /**
@@ -920,12 +957,24 @@ class IndexedDBStorage {
     const actualLimit = request.limit !== null ? request.limit : 4294967295; // u32::MAX
 
     const transaction = this.db.transaction(
-      ["payments", "payment_metadata", "lnurl_receive_metadata"],
+      [
+        "payments",
+        "payment_metadata",
+        "lnurl_receive_metadata",
+        "spark_settled_bolt11_sends",
+        "spark_settled_bolt11_receives",
+      ],
       "readonly"
     );
     const paymentStore = transaction.objectStore("payments");
     const metadataStore = transaction.objectStore("payment_metadata");
     const lnurlReceiveMetadataStore = transaction.objectStore("lnurl_receive_metadata");
+    const sparkSettledSendsStore = transaction.objectStore(
+      "spark_settled_bolt11_sends"
+    );
+    const sparkSettledReceivesStore = transaction.objectStore(
+      "spark_settled_bolt11_receives"
+    );
 
     // Build set of related payment IDs upfront for O(1) filtering
     const relatedPaymentIds = await this._getRelatedPaymentIds(metadataStore);
@@ -977,10 +1026,14 @@ class IndexedDBStorage {
 
           // Fetch lnurl receive metadata before filtering, so Lightning
           // filters can check lnurlReceiveMetadata fields
-          this._fetchLnurlReceiveMetadata(
+          this._attachSettledBolt11(
             paymentWithMetadata,
-            lnurlReceiveMetadataStore
+            sparkSettledSendsStore,
+            sparkSettledReceivesStore
           )
+            .then((settled) =>
+              this._fetchLnurlReceiveMetadata(settled, lnurlReceiveMetadataStore)
+            )
             .then((mergedPayment) => {
               // Apply filters after lnurl metadata is populated
               if (!this._matchesFilters(mergedPayment, request)) {
@@ -1129,13 +1182,25 @@ class IndexedDBStorage {
 
     return new Promise((resolve, reject) => {
       const transaction = this.db.transaction(
-        ["payments", "payment_metadata", "lnurl_receive_metadata"],
+        [
+        "payments",
+        "payment_metadata",
+        "lnurl_receive_metadata",
+        "spark_settled_bolt11_sends",
+        "spark_settled_bolt11_receives",
+      ],
         "readonly"
       );
       const paymentStore = transaction.objectStore("payments");
       const metadataStore = transaction.objectStore("payment_metadata");
       const lnurlReceiveMetadataStore = transaction.objectStore(
         "lnurl_receive_metadata"
+      );
+      const sparkSettledSendsStore = transaction.objectStore(
+        "spark_settled_bolt11_sends"
+      );
+      const sparkSettledReceivesStore = transaction.objectStore(
+        "spark_settled_bolt11_receives"
       );
 
       const paymentRequest = paymentStore.get(id);
@@ -1157,10 +1222,14 @@ class IndexedDBStorage {
           );
 
           // Fetch lnurl receive metadata if it's a lightning payment
-          this._fetchLnurlReceiveMetadata(
+          this._attachSettledBolt11(
             paymentWithMetadata,
-            lnurlReceiveMetadataStore
+            sparkSettledSendsStore,
+            sparkSettledReceivesStore
           )
+            .then((settled) =>
+              this._fetchLnurlReceiveMetadata(settled, lnurlReceiveMetadataStore)
+            )
             .then(resolve)
             .catch(() => {
               // Continue without lnurl receive metadata if fetch fails
@@ -1192,7 +1261,13 @@ class IndexedDBStorage {
 
     return new Promise((resolve, reject) => {
       const transaction = this.db.transaction(
-        ["payments", "payment_metadata", "lnurl_receive_metadata"],
+        [
+        "payments",
+        "payment_metadata",
+        "lnurl_receive_metadata",
+        "spark_settled_bolt11_sends",
+        "spark_settled_bolt11_receives",
+      ],
         "readonly"
       );
       const paymentStore = transaction.objectStore("payments");
@@ -1201,11 +1276,59 @@ class IndexedDBStorage {
       const lnurlReceiveMetadataStore = transaction.objectStore(
         "lnurl_receive_metadata"
       );
+      const sparkSettledSendsStore = transaction.objectStore(
+        "spark_settled_bolt11_sends"
+      );
+      const sparkSettledReceivesStore = transaction.objectStore(
+        "spark_settled_bolt11_receives"
+      );
 
-      const paymentRequest = invoiceIndex.get(invoice);
+      // A payment settled over Spark never carries the Bolt11 itself, so when
+      // the direct lookup misses, the row naming it points the way back: sends
+      // by payment id, receives by the Spark invoice the transfer paid.
+      const findPayment = (onFound) => {
+        const direct = invoiceIndex.get(invoice);
+        direct.onsuccess = () => {
+          if (direct.result) {
+            onFound(direct.result);
+            return;
+          }
+          const bySend = sparkSettledSendsStore.index("bolt11").get(invoice);
+          bySend.onsuccess = () => {
+            if (bySend.result) {
+              const byId = paymentStore.get(bySend.result.paymentId);
+              byId.onsuccess = () => onFound(byId.result);
+              byId.onerror = () => onFound(undefined);
+              return;
+            }
+            const byReceive = sparkSettledReceivesStore
+              .index("bolt11")
+              .get(invoice);
+            byReceive.onsuccess = () => {
+              if (!byReceive.result) {
+                onFound(undefined);
+                return;
+              }
+              const bySparkInvoice = paymentStore
+                .index("sparkInvoice")
+                .get(byReceive.result.sparkInvoice);
+              bySparkInvoice.onsuccess = () => onFound(bySparkInvoice.result);
+              bySparkInvoice.onerror = () => onFound(undefined);
+            };
+            byReceive.onerror = () => onFound(undefined);
+          };
+          bySend.onerror = () => onFound(undefined);
+        };
+        direct.onerror = () =>
+          reject(
+            new StorageError(
+              `Failed to get payment by invoice: ${direct.error?.message || "Unknown error"}`,
+              direct.error
+            )
+          );
+      };
 
-      paymentRequest.onsuccess = () => {
-        const payment = paymentRequest.result;
+      findPayment((payment) => {
         if (!payment) {
           resolve(null);
           return;
@@ -1221,10 +1344,14 @@ class IndexedDBStorage {
           );
 
           // Fetch lnurl receive metadata if it's a lightning payment
-          this._fetchLnurlReceiveMetadata(
+          this._attachSettledBolt11(
             paymentWithMetadata,
-            lnurlReceiveMetadataStore
+            sparkSettledSendsStore,
+            sparkSettledReceivesStore
           )
+            .then((settled) =>
+              this._fetchLnurlReceiveMetadata(settled, lnurlReceiveMetadataStore)
+            )
             .then(resolve)
             .catch(() => {
               // Continue without lnurl receive metadata if fetch fails
@@ -1235,17 +1362,7 @@ class IndexedDBStorage {
           // Return payment without metadata if metadata fetch fails
           resolve(payment);
         };
-      };
-
-      paymentRequest.onerror = () => {
-        reject(
-          new StorageError(
-            `Failed to get payment by invoice '${invoice}': ${paymentRequest.error?.message || "Unknown error"
-            }`,
-            paymentRequest.error
-          )
-        );
-      };
+      });
     });
   }
 
@@ -1316,7 +1433,13 @@ class IndexedDBStorage {
     }
 
     const transaction = this.db.transaction(
-      ["payments", "payment_metadata", "lnurl_receive_metadata"],
+      [
+        "payments",
+        "payment_metadata",
+        "lnurl_receive_metadata",
+        "spark_settled_bolt11_sends",
+        "spark_settled_bolt11_receives",
+      ],
       "readonly"
     );
     const metadataStore = transaction.objectStore("payment_metadata");
@@ -1330,6 +1453,12 @@ class IndexedDBStorage {
     const parentIdSet = new Set(parentPaymentIds);
     const paymentStore = transaction.objectStore("payments");
     const lnurlReceiveMetadataStore = transaction.objectStore("lnurl_receive_metadata");
+    const sparkSettledSendsStore = transaction.objectStore(
+      "spark_settled_bolt11_sends"
+    );
+    const sparkSettledReceivesStore = transaction.objectStore(
+      "spark_settled_bolt11_receives"
+    );
 
     return new Promise((resolve, reject) => {
       const result = {};
@@ -1361,7 +1490,14 @@ class IndexedDBStorage {
                 }
 
                 // Fetch lnurl receive metadata if applicable
-                this._fetchLnurlReceiveMetadata(paymentWithMetadata, lnurlReceiveMetadataStore)
+                this._attachSettledBolt11(
+                  paymentWithMetadata,
+                  sparkSettledSendsStore,
+                  sparkSettledReceivesStore
+                )
+                  .then((settled) =>
+                    this._fetchLnurlReceiveMetadata(settled, lnurlReceiveMetadataStore)
+                  )
                   .then((mergedPayment) => {
                     result[parentId].push(mergedPayment);
                   })
@@ -2456,7 +2592,12 @@ class IndexedDBStorage {
     return new Promise((resolve, reject) => {
       const transaction = this.db.transaction("spark_settled_bolt11_sends", "readwrite");
       const store = transaction.objectStore("spark_settled_bolt11_sends");
-      const request = store.put({ paymentId: send.paymentId, bolt11: send.bolt11 });
+      const request = store.put({
+        paymentId: send.paymentId,
+        bolt11: send.bolt11,
+        description: send.description ?? null,
+        destinationPubkey: send.destinationPubkey ?? "",
+      });
       request.onsuccess = () => resolve();
       request.onerror = () => {
         reject(
@@ -2505,6 +2646,8 @@ class IndexedDBStorage {
         sparkInvoice: receive.sparkInvoice,
         bolt11: receive.bolt11,
         expiresAt: receive.expiresAt == null ? undefined : Number(receive.expiresAt),
+        description: receive.description ?? null,
+        destinationPubkey: receive.destinationPubkey ?? "",
       });
       request.onsuccess = () => resolve();
       request.onerror = () => {
@@ -2651,6 +2794,7 @@ class IndexedDBStorage {
     return {
       ...payment,
       invoice: payment.details?.invoice ?? undefined,
+      sparkInvoice: payment.details?.invoiceDetails?.invoice ?? undefined,
       details: payment.details ? JSON.stringify(payment.details) : null,
       method: payment.method ? JSON.stringify(payment.method) : null,
     };
@@ -2937,6 +3081,53 @@ class IndexedDBStorage {
         ? { status: metadata.conversionStatus, from: null, to: null }
         : null,
     };
+  }
+
+  /**
+   * Reports a payment that settled a Bolt11 over Spark as that invoice.
+   *
+   * Looked up when the payment is read rather than applied when it is written,
+   * so no write path can leave it off. Sends are keyed by the payment id,
+   * receives by the Spark invoice the transfer paid.
+   */
+  _attachSettledBolt11(payment, sendsStore, receivesStore) {
+    const details = payment.details;
+    if (details && details.type !== "spark") {
+      return Promise.resolve(payment);
+    }
+    if (!sendsStore || !receivesStore) {
+      return Promise.resolve(payment);
+    }
+
+    const sparkInvoice = details?.invoiceDetails?.invoice;
+    const request = sparkInvoice
+      ? receivesStore.index("sparkInvoice").get(sparkInvoice)
+      : sendsStore.get(payment.id);
+
+    return new Promise((resolve) => {
+      request.onsuccess = () => {
+        const settled = request.result;
+        if (settled) {
+          payment.method = "lightning";
+          payment.details = {
+            type: "lightning",
+            invoice: settled.bolt11,
+            description: settled.description ?? null,
+            destinationPubkey: settled.destinationPubkey ?? "",
+            // Settled by a transfer, so no HTLC was ever created.
+            htlcDetails: null,
+            lnurlPayInfo: details?.lnurlPayInfo ?? null,
+            lnurlWithdrawInfo: details?.lnurlWithdrawInfo ?? null,
+            // Keyed on the payment hash, which a transfer never had.
+            lnurlReceiveMetadata: null,
+            conversionInfo: details?.conversionInfo ?? null,
+          };
+        }
+        resolve(payment);
+      };
+      // A payment that cannot be tied to its Bolt11 still lists, as itself.
+      request.onerror = () => resolve(payment);
+    });
   }
 
   _fetchLnurlReceiveMetadata(payment, lnurlReceiveMetadataStore) {

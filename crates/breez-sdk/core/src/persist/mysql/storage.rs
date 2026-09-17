@@ -602,6 +602,31 @@ impl MysqlStorage {
                     )",
                 ),
             ],
+            // Migration 27: A payment reports as the Bolt11 it settled by joining
+            // these rows when it is read, so the row carries what the details
+            // need and the Spark row carries the key the receive side joins on.
+            vec![
+                Migration::sql(
+                    "ALTER TABLE brz_spark_settled_bolt11_sends
+                       ADD COLUMN description TEXT NULL,
+                       ADD COLUMN destination_pubkey VARCHAR(255) NOT NULL DEFAULT ''",
+                ),
+                Migration::sql(
+                    "ALTER TABLE brz_spark_settled_bolt11_receives
+                       ADD COLUMN description TEXT NULL,
+                       ADD COLUMN destination_pubkey VARCHAR(255) NOT NULL DEFAULT ''",
+                ),
+                Migration::AddColumn {
+                    table: "brz_payment_details_spark",
+                    column: "spark_invoice_digest",
+                    definition: "VARCHAR(64) NULL",
+                },
+                Migration::CreateIndex {
+                    name: "brz_idx_payment_details_spark_invoice_digest",
+                    table: "brz_payment_details_spark",
+                    columns: "(user_id, spark_invoice_digest)",
+                },
+            ],
         ]
     }
 }
@@ -889,12 +914,21 @@ impl MysqlStorage {
                     let invoice_json = to_json_string_opt(invoice_details.as_ref())?;
                     let htlc_json = to_json_string_opt(htlc_details.as_ref())?;
                     tx.exec_drop(
-                        "INSERT INTO brz_payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
-                             VALUES (?, ?, ?, ?)
+                        "INSERT INTO brz_payment_details_spark (user_id, payment_id, invoice_details, htlc_details, spark_invoice_digest)
+                             VALUES (?, ?, ?, ?, ?)
                              ON DUPLICATE KEY UPDATE
                                 invoice_details = COALESCE(VALUES(invoice_details), invoice_details),
-                                htlc_details = COALESCE(VALUES(htlc_details), htlc_details)",
-                        (identity.to_vec(), &payment.id, invoice_json, htlc_json),
+                                htlc_details = COALESCE(VALUES(htlc_details), htlc_details),
+                                spark_invoice_digest = COALESCE(VALUES(spark_invoice_digest), spark_invoice_digest)",
+                        (
+                            identity.to_vec(),
+                            &payment.id,
+                            invoice_json,
+                            htlc_json,
+                            invoice_details
+                                .as_ref()
+                                .map(|d| crate::persist::spark_invoice_digest(&d.invoice)),
+                        ),
                     )
                     .await
                     .map_err(map_db_error)?;
@@ -1348,9 +1382,14 @@ impl Storage for MysqlStorage {
         invoice: String,
     ) -> Result<Option<Payment>, StorageError> {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
-        let query = format!("{SELECT_PAYMENT_SQL} WHERE p.user_id = ? AND l.invoice = ?");
+        // A payment settled over Spark has no lightning details row: it is
+        // reported as its Bolt11 by the joined row, so match that too.
+        let query = format!(
+            "{SELECT_PAYMENT_SQL} WHERE p.user_id = ?
+               AND (l.invoice = ? OR COALESCE(sb.bolt11, rb.bolt11) = ?)"
+        );
         let row: Option<Row> = conn
-            .exec_first(&query, (self.identity.clone(), invoice))
+            .exec_first(&query, (self.identity.clone(), invoice.clone(), invoice))
             .await
             .map_err(map_db_error)?;
 
@@ -1786,10 +1825,20 @@ impl Storage for MysqlStorage {
     ) -> Result<(), StorageError> {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         conn.exec_drop(
-            "INSERT INTO brz_spark_settled_bolt11_sends (user_id, payment_id, bolt11)
-             VALUES (?, ?, ?)
-             ON DUPLICATE KEY UPDATE bolt11 = VALUES(bolt11)",
-            (self.identity.clone(), send.payment_id, send.bolt11),
+            "INSERT INTO brz_spark_settled_bolt11_sends
+               (user_id, payment_id, bolt11, description, destination_pubkey)
+             VALUES (?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+               bolt11 = VALUES(bolt11),
+               description = VALUES(description),
+               destination_pubkey = VALUES(destination_pubkey)",
+            (
+                self.identity.clone(),
+                send.payment_id,
+                send.bolt11,
+                send.description,
+                send.destination_pubkey,
+            ),
         )
         .await
         .map_err(map_db_error)?;
@@ -1801,15 +1850,25 @@ impl Storage for MysqlStorage {
         payment_id: String,
     ) -> Result<Option<SparkSettledBolt11Send>, StorageError> {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
-        let row: Option<(String, String)> = conn
+        let row: Option<(String, String, Option<String>, String)> = conn
             .exec_first(
-                "SELECT payment_id, bolt11 FROM brz_spark_settled_bolt11_sends
+                "SELECT payment_id, bolt11, description, destination_pubkey
+                 FROM brz_spark_settled_bolt11_sends
                  WHERE user_id = ? AND payment_id = ?",
                 (self.identity.clone(), payment_id),
             )
             .await
             .map_err(map_db_error)?;
-        Ok(row.map(|(payment_id, bolt11)| SparkSettledBolt11Send { payment_id, bolt11 }))
+        Ok(
+            row.map(|(payment_id, bolt11, description, destination_pubkey)| {
+                SparkSettledBolt11Send {
+                    payment_id,
+                    bolt11,
+                    description,
+                    destination_pubkey,
+                }
+            }),
+        )
     }
 
     async fn set_spark_settled_bolt11_receive(
@@ -1820,18 +1879,22 @@ impl Storage for MysqlStorage {
         let expires_at = receive.expires_at.map(i64::try_from).transpose()?;
         conn.exec_drop(
             "INSERT INTO brz_spark_settled_bolt11_receives
-               (user_id, id, spark_invoice, bolt11, expires_at)
-             VALUES (?, ?, ?, ?, ?)
+               (user_id, id, spark_invoice, bolt11, expires_at, description, destination_pubkey)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
                spark_invoice = VALUES(spark_invoice),
                bolt11 = VALUES(bolt11),
-               expires_at = VALUES(expires_at)",
+               expires_at = VALUES(expires_at),
+               description = VALUES(description),
+               destination_pubkey = VALUES(destination_pubkey)",
             (
                 self.identity.clone(),
                 receive.id,
                 receive.spark_invoice,
                 receive.bolt11,
                 expires_at,
+                receive.description,
+                receive.destination_pubkey,
             ),
         )
         .await
@@ -1844,9 +1907,9 @@ impl Storage for MysqlStorage {
         id: String,
     ) -> Result<Option<SparkSettledBolt11Receive>, StorageError> {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
-        let row: Option<(String, String, String, Option<i64>)> = conn
+        let row: Option<(String, String, String, Option<i64>, Option<String>, String)> = conn
             .exec_first(
-                "SELECT id, spark_invoice, bolt11, expires_at
+                "SELECT id, spark_invoice, bolt11, expires_at, description, destination_pubkey
                  FROM brz_spark_settled_bolt11_receives
                  WHERE user_id = ? AND id = ?",
                 (self.identity.clone(), id),
@@ -1854,12 +1917,16 @@ impl Storage for MysqlStorage {
             .await
             .map_err(map_db_error)?;
         match row {
-            Some((id, spark_invoice, bolt11, expires_at)) => Ok(Some(SparkSettledBolt11Receive {
-                id,
-                spark_invoice,
-                bolt11,
-                expires_at: expires_at.map(u64::try_from).transpose()?,
-            })),
+            Some((id, spark_invoice, bolt11, expires_at, description, destination_pubkey)) => {
+                Ok(Some(SparkSettledBolt11Receive {
+                    id,
+                    spark_invoice,
+                    bolt11,
+                    expires_at: expires_at.map(u64::try_from).transpose()?,
+                    description,
+                    destination_pubkey,
+                }))
+            }
             None => Ok(None),
         }
     }
@@ -2291,14 +2358,19 @@ const SELECT_PAYMENT_SQL: &str = "
            lrm.sender_comment AS lnurl_sender_comment,
            lrm.payment_hash AS lnurl_payment_hash,
            pm.conversion_status,
-           pm.parent_payment_id
+           pm.parent_payment_id,
+           COALESCE(sb.bolt11, rb.bolt11) AS settled_bolt11,
+           COALESCE(sb.description, rb.description) AS settled_description,
+           COALESCE(sb.destination_pubkey, rb.destination_pubkey) AS settled_destination_pubkey
       FROM brz_payments p
       LEFT JOIN brz_payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
       LEFT JOIN brz_payment_details_deposit pd ON p.id = pd.payment_id AND p.user_id = pd.user_id
       LEFT JOIN brz_payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
       LEFT JOIN brz_payment_details_spark s ON p.id = s.payment_id AND p.user_id = s.user_id
       LEFT JOIN brz_payment_metadata pm ON p.id = pm.payment_id AND p.user_id = pm.user_id
-      LEFT JOIN brz_lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash AND l.user_id = lrm.user_id";
+      LEFT JOIN brz_lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash AND l.user_id = lrm.user_id
+      LEFT JOIN brz_spark_settled_bolt11_sends sb ON p.id = sb.payment_id AND p.user_id = sb.user_id
+      LEFT JOIN brz_spark_settled_bolt11_receives rb ON rb.id = s.spark_invoice_digest AND p.user_id = rb.user_id";
 
 #[allow(clippy::too_many_lines)]
 fn map_payment(row: &Row) -> Result<Payment, StorageError> {
@@ -2424,6 +2496,28 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
     let fees_str: String = get_str(row, 4)?;
     let method_str: Option<String> = get_opt_str(row, 6);
 
+    // A Spark transfer that settled a Bolt11 reports as that invoice. The row
+    // naming it is joined here rather than applied when the payment was written,
+    // so no ingest path can leave it off.
+    let settled_over_spark = get_opt_str(row, 33).is_some();
+    let details = match (details, get_opt_str(row, 33)) {
+        (Some(PaymentDetails::Spark { .. }) | None, Some(bolt11)) => {
+            Some(PaymentDetails::Lightning {
+                description: get_opt_str(row, 34),
+                invoice: bolt11,
+                destination_pubkey: get_opt_str(row, 35).unwrap_or_default(),
+                // Settled by a transfer, so no HTLC was ever created.
+                htlc_details: None,
+                lnurl_pay_info: from_json_string_opt(get_opt_str(row, 18))?,
+                lnurl_withdraw_info: from_json_string_opt(get_opt_str(row, 19))?,
+                // Keyed on the payment hash, which a transfer never had.
+                lnurl_receive_metadata: None,
+                conversion_info: from_json_string_opt(get_opt_str(row, 20))?,
+            })
+        }
+        (details, _) => details,
+    };
+
     Ok(Payment {
         id: get_str(row, 0)?,
         payment_type: payment_type_str
@@ -2440,12 +2534,16 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
             .map_err(|_| StorageError::Serialization("invalid fees".to_string()))?,
         timestamp: u64::try_from(get_i64(row, 5)?)?,
         details,
-        method: method_str.map_or(PaymentMethod::Lightning, |s| {
-            s.trim_matches('"')
-                .to_lowercase()
-                .parse()
-                .unwrap_or(PaymentMethod::Lightning)
-        }),
+        method: if settled_over_spark {
+            PaymentMethod::Lightning
+        } else {
+            method_str.map_or(PaymentMethod::Lightning, |s| {
+                s.trim_matches('"')
+                    .to_lowercase()
+                    .parse()
+                    .unwrap_or(PaymentMethod::Lightning)
+            })
+        },
         conversion_details: {
             let conversion_status_str: Option<String> = get_opt_str(row, 31);
             conversion_status_str
@@ -2648,6 +2746,13 @@ mod tests {
             fixture.storage,
         ))
         .await;
+    }
+
+    #[tokio::test]
+    async fn test_spark_settled_bolt11_joins_at_read() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_spark_settled_bolt11_joins_at_read(Box::new(fixture.storage))
+            .await;
     }
 
     #[tokio::test]
@@ -3293,7 +3398,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(26), "migration version must advance to 26");
+        assert_eq!(version, Some(27), "migration version must advance to 27");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())
@@ -3565,7 +3670,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(26), "migration must advance to 26");
+        assert_eq!(version, Some(27), "migration must advance to 27");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())

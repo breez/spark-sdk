@@ -6,9 +6,7 @@ use crate::{
     error::SdkError,
     models::Payment,
     utils::{
-        payments::{
-            fetch_and_process_payment, insert_payment_with_metadata, resolve_spark_settled_bolt11,
-        },
+        payments::{fetch_and_process_payment, insert_payment_with_metadata},
         polling::{PollSchedule, poll_until},
     },
 };
@@ -60,10 +58,6 @@ pub(super) async fn wait_for_incoming_payment(
 /// refresh, so an LNURL-receive payment lands in storage with its sender
 /// metadata attached. Returns whether a status event was emitted.
 pub(super) async fn finalize_payment(sdk: &BreezSdk, mut payment: Payment) -> bool {
-    // Must run first: the metadata below is keyed on the Bolt11 invoice, which a
-    // Spark-settled payment only carries once this has attributed it.
-    resolve_spark_settled_bolt11(&sdk.storage, &mut payment).await;
-
     // No-op for non-Lightning-receive payments; for LNURL receives
     // this pulls the LNURL metadata into the payment record.
     sdk.sync_single_lnurl_metadata(&mut payment).await;
