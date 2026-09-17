@@ -11,10 +11,10 @@ use tracing::{Instrument, debug, error, info, trace};
 
 use crate::utils::token::{token_transaction_to_payments, token_tx_inputs_are_ours};
 use crate::{
-    GetInfoRequest, GetInfoResponse, Payment,
+    GetInfoRequest, GetInfoResponse, InstantClaimStatus, Payment,
     error::SdkError,
     events::{EventListener, SdkEvent},
-    persist::ObjectCacheRepository,
+    persist::{ObjectCacheRepository, UpdateDepositPayload},
     token_conversion::TokenConverter,
     utils::{
         payments::{get_payment_and_emit_event, update_balances},
@@ -313,10 +313,11 @@ async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
         }
         WalletEvent::TransferClaimed(transfer) => {
             info!("Transfer claimed");
-            // Drop any unclaimed-deposit record for this outpoint independently
-            // of payment ingestion, so conversion failures do not leave it stale.
+            // Mark rather than delete: the chain and the operators go on
+            // reporting the UTXO until the provider spends it, so a deleted
+            // record is re-announced and claimed again on the next sync.
             if let Some((tx_id, vout)) = claim_static_deposit_outpoint(&transfer) {
-                cleanup_claimed_deposit(sdk, &tx_id, vout).await;
+                mark_deposit_claimed(sdk, &tx_id, vout).await;
             }
             if let Ok(payment) = Payment::try_from(transfer) {
                 sdk.finalize_payment(payment).await
@@ -449,9 +450,19 @@ async fn token_tx_inputs_are_ours_cached_or_query(
     )
 }
 
-async fn cleanup_claimed_deposit(sdk: &BreezSdk, tx_id: &str, vout: u32) {
-    if let Err(e) = sdk.storage.delete_deposit(tx_id.to_string(), vout).await {
-        error!("Failed to delete claimed deposit {tx_id}:{vout} from storage: {e:?}");
+async fn mark_deposit_claimed(sdk: &BreezSdk, tx_id: &str, vout: u32) {
+    if let Err(e) = sdk
+        .storage
+        .update_deposit(
+            tx_id.to_string(),
+            vout,
+            UpdateDepositPayload::InstantClaim {
+                status: InstantClaimStatus::Claimed,
+            },
+        )
+        .await
+    {
+        error!("Failed to mark deposit {tx_id}:{vout} claimed: {e:?}");
     }
 }
 

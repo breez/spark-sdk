@@ -220,6 +220,7 @@ pub enum _InstantClaimStatus {
         confirmations: u32,
     },
     Submitted { claim_id: String },
+    Claimed,
 }
 
 #[frb(mirror(RefundState))]

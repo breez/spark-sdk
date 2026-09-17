@@ -1,6 +1,12 @@
 # Claiming on-chain deposits
 
-On-chain deposits go through three stages. Once detected, the deposit is visible in the SDK and each deposit includes a {{#name is_mature}} field. After **3 on-chain confirmations** the deposit has sufficient confirmations ({{#name is_mature}} is true) and the SDK [automatically attempts](#setting-a-max-fee-for-automatic-claims) to claim it. The SDK also claims automatically [before maturity](#claiming-before-maturity) when the configured ceiling covers the provider's spread, so a deposit can be credited sooner than 3 confirmations. If the maximum deposit claim fee is too low for either, the deposit won't be automatically claimed and should be [manually claimed](#manually-claiming-deposits).
+On-chain deposits go through three stages. A deposit is detected while it is still unconfirmed, once it reaches the mempool. Once detected, the deposit is visible in the SDK and each deposit includes a {{#name is_mature}} field. After **3 on-chain confirmations** the deposit has sufficient confirmations ({{#name is_mature}} is true) and the SDK [automatically attempts](#setting-a-max-fee-for-automatic-claims) to claim it. The SDK also claims automatically [before maturity](#claiming-before-maturity) when the configured ceiling covers the provider's spread, so a deposit can be credited sooner than 3 confirmations. If the maximum deposit claim fee is too low for either, the deposit won't be automatically claimed and should be [manually claimed](#manually-claiming-deposits).
+
+## Detecting a deposit before it confirms
+
+The Spark operators report a deposit UTXO once it has a confirmation. To detect one sooner the SDK also asks its chain service about the deposit addresses it has handed out, which is what lets a deposit be claimed, or shown to the user, while it is still in the mempool. A deposit found this way arrives through {{#enum SdkEvent::NewDeposits}} and appears in {{#name list_unclaimed_deposits}} with {{#name is_mature}} false, whether or not the SDK goes on to claim it automatically.
+
+Each watched address costs one chain-service request per sync. Requesting a receive address starts a 24-hour window on it and requesting it again restarts that, so a wallet that is not expecting an on-chain payment settles at no requests at all. An address that has taken a deposit keeps being watched past its window until that deposit confirms.
 
 ## Setting a max fee for automatic claims
 
@@ -40,15 +46,19 @@ A claim made before maturity settles asynchronously, so {{#name claim_deposit}} 
 
 ## Listing unclaimed deposits
 
-Retrieve all deposits that have not yet been claimed. This includes pending deposits that do not yet have sufficient confirmations, as well as deposits with sufficient confirmations that failed to claim (with the specific failure reason). Pending deposits will be automatically claimed once they have sufficient confirmations, or sooner if the configured ceiling covers an early claim.
+Retrieve the deposits the SDK is tracking. This includes pending deposits that do not yet have sufficient confirmations, deposits with sufficient confirmations that failed to claim (with the specific failure reason), and deposits already claimed whose output the provider has not yet spent. Pending deposits will be automatically claimed once they have sufficient confirmations, or sooner if the configured ceiling covers an early claim.
 
-A deposit claimed before maturity stays in the list with its {{#name instant_claim_status}} set to {{#enum InstantClaimStatus::Submitted}} for a short time after submission, and is removed once the claim settles. When the SDK claims automatically it emits {{#enum SdkEvent::ClaimedDeposits}} at submission, so a deposit can briefly appear both in that event and in this list.
+A deposit claimed before maturity carries {{#enum InstantClaimStatus::Submitted}} in its {{#name instant_claim_status}} while the claim settles, and {{#enum InstantClaimStatus::Claimed}} once the amount is credited. It stays in the list until the provider spends the deposit output, some time after the credit, so treat {{#enum InstantClaimStatus::Claimed}} as settled and branch on it rather than showing the deposit as awaiting action. When the SDK claims automatically it emits {{#enum SdkEvent::ClaimedDeposits}} at submission, so a deposit can appear both in that event and in this list.
+
+A deposit claimed elsewhere, by another instance sharing the wallet or on another device, reaches {{#enum InstantClaimStatus::Claimed}} the next time the SDK tries to claim it and the provider reports it as already claimed. No {{#enum SdkEvent::ClaimedDeposits}} event is emitted, because the claim was not made here. The credit still arrives as a payment, so follow it through {{#name list_payments}} or the [payment events](events.md).
 
 {{#tabs refunding_payments:list-unclaimed-deposits}}
 
 ## Refunding deposits
 
 When a deposit cannot be successfully claimed you can refund it to an external Bitcoin address. This creates a transaction that sends the amount (minus transaction fees) to the specified destination address.
+
+A deposit that has already been claimed is not a candidate: its {{#name instant_claim_status}} is {{#enum InstantClaimStatus::Claimed}}, so check that before offering a refund.
 
 The [recommended fees](#recommended-fees) API is useful for determining appropriate fee levels for refund transactions.
 

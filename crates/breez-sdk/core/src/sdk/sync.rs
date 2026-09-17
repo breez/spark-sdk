@@ -1,11 +1,12 @@
 use platform_utils::time::Instant;
 use platform_utils::tokio;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::{debug, error, info, trace, warn};
 
 use super::{
-    BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncType, deposits::InstantClaimOutcome,
+    BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncType,
+    deposits::{InstantClaimOutcome, is_already_claimed_error},
 };
 use crate::utils::time::now_secs;
 use crate::{
@@ -40,22 +41,14 @@ fn instant_claim_worth_attempting(
     }
 }
 
-/// Indexes the deposits that carry an instant-claim status by their outpoint.
-fn instant_claim_status_map(deposits: &[DepositInfo]) -> HashMap<TxOutput, InstantClaimStatus> {
-    deposits
-        .iter()
-        .filter_map(|d| {
-            d.instant_claim_status.clone().map(|status| {
-                (
-                    TxOutput {
-                        txid: d.txid.clone(),
-                        vout: d.vout,
-                    },
-                    status,
-                )
-            })
-        })
-        .collect()
+/// Whether a claim has already taken this deposit, still settling or credited.
+/// The chain and the operators go on reporting the UTXO until the provider
+/// spends it, so a deposit that is already spoken for still appears unclaimed.
+fn claim_already_made(status: Option<&InstantClaimStatus>) -> bool {
+    matches!(
+        status,
+        Some(InstantClaimStatus::Submitted { .. } | InstantClaimStatus::Claimed)
+    )
 }
 
 impl BreezSdk {
@@ -359,11 +352,6 @@ impl BreezSdk {
                 .await;
         }
 
-        // Read after the chain sync (a round-trip per UTXO): a manual instant claim
-        // landing during the sync must be visible here, or the cascade could normal-
-        // claim on top of the in-flight instant one.
-        let instant_status = instant_claim_status_map(&self.storage.list_deposits().await?);
-
         // Resolved once per pass, and only when an immature deposit could use it.
         let instant_ceiling = if all_utxos.iter().any(|(_, is_mature)| !is_mature) {
             match self
@@ -399,6 +387,10 @@ impl BreezSdk {
             let Some(_claim_guard) = self.claim_guards.try_acquire(key.clone()) else {
                 continue;
             };
+            let instant_status = self.deposit_instant_claim_status(&key).await;
+            if claim_already_made(instant_status.as_ref()) {
+                continue;
+            }
             let res = if is_mature {
                 // Mature deposit: claim via the normal path.
                 self.claim_utxo_and_resolve_deposit(
@@ -421,7 +413,7 @@ impl BreezSdk {
                     continue;
                 };
                 if !instant_claim_worth_attempting(
-                    instant_status.get(&key),
+                    instant_status.as_ref(),
                     confirmations,
                     ceiling.1,
                 ) {
@@ -463,6 +455,19 @@ impl BreezSdk {
         Ok(())
     }
 
+    /// One deposit's instant-claim status, or `None` when it has none or cannot
+    /// be read.
+    async fn deposit_instant_claim_status(&self, key: &TxOutput) -> Option<InstantClaimStatus> {
+        self.storage
+            .list_deposits()
+            .await
+            .inspect_err(|e| warn!("Could not read the instant claim status: {e}"))
+            .ok()?
+            .into_iter()
+            .find(|d| d.txid == key.txid && d.vout == key.vout)?
+            .instant_claim_status
+    }
+
     async fn claim_utxo_and_resolve_deposit(
         &self,
         detailed_utxo: &DetailedUtxo,
@@ -477,6 +482,25 @@ impl BreezSdk {
                     .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
                     .await?;
                 claimed_deposits.push(detailed_utxo.clone().into_deposit_info(true));
+            }
+            // The deposit is settled, not failed: an earlier claim took it, here
+            // or elsewhere. Marking it stops every later pass re-claiming it, and
+            // records no claim error, which would have asked the user to act on a
+            // deposit nothing more can be done with.
+            Err(e) if is_already_claimed_error(&e.to_string()) => {
+                info!(
+                    "Deposit {}:{} was already claimed, marking it",
+                    detailed_utxo.txid, detailed_utxo.vout
+                );
+                self.storage
+                    .update_deposit(
+                        detailed_utxo.txid.to_string(),
+                        detailed_utxo.vout,
+                        UpdateDepositPayload::InstantClaim {
+                            status: InstantClaimStatus::Claimed,
+                        },
+                    )
+                    .await?;
             }
             Err(e) => {
                 warn!(
@@ -727,7 +751,7 @@ impl BreezSdk {
 
 #[cfg(test)]
 mod tests {
-    use super::instant_claim_worth_attempting;
+    use super::{claim_already_made, instant_claim_worth_attempting};
     use crate::InstantClaimStatus;
 
     fn declined(max_fee_sats: Option<u64>, confirmations: u32) -> InstantClaimStatus {
@@ -777,6 +801,21 @@ mod tests {
             1,
             500
         ));
-        // An in-flight submission is never re-attempted.
+    }
+
+    #[test]
+    fn a_claim_already_taken_is_recognised() {
+        // The cascade skips these before either claim path runs, so this is the
+        // guard rather than a second opinion alongside one.
+        let submitted = InstantClaimStatus::Submitted {
+            claim_id: "claim-1".to_string(),
+        };
+        assert!(claim_already_made(Some(&submitted)));
+        // A credited deposit is still reported until the provider spends the
+        // output, so it has to be skipped for as long as the record lives.
+        assert!(claim_already_made(Some(&InstantClaimStatus::Claimed)));
+        assert!(!claim_already_made(None));
+        // A decline leaves the deposit to be claimed at maturity.
+        assert!(!claim_already_made(Some(&declined(Some(500), 1))));
     }
 }

@@ -45,7 +45,7 @@ pub use models::*;
 pub use persist::{
     ConversionFilter, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,
     StorageListPaymentsRequest, StoragePaymentDetailsFilter, StoredCrossChainSwap,
-    UpdateDepositPayload,
+    UpdateDepositPayload, UpdateWatchedAddressPayload, WatchedDepositAddress,
     backend::{
         PrebuiltBackend, ResolvedStores, StorageBackend, custom_storage, default_session_store,
     },
