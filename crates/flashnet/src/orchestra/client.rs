@@ -9,16 +9,17 @@ use tokio::sync::OnceCell;
 use tracing::debug;
 
 use super::models::{
-    EstimateRequest, EstimateResponse, QuoteRequest, QuoteResponse, Route, RoutesResponse,
-    StatusResponse, SubmitRequest, SubmitResponse,
+    EstimateRequest, EstimateResponse, LimitsResponse, QuoteRequest, QuoteResponse,
+    RouteWithLimits, StatusResponse, SubmitRequest, SubmitResponse,
 };
 use crate::cache::CacheStore;
 use crate::config::OrchestraConfig;
 use crate::error::FlashnetError;
 use crate::models::AssetTransfer;
 
-const ROUTES_CACHE_KEY: &str = "orchestra_routes";
-/// One hour — Orchestra routes are effectively static between deployments.
+/// One hour. Orchestra routes are effectively static between deployments, and
+/// the published bounds move slowly enough that a stale ceiling is harmless for
+/// UI validation.
 const ROUTES_TTL_MS: u128 = 60 * 60 * 1000;
 
 /// Resolves the Orchestra config (base URL + API key) on demand.
@@ -62,52 +63,59 @@ impl OrchestraClient {
             .await
     }
 
-    /// Fetch all supported cross-chain routes. Responses are cached for
-    /// [`ROUTES_TTL_MS`] so repeated parser/UI calls are synchronous.
-    pub async fn routes(&self) -> Result<RoutesResponse, FlashnetError> {
-        if let Some(cached) = self
-            .cache_store
-            .get::<RoutesResponse>(ROUTES_CACHE_KEY)
-            .await?
-        {
-            return Ok(cached);
-        }
-        debug!("Orchestra: GET /v1/orchestration/routes (cache miss)");
-        let response: RoutesResponse = self
-            .get("v1/orchestration/routes", None::<()>, false)
-            .await?;
-        self.cache_store
-            .set(ROUTES_CACHE_KEY, &response, ROUTES_TTL_MS)
-            .await?;
-        Ok(response)
-    }
-
-    /// Return routes where `chain` is involved as source or destination.
+    /// Return the routes where `chain` is involved, each with the amount bounds
+    /// the provider publishes for it.
     ///
     /// When `is_send` is `true`, returns routes with `source_chain == chain`
     /// (funding from `chain` to another chain, e.g. `spark` for a wallet send or
     /// `lightning` for a Cash App onramp). When `false`, returns routes with
     /// `destination_chain == chain` (receiving into `chain`).
     ///
-    /// Driven by the cached [`Self::routes`] response — cheap to call
-    /// repeatedly from the parser / UI layer.
+    /// Reads `/limits` rather than `/routes`: it returns the same route set
+    /// under the same filter with the bounds attached, and filtering server-side
+    /// keeps the payload a fraction of the unfiltered route list. Responses are
+    /// cached per `(chain, direction)` for [`ROUTES_TTL_MS`] so repeated
+    /// parser/UI calls are synchronous.
     pub async fn filter_routes(
         &self,
         chain: &str,
         is_send: bool,
-    ) -> Result<Vec<Route>, FlashnetError> {
-        let response = self.routes().await?;
-        Ok(response
-            .routes
-            .into_iter()
-            .filter(|r| {
-                if is_send {
-                    r.source_chain.eq_ignore_ascii_case(chain)
-                } else {
-                    r.destination_chain.eq_ignore_ascii_case(chain)
-                }
-            })
-            .collect())
+    ) -> Result<Vec<RouteWithLimits>, FlashnetError> {
+        #[derive(serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Query<'a> {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            source_chain: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            destination_chain: Option<&'a str>,
+        }
+
+        let direction = if is_send { "source" } else { "destination" };
+        let cache_key = format!("orchestra_limits:{direction}:{chain}");
+        if let Some(cached) = self.cache_store.get::<LimitsResponse>(&cache_key).await? {
+            return Ok(cached.routes);
+        }
+        debug!("Orchestra: GET /v1/orchestration/limits?{direction}Chain={chain} (cache miss)");
+
+        let query = if is_send {
+            Query {
+                source_chain: Some(chain),
+                destination_chain: None,
+            }
+        } else {
+            Query {
+                source_chain: None,
+                destination_chain: Some(chain),
+            }
+        };
+
+        let response: LimitsResponse = self
+            .get("v1/orchestration/limits", Some(query), false)
+            .await?;
+        self.cache_store
+            .set(&cache_key, &response, ROUTES_TTL_MS)
+            .await?;
+        Ok(response.routes)
     }
 
     pub async fn estimate(
@@ -292,10 +300,7 @@ impl OrchestraClient {
 
         let response = self.http_client.get(url, Some(headers)).await?;
         if !response.is_success() {
-            return Err(FlashnetError::Network {
-                reason: extract_error_message(&response.body),
-                code: Some(response.status),
-            });
+            return Err(error_from_body(&response.body, response.status));
         }
         response
             .json::<D>()
@@ -337,10 +342,7 @@ impl OrchestraClient {
             .await?;
 
         if !response.is_success() {
-            return Err(FlashnetError::Network {
-                reason: extract_error_message(&response.body),
-                code: Some(response.status),
-            });
+            return Err(error_from_body(&response.body, response.status));
         }
 
         response
@@ -356,19 +358,90 @@ pub fn derive_idempotency_key(scope: &str, key_input: &str) -> String {
     hash.to_string()
 }
 
-/// Try to extract a human-readable message from an Orchestra JSON error body.
-/// Orchestra errors follow the shape `{"error":{"code":"...","message":"..."}}`.
-/// Returns the `message` field if present, otherwise the raw body.
-fn extract_error_message(body: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| {
-            v.get("error")
-                .and_then(|e| e.get("message"))
-                .and_then(|m| m.as_str())
-                .map(String::from)
-        })
-        .unwrap_or_else(|| body.to_string())
+/// Classify an Orchestra error body, which has the shape
+/// `{"error":{"code":"...","message":"..."}}`.
+///
+/// The amount-rejection codes become [`FlashnetError::AmountOutOfRange`] so
+/// callers can react to them without matching on prose. Orchestra does not
+/// include the bound it applied, so the error carries the direction only.
+/// Anything else keeps its message and the HTTP status.
+fn error_from_body(body: &str, status: u16) -> FlashnetError {
+    let parsed = serde_json::from_str::<serde_json::Value>(body).ok();
+    let field = |name: &str| {
+        parsed
+            .as_ref()?
+            .get("error")?
+            .get(name)?
+            .as_str()
+            .map(String::from)
+    };
+    let reason = field("message").unwrap_or_else(|| body.to_string());
+    match field("code").as_deref() {
+        Some("amount_too_small") => FlashnetError::AmountOutOfRange {
+            reason,
+            too_small: true,
+        },
+        Some("amount_too_large" | "amount_exceeds_liquidity") => FlashnetError::AmountOutOfRange {
+            reason,
+            too_small: false,
+        },
+        _ => FlashnetError::Network {
+            reason,
+            code: Some(status),
+        },
+    }
+}
+
+#[cfg(test)]
+mod error_body_tests {
+    use super::*;
+
+    #[test]
+    fn amount_rejections_become_typed_errors() {
+        let small = error_from_body(
+            r#"{"error":{"code":"amount_too_small","message":"Amount too small"}}"#,
+            400,
+        );
+        assert!(matches!(
+            small,
+            FlashnetError::AmountOutOfRange {
+                too_small: true,
+                ref reason
+            } if reason == "Amount too small"
+        ));
+
+        for code in ["amount_too_large", "amount_exceeds_liquidity"] {
+            let body = format!(r#"{{"error":{{"code":"{code}","message":"Amount too large"}}}}"#);
+            assert!(matches!(
+                error_from_body(&body, 400),
+                FlashnetError::AmountOutOfRange {
+                    too_small: false,
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn other_errors_keep_the_message_and_status() {
+        let err = error_from_body(
+            r#"{"error":{"code":"route_unavailable","message":"No route"}}"#,
+            503,
+        );
+        assert!(matches!(
+            err,
+            FlashnetError::Network { code: Some(503), ref reason } if reason == "No route"
+        ));
+    }
+
+    #[test]
+    fn a_non_json_body_is_carried_through_verbatim() {
+        let err = error_from_body("upstream timeout", 502);
+        assert!(matches!(
+            err,
+            FlashnetError::Network { code: Some(502), ref reason } if reason == "upstream timeout"
+        ));
+    }
 }
 
 #[cfg(test)]
