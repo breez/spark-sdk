@@ -288,7 +288,7 @@ enum RequestedFallback<'a> {
     None,
     /// A bare address for our own identity, which the SSP builds itself.
     Address,
-    /// An invoice we minted, which the SSP must return unaltered.
+    /// An invoice we created, which the SSP must return unaltered.
     Invoice(&'a SparkAddress),
 }
 
@@ -522,7 +522,7 @@ impl LightningService {
             }
         };
 
-        // Parsed up front so a malformed invoice fails before the SSP mints a
+        // Parsed up front so a malformed invoice fails before the SSP creates a
         // BOLT11 that would advertise it.
         let requested_invoice = match &fallback {
             LightningReceiveFallback::Invoice(encoded) => {
@@ -907,6 +907,16 @@ impl LightningService {
         }
 
         Ok((fee_sat + to_pay_sat, None))
+    }
+
+    /// Runs [`validate_fallback_to_pay`] for a caller that builds the transfer
+    /// itself instead of going through [`LightningService::validate_payment`].
+    pub fn validate_fallback(
+        &self,
+        fallback: &SparkFallback,
+        to_pay_sat: u64,
+    ) -> Result<(), ServiceError> {
+        validate_fallback_to_pay(fallback, self.network, to_pay_sat)
     }
 
     pub fn extract_spark_fallback_from_invoice(

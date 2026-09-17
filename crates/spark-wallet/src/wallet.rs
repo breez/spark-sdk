@@ -849,6 +849,18 @@ impl SparkWallet {
             .await?)
     }
 
+    /// Checks a Spark destination taken from a Bolt11 against the amount about
+    /// to be sent to it.
+    pub fn validate_spark_fallback(
+        &self,
+        fallback: &SparkFallback,
+        to_pay_sat: u64,
+    ) -> Result<(), SparkWalletError> {
+        Ok(self
+            .lightning_service
+            .validate_fallback(fallback, to_pay_sat)?)
+    }
+
     /// The Spark destination a Bolt11 invoice advertises, if any.
     pub fn extract_spark_fallback(
         &self,

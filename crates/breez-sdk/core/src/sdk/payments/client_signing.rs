@@ -120,17 +120,20 @@ pub(in crate::sdk) async fn build_unsigned_transfer_package(
                     .receiver_address()
                     .to_address_string()
                     .map_err(|e| SdkError::Generic(e.to_string()))?;
-                let package = if prepare_response.fee_policy == FeePolicy::FeesIncluded
+                let mut to_send = prepare_response.clone();
+                if prepare_response.fee_policy == FeePolicy::FeesIncluded
                     && invoice_details.amount_msat.is_none()
                 {
-                    let mut adjusted = prepare_response.clone();
-                    adjusted.amount = adjusted
+                    to_send.amount = to_send
                         .amount
                         .saturating_sub(u128::from(spark_transfer_fee_sats.unwrap_or(0)));
-                    build_spark_package(sdk, &adjusted, &receiver, spark_invoice).await?
-                } else {
-                    build_spark_package(sdk, prepare_response, &receiver, spark_invoice).await?
-                };
+                }
+                // The check a send the SDK signs itself gets inside
+                // `validate_payment`, which building a package for an external
+                // signer never reaches.
+                sdk.spark_wallet
+                    .validate_spark_fallback(&fallback, to_send.amount.try_into()?)?;
+                let package = build_spark_package(sdk, &to_send, &receiver, spark_invoice).await?;
                 // The package drops the Bolt11 on its way to the signer, so the
                 // link is recorded against the transfer id it already carries.
                 // A swap package is not the send: its transfer id belongs to the
