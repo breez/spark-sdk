@@ -68,9 +68,7 @@ Each entry in {{#name CrossChainRoutePair.accepted_assets}} carries an optional 
 
 Bounds are per asset rather than per route, because the same external endpoint can carry a dust floor when moved as sats and none when moved as a token. Either denomination can be absent, and a provider may publish none at all, so treat a missing bound as "no published limit" rather than as zero.
 
-**The bounds are a reliable no, never a reliable yes.** Reject an amount that falls outside a published bound before preparing the payment: the provider rejects it too, so the check costs nothing and never blocks a payment that would have gone through. Satisfying the bounds is not a guarantee. Some routes enforce a tighter bound than they publish, so a payment inside the published band can still be rejected, and preparing it is what decides a concrete amount.
-
-Because of that, the bounds are for catching an amount the user could not have meant, not for guiding them to a sensible one. Fees weigh heavily near the floor, so the smallest amount worth sending is usually well above the smallest one accepted.
+Validate the amount against the bounds before preparing the payment. A route can enforce a tighter bound than it publishes, so an amount inside the published band can still be rejected at prepare.
 
 A rejected amount surfaces as {{#enum SdkError::CrossChainAmountOutOfRange}}, carrying {{#name too_small}} for the direction and the published bound in whichever denominations the provider publishes.
 
