@@ -1,4 +1,6 @@
 import breez_sdk_spark.*
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import java.io.File
 import org.jline.reader.LineReader
 
@@ -16,6 +18,7 @@ data class AdvancedCliCommand(
  */
 val ADVANCED_COMMAND_NAMES = listOf(
     "unilateral-exit",
+    "check-unilateral-exit",
     "export-unilateral-exit-state",
     "import-unilateral-exit-state",
 )
@@ -29,6 +32,11 @@ fun buildAdvancedRegistry(): Map<String, AdvancedCliCommand> {
             "unilateral-exit",
             "Build and sign a unilateral exit",
             ::handleUnilateralExit,
+        ),
+        "check-unilateral-exit" to AdvancedCliCommand(
+            "check-unilateral-exit",
+            "Check a signed exit against the chain",
+            ::handleCheckUnilateralExit,
         ),
         "export-unilateral-exit-state" to AdvancedCliCommand(
             "export-unilateral-exit-state",
@@ -92,12 +100,14 @@ suspend fun handleUnilateralExit(sdk: BreezSdk, reader: LineReader, args: List<S
     val fundingKindStr = fp.getString("funding-kind") ?: "p2tr"
     val destination = fp.getString("destination")
     val leafIds = fp.getAll("leaf")
+    val outputFile = fp.getString("output-file")
 
     if (feeRate == null || destination == null) {
         println("Usage: advanced unilateral-exit --fee-rate <sat/vByte> --destination <address> [options]")
         println("Options:")
         println("  --funding-kind <p2wpkh|p2tr>   Funding UTXO kind (default: p2tr)")
         println("  --leaf <id>                     Leaf id to exit (repeatable, omit for auto)")
+        println("  --output-file <path>            File to write the signed exit to")
         return
     }
 
@@ -163,6 +173,9 @@ suspend fun handleUnilateralExit(sdk: BreezSdk, reader: LineReader, args: List<S
         signer,
     )
     printExitTransactions(response)
+    if (outputFile != null) {
+        writeExit(outputFile, response)
+    }
 }
 
 fun parseCpfpInput(s: String, kind: CpfpFundingKind): CpfpInput {
@@ -192,6 +205,107 @@ fun parseCpfpInput(s: String, kind: CpfpFundingKind): CpfpInput {
         )
         is CpfpFundingKind.Custom ->
             throw IllegalArgumentException("custom funding kind is not supported by this CLI")
+    }
+}
+
+// --- check-unilateral-exit ---
+
+suspend fun handleCheckUnilateralExit(sdk: BreezSdk, reader: LineReader, args: List<String>) {
+    val fp = FlagParser(args)
+    val inputFile = fp.getString("input-file")
+    val outputFile = fp.getString("output-file")
+
+    if (inputFile == null) {
+        println("Usage: advanced check-unilateral-exit --input-file <path> [--output-file <path>]")
+        return
+    }
+
+    val exit = readExit(inputFile)
+    val checked = sdk.checkUnilateralExit(CheckUnilateralExitRequest(exit = exit))
+    println("Verdict: ${checked.verdict}")
+    if (checked.verdict is UnilateralExitVerdict.Redo) {
+        println("  (this exit cannot be finished, quote and build it again)")
+    }
+    printExitTransactions(checked.exit)
+    writeExit(outputFile ?: inputFile, checked.exit)
+}
+
+fun readExit(path: String): UnilateralExitResponse {
+    val root = JsonParser.parseString(File(path).readText()).asJsonObject
+    return UnilateralExitResponse(
+        recoverableValueSat = root["recoverable_value_sat"].asLong.toULong(),
+        totalFeeSat = root["total_fee_sat"].asLong.toULong(),
+        cpfpFeeSat = root["cpfp_fee_sat"].asLong.toULong(),
+        fanoutFeeSat = root["fanout_fee_sat"].asLong.toULong(),
+        sweepFeeSat = root["sweep_fee_sat"].asLong.toULong(),
+        leaves = root["leaves"].asJsonArray.map { deserializeLeaf(it.asJsonObject) },
+        transactions = root["transactions"].asJsonArray.map { deserializeTx(it.asJsonObject) },
+        fundingInputs = root["funding_inputs"].asJsonArray.map { deserializeFundingInput(it.asJsonObject) },
+    )
+}
+
+fun writeExit(path: String, exit: UnilateralExitResponse) {
+    File(path).writeText(serialize(exit))
+    println("Wrote the exit to $path")
+}
+
+private fun deserializeLeaf(obj: JsonObject): UnilateralExitLeaf {
+    return UnilateralExitLeaf(
+        leafId = obj["leaf_id"].asString,
+        value = obj["value"].asLong.toULong(),
+    )
+}
+
+private fun deserializeTx(obj: JsonObject): UnilateralExitTransaction {
+    return UnilateralExitTransaction(
+        kind = UnilateralExitTxKind.valueOf(obj["kind"].asString),
+        nodeId = obj["node_id"]?.takeIf { !it.isJsonNull }?.asString,
+        txid = obj["txid"].asString,
+        txHex = obj["tx_hex"].asString,
+        cpfpTxHex = obj["cpfp_tx_hex"]?.takeIf { !it.isJsonNull }?.asString,
+        csvTimelockBlocks = obj["csv_timelock_blocks"]?.takeIf { !it.isJsonNull }?.asLong?.toUInt(),
+        dependsOn = obj["depends_on"].asJsonArray.map { it.asString },
+        status = deserializeStatus(obj["status"].asJsonObject),
+    )
+}
+
+private fun deserializeStatus(obj: JsonObject): ExitTransactionStatus {
+    return when (obj["type"].asString) {
+        "Confirmed" -> ExitTransactionStatus.Confirmed(
+            blockHeight = obj["block_height"]?.takeIf { !it.isJsonNull }?.asLong?.toUInt(),
+        )
+        "Ready" -> ExitTransactionStatus.Ready
+        "WaitingForDependencies" -> ExitTransactionStatus.WaitingForDependencies
+        "WaitingForTimelock" -> ExitTransactionStatus.WaitingForTimelock(
+            spendableAtHeight = obj["spendable_at_height"]?.takeIf { !it.isJsonNull }?.asLong?.toUInt(),
+        )
+        "Unverified" -> ExitTransactionStatus.Unverified
+        else -> throw IllegalArgumentException("Unknown ExitTransactionStatus: ${obj["type"]}")
+    }
+}
+
+private fun deserializeFundingInput(obj: JsonObject): CpfpInput {
+    return when (obj["type"].asString) {
+        "P2wpkh" -> CpfpInput.P2wpkh(
+            txid = obj["txid"].asString,
+            vout = obj["vout"].asLong.toUInt(),
+            value = obj["value"].asLong.toULong(),
+            pubkey = obj["pubkey"].asString,
+        )
+        "P2tr" -> CpfpInput.P2tr(
+            txid = obj["txid"].asString,
+            vout = obj["vout"].asLong.toUInt(),
+            value = obj["value"].asLong.toULong(),
+            pubkey = obj["pubkey"].asString,
+        )
+        "Custom" -> CpfpInput.Custom(
+            txid = obj["txid"].asString,
+            vout = obj["vout"].asLong.toUInt(),
+            value = obj["value"].asLong.toULong(),
+            scriptPubkeyHex = obj["script_pubkey_hex"].asString,
+            signedInputWeight = obj["signed_input_weight"].asLong.toULong(),
+        )
+        else -> throw IllegalArgumentException("Unknown CpfpInput type: ${obj["type"]}")
     }
 }
 

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -10,6 +11,7 @@ import 'serialization.dart';
 /// Advanced subcommand names (used for help and tab completion).
 const advancedCommandNames = [
   'advanced unilateral-exit',
+  'advanced check-unilateral-exit',
   'advanced export-unilateral-exit-state',
   'advanced import-unilateral-exit-state',
 ];
@@ -29,6 +31,10 @@ Map<String, _AdvancedEntry> _getRegistry() {
     'unilateral-exit': _AdvancedEntry(
       'Build and sign a unilateral exit (expert-only)',
       _handleUnilateralExit,
+    ),
+    'check-unilateral-exit': _AdvancedEntry(
+      'Check a signed exit against the chain',
+      _handleCheckUnilateralExit,
     ),
     'export-unilateral-exit-state': _AdvancedEntry(
       'Export the wallet\'s unilateral exit state to a file',
@@ -102,7 +108,8 @@ Future<void> _handleUnilateralExit(BreezSdk sdk, List<String> args) async {
         ..addOption('fee-rate', mandatory: true, help: 'Target fee rate in sat/vByte')
         ..addOption('funding-kind', defaultsTo: 'p2tr', help: 'Funding UTXO kind: p2wpkh or p2tr')
         ..addOption('destination', mandatory: true, help: 'Destination address for swept funds')
-        ..addMultiOption('leaf', help: 'Leaf id to exit (repeatable). Omit to auto-select.');
+        ..addMultiOption('leaf', help: 'Leaf id to exit (repeatable). Omit to auto-select.')
+        ..addOption('output-file', help: 'File to write the signed exit to');
   final results = _parseArgs(
     parser,
     args,
@@ -160,6 +167,10 @@ Future<void> _handleUnilateralExit(BreezSdk sdk, List<String> args) async {
     signerSecretKey: secretKeyBytes,
   );
   _printExitTransactions(response);
+  final outputFile = results.option('output-file');
+  if (outputFile != null) {
+    _writeExit(outputFile, response);
+  }
 }
 
 // --- export-unilateral-exit-state ---
@@ -195,6 +206,192 @@ Future<void> _handleImportUnilateralExitState(BreezSdk sdk, List<String> args) a
     'and ${imported.skippedConflictingLeaves} that disagree with what this wallet holds, '
     'left out the exit data of ${imported.skippedChains} leaf(s)',
   );
+}
+
+// --- check-unilateral-exit ---
+
+Future<void> _handleCheckUnilateralExit(BreezSdk sdk, List<String> args) async {
+  final parser =
+      ArgParser(usageLineLength: 80)
+        ..addOption('input-file', mandatory: true, help: 'File the exit was written to')
+        ..addOption('output-file', help: 'File to write the updated exit to. Defaults to --input-file.');
+  final results = _parseArgs(
+    parser,
+    args,
+    'advanced check-unilateral-exit --input-file <path> [--output-file <path>]',
+  );
+  if (results == null) return;
+
+  final inputFile = results.option('input-file')!;
+  final outputFile = results.option('output-file') ?? inputFile;
+
+  final exit = _readExit(inputFile);
+  final checked = await sdk.checkUnilateralExit(request: CheckUnilateralExitRequest(exit: exit));
+
+  final verdict = checked.verdict;
+  if (verdict is UnilateralExitVerdict_Redo) {
+    print('Verdict: Redo { reason: "${verdict.reason}" }');
+    print('  (this exit cannot be finished, quote and build it again)');
+  } else if (verdict is UnilateralExitVerdict_Done) {
+    print('Verdict: Done');
+  } else {
+    print('Verdict: Valid');
+  }
+  _printExitTransactions(checked.exit);
+  _writeExit(outputFile, checked.exit);
+}
+
+// --- exit file I/O ---
+
+void _writeExit(String path, UnilateralExitResponse exit) {
+  File(path).writeAsStringSync(const JsonEncoder.withIndent('  ').convert(_exitToJson(exit)));
+  print('Wrote the exit to $path');
+}
+
+UnilateralExitResponse _readExit(String path) {
+  return _exitFromJson(jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>);
+}
+
+Map<String, dynamic> _exitToJson(UnilateralExitResponse r) => {
+  'recoverableValueSat': r.recoverableValueSat.toString(),
+  'totalFeeSat': r.totalFeeSat.toString(),
+  'cpfpFeeSat': r.cpfpFeeSat.toString(),
+  'fanoutFeeSat': r.fanoutFeeSat.toString(),
+  'sweepFeeSat': r.sweepFeeSat.toString(),
+  'leaves': [
+    for (final l in r.leaves) {'leafId': l.leafId, 'value': l.value.toString()},
+  ],
+  'transactions': [for (final t in r.transactions) _txToJson(t)],
+  'fundingInputs': [for (final i in r.fundingInputs) _cpfpInputToJson(i)],
+};
+
+UnilateralExitResponse _exitFromJson(Map<String, dynamic> j) {
+  return UnilateralExitResponse(
+    recoverableValueSat: BigInt.parse(j['recoverableValueSat'] as String),
+    totalFeeSat: BigInt.parse(j['totalFeeSat'] as String),
+    cpfpFeeSat: BigInt.parse(j['cpfpFeeSat'] as String),
+    fanoutFeeSat: BigInt.parse(j['fanoutFeeSat'] as String),
+    sweepFeeSat: BigInt.parse(j['sweepFeeSat'] as String),
+    leaves:
+        (j['leaves'] as List).map((e) {
+          final l = e as Map<String, dynamic>;
+          return UnilateralExitLeaf(leafId: l['leafId'] as String, value: BigInt.parse(l['value'] as String));
+        }).toList(),
+    transactions: (j['transactions'] as List).map((e) => _txFromJson(e as Map<String, dynamic>)).toList(),
+    fundingInputs:
+        (j['fundingInputs'] as List).map((e) => _cpfpInputFromJson(e as Map<String, dynamic>)).toList(),
+  );
+}
+
+Map<String, dynamic> _txToJson(UnilateralExitTransaction tx) => {
+  'kind': tx.kind.name,
+  'nodeId': tx.nodeId,
+  'txid': tx.txid,
+  'txHex': tx.txHex,
+  'cpfpTxHex': tx.cpfpTxHex,
+  'csvTimelockBlocks': tx.csvTimelockBlocks,
+  'dependsOn': tx.dependsOn,
+  'status': _statusToJson(tx.status),
+};
+
+UnilateralExitTransaction _txFromJson(Map<String, dynamic> j) => UnilateralExitTransaction(
+  kind: UnilateralExitTxKind.values.byName(j['kind'] as String),
+  nodeId: j['nodeId'] as String?,
+  txid: j['txid'] as String,
+  txHex: j['txHex'] as String,
+  cpfpTxHex: j['cpfpTxHex'] as String?,
+  csvTimelockBlocks: j['csvTimelockBlocks'] as int?,
+  dependsOn: (j['dependsOn'] as List).cast<String>(),
+  status: _statusFromJson(j['status'] as Map<String, dynamic>),
+);
+
+Map<String, dynamic> _statusToJson(ExitTransactionStatus s) {
+  if (s is ExitTransactionStatus_Confirmed) {
+    return {'type': 'Confirmed', 'blockHeight': s.blockHeight};
+  } else if (s is ExitTransactionStatus_WaitingForTimelock) {
+    return {'type': 'WaitingForTimelock', 'spendableAtHeight': s.spendableAtHeight};
+  } else if (s is ExitTransactionStatus_WaitingForDependencies) {
+    return {'type': 'WaitingForDependencies'};
+  } else if (s is ExitTransactionStatus_Ready) {
+    return {'type': 'Ready'};
+  } else {
+    return {'type': 'Unverified'};
+  }
+}
+
+ExitTransactionStatus _statusFromJson(Map<String, dynamic> j) {
+  switch (j['type'] as String) {
+    case 'Confirmed':
+      return ExitTransactionStatus.confirmed(blockHeight: j['blockHeight'] as int?);
+    case 'WaitingForTimelock':
+      return ExitTransactionStatus.waitingForTimelock(spendableAtHeight: j['spendableAtHeight'] as int?);
+    case 'WaitingForDependencies':
+      return const ExitTransactionStatus.waitingForDependencies();
+    case 'Ready':
+      return const ExitTransactionStatus.ready();
+    default:
+      return const ExitTransactionStatus.unverified();
+  }
+}
+
+Map<String, dynamic> _cpfpInputToJson(CpfpInput input) {
+  if (input is CpfpInput_P2tr) {
+    return {
+      'type': 'P2tr',
+      'txid': input.txid,
+      'vout': input.vout,
+      'value': input.value.toString(),
+      'pubkey': input.pubkey,
+    };
+  } else if (input is CpfpInput_P2wpkh) {
+    return {
+      'type': 'P2wpkh',
+      'txid': input.txid,
+      'vout': input.vout,
+      'value': input.value.toString(),
+      'pubkey': input.pubkey,
+    };
+  } else if (input is CpfpInput_Custom) {
+    return {
+      'type': 'Custom',
+      'txid': input.txid,
+      'vout': input.vout,
+      'value': input.value.toString(),
+      'scriptPubkeyHex': input.scriptPubkeyHex,
+      'signedInputWeight': input.signedInputWeight.toString(),
+    };
+  }
+  throw StateError('Unknown CpfpInput variant: ${input.runtimeType}');
+}
+
+CpfpInput _cpfpInputFromJson(Map<String, dynamic> j) {
+  final value = BigInt.parse(j['value'] as String);
+  switch (j['type'] as String) {
+    case 'P2tr':
+      return CpfpInput.p2Tr(
+        txid: j['txid'] as String,
+        vout: j['vout'] as int,
+        value: value,
+        pubkey: j['pubkey'] as String,
+      );
+    case 'P2wpkh':
+      return CpfpInput.p2Wpkh(
+        txid: j['txid'] as String,
+        vout: j['vout'] as int,
+        value: value,
+        pubkey: j['pubkey'] as String,
+      );
+    case 'Custom':
+      return CpfpInput.custom(
+        txid: j['txid'] as String,
+        vout: j['vout'] as int,
+        value: value,
+        scriptPubkeyHex: j['scriptPubkeyHex'] as String,
+        signedInputWeight: BigInt.parse(j['signedInputWeight'] as String),
+      );
+    default:
+      throw StateError("Unknown CpfpInput type: ${j['type']}");
+  }
 }
 
 CpfpInput? _parseCpfpInput(String s, String kindStr) {

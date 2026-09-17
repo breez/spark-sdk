@@ -95,6 +95,8 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export type ExitLeafSelection = any;
   export const ExitTransactionStatus_Tags: any;
   export type ExitTransactionStatus = any;
+  export const UnilateralExitVerdict_Tags: any;
+  export type UnilateralExitVerdict = any;
 
   // --- proxy ---
   export type ProxyConfig = any;

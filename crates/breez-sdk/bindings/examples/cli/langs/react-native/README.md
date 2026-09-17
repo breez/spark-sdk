@@ -92,7 +92,7 @@ Once the app is running, type commands in the text input at the bottom:
 
 **Webhooks**: `webhooks <subcommand>`
 
-**Advanced**: `advanced unilateral-exit`, `advanced export-unilateral-exit-state`, `advanced import-unilateral-exit-state`
+**Advanced**: `advanced unilateral-exit`, `advanced check-unilateral-exit`, `advanced export-unilateral-exit-state`, `advanced import-unilateral-exit-state`
 
 **Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`
 
@@ -185,6 +185,15 @@ advanced unilateral-exit --fee-rate 2 --destination bc1q... --utxo txid:vout:val
 
 # Select specific leaves to exit
 advanced unilateral-exit --fee-rate 2 --destination bc1q... --leaf id1,id2
+
+# Write the signed exit to a file for later checking
+advanced unilateral-exit --fee-rate 2 --destination bc1q... --utxo txid:vout:value:pubkey --secret-key <hex> --output-file exit.json
+
+# Check a signed exit against the chain (which txs confirmed, what is ready)
+advanced check-unilateral-exit --input-file exit.json
+
+# Check and write the updated exit to a different file
+advanced check-unilateral-exit --input-file exit.json --output-file checked.json
 
 # Export exit state to a file (for safekeeping outside the wallet)
 advanced export-unilateral-exit-state --output-file exit-state.json
