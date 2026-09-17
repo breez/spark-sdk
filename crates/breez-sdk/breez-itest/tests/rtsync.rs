@@ -66,7 +66,6 @@ async fn bob_spark_sdk() -> Result<SdkInstance> {
 
     let mut config = default_config(Network::Regtest);
     config.api_key = None;
-    config.prefer_spark_over_lightning = true;
     config.sync_interval_secs = 1;
     config.real_time_sync_server_url = None;
 
@@ -482,7 +481,7 @@ async fn test_04_rtsync_spark_settled_bolt11_receive_sync(
         .sdk
         .receive_payment(ReceivePaymentRequest {
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
-                description: "ssp recovery".to_string(),
+                description: "rtsync receive attribution".to_string(),
                 amount_sats: Some(AMOUNT_SATS),
                 expiry_secs: Some(3600),
                 payment_hash: None,
@@ -550,6 +549,7 @@ async fn test_04_rtsync_spark_settled_bolt11_receive_sync(
 
     let Some(PaymentDetails::Lightning {
         invoice: settled_invoice,
+        htlc_details,
         ..
     }) = &alice2_payment.details
     else {
@@ -559,6 +559,10 @@ async fn test_04_rtsync_spark_settled_bolt11_receive_sync(
         );
     };
     assert_eq!(settled_invoice, &invoice);
+    assert!(
+        htlc_details.is_none(),
+        "a Spark-settled invoice has no HTLC"
+    );
 
     info!("=== Test test_04_rtsync_spark_settled_bolt11_receive_sync PASSED ===");
     Ok(())

@@ -100,7 +100,8 @@ const SELECT_PAYMENT_SQL = `
            lrm.payment_hash AS lnurl_payment_hash,
            pm.parent_payment_id,
            COALESCE(sb.bolt11, rb.bolt11) AS settled_bolt11,
-           COALESCE(sb.description, rb.description) AS settled_description,
+           COALESCE(sb.description, rb.description, pm.lnurl_description)
+             AS settled_description,
            COALESCE(sb.destination_pubkey, rb.destination_pubkey) AS settled_destination_pubkey
       FROM brz_payments p
       LEFT JOIN brz_payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
@@ -149,34 +150,6 @@ function crossChainSwapFromRow(row) {
     updatedAt: Number(row.updated_at),
     data: row.data,
     secrets: row.secrets,
-  };
-}
-
-/**
- * Maps a brz_spark_settled_bolt11_sends row to the camelCase shape the SDK
- * expects. A NULL description comes back absent.
- */
-function sparkSettledBolt11SendFromRow(row) {
-  return {
-    paymentId: row.payment_id,
-    bolt11: row.bolt11,
-    description: row.description == null ? undefined : row.description,
-    destinationPubkey: row.destination_pubkey,
-  };
-}
-
-/**
- * Maps a brz_spark_settled_bolt11_receives row to the camelCase shape the SDK
- * expects. A NULL expiry or description comes back absent.
- */
-function sparkSettledBolt11ReceiveFromRow(row) {
-  return {
-    id: row.id,
-    sparkInvoice: row.spark_invoice,
-    bolt11: row.bolt11,
-    expiresAt: row.expires_at == null ? undefined : Number(row.expires_at),
-    description: row.description == null ? undefined : row.description,
-    destinationPubkey: row.destination_pubkey,
   };
 }
 
@@ -339,13 +312,18 @@ class MysqlStorage {
           // Token payments are identified by spark = NULL AND a token row
           // joined in via t.tx_hash.
           if (paymentDetailsFilter.type === "spark") {
-            paymentDetailsClauses.push("p.spark = 1");
+            paymentDetailsClauses.push(
+              "p.spark = 1 AND COALESCE(sb.bolt11, rb.bolt11) IS NULL"
+            );
           } else if (paymentDetailsFilter.type === "token") {
             paymentDetailsClauses.push("p.spark IS NULL AND t.tx_hash IS NOT NULL");
           } else if (paymentDetailsFilter.type === "lightning") {
-            // Not htlc_status: a payment settled over the Spark destination its
-            // invoice advertised is a Lightning payment with no HTLC.
-            paymentDetailsClauses.push("l.invoice IS NOT NULL");
+            // A payment settled over the Spark destination its invoice
+            // advertised has no lightning details row of its own: it reports as
+            // the Bolt11 through the joined row.
+            paymentDetailsClauses.push(
+              "(l.invoice IS NOT NULL OR COALESCE(sb.bolt11, rb.bolt11) IS NOT NULL)"
+            );
           }
 
           const htlcAlias =
@@ -1243,8 +1221,6 @@ class MysqlStorage {
     }
   }
 
-  // ===== Cross-Chain Swap Operations =====
-
   // ===== Spark-Settled Bolt11 Operations =====
 
   async setSparkSettledBolt11Send(send) {
@@ -1268,26 +1244,6 @@ class MysqlStorage {
     } catch (error) {
       throw new StorageError(
         `Failed to set spark-settled bolt11 send: ${error.message}`,
-        error
-      );
-    }
-  }
-
-  async getSparkSettledBolt11Send(paymentId) {
-    try {
-      const [rows] = await this.pool.query(
-        `SELECT payment_id, bolt11, description, destination_pubkey
-         FROM brz_spark_settled_bolt11_sends
-         WHERE user_id = ? AND payment_id = ?`,
-        [this.identity, paymentId]
-      );
-      if (rows.length === 0) {
-        return null;
-      }
-      return sparkSettledBolt11SendFromRow(rows[0]);
-    } catch (error) {
-      throw new StorageError(
-        `Failed to get spark-settled bolt11 send: ${error.message}`,
         error
       );
     }
@@ -1323,32 +1279,16 @@ class MysqlStorage {
     }
   }
 
-  async getSparkSettledBolt11Receive(id) {
-    try {
-      const [rows] = await this.pool.query(
-        `SELECT id, spark_invoice, bolt11, expires_at, description, destination_pubkey
-         FROM brz_spark_settled_bolt11_receives
-         WHERE user_id = ? AND id = ?`,
-        [this.identity, id]
-      );
-      if (rows.length === 0) {
-        return null;
-      }
-      return sparkSettledBolt11ReceiveFromRow(rows[0]);
-    } catch (error) {
-      throw new StorageError(
-        `Failed to get spark-settled bolt11 receive: ${error.message}`,
-        error
-      );
-    }
-  }
-
   async deleteExpiredSparkSettledBolt11Receives(before) {
     try {
       await this.pool.query(
         `DELETE FROM brz_spark_settled_bolt11_receives
-         WHERE user_id = ? AND expires_at < ?`,
-        [this.identity, Number(before)]
+         WHERE user_id = ? AND expires_at < ?
+           AND id NOT IN (
+             SELECT spark_invoice_digest FROM brz_payment_details_spark
+              WHERE user_id = ? AND spark_invoice_digest IS NOT NULL
+           )`,
+        [this.identity, Number(before), this.identity]
       );
     } catch (error) {
       throw new StorageError(
@@ -1357,6 +1297,8 @@ class MysqlStorage {
       );
     }
   }
+
+  // ===== Cross-Chain Swap Operations =====
 
   async setCrossChainSwap(swap) {
     try {

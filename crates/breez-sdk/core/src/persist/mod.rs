@@ -457,7 +457,7 @@ pub struct SparkSettledBolt11Receive {
     pub spark_invoice: String,
     pub bolt11: String,
     /// When the Spark invoice expires, as Unix seconds. Absent when it never
-    /// does. A row is dropped once its invoice has been expired for a while.
+    /// does. A row whose invoice expired unpaid is dropped a while after.
     pub expires_at: Option<u64>,
     /// The Bolt11's description and payee, read off it once when the row is
     /// written so that reporting the payment as the invoice costs no parsing.
@@ -661,28 +661,17 @@ pub trait Storage: Send + Sync {
         send: SparkSettledBolt11Send,
     ) -> Result<(), StorageError>;
 
-    /// Gets the Bolt11 a Spark transfer was sent to settle, or `None` if the
-    /// send settled nothing over Spark.
-    async fn get_spark_settled_bolt11_send(
-        &self,
-        payment_id: String,
-    ) -> Result<Option<SparkSettledBolt11Send>, StorageError>;
-
     /// Inserts or overwrites a Bolt11 that can settle over Spark (upsert by id).
     async fn set_spark_settled_bolt11_receive(
         &self,
         receive: SparkSettledBolt11Receive,
     ) -> Result<(), StorageError>;
 
-    /// Gets a Bolt11 that can settle over Spark by the id of the Spark invoice
-    /// it embeds, or `None` if no Bolt11 embeds it.
-    async fn get_spark_settled_bolt11_receive(
-        &self,
-        id: String,
-    ) -> Result<Option<SparkSettledBolt11Receive>, StorageError>;
-
     /// Deletes every Bolt11 that can settle over Spark whose Spark invoice
-    /// expired before `before`, as Unix seconds. Rows with no expiry stay.
+    /// expired before `before`, as Unix seconds, and that no stored payment
+    /// settled. Rows with no expiry stay, as do the rows a payment reports
+    /// itself by: those are read on every list, so dropping one would take the
+    /// invoice off a payment that already settled it.
     async fn delete_expired_spark_settled_bolt11_receives(
         &self,
         before: u64,

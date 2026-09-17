@@ -600,28 +600,23 @@ class MysqlMigrationManager {
         ],
       },
       {
-        // A Lightning payment settled by a transfer to the Spark destination its
-        // invoice advertised involves no HTLC, so the columns describing one
-        // become nullable.
-        name: "Allow lightning payments with no HTLC",
+        // Bolt11s settled over Spark, one table per direction, joined when a
+        // payment is read: sends by the payment id, receives by a digest of the
+        // Spark invoice the Bolt11 embeds, which the Spark details row carries.
+        // Born multi-tenant. A payment settled this way involves no HTLC, so the
+        // lightning columns describing one become nullable.
+        name: "Create brz_spark_settled_bolt11 tables",
         sql: [
           `ALTER TABLE brz_payment_details_lightning
              MODIFY payment_hash VARCHAR(255) NULL,
              MODIFY htlc_status VARCHAR(64) NULL,
              MODIFY htlc_expiry_time BIGINT NULL`,
-        ],
-      },
-      {
-        // Bolt11s settled over Spark, one table per direction. Sends are keyed
-        // by the transfer that paid. Receives are keyed by the Spark invoice
-        // the Bolt11 embeds, written when it is created and dropped once it has
-        // expired. Born multi-tenant.
-        name: "Create brz_spark_settled_bolt11 tables",
-        sql: [
           `CREATE TABLE IF NOT EXISTS brz_spark_settled_bolt11_sends (
               user_id VARBINARY(33) NOT NULL,
               payment_id VARCHAR(255) NOT NULL,
               bolt11 TEXT NOT NULL,
+              description TEXT NULL,
+              destination_pubkey VARCHAR(255) NOT NULL DEFAULT '',
               PRIMARY KEY (user_id, payment_id)
           )`,
           `CREATE TABLE IF NOT EXISTS brz_spark_settled_bolt11_receives (
@@ -630,24 +625,12 @@ class MysqlMigrationManager {
               spark_invoice TEXT NOT NULL,
               bolt11 TEXT NOT NULL,
               expires_at BIGINT NULL,
+              description TEXT NULL,
+              destination_pubkey VARCHAR(255) NOT NULL DEFAULT '',
               PRIMARY KEY (user_id, id),
               INDEX brz_idx_spark_settled_bolt11_receives_user_expires_at
                   (user_id, expires_at)
           )`,
-        ],
-      },
-      {
-        // A payment reports as the Bolt11 it settled by joining these rows when
-        // it is read, so the row carries what the details need and the Spark
-        // row carries the key the receive side joins on.
-        name: "Join the settled bolt11 when a payment is read",
-        sql: [
-          `ALTER TABLE brz_spark_settled_bolt11_sends
-             ADD COLUMN description TEXT NULL,
-             ADD COLUMN destination_pubkey VARCHAR(255) NOT NULL DEFAULT ''`,
-          `ALTER TABLE brz_spark_settled_bolt11_receives
-             ADD COLUMN description TEXT NULL,
-             ADD COLUMN destination_pubkey VARCHAR(255) NOT NULL DEFAULT ''`,
           `ALTER TABLE brz_payment_details_spark
              ADD COLUMN spark_invoice_digest VARCHAR(64) NULL`,
           `CREATE INDEX brz_idx_payment_details_spark_invoice_digest

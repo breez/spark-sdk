@@ -84,8 +84,8 @@ pub(crate) async fn record_spark_settled_bolt11_receive(
 const SPARK_SETTLED_BOLT11_RECEIVE_GRACE_SECS: u64 = 7 * 24 * 60 * 60;
 
 /// Drops the [`SparkSettledBolt11Receive`] rows of invoices that expired long
-/// enough before `now_secs` that no transfer settling them is still to be
-/// resolved.
+/// enough before `now_secs` that nothing is still going to settle them. A row
+/// a payment did settle stays: the payment reports itself by it.
 pub(crate) async fn prune_expired_spark_settled_bolt11_receives(
     storage: &Arc<dyn Storage>,
     now_secs: u64,

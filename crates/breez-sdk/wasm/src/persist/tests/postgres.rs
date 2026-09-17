@@ -179,10 +179,11 @@ async fn test_lightning_payment_settled_over_spark() {
 }
 
 #[wasm_bindgen_test]
-async fn test_spark_settled_bolt11_crud() {
+async fn test_spark_settled_bolt11_upsert_and_prune() {
     let storage = create_test_storage("pg_spark_settled_bolt11_crud").await;
 
-    breez_sdk_spark::storage_tests::test_spark_settled_bolt11_crud(Box::new(storage)).await;
+    breez_sdk_spark::storage_tests::test_spark_settled_bolt11_upsert_and_prune(Box::new(storage))
+        .await;
 }
 
 #[wasm_bindgen_test]

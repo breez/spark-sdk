@@ -514,11 +514,14 @@ class MigrationManager {
         ],
       },
       {
-        // A Lightning payment settled by a transfer to the Spark destination its
-        // invoice advertised involves no HTLC, so the columns describing one have
-        // to be nullable. SQLite cannot drop NOT NULL in place, so the table is
-        // rebuilt. Every existing row settled over Lightning and keeps its values.
-        name: "Allow lightning payments with no HTLC",
+        // Bolt11s settled over Spark, one table per direction, joined when a
+        // payment is read: sends by the payment id, receives by a digest of the
+        // Spark invoice the Bolt11 embeds, which the Spark details row carries.
+        // A payment settled this way involves no HTLC, so the lightning columns
+        // describing one have to be nullable; SQLite cannot drop NOT NULL in
+        // place, so that table is rebuilt. Every existing row settled over
+        // Lightning and keeps its values.
+        name: "Create spark_settled_bolt11 tables",
         sql: [
           `CREATE TABLE payment_details_lightning_new (
              payment_id TEXT PRIMARY KEY,
@@ -539,39 +542,22 @@ class MigrationManager {
           `ALTER TABLE payment_details_lightning_new RENAME TO payment_details_lightning`,
           `CREATE INDEX idx_payment_details_lightning_invoice ON payment_details_lightning(invoice)`,
           `CREATE INDEX idx_payment_details_lightning_payment_hash ON payment_details_lightning(payment_hash)`,
-        ],
-      },
-      {
-        // Bolt11s settled over Spark, one table per direction. Sends are keyed
-        // by the transfer that paid. Receives are keyed by the Spark invoice
-        // the Bolt11 embeds, written when it is created and dropped once it has
-        // expired.
-        name: "Create spark_settled_bolt11 tables",
-        sql: [
           `CREATE TABLE spark_settled_bolt11_sends (
               payment_id TEXT PRIMARY KEY,
-              bolt11 TEXT NOT NULL
+              bolt11 TEXT NOT NULL,
+              description TEXT,
+              destination_pubkey TEXT NOT NULL DEFAULT ''
           )`,
           `CREATE TABLE spark_settled_bolt11_receives (
               id TEXT PRIMARY KEY,
               spark_invoice TEXT NOT NULL,
               bolt11 TEXT NOT NULL,
-              expires_at INTEGER
+              expires_at INTEGER,
+              description TEXT,
+              destination_pubkey TEXT NOT NULL DEFAULT ''
           )`,
           `CREATE INDEX idx_spark_settled_bolt11_receives_expires_at
             ON spark_settled_bolt11_receives(expires_at)`,
-        ],
-      },
-      {
-        // A payment reports as the Bolt11 it settled by joining these rows when
-        // it is read, so the row carries what the details need and the Spark
-        // row carries the key the receive side joins on.
-        name: "Join the settled bolt11 when a payment is read",
-        sql: [
-          `ALTER TABLE spark_settled_bolt11_sends ADD COLUMN description TEXT`,
-          `ALTER TABLE spark_settled_bolt11_sends ADD COLUMN destination_pubkey TEXT NOT NULL DEFAULT ''`,
-          `ALTER TABLE spark_settled_bolt11_receives ADD COLUMN description TEXT`,
-          `ALTER TABLE spark_settled_bolt11_receives ADD COLUMN destination_pubkey TEXT NOT NULL DEFAULT ''`,
           `ALTER TABLE payment_details_spark ADD COLUMN spark_invoice_digest TEXT`,
           `CREATE INDEX idx_payment_details_spark_invoice_digest
             ON payment_details_spark(spark_invoice_digest)`,

@@ -500,9 +500,12 @@ impl PostgresStorage {
                  )"
                 .to_string(),
             ],
-            // Migration 24: A Lightning payment settled by a transfer to the Spark
-            // destination its invoice advertised involves no HTLC, so the columns
-            // describing one become nullable.
+            // Migration 24: Bolt11s settled over Spark, one table per direction,
+            // joined when a payment is read: sends by the payment id, receives
+            // by a digest of the Spark invoice the Bolt11 embeds, which the
+            // Spark details row carries. Born multi-tenant. A payment settled
+            // this way involves no HTLC, so the lightning columns describing one
+            // become nullable.
             vec![
                 "ALTER TABLE brz_payment_details_lightning ALTER COLUMN payment_hash DROP NOT NULL"
                     .to_string(),
@@ -510,16 +513,12 @@ impl PostgresStorage {
                     .to_string(),
                 "ALTER TABLE brz_payment_details_lightning ALTER COLUMN htlc_expiry_time DROP NOT NULL"
                     .to_string(),
-            ],
-            // Migration 25: Bolt11s settled over Spark, one table per direction.
-            // Sends are keyed by the transfer that paid. Receives are keyed by
-            // the Spark invoice the Bolt11 embeds, written when it is created and
-            // dropped once it has expired. Born multi-tenant.
-            vec![
                 "CREATE TABLE IF NOT EXISTS brz_spark_settled_bolt11_sends (
                     user_id BYTEA NOT NULL,
                     payment_id TEXT NOT NULL,
                     bolt11 TEXT NOT NULL,
+                    description TEXT,
+                    destination_pubkey TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY (user_id, payment_id)
                  )".to_string(),
                 "CREATE TABLE IF NOT EXISTS brz_spark_settled_bolt11_receives (
@@ -528,19 +527,12 @@ impl PostgresStorage {
                     spark_invoice TEXT NOT NULL,
                     bolt11 TEXT NOT NULL,
                     expires_at BIGINT,
+                    description TEXT,
+                    destination_pubkey TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY (user_id, id)
                  )".to_string(),
                 "CREATE INDEX IF NOT EXISTS brz_idx_spark_settled_bolt11_receives_user_expires_at
                     ON brz_spark_settled_bolt11_receives (user_id, expires_at)".to_string(),
-            ],
-            // Migration 26: A payment reports as the Bolt11 it settled by joining
-            // these rows when it is read, so the row carries what the details
-            // need and the Spark row carries the key the receive side joins on.
-            vec![
-                "ALTER TABLE brz_spark_settled_bolt11_sends ADD COLUMN description TEXT".to_string(),
-                "ALTER TABLE brz_spark_settled_bolt11_sends ADD COLUMN destination_pubkey TEXT NOT NULL DEFAULT ''".to_string(),
-                "ALTER TABLE brz_spark_settled_bolt11_receives ADD COLUMN description TEXT".to_string(),
-                "ALTER TABLE brz_spark_settled_bolt11_receives ADD COLUMN destination_pubkey TEXT NOT NULL DEFAULT ''".to_string(),
                 "ALTER TABLE brz_payment_details_spark ADD COLUMN spark_invoice_digest TEXT".to_string(),
                 "CREATE INDEX IF NOT EXISTS brz_idx_payment_details_spark_invoice_digest
                     ON brz_payment_details_spark (user_id, spark_invoice_digest)".to_string(),
@@ -987,7 +979,11 @@ impl Storage for PostgresStorage {
                 // Payment type discriminator
                 match payment_details_filter {
                     StoragePaymentDetailsFilter::Spark { .. } => {
-                        payment_details_clauses.push("p.spark = true".to_string());
+                        // Not a Spark payment once it reports as the Bolt11 it
+                        // settled, which is what the joined row makes it.
+                        payment_details_clauses.push(
+                            "p.spark = true AND COALESCE(sb.bolt11, rb.bolt11) IS NULL".to_string(),
+                        );
                     }
                     StoragePaymentDetailsFilter::Token { .. } => {
                         payment_details_clauses.push("p.spark IS NULL".to_string());
@@ -1703,27 +1699,6 @@ impl Storage for PostgresStorage {
         Ok(())
     }
 
-    async fn get_spark_settled_bolt11_send(
-        &self,
-        payment_id: String,
-    ) -> Result<Option<SparkSettledBolt11Send>, StorageError> {
-        let client = self.pool.get().await.map_err(map_pool_error)?;
-        let row = client
-            .query_opt(
-                "SELECT payment_id, bolt11, description, destination_pubkey
-                 FROM brz_spark_settled_bolt11_sends
-                 WHERE user_id = $1 AND payment_id = $2",
-                &[&self.identity, &payment_id],
-            )
-            .await?;
-        Ok(row.map(|row| SparkSettledBolt11Send {
-            payment_id: row.get(0),
-            bolt11: row.get(1),
-            description: row.get(2),
-            destination_pubkey: row.get(3),
-        }))
-    }
-
     async fn set_spark_settled_bolt11_receive(
         &self,
         receive: SparkSettledBolt11Receive,
@@ -1755,35 +1730,6 @@ impl Storage for PostgresStorage {
         Ok(())
     }
 
-    async fn get_spark_settled_bolt11_receive(
-        &self,
-        id: String,
-    ) -> Result<Option<SparkSettledBolt11Receive>, StorageError> {
-        let client = self.pool.get().await.map_err(map_pool_error)?;
-        let row = client
-            .query_opt(
-                "SELECT id, spark_invoice, bolt11, expires_at, description, destination_pubkey
-                 FROM brz_spark_settled_bolt11_receives
-                 WHERE user_id = $1 AND id = $2",
-                &[&self.identity, &id],
-            )
-            .await?;
-        match row {
-            Some(row) => Ok(Some(SparkSettledBolt11Receive {
-                id: row.get(0),
-                spark_invoice: row.get(1),
-                bolt11: row.get(2),
-                expires_at: row
-                    .get::<_, Option<i64>>(3)
-                    .map(u64::try_from)
-                    .transpose()?,
-                description: row.get(4),
-                destination_pubkey: row.get(5),
-            })),
-            None => Ok(None),
-        }
-    }
-
     async fn delete_expired_spark_settled_bolt11_receives(
         &self,
         before: u64,
@@ -1792,7 +1738,11 @@ impl Storage for PostgresStorage {
         client
             .execute(
                 "DELETE FROM brz_spark_settled_bolt11_receives
-                 WHERE user_id = $1 AND expires_at < $2",
+                 WHERE user_id = $1 AND expires_at < $2
+                   AND id NOT IN (
+                     SELECT spark_invoice_digest FROM brz_payment_details_spark
+                      WHERE user_id = $1 AND spark_invoice_digest IS NOT NULL
+                   )",
                 &[&self.identity, &i64::try_from(before)?],
             )
             .await?;
@@ -2217,7 +2167,8 @@ const SELECT_PAYMENT_SQL: &str = "
            pm.conversion_status,
            pm.parent_payment_id,
            COALESCE(sb.bolt11, rb.bolt11) AS settled_bolt11,
-           COALESCE(sb.description, rb.description) AS settled_description,
+           COALESCE(sb.description, rb.description, pm.lnurl_description)
+             AS settled_description,
            COALESCE(sb.destination_pubkey, rb.destination_pubkey) AS settled_destination_pubkey
       FROM brz_payments p
       LEFT JOIN brz_payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
@@ -2568,9 +2519,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_spark_settled_bolt11_crud() {
+    async fn test_spark_settled_bolt11_upsert_and_prune() {
         let fixture = PostgresTestFixture::new().await;
-        crate::persist::tests::test_spark_settled_bolt11_crud(Box::new(fixture.storage)).await;
+        crate::persist::tests::test_spark_settled_bolt11_upsert_and_prune(Box::new(
+            fixture.storage,
+        ))
+        .await;
     }
 
     #[tokio::test]

@@ -4303,17 +4303,18 @@ pub async fn test_update_boltz_status_to_completed(storage: Box<dyn Storage>) {
     assert!(fetched.conversion_details.is_none());
 }
 
-/// A Bolt11 invoice settled by a Spark transfer to the destination it
-/// advertised has no HTLC, and must round-trip that way rather than being read
-/// back with invented HTLC details.
 /// A Spark transfer that settled a Bolt11 reports as that invoice because the
 /// row naming it is joined when the payment is read, with nothing applied to
 /// the payment when it was written.
+#[allow(clippy::too_many_lines)]
 pub async fn test_spark_settled_bolt11_joins_at_read(storage: Box<dyn Storage>) {
     use crate::SparkInvoicePaymentDetails;
-    use crate::persist::{SparkSettledBolt11Receive, SparkSettledBolt11Send};
+    use crate::persist::{
+        SparkSettledBolt11Receive, SparkSettledBolt11Send, StorageListPaymentsRequest,
+        StoragePaymentDetailsFilter,
+    };
     let spark_invoice = "sparkrt1joined".to_string();
-    let receive = Payment {
+    let receive_payment = Payment {
         id: "joined_receive".to_string(),
         payment_type: PaymentType::Receive,
         status: PaymentStatus::Completed,
@@ -4331,17 +4332,17 @@ pub async fn test_spark_settled_bolt11_joins_at_read(storage: Box<dyn Storage>) 
         }),
         conversion_details: None,
     };
+    // The payer's transfer carries the Spark invoice it paid, so the send
+    // matches the receive row too: its own row has to win.
     let send = Payment {
         id: "joined_send".to_string(),
         payment_type: PaymentType::Send,
-        details: Some(PaymentDetails::Spark {
-            invoice_details: None,
-            htlc_details: None,
-            conversion_info: None,
-        }),
-        ..receive.clone()
+        ..receive_payment.clone()
     };
-    storage.apply_payment_update(receive).await.unwrap();
+    storage
+        .apply_payment_update(receive_payment.clone())
+        .await
+        .unwrap();
     storage.apply_payment_update(send).await.unwrap();
 
     // Both still read as plain Spark payments until the rows naming the Bolt11
@@ -4406,7 +4407,83 @@ pub async fn test_spark_settled_bolt11_joins_at_read(storage: Box<dyn Storage>) 
         assert_eq!(description.as_deref(), Some(expected_description));
         assert_eq!(destination_pubkey, expected_pubkey);
         assert!(htlc_details.is_none());
+
+        // Found by the Bolt11 it settled, which is how a receive is picked up
+        // while a caller waits on the invoice it issued.
+        let by_invoice = storage
+            .get_payment_by_invoice(expected_bolt11.to_string())
+            .await
+            .unwrap();
+        assert_eq!(by_invoice.map(|p| p.id).as_deref(), Some(id), "{id}");
     }
+
+    // An LNURL Bolt11 carries a description hash rather than the text, so the
+    // row has no description: the payment reports the LNURL one instead.
+    storage
+        .apply_payment_update(Payment {
+            id: "lnurl_send".to_string(),
+            payment_type: PaymentType::Send,
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: None,
+                conversion_info: None,
+            }),
+            ..receive_payment.clone()
+        })
+        .await
+        .unwrap();
+    storage
+        .insert_payment_metadata(
+            "lnurl_send".to_string(),
+            PaymentMetadata {
+                lnurl_description: Some("lnurl desc".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    storage
+        .set_spark_settled_bolt11_send(SparkSettledBolt11Send {
+            payment_id: "lnurl_send".to_string(),
+            bolt11: "lnbc_lnurl_send".to_string(),
+            description: None,
+            destination_pubkey: "02send".to_string(),
+        })
+        .await
+        .unwrap();
+    let stored = storage
+        .get_payment_by_id("lnurl_send".to_string())
+        .await
+        .unwrap();
+    let Some(PaymentDetails::Lightning { description, .. }) = stored.details else {
+        panic!("lnurl_send should report as the Bolt11 it settled");
+    };
+    assert_eq!(description.as_deref(), Some("lnurl desc"));
+
+    // Filtering has to agree with what the payment reports, or a caller sees a
+    // Lightning payment under a Spark filter.
+    let listed = |filter: StoragePaymentDetailsFilter| StorageListPaymentsRequest {
+        payment_details_filter: Some(vec![filter]),
+        ..Default::default()
+    };
+    let lightning = storage
+        .list_payments(listed(StoragePaymentDetailsFilter::Lightning {
+            htlc_status: None,
+            conversion_filter: None,
+        }))
+        .await
+        .unwrap();
+    let mut ids: Vec<_> = lightning.into_iter().map(|p| p.id).collect();
+    ids.sort();
+    assert_eq!(ids, ["joined_receive", "joined_send", "lnurl_send"]);
+    let spark = storage
+        .list_payments(listed(StoragePaymentDetailsFilter::Spark {
+            htlc_status: None,
+            conversion_filter: None,
+        }))
+        .await
+        .unwrap();
+    assert!(spark.is_empty(), "got {spark:?}");
 }
 
 /// Looking a payment up by its Bolt11, which is how a receive settled over
@@ -4539,122 +4616,119 @@ pub async fn test_lightning_payment_settled_over_spark(storage: Box<dyn Storage>
     assert!(htlc_details.is_none());
 }
 
-/// Both halves of a Bolt11 settled over Spark round-trip, upsert on their
-/// key, and the receive half is pruned by expiry while rows with no expiry
-/// stay.
+/// Both halves of a Bolt11 settled over Spark upsert on their key, and the
+/// receive half is pruned once its invoice has expired unpaid. A row a payment
+/// settled stays: the payment reports itself by it on every read.
 #[allow(clippy::too_many_lines)]
-pub async fn test_spark_settled_bolt11_crud(storage: Box<dyn Storage>) {
+pub async fn test_spark_settled_bolt11_upsert_and_prune(storage: Box<dyn Storage>) {
+    use crate::SparkInvoicePaymentDetails;
     use crate::persist::{SparkSettledBolt11Receive, SparkSettledBolt11Send};
 
-    let send = |payment_id: &str, bolt11: &str| SparkSettledBolt11Send {
-        payment_id: payment_id.to_string(),
-        bolt11: bolt11.to_string(),
-        description: None,
-        destination_pubkey: String::new(),
+    let spark_payment = |id: &str, spark_invoice: Option<&str>| Payment {
+        id: id.to_string(),
+        payment_type: PaymentType::Receive,
+        status: PaymentStatus::Completed,
+        amount: 10,
+        fees: 0,
+        timestamp: 1,
+        method: PaymentMethod::Spark,
+        details: Some(PaymentDetails::Spark {
+            invoice_details: spark_invoice.map(|invoice| SparkInvoicePaymentDetails {
+                description: None,
+                invoice: invoice.to_string(),
+            }),
+            htlc_details: None,
+            conversion_info: None,
+        }),
+        conversion_details: None,
     };
-    storage
-        .set_spark_settled_bolt11_send(send("t1", "lnbc_t1"))
-        .await
-        .unwrap();
-    let fetched = storage
-        .get_spark_settled_bolt11_send("t1".to_string())
-        .await
-        .unwrap()
-        .expect("t1 present");
-    assert_eq!(fetched.payment_id, "t1");
-    assert_eq!(fetched.bolt11, "lnbc_t1");
-    assert!(
-        storage
-            .get_spark_settled_bolt11_send("nope".to_string())
-            .await
-            .unwrap()
-            .is_none()
-    );
-    storage
-        .set_spark_settled_bolt11_send(send("t1", "lnbc_t1_again"))
-        .await
-        .unwrap();
-    assert_eq!(
-        storage
-            .get_spark_settled_bolt11_send("t1".to_string())
-            .await
-            .unwrap()
-            .unwrap()
-            .bolt11,
-        "lnbc_t1_again"
-    );
+    let settled_bolt11 = |payment: &Payment| match &payment.details {
+        Some(PaymentDetails::Lightning { invoice, .. }) => Some(invoice.clone()),
+        _ => None,
+    };
 
+    // A send names its Bolt11 by payment id, and rewriting the row rewrites
+    // what the payment reports.
+    storage
+        .apply_payment_update(spark_payment("t1", None))
+        .await
+        .unwrap();
+    for bolt11 in ["lnbc_t1", "lnbc_t1_again"] {
+        storage
+            .set_spark_settled_bolt11_send(SparkSettledBolt11Send {
+                payment_id: "t1".to_string(),
+                bolt11: bolt11.to_string(),
+                description: None,
+                destination_pubkey: String::new(),
+            })
+            .await
+            .unwrap();
+        let fetched = storage.get_payment_by_id("t1".to_string()).await.unwrap();
+        assert_eq!(settled_bolt11(&fetched).as_deref(), Some(bolt11));
+    }
+
+    // Keyed by a digest of the Spark invoice, which is what the payment
+    // carrying that invoice joins on.
     let receive = |id: &str, expires_at: Option<u64>| SparkSettledBolt11Receive {
         description: None,
         destination_pubkey: String::new(),
-        id: id.to_string(),
+        id: crate::persist::spark_invoice_digest(&format!("spark_{id}")),
         spark_invoice: format!("spark_{id}"),
         bolt11: format!("lnbc_{id}"),
         expires_at,
     };
-    storage
-        .set_spark_settled_bolt11_receive(receive("r1", Some(1000)))
-        .await
-        .unwrap();
-    storage
-        .set_spark_settled_bolt11_receive(receive("r2", Some(2000)))
-        .await
-        .unwrap();
-    storage
-        .set_spark_settled_bolt11_receive(receive("r3", None))
-        .await
-        .unwrap();
-    let fetched = storage
-        .get_spark_settled_bolt11_receive("r1".to_string())
-        .await
-        .unwrap()
-        .expect("r1 present");
-    assert_eq!(fetched.id, "r1");
-    assert_eq!(fetched.spark_invoice, "spark_r1");
-    assert_eq!(fetched.bolt11, "lnbc_r1");
-    assert_eq!(fetched.expires_at, Some(1000));
-    let fetched = storage
-        .get_spark_settled_bolt11_receive("r3".to_string())
-        .await
-        .unwrap()
-        .expect("r3 present");
-    assert_eq!(fetched.expires_at, None);
-    assert!(
+    // r1 expired and was settled, r2 expires at the cutoff, r3 never expires,
+    // r4 expired with nothing settling it.
+    for (id, expires_at) in [
+        ("r1", Some(1000)),
+        ("r2", Some(2000)),
+        ("r3", None),
+        ("r4", Some(1000)),
+    ] {
         storage
-            .get_spark_settled_bolt11_receive("nope".to_string())
+            .set_spark_settled_bolt11_receive(receive(id, expires_at))
             .await
-            .unwrap()
-            .is_none()
-    );
+            .unwrap();
+    }
+    for id in ["r1", "r2", "r3"] {
+        storage
+            .apply_payment_update(spark_payment(id, Some(&format!("spark_{id}"))))
+            .await
+            .unwrap();
+    }
+    // A rewritten row is what the payment reports.
     storage
-        .set_spark_settled_bolt11_receive(receive("r1", Some(1500)))
+        .set_spark_settled_bolt11_receive(SparkSettledBolt11Receive {
+            bolt11: "lnbc_r1_again".to_string(),
+            ..receive("r1", Some(1000))
+        })
         .await
         .unwrap();
-    assert_eq!(
-        storage
-            .get_spark_settled_bolt11_receive("r1".to_string())
-            .await
-            .unwrap()
-            .unwrap()
-            .expires_at,
-        Some(1500)
-    );
+    let fetched = storage.get_payment_by_id("r1".to_string()).await.unwrap();
+    assert_eq!(settled_bolt11(&fetched).as_deref(), Some("lnbc_r1_again"));
 
-    // Expired before the cutoff go; the one expiring at it, and the one that
-    // never expires, stay.
     storage
         .delete_expired_spark_settled_bolt11_receives(2000)
         .await
         .unwrap();
-    for (id, expected_present) in [("r1", false), ("r2", true), ("r3", true)] {
-        assert_eq!(
-            storage
-                .get_spark_settled_bolt11_receive(id.to_string())
-                .await
-                .unwrap()
-                .is_some(),
-            expected_present,
-            "{id}"
-        );
+
+    // r1 expired long ago but a payment settled it, so it keeps its invoice.
+    for (id, expected) in [
+        ("r1", Some("lnbc_r1_again")),
+        ("r2", Some("lnbc_r2")),
+        ("r3", Some("lnbc_r3")),
+    ] {
+        let fetched = storage.get_payment_by_id(id.to_string()).await.unwrap();
+        assert_eq!(settled_bolt11(&fetched).as_deref(), expected, "{id}");
     }
+
+    // r4 settled nothing, so it went: a transfer arriving now is a plain Spark
+    // receive.
+    storage
+        .apply_payment_update(spark_payment("r4", Some("spark_r4")))
+        .await
+        .unwrap();
+    let fetched = storage.get_payment_by_id("r4".to_string()).await.unwrap();
+    assert_eq!(settled_bolt11(&fetched), None);
+    assert_eq!(fetched.method, PaymentMethod::Spark);
 }

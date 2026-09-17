@@ -567,25 +567,26 @@ impl MysqlStorage {
                     PRIMARY KEY (user_id, address)
                 )",
             )],
-            // Migration 25: A Lightning payment settled by a transfer to the Spark
-            // destination its invoice advertised involves no HTLC, so the columns
-            // describing one become nullable.
-            vec![Migration::sql(
-                "ALTER TABLE brz_payment_details_lightning
-                   MODIFY payment_hash VARCHAR(255) NULL,
-                   MODIFY htlc_status VARCHAR(64) NULL,
-                   MODIFY htlc_expiry_time BIGINT NULL",
-            )],
-            // Migration 26: Bolt11s settled over Spark, one table per direction.
-            // Sends are keyed by the transfer that paid. Receives are keyed by
-            // the Spark invoice the Bolt11 embeds, written when it is created and
-            // dropped once it has expired. Born multi-tenant.
+            // Migration 25: Bolt11s settled over Spark, one table per direction,
+            // joined when a payment is read: sends by the payment id, receives
+            // by a digest of the Spark invoice the Bolt11 embeds, which the
+            // Spark details row carries. Born multi-tenant. A payment settled
+            // this way involves no HTLC, so the lightning columns describing one
+            // become nullable.
             vec![
+                Migration::sql(
+                    "ALTER TABLE brz_payment_details_lightning
+                       MODIFY payment_hash VARCHAR(255) NULL,
+                       MODIFY htlc_status VARCHAR(64) NULL,
+                       MODIFY htlc_expiry_time BIGINT NULL",
+                ),
                 Migration::sql(
                     "CREATE TABLE IF NOT EXISTS brz_spark_settled_bolt11_sends (
                         user_id VARBINARY(33) NOT NULL,
                         payment_id VARCHAR(255) NOT NULL,
                         bolt11 TEXT NOT NULL,
+                        description TEXT NULL,
+                        destination_pubkey VARCHAR(255) NOT NULL DEFAULT '',
                         PRIMARY KEY (user_id, payment_id)
                     )",
                 ),
@@ -596,25 +597,12 @@ impl MysqlStorage {
                         spark_invoice TEXT NOT NULL,
                         bolt11 TEXT NOT NULL,
                         expires_at BIGINT NULL,
+                        description TEXT NULL,
+                        destination_pubkey VARCHAR(255) NOT NULL DEFAULT '',
                         PRIMARY KEY (user_id, id),
                         INDEX brz_idx_spark_settled_bolt11_receives_user_expires_at
                             (user_id, expires_at)
                     )",
-                ),
-            ],
-            // Migration 27: A payment reports as the Bolt11 it settled by joining
-            // these rows when it is read, so the row carries what the details
-            // need and the Spark row carries the key the receive side joins on.
-            vec![
-                Migration::sql(
-                    "ALTER TABLE brz_spark_settled_bolt11_sends
-                       ADD COLUMN description TEXT NULL,
-                       ADD COLUMN destination_pubkey VARCHAR(255) NOT NULL DEFAULT ''",
-                ),
-                Migration::sql(
-                    "ALTER TABLE brz_spark_settled_bolt11_receives
-                       ADD COLUMN description TEXT NULL,
-                       ADD COLUMN destination_pubkey VARCHAR(255) NOT NULL DEFAULT ''",
                 ),
                 Migration::AddColumn {
                     table: "brz_payment_details_spark",
@@ -1116,7 +1104,11 @@ impl Storage for MysqlStorage {
                 // Spark transfers and `NULL` for token transactions.
                 match payment_details_filter {
                     StoragePaymentDetailsFilter::Spark { .. } => {
-                        payment_details_clauses.push("p.spark = true".to_string());
+                        // Not a Spark payment once it reports as the Bolt11 it
+                        // settled, which is what the joined row makes it.
+                        payment_details_clauses.push(
+                            "p.spark = true AND COALESCE(sb.bolt11, rb.bolt11) IS NULL".to_string(),
+                        );
                     }
                     StoragePaymentDetailsFilter::Token { .. } => {
                         payment_details_clauses.push("p.spark IS NULL".to_string());
@@ -1845,32 +1837,6 @@ impl Storage for MysqlStorage {
         Ok(())
     }
 
-    async fn get_spark_settled_bolt11_send(
-        &self,
-        payment_id: String,
-    ) -> Result<Option<SparkSettledBolt11Send>, StorageError> {
-        let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
-        let row: Option<(String, String, Option<String>, String)> = conn
-            .exec_first(
-                "SELECT payment_id, bolt11, description, destination_pubkey
-                 FROM brz_spark_settled_bolt11_sends
-                 WHERE user_id = ? AND payment_id = ?",
-                (self.identity.clone(), payment_id),
-            )
-            .await
-            .map_err(map_db_error)?;
-        Ok(
-            row.map(|(payment_id, bolt11, description, destination_pubkey)| {
-                SparkSettledBolt11Send {
-                    payment_id,
-                    bolt11,
-                    description,
-                    destination_pubkey,
-                }
-            }),
-        )
-    }
-
     async fn set_spark_settled_bolt11_receive(
         &self,
         receive: SparkSettledBolt11Receive,
@@ -1902,35 +1868,6 @@ impl Storage for MysqlStorage {
         Ok(())
     }
 
-    async fn get_spark_settled_bolt11_receive(
-        &self,
-        id: String,
-    ) -> Result<Option<SparkSettledBolt11Receive>, StorageError> {
-        let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
-        let row: Option<(String, String, String, Option<i64>, Option<String>, String)> = conn
-            .exec_first(
-                "SELECT id, spark_invoice, bolt11, expires_at, description, destination_pubkey
-                 FROM brz_spark_settled_bolt11_receives
-                 WHERE user_id = ? AND id = ?",
-                (self.identity.clone(), id),
-            )
-            .await
-            .map_err(map_db_error)?;
-        match row {
-            Some((id, spark_invoice, bolt11, expires_at, description, destination_pubkey)) => {
-                Ok(Some(SparkSettledBolt11Receive {
-                    id,
-                    spark_invoice,
-                    bolt11,
-                    expires_at: expires_at.map(u64::try_from).transpose()?,
-                    description,
-                    destination_pubkey,
-                }))
-            }
-            None => Ok(None),
-        }
-    }
-
     async fn delete_expired_spark_settled_bolt11_receives(
         &self,
         before: u64,
@@ -1938,8 +1875,16 @@ impl Storage for MysqlStorage {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         conn.exec_drop(
             "DELETE FROM brz_spark_settled_bolt11_receives
-             WHERE user_id = ? AND expires_at < ?",
-            (self.identity.clone(), i64::try_from(before)?),
+             WHERE user_id = ? AND expires_at < ?
+               AND id NOT IN (
+                 SELECT spark_invoice_digest FROM brz_payment_details_spark
+                  WHERE user_id = ? AND spark_invoice_digest IS NOT NULL
+               )",
+            (
+                self.identity.clone(),
+                i64::try_from(before)?,
+                self.identity.clone(),
+            ),
         )
         .await
         .map_err(map_db_error)?;
@@ -2360,7 +2305,8 @@ const SELECT_PAYMENT_SQL: &str = "
            pm.conversion_status,
            pm.parent_payment_id,
            COALESCE(sb.bolt11, rb.bolt11) AS settled_bolt11,
-           COALESCE(sb.description, rb.description) AS settled_description,
+           COALESCE(sb.description, rb.description, pm.lnurl_description)
+             AS settled_description,
            COALESCE(sb.destination_pubkey, rb.destination_pubkey) AS settled_destination_pubkey
       FROM brz_payments p
       LEFT JOIN brz_payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
@@ -2769,9 +2715,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_spark_settled_bolt11_crud() {
+    async fn test_spark_settled_bolt11_upsert_and_prune() {
         let fixture = MysqlTestFixture::new().await;
-        crate::persist::tests::test_spark_settled_bolt11_crud(Box::new(fixture.storage)).await;
+        crate::persist::tests::test_spark_settled_bolt11_upsert_and_prune(Box::new(
+            fixture.storage,
+        ))
+        .await;
     }
 
     #[tokio::test]

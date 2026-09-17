@@ -399,11 +399,13 @@ impl SqliteStorage {
                 issued_at INTEGER NOT NULL,
                 seen INTEGER NOT NULL DEFAULT 0
             );",
-            // A Lightning payment settled by a transfer to the Spark destination
-            // its invoice advertised involves no HTLC, so the columns describing
-            // one have to be nullable. SQLite cannot drop NOT NULL in place, so
-            // the table is rebuilt. Every existing row settled over Lightning and
-            // keeps its values.
+            // Bolt11s settled over Spark, one table per direction, joined when
+            // a payment is read: sends by the payment id, receives by a digest
+            // of the Spark invoice the Bolt11 embeds, which the Spark details
+            // row carries. A payment settled this way involves no HTLC, so the
+            // lightning columns describing one have to be nullable; SQLite
+            // cannot drop NOT NULL in place, so that table is rebuilt. Every
+            // existing row settled over Lightning and keeps its values.
             "CREATE TABLE payment_details_lightning_new (
                payment_id TEXT PRIMARY KEY,
                invoice TEXT NOT NULL,
@@ -422,30 +424,23 @@ impl SqliteStorage {
              DROP TABLE payment_details_lightning;
              ALTER TABLE payment_details_lightning_new RENAME TO payment_details_lightning;
              CREATE INDEX idx_payment_details_lightning_invoice ON payment_details_lightning(invoice);
-             CREATE INDEX idx_payment_details_lightning_payment_hash ON payment_details_lightning(payment_hash);",
-            // Bolt11s settled over Spark, one table per direction. Sends are
-            // keyed by the transfer that paid. Receives are keyed by the Spark
-            // invoice the Bolt11 embeds, written when it is created and dropped
-            // once it has expired.
-            "CREATE TABLE spark_settled_bolt11_sends (
+             CREATE INDEX idx_payment_details_lightning_payment_hash ON payment_details_lightning(payment_hash);
+             CREATE TABLE spark_settled_bolt11_sends (
                 payment_id TEXT PRIMARY KEY,
-                bolt11 TEXT NOT NULL
+                bolt11 TEXT NOT NULL,
+                description TEXT,
+                destination_pubkey TEXT NOT NULL DEFAULT ''
              );
              CREATE TABLE spark_settled_bolt11_receives (
                 id TEXT PRIMARY KEY,
                 spark_invoice TEXT NOT NULL,
                 bolt11 TEXT NOT NULL,
-                expires_at INTEGER
+                expires_at INTEGER,
+                description TEXT,
+                destination_pubkey TEXT NOT NULL DEFAULT ''
              );
              CREATE INDEX idx_spark_settled_bolt11_receives_expires_at
-                ON spark_settled_bolt11_receives(expires_at);",
-            // A payment reports as the Bolt11 it settled by joining these rows
-            // when it is read, so the row carries what the details need and the
-            // Spark row carries the key the receive side joins on.
-            "ALTER TABLE spark_settled_bolt11_sends ADD COLUMN description TEXT;
-             ALTER TABLE spark_settled_bolt11_sends ADD COLUMN destination_pubkey TEXT NOT NULL DEFAULT '';
-             ALTER TABLE spark_settled_bolt11_receives ADD COLUMN description TEXT;
-             ALTER TABLE spark_settled_bolt11_receives ADD COLUMN destination_pubkey TEXT NOT NULL DEFAULT '';
+                ON spark_settled_bolt11_receives(expires_at);
              ALTER TABLE payment_details_spark ADD COLUMN spark_invoice_digest TEXT;
              CREATE INDEX idx_payment_details_spark_invoice_digest
                 ON payment_details_spark(spark_invoice_digest);",
@@ -754,7 +749,11 @@ impl Storage for SqliteStorage {
                 // conversion-specific sub-filter is set.
                 match payment_details_filter {
                     StoragePaymentDetailsFilter::Spark { .. } => {
-                        payment_details_clauses.push("p.spark = 1".to_string());
+                        // Not a Spark payment once it reports as the Bolt11 it
+                        // settled, which is what the joined row makes it.
+                        payment_details_clauses.push(
+                            "p.spark = 1 AND COALESCE(sb.bolt11, rb.bolt11) IS NULL".to_string(),
+                        );
                     }
                     StoragePaymentDetailsFilter::Token { .. } => {
                         payment_details_clauses.push("p.spark IS NULL".to_string());
@@ -1339,29 +1338,6 @@ impl Storage for SqliteStorage {
         Ok(())
     }
 
-    async fn get_spark_settled_bolt11_send(
-        &self,
-        payment_id: String,
-    ) -> Result<Option<SparkSettledBolt11Send>, StorageError> {
-        let connection = self.get_connection()?;
-        let mut stmt = connection.prepare(
-            "SELECT payment_id, bolt11, description, destination_pubkey
-               FROM spark_settled_bolt11_sends WHERE payment_id = ?",
-        )?;
-        match stmt.query_row(params![payment_id], |row| {
-            Ok(SparkSettledBolt11Send {
-                payment_id: row.get(0)?,
-                bolt11: row.get(1)?,
-                description: row.get(2)?,
-                destination_pubkey: row.get(3)?,
-            })
-        }) {
-            Ok(send) => Ok(Some(send)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
-    }
-
     async fn set_spark_settled_bolt11_receive(
         &self,
         receive: SparkSettledBolt11Receive,
@@ -1389,38 +1365,18 @@ impl Storage for SqliteStorage {
         Ok(())
     }
 
-    async fn get_spark_settled_bolt11_receive(
-        &self,
-        id: String,
-    ) -> Result<Option<SparkSettledBolt11Receive>, StorageError> {
-        let connection = self.get_connection()?;
-        let mut stmt = connection.prepare(
-            "SELECT id, spark_invoice, bolt11, expires_at, description, destination_pubkey
-               FROM spark_settled_bolt11_receives WHERE id = ?",
-        )?;
-        match stmt.query_row(params![id], |row| {
-            Ok(SparkSettledBolt11Receive {
-                id: row.get(0)?,
-                spark_invoice: row.get(1)?,
-                bolt11: row.get(2)?,
-                expires_at: row.get(3)?,
-                description: row.get(4)?,
-                destination_pubkey: row.get(5)?,
-            })
-        }) {
-            Ok(receive) => Ok(Some(receive)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
-    }
-
     async fn delete_expired_spark_settled_bolt11_receives(
         &self,
         before: u64,
     ) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
         connection.execute(
-            "DELETE FROM spark_settled_bolt11_receives WHERE expires_at < ?",
+            "DELETE FROM spark_settled_bolt11_receives
+               WHERE expires_at < ?
+                 AND id NOT IN (
+                   SELECT spark_invoice_digest FROM payment_details_spark
+                    WHERE spark_invoice_digest IS NOT NULL
+                 )",
             params![before],
         )?;
         Ok(())
@@ -1832,7 +1788,8 @@ const SELECT_PAYMENT_SQL: &str = "
            pm.conversion_status,
            pm.parent_payment_id,
            COALESCE(sb.bolt11, rb.bolt11) AS settled_bolt11,
-           COALESCE(sb.description, rb.description) AS settled_description,
+           COALESCE(sb.description, rb.description, pm.lnurl_description)
+             AS settled_description,
            COALESCE(sb.destination_pubkey, rb.destination_pubkey) AS settled_destination_pubkey
       FROM payments p
       LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
@@ -2354,11 +2311,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_spark_settled_bolt11_crud() {
+    async fn test_spark_settled_bolt11_upsert_and_prune() {
         let temp_dir = create_temp_dir("sqlite_storage_spark_settled_bolt11_crud");
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
-        crate::persist::tests::test_spark_settled_bolt11_crud(Box::new(storage)).await;
+        crate::persist::tests::test_spark_settled_bolt11_upsert_and_prune(Box::new(storage)).await;
     }
 
     #[tokio::test]

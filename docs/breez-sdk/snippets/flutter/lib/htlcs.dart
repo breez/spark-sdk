@@ -82,7 +82,7 @@ Future<List<Payment>> listClaimableHtlcPayments(BreezSdk sdk) async {
     final details = payment.details;
     if (details is PaymentDetails_Spark && details.htlcDetails != null) {
       print("Spark HTLC expiry time: ${details.htlcDetails!.expiryTime}");
-    } else if (details is PaymentDetails_Lightning) {
+    } else if (details is PaymentDetails_Lightning && details.htlcDetails != null) {
       print("Lightning HTLC expiry time: ${details.htlcDetails!.expiryTime}");
     }
   }

@@ -431,25 +431,6 @@ impl breez_sdk_spark::Storage for WasmStorage {
         Ok(())
     }
 
-    async fn get_spark_settled_bolt11_send(
-        &self,
-        payment_id: String,
-    ) -> Result<Option<breez_sdk_spark::SparkSettledBolt11Send>, StorageError> {
-        let promise = self
-            .storage
-            .get_spark_settled_bolt11_send(payment_id)
-            .map_err(js_error_to_storage_error)?;
-        let result = JsFuture::from(promise)
-            .await
-            .map_err(js_error_to_storage_error)?;
-        if result.is_null() || result.is_undefined() {
-            return Ok(None);
-        }
-        let send: SparkSettledBolt11Send = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| StorageError::Serialization(e.to_string()))?;
-        Ok(Some(send.into()))
-    }
-
     async fn set_spark_settled_bolt11_receive(
         &self,
         receive: breez_sdk_spark::SparkSettledBolt11Receive,
@@ -463,25 +444,6 @@ impl breez_sdk_spark::Storage for WasmStorage {
             .await
             .map_err(js_error_to_storage_error)?;
         Ok(())
-    }
-
-    async fn get_spark_settled_bolt11_receive(
-        &self,
-        id: String,
-    ) -> Result<Option<breez_sdk_spark::SparkSettledBolt11Receive>, StorageError> {
-        let promise = self
-            .storage
-            .get_spark_settled_bolt11_receive(id)
-            .map_err(js_error_to_storage_error)?;
-        let result = JsFuture::from(promise)
-            .await
-            .map_err(js_error_to_storage_error)?;
-        if result.is_null() || result.is_undefined() {
-            return Ok(None);
-        }
-        let receive: SparkSettledBolt11Receive = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| StorageError::Serialization(e.to_string()))?;
-        Ok(Some(receive.into()))
     }
 
     async fn delete_expired_spark_settled_bolt11_receives(
@@ -683,10 +645,11 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     getCrossChainSwap: (provider: string, id: string) => Promise<StoredCrossChainSwap | null>;
     listActiveCrossChainSwaps: (provider: string) => Promise<StoredCrossChainSwap[]>;
     setSparkSettledBolt11Send: (send: SparkSettledBolt11Send) => Promise<void>;
-    getSparkSettledBolt11Send: (paymentId: string) => Promise<SparkSettledBolt11Send | null>;
     setSparkSettledBolt11Receive: (receive: SparkSettledBolt11Receive) => Promise<void>;
-    getSparkSettledBolt11Receive: (id: string) => Promise<SparkSettledBolt11Receive | null>;
-    /** Delete every receive whose Spark invoice expired before `before` (Unix seconds). */
+    /**
+     * Delete every receive whose Spark invoice expired before `before` (Unix
+     * seconds) and that no stored payment settled.
+     */
     deleteExpiredSparkSettledBolt11Receives: (before: number) => Promise<void>;
     syncAddOutgoingChange: (record: UnversionedRecordChange) => Promise<number>;
     syncCompleteOutgoingSync: (record: Record) => Promise<void>;
@@ -811,21 +774,11 @@ extern "C" {
         send: SparkSettledBolt11Send,
     ) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = getSparkSettledBolt11Send, catch)]
-    pub fn get_spark_settled_bolt11_send(
-        this: &Storage,
-        payment_id: String,
-    ) -> Result<Promise, JsValue>;
-
     #[wasm_bindgen(structural, method, js_name = setSparkSettledBolt11Receive, catch)]
     pub fn set_spark_settled_bolt11_receive(
         this: &Storage,
         receive: SparkSettledBolt11Receive,
     ) -> Result<Promise, JsValue>;
-
-    #[wasm_bindgen(structural, method, js_name = getSparkSettledBolt11Receive, catch)]
-    pub fn get_spark_settled_bolt11_receive(this: &Storage, id: String)
-    -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = deleteExpiredSparkSettledBolt11Receives, catch)]
     pub fn delete_expired_spark_settled_bolt11_receives(

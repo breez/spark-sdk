@@ -110,7 +110,8 @@ const SELECT_PAYMENT_SQL = `
            lrm.payment_hash AS lnurl_payment_hash,
            pm.parent_payment_id,
            COALESCE(sb.bolt11, rb.bolt11) AS settled_bolt11,
-           COALESCE(sb.description, rb.description) AS settled_description,
+           COALESCE(sb.description, rb.description, pm.lnurl_description)
+             AS settled_description,
            COALESCE(sb.destination_pubkey, rb.destination_pubkey) AS settled_destination_pubkey
       FROM payments p
       LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
@@ -256,13 +257,18 @@ class SqliteStorage {
           const paymentDetailsClauses = [];
           // Base type check: ensure payment type matches the filter type
           if (paymentDetailsFilter.type === "spark") {
-            paymentDetailsClauses.push("p.spark = 1");
+            paymentDetailsClauses.push(
+              "p.spark = 1 AND COALESCE(sb.bolt11, rb.bolt11) IS NULL"
+            );
           } else if (paymentDetailsFilter.type === "token") {
             paymentDetailsClauses.push("p.spark IS NULL AND t.tx_hash IS NOT NULL");
           } else if (paymentDetailsFilter.type === "lightning") {
-            // Not htlc_status: a payment settled over the Spark destination its
-            // invoice advertised is a Lightning payment with no HTLC.
-            paymentDetailsClauses.push("l.invoice IS NOT NULL");
+            // A payment settled over the Spark destination its invoice
+            // advertised has no lightning details row of its own: it reports as
+            // the Bolt11 through the joined row.
+            paymentDetailsClauses.push(
+              "(l.invoice IS NOT NULL OR COALESCE(sb.bolt11, rb.bolt11) IS NOT NULL)"
+            );
           }
           // Filter by HTLC status (Spark or Lightning)
           const htlcAlias =
@@ -1622,21 +1628,6 @@ class SqliteStorage {
     }
   }
 
-  getSparkSettledBolt11Send(paymentId) {
-    try {
-      const stmt = this.db.prepare(
-        `SELECT payment_id, bolt11, description, destination_pubkey
-         FROM spark_settled_bolt11_sends WHERE payment_id = ?`
-      );
-      const row = stmt.get(paymentId);
-      return Promise.resolve(row ? sparkSettledBolt11SendFromRow(row) : null);
-    } catch (error) {
-      return Promise.reject(
-        new StorageError(`Failed to get spark-settled bolt11 send: ${error.message}`, error)
-      );
-    }
-  }
-
   setSparkSettledBolt11Receive(receive) {
     try {
       const stmt = this.db.prepare(
@@ -1666,25 +1657,15 @@ class SqliteStorage {
     }
   }
 
-  getSparkSettledBolt11Receive(id) {
-    try {
-      const stmt = this.db.prepare(
-        `SELECT id, spark_invoice, bolt11, expires_at, description, destination_pubkey
-         FROM spark_settled_bolt11_receives WHERE id = ?`
-      );
-      const row = stmt.get(id);
-      return Promise.resolve(row ? sparkSettledBolt11ReceiveFromRow(row) : null);
-    } catch (error) {
-      return Promise.reject(
-        new StorageError(`Failed to get spark-settled bolt11 receive: ${error.message}`, error)
-      );
-    }
-  }
-
   deleteExpiredSparkSettledBolt11Receives(before) {
     try {
       const stmt = this.db.prepare(
-        `DELETE FROM spark_settled_bolt11_receives WHERE expires_at < ?`
+        `DELETE FROM spark_settled_bolt11_receives
+           WHERE expires_at < ?
+             AND id NOT IN (
+               SELECT spark_invoice_digest FROM payment_details_spark
+                WHERE spark_invoice_digest IS NOT NULL
+             )`
       );
       stmt.run(Number(before));
       return Promise.resolve();
@@ -1756,34 +1737,6 @@ class SqliteStorage {
       );
     }
   }
-}
-
-/**
- * Maps a `spark_settled_bolt11_sends` row to the camelCase shape the SDK
- * expects. A NULL description comes back absent.
- */
-function sparkSettledBolt11SendFromRow(row) {
-  return {
-    paymentId: row.payment_id,
-    bolt11: row.bolt11,
-    description: row.description == null ? undefined : row.description,
-    destinationPubkey: row.destination_pubkey,
-  };
-}
-
-/**
- * Maps a `spark_settled_bolt11_receives` row to the camelCase shape the SDK
- * expects. A NULL expiry or description comes back absent.
- */
-function sparkSettledBolt11ReceiveFromRow(row) {
-  return {
-    id: row.id,
-    sparkInvoice: row.spark_invoice,
-    bolt11: row.bolt11,
-    expiresAt: row.expires_at == null ? undefined : Number(row.expires_at),
-    description: row.description == null ? undefined : row.description,
-    destinationPubkey: row.destination_pubkey,
-  };
 }
 
 /// Maps a `cross_chain_swaps` row to a StoredCrossChainSwap, parsing `data` and
