@@ -9,6 +9,49 @@
   const SCROLL_COOLDOWN = 150; // ms to wait after manual click before auto-updating
   const SCROLL_OFFSET = 60; // px offset for active section detection
 
+  // Headings can embed a {{#name}} identifier, which renders as one span per
+  // language inside a .lang-fn wrapper. Only the selected language's span is
+  // visible, but textContent would still read all nine, so entries are built
+  // from the active span and rebuilt when the language changes.
+  const DEFAULT_LANG_CLASS = "fn-rust"; // matches the CSS default before tabs.js runs
+  const tocEntries = [];
+
+  const activeLangClass = () => {
+    try {
+      const lang = localStorage.getItem("mdbook-tabs-lang");
+      if (!lang) return DEFAULT_LANG_CLASS;
+      return "fn-" + lang.toLowerCase().replace(/ /g, "-").replace("#", "sharp");
+    } catch (e) {
+      return DEFAULT_LANG_CLASS;
+    }
+  };
+
+  const extractText = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent || "";
+    if (node.nodeType !== Node.ELEMENT_NODE) return "";
+
+    // Exclude elements with 'tag' class (like API docs tags)
+    if (node.classList.contains("tag")) return "";
+
+    if (node.classList.contains("lang-fn")) {
+      const span =
+        node.querySelector("span." + activeLangClass()) ||
+        node.querySelector("span");
+      return span ? span.textContent || "" : node.textContent || "";
+    }
+
+    return [...node.childNodes].map(extractText).join("");
+  };
+
+  const headerText = (parent) =>
+    [...parent.childNodes].map(extractText).join("").trim();
+
+  const refreshTocLabels = () => {
+    tocEntries.forEach((entry) => {
+      entry.link.textContent = headerText(entry.parent);
+    });
+  };
+
   /**
    * Attach click listeners to TOC links
    */
@@ -128,21 +171,7 @@
         return;
       }
 
-      // Extract text content from the header (excluding tags and other non-header elements)
-      const textContent = [...parent.childNodes]
-        .filter((node) => {
-          // Exclude elements with 'tag' class (like API docs tags)
-          if (
-            node.nodeType === Node.ELEMENT_NODE &&
-            node.classList.contains("tag")
-          ) {
-            return false;
-          }
-          return true;
-        })
-        .map((node) => node.textContent || "")
-        .join("")
-        .trim();
+      const textContent = headerText(parent);
 
       if (!textContent) return;
 
@@ -153,6 +182,7 @@
       link.className = `pagetoc-${parent.tagName}`;
 
       pagetoc.appendChild(link);
+      tocEntries.push({ link, parent });
     });
   };
 
@@ -163,6 +193,10 @@
     populateToc();
     attachClickListeners();
     updateActiveTocLink();
+
+    document.addEventListener("mdbook-category-changed", (event) => {
+      if (event.detail && event.detail.category === "lang") refreshTocLabels();
+    });
 
     // Listen for scroll events
     let rafId = null;
