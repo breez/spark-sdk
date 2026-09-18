@@ -7,6 +7,7 @@ use spark::{
         ExitRefundState, UnilateralExitPlan, build_cpfp_child, csv_timelock,
         walk_unilateral_exit_chain,
     },
+    signer::LeafSigningKey,
     tree::{LeafPedigree, TreeNode, TreeNodeId, TreeNodeStatus},
 };
 use tracing::{debug, trace, warn};
@@ -171,6 +172,8 @@ pub struct RefundOutput {
     pub outpoint: bitcoin::OutPoint,
     pub leaf_id: TreeNodeId,
     pub value: u64,
+    /// The key the leaf was held under, which the refund pays to.
+    pub signing_key: LeafSigningKey,
 }
 
 /// A caller-controlled CPFP-change output (the terminal change of a leaf's CPFP
@@ -1180,7 +1183,8 @@ fn interpret_refund(
 /// Reads no chain of its own: the tree is in `state` and the funding was
 /// resolved into the plan by [`scan_funding`]. Each not-yet-confirmed tx gets an
 /// unsigned CPFP child that pays its fee; confirmed nodes and adopted refunds
-/// are emitted without one.
+/// are emitted without one. Each refund output is swept under the key derived
+/// from its leaf's node id, the key a wallet's leaves are held under.
 pub fn build_unilateral_exit(
     plan: &UnilateralExitPlan,
     state: &ExitChainState,
@@ -1341,6 +1345,9 @@ pub(crate) fn build_exit(
                     outpoint: adopted.outpoint,
                     leaf_id: leaf_id.clone(),
                     value: adopted.value,
+                    signing_key: LeafSigningKey {
+                        derived_from: leaf_id.clone(),
+                    },
                 });
                 txs.push(ExitTx {
                     kind: ExitTxKind::Refund,
@@ -1371,6 +1378,9 @@ pub(crate) fn build_exit(
                     },
                     leaf_id: leaf_id.clone(),
                     value: refund_value,
+                    signing_key: LeafSigningKey {
+                        derived_from: leaf_id.clone(),
+                    },
                 });
                 txs.push(ExitTx {
                     kind: ExitTxKind::Refund,
@@ -1403,6 +1413,9 @@ pub(crate) fn build_exit(
                     },
                     leaf_id: leaf_id.clone(),
                     value: refund_value,
+                    signing_key: LeafSigningKey {
+                        derived_from: leaf_id.clone(),
+                    },
                 });
                 // The refund child's change is the branch's terminal sweep input.
                 cpfp_change_inputs.push(CpfpChangeInput {
@@ -1645,6 +1658,7 @@ mod exit_build_tests {
         let refund = txs.last().unwrap();
         assert_eq!(refund.kind, ExitTxKind::Refund);
         assert_eq!(build.refund_outputs.len(), 1);
+        assert_eq!(build.refund_outputs[0].signing_key.derived_from, id("leaf"));
         assert_eq!(build.refund_outputs[0].outpoint.txid, refund.txid);
         assert_eq!(build.refund_outputs[0].outpoint.vout, 0);
         assert_eq!(build.cpfp_change_inputs.len(), 1);
@@ -1679,6 +1693,7 @@ mod exit_build_tests {
             "an adopted refund needs no CPFP child"
         );
         assert_eq!(build.refund_outputs.len(), 1);
+        assert_eq!(build.refund_outputs[0].signing_key.derived_from, id("leaf"));
         assert_eq!(build.refund_outputs[0].outpoint, adopted_outpoint);
         assert_eq!(build.refund_outputs[0].value, 55_000);
         assert!(
@@ -1736,6 +1751,7 @@ mod exit_build_tests {
         assert_eq!(refund.txid, anchor_tx(5).compute_txid());
         assert!(refund.to_sign.is_none(), "a direct refund pays its own fee");
         assert_eq!(build.refund_outputs.len(), 1);
+        assert_eq!(build.refund_outputs[0].signing_key.derived_from, id("leaf"));
         assert_eq!(build.refund_outputs[0].outpoint.txid, refund.txid);
         assert!(
             build.cpfp_change_inputs.is_empty(),
@@ -1784,6 +1800,7 @@ mod exit_build_tests {
         };
         let build = build_exit(&single_leaf_plan(), &resolved, FEE_RATE).unwrap();
         assert_eq!(build.refund_outputs.len(), 1);
+        assert_eq!(build.refund_outputs[0].signing_key.derived_from, id("leaf"));
         assert_eq!(build.refund_outputs[0].outpoint, adopted_outpoint);
     }
 
