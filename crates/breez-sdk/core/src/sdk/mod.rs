@@ -231,7 +231,7 @@ pub async fn connect_with_signing_only_signer(
 pub fn default_config(network: Network) -> Config {
     let lnurl_domain = match network {
         Network::Mainnet => Some("breez.tips".to_string()),
-        Network::Regtest => None,
+        Network::Signet | Network::Regtest => None,
     };
     Config {
         api_key: None,
@@ -256,7 +256,10 @@ pub fn default_config(network: Network) -> Config {
         },
         stable_balance_config: None,
         max_concurrent_claims: 4,
-        spark_config: Some(default_spark_config(network)),
+        spark_config: match network {
+            Network::Mainnet | Network::Regtest => Some(default_spark_config(network)),
+            Network::Signet => None,
+        },
         background_tasks_enabled: true,
         proxy: None,
         cross_chain_config: None,
@@ -392,9 +395,9 @@ pub struct SigningOnlyExternalSigners {
 ///
 /// * `mnemonic` - BIP39 mnemonic phrase (12 or 24 words)
 /// * `passphrase` - Optional passphrase for the mnemonic
-/// * `network` - Network to use (Mainnet or Regtest)
+/// * `network` - Network to use (Mainnet, Signet, or Regtest)
 /// * `account_number` - Account number in the derivation path. Unset uses the
-///   network default: 0 on Regtest, 1 on all other networks.
+///   network default: 0 on Regtest and Signet, 1 on Mainnet.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn default_external_signers(
     mnemonic: String,
@@ -501,7 +504,7 @@ mod tests {
 
     #[test]
     fn default_server_config_disables_background_tasks() {
-        for network in [Network::Mainnet, Network::Regtest] {
+        for network in [Network::Mainnet, Network::Regtest, Network::Signet] {
             let cfg = default_server_config(network);
             assert!(!cfg.background_tasks_enabled);
             assert!(cfg.real_time_sync_server_url.is_none());
@@ -514,5 +517,6 @@ mod tests {
     fn default_config_enables_background_tasks() {
         assert!(default_config(Network::Mainnet).background_tasks_enabled);
         assert!(default_config(Network::Regtest).background_tasks_enabled);
+        assert!(default_config(Network::Signet).background_tasks_enabled);
     }
 }

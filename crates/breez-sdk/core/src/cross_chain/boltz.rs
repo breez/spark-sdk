@@ -69,7 +69,7 @@ impl BoltzService {
         const BREEZ_REFERRAL_ID: &str = "breez-sdk";
         match network {
             Network::Mainnet => Some(BoltzClientConfig::mainnet(BREEZ_REFERRAL_ID.to_string())),
-            Network::Regtest => None,
+            Network::Signet | Network::Regtest => None,
         }
     }
 

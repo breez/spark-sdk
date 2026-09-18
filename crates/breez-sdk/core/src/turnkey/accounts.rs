@@ -13,22 +13,26 @@ use super::error::TurnkeyError;
 use super::transport::{OnConflict, TurnkeyClient};
 use super::types::{
     ADDRESS_FORMAT_BITCOIN_MAINNET_P2TR, ADDRESS_FORMAT_BITCOIN_REGTEST_P2TR,
-    ADDRESS_FORMAT_COMPRESSED, ADDRESS_FORMAT_SPARK_MAINNET, ADDRESS_FORMAT_SPARK_REGTEST,
-    CREATE_WALLET_ACCOUNTS_PATH, CREATE_WALLET_ACCOUNTS_RESULT, CREATE_WALLET_ACCOUNTS_TYPE,
-    CURVE_SECP256K1, CreateWalletAccountsIntent, CreateWalletAccountsResult, ENCODING_HEXADECIMAL,
-    EXPORT_WALLET_ACCOUNT_PATH, EXPORT_WALLET_ACCOUNT_RESULT, EXPORT_WALLET_ACCOUNT_TYPE,
-    ExportWalletAccountIntent, ExportWalletAccountResult, GET_WALLET_ACCOUNT_PATH,
-    GetWalletAccountRequest, GetWalletAccountResponse, PATH_FORMAT_BIP32, SIGN_RAW_PAYLOAD_PATH,
-    SIGN_RAW_PAYLOAD_RESULT, SIGN_RAW_PAYLOAD_TYPE, SignRawPayloadIntent, SignRawPayloadResult,
-    WalletAccountParams,
+    ADDRESS_FORMAT_BITCOIN_SIGNET_P2TR, ADDRESS_FORMAT_COMPRESSED, ADDRESS_FORMAT_SPARK_MAINNET,
+    ADDRESS_FORMAT_SPARK_REGTEST, CREATE_WALLET_ACCOUNTS_PATH, CREATE_WALLET_ACCOUNTS_RESULT,
+    CREATE_WALLET_ACCOUNTS_TYPE, CURVE_SECP256K1, CreateWalletAccountsIntent,
+    CreateWalletAccountsResult, ENCODING_HEXADECIMAL, EXPORT_WALLET_ACCOUNT_PATH,
+    EXPORT_WALLET_ACCOUNT_RESULT, EXPORT_WALLET_ACCOUNT_TYPE, ExportWalletAccountIntent,
+    ExportWalletAccountResult, GET_WALLET_ACCOUNT_PATH, GetWalletAccountRequest,
+    GetWalletAccountResponse, PATH_FORMAT_BIP32, SIGN_RAW_PAYLOAD_PATH, SIGN_RAW_PAYLOAD_RESULT,
+    SIGN_RAW_PAYLOAD_TYPE, SignRawPayloadIntent, SignRawPayloadResult, WalletAccountParams,
 };
 
 /// The Spark address format (and thus the BIP-340 Schnorr signing scheme) for
 /// the wallet's network.
-pub(crate) fn spark_address_format(network: Network) -> &'static str {
+pub(crate) fn spark_address_format(network: Network) -> Result<&'static str, TurnkeyError> {
     match network {
-        Network::Mainnet => ADDRESS_FORMAT_SPARK_MAINNET,
-        Network::Regtest => ADDRESS_FORMAT_SPARK_REGTEST,
+        Network::Mainnet => Ok(ADDRESS_FORMAT_SPARK_MAINNET),
+        Network::Regtest => Ok(ADDRESS_FORMAT_SPARK_REGTEST),
+        // Turnkey exposes Spark formats only for mainnet and regtest.
+        Network::Signet => Err(TurnkeyError::InvalidConfig(
+            "Turnkey does not support Spark Signet accounts".to_string(),
+        )),
     }
 }
 
@@ -39,6 +43,7 @@ pub(crate) fn bitcoin_p2tr_format(network: Network) -> &'static str {
     match network {
         Network::Mainnet => ADDRESS_FORMAT_BITCOIN_MAINNET_P2TR,
         Network::Regtest => ADDRESS_FORMAT_BITCOIN_REGTEST_P2TR,
+        Network::Signet => ADDRESS_FORMAT_BITCOIN_SIGNET_P2TR,
     }
 }
 
@@ -284,7 +289,7 @@ pub(crate) fn xpriv_from_secret(secret: SecretKey, network: Network) -> Xpriv {
     Xpriv {
         network: match network {
             Network::Mainnet => NetworkKind::Main,
-            Network::Regtest => NetworkKind::Test,
+            Network::Signet | Network::Regtest => NetworkKind::Test,
         },
         depth: 0,
         parent_fingerprint: Fingerprint::default(),

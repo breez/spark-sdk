@@ -691,6 +691,7 @@ pub struct LnurlWithdrawInfo {
 pub enum Network {
     Mainnet,
     Regtest,
+    Signet,
 }
 
 impl std::fmt::Display for Network {
@@ -698,6 +699,7 @@ impl std::fmt::Display for Network {
         match self {
             Network::Mainnet => write!(f, "Mainnet"),
             Network::Regtest => write!(f, "Regtest"),
+            Network::Signet => write!(f, "Signet"),
         }
     }
 }

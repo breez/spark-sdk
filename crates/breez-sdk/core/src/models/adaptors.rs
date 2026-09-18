@@ -401,6 +401,7 @@ impl From<Network> for SparkNetwork {
         match network {
             Network::Mainnet => SparkNetwork::Mainnet,
             Network::Regtest => SparkNetwork::Regtest,
+            Network::Signet => SparkNetwork::Signet,
         }
     }
 }

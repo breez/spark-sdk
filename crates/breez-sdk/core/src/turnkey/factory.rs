@@ -52,6 +52,7 @@ async fn build_client(
     config: &TurnkeyConfig,
 ) -> Result<(Arc<TurnkeyClient>, Network, u32), SignerError> {
     let network = config.network;
+    let address_format = spark_address_format(network).map_err(to_signer_err)?;
     let account = account_number(config);
     let http =
         crate::ProxyConfig::http_client(config.proxy.as_ref(), Some("breez-sdk-spark-turnkey"))
@@ -63,7 +64,7 @@ async fn build_client(
             .await
             .map_err(to_signer_err)?;
         client
-            .create_account(identity_path(account), spark_address_format(network))
+            .create_account(identity_path(account), address_format)
             .await
             .map_err(to_signer_err)?;
     }
@@ -172,6 +173,22 @@ mod tests {
         let secp = Secp256k1::new();
         let sk = SecretKey::from_slice(&[0x22; 32]).unwrap();
         sk.public_key(&secp)
+    }
+
+    #[tokio::test]
+    async fn signet_turnkey_signers_fail_before_contacting_turnkey() {
+        for identity in [None, Some(hex::encode(identity_pubkey().serialize()))] {
+            let mut config = test_config(identity);
+            config.network = Network::Signet;
+            assert!(matches!(
+                create_turnkey_signer(config.clone()).await,
+                Err(SignerError::Generic(message)) if message.contains("Signet")
+            ));
+            assert!(matches!(
+                create_turnkey_signing_only_signer(config).await,
+                Err(SignerError::Generic(message)) if message.contains("Signet")
+            ));
+        }
     }
 
     // A config carrying the identity pubkey builds the signing-only signer with

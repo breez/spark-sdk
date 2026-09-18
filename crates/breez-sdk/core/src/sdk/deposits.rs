@@ -38,7 +38,7 @@ use super::{BreezSdk, CLAIM_TX_SIZE_VBYTES};
 fn maturity_confirmations(network: Network) -> u32 {
     match network {
         Network::Regtest => 1,
-        Network::Mainnet => 3,
+        Network::Mainnet | Network::Signet => 3,
     }
 }
 
