@@ -1017,6 +1017,7 @@ fn itest_cmd() -> Result<()> {
     // breez-itest reaches the deployed regtest and runs in `make breez-itest`.
     let local_suites = [
         "breez_sdk_tests",
+        "coop_exit_local",
         "deposit_withdraw",
         "exit_state_events",
         "external_signer",
@@ -1027,6 +1028,7 @@ fn itest_cmd() -> Result<()> {
         "optimization",
         "recovery",
         "spark_htlcs",
+        "static_deposit_instant",
         "tokens",
         "unilateral_exit",
     ];
