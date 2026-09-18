@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
+bip39.workspace = true
 bitcoin = { workspace = true, features = ["serde"] }
 bytes.workspace = true
 futures.workspace = true
@@ -22,6 +23,7 @@ spark.workspace = true
 spark-mysql.workspace = true
 spark-postgres.workspace = true
 spark-wallet = { workspace = true, features = ["test-utils"] }
+sspd = { workspace = true, features = ["test-utils"] }
 test-log = { workspace = true, features = ["trace"] }
 testcontainers.workspace = true
 prost.workspace = true

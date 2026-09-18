@@ -53,6 +53,9 @@ const FEATURE_CLIPPY_PASSES: &[(&str, ClippyFeatures)] = &[
 /// Features no clippy pass builds, as `(package, feature)`. Each is compiled by
 /// another target, so its code still cannot rot unnoticed.
 const UNLINTED_FEATURES: &[(&str, &str)] = &[
+    // `cfg(test)` compiles the same code, so the `--all-targets` and `--tests`
+    // workspace passes already lint it.
+    ("sspd", "test-utils"),
     // `cargo xtask test` runs the spark tests a second time with it on.
     ("spark", "test-arbitrary-precision"),
     // `cargo xtask wasm-test` passes it to wasm-pack.
@@ -1110,6 +1113,10 @@ fn prepare_itest_images() -> Result<Shell> {
     let spark_so_df_str = spark_so_df
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("invalid spark-so.dockerfile path"))?;
+    let ldk_server_df = docker_dir.join("ldk-server.dockerfile");
+    let ldk_server_df_str = ldk_server_df
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("invalid ldk-server.dockerfile path"))?;
     let sspd_df = docker_dir.join("sspd.dockerfile");
     let sspd_df_str = sspd_df
         .to_str()
@@ -1123,6 +1130,11 @@ fn prepare_itest_images() -> Result<Shell> {
     cmd!(
         sh,
         "docker build -t spark-so -f {spark_so_df_str} {docker_dir_str}"
+    )
+    .run()?;
+    cmd!(
+        sh,
+        "docker build -t ldk-server -f {ldk_server_df_str} {docker_dir_str}"
     )
     .run()?;
     // sspd builds from the working tree, with the repository root as context. It
