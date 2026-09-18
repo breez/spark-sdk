@@ -1,16 +1,31 @@
+use std::path::PathBuf;
+
 use anyhow::Result;
 use rand::Rng;
 use spark_wallet::{
     DefaultSigner, LeafOptimizationOptions, Network, OperatorConfig, OperatorPoolConfig, PublicKey,
     RetryConfig, ServiceProviderConfig, SparkWalletConfig, TokenOutputsOptimizationOptions,
 };
+use tokio::sync::OnceCell;
 use tracing::info;
 
-use crate::fixtures::{bitcoind::BitcoindFixture, spark_so::SparkSoFixture};
+use crate::fixtures::{
+    bitcoind::BitcoindFixture,
+    spark_so::SparkSoFixture,
+    sspd::{LdkSettings, SspdFixture},
+    state_snapshot,
+};
+
+/// Fixed because the state snapshot's leaf pool is stored against the identity
+/// this seed derives.
+pub const SSPD_WALLET_SEED_HEX: &str =
+    "0505050505050505050505050505050505050505050505050505050505050505";
 
 pub struct TestFixtures {
+    pub fixture_id: FixtureId,
     pub bitcoind: BitcoindFixture,
     pub spark_so: SparkSoFixture,
+    sspd: OnceCell<SspdFixture>,
 }
 
 #[derive(Clone, Debug)]
@@ -31,6 +46,15 @@ impl FixtureId {
     pub fn to_network(&self) -> String {
         format!("network-{}", self.0)
     }
+
+    /// This cluster's directory for the files its containers bind-mount. Keyed by
+    /// the fixture id alone: a test-scoped `testdir!()` is named after the running
+    /// thread, which concurrent tests can share.
+    pub fn testdir(&self) -> std::io::Result<PathBuf> {
+        let dir = testdir::testdir!(ModuleScope).join(&self.0);
+        std::fs::create_dir_all(&dir)?;
+        Ok(dir)
+    }
 }
 
 impl std::fmt::Display for FixtureId {
@@ -39,13 +63,27 @@ impl std::fmt::Display for FixtureId {
     }
 }
 
+/// Together two full pools' worth: the daemon spends its on-chain funds on its
+/// leaf pool and on fronting coop-exit withdrawals.
+const SSPD_ONCHAIN_UTXO_SATS: u64 = 1_000_000;
+const SSPD_ONCHAIN_UTXO_COUNT: usize =
+    2 * (crate::fixtures::sspd::FULL_POOL_ONCHAIN_SATS / 1_000_000) as usize;
+
 impl TestFixtures {
     pub async fn new() -> Result<Self> {
         let fixture_id = FixtureId::new();
 
-        // Initialize bitcoind
-        let mut bitcoind = BitcoindFixture::new(&fixture_id).await?;
-        bitcoind.initialize().await?;
+        let snapshot = state_snapshot::is_current();
+        let bitcoind = if snapshot {
+            let mut bitcoind =
+                BitcoindFixture::restored(&fixture_id, &state_snapshot::bitcoind_datadir()).await?;
+            bitcoind.adopt_restored_wallet().await?;
+            bitcoind
+        } else {
+            let mut bitcoind = BitcoindFixture::new(&fixture_id).await?;
+            bitcoind.initialize().await?;
+            bitcoind
+        };
 
         // Create the SparkSoFixture with the docker_ref and bitcoind connection
         let mut spark_so = SparkSoFixture::new(&fixture_id, &bitcoind).await?;
@@ -53,7 +91,40 @@ impl TestFixtures {
 
         info!("All test fixtures initialized");
 
-        Ok(Self { bitcoind, spark_so })
+        Ok(Self {
+            fixture_id,
+            bitcoind,
+            spark_so,
+            sspd: OnceCell::new(),
+        })
+    }
+
+    /// Started and funded on first use, without a lightning node.
+    pub async fn sspd(&self) -> Result<&SspdFixture> {
+        self.sspd_with_ldk(None).await
+    }
+
+    /// This cluster's daemon, started with `ldk` if this call is what starts it.
+    pub async fn sspd_with_ldk(&self, ldk: Option<&LdkSettings>) -> Result<&SspdFixture> {
+        self.sspd
+            .get_or_try_init(|| async {
+                let sspd = SspdFixture::start(
+                    &self.fixture_id,
+                    &self.bitcoind,
+                    &self.spark_so.operators,
+                    SSPD_WALLET_SEED_HEX,
+                    ldk,
+                )
+                .await?;
+                sspd.fund_onchain(
+                    &self.bitcoind,
+                    SSPD_ONCHAIN_UTXO_SATS,
+                    SSPD_ONCHAIN_UTXO_COUNT,
+                )
+                .await?;
+                Ok(sspd)
+            })
+            .await
     }
 
     /// Takes all operators offline by stopping their containers; bitcoind stays up.
@@ -63,6 +134,13 @@ impl TestFixtures {
     }
 
     pub async fn create_wallet_config(&self) -> Result<SparkWalletConfig> {
+        self.create_wallet_config_with_ssp(None).await
+    }
+
+    pub async fn create_wallet_config_with_ssp(
+        &self,
+        ssp_config: Option<ServiceProviderConfig>,
+    ) -> Result<SparkWalletConfig> {
         // Create a wallet configuration that points to our service operators
         let mut operator_configs = Vec::new();
 
@@ -77,18 +155,23 @@ impl TestFixtures {
             });
         }
 
-        Ok(SparkWalletConfig {
-            network: Network::Regtest,
-            operator_pool: OperatorPoolConfig::new(0, operator_configs)?,
-            split_secret_threshold: crate::fixtures::spark_so::MIN_SIGNERS as u32,
-            reconnect_interval_seconds: 1,
-            service_provider_config: ServiceProviderConfig {
+        let service_provider_config = match ssp_config {
+            Some(config) => config,
+            None => ServiceProviderConfig {
                 base_url: "".to_string(),
                 schema_endpoint: None,
                 identity_public_key: PublicKey::from_slice(&[2; 33])?,
                 user_agent: Some("spark-wallet-itest/0.1.0".to_string()),
                 retry_config: RetryConfig::default(),
             },
+        };
+
+        Ok(SparkWalletConfig {
+            network: Network::Regtest,
+            operator_pool: OperatorPoolConfig::new(0, operator_configs)?,
+            split_secret_threshold: crate::fixtures::spark_so::MIN_SIGNERS as u32,
+            reconnect_interval_seconds: 1,
+            service_provider_config,
             tokens_config: SparkWalletConfig::default_tokens_config(),
             leaf_optimization_options: LeafOptimizationOptions::default(),
             leaf_auto_optimize_enabled: false,

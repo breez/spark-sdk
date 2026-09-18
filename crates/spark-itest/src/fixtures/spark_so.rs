@@ -20,9 +20,10 @@ use tokio_postgres::NoTls;
 use tracing::{info, warn};
 
 use crate::fixtures::bitcoind::BitcoindFixture;
-use crate::fixtures::keyshares;
+use crate::fixtures::keyshares::{MIN_AVAILABLE_KEYS, available_per_coordinator};
 use crate::fixtures::log::TracingConsumer;
 use crate::fixtures::setup::FixtureId;
+use crate::fixtures::state_snapshot;
 use crate::fixtures::wait_log::WaitForLogConsumer;
 
 const POSTGRES_USER: &str = "postgres";
@@ -54,28 +55,58 @@ const LOG_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 // Database query constants
 const KEYSHARE_CHECK_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Each DKG round is a full three-operator protocol run, so the capture's tens of
+/// thousands of keyshares come sooner in fewer, larger rounds.
+const CAPTURE_DKG_BATCH_SIZE: usize = 2000;
 const KEYSHARE_CHECK_INTERVAL: Duration = Duration::from_millis(500);
 const KEYSHARE_MIN_UUID: &str = "01954639-8d50-7e47-b3f0-ddb307fab7c2";
 const KEYSHARE_STATUS_AVAILABLE: &str = "AVAILABLE";
 
-/// Where a cluster's signing keyshares come from.
 #[derive(Clone, Copy, Debug)]
-pub enum KeyshareSource {
-    /// Load the committed seed into every operator database before boot. The
-    /// pools start full, so the operators never run DKG.
-    Seed,
-    /// Let the operators generate their own keyshares and wait for the rounds
-    /// to land. Slow and load-sensitive: only the seed capture uses it.
-    Dkg,
+pub enum StateSource {
+    Snapshot,
+    /// The operators run DKG until each coordinator holds more than `target`
+    /// keyshares of its own. Slow and load-sensitive.
+    Dkg {
+        target: usize,
+    },
+}
+
+impl StateSource {
+    fn ready_at(self) -> usize {
+        match self {
+            Self::Snapshot => MIN_AVAILABLE_KEYS,
+            Self::Dkg { target } => target,
+        }
+    }
 }
 
 pub struct SparkSoFixture {
     pub operators: Vec<OperatorFixture>,
-    keyshare_source: KeyshareSource,
+    state_source: StateSource,
     // Store receivers separately to avoid borrowing issues
     startup_receivers: Vec<(usize, oneshot::Receiver<()>)>,
     // Store references to log consumers for each operator
     log_consumers: Vec<(usize, WaitForLogConsumer)>,
+}
+
+/// Waits for the container's exit, not a log line, so what runs next sees every
+/// migration applied.
+async fn run_migrations(
+    fixture_id: &FixtureId,
+    index: usize,
+    connection_string: &str,
+) -> Result<()> {
+    GenericImage::new("spark-migrations", "latest")
+        .with_wait_for(WaitFor::Exit(ExitWaitStrategy::new().with_exit_code(0)))
+        .with_cmd(["migrate", "apply", "--url", connection_string])
+        .with_network(fixture_id.to_network())
+        .with_container_name(format!("migrations-{index}-{fixture_id}"))
+        .with_log_consumer(TracingConsumer::new(format!("migrations {index}")))
+        .start()
+        .await?;
+    Ok(())
 }
 
 // Function to generate a self-signed certificate for all operator hostnames
@@ -86,26 +117,26 @@ fn generate_self_signed_certificate(host_names: &[String]) -> Result<(String, St
 
 impl SparkSoFixture {
     pub async fn new(fixture_id: &FixtureId, bitcoind_fixture: &BitcoindFixture) -> Result<Self> {
-        Self::new_with_keyshares(fixture_id, bitcoind_fixture, KeyshareSource::Seed).await
+        Self::new_with_keyshares(fixture_id, bitcoind_fixture, StateSource::Snapshot).await
     }
 
     pub async fn new_with_keyshares(
         fixture_id: &FixtureId,
         bitcoind_fixture: &BitcoindFixture,
-        keyshare_source: KeyshareSource,
+        state_source: StateSource,
     ) -> Result<Self> {
-        // Namespaced by `fixture_id`: `testdir!()` keys only on the test's case
-        // name, so parametrized cases that share a name (all our `case_1_seed`s)
-        // resolve to one directory and would clobber each other's operators.json
-        // when tests run concurrently.
-        let config_dir = testdir::testdir!().join(fixture_id.to_string());
+        // The entrypoint keeps so.config.yaml's values for an empty variable.
+        let (dkg_min_available_keys, dkg_batch_size) = match state_source {
+            StateSource::Snapshot => (String::new(), String::new()),
+            StateSource::Dkg { target } => (target.to_string(), CAPTURE_DKG_BATCH_SIZE.to_string()),
+        };
+        let config_dir = fixture_id.testdir()?;
         let operators_json_path = config_dir.join("operators.json");
 
         // Create a shared server certificate file
         let key_path = config_dir.join("server.key");
         let cert_path = config_dir.join("server.crt");
 
-        fs::create_dir_all(&config_dir)?;
         fs::write(&operators_json_path, "{}")?;
 
         // Generate a list of operator host names before creating the operators
@@ -144,6 +175,8 @@ impl SparkSoFixture {
             let key_path = key_path.clone();
             let operators_json_path = operators_json_path.clone();
             let cert_pem_clone = cert_pem.clone();
+            let dkg_min_available_keys = dkg_min_available_keys.clone();
+            let dkg_batch_size = dkg_batch_size.clone();
 
             // Create async task for each operator
             let operator_future = tokio::spawn(async move {
@@ -152,10 +185,12 @@ impl SparkSoFixture {
                 let postgres = Postgres::default()
                     .with_network(fixture_id.to_network())
                     .with_container_name(&postgres_container_name)
+                    .with_mount(state_snapshot::mount())
                     .start()
                     .await?;
 
-                let postgres_port = postgres.get_host_port_ipv4(POSTGRES_PORT).await?;
+                let postgres_port =
+                    crate::fixtures::published_port(&postgres, POSTGRES_PORT).await?;
                 let internal_postgres_connectionstring = format!(
                     "postgres://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{postgres_container_name}:{POSTGRES_PORT}/{POSTGRES_DB}?sslmode=disable"
                 );
@@ -163,29 +198,23 @@ impl SparkSoFixture {
                     "postgres://{}:{}@{}:{}/{}?sslmode=disable",
                     POSTGRES_USER, POSTGRES_PASSWORD, "127.0.0.1", postgres_port, POSTGRES_DB
                 );
-                // Waiting for the exit rather than a log line: the keyshare seed
-                // is copied in right after this, and a COPY that overlaps the
-                // last migration fails on a table that is not there yet.
-                let _migrations_container = GenericImage::new("spark-migrations", "latest")
-                    .with_wait_for(WaitFor::Exit(ExitWaitStrategy::new().with_exit_code(0)))
-                    .with_cmd([
-                        "migrate",
-                        "apply",
-                        "--url",
-                        internal_postgres_connectionstring.as_str(),
-                    ])
-                    .with_network(fixture_id.to_network())
-                    .with_container_name(format!("migrations-{i}-{fixture_id}"))
-                    .with_log_consumer(TracingConsumer::new(format!("migrations {i}")))
-                    .start()
-                    .await?;
-
-                match keyshare_source {
-                    KeyshareSource::Seed => {
-                        let seeded = keyshares::load_seed(&postgres_connectionstring, i).await?;
-                        info!("Seeded {seeded} keyshares into operator {i}'s database");
+                match state_source {
+                    // Restore before migrating: the dump carries the schema, and
+                    // Atlas's revision table with it, so migrating afterwards
+                    // applies only the revisions the dump lacks.
+                    StateSource::Snapshot => {
+                        state_snapshot::restore_database(
+                            &fixture_id.to_network(),
+                            &postgres_container_name,
+                            &format!("operator-{i}"),
+                        )
+                        .await?;
+                        run_migrations(&fixture_id, i, &internal_postgres_connectionstring).await?;
+                        info!("Restored operator {i}'s database from the state snapshot");
                     }
-                    KeyshareSource::Dkg => {}
+                    StateSource::Dkg { .. } => {
+                        run_migrations(&fixture_id, i, &internal_postgres_connectionstring).await?;
+                    }
                 }
 
                 let secret_key = SecretKey::from_slice(&[i as u8 + 1; 32])?;
@@ -237,10 +266,12 @@ impl SparkSoFixture {
                     // Bitcoind connection
                     .with_env_var("BITCOIND_HOST", &internal_rpc_url)
                     .with_env_var("BITCOIND_ZMQPUBRAWBLOCK", &internal_zmqpubrawblock_url)
+                    .with_env_var("DKG_MIN_AVAILABLE_KEYS", &dkg_min_available_keys)
+                    .with_env_var("DKG_BATCH_SIZE", &dkg_batch_size)
                     .start()
                     .await?;
 
-                let host_port = container.get_host_port_ipv4(OPERATOR_PORT).await?;
+                let host_port = crate::fixtures::published_port(&container, OPERATOR_PORT).await?;
 
                 info!("Operator {} running on port {}", i, host_port);
 
@@ -279,7 +310,7 @@ impl SparkSoFixture {
                     startup_receivers.push((index, startup_rx));
                     log_consumers.push((index, log_consumer));
                 }
-                Ok(Err(e)) => return Err(anyhow::anyhow!("Failed to create operator: {}", e)),
+                Ok(Err(e)) => return Err(e.context("failed to create operator")),
                 Err(e) => return Err(anyhow::anyhow!("Task join error: {}", e)),
             }
         }
@@ -292,7 +323,7 @@ impl SparkSoFixture {
 
         Ok(Self {
             operators,
-            keyshare_source,
+            state_source,
             startup_receivers,
             log_consumers,
         })
@@ -342,55 +373,35 @@ impl SparkSoFixture {
             }
         }
 
-        match self.keyshare_source {
-            KeyshareSource::Seed => self.verify_seeded_keyshares().await?,
-            KeyshareSource::Dkg => self.wait_for_keyshares().await?,
+        match self.state_source {
+            StateSource::Snapshot => self.verify_restored_keyshares().await?,
+            StateSource::Dkg { .. } => self.wait_for_keyshares().await?,
         }
 
         info!("All operators are initialized and ready");
         Ok(())
     }
 
-    // Confirm the seed survived operator startup. Unlike the DKG path this does
-    // not poll: the rows were written before the operators booted, so anything
-    // missing here is a broken seed, not a slow one.
-    async fn verify_seeded_keyshares(&self) -> Result<()> {
+    // No polling: the rows are restored before the operators boot, so a shortfall
+    // is a broken snapshot rather than a slow one.
+    async fn verify_restored_keyshares(&self) -> Result<()> {
         for operator in &self.operators {
-            let counts =
-                keyshares::available_per_coordinator(&operator.postgres_connectionstring).await?;
+            let counts = available_per_coordinator(&operator.postgres_connectionstring).await?;
             for coordinator in 0..NUM_OPERATORS {
                 let available = counts.get(&(coordinator as i64)).copied().unwrap_or(0);
-                if available <= keyshares::MIN_AVAILABLE_KEYS {
+                if available <= MIN_AVAILABLE_KEYS {
                     return Err(anyhow::anyhow!(
                         "operator {}'s database holds {available} keyshares for coordinator \
-                         {coordinator}, need more than {}",
+                         {coordinator}, need more than {MIN_AVAILABLE_KEYS}. The state snapshot \
+                         is incomplete; rebuild it with `make capture-itest-state`.",
                         operator.index,
-                        keyshares::MIN_AVAILABLE_KEYS
                     ));
                 }
             }
         }
 
-        info!("Seeded keyshares are available in all operator databases");
+        info!("Restored keyshares are available in all operator databases");
         Ok(())
-    }
-
-    /// Replace the committed keyshare seed with this cluster's keyshares. Only
-    /// meaningful for a [`KeyshareSource::Dkg`] cluster, which is the only one
-    /// that generates its own.
-    pub async fn capture_keyshare_seed(&self) -> Result<u64> {
-        let mut total = 0;
-        for operator in &self.operators {
-            let captured =
-                keyshares::capture_seed(&operator.postgres_connectionstring, operator.index)
-                    .await?;
-            info!(
-                "Captured {captured} keyshares from operator {}",
-                operator.index
-            );
-            total += captured;
-        }
-        Ok(total)
     }
 
     /// Stops every operator container so their RPC endpoints refuse connections,
@@ -468,7 +479,8 @@ impl SparkSoFixture {
                         let counts: Vec<usize> = snapshot.iter().map(Vec::len).collect();
                         info!("Available keyshares per operator database: {:?}", counts);
 
-                        if previous.as_ref() == Some(&snapshot) && Self::keyshares_ready(&snapshot)
+                        if previous.as_ref() == Some(&snapshot)
+                            && Self::keyshares_ready(&snapshot, self.state_source.ready_at())
                         {
                             info!("Keyshares are propagated across all operator databases");
                             return Ok(());
@@ -533,7 +545,7 @@ impl SparkSoFixture {
     // Mirrors the reservation invariant: a coordinator picks from the available keyshares
     // with its own coordinator_index in its own database, then reserves that id on every
     // other operator, so each of those ids must be available in every other database.
-    fn keyshares_ready(snapshot: &[Vec<(String, i64)>]) -> bool {
+    fn keyshares_ready(snapshot: &[Vec<(String, i64)>], ready_at: usize) -> bool {
         let id_sets: Vec<HashSet<&str>> = snapshot
             .iter()
             .map(|set| set.iter().map(|(id, _)| id.as_str()).collect())
@@ -547,9 +559,9 @@ impl SparkSoFixture {
                 .collect();
 
             // An operator's DKG keeps inserting batches until it has more than
-            // MIN_AVAILABLE_KEYS keyshares of its own; below that, more inserts
-            // are still coming and could race this check.
-            coordinated.len() > keyshares::MIN_AVAILABLE_KEYS
+            // `ready_at` keyshares of its own; below that, more inserts are
+            // still coming and could race this check.
+            coordinated.len() > ready_at
                 && id_sets.iter().enumerate().all(|(other, ids)| {
                     other == coordinator || coordinated.iter().all(|id| ids.contains(id))
                 })
