@@ -702,12 +702,27 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
     );
     assert!(matches!(send_resp.payment.payment_type, PaymentType::Send));
 
-    // Bob should receive the amount
+    // Bob should receive the amount. Settling over Spark does not change what
+    // was paid, so it still reports as the Bolt11 invoice being paid, just
+    // without an HTLC.
     let received =
         wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
     assert_eq!(received.amount, invoice_amount_sats as u128);
-    // Receiver should see Spark method when routed via prefer_spark
-    assert!(matches!(received.method, PaymentMethod::Spark));
+    let bob_payment = bob
+        .sdk
+        .get_payment(GetPaymentRequest {
+            payment_id: received.id.clone(),
+        })
+        .await?
+        .payment;
+    assert!(matches!(bob_payment.method, PaymentMethod::Lightning));
+    let Some(PaymentDetails::Lightning { htlc_details, .. }) = &bob_payment.details else {
+        anyhow::bail!("Expected Lightning details, got {:?}", bob_payment.details);
+    };
+    assert!(
+        htlc_details.is_none(),
+        "a Spark-settled invoice has no HTLC"
+    );
 
     info!("=== Test test_05_lightning_invoice_prefer_spark_fee_path PASSED ===");
     Ok(())

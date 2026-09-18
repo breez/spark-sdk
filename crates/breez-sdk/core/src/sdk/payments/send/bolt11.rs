@@ -155,6 +155,7 @@ pub(super) async fn send_signed(
         .lightning_sender
         .payment_from_pay_result(
             result,
+            bolt11,
             u128::from(amount_to_send),
             completion_timeout_secs.unwrap_or(0).into(),
         )

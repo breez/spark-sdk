@@ -103,9 +103,11 @@ namespace BreezSdkSnippets
                 {
                     Console.WriteLine($"Spark HTLC expiry time: {sparkDetails.htlcDetails.expiryTime}");
                 }
-                else if (payment.details is PaymentDetails.Lightning lightningDetails)
+                else if (payment.details is PaymentDetails.Lightning lightningDetails
+                    && lightningDetails.htlcDetails != null)
                 {
-                    Console.WriteLine($"Lightning HTLC expiry time: {lightningDetails.htlcDetails.expiryTime}");
+                    Console.WriteLine(
+                        $"Lightning HTLC expiry time: {lightningDetails.htlcDetails.expiryTime}");
                 }
             }
             // ANCHOR_END: list-claimable-htlc-payments

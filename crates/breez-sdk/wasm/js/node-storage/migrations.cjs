@@ -513,6 +513,56 @@ class MigrationManager {
           )`,
         ],
       },
+      {
+        // Bolt11s settled over Spark, one table per direction, joined when a
+        // payment is read: sends by the payment id, receives by a digest of the
+        // Spark invoice the Bolt11 embeds, which the Spark details row carries.
+        // A payment settled this way involves no HTLC, so the lightning columns
+        // describing one have to be nullable; SQLite cannot drop NOT NULL in
+        // place, so that table is rebuilt. Every existing row settled over
+        // Lightning and keeps its values.
+        name: "Create spark_settled_bolt11 tables",
+        sql: [
+          `CREATE TABLE payment_details_lightning_new (
+             payment_id TEXT PRIMARY KEY,
+             invoice TEXT NOT NULL,
+             destination_pubkey TEXT NOT NULL,
+             description TEXT,
+             payment_hash TEXT,
+             preimage TEXT,
+             htlc_status TEXT,
+             htlc_expiry_time INTEGER,
+             FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
+           )`,
+          `INSERT INTO payment_details_lightning_new
+             (payment_id, invoice, destination_pubkey, description, payment_hash, preimage, htlc_status, htlc_expiry_time)
+           SELECT payment_id, invoice, destination_pubkey, description, payment_hash, preimage, htlc_status, htlc_expiry_time
+           FROM payment_details_lightning`,
+          `DROP TABLE payment_details_lightning`,
+          `ALTER TABLE payment_details_lightning_new RENAME TO payment_details_lightning`,
+          `CREATE INDEX idx_payment_details_lightning_invoice ON payment_details_lightning(invoice)`,
+          `CREATE INDEX idx_payment_details_lightning_payment_hash ON payment_details_lightning(payment_hash)`,
+          `CREATE TABLE spark_settled_bolt11_sends (
+              payment_id TEXT PRIMARY KEY,
+              bolt11 TEXT NOT NULL,
+              description TEXT,
+              destination_pubkey TEXT NOT NULL DEFAULT ''
+          )`,
+          `CREATE TABLE spark_settled_bolt11_receives (
+              id TEXT PRIMARY KEY,
+              spark_invoice TEXT NOT NULL,
+              bolt11 TEXT NOT NULL,
+              expires_at INTEGER,
+              description TEXT,
+              destination_pubkey TEXT NOT NULL DEFAULT ''
+          )`,
+          `CREATE INDEX idx_spark_settled_bolt11_receives_expires_at
+            ON spark_settled_bolt11_receives(expires_at)`,
+          `ALTER TABLE payment_details_spark ADD COLUMN spark_invoice_digest TEXT`,
+          `CREATE INDEX idx_payment_details_spark_invoice_digest
+            ON payment_details_spark(spark_invoice_digest)`,
+        ],
+      },
     ];
   }
 }

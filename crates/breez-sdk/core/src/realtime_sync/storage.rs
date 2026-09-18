@@ -15,7 +15,8 @@ use tracing::{Instrument, debug, error, warn};
 
 use crate::{
     Contact, DepositInfo, EventEmitter, ListContactsRequest, Payment, PaymentDetails,
-    PaymentMetadata, Storage, StorageError, UpdateDepositPayload,
+    PaymentMetadata, SparkSettledBolt11Receive, SparkSettledBolt11Send, Storage, StorageError,
+    UpdateDepositPayload,
     events::{InternalSyncedEvent, SdkEvent},
     lnurl::LnurlServerClient,
     persist::{
@@ -35,6 +36,10 @@ enum RecordType {
     Contact,
     LightningAddress,
     CrossChainSwap,
+    /// A [`SparkSettledBolt11Send`], keyed by its payment id.
+    SparkSettledBolt11Send,
+    /// A [`SparkSettledBolt11Receive`], keyed by its id.
+    SparkSettledBolt11Receive,
 }
 
 impl RecordType {
@@ -45,6 +50,8 @@ impl RecordType {
             Self::Contact => SchemaVersion::new(1, 0, 0),
             Self::LightningAddress => SchemaVersion::new(1, 0, 0),
             Self::CrossChainSwap => SchemaVersion::new(1, 0, 0),
+            Self::SparkSettledBolt11Send => SchemaVersion::new(1, 0, 0),
+            Self::SparkSettledBolt11Receive => SchemaVersion::new(1, 0, 0),
         }
     }
 }
@@ -56,6 +63,8 @@ impl Display for RecordType {
             RecordType::Contact => "Contact",
             RecordType::LightningAddress => "LightningAddress",
             RecordType::CrossChainSwap => "CrossChainSwap",
+            RecordType::SparkSettledBolt11Send => "SparkSettledBolt11Send",
+            RecordType::SparkSettledBolt11Receive => "SparkSettledBolt11Receive",
         };
         write!(f, "{s}")
     }
@@ -70,12 +79,15 @@ impl FromStr for RecordType {
             "Contact" => Ok(RecordType::Contact),
             "LightningAddress" => Ok(RecordType::LightningAddress),
             "CrossChainSwap" => Ok(RecordType::CrossChainSwap),
+            "SparkSettledBolt11Send" => Ok(RecordType::SparkSettledBolt11Send),
+            "SparkSettledBolt11Receive" => Ok(RecordType::SparkSettledBolt11Receive),
             _ => Err(format!("Unknown record type: {s}")),
         }
     }
 }
 
 const LIGHTNING_ADDRESS_DATA_ID: &str = "current";
+
 const DELETED_AT_FIELD: &str = "deleted_at";
 
 /// Internal sync model for contacts
@@ -329,6 +341,14 @@ impl SyncedRecordHandler {
                 self.handle_cross_chain_swap_change(change.new_state.data)
                     .await
             }
+            RecordType::SparkSettledBolt11Send => {
+                self.handle_spark_settled_bolt11_send_change(change.new_state.data)
+                    .await
+            }
+            RecordType::SparkSettledBolt11Receive => {
+                self.handle_spark_settled_bolt11_receive_change(change.new_state.data)
+                    .await
+            }
         }?;
         Ok(RecordOutcome::Completed)
     }
@@ -368,6 +388,14 @@ impl SyncedRecordHandler {
                 self.handle_cross_chain_swap_change(change.change.updated_fields)
                     .await
             }
+            RecordType::SparkSettledBolt11Send => {
+                self.handle_spark_settled_bolt11_send_change(change.change.updated_fields)
+                    .await
+            }
+            RecordType::SparkSettledBolt11Receive => {
+                self.handle_spark_settled_bolt11_receive_change(change.change.updated_fields)
+                    .await
+            }
         }
     }
 
@@ -384,6 +412,47 @@ impl SyncedRecordHandler {
 
         self.storage
             .insert_payment_metadata(data_id, metadata)
+            .await?;
+        Ok(())
+    }
+
+    /// Applies a [`SparkSettledBolt11Send`] another device recorded when it
+    /// paid.
+    ///
+    /// Stored whether or not the transfer is here yet: the row is read when a
+    /// payment is, so either arrival order reports the same thing.
+    async fn handle_spark_settled_bolt11_send_change(
+        &self,
+        fields: HashMap<String, Value>,
+    ) -> anyhow::Result<()> {
+        let send: SparkSettledBolt11Send = serde_json::from_value(
+            serde_json::to_value(&fields)
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+        )
+        .map_err(|e| StorageError::Serialization(e.to_string()))?;
+
+        self.storage.set_spark_settled_bolt11_send(send).await?;
+        Ok(())
+    }
+
+    /// Applies a [`SparkSettledBolt11Receive`] another device recorded when
+    /// it created the Bolt11.
+    ///
+    /// Stored whether or not the transfer settling the invoice is here yet: the
+    /// row is read when a payment is, so either arrival order reports the same
+    /// thing.
+    async fn handle_spark_settled_bolt11_receive_change(
+        &self,
+        fields: HashMap<String, Value>,
+    ) -> anyhow::Result<()> {
+        let receive: SparkSettledBolt11Receive = serde_json::from_value(
+            serde_json::to_value(&fields)
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+        )
+        .map_err(|e| StorageError::Serialization(e.to_string()))?;
+
+        self.storage
+            .set_spark_settled_bolt11_receive(receive)
             .await?;
         Ok(())
     }
@@ -713,6 +782,65 @@ impl Storage for SyncedStorage {
         self.inner.list_active_cross_chain_swaps(provider).await
     }
 
+    /// The payer is the only one who knows which Bolt11 a transfer settled,
+    /// and only the device that sent it. Sharing the row is what lets the
+    /// account's other devices report the send as that invoice too.
+    async fn set_spark_settled_bolt11_send(
+        &self,
+        send: SparkSettledBolt11Send,
+    ) -> Result<(), StorageError> {
+        self.sync_service
+            .set_outgoing_record(&RecordChangeRequest {
+                id: RecordId::new(
+                    RecordType::SparkSettledBolt11Send.to_string(),
+                    &send.payment_id,
+                ),
+                schema_version: RecordType::SparkSettledBolt11Send.schema_version(),
+                updated_fields: serde_json::from_value(
+                    serde_json::to_value(&send)
+                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
+                )
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+            })
+            .await
+            .map_err(|e| StorageError::Implementation(e.to_string()))?;
+        self.inner.set_spark_settled_bolt11_send(send).await
+    }
+
+    /// The receiver's half: only the device that created the Bolt11 knows which
+    /// Spark invoice it embedded, and a transfer settling that invoice can be
+    /// claimed on any of the account's devices.
+    async fn set_spark_settled_bolt11_receive(
+        &self,
+        receive: SparkSettledBolt11Receive,
+    ) -> Result<(), StorageError> {
+        self.sync_service
+            .set_outgoing_record(&RecordChangeRequest {
+                id: RecordId::new(
+                    RecordType::SparkSettledBolt11Receive.to_string(),
+                    &receive.id,
+                ),
+                schema_version: RecordType::SparkSettledBolt11Receive.schema_version(),
+                updated_fields: serde_json::from_value(
+                    serde_json::to_value(&receive)
+                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
+                )
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+            })
+            .await
+            .map_err(|e| StorageError::Implementation(e.to_string()))?;
+        self.inner.set_spark_settled_bolt11_receive(receive).await
+    }
+
+    async fn delete_expired_spark_settled_bolt11_receives(
+        &self,
+        before: u64,
+    ) -> Result<(), StorageError> {
+        self.inner
+            .delete_expired_spark_settled_bolt11_receives(before)
+            .await
+    }
+
     async fn add_outgoing_change(
         &self,
         record: UnversionedRecordChange,
@@ -838,12 +966,12 @@ mod tests {
                 invoice: "lnbc1test".to_string(),
                 destination_pubkey: "02def456".to_string(),
                 description: None,
-                htlc_details: SparkHtlcDetails {
+                htlc_details: Some(SparkHtlcDetails {
                     payment_hash: "abc123".to_string(),
                     preimage: None,
                     expiry_time: 0,
                     status: crate::SparkHtlcStatus::WaitingForPreimage,
-                },
+                }),
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
@@ -1369,5 +1497,214 @@ mod tests {
         cache.delete_lightning_address(true).await.unwrap();
 
         assert_eq!(lightning_address_outgoing_count(&storage).await, 0);
+    }
+
+    // A regtest Bolt11 and a regtest Spark invoice, both real so they parse.
+    const TEST_BOLT11: &str = "lnbcrt10u1p42j5khpp57zyscpf43g90q9de4za4ptj6xpyp9snztynac9k7q2vet7kuknpssp58tfaf7uq5z6vgaphxg64zv9z69kd399llwvu0d760w8z48sd282qxqyz5vqnp4qtlyk6hxw5h4hrdfdkd4nh2rv0mwyyqvdtakr3dv6m4vvsmfshvg6cqzpudqq9qyyssq6gnvg355jjmqtw73pfevvkpf788j4xsftv2h7xhfyj4jvzkljxurmh7dydt2dyex7te49hfstkfg950vaepejaxf8gugft9fvequ7qsqu49at4";
+    const TEST_SPARK_INVOICE: &str = "sparkrt1pgss8cf4gru7ece2ryn8ym3vm3yz8leeend2589m7svq2mgv0xncfyx8zf8ssqgjzqqe5pmwfwyh9u4u6wgrepzk7j6j5prdv4kk7v3pqdur4y4c5nlcyr7lksm4mhrhdzakas9yt8gz4levtnfe49sgkqknywstpzxd8hk8qcgvp7x22q3qxz8gqudyp7rmuglc2axjqnlzz7d047gndmxff6ud02fvdgasdsq2en2aah6g52rq4qq7peler4s4d85s7prhm6sqzqj7gvc9nlzucy4yfh206fyqpk9zez";
+
+    /// A Spark payment, carrying `spark_invoice` when it settled one.
+    fn make_spark_payment(id: &str, spark_invoice: Option<&str>) -> crate::Payment {
+        crate::Payment {
+            id: id.to_string(),
+            payment_type: crate::PaymentType::Receive,
+            status: crate::PaymentStatus::Completed,
+            amount: 1000,
+            fees: 0,
+            timestamp: now_secs(),
+            method: crate::PaymentMethod::Spark,
+            details: Some(crate::PaymentDetails::Spark {
+                invoice_details: spark_invoice.map(|invoice| crate::SparkInvoicePaymentDetails {
+                    description: None,
+                    invoice: invoice.to_string(),
+                }),
+                htlc_details: None,
+                conversion_info: None,
+            }),
+            conversion_details: None,
+        }
+    }
+
+    fn test_receive(spark_invoice: &str, bolt11: &str) -> SparkSettledBolt11Receive {
+        SparkSettledBolt11Receive {
+            description: None,
+            destination_pubkey: String::new(),
+            id: crate::persist::spark_invoice_digest(spark_invoice),
+            spark_invoice: spark_invoice.to_string(),
+            bolt11: bolt11.to_string(),
+            expires_at: crate::persist::spark_invoice_expiry_secs(spark_invoice),
+        }
+    }
+
+    fn record_fields<T: Serialize>(record: &T) -> HashMap<String, Value> {
+        serde_json::from_value(serde_json::to_value(record).unwrap()).unwrap()
+    }
+
+    /// Stores a Spark payment and returns the Bolt11 it reports, which is the
+    /// only way a settled row is observable.
+    async fn settled_bolt11(
+        storage: &Arc<dyn Storage>,
+        payment_id: &str,
+        spark_invoice: Option<&str>,
+    ) -> Option<String> {
+        storage
+            .apply_payment_update(make_spark_payment(payment_id, spark_invoice))
+            .await
+            .unwrap();
+        match storage
+            .get_payment_by_id(payment_id.to_string())
+            .await
+            .unwrap()
+            .details
+        {
+            Some(crate::PaymentDetails::Lightning { invoice, .. }) => Some(invoice),
+            _ => None,
+        }
+    }
+
+    async fn outgoing_count(storage: &Arc<dyn Storage>, record_type: &RecordType) -> usize {
+        storage
+            .get_pending_outgoing_changes(100)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|c| c.change.id.r#type == record_type.to_string())
+            .count()
+    }
+
+    #[tokio::test]
+    async fn test_set_spark_settled_bolt11_receive_triggers_sync() {
+        let temp_dir = create_temp_dir("spark_settled_bolt11_receive_sync_push");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        let receive = test_receive(TEST_SPARK_INVOICE, TEST_BOLT11);
+        synced
+            .set_spark_settled_bolt11_receive(receive.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outgoing_count(&storage, &RecordType::SparkSettledBolt11Receive).await,
+            1
+        );
+        let change = storage.get_latest_outgoing_change().await.unwrap().unwrap();
+        assert_eq!(change.change.id.data_id, receive.id);
+        // Queued field values are stored JSON-encoded.
+        assert_eq!(
+            change.change.updated_fields.get("sparkInvoice"),
+            Some(&serde_json::to_string(TEST_SPARK_INVOICE).unwrap())
+        );
+        assert_eq!(
+            change.change.updated_fields.get("bolt11"),
+            Some(&serde_json::to_string(TEST_BOLT11).unwrap())
+        );
+        assert_eq!(
+            settled_bolt11(&storage, "settled", Some(TEST_SPARK_INVOICE)).await,
+            Some(TEST_BOLT11.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_spark_settled_bolt11_send_triggers_sync() {
+        let temp_dir = create_temp_dir("spark_settled_bolt11_send_sync_push");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        synced
+            .set_spark_settled_bolt11_send(SparkSettledBolt11Send {
+                payment_id: "transfer-1".to_string(),
+                bolt11: TEST_BOLT11.to_string(),
+                description: None,
+                destination_pubkey: String::new(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outgoing_count(&storage, &RecordType::SparkSettledBolt11Send).await,
+            1
+        );
+        let change = storage.get_latest_outgoing_change().await.unwrap().unwrap();
+        assert_eq!(change.change.id.data_id, "transfer-1");
+        assert_eq!(
+            settled_bolt11(&storage, "transfer-1", None).await,
+            Some(TEST_BOLT11.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_incoming_spark_settled_bolt11_receive_is_stored_for_a_later_transfer() {
+        let temp_dir = create_temp_dir("spark_settled_bolt11_receive_incoming_first");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let handler = create_test_record_handler(Arc::clone(&storage));
+
+        let receive = test_receive(TEST_SPARK_INVOICE, TEST_BOLT11);
+        let change = make_incoming_change(
+            "SparkSettledBolt11Receive",
+            &receive.id,
+            RecordType::SparkSettledBolt11Receive.schema_version(),
+            record_fields(&receive),
+        );
+        assert_eq!(
+            handler.handle_incoming_change(change).await.unwrap(),
+            RecordOutcome::Completed
+        );
+
+        // The transfer lands after the row, and still reports as the Bolt11.
+        assert_eq!(
+            settled_bolt11(&storage, "settled", Some(TEST_SPARK_INVOICE)).await,
+            Some(TEST_BOLT11.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_incoming_spark_settled_bolt11_receive_attributes_the_stored_payment() {
+        let temp_dir = create_temp_dir("spark_settled_bolt11_receive_incoming_second");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let handler = create_test_record_handler(Arc::clone(&storage));
+
+        storage
+            .apply_payment_update(make_spark_payment("settled", Some(TEST_SPARK_INVOICE)))
+            .await
+            .unwrap();
+        storage
+            .apply_payment_update(make_spark_payment("other", Some("sparkrt1other")))
+            .await
+            .unwrap();
+
+        let receive = test_receive(TEST_SPARK_INVOICE, TEST_BOLT11);
+        let change = make_incoming_change(
+            "SparkSettledBolt11Receive",
+            &receive.id,
+            RecordType::SparkSettledBolt11Receive.schema_version(),
+            record_fields(&receive),
+        );
+        assert_eq!(
+            handler.handle_incoming_change(change).await.unwrap(),
+            RecordOutcome::Completed
+        );
+
+        let settled = storage
+            .get_payment_by_id("settled".to_string())
+            .await
+            .unwrap();
+        assert_eq!(settled.method, crate::PaymentMethod::Lightning);
+        let Some(crate::PaymentDetails::Lightning {
+            invoice,
+            htlc_details,
+            ..
+        }) = settled.details
+        else {
+            panic!("expected Lightning details, got {:?}", settled.details);
+        };
+        assert_eq!(invoice, TEST_BOLT11);
+        assert!(htlc_details.is_none());
+
+        let other = storage
+            .get_payment_by_id("other".to_string())
+            .await
+            .unwrap();
+        assert_eq!(other.method, crate::PaymentMethod::Spark);
     }
 }

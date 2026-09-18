@@ -14,9 +14,10 @@ use std::collections::HashMap;
 
 use crate::models::{
     Contact, DepositInfo, IncomingChange, ListContactsRequest, OutgoingChange, Payment,
-    PaymentMetadata, Record, SetLnurlMetadataItem, StorageListPaymentsRequest,
-    StoredCrossChainSwap, UnversionedRecordChange, UpdateDepositPayload,
-    UpdateWatchedAddressPayload, WatchedDepositAddress,
+    PaymentMetadata, Record, SetLnurlMetadataItem, SparkSettledBolt11Receive,
+    SparkSettledBolt11Send, StorageListPaymentsRequest, StoredCrossChainSwap,
+    UnversionedRecordChange, UpdateDepositPayload, UpdateWatchedAddressPayload,
+    WatchedDepositAddress,
 };
 
 pub struct WasmStorage {
@@ -415,6 +416,50 @@ impl breez_sdk_spark::Storage for WasmStorage {
         Ok(Some(swap.into()))
     }
 
+    async fn set_spark_settled_bolt11_send(
+        &self,
+        send: breez_sdk_spark::SparkSettledBolt11Send,
+    ) -> Result<(), StorageError> {
+        let send: SparkSettledBolt11Send = send.into();
+        let promise = self
+            .storage
+            .set_spark_settled_bolt11_send(send)
+            .map_err(js_error_to_storage_error)?;
+        JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_storage_error)?;
+        Ok(())
+    }
+
+    async fn set_spark_settled_bolt11_receive(
+        &self,
+        receive: breez_sdk_spark::SparkSettledBolt11Receive,
+    ) -> Result<(), StorageError> {
+        let receive: SparkSettledBolt11Receive = receive.into();
+        let promise = self
+            .storage
+            .set_spark_settled_bolt11_receive(receive)
+            .map_err(js_error_to_storage_error)?;
+        JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_storage_error)?;
+        Ok(())
+    }
+
+    async fn delete_expired_spark_settled_bolt11_receives(
+        &self,
+        before: u64,
+    ) -> Result<(), StorageError> {
+        let promise = self
+            .storage
+            .delete_expired_spark_settled_bolt11_receives(before)
+            .map_err(js_error_to_storage_error)?;
+        JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_storage_error)?;
+        Ok(())
+    }
+
     async fn list_active_cross_chain_swaps(
         &self,
         provider: String,
@@ -599,6 +644,13 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     setCrossChainSwap: (swap: StoredCrossChainSwap) => Promise<void>;
     getCrossChainSwap: (provider: string, id: string) => Promise<StoredCrossChainSwap | null>;
     listActiveCrossChainSwaps: (provider: string) => Promise<StoredCrossChainSwap[]>;
+    setSparkSettledBolt11Send: (send: SparkSettledBolt11Send) => Promise<void>;
+    setSparkSettledBolt11Receive: (receive: SparkSettledBolt11Receive) => Promise<void>;
+    /**
+     * Delete every receive whose Spark invoice expired before `before` (Unix
+     * seconds) and that no stored payment settled.
+     */
+    deleteExpiredSparkSettledBolt11Receives: (before: number) => Promise<void>;
     syncAddOutgoingChange: (record: UnversionedRecordChange) => Promise<number>;
     syncCompleteOutgoingSync: (record: Record) => Promise<void>;
     syncGetPendingOutgoingChanges: (limit: number) => Promise<OutgoingChange[]>;
@@ -714,6 +766,24 @@ extern "C" {
         this: &Storage,
         provider: String,
         id: String,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = setSparkSettledBolt11Send, catch)]
+    pub fn set_spark_settled_bolt11_send(
+        this: &Storage,
+        send: SparkSettledBolt11Send,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = setSparkSettledBolt11Receive, catch)]
+    pub fn set_spark_settled_bolt11_receive(
+        this: &Storage,
+        receive: SparkSettledBolt11Receive,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = deleteExpiredSparkSettledBolt11Receives, catch)]
+    pub fn delete_expired_spark_settled_bolt11_receives(
+        this: &Storage,
+        before: u64,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = listActiveCrossChainSwaps, catch)]

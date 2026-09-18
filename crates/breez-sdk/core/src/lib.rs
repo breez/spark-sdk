@@ -44,9 +44,10 @@ pub use issuer::*;
 pub use logger::DEFAULT_FILTER;
 pub use models::*;
 pub use persist::{
-    ConversionFilter, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,
-    StorageListPaymentsRequest, StoragePaymentDetailsFilter, StoredCrossChainSwap,
-    UpdateDepositPayload, UpdateWatchedAddressPayload, WatchedDepositAddress,
+    ConversionFilter, PaymentMetadata, SetLnurlMetadataItem, SparkSettledBolt11Receive,
+    SparkSettledBolt11Send, Storage, StorageError, StorageListPaymentsRequest,
+    StoragePaymentDetailsFilter, StoredCrossChainSwap, UpdateDepositPayload,
+    UpdateWatchedAddressPayload, WatchedDepositAddress,
     backend::{
         PrebuiltBackend, ResolvedStores, StorageBackend, custom_storage, default_session_store,
     },
