@@ -66,15 +66,15 @@ const SCHNORR_SIG_WITNESS_VBYTES: u64 = 17;
 
 /// Builds the instant static deposit claim user statement. The field order and
 /// encoding must byte-match what the SSP validates for a 0-conf claim.
-fn serialize_instant_static_deposit_claim_payload(
-    network: &str,
+pub fn serialize_instant_static_deposit_claim_payload(
+    network: Network,
     credit_amount_sats: u64,
     deposit_amount_sats: u64,
     static_deposit_address: &str,
     quote_signature: &[u8],
 ) -> Vec<u8> {
     TaggedHasher::new(&CLAIM_INSTANT_STATIC_DEPOSIT_TAG)
-        .add_string(network)
+        .add_string(&network.to_string())
         .add_u64(INSTANT_UTXO_SWAP_REQUEST_TYPE)
         .add_u64(credit_amount_sats)
         .add_u64(0) // secondary credit amount, always 0
@@ -82,6 +82,33 @@ fn serialize_instant_static_deposit_claim_payload(
         .add_u64(deposit_amount_sats)
         .add_bytes(quote_signature)
         .signable_message()
+}
+
+/// Builds the user statement for a static deposit claim or refund.
+pub fn serialize_static_deposit_claim_payload(
+    network: Network,
+    txid: Txid,
+    output_index: u32,
+    request_type: UtxoSwapRequestType,
+    credit_amount_sats: u64,
+    signing_payload: &[u8],
+) -> Vec<u8> {
+    // The user statement is constructed by concatenating the following fields in order:
+    // 1. Action name: "claim_static_deposit" (UTF-8 string)
+    let mut payload = CLAIM_STATIC_DEPOSIT_ACTION.as_bytes().to_vec();
+    // 2. Network: lowercase network name (e.g., "bitcoin", "testnet") (UTF-8 string)
+    payload.extend_from_slice(network.to_string().as_bytes());
+    // 3. Transaction ID: hex-encoded UTXO transaction ID (UTF-8 string)
+    payload.extend_from_slice(txid.to_string().as_bytes());
+    // 4. Output index: UTXO output index (vout) as 4-byte unsigned integer (little-endian)
+    payload.extend_from_slice(&output_index.to_le_bytes());
+    // 5. Request type (1-byte unsigned integer, little-endian)
+    payload.extend_from_slice(&[request_type as u8]);
+    // 6. Credit amount: amount of satoshis to credit as 8-byte unsigned integer (little-endian)
+    payload.extend_from_slice(&credit_amount_sats.to_le_bytes());
+    // 7. Signing payload: SSP signature or sighash of spend transaction (UTF-8 string)
+    payload.extend_from_slice(signing_payload);
+    payload
 }
 
 /// A static deposit address.
@@ -394,7 +421,8 @@ impl DepositService {
         validate_claim_against_funding_tx(tx, txid, output_index, credit_amount_sats)?;
 
         // Serialize the static deposit claim user-statement.
-        let user_statement = self.serialize_static_deposit_claim_payload(
+        let user_statement = serialize_static_deposit_claim_payload(
+            self.network,
             txid,
             output_index,
             UtxoSwapRequestType::Fixed,
@@ -524,7 +552,8 @@ impl DepositService {
         let spend_tx_sighash = sighash_from_tx(&refund_tx, 0, tx_out)?;
 
         // Serialize the static deposit refund user-statement.
-        let user_statement = self.serialize_static_deposit_claim_payload(
+        let user_statement = serialize_static_deposit_claim_payload(
+            self.network,
             txid,
             output_index,
             UtxoSwapRequestType::Refund,
@@ -615,32 +644,6 @@ impl DepositService {
         refund_tx.input[0].witness = witness;
 
         Ok(refund_tx)
-    }
-
-    fn serialize_static_deposit_claim_payload(
-        &self,
-        txid: Txid,
-        output_index: u32,
-        request_type: UtxoSwapRequestType,
-        credit_amount_sats: u64,
-        signing_payload: &[u8],
-    ) -> Vec<u8> {
-        // The user statement is constructed by concatenating the following fields in order:
-        // 1. Action name: "claim_static_deposit" (UTF-8 string)
-        let mut payload = CLAIM_STATIC_DEPOSIT_ACTION.as_bytes().to_vec();
-        // 2. Network: lowercase network name (e.g., "bitcoin", "testnet") (UTF-8 string)
-        payload.extend_from_slice(self.network.to_string().as_bytes());
-        // 3. Transaction ID: hex-encoded UTXO transaction ID (UTF-8 string)
-        payload.extend_from_slice(txid.to_string().as_bytes());
-        // 4. Output index: UTXO output index (vout) as 4-byte unsigned integer (little-endian)
-        payload.extend_from_slice(&output_index.to_le_bytes());
-        // 5. Request type (1-byte unsigned integer, little-endian)
-        payload.extend_from_slice(&[request_type as u8]);
-        // 6. Credit amount: amount of satoshis to credit as 8-byte unsigned integer (little-endian)
-        payload.extend_from_slice(&credit_amount_sats.to_le_bytes());
-        // 7. Signing payload: SSP signature or sighash of spend transaction (UTF-8 string)
-        payload.extend_from_slice(signing_payload);
-        payload
     }
 
     /// Creates a tree root node for a deposit transaction.
@@ -1243,14 +1246,15 @@ impl DepositService {
                 .to_string();
 
             serialize_instant_static_deposit_claim_payload(
-                &self.network.to_string(),
+                self.network,
                 credit_amount_sats,
                 deposit_amount_sats,
                 &static_deposit_address,
                 &quote_signature_bytes,
             )
         } else {
-            self.serialize_static_deposit_claim_payload(
+            serialize_static_deposit_claim_payload(
+                self.network,
                 quote_txid,
                 output_index,
                 UtxoSwapRequestType::Fixed,

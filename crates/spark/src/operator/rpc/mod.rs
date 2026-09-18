@@ -8,6 +8,7 @@ pub use auth::SoAuthHeaderProvider;
 pub use connection_manager::*;
 pub use error::*;
 pub use spark_rpc_client::*;
+pub use transport::grpc_client::Transport;
 
 pub mod spark {
     #![allow(clippy::all)]

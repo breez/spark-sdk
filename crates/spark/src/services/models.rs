@@ -361,7 +361,7 @@ pub(crate) fn build_refund_signing_job(
     RefundJob { job, pending }
 }
 
-pub(crate) struct SigningResult {
+pub struct SigningResult {
     pub signing_commitments: BTreeMap<Identifier, SigningCommitments>,
     pub signature_shares: BTreeMap<Identifier, SignatureShare>,
     pub public_keys: BTreeMap<Identifier, PublicKey>,
