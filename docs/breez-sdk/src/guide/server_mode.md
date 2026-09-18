@@ -165,6 +165,8 @@ This configuration normally pairs with shared resources across every per-request
 
 Pair {{#name default_server_config}} with all of these shared resources: sharing the DB pool, chain service, SSP HTTP client, and gRPC channels across SDKs is the intended deployment shape.
 
-## Driving the {{#name background_tasks_enabled}} field directly
+<h2 id="driving-the-background-tasks-flag-directly">
+    <a class="header" href="#driving-the-background-tasks-flag-directly">Driving the {{#name background_tasks_enabled}} field directly</a>
+</h2>
 
 {{#name default_server_config}} is the recommended entry point. If you need to flip the flag on an existing config built another way, see [Background tasks enabled](./config.md#background-tasks-enabled).
