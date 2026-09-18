@@ -33,6 +33,9 @@ function parseCliArgs() {
   const opts = {
     dataDir: './.data',
     network: 'regtest',
+    sparkConfig: undefined,
+    chainApiUrl: undefined,
+    chainApiType: undefined,
     accountNumber: undefined,
     postgresConnectionString: undefined,
     mysqlConnectionString: undefined,
@@ -59,6 +62,15 @@ function parseCliArgs() {
         break
       case '--network':
         opts.network = args[++i]
+        break
+      case '--spark-config':
+        opts.sparkConfig = args[++i]
+        break
+      case '--chain-api-url':
+        opts.chainApiUrl = args[++i]
+        break
+      case '--chain-api-type':
+        opts.chainApiType = args[++i]
         break
       case '--account-number':
         opts.accountNumber = parseInt(args[++i], 10)
@@ -114,7 +126,10 @@ function parseCliArgs() {
         console.log('')
         console.log('Options:')
         console.log('  -d, --data-dir <path>                       Path to the data directory (default: ./.data)')
-        console.log('  --network <network>                          Network to use: regtest or mainnet (default: regtest)')
+        console.log('  --network <network>                          Network to use: regtest, signet, or mainnet (default: regtest)')
+        console.log('  --spark-config <file>                        JSON file with Spark operators and SSP configuration (required for signet)')
+        console.log('  --chain-api-url <url>                        Chain API base URL (required for signet)')
+        console.log('  --chain-api-type <type>                      Chain API type: esplora (default) or mempool-space (requires --chain-api-url)')
         console.log('  --account-number <number>                    Account number for the Spark signer')
         console.log('  --postgres-connection-string <string>        PostgreSQL connection string')
         console.log('  --mysql-connection-string <string>           MySQL connection string')
@@ -167,6 +182,16 @@ function parseCliArgs() {
 
   if (opts.listLabels && (opts.label || opts.storeLabel)) {
     console.error('--list-labels conflicts with --label and --store-label')
+    process.exit(1)
+  }
+
+  if (opts.chainApiType && !opts.chainApiUrl) {
+    console.error('--chain-api-type requires --chain-api-url')
+    process.exit(1)
+  }
+
+  if (opts.chainApiType && opts.chainApiType !== 'esplora' && opts.chainApiType !== 'mempool-space') {
+    console.error("Invalid --chain-api-type. Expected 'esplora' or 'mempool-space'")
     process.exit(1)
   }
 
@@ -268,8 +293,8 @@ async function main() {
 
   // Parse network
   const networkLower = opts.network.toLowerCase()
-  if (networkLower !== 'regtest' && networkLower !== 'mainnet') {
-    console.error("Invalid network. Use 'regtest' or 'mainnet'")
+  if (networkLower !== 'regtest' && networkLower !== 'signet' && networkLower !== 'mainnet') {
+    console.error("Invalid network. Use 'regtest', 'signet', or 'mainnet'")
     process.exit(1)
   }
   const network = networkLower
@@ -297,6 +322,17 @@ async function main() {
   const breezApiKey = process.env.BREEZ_API_KEY
   if (breezApiKey) {
     config.apiKey = breezApiKey
+  }
+
+  // Load and apply Spark config from JSON file
+  if (opts.sparkConfig) {
+    try {
+      const sparkConfigData = fs.readFileSync(opts.sparkConfig, 'utf-8')
+      config.sparkConfig = JSON.parse(sparkConfigData)
+    } catch (e) {
+      console.error(`Failed to load Spark config ${opts.sparkConfig}: ${e.message}`)
+      process.exit(1)
+    }
   }
 
   if (network === 'mainnet') {
@@ -355,6 +391,11 @@ async function main() {
 
   // Build SDK using SdkBuilder
   let sdkBuilder = SdkBuilder.new(config, seed)
+
+  if (opts.chainApiUrl) {
+    const apiType = opts.chainApiType === 'mempool-space' ? 'mempoolSpace' : 'esplora'
+    sdkBuilder = sdkBuilder.withRestChainService(opts.chainApiUrl, apiType, undefined)
+  }
 
   if (opts.postgresConnectionString) {
     sdkBuilder = sdkBuilder.withStorageBackend(

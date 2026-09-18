@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -50,6 +51,78 @@ func expandPath(path string) string {
 		return filepath.Join(home, path[2:])
 	}
 	return path
+}
+
+func parseChainApiType(value string) (breez_sdk_spark.ChainApiType, error) {
+	switch value {
+	case "esplora":
+		return breez_sdk_spark.ChainApiTypeEsplora, nil
+	case "mempool-space":
+		return breez_sdk_spark.ChainApiTypeMempoolSpace, nil
+	default:
+		return 0, fmt.Errorf("expected 'esplora' or 'mempool-space'")
+	}
+}
+
+// JSON-tagged intermediary types for loading SparkConfig from a JSON file
+// whose keys use the Rust serde default (snake_case).
+
+type jsonSparkSspConfig struct {
+	BaseURL           string  `json:"base_url"`
+	IdentityPublicKey string  `json:"identity_public_key"`
+	SchemaEndpoint    *string `json:"schema_endpoint"`
+}
+
+type jsonSparkSigningOperator struct {
+	ID                uint32  `json:"id"`
+	Identifier        string  `json:"identifier"`
+	Address           string  `json:"address"`
+	IdentityPublicKey string  `json:"identity_public_key"`
+	CaCertPem         *string `json:"ca_cert_pem"`
+}
+
+type jsonSparkConfig struct {
+	CoordinatorIdentifier                string                     `json:"coordinator_identifier"`
+	Threshold                            uint32                     `json:"threshold"`
+	SigningOperators                     []jsonSparkSigningOperator `json:"signing_operators"`
+	SspConfig                            jsonSparkSspConfig         `json:"ssp_config"`
+	ExpectedWithdrawBondSats             uint64                     `json:"expected_withdraw_bond_sats"`
+	ExpectedWithdrawRelativeBlockLocktime uint64                    `json:"expected_withdraw_relative_block_locktime"`
+	MaxTokenTransactionInputs            *uint32                    `json:"max_token_transaction_inputs"`
+}
+
+func loadSparkConfig(path string) (*breez_sdk_spark.SparkConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open Spark config %s: %w", path, err)
+	}
+	var raw jsonSparkConfig
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse Spark config %s: %w", path, err)
+	}
+	var operators []breez_sdk_spark.SparkSigningOperator
+	for _, op := range raw.SigningOperators {
+		operators = append(operators, breez_sdk_spark.SparkSigningOperator{
+			Id:                op.ID,
+			Identifier:        op.Identifier,
+			Address:           op.Address,
+			IdentityPublicKey: op.IdentityPublicKey,
+			CaCertPem:         op.CaCertPem,
+		})
+	}
+	return &breez_sdk_spark.SparkConfig{
+		CoordinatorIdentifier: raw.CoordinatorIdentifier,
+		Threshold:             raw.Threshold,
+		SigningOperators:      operators,
+		SspConfig: breez_sdk_spark.SparkSspConfig{
+			BaseUrl:           raw.SspConfig.BaseURL,
+			IdentityPublicKey: raw.SspConfig.IdentityPublicKey,
+			SchemaEndpoint:    raw.SspConfig.SchemaEndpoint,
+		},
+		ExpectedWithdrawBondSats:              raw.ExpectedWithdrawBondSats,
+		ExpectedWithdrawRelativeBlockLocktime: raw.ExpectedWithdrawRelativeBlockLocktime,
+		MaxTokenTransactionInputs:             raw.MaxTokenTransactionInputs,
+	}, nil
 }
 
 // splitArgs splits a command line into arguments, handling double-quoted strings.
@@ -102,7 +175,10 @@ func main() {
 	// CLI flags
 	dataDir := flag.String("d", "./.data", "Path to the data directory")
 	flag.StringVar(dataDir, "data-dir", "./.data", "Path to the data directory")
-	network := flag.String("network", "regtest", "Network to use (regtest or mainnet)")
+	network := flag.String("network", "regtest", "Network to use (regtest, signet, or mainnet)")
+	sparkConfigPath := flag.String("spark-config", "", "JSON file with Spark operators and SSP configuration (required for signet)")
+	chainApiURL := flag.String("chain-api-url", "", "Chain API base URL (required for signet)")
+	chainApiTypeStr := flag.String("chain-api-type", "", "Chain API type: esplora (default) or mempool-space (requires --chain-api-url)")
 	accountNumber := flag.String("account-number", "", "Account number for the Spark signer")
 	postgresConnectionString := flag.String("postgres-connection-string", "", "PostgreSQL connection string (uses SQLite by default)")
 	mysqlConnectionString := flag.String("mysql-connection-string", "", "MySQL connection string (uses SQLite by default)")
@@ -134,8 +210,20 @@ func main() {
 		networkEnum = breez_sdk_spark.NetworkRegtest
 	case "mainnet":
 		networkEnum = breez_sdk_spark.NetworkMainnet
+	case "signet":
+		networkEnum = breez_sdk_spark.NetworkSignet
 	default:
-		log.Fatalf("Invalid network. Use 'regtest' or 'mainnet'")
+		log.Fatalf("Invalid network. Use 'regtest', 'signet', or 'mainnet'")
+	}
+
+	// Load Spark config from JSON file
+	var sparkConfig *breez_sdk_spark.SparkConfig
+	if *sparkConfigPath != "" {
+		var err error
+		sparkConfig, err = loadSparkConfig(*sparkConfigPath)
+		if err != nil {
+			log.Fatalf("Spark config error: %v", err)
+		}
 	}
 
 	// Parse proxy
@@ -165,6 +253,9 @@ func main() {
 		config.ApiKey = &apiKey
 	}
 
+	if sparkConfig != nil {
+		config.SparkConfig = sparkConfig
+	}
 	if *lnurlDomain != "" {
 		config.LnurlDomain = lnurlDomain
 	}
@@ -239,6 +330,17 @@ func main() {
 		log.Fatalf("Cannot specify both --postgres-connection-string and --mysql-connection-string")
 	}
 	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
+	if *chainApiURL != "" {
+		chainApiType := breez_sdk_spark.ChainApiTypeEsplora
+		if *chainApiTypeStr != "" {
+			var err error
+			chainApiType, err = parseChainApiType(*chainApiTypeStr)
+			if err != nil {
+				log.Fatalf("Invalid chain API type: %v", err)
+			}
+		}
+		builder.WithRestChainService(*chainApiURL, chainApiType, nil)
+	}
 	if *postgresConnectionString != "" {
 		pgConfig := breez_sdk_spark.DefaultPostgresStorageConfig(*postgresConnectionString)
 		storage, err := breez_sdk_spark.PostgresStorage(pgConfig)
@@ -306,9 +408,14 @@ func runRepl(sdk *breez_sdk_spark.BreezSdk, tokenIssuer *breez_sdk_spark.TokenIs
 		completerItems[i] = readline.PcItem(cmd)
 	}
 
-	networkLabel := "regtest"
-	if network == breez_sdk_spark.NetworkMainnet {
+	var networkLabel string
+	switch network {
+	case breez_sdk_spark.NetworkMainnet:
 		networkLabel = "mainnet"
+	case breez_sdk_spark.NetworkSignet:
+		networkLabel = "signet"
+	default:
+		networkLabel = "regtest"
 	}
 	promptStr := fmt.Sprintf("breez-spark-cli [%s]> ", networkLabel)
 

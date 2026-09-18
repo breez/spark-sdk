@@ -34,6 +34,9 @@ ProxyConfig parseProxy(String address, String? username, String? password) {
 Future<void> runCli({
   required String dataDir,
   required String network,
+  SparkConfig? sparkConfig,
+  String? chainApiUrl,
+  ChainApiType? chainApiType,
   int? accountNumber,
   String? postgresConnectionString,
   String? mysqlConnectionString,
@@ -54,7 +57,15 @@ Future<void> runCli({
 
   final persistence = CliPersistence(dataDir);
 
-  final networkEnum = network == 'mainnet' ? Network.mainnet : Network.regtest;
+  final Network networkEnum;
+  switch (network) {
+    case 'mainnet':
+      networkEnum = Network.mainnet;
+    case 'signet':
+      networkEnum = Network.signet;
+    default:
+      networkEnum = Network.regtest;
+  }
   Config config;
   if (serverMode) {
     stdout.writeln('Server mode enabled. Run `sync` between operations.');
@@ -65,6 +76,10 @@ Future<void> runCli({
   final apiKey = Platform.environment['BREEZ_API_KEY'];
   if (apiKey != null) {
     config = config.copyWith(apiKey: apiKey);
+  }
+
+  if (sparkConfig != null) {
+    config = config.copyWith(sparkConfig: sparkConfig);
   }
 
   if (stableBalanceTokens.isNotEmpty) {
@@ -99,6 +114,14 @@ Future<void> runCli({
   }
 
   var builder = SdkBuilder(config: config, seed: seed);
+
+  if (chainApiUrl != null) {
+    builder = builder.withRestChainService(
+      url: chainApiUrl,
+      apiType: chainApiType ?? ChainApiType.esplora,
+      credentials: null,
+    );
+  }
 
   if (postgresConnectionString != null) {
     stderr.writeln(
@@ -147,7 +170,15 @@ Future<void> _runRepl(
   Network network,
   CliPersistence persistence,
 ) async {
-  final networkLabel = network == Network.mainnet ? 'mainnet' : 'regtest';
+  final String networkLabel;
+  switch (network) {
+    case Network.mainnet:
+      networkLabel = 'mainnet';
+    case Network.signet:
+      networkLabel = 'signet';
+    default:
+      networkLabel = 'regtest';
+  }
   final promptStr = 'breez-spark-cli [$networkLabel]> ';
 
   stdout.writeln('Breez SDK CLI Interactive Mode');

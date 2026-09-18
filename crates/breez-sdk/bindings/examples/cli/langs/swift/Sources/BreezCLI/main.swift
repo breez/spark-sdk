@@ -7,6 +7,9 @@ import CEditLine
 struct CliOptions {
     var dataDir: String = "./.data"
     var network: String = "regtest"
+    var sparkConfig: String?
+    var chainApiUrl: String?
+    var chainApiType: String?
     var accountNumber: UInt32?
     var postgresConnectionString: String?
     var mysqlConnectionString: String?
@@ -37,6 +40,15 @@ func parseCliFlags() -> CliOptions {
         case "--network":
             i += 1
             if i < args.count { opts.network = args[i] }
+        case "--spark-config":
+            i += 1
+            if i < args.count { opts.sparkConfig = args[i] }
+        case "--chain-api-url":
+            i += 1
+            if i < args.count { opts.chainApiUrl = args[i] }
+        case "--chain-api-type":
+            i += 1
+            if i < args.count { opts.chainApiType = args[i] }
         case "--account-number":
             i += 1
             if i < args.count { opts.accountNumber = UInt32(args[i]) }
@@ -113,6 +125,69 @@ func parseProxy(address: String, username: String?, password: String?) -> ProxyC
         exit(1)
     }
     return ProxyConfig(host: host, port: port, username: username, password: password)
+}
+
+func parseChainApiType(_ value: String) -> ChainApiType? {
+    switch value {
+    case "esplora":
+        return .esplora
+    case "mempool-space":
+        return .mempoolSpace
+    default:
+        return nil
+    }
+}
+
+func loadSparkConfig(path: String) throws -> SparkConfig {
+    let data = try Data(contentsOf: URL(fileURLWithPath: path))
+    guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        throw NSError(domain: "CLI", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: "Failed to parse Spark config \(path)",
+        ])
+    }
+    guard let coordinatorIdentifier = json["coordinator_identifier"] as? String,
+          let threshold = json["threshold"] as? Int,
+          let opsArray = json["signing_operators"] as? [[String: Any]],
+          let sspDict = json["ssp_config"] as? [String: Any],
+          let sspBaseUrl = sspDict["base_url"] as? String,
+          let sspIdentityPubkey = sspDict["identity_public_key"] as? String
+    else {
+        throw NSError(domain: "CLI", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: "Missing required fields in Spark config \(path)",
+        ])
+    }
+    let operators = try opsArray.map { op -> SparkSigningOperator in
+        guard let id = op["id"] as? Int,
+              let identifier = op["identifier"] as? String,
+              let address = op["address"] as? String,
+              let identityPubkey = op["identity_public_key"] as? String
+        else {
+            throw NSError(domain: "CLI", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Invalid signing operator in Spark config \(path)",
+            ])
+        }
+        return SparkSigningOperator(
+            id: UInt32(id),
+            identifier: identifier,
+            address: address,
+            identityPublicKey: identityPubkey,
+            caCertPem: op["ca_cert_pem"] as? String
+        )
+    }
+    let sspConfig = SparkSspConfig(
+        baseUrl: sspBaseUrl,
+        identityPublicKey: sspIdentityPubkey,
+        schemaEndpoint: sspDict["schema_endpoint"] as? String
+    )
+    return SparkConfig(
+        coordinatorIdentifier: coordinatorIdentifier,
+        threshold: UInt32(threshold),
+        signingOperators: operators,
+        sspConfig: sspConfig,
+        expectedWithdrawBondSats: (json["expected_withdraw_bond_sats"] as? Int).map { UInt64($0) } ?? 0,
+        expectedWithdrawRelativeBlockLocktime: (json["expected_withdraw_relative_block_locktime"] as? Int).map { UInt64($0) } ?? 0,
+        maxTokenTransactionInputs: (json["max_token_transaction_inputs"] as? Int).map { UInt32($0) }
+    )
 }
 
 // MARK: - Argument splitting (shell-like)
@@ -232,9 +307,32 @@ case "regtest":
     network = .regtest
 case "mainnet":
     network = .mainnet
+case "signet":
+    network = .signet
 default:
-    print("Invalid network. Use 'regtest' or 'mainnet'")
+    print("Invalid network. Use 'regtest', 'signet', or 'mainnet'")
     exit(1)
+}
+
+// Load spark config
+let sparkConfig: SparkConfig? = try opts.sparkConfig.map { try loadSparkConfig(path: $0) }
+
+// Parse chain API options
+let chainApi: (String, ChainApiType)?
+if let chainApiUrl = opts.chainApiUrl {
+    let apiType: ChainApiType
+    if let typeStr = opts.chainApiType {
+        guard let parsed = parseChainApiType(typeStr) else {
+            print("Invalid chain API type '\(typeStr)'. Expected 'esplora' or 'mempool-space'")
+            exit(1)
+        }
+        apiType = parsed
+    } else {
+        apiType = .esplora
+    }
+    chainApi = (chainApiUrl, apiType)
+} else {
+    chainApi = nil
 }
 
 // Init logging
@@ -258,6 +356,9 @@ let breezApiKey: String? = {
     return nil
 }()
 config.apiKey = breezApiKey
+if let sparkConfig = sparkConfig {
+    config.sparkConfig = sparkConfig
+}
 if network == .mainnet {
     config.crossChainConfig = CrossChainConfig()
 }
@@ -310,6 +411,9 @@ if let passkeyStr = opts.passkey {
 
 // Build SDK
 let builder = SdkBuilder(config: config, seed: seed)
+if let (url, apiType) = chainApi {
+    await builder.withRestChainService(url: url, apiType: apiType, credentials: nil)
+}
 if let connectionString = opts.postgresConnectionString {
     await builder.withStorageBackend(storage: try postgresStorage(
         config: defaultPostgresStorageConfig(connectionString: connectionString)
@@ -348,7 +452,12 @@ read_history(historyPath)
 print("Breez SDK CLI Interactive Mode")
 print("Type 'help' for available commands or 'exit' to quit")
 
-let networkLabel = network == .mainnet ? "mainnet" : "regtest"
+let networkLabel: String
+switch network {
+case .mainnet: networkLabel = "mainnet"
+case .signet: networkLabel = "signet"
+case .regtest: networkLabel = "regtest"
+}
 let promptStr = "breez-spark-cli [\(networkLabel)]> "
 
 replLoop: while true {
