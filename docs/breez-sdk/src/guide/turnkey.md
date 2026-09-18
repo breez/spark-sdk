@@ -2,7 +2,7 @@
 
 [Turnkey](https://www.turnkey.com/) keeps the wallet's keys inside a secure enclave. The SDK ships Turnkey-backed signers, so a server can run wallets without holding any signing key material: signing happens inside Turnkey, and what the server holds is an API credential whose permissions you control with Turnkey policies.
 
-Turnkey is meant for server deployments (see [Server mode](server_mode.md)). Depending on the policy you attach to the server's credential, it supports two ways of sending payments: the server signs everything itself, or each payment is approved by the end user via [Client signing](client_signing.md).
+Turnkey is meant for [server-side deployments](server_deployments.md). Depending on the policy you attach to the server's credential, it supports two ways of sending payments: the server signs everything itself, or each payment is approved by the end user via [Client signing](client_signing.md).
 
 The SDK connects to an existing Spark wallet in your Turnkey organization or sub-organization. Creating the wallet itself is done with Turnkey directly and is out of the SDK's scope (see [Turnkey's Spark support](https://docs.turnkey.com/features/networks/spark) for creating the wallet account).
 

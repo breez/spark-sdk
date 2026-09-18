@@ -94,6 +94,16 @@ Future<void> importExitState(BreezSdk sdk, String exitState) async {
   // ANCHOR_END: import-unilateral-exit-state
 }
 
+Future<void> syncExitData(BreezSdk sdk) async {
+  // ANCHOR: sync-exit-data
+  // With automatic collection off, an explicit sync is what collects the data
+  // a unilateral exit needs, and it waits for the collection to finish. Needs
+  // the Spark operators reachable, so run it on a schedule rather than at the
+  // moment an exit is needed.
+  await sdk.syncWallet(request: SyncWalletRequest());
+  // ANCHOR_END: sync-exit-data
+}
+
 // ANCHOR: custom-cpfp-signer
 Future<void> buildExitWithSigner(BreezSdk sdk, PrepareUnilateralExitResponse quote) async {
   // Flutter cannot pass a foreign CpfpSigner, so it takes a signPsbt callback.

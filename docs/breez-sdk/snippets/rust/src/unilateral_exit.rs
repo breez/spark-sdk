@@ -110,6 +110,18 @@ async fn import_exit_state(sdk: &BreezSdk, exit_state: String) -> Result<()> {
     Ok(())
 }
 
+async fn sync_exit_data(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: sync-exit-data
+    // With automatic collection off, an explicit sync is what collects the data
+    // a unilateral exit needs, and it waits for the collection to finish. Needs
+    // the Spark operators reachable, so run it on a schedule rather than at the
+    // moment an exit is needed.
+    sdk.sync_wallet(SyncWalletRequest {}).await?;
+    // ANCHOR_END: sync-exit-data
+
+    Ok(())
+}
+
 // ANCHOR: custom-cpfp-signer
 struct MyCpfpSigner;
 

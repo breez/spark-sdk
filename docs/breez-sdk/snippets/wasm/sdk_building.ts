@@ -169,6 +169,38 @@ const exampleInitSdkServer = async () => {
   return sdk
 }
 
+const exampleInitSdkTreasury = async () => {
+  // ANCHOR: init-sdk-treasury
+  // Construct the seed using a mnemonic, entropy or passkey
+  const mnemonic = '<mnemonic words>'
+  const seed: Seed = { type: 'mnemonic', mnemonic, passphrase: undefined }
+
+  // A treasury wallet is an ordinary long-lived SDK instance, so start from
+  // defaultConfig and keep background tasks on.
+  const config = defaultConfig('mainnet')
+  config.apiKey = '<breez api key>'
+
+  // Keeps user data in step across devices that each hold their own
+  // storage, which a server-side wallet has no use for.
+  config.realTimeSyncServerUrl = undefined
+
+  // Stays connected, and syncs cost more with more leaves, so it can
+  // afford a longer interval.
+  config.syncIntervalSecs = 300
+
+  // Optional: on a treasury that pays often and holds many leaves, collecting
+  // unilateral exit data behind every operation adds up. Turn it off and
+  // sync on a cadence of your own instead: a sync collects regardless of
+  // this flag.
+  config.exitChainAutoFetchEnabled = false
+
+  let builder = SdkBuilder.new(config, seed)
+  builder = await builder.withDefaultStorage('./.data')
+  const sdk = await builder.build()
+  // ANCHOR_END: init-sdk-treasury
+  return sdk
+}
+
 const exampleServerModeRequestHandler = async (sdk: BreezSdk): Promise<string> => {
   // ANCHOR: server-mode-request-handler
   // User-facing request handler: do not call syncWallet here. Operations

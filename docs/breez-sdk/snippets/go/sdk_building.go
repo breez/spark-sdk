@@ -251,6 +251,46 @@ func InitSdkServer() (*breez_sdk_spark.BreezSdk, error) {
 	return sdk, nil
 }
 
+func InitSdkTreasury() (*breez_sdk_spark.BreezSdk, error) {
+	// ANCHOR: init-sdk-treasury
+	// Construct the seed using a mnemonic, entropy or passkey
+	mnemonic := "<mnemonic words>"
+	var seed breez_sdk_spark.Seed = breez_sdk_spark.SeedMnemonic{
+		Mnemonic:   mnemonic,
+		Passphrase: nil,
+	}
+
+	// A treasury wallet is an ordinary long-lived SDK instance, so start from
+	// DefaultConfig and keep background tasks on.
+	apiKey := "<breez api key>"
+	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+	config.ApiKey = &apiKey
+
+	// Keeps user data in step across devices that each hold their own
+	// storage, which a server-side wallet has no use for.
+	config.RealTimeSyncServerUrl = nil
+
+	// Stays connected, and syncs cost more with more leaves, so it can
+	// afford a longer interval.
+	config.SyncIntervalSecs = 300
+
+	// Optional: on a treasury that pays often and holds many leaves, collecting
+	// unilateral exit data behind every operation adds up. Turn it off and
+	// sync on a cadence of your own instead: a sync collects regardless of
+	// this flag.
+	config.ExitChainAutoFetchEnabled = false
+
+	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
+	builder.WithDefaultStorage("./.data")
+	sdk, err := builder.Build()
+	if err != nil {
+		return nil, err
+	}
+	// ANCHOR_END: init-sdk-treasury
+
+	return sdk, nil
+}
+
 func ServerModeRequestHandler(sdk *breez_sdk_spark.BreezSdk) (string, error) {
 	// ANCHOR: server-mode-request-handler
 	// User-facing request handler: do not call SyncWallet here. Operations

@@ -2,7 +2,7 @@
 
 Using the SDK Builder gives you more control over the initialization and modular components used when the SDK is running. Below you can find examples of initializing the SDK using the SDK Builder and implementing modular components.
 
-The shared-pool, shared-chain-service, and shared-connection-manager components on this page are designed for multi-tenant server deployments — they're most useful in combination with the [Server mode](server_mode.md) SDK profile.
+The shared-pool, shared-chain-service, and shared-connection-manager components on this page are designed for multi-tenant server deployments: they're most useful in combination with the [multi-user configuration](server_mode.md).
 
 - [Storage](#with-storage) to manage stored data
 - [PostgreSQL Backend](#with-postgres-backend) as an alternative storage backend
