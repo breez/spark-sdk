@@ -5,8 +5,8 @@ use crate::operator::rpc::spark::{
     InitiatePreimageSwapResponse, SecretShare, StartTransferRequest, StorePreimageShareV2Request,
 };
 use crate::services::{
-    ServiceError, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
-    TransferType,
+    Preimage, ServiceError, Transfer, TransferId, TransferObserver, TransferService,
+    TransferStatus, TransferType,
 };
 use crate::signer::{
     OperatorRecipient, PrepareLightningReceiveRequest, PrepareTransferRequest, PreparedTransfer,
@@ -39,7 +39,7 @@ const DEFAULT_SEND_EXPIRY_SECS: u64 = 60 * 60 * 24 * 16; // 16 days
 const RECEIVER_IDENTITY_PUBLIC_KEY_SHORT_CHANNEL_ID: u64 = 17592187092992000001;
 
 /// Splits `preimage` into verifiable secret shares, encrypts each for its operator,
-/// and stores them at the coordinator under `payment_hash`. Storing the shares is
+/// and stores them at the coordinator under its payment hash. Storing the shares is
 /// what makes an invoice a normal (non-HODL) invoice: with the shares present, the
 /// operators reconstruct the preimage during the receiver-side `Reason::Receive`
 /// preimage swap and return it atomically with the leaf transfer (a HODL invoice
@@ -52,14 +52,13 @@ pub async fn store_preimage_shares(
     operator_pool: &OperatorPool,
     signer: &Arc<dyn Signer>,
     split_secret_threshold: u32,
-    payment_hash: sha256::Hash,
-    preimage: Vec<u8>,
+    preimage: &Preimage,
     invoice_string: String,
     identity_pubkey: PublicKey,
 ) -> Result<(), ServiceError> {
     let shares = signer
         .split_secret_with_proofs(
-            &SecretToSplit::Preimage(preimage),
+            &SecretToSplit::Preimage(preimage.to_vec()),
             split_secret_threshold,
             operator_pool.len(),
         )
@@ -89,7 +88,7 @@ pub async fn store_preimage_shares(
         .get_coordinator()
         .client
         .store_preimage_share_v2(StorePreimageShareV2Request {
-            payment_hash: payment_hash.to_byte_array().to_vec(),
+            payment_hash: preimage.compute_hash().to_byte_array().to_vec(),
             encrypted_preimage_shares: encrypted_shares.into_iter().collect(),
             threshold: split_secret_threshold,
             invoice_string,
