@@ -110,7 +110,7 @@ async fn run_migrations(
 }
 
 // Function to generate a self-signed certificate for all operator hostnames
-fn generate_self_signed_certificate(host_names: &[String]) -> Result<(String, String)> {
+pub(crate) fn generate_self_signed_certificate(host_names: &[String]) -> Result<(String, String)> {
     let CertifiedKey { cert, signing_key } = generate_simple_self_signed(host_names).unwrap();
     Ok((signing_key.serialize_pem(), cert.pem()))
 }
