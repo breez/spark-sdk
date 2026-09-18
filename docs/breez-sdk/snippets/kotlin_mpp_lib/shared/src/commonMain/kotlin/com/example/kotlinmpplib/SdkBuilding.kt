@@ -207,6 +207,41 @@ class SdkBuilding {
         // ANCHOR_END: init-sdk-server
     }
 
+    suspend fun initSdkTreasury() {
+        // ANCHOR: init-sdk-treasury
+        // Construct the seed using a mnemonic, entropy or passkey
+        val mnemonic = "<mnemonic words>"
+        val seed = Seed.Mnemonic(mnemonic, null)
+
+        // A treasury wallet is an ordinary long-lived SDK instance, so start
+        // from defaultConfig and keep background tasks on.
+        val config = defaultConfig(Network.MAINNET)
+        config.apiKey = "<breez api key>"
+
+        // Keeps user data in step across devices that each hold their own
+        // storage, which a server-side wallet has no use for.
+        config.realTimeSyncServerUrl = null
+
+        // Stays connected, and syncs cost more with more leaves, so it can
+        // afford a longer interval.
+        config.syncIntervalSecs = 300u
+
+        // Optional: on a treasury that pays often and holds many leaves,
+        // collecting unilateral exit data behind every operation adds up. Turn
+        // it off and sync on a cadence of your own instead: a sync collects
+        // regardless of this flag.
+        config.exitChainAutoFetchEnabled = false
+
+        try {
+            val builder = SdkBuilder(config, seed)
+            builder.withDefaultStorage("./.data")
+            val sdk = builder.build()
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: init-sdk-treasury
+    }
+
     suspend fun serverModeRequestHandler(sdk: BreezSdk) {
         // ANCHOR: server-mode-request-handler
         // User-facing request handler: do not call syncWallet here.

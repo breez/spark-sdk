@@ -13,4 +13,4 @@ Before moving to production, we strongly recommend verifying that these use case
 
 - **Check Spark status**: Use the Spark status check to monitor the operational status of the Spark network and display a warning to users when services are degraded or experiencing issues. For more information see [Spark status](spark_status.md).
 
-- **Server-side deployments**: If you're running the SDK in a multi-tenant server hosting many wallets at once, review [Server mode](server_mode.md) for the recommended profile, explicit sync/claim patterns, and shared-infrastructure wiring.
+- **Server-side deployments**: If you're running the SDK on a server, review [Server-side configuration](server_deployments.md) for the multi-user and treasury configurations.

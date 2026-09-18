@@ -236,6 +236,43 @@ pub(crate) async fn init_sdk_server() -> Result<BreezSdk> {
     Ok(sdk)
 }
 
+pub(crate) async fn init_sdk_treasury() -> Result<BreezSdk> {
+    // ANCHOR: init-sdk-treasury
+    // Construct the seed using a mnemonic, entropy or passkey
+    let mnemonic = "<mnemonic words>".to_string();
+    let seed = Seed::Mnemonic {
+        mnemonic,
+        passphrase: None,
+    };
+
+    // A treasury wallet is an ordinary long-lived SDK instance, so start from
+    // default_config and keep background tasks on.
+    let mut config = default_config(Network::Mainnet);
+    config.api_key = Some("<breez api key>".to_string());
+
+    // Keeps user data in step across devices that each hold their own
+    // storage, which a server-side wallet has no use for.
+    config.real_time_sync_server_url = None;
+
+    // Stays connected, and syncs cost more with more leaves, so it can
+    // afford a longer interval.
+    config.sync_interval_secs = 300;
+
+    // Optional: on a treasury that pays often and holds many leaves, collecting
+    // unilateral exit data behind every operation adds up. Turn it off and
+    // sync on a cadence of your own instead: a sync collects regardless of
+    // this flag.
+    config.exit_chain_auto_fetch_enabled = false;
+
+    let sdk = SdkBuilder::new(config, seed)
+        .with_default_storage("./.data".to_string())
+        .build()
+        .await?;
+    // ANCHOR_END: init-sdk-treasury
+
+    Ok(sdk)
+}
+
 pub(crate) async fn server_mode_request_handler(sdk: &BreezSdk) -> Result<String> {
     // ANCHOR: server-mode-request-handler
     // User-facing request handler: do not call sync_wallet here. Operations

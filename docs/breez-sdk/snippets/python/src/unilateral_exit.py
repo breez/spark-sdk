@@ -10,6 +10,7 @@ from breez_sdk_spark import (
     ImportUnilateralExitStateRequest,
     PrepareUnilateralExitRequest,
     PrepareUnilateralExitResponse,
+    SyncWalletRequest,
     UnilateralExitRequest,
     UnilateralExitResponse,
     UnilateralExitVerdict,
@@ -125,6 +126,20 @@ async def import_exit_state(sdk: BreezSdk, exit_state: str):
             f"skipped {imported.skipped_foreign_leaves}"
         )
         # ANCHOR_END: import-unilateral-exit-state
+    except Exception as error:
+        logging.error(error)
+        raise
+
+
+async def sync_exit_data(sdk: BreezSdk):
+    try:
+        # ANCHOR: sync-exit-data
+        # With automatic collection off, an explicit sync is what collects the data
+        # a unilateral exit needs, and it waits for the collection to finish. Needs
+        # the Spark operators reachable, so run it on a schedule rather than at the
+        # moment an exit is needed.
+        await sdk.sync_wallet(request=SyncWalletRequest())
+        # ANCHOR_END: sync-exit-data
     except Exception as error:
         logging.error(error)
         raise

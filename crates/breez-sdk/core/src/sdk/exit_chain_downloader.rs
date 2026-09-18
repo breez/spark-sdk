@@ -83,29 +83,37 @@ fn stopped_error() -> SdkError {
     SdkError::Generic("exit chain collection is not running".to_string())
 }
 
-/// Collects until cancelled, on each request. The first pass happens without
-/// waiting, so chains missed while the wallet was down are picked up at startup.
+/// Collects until cancelled, on each request. With `collect_on_start`, the first
+/// pass happens without waiting, so chains missed while the wallet was down are
+/// picked up at startup; without it the loop only ever collects when asked, which
+/// is what a wallet that has turned automatic collection off wants.
 pub(crate) async fn run_downloader(
     trigger: ExitChainTrigger,
     source: Arc<dyn ExitChainSource>,
     mut cancellation_token: watch::Receiver<()>,
+    collect_on_start: bool,
 ) {
+    let mut collect = collect_on_start;
     loop {
-        // Claimed before the pass rather than after it, so a waiter is only ever
-        // reported to by a pass that started once it had asked. One reported to
-        // by the pass already running would learn about a snapshot taken before
-        // its own leaves were stored.
-        let waiters = {
-            let mut inner = trigger.inner.lock().await;
-            inner.waiters.drain(..).collect::<Vec<_>>()
-        };
-        let result = source.fetch_missing_exit_chains().await;
-        if let Err(e) = &result {
-            warn!("Failed to collect exit chains: {e:?}");
+        if collect {
+            // Claimed before the pass rather than after it, so a waiter is only
+            // ever reported to by a pass that started once it had asked. One
+            // reported to by the pass already running would learn about a
+            // snapshot taken before its own leaves were stored.
+            let waiters = {
+                let mut inner = trigger.inner.lock().await;
+                inner.waiters.drain(..).collect::<Vec<_>>()
+            };
+            let result = source.fetch_missing_exit_chains().await;
+            if let Err(e) = &result {
+                warn!("Failed to collect exit chains: {e:?}");
+            }
+            for waiter in waiters {
+                let _ = waiter.send(result.clone());
+            }
         }
-        for waiter in waiters {
-            let _ = waiter.send(result.clone());
-        }
+        // Only the startup pass is ever skipped; every request is served.
+        collect = true;
 
         tokio::select! {
             // Cancellation first: with a request already pending, both arms are
@@ -196,6 +204,7 @@ mod tests {
             trigger.clone(),
             Arc::clone(&source) as Arc<dyn ExitChainSource>,
             cancel_rx,
+            true,
         ));
 
         // The loop collects once immediately, without waiting for a trigger.
@@ -244,6 +253,37 @@ mod tests {
         );
     }
 
+    /// With automatic collection off the downloader still runs, but it sweeps
+    /// nothing until asked: the startup pass is the cost the config turned off.
+    #[async_test_all]
+    async fn test_no_startup_pass_without_collect_on_start() {
+        let source = Arc::new(MockSource::default());
+        let trigger = ExitChainTrigger::new();
+        let (cancel_tx, cancel_rx) = watch::channel(());
+        tokio::spawn(run_downloader(
+            trigger.clone(),
+            Arc::clone(&source) as Arc<dyn ExitChainSource>,
+            cancel_rx,
+            false,
+        ));
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            source.call_count(),
+            0,
+            "nothing must be collected until a caller asks"
+        );
+
+        trigger.collect().await.expect("collect");
+        assert_eq!(
+            source.call_count(),
+            1,
+            "an explicit request must still be served"
+        );
+
+        drop(cancel_tx);
+    }
+
     /// A waiter is reported to by a pass that started after it asked, never by
     /// the one already running: that pass took its snapshot before the caller
     /// stored the leaves it is waiting to hear about.
@@ -256,6 +296,7 @@ mod tests {
             trigger.clone(),
             Arc::clone(&source) as Arc<dyn ExitChainSource>,
             cancel_rx,
+            true,
         ));
         assert!(
             wait_until(|| source.call_count() >= 1).await,

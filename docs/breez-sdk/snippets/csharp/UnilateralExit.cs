@@ -111,6 +111,17 @@ namespace BreezSdkSnippets
             // ANCHOR_END: import-unilateral-exit-state
         }
 
+        async Task SyncExitData(BreezSdk sdk)
+        {
+            // ANCHOR: sync-exit-data
+            // With automatic collection off, an explicit sync is what collects the data
+            // a unilateral exit needs, and it waits for the collection to finish. Needs
+            // the Spark operators reachable, so run it on a schedule rather than at the
+            // moment an exit is needed.
+            await sdk.SyncWallet(request: new SyncWalletRequest());
+            // ANCHOR_END: sync-exit-data
+        }
+
         // ANCHOR: custom-cpfp-signer
         class MyCpfpSigner : CpfpSigner
         {
