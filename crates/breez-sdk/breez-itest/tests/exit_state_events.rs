@@ -155,11 +155,11 @@ async fn spark_address(bob: &SdkInstance) -> Result<String> {
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_exit_state_events_for_a_send_that_swaps(
-    #[future] alice_sdk_no_auto_opt: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
+    #[future] env: Result<Environment>,
 ) -> Result<()> {
-    let mut alice = alice_sdk_no_auto_opt.await?;
-    let bob = bob_sdk.await?;
+    let env = env.await?;
+    let mut alice = env.create_wallet_without_auto_optimization().await?;
+    let bob = env.create_wallet().await?;
 
     ensure_funded(&mut alice, FUNDING_SATS).await?;
     quiesce(&mut alice).await?;
@@ -201,11 +201,11 @@ async fn test_exit_state_events_for_a_send_that_swaps(
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_exit_state_events_for_a_send_without_a_swap(
-    #[future] alice_sdk_no_auto_opt: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
+    #[future] env: Result<Environment>,
 ) -> Result<()> {
-    let mut alice = alice_sdk_no_auto_opt.await?;
-    let bob = bob_sdk.await?;
+    let env = env.await?;
+    let mut alice = env.create_wallet_without_auto_optimization().await?;
+    let bob = env.create_wallet().await?;
 
     ensure_funded(&mut alice, FUNDING_SATS).await?;
     quiesce(&mut alice).await?;

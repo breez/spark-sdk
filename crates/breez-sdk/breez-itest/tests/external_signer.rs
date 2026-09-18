@@ -7,14 +7,12 @@ use tracing::info;
 /// Test send/receive over lightning using external signer
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_external_signer_send_receive(
-    #[future] alice_external_signer_sdk: Result<SdkInstance>,
-    #[future] bob_external_signer_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_external_signer_send_receive(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_external_signer_send_receive ===");
 
-    let mut alice = alice_external_signer_sdk.await?;
-    let mut bob = bob_external_signer_sdk.await?;
+    let mut alice = env.create_external_signer_wallet().await?;
+    let mut bob = env.create_external_signer_wallet().await?;
 
     // Ensure Alice is funded
     ensure_funded(&mut alice, 1000).await?;

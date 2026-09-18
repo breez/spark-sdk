@@ -44,7 +44,7 @@ const FEATURE_CLIPPY_PASSES: &[(&str, ClippyFeatures)] = &[
     ("cli", ClippyFeatures::All),
     // `uniffi-cli` and `span-trace`.
     ("breez-sdk-bindings", ClippyFeatures::All),
-    // The Turnkey harness and the local-operator-cluster (unilateral exit) cases.
+    // The Turnkey harness and the local-operator-cluster cases.
     ("breez-sdk-itest", ClippyFeatures::All),
     // `dev`, which adds the flag for including the spark address in invoices.
     ("lnurl", ClippyFeatures::All),
@@ -1011,16 +1011,41 @@ fn itest_cmd() -> Result<()> {
     )
     .run()?;
 
-    // The unilateral-exit suite is the only local-cluster test in breez-itest, so
-    // scope to that binary: the rest of breez-itest is faucet-based and runs (with
-    // its secrets) in the 8-thread `make breez-itest`; re-running it here would be
-    // redundant and trips tests that need secrets absent from this job. Limited
-    // parallelism because each test starts its own bitcoind + operator cluster.
-    cmd!(
-        sh,
-        "cargo test -p breez-sdk-itest --features local-itest --test unilateral_exit --no-fail-fast -- --test-threads=2"
-    )
-    .run()?;
+    // The breez-itest suites that take an `Environment` and pass on a local stack.
+    // Left out: lnurl, whose payment flows need a second Lightning node to pay
+    // from, and rtsync, whose LNURL info sync needs an LNURL server. The rest of
+    // breez-itest reaches the deployed regtest and runs in `make breez-itest`.
+    let local_suites = [
+        "breez_sdk_tests",
+        "deposit_withdraw",
+        "exit_state_events",
+        "external_signer",
+        "idempotency_tests",
+        "lightning_hodl",
+        "lightning_send_server_mode",
+        "message_signing",
+        "optimization",
+        "recovery",
+        "spark_htlcs",
+        "tokens",
+        "unilateral_exit",
+    ];
+    let mut args = vec![
+        "test".to_string(),
+        "-p".to_string(),
+        "breez-sdk-itest".to_string(),
+        "--features".to_string(),
+        "local-itest".to_string(),
+    ];
+    for suite in local_suites {
+        args.push("--test".to_string());
+        args.push(suite.to_string());
+    }
+    args.push("--no-fail-fast".to_string());
+    args.push("--".to_string());
+    args.push("--test-threads=2".to_string());
+    cmd!(sh, "cargo {args...}").run()?;
+
     Ok(())
 }
 

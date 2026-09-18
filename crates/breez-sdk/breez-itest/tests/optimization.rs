@@ -14,10 +14,9 @@ use tracing::info;
 /// `Completed { rounds_executed > 0 }`.
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_optimize_leaves_full_client_mode(
-    #[future] alice_sdk_manual_opt: Result<SdkInstance>,
-) -> Result<()> {
-    let mut alice = alice_sdk_manual_opt.await?;
+async fn test_optimize_leaves_full_client_mode(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
+    let mut alice = env.create_wallet_optimizing_on_demand().await?;
     ensure_funded(&mut alice, 50_000).await?;
     clear_event_receiver(&mut alice.events).await;
 
@@ -51,9 +50,10 @@ async fn test_optimize_leaves_full_client_mode(
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_optimize_leaves_single_round_client_mode(
-    #[future] alice_sdk_manual_opt: Result<SdkInstance>,
+    #[future] env: Result<Environment>,
 ) -> Result<()> {
-    let mut alice = alice_sdk_manual_opt.await?;
+    let env = env.await?;
+    let mut alice = env.create_wallet_optimizing_on_demand().await?;
     ensure_funded(&mut alice, 50_000).await?;
     clear_event_receiver(&mut alice.events).await;
 
@@ -74,10 +74,9 @@ async fn test_optimize_leaves_single_round_client_mode(
 /// regardless of runtime profile.
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_optimize_leaves_full_server_mode(
-    #[future] alice_server_sdk_manual_opt: Result<SdkInstance>,
-) -> Result<()> {
-    let mut alice = alice_server_sdk_manual_opt.await?;
+async fn test_optimize_leaves_full_server_mode(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
+    let mut alice = env.create_server_wallet_optimizing_on_demand().await?;
     // Server mode has no ClaimedDeposits event; poll the balance instead.
     ensure_funded_via_polling(&mut alice, 50_000).await?;
     clear_event_receiver(&mut alice.events).await;
@@ -109,9 +108,10 @@ async fn test_optimize_leaves_full_server_mode(
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_optimize_leaves_rejects_concurrent_calls(
-    #[future] alice_sdk_manual_opt: Result<SdkInstance>,
+    #[future] env: Result<Environment>,
 ) -> Result<()> {
-    let mut alice = alice_sdk_manual_opt.await?;
+    let env = env.await?;
+    let mut alice = env.create_wallet_optimizing_on_demand().await?;
     ensure_funded(&mut alice, 50_000).await?;
     clear_event_receiver(&mut alice.events).await;
 

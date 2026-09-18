@@ -10,10 +10,16 @@ knobs:
     # Cancels expired transfers every 5s rather than every minute, for tests that
     # wait on an expiry.
     spark.so.task.cancel_expired_transfers.interval_seconds: 5
+    # The operator refuses to reserve an instant (0-conf) static deposit on a
+    # network this knob does not enable.
+    "spark.so.enable_instant_static_deposit@REGTEST": 1
     # By default the operator refuses a new deposit address to an owner holding 64
     # unused ones. Every node of a deposit tree holds one until the tree is
     # created, so the SSP's pool stocking reaches that.
     spark.so.max_unused_deposit_addresses: 100000
+    # A rollout percentage (default 0) for BroadcastTokenTransaction, which the
+    # SDK's token APIs call and the operator otherwise refuses as unimplemented.
+    spark.so.tokens.token_transaction_v3_enabled: 100
     # Routes the SSP's counter transfer through the consensus flow, which fences a
     # swap's primary transfer on every operator rather than the coordinator alone.
     spark.so.use_consensus_initiate_counter_transfer: 1
