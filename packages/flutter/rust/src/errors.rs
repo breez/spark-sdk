@@ -34,6 +34,10 @@ pub enum _SdkError {
         bound_amount: Option<u128>,
         bound_usd_cents: Option<u64>,
     },
+    CrossChainRouteUnavailable {
+        reason: String,
+        temporary: bool,
+    },
     NetworkError(String),
     StorageError(String),
     ChainServiceError(String),

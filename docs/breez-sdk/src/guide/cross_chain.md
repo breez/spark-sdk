@@ -72,6 +72,8 @@ Validate the amount against the bounds before preparing the payment. A route can
 
 A rejected amount surfaces as {{#enum SdkError::CrossChainAmountOutOfRange}}, carrying {{#name too_small}} for the direction and the published bound in whichever denominations the provider publishes.
 
+A route the provider won't serve surfaces as {{#enum SdkError::CrossChainRouteUnavailable}}. {{#name temporary}} tells a route that should be back shortly, where the same request can succeed later, from one that is refused, where another route is the way forward.
+
 ## Slippage
 
 Cross-chain slippage protects against price movement between quote and delivery. Values are expressed in basis points (1 bps = 0.01%).
