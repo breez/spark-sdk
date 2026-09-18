@@ -17,18 +17,26 @@ base64.workspace = true
 rstest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+sha2.workspace = true
+spark.workspace = true
 spark-mysql.workspace = true
 spark-postgres.workspace = true
 spark-wallet = { workspace = true, features = ["test-utils"] }
 test-log = { workspace = true, features = ["trace"] }
 testcontainers.workspace = true
+prost.workspace = true
+tonic = { workspace = true, features = ["transport", "codegen", "prost"] }
 testcontainers-modules = { workspace = true, features = ["postgres", "mysql"] }
+tempfile.workspace = true
 testdir.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tokio-postgres.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[build-dependencies]
+tonic-build = { workspace = true }
 
 [dev-dependencies]
 tokio-test.workspace = true

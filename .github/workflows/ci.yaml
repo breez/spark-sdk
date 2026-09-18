@@ -147,6 +147,9 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Restore the state snapshot
+        uses: ./.github/actions/state-snapshot-cache
+
       - name: Run Tests
         run: make ${{ matrix.backend.target }}
 
@@ -160,6 +163,9 @@ jobs:
         uses: ./.github/actions/setup-build
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restore the state snapshot
+        uses: ./.github/actions/state-snapshot-cache
 
       - name: Run cross-version signer tests
         run: make compat-itest
@@ -201,6 +207,9 @@ jobs:
       - name: Restore lnurl server image
         id: lnurl-image
         uses: ./.github/actions/lnurl-image-cache
+
+      - name: Restore the state snapshot
+        uses: ./.github/actions/state-snapshot-cache
 
       - name: Run Tests
         run: make breez-itest
