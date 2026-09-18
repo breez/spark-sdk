@@ -104,6 +104,20 @@ The setup screen includes a Client/Server mode toggle. Server mode uses `default
 which disables background tasks (periodic sync, real-time sync client, optimizers).
 Run `sync` manually between operations.
 
+### Signet Support
+
+The setup screen offers Regtest, Signet, and Mainnet network options.
+
+When Signet is selected, two additional fields appear:
+
+| Field | Description |
+|-------|-------------|
+| **Spark config path** | Path to a JSON file containing Spark operators and SSP configuration. Relative paths resolve against the app's documents directory. |
+| **Chain API URL** | Base URL for the REST chain service (e.g. `https://mempool.space/signet/api`). |
+
+When a Chain API URL is provided, a picker appears to choose between `esplora` (default) and
+`mempool-space` API types.
+
 ### Lightning Address Transfers
 
 Transfer a lightning address to another user:

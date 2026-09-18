@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import shlex
@@ -10,6 +11,7 @@ from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
 
 from breez_sdk_spark import (
+    ChainApiType,
     CrossChainConfig,
     EventListener,
     Network,
@@ -17,6 +19,9 @@ from breez_sdk_spark import (
     SdkBuilder,
     SdkEvent,
     Seed,
+    SparkConfig,
+    SparkSigningOperator,
+    SparkSspConfig,
     StableBalanceConfig,
     StableBalanceToken,
     default_config,
@@ -68,14 +73,57 @@ def parse_proxy(address: str, username=None, password=None) -> ProxyConfig:
     return ProxyConfig(host=host, port=port, username=username, password=password)
 
 
+def parse_chain_api_type(value):
+    mapping = {"esplora": ChainApiType.ESPLORA, "mempool-space": ChainApiType.MEMPOOL_SPACE}
+    result = mapping.get(value)
+    if result is None:
+        raise click.BadParameter("Expected 'esplora' or 'mempool-space'")
+    return result
+
+
+def load_spark_config(path):
+    with open(path) as f:
+        data = json.load(f)
+    signing_operators = [
+        SparkSigningOperator(
+            id=op["id"],
+            identifier=op["identifier"],
+            address=op["address"],
+            identity_public_key=op["identity_public_key"],
+            ca_cert_pem=op.get("ca_cert_pem"),
+        )
+        for op in data["signing_operators"]
+    ]
+    ssp = data["ssp_config"]
+    ssp_config = SparkSspConfig(
+        base_url=ssp["base_url"],
+        identity_public_key=ssp["identity_public_key"],
+        schema_endpoint=ssp["schema_endpoint"],
+    )
+    return SparkConfig(
+        coordinator_identifier=data["coordinator_identifier"],
+        threshold=data["threshold"],
+        signing_operators=signing_operators,
+        ssp_config=ssp_config,
+        expected_withdraw_bond_sats=data["expected_withdraw_bond_sats"],
+        expected_withdraw_relative_block_locktime=data["expected_withdraw_relative_block_locktime"],
+        max_token_transaction_inputs=data.get("max_token_transaction_inputs"),
+    )
+
+
 @click.command()
 @click.option("-d", "--data-dir", default="./.data", help="Path to the data directory")
 @click.option(
     "--network",
     default="regtest",
-    type=click.Choice(["regtest", "mainnet"], case_sensitive=False),
+    type=click.Choice(["regtest", "signet", "mainnet"], case_sensitive=False),
     help="Network to use",
 )
+@click.option("--spark-config", "spark_config_path", default=None, type=click.Path(exists=True),
+              help="JSON file with Spark operators and SSP configuration (required for signet)")
+@click.option("--chain-api-url", default=None, help="Chain API base URL (required for signet)")
+@click.option("--chain-api-type", "chain_api_type_str", default=None,
+              help="Chain API type: esplora (default) or mempool-space")
 @click.option("--account-number", type=int, default=None, help="Account number for the Spark signer")
 @click.option("--postgres-connection-string", default=None, help="PostgreSQL connection string")
 @click.option("--mysql-connection-string", default=None, help="MySQL connection string")
@@ -99,7 +147,8 @@ def parse_proxy(address: str, username=None, password=None) -> ProxyConfig:
               help="Username for SOCKS5 authentication (requires --proxy and --proxy-password)")
 @click.option("--proxy-password", default=None,
               help="Password for SOCKS5 authentication (requires --proxy and --proxy-user)")
-async def main(data_dir, network, account_number, postgres_connection_string,
+async def main(data_dir, network, spark_config_path, chain_api_url, chain_api_type_str,
+               account_number, postgres_connection_string,
                mysql_connection_string,
                stable_balance_tokens, stable_balance_default_active_label,
                stable_balance_threshold,
@@ -113,6 +162,17 @@ async def main(data_dir, network, account_number, postgres_connection_string,
 
     if postgres_connection_string and mysql_connection_string:
         raise click.UsageError("--postgres-connection-string and --mysql-connection-string are mutually exclusive")
+
+    if chain_api_type_str and not chain_api_url:
+        raise click.UsageError("--chain-api-type requires --chain-api-url")
+
+    spark_config = None
+    if spark_config_path:
+        spark_config = load_spark_config(spark_config_path)
+
+    chain_api_type = None
+    if chain_api_type_str:
+        chain_api_type = parse_chain_api_type(chain_api_type_str)
 
     # Validate passkey flag combinations
     if label and not passkey_provider:
@@ -145,7 +205,8 @@ async def main(data_dir, network, account_number, postgres_connection_string,
 
     persistence = CliPersistence(data_dir)
 
-    network_enum = Network.MAINNET if network == "mainnet" else Network.REGTEST
+    network_map = {"mainnet": Network.MAINNET, "signet": Network.SIGNET, "regtest": Network.REGTEST}
+    network_enum = network_map[network]
     breez_api_key = os.environ.get("BREEZ_API_KEY")
     if server_mode:
         print("Server mode enabled. Run `sync` between operations.")
@@ -153,6 +214,8 @@ async def main(data_dir, network, account_number, postgres_connection_string,
     else:
         config = default_config(network=network_enum)
     config.api_key = breez_api_key
+    if spark_config is not None:
+        config.spark_config = spark_config
     config.proxy = proxy_config
     if lnurl_domain is not None:
         config.lnurl_domain = lnurl_domain
@@ -184,6 +247,13 @@ async def main(data_dir, network, account_number, postgres_connection_string,
         mnemonic = persistence.get_or_create_mnemonic()
         seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
     builder = SdkBuilder(config=config, seed=seed)
+
+    if chain_api_url:
+        await builder.with_rest_chain_service(
+            url=chain_api_url,
+            api_type=chain_api_type or ChainApiType.ESPLORA,
+            credentials=None,
+        )
 
     if postgres_connection_string:
         await builder.with_storage_backend(
@@ -220,7 +290,8 @@ async def run_repl(sdk, token_issuer, network, persistence):
         completer=WordCompleter(all_commands, ignore_case=True),
     )
 
-    network_label = "mainnet" if network == Network.MAINNET else "regtest"
+    network_labels = {Network.MAINNET: "mainnet", Network.SIGNET: "signet", Network.REGTEST: "regtest"}
+    network_label = network_labels.get(network, "regtest")
     prompt_str = f"breez-spark-cli [{network_label}]> "
 
     print("Breez SDK CLI Interactive Mode")

@@ -49,7 +49,10 @@ node src/main.js [OPTIONS]
 | Option | Default | Description |
 |--------|---------|-------------|
 | `-d`, `--data-dir` | `./.data` | Path to the data directory |
-| `--network` | `regtest` | Network to use (`regtest` or `mainnet`) |
+| `--network` | `regtest` | Network to use (`regtest`, `signet`, or `mainnet`) |
+| `--spark-config` | - | JSON file with Spark operators and SSP configuration (required for signet) |
+| `--chain-api-url` | - | Chain API base URL (required for signet) |
+| `--chain-api-type` | `esplora` | Chain API type: `esplora` or `mempool-space` (requires `--chain-api-url`) |
 | `--account-number` | - | Account number for the Spark signer |
 | `--postgres-connection-string` | - | PostgreSQL connection string (uses SQLite by default) |
 | `--mysql-connection-string` | - | MySQL connection string (mutually exclusive with `--postgres-connection-string`) |
@@ -72,6 +75,12 @@ node src/main.js [OPTIONS]
 ```bash
 # Use a custom data directory
 node src/main.js --data-dir ~/.breez/my-wallet
+
+# Run on signet with a Spark config file and chain API
+node src/main.js --network signet --spark-config spark.json --chain-api-url https://mempool.space/signet/api
+
+# Use a Mempool Space chain API
+node src/main.js --network signet --spark-config spark.json --chain-api-url https://mempool.space/signet/api --chain-api-type mempool-space
 
 # Use PostgreSQL storage
 node src/main.js --postgres-connection-string "host=localhost user=postgres dbname=spark"

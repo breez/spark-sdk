@@ -23,6 +23,7 @@ import {
   TouchableOpacity,
 } from 'react-native'
 import {
+  ChainApiType,
   defaultConfig,
   defaultServerConfig,
   Network,
@@ -50,10 +51,23 @@ import {
 /** Base data directory. Network-specific subdirs are created below. */
 const BASE_DATA_DIR = `${RNFS.DocumentDirectoryPath}/breez-cli-data`
 
+/** Human-readable lowercase label for a network. */
+function getNetworkLabel(network: Network): string {
+  if (network === Network.Mainnet) return 'mainnet'
+  if (network === (Network.Signet as Network)) return 'signet'
+  return 'regtest'
+}
+
+/** Title-case label for UI display. */
+function getNetworkDisplayName(network: Network): string {
+  if (network === Network.Mainnet) return 'Mainnet'
+  if (network === (Network.Signet as Network)) return 'Signet'
+  return 'Regtest'
+}
+
 /** Get a network-specific data directory to avoid storage conflicts. */
 function getDataDir(network: Network): string {
-  const suffix = network === Network.Mainnet ? 'mainnet' : 'regtest'
-  return `${BASE_DATA_DIR}/${suffix}`
+  return `${BASE_DATA_DIR}/${getNetworkLabel(network)}`
 }
 
 // ---------------------------------------------------------------------------
@@ -66,6 +80,12 @@ interface SetupConfig {
   passkeyConfig: PasskeyConfig | undefined
   /** If provided, use this mnemonic instead of generating/loading one. */
   restoreMnemonic: string | undefined
+  /** Path to a JSON file with Spark operators and SSP configuration. */
+  sparkConfigPath: string | undefined
+  /** Chain API base URL for the REST chain service. */
+  chainApiUrl: string | undefined
+  /** Chain API type (esplora or mempool-space). Defaults to esplora. */
+  chainApiType: ChainApiType | undefined
 }
 
 /**
@@ -98,6 +118,9 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onStart }) => {
   const [mnemonicMode, setMnemonicMode] = useState<'new' | 'restore'>('new')
   const [mnemonicInput, setMnemonicInput] = useState('')
   const [passkeyProvider, setPasskeyProvider] = useState<PasskeyProvider>(PasskeyProvider.File)
+  const [sparkConfigPath, setSparkConfigPath] = useState('')
+  const [chainApiUrl, setChainApiUrl] = useState('')
+  const [chainApiType, setChainApiType] = useState<ChainApiType>(ChainApiType.Esplora)
 
   const handleStart = () => {
     const restoreMnemonic = seedMethod === 'mnemonic' && mnemonicMode === 'restore'
@@ -117,6 +140,9 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onStart }) => {
         storeLabel: false,
       } : undefined,
       restoreMnemonic,
+      sparkConfigPath: sparkConfigPath.trim() || undefined,
+      chainApiUrl: chainApiUrl.trim() || undefined,
+      chainApiType: chainApiUrl.trim() ? chainApiType : undefined,
     })
   }
 
@@ -170,18 +196,67 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onStart }) => {
         {/* Network */}
         <Text style={styles.sectionLabel}>Network</Text>
         <View style={styles.buttonRow}>
-          {([Network.Regtest, Network.Mainnet] as Network[]).map(n => (
+          {([Network.Regtest, Network.Signet, Network.Mainnet] as Network[]).map(n => (
             <TouchableOpacity
               key={String(n)}
               style={[styles.optionButton, network === n && styles.optionButtonActive]}
               onPress={() => setNetwork(n)}
             >
               <Text style={[styles.optionText, network === n && styles.optionTextActive]}>
-                {n === Network.Mainnet ? 'Mainnet' : 'Regtest'}
+                {getNetworkDisplayName(n)}
               </Text>
             </TouchableOpacity>
           ))}
         </View>
+
+        {/* Signet Configuration */}
+        {network === (Network.Signet as Network) && (
+          <>
+            <Text style={styles.sectionLabel}>Signet Configuration</Text>
+            <Text style={styles.hint}>
+              Spark config and chain API URL are required for signet.
+            </Text>
+            <TextInput
+              style={styles.mnemonicInput}
+              value={sparkConfigPath}
+              onChangeText={setSparkConfigPath}
+              placeholder="Spark config JSON file path..."
+              placeholderTextColor="#555"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TextInput
+              style={[styles.mnemonicInput, { marginTop: 8 }]}
+              value={chainApiUrl}
+              onChangeText={setChainApiUrl}
+              placeholder="Chain API URL (e.g. https://mempool.space/signet/api)"
+              placeholderTextColor="#555"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            {chainApiUrl.trim().length > 0 && (
+              <>
+                <Text style={styles.sectionLabel}>Chain API Type</Text>
+                <View style={styles.buttonRow}>
+                  {([
+                    { label: 'esplora', value: ChainApiType.Esplora },
+                    { label: 'mempool-space', value: ChainApiType.MempoolSpace },
+                  ] as const).map(t => (
+                    <TouchableOpacity
+                      key={t.label}
+                      style={[styles.optionButton, chainApiType === t.value && styles.optionButtonActive]}
+                      onPress={() => setChainApiType(t.value)}
+                    >
+                      <Text style={[styles.optionText, chainApiType === t.value && styles.optionTextActive]}>
+                        {t.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </>
+            )}
+          </>
+        )}
 
         {/* Server Mode */}
         <Text style={styles.sectionLabel}>Mode</Text>
@@ -413,6 +488,15 @@ const CliScreen: React.FC<CliScreenProps> = ({ config, onDisconnect }) => {
           appendLog('Warning: No API key found. Create secrets.json with { "apiKey": "..." }')
         }
 
+        if (config.sparkConfigPath) {
+          const fullPath = config.sparkConfigPath.startsWith('/')
+            ? config.sparkConfigPath
+            : `${RNFS.DocumentDirectoryPath}/${config.sparkConfigPath}`
+          const json = await RNFS.readFile(fullPath, 'utf8')
+          sdkConfig.sparkConfig = JSON.parse(json)
+          appendLog(`Spark config loaded from ${config.sparkConfigPath}`)
+        }
+
         if (config.network === Network.Mainnet) {
           sdkConfig.crossChainConfig = {
             defaultSlippageBps: undefined,
@@ -454,6 +538,14 @@ const CliScreen: React.FC<CliScreenProps> = ({ config, onDisconnect }) => {
         }
 
         const builder = new SdkBuilder(sdkConfig, seed)
+        if (config.chainApiUrl) {
+          await builder.withRestChainService(
+            config.chainApiUrl,
+            config.chainApiType ?? ChainApiType.Esplora,
+            undefined,
+          )
+          appendLog(`Chain API: ${config.chainApiUrl}`)
+        }
         await builder.withDefaultStorage(dataDir)
 
         const sdk = await builder.build()
@@ -466,7 +558,7 @@ const CliScreen: React.FC<CliScreenProps> = ({ config, onDisconnect }) => {
           sdkRef.current = sdk
           tokenIssuerRef.current = tokenIssuer
 
-          const networkLabel = config.network === Network.Mainnet ? 'mainnet' : 'regtest'
+          const networkLabel = getNetworkLabel(config.network)
           appendLog(`SDK initialized on ${networkLabel}`)
           appendLog(`Data dir: ${dataDir}`)
           appendLog("Type 'help' for available commands.")
@@ -514,7 +606,7 @@ const CliScreen: React.FC<CliScreenProps> = ({ config, onDisconnect }) => {
     const registry = registryRef.current
     const persistence = persistenceRef.current
 
-    const networkLabel = config.network === Network.Mainnet ? 'mainnet' : 'regtest'
+    const networkLabel = getNetworkLabel(config.network)
     appendLog(`breez-spark-cli [${networkLabel}]> ${trimmed}`)
     setInputText('')
     commandHistoryRef.current.push(trimmed)
@@ -557,7 +649,7 @@ const CliScreen: React.FC<CliScreenProps> = ({ config, onDisconnect }) => {
     }
   }, [inputText, isProcessing, appendLog, config, disconnectAndGoBack])
 
-  const networkLabel = config.network === Network.Mainnet ? 'mainnet' : 'regtest'
+  const networkLabel = getNetworkLabel(config.network)
   const prompt = isInitializing
     ? 'initializing...'
     : isProcessing
