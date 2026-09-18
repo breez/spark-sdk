@@ -1698,6 +1698,7 @@ dependencies = [
  "serde_json",
  "spark-itest",
  "spark-wallet",
+ "sspd",
  "tempfile",
  "test-log",
  "testcontainers",

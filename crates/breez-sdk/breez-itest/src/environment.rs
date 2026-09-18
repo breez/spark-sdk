@@ -49,6 +49,17 @@ impl Environment {
         }
     }
 
+    /// This test's local stack, for a test that reads what only a local SSP shows.
+    /// Panics on the deployed environment, which such a test cannot run against.
+    pub fn local(&self) -> &LocalStack {
+        match self {
+            Environment::Local(stack) => stack,
+            Environment::Deployed => {
+                panic!("this test needs a local stack; it runs under the local-itest feature")
+            }
+        }
+    }
+
     /// The faucet that funds this environment's wallets.
     pub fn faucet(&self) -> Result<RegtestFaucet> {
         RegtestFaucet::with_config(self.faucet_config())

@@ -25,6 +25,9 @@ breez-sdk-spark = { workspace = true, features = ["test-utils", "sqlite", "postg
 breez-sdk-common = { workspace = true }
 spark-itest.workspace = true
 spark-wallet.workspace = true
+# The local target reads the SSP's fee arithmetic (base rate, claim fee) so a
+# test asserts against what the daemon charges rather than a copy of it.
+sspd.workspace = true
 testcontainers-modules = { workspace = true, features = ["postgres", "mysql"] }
 
 # PostgreSQL for database creation utilities

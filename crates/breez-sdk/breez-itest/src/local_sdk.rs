@@ -15,6 +15,7 @@ use breez_sdk_spark::{
     default_external_signers, default_server_config,
 };
 use spark_itest::fixtures::setup::TestFixtures;
+use spark_itest::fixtures::sspd::internal_api;
 use spark_wallet::{
     DefaultSigner, SparkSignerAdapter, SparkWallet, SparkWalletConfig, WalletEvent,
 };
@@ -47,6 +48,42 @@ pub struct LocalSdk {
     turnkey_guard: Option<crate::turnkey::TurnkeyWalletGuard>,
 }
 
+impl LocalSdk {
+    /// The txid under which the SSP broadcast its spend of the deposit at
+    /// `txid:vout`, if it has.
+    pub async fn static_deposit_spend_txid(&self, txid: &str, vout: u32) -> Result<Option<String>> {
+        let claim = self
+            .fixtures
+            .sspd()
+            .await?
+            .manager_client()
+            .await?
+            .get_static_deposit_claim(internal_api::GetStaticDepositClaimRequest {
+                txid: txid.to_string(),
+                vout,
+            })
+            .await?
+            .into_inner()
+            .claim;
+        Ok(claim.and_then(|claim| claim.spend_broadcast_txid))
+    }
+
+    /// The SSP's most recent coop exits, newest first, up to its default listing
+    /// limit.
+    pub async fn coop_exit_records(&self) -> Result<Vec<internal_api::CoopExit>> {
+        Ok(self
+            .fixtures
+            .sspd()
+            .await?
+            .manager_client()
+            .await?
+            .list_coop_exits(internal_api::ListCoopExitsRequest { limit: 0 })
+            .await?
+            .into_inner()
+            .coop_exits)
+    }
+}
+
 /// Build a `BreezSdk` pointing at the spark-itest operator pool and a
 /// [`LocalBitcoindChainService`], signing with `backend`. Pass `seed` to pin the
 /// wallet's identity (seed backend only); `None` derives a fresh identity per
@@ -57,6 +94,23 @@ pub async fn build_local_sdk(
     seed: Option<[u8; 32]>,
 ) -> Result<LocalSdk> {
     build_local_sdk_inner(fixtures, backend, seed.map(|s| s.to_vec()), false, None).await
+}
+
+/// Like [`build_local_sdk`], with `configure` applied to the SDK `Config` last.
+pub async fn build_local_sdk_with_config(
+    fixtures: Arc<TestFixtures>,
+    backend: SignerBackend,
+    seed: Option<[u8; 32]>,
+    configure: impl FnOnce(&mut Config) + Send + 'static,
+) -> Result<LocalSdk> {
+    build_local_sdk_inner(
+        fixtures,
+        backend,
+        seed.map(|s| s.to_vec()),
+        false,
+        Some(Box::new(configure)),
+    )
+    .await
 }
 
 /// The same wallet as `source`, on an empty store: same identity, so the operators
@@ -289,6 +343,12 @@ impl LocalStack {
     /// use `<base_url>/graphql/spark/rc`.
     pub fn ssp_base_url(&self) -> String {
         self.ssp_base_url.clone()
+    }
+
+    /// A wallet on this stack with a side-channel `SparkWallet` of the same
+    /// identity, for a test that reaches spark-wallet APIs the SDK does not expose.
+    pub async fn create_wallet_with_side_channel(&self) -> Result<LocalSdk> {
+        build_local_sdk(Arc::clone(&self.fixtures), SignerBackend::Seed, None).await
     }
 
     /// The containers this stack runs, for a test that drives them directly.
