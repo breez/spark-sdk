@@ -17,7 +17,7 @@ pub use htlc::*;
 pub use lightning::{
     DEFAULT_RECEIVE_EXPIRY_SECS, InvoiceDescription, LightningReceiveFallback,
     LightningReceivePayment, LightningSendPayment, LightningSendStatus, LightningService,
-    PayLightningResult,
+    PayLightningResult, store_preimage_shares,
 };
 pub use models::*;
 pub use swap::*;

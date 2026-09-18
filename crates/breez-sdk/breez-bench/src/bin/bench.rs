@@ -216,6 +216,7 @@ async fn main() -> Result<()> {
     // Initialize SDK instances based on network
     info!("Initializing SDK instances...");
     let (mut sender, mut receiver) = match network {
+        Network::Signet => bail!("The benchmark does not support Signet deployments"),
         Network::Regtest => {
             initialize_regtest_sdk_pair(args.sender_multiplicity, args.receiver_multiplicity)
                 .await?
@@ -267,6 +268,7 @@ async fn main() -> Result<()> {
 
     // Handle funding based on network
     match network {
+        Network::Signet => bail!("The benchmark does not support Signet deployments"),
         Network::Regtest => {
             // Use itest faucet for regtest
             info!(

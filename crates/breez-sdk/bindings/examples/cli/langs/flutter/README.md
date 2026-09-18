@@ -44,7 +44,10 @@ make run-mainnet
 
 ```
 -d, --data-dir                          Path to the data directory (default: ./.data)
-    --network                           Network to use: regtest, mainnet (default: regtest)
+    --network                           Network to use: regtest, signet, mainnet (default: regtest)
+    --spark-config                      JSON file with Spark operators and SSP configuration
+    --chain-api-url                     Chain API base URL (required for signet)
+    --chain-api-type                    Chain API type: esplora (default) or mempool-space
     --account-number                    Account number for the Spark signer
     --postgres-connection-string        PostgreSQL connection string (not yet supported, uses SQLite)
     --mysql-connection-string           MySQL connection string (not yet supported, uses SQLite)

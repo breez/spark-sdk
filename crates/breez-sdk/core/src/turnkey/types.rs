@@ -93,6 +93,7 @@ pub(crate) const ADDRESS_FORMAT_SPARK_REGTEST: &str = "ADDRESS_FORMAT_SPARK_REGT
 // https://docs.turnkey.com/features/networks/bitcoin.
 pub(crate) const ADDRESS_FORMAT_BITCOIN_MAINNET_P2TR: &str = "ADDRESS_FORMAT_BITCOIN_MAINNET_P2TR";
 pub(crate) const ADDRESS_FORMAT_BITCOIN_REGTEST_P2TR: &str = "ADDRESS_FORMAT_BITCOIN_REGTEST_P2TR";
+pub(crate) const ADDRESS_FORMAT_BITCOIN_SIGNET_P2TR: &str = "ADDRESS_FORMAT_BITCOIN_SIGNET_P2TR";
 
 pub(crate) const SPARK_SIGN_FROST_PATH: &str = "/public/v1/submit/spark_sign_frost";
 pub(crate) const SPARK_SIGN_FROST_TYPE: &str = "ACTIVITY_TYPE_SPARK_SIGN_FROST";

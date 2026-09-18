@@ -36,7 +36,7 @@ See [Connecting with a Passkey](passkey.md) for the full setup guide including P
 
 ## Advanced Initialization
 
-If you're building a multi-tenant server deployment, start with [Server mode](server_mode.md) for the recommended profile, lifecycle pattern, and shared-infrastructure wiring.
+If you're running the SDK on a server, start with [Server-side configuration](server_deployments.md), which covers a wallet per user and a single treasury wallet.
 
 For advanced use cases where you need more control, you can configure the SDK using the Builder pattern. With the SDK Builder you can define:
 

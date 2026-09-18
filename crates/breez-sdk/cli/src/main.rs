@@ -3,13 +3,13 @@ mod passkey;
 mod persist;
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use breez_sdk_spark::{
-    CrossChainConfig, EventListener, Network, ProxyConfig, SdkBuilder, SdkEvent, Seed,
-    StableBalanceConfig, StableBalanceToken, default_config, default_mysql_storage_config,
-    default_postgres_storage_config, default_server_config,
+    ChainApiType, CrossChainConfig, EventListener, Network, ProxyConfig, SdkBuilder, SdkEvent,
+    Seed, SparkConfig, StableBalanceConfig, StableBalanceToken, default_config,
+    default_mysql_storage_config, default_postgres_storage_config, default_server_config,
 };
 use clap::Parser;
 use command::{Command, execute_command};
@@ -30,9 +30,21 @@ struct Cli {
     #[arg(short, long, default_value = "./.data")]
     data_dir: String,
 
-    /// Network to use (mainnet, regtest)
+    /// Network to use (mainnet, signet, regtest)
     #[arg(long, default_value = "regtest")]
     network: String,
+
+    /// JSON file with Spark operators and SSP configuration (required for signet)
+    #[arg(long, value_name = "FILE")]
+    spark_config: Option<PathBuf>,
+
+    /// Chain API base URL (required for signet)
+    #[arg(long, value_name = "URL")]
+    chain_api_url: Option<String>,
+
+    /// Chain API type: esplora (default) or mempool-space
+    #[arg(long, value_parser = parse_chain_api_type, requires = "chain_api_url")]
+    chain_api_type: Option<ChainApiType>,
 
     /// Account number to use for the Spark signer
     #[arg(long)]
@@ -127,6 +139,21 @@ fn parse_proxy(
     })
 }
 
+fn parse_chain_api_type(value: &str) -> Result<ChainApiType, String> {
+    match value {
+        "esplora" => Ok(ChainApiType::Esplora),
+        "mempool-space" => Ok(ChainApiType::MempoolSpace),
+        _ => Err("Expected 'esplora' or 'mempool-space'".to_string()),
+    }
+}
+
+fn load_spark_config(path: &Path) -> Result<SparkConfig> {
+    let file = fs::File::open(path)
+        .with_context(|| format!("Failed to open Spark config {}", path.display()))?;
+    serde_json::from_reader(file)
+        .with_context(|| format!("Failed to parse Spark config {}", path.display()))
+}
+
 fn expand_path(path: &str) -> PathBuf {
     if let Some(stripped) = path.strip_prefix("~/") {
         dirs::home_dir()
@@ -180,6 +207,8 @@ async fn run_interactive_mode(
     data_dir: PathBuf,
     network: Network,
     server_mode: bool,
+    spark_config: Option<SparkConfig>,
+    chain_api: Option<(String, ChainApiType)>,
     account_number: Option<u32>,
     postgres_connection_string: Option<String>,
     mysql_connection_string: Option<String>,
@@ -214,6 +243,9 @@ async fn run_interactive_mode(
         default_config(network)
     };
     config.api_key.clone_from(&breez_api_key);
+    if spark_config.is_some() {
+        config.spark_config = spark_config;
+    }
     config.stable_balance_config = stable_balance_config;
     config.proxy.clone_from(&proxy);
     if lnurl_domain.is_some() {
@@ -249,6 +281,9 @@ async fn run_interactive_mode(
     };
 
     let mut sdk_builder = SdkBuilder::new(config, seed);
+    if let Some((url, api_type)) = chain_api {
+        sdk_builder = sdk_builder.with_rest_chain_service(url, api_type, None);
+    }
     if let Some(connection_string) = postgres_connection_string {
         sdk_builder = sdk_builder.with_storage_backend(breez_sdk_spark::postgres_storage(
             default_postgres_storage_config(connection_string),
@@ -277,6 +312,7 @@ async fn run_interactive_mode(
     let cli_prompt = match network {
         Network::Mainnet => "breez-spark-cli [mainnet]> ",
         Network::Regtest => "breez-spark-cli [regtest]> ",
+        Network::Signet => "breez-spark-cli [signet]> ",
     };
 
     loop {
@@ -336,13 +372,23 @@ async fn run_interactive_mode(
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     let cli = Cli::parse();
+    let spark_config = cli
+        .spark_config
+        .as_deref()
+        .map(load_spark_config)
+        .transpose()?;
     let data_dir = expand_path(&cli.data_dir);
     fs::create_dir_all(&data_dir)?;
 
     let network = match cli.network.to_lowercase().as_str() {
         "regtest" => Network::Regtest,
         "mainnet" => Network::Mainnet,
-        _ => return Err(anyhow!("Invalid network. Use 'regtest' or 'mainnet'")),
+        "signet" => Network::Signet,
+        _ => {
+            return Err(anyhow!(
+                "Invalid network. Use 'regtest', 'signet', or 'mainnet'"
+            ));
+        }
     };
     let stable_balance_config = if cli.stable_balance_tokens.is_empty() {
         None
@@ -385,6 +431,9 @@ async fn main() -> Result<(), anyhow::Error> {
         data_dir,
         network,
         cli.server_mode,
+        spark_config,
+        cli.chain_api_url
+            .map(|url| (url, cli.chain_api_type.unwrap_or(ChainApiType::Esplora))),
         cli.account_number,
         cli.postgres_connection_string,
         cli.mysql_connection_string,
@@ -401,6 +450,47 @@ async fn main() -> Result<(), anyhow::Error> {
 #[cfg(test)]
 mod parse_command_tests {
     use super::*;
+
+    #[test]
+    fn parses_chain_api_options() {
+        let defaults = Cli::try_parse_from(["cli"]).unwrap();
+        assert!(defaults.chain_api_url.is_none());
+        assert!(defaults.chain_api_type.is_none());
+        for value in ["esplora", "mempool-space"] {
+            let cli = Cli::try_parse_from([
+                "cli",
+                "--chain-api-url",
+                "https://chain.invalid/api",
+                "--chain-api-type",
+                value,
+            ])
+            .unwrap();
+            assert_eq!(
+                cli.chain_api_url.as_deref(),
+                Some("https://chain.invalid/api")
+            );
+            assert!(matches!(
+                (value, cli.chain_api_type),
+                ("esplora", Some(ChainApiType::Esplora))
+                    | ("mempool-space", Some(ChainApiType::MempoolSpace))
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_chain_api_options() {
+        assert!(Cli::try_parse_from(["cli", "--chain-api-type", "esplora"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "cli",
+                "--chain-api-url",
+                "https://chain.invalid/api",
+                "--chain-api-type",
+                "unknown",
+            ])
+            .is_err()
+        );
+    }
 
     #[test]
     fn exit_and_quit_are_special_cased() {

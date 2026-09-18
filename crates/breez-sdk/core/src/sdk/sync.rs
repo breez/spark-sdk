@@ -736,7 +736,13 @@ impl BreezSdk {
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {
-    /// Synchronizes the wallet with the Spark network
+    /// Synchronizes the wallet with the Spark network.
+    ///
+    /// Also collects the data a unilateral exit needs for any leaf still missing
+    /// it, and waits for that before returning. This happens regardless of
+    /// [`exit_chain_auto_fetch_enabled`](crate::Config::exit_chain_auto_fetch_enabled),
+    /// which governs only the automatic collection: syncing is how to run one at
+    /// a moment of your choosing with that turned off.
     #[allow(unused_variables)]
     pub async fn sync_wallet(
         &self,
@@ -745,13 +751,13 @@ impl BreezSdk {
         self.runtime
             .run_user_sync(self, super::SyncType::Full, true)
             .await?;
-        // Awaited rather than left to the background collection, so a caller
-        // that syncs before going offline knows the collection has run by the
-        // time this returns. After the sync, so the leaves it brought in are
+        // Whatever `exit_chain_auto_fetch_enabled` says: that flag governs the
+        // automatic collection, and an explicit sync is the way to ask for one
+        // with it turned off. Awaited rather than left to the background, so a
+        // caller that syncs before going offline knows the collection has run by
+        // the time this returns. After the sync, so the leaves it brought in are
         // collected for too.
-        if self.config.exit_chain_auto_fetch_enabled {
-            self.runtime.collect_exit_chains(self).await?;
-        }
+        self.runtime.collect_exit_chains(self).await?;
         Ok(SyncWalletResponse {})
     }
 }

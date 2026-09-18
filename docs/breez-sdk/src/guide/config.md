@@ -37,7 +37,7 @@ Master switch for all per-instance background tasks. Defaults to `true`, which i
 
 Set to `false` for multi-tenant server deployments where the SDK is built per request and the host orchestrates sync, claiming, and event delivery (typically via webhooks) explicitly. No background work is started; explicit operations such as {{#name sync_wallet}}, {{#name claim_deposit}}, {{#name list_unclaimed_deposits}}, {{#name refund_deposit}}, and {{#name refund_pending_conversions}} continue to work and are the intended entry points in this mode.
 
-The recommended way to opt into server mode is via {{#name default_server_config}}, which returns the same `Config` as {{#name default_config}} with this flag flipped off. See [Server mode](./server_mode.md) for the full profile, lifecycle pattern, and shared-infrastructure wiring. Configuring this field directly is supported if you build your `Config` another way:
+The recommended way to opt in is {{#name default_server_config}}, which returns the same `Config` as {{#name default_config}} with this flag flipped off. See [Multi-user configuration](./server_mode.md) for the lifecycle pattern and shared-infrastructure wiring. A single long-lived wallet on a server does **not** want this flag: see [Treasury configuration](./treasury.md). Configuring this field directly is supported if you build your `Config` another way:
 
 {{#tabs config:config-background-tasks}}
 
@@ -88,13 +88,13 @@ This configuration option is only relevant when the SDK is initialized for the f
 
 ## Unilateral exit data
 
-Whether the SDK collects the data a [unilateral exit](./unilateral_exit.md) needs, in the background, as funds arrive. Defaults to `true`.
+Whether the SDK collects the data a [unilateral exit](./unilateral_exit.md) needs automatically, as funds arrive. Defaults to `true`.
 
 An exit is built from each leaf's chain of pre-signed transactions. Holding that chain locally is what lets an exit be quoted and built when the Spark operators are unreachable, so a leaf is only exitable that way once its chain has been collected. Collection runs after an operation finishes rather than during it, which keeps it off the critical path of a payment. Freshly received funds are therefore briefly not yet exitable, for roughly one round trip to the operators.
 
-Set it to `false` if bandwidth matters more than being able to recover funds without the operators. Chains are then only collected when an exit is prepared, which needs the operators reachable at that moment, so a leaf stays un-exitable until one is collected.
+Set it to `false` when a collection behind every operation costs more than it is worth, on a busy wallet holding many leaves, or where bandwidth matters more than being able to recover funds without the operators. See [Treasury configuration](./treasury.md) for when that trade is worth making.
 
-The flag also governs {{#name sync_wallet}}, which waits for a collection pass before it returns rather than leaving it to the background. That makes a sync the way to run the collection at a moment of your choosing, and it is what keeps the data current in [server mode](./server_mode.md), where nothing runs in the background to collect it. A leaf whose chain the operators will not complete stays un-exitable until a later attempt succeeds, so a successful sync means the collection ran, not that every leaf is now exitable.
+The flag governs only the automatic collection. {{#name sync_wallet}} collects the missing data regardless of it and returns once that is done, so **with the automatic collection off, an explicit sync is what keeps the data current**. A leaf whose chain the operators will not complete stays un-exitable until a later attempt succeeds, so a successful sync means the collection ran, not that every leaf is now exitable.
 
 ## Optimization configuration
 

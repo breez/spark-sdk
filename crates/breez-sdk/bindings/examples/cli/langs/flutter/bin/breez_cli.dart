@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/args.dart';
@@ -9,7 +10,23 @@ Future<void> main(List<String> arguments) async {
   final parser =
       ArgParser()
         ..addOption('data-dir', abbr: 'd', defaultsTo: './.data', help: 'Path to the data directory')
-        ..addOption('network', defaultsTo: 'regtest', allowed: ['regtest', 'mainnet'], help: 'Network to use')
+        ..addOption(
+          'network',
+          defaultsTo: 'regtest',
+          allowed: ['regtest', 'signet', 'mainnet'],
+          help: 'Network to use',
+        )
+        ..addOption(
+          'spark-config',
+          help: 'JSON file with Spark operators and SSP configuration',
+          valueHelp: 'FILE',
+        )
+        ..addOption('chain-api-url', help: 'Chain API base URL (required for signet)', valueHelp: 'URL')
+        ..addOption(
+          'chain-api-type',
+          help: 'Chain API type: esplora (default) or mempool-space',
+          allowed: ['esplora', 'mempool-space'],
+        )
         ..addOption('account-number', help: 'Account number for the Spark signer')
         ..addOption(
           'postgres-connection-string',
@@ -149,6 +166,29 @@ Future<void> main(List<String> arguments) async {
     proxy = parseProxy(proxyAddress, proxyUser, proxyPassword);
   }
 
+  // Validate chain-api-type requires chain-api-url
+  final chainApiUrl = results.option('chain-api-url');
+  final chainApiTypeStr = results.option('chain-api-type');
+  if (chainApiTypeStr != null && chainApiUrl == null) {
+    stderr.writeln('Error: --chain-api-type requires --chain-api-url');
+    exit(1);
+  }
+  final ChainApiType? chainApiType;
+  if (chainApiTypeStr == 'mempool-space') {
+    chainApiType = ChainApiType.mempoolSpace;
+  } else if (chainApiTypeStr == 'esplora') {
+    chainApiType = ChainApiType.esplora;
+  } else {
+    chainApiType = null;
+  }
+
+  // Load SparkConfig from JSON file if specified
+  final sparkConfigPath = results.option('spark-config');
+  SparkConfig? sparkConfig;
+  if (sparkConfigPath != null) {
+    sparkConfig = _loadSparkConfig(sparkConfigPath);
+  }
+
   CliPasskeyConfig? passkeyConfig;
   if (passkeyProvider != null) {
     passkeyConfig = CliPasskeyConfig(
@@ -163,6 +203,9 @@ Future<void> main(List<String> arguments) async {
   await runCli(
     dataDir: dataDir,
     network: network,
+    sparkConfig: sparkConfig,
+    chainApiUrl: chainApiUrl,
+    chainApiType: chainApiType,
     accountNumber: accountNumber,
     postgresConnectionString: postgresConnectionString,
     mysqlConnectionString: mysqlConnectionString,
@@ -178,4 +221,45 @@ Future<void> main(List<String> arguments) async {
   // Force exit — the native FFI library may keep background threads alive
   // after sdk.disconnect(), preventing the Dart VM from exiting cleanly.
   exit(0);
+}
+
+SparkConfig _loadSparkConfig(String path) {
+  final file = File(path);
+  if (!file.existsSync()) {
+    stderr.writeln('Error: Failed to open Spark config $path');
+    exit(1);
+  }
+  try {
+    final json = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
+    final operators =
+        (json['signing_operators'] as List).map((op) {
+          final o = op as Map<String, dynamic>;
+          return SparkSigningOperator(
+            id: o['id'] as int,
+            identifier: o['identifier'] as String,
+            address: o['address'] as String,
+            identityPublicKey: o['identity_public_key'] as String,
+            caCertPem: o['ca_cert_pem'] as String?,
+          );
+        }).toList();
+    final ssp = json['ssp_config'] as Map<String, dynamic>;
+    return SparkConfig(
+      coordinatorIdentifier: json['coordinator_identifier'] as String,
+      threshold: json['threshold'] as int,
+      signingOperators: operators,
+      sspConfig: SparkSspConfig(
+        baseUrl: ssp['base_url'] as String,
+        identityPublicKey: ssp['identity_public_key'] as String,
+        schemaEndpoint: ssp['schema_endpoint'] as String?,
+      ),
+      expectedWithdrawBondSats: BigInt.from(json['expected_withdraw_bond_sats'] as int),
+      expectedWithdrawRelativeBlockLocktime: BigInt.from(
+        json['expected_withdraw_relative_block_locktime'] as int,
+      ),
+      maxTokenTransactionInputs: json['max_token_transaction_inputs'] as int?,
+    );
+  } catch (e) {
+    stderr.writeln('Error: Failed to parse Spark config $path: $e');
+    exit(1);
+  }
 }

@@ -7,6 +7,9 @@ using BreezCli;
 
 string dataDir = "./.data";
 string network = "regtest";
+string? sparkConfigPath = null;
+string? chainApiUrl = null;
+string? chainApiTypeStr = null;
 uint? accountNumber = null;
 string? postgresConnectionString = null;
 string? mysqlConnectionString = null;
@@ -34,6 +37,15 @@ for (int i = 0; i < args.Length; i++)
             break;
         case "--network":
             if (i + 1 < args.Length) network = args[++i];
+            break;
+        case "--spark-config":
+            if (i + 1 < args.Length) sparkConfigPath = args[++i];
+            break;
+        case "--chain-api-url":
+            if (i + 1 < args.Length) chainApiUrl = args[++i];
+            break;
+        case "--chain-api-type":
+            if (i + 1 < args.Length) chainApiTypeStr = args[++i];
             break;
         case "--account-number":
             if (i + 1 < args.Length) accountNumber = uint.Parse(args[++i]);
@@ -97,6 +109,12 @@ for (int i = 0; i < args.Length; i++)
 if (postgresConnectionString != null && mysqlConnectionString != null)
 {
     Console.Error.WriteLine("Error: --mysql-connection-string conflicts with --postgres-connection-string");
+    return;
+}
+
+if (chainApiTypeStr != null && chainApiUrl == null)
+{
+    Console.Error.WriteLine("Error: --chain-api-type requires --chain-api-url");
     return;
 }
 
@@ -169,7 +187,8 @@ Network networkEnum = network.ToLower() switch
 {
     "regtest" => Network.Regtest,
     "mainnet" => Network.Mainnet,
-    _ => throw new ArgumentException($"Invalid network '{network}'. Use 'regtest' or 'mainnet'")
+    "signet" => Network.Signet,
+    _ => throw new ArgumentException($"Invalid network '{network}'. Use 'regtest', 'signet', or 'mainnet'")
 };
 
 // ---------------------------------------------------------------------------
@@ -195,6 +214,31 @@ if (stableBalanceTokens.Count > 0)
         thresholdSats: stableBalanceThreshold,
         maxSlippageBps: null
     );
+}
+
+// ---------------------------------------------------------------------------
+// Spark config (custom operators / SSP)
+// ---------------------------------------------------------------------------
+
+SparkConfig? sparkConfig = null;
+if (sparkConfigPath != null)
+{
+    sparkConfig = LoadSparkConfig(sparkConfigPath);
+}
+
+// ---------------------------------------------------------------------------
+// Chain API
+// ---------------------------------------------------------------------------
+
+ChainApiType? chainApiType = null;
+if (chainApiTypeStr != null)
+{
+    chainApiType = chainApiTypeStr.ToLower() switch
+    {
+        "esplora" => ChainApiType.Esplora,
+        "mempool-space" => ChainApiType.MempoolSpace,
+        _ => throw new ArgumentException($"Invalid chain API type '{chainApiTypeStr}'. Expected 'esplora' or 'mempool-space'")
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -230,6 +274,8 @@ await RunInteractiveMode(
     resolvedDir,
     networkEnum,
     serverMode,
+    sparkConfig,
+    chainApiUrl != null ? (chainApiUrl, chainApiType ?? ChainApiType.Esplora) : null,
     accountNumber,
     postgresConnectionString,
     mysqlConnectionString,
@@ -261,6 +307,12 @@ static ProxyConfig ParseProxy(string address, string? username, string? password
     return new ProxyConfig(host: host, port: port, username: username, password: password);
 }
 
+static SparkConfig LoadSparkConfig(string path)
+{
+    var json = File.ReadAllText(path);
+    return Serialization.Deserialize<SparkConfig>(json);
+}
+
 static string ExpandPath(string path)
 {
     if (path.StartsWith("~/"))
@@ -279,7 +331,10 @@ static void PrintUsage()
     Console.WriteLine();
     Console.WriteLine("Options:");
     Console.WriteLine("  -d, --data-dir <PATH>                       Path to data directory (default: ./.data)");
-    Console.WriteLine("  --network <NETWORK>                         Network: regtest or mainnet (default: regtest)");
+    Console.WriteLine("  --network <NETWORK>                         Network: regtest, signet, or mainnet (default: regtest)");
+    Console.WriteLine("  --spark-config <FILE>                       JSON file with Spark operators and SSP config (required for signet)");
+    Console.WriteLine("  --chain-api-url <URL>                       Chain API base URL (required for signet)");
+    Console.WriteLine("  --chain-api-type <TYPE>                     Chain API type: esplora (default) or mempool-space");
     Console.WriteLine("  --account-number <N>                        Account number for the Spark signer");
     Console.WriteLine("  --postgres-connection-string <CONN>         PostgreSQL connection string (SQLite by default)");
     Console.WriteLine("  --mysql-connection-string <CONN>            MySQL connection string (SQLite by default)");
@@ -303,6 +358,8 @@ static async Task RunInteractiveMode(
     string dataDir,
     Network network,
     bool serverMode,
+    SparkConfig? sparkConfig,
+    (string url, ChainApiType apiType)? chainApi,
     uint? accountNumber,
     string? postgresConnectionString,
     string? mysqlConnectionString,
@@ -340,6 +397,10 @@ static async Task RunInteractiveMode(
     if (!string.IsNullOrEmpty(apiKey))
     {
         config = config with { apiKey = apiKey };
+    }
+    if (sparkConfig != null)
+    {
+        config = config with { sparkConfig = sparkConfig };
     }
     if (stableBalanceConfig != null)
     {
@@ -382,6 +443,10 @@ static async Task RunInteractiveMode(
 
     // Build SDK
     var builder = new SdkBuilder(config: config, seed: seed);
+    if (chainApi != null)
+    {
+        await builder.WithRestChainService(url: chainApi.Value.url, apiType: chainApi.Value.apiType, credentials: null);
+    }
     if (postgresConnectionString != null)
     {
         await builder.WithStorageBackend(storage: BreezSdkSparkMethods.PostgresStorage(
@@ -443,6 +508,7 @@ static async Task RunInteractiveMode(
     {
         Network.Mainnet => "breez-spark-cli [mainnet]> ",
         Network.Regtest => "breez-spark-cli [regtest]> ",
+        Network.Signet => "breez-spark-cli [signet]> ",
         _ => "breez-spark-cli> "
     };
 

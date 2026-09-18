@@ -546,6 +546,7 @@ impl FromStr for SparkHtlcStatus {
 pub enum Network {
     Mainnet,
     Regtest,
+    Signet,
 }
 
 impl std::fmt::Display for Network {
@@ -553,6 +554,7 @@ impl std::fmt::Display for Network {
         match self {
             Network::Mainnet => write!(f, "Mainnet"),
             Network::Regtest => write!(f, "Regtest"),
+            Network::Signet => write!(f, "Signet"),
         }
     }
 }
@@ -562,6 +564,7 @@ impl From<Network> for BitcoinNetwork {
         match network {
             Network::Mainnet => BitcoinNetwork::Bitcoin,
             Network::Regtest => BitcoinNetwork::Regtest,
+            Network::Signet => BitcoinNetwork::Signet,
         }
     }
 }
@@ -571,6 +574,7 @@ impl From<Network> for breez_sdk_common::network::BitcoinNetwork {
         match network {
             Network::Mainnet => breez_sdk_common::network::BitcoinNetwork::Bitcoin,
             Network::Regtest => breez_sdk_common::network::BitcoinNetwork::Regtest,
+            Network::Signet => breez_sdk_common::network::BitcoinNetwork::Signet,
         }
     }
 }
@@ -580,6 +584,7 @@ impl From<Network> for bitcoin::Network {
         match network {
             Network::Mainnet => bitcoin::Network::Bitcoin,
             Network::Regtest => bitcoin::Network::Regtest,
+            Network::Signet => bitcoin::Network::Signet,
         }
     }
 }
@@ -591,6 +596,7 @@ impl FromStr for Network {
         match s {
             "mainnet" => Ok(Network::Mainnet),
             "regtest" => Ok(Network::Regtest),
+            "signet" => Ok(Network::Signet),
             _ => Err("Invalid network".to_string()),
         }
     }
@@ -729,15 +735,20 @@ pub struct Config {
     pub prefer_spark_over_lightning: bool,
 
     /// Whether the data needed to exit a payment unilaterally, without the Spark
-    /// operators, is collected as funds arrive. Collection runs in the background,
-    /// and a sync waits for a collection pass before returning, so syncing is how
-    /// to make that happen at a moment of your choosing. A leaf the operators
-    /// cannot complete stays un-exitable until a later attempt succeeds.
+    /// operators, is collected automatically as funds arrive. Collection runs in
+    /// the background, after an operation rather than during it. A leaf the
+    /// operators cannot complete stays un-exitable until a later attempt
+    /// succeeds.
     ///
-    /// Leave this on unless bandwidth matters more than being able to recover funds
-    /// when the operators are unreachable. With it off, chains are only collected
-    /// when an exit is prepared, which needs the operators reachable at that
-    /// moment: a leaf cannot be exited without them until one is collected.
+    /// Turn it off when collecting behind every operation costs more than it is
+    /// worth, on a busy wallet holding many leaves. `sync_wallet` collects
+    /// regardless of this flag, and waits for the pass before returning, so an
+    /// explicit sync on a cadence of your choosing is how the data is kept
+    /// current with the automatic collection off.
+    ///
+    /// Only that automatic collection is governed, so this has no effect at all
+    /// where none runs: with `background_tasks_enabled` off there is no
+    /// background collector, and every sync is an explicit one.
     ///
     /// Default value is true.
     pub exit_chain_auto_fetch_enabled: bool,
@@ -999,7 +1010,7 @@ pub enum StableBalanceActiveLabel {
 /// When set on [`Config`], overrides the default Spark operator pool,
 /// service provider, threshold, and token settings. This allows connecting
 /// to alternative Spark deployments (e.g. dev/staging environments).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SparkConfig {
     /// Hex-encoded identifier of the coordinator operator.
@@ -1021,7 +1032,7 @@ pub struct SparkConfig {
 }
 
 /// A Spark signing operator.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SparkSigningOperator {
     /// Sequential operator ID (0-indexed).
@@ -1040,7 +1051,7 @@ pub struct SparkSigningOperator {
 }
 
 /// Configuration for the Spark Service Provider (SSP).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SparkSspConfig {
     /// Base URL of the SSP GraphQL API.
@@ -1057,6 +1068,12 @@ impl Config {
     ///
     /// Returns an error if any configuration values are invalid.
     pub fn validate(&self) -> Result<(), SdkError> {
+        if self.network == Network::Signet && self.spark_config.is_none() {
+            return Err(SdkError::InvalidInput(
+                "Signet requires an explicit spark_config with signing operators and an SSP"
+                    .to_string(),
+            ));
+        }
         if self.max_concurrent_claims == 0 {
             return Err(SdkError::InvalidInput(
                 "max_concurrent_claims must be greater than 0".to_string(),
@@ -1114,23 +1131,7 @@ impl Config {
             }
         }
 
-        let token_opt = &self.token_optimization_config;
-        if token_opt.min_outputs_threshold <= 1 {
-            return Err(SdkError::InvalidInput(
-                "token optimization minimum outputs threshold must be greater than 1".to_string(),
-            ));
-        }
-        if token_opt.target_output_count < 1 {
-            return Err(SdkError::InvalidInput(
-                "token optimization target output count must be at least 1".to_string(),
-            ));
-        }
-        if token_opt.target_output_count >= token_opt.min_outputs_threshold {
-            return Err(SdkError::InvalidInput(
-                "token optimization target output count must be less than the minimum outputs threshold".to_string(),
-            ));
-        }
-
+        self.validate_token_optimization()?;
         self.proxy.as_ref().map_or(Ok(()), ProxyConfig::validate)?;
 
         if let Some(cc) = &self.cross_chain_config {
@@ -1164,6 +1165,26 @@ impl Config {
             }
         }
 
+        Ok(())
+    }
+
+    fn validate_token_optimization(&self) -> Result<(), SdkError> {
+        let token_opt = &self.token_optimization_config;
+        if token_opt.min_outputs_threshold <= 1 {
+            return Err(SdkError::InvalidInput(
+                "token optimization minimum outputs threshold must be greater than 1".to_string(),
+            ));
+        }
+        if token_opt.target_output_count < 1 {
+            return Err(SdkError::InvalidInput(
+                "token optimization target output count must be at least 1".to_string(),
+            ));
+        }
+        if token_opt.target_output_count >= token_opt.min_outputs_threshold {
+            return Err(SdkError::InvalidInput(
+                "token optimization target output count must be less than the minimum outputs threshold".to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -2883,7 +2904,8 @@ pub enum ExitLeafSelection {
     /// `total_fee_sat`, or fund one UTXO per branch to avoid the fan-out. Leaves
     /// that fail the per-leaf test are skipped.
     Auto,
-    /// Exit exactly these leaves, regardless of profitability.
+    /// Exit exactly these leaves, regardless of profitability, apart from any
+    /// whose exit already finished.
     Specific { leaf_ids: Vec<String> },
 }
 
@@ -3064,6 +3086,9 @@ pub enum ExitRefundState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareUnilateralExitResponse {
+    /// The leaves the exit covers. A leaf whose exit already finished is left out,
+    /// even when named: `exit_chain_state` shows its refund swept or its branch
+    /// stopped.
     pub leaves: Vec<UnilateralExitLeaf>,
     /// Total value of the selected leaves, in satoshis.
     pub recoverable_value_sat: u64,

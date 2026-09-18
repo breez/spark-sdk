@@ -10,9 +10,8 @@ use super::{BreezSdk, BreezSdkParams, helpers::validate_breez_api_key};
 impl BreezSdk {
     /// Creates a new instance of the `BreezSdk`
     pub(crate) async fn init_and_start(params: BreezSdkParams) -> Result<Self, SdkError> {
-        // In Regtest we allow running without a Breez API key to facilitate local
-        // integration tests. For non-regtest networks, a valid API key is required.
-        if !matches!(params.config.network, Network::Regtest) {
+        // Test networks allow running custom deployments without a Breez API key.
+        if matches!(params.config.network, Network::Mainnet) {
             match &params.config.api_key {
                 Some(api_key) => validate_breez_api_key(api_key)?,
                 None => return Err(SdkError::Generic("Missing Breez API key".to_string())),

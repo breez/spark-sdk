@@ -15,7 +15,7 @@ Client signing is fully opt-in. Without it, {{#name send_payment}} works as desc
 
 Sometimes the wallet first needs to re-shape its funds so it can send the exact amount (a denomination swap). That swap also needs the user's signature, so it arrives as its own package: publishing it returns {{#enum PublishSignedTransferPackageResponse::SwapCompleted}}, and you build again from the same prepare response. Repeat until publishing returns {{#enum PublishSignedTransferPackageResponse::PaymentSent}}.
 
-The server keeps no state between these steps. Everything needed to complete the payment travels inside the requests and responses, so building and publishing can happen in different processes or on different instances. This fits [Server mode](server_mode.md) deployments, where an SDK instance is built per request.
+The server keeps no state between these steps. Everything needed to complete the payment travels inside the requests and responses, so building and publishing can happen in different processes or on different instances. This fits the [multi-user configuration](server_mode.md), where an SDK instance is built per request.
 
 <h2 id="signing-on-the-users-side">
     <a class="header" href="#signing-on-the-users-side">Signing on the user's side</a>

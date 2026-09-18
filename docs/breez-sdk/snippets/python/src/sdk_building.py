@@ -235,6 +235,42 @@ async def init_sdk_server():
     # ANCHOR_END: init-sdk-server
 
 
+async def init_sdk_treasury():
+    # ANCHOR: init-sdk-treasury
+    # Construct the seed using a mnemonic, entropy or passkey
+    mnemonic = "<mnemonic words>"
+    seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
+
+    # A treasury wallet is an ordinary long-lived SDK instance, so start from
+    # default_config and keep background tasks on.
+    config = default_config(network=Network.MAINNET)
+    config.api_key = "<breez api key>"
+
+    # Keeps user data in step across devices that each hold their own
+    # storage, which a server-side wallet has no use for.
+    config.real_time_sync_server_url = None
+
+    # Stays connected, and syncs cost more with more leaves, so it can
+    # afford a longer interval.
+    config.sync_interval_secs = 300
+
+    # Optional: on a treasury that pays often and holds many leaves, collecting
+    # unilateral exit data behind every operation adds up. Turn it off and
+    # sync on a cadence of your own instead: a sync collects regardless of
+    # this flag.
+    config.exit_chain_auto_fetch_enabled = False
+
+    try:
+        builder = SdkBuilder(config=config, seed=seed)
+        await builder.with_default_storage(storage_dir="./.data")
+        sdk = await builder.build()
+        return sdk
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: init-sdk-treasury
+
+
 async def server_mode_request_handler(sdk: BreezSdk):
     # ANCHOR: server-mode-request-handler
     # User-facing request handler: do not call sync_wallet here. Operations

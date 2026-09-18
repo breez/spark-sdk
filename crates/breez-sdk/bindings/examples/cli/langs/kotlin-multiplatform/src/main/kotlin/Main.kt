@@ -1,4 +1,5 @@
 import breez_sdk_spark.*
+import com.google.gson.JsonParser
 import kotlinx.coroutines.runBlocking
 import org.jline.reader.EndOfFileException
 import org.jline.reader.LineReader
@@ -76,9 +77,40 @@ fun expandPath(path: String): String {
     return path
 }
 
+fun loadSparkConfig(path: String): SparkConfig {
+    val root = JsonParser.parseReader(File(path).reader()).asJsonObject
+    val operators = root.getAsJsonArray("signing_operators").map { elem ->
+        val op = elem.asJsonObject
+        SparkSigningOperator(
+            id = op.get("id").asLong.toUInt(),
+            identifier = op.get("identifier").asString,
+            address = op.get("address").asString,
+            identityPublicKey = op.get("identity_public_key").asString,
+            caCertPem = op.get("ca_cert_pem")?.takeIf { !it.isJsonNull }?.asString,
+        )
+    }
+    val ssp = root.getAsJsonObject("ssp_config")
+    return SparkConfig(
+        coordinatorIdentifier = root.get("coordinator_identifier").asString,
+        threshold = root.get("threshold").asLong.toUInt(),
+        signingOperators = operators,
+        sspConfig = SparkSspConfig(
+            baseUrl = ssp.get("base_url").asString,
+            identityPublicKey = ssp.get("identity_public_key").asString,
+            schemaEndpoint = ssp.get("schema_endpoint").asString,
+        ),
+        expectedWithdrawBondSats = root.get("expected_withdraw_bond_sats").asLong.toULong(),
+        expectedWithdrawRelativeBlockLocktime = root.get("expected_withdraw_relative_block_locktime").asLong.toULong(),
+        maxTokenTransactionInputs = root.get("max_token_transaction_inputs")?.takeIf { !it.isJsonNull }?.asLong?.toUInt(),
+    )
+}
+
 fun main(args: Array<String>) {
     var dataDir = "./.data"
     var network = "regtest"
+    var sparkConfigPath: String? = null
+    var chainApiUrl: String? = null
+    var chainApiTypeStr: String? = null
     var accountNumber: String? = null
     var postgresConnectionString: String? = null
     var mysqlConnectionString: String? = null
@@ -107,6 +139,18 @@ fun main(args: Array<String>) {
             "--network" -> {
                 i++
                 if (i < args.size) network = args[i]
+            }
+            "--spark-config" -> {
+                i++
+                if (i < args.size) sparkConfigPath = args[i]
+            }
+            "--chain-api-url" -> {
+                i++
+                if (i < args.size) chainApiUrl = args[i]
+            }
+            "--chain-api-type" -> {
+                i++
+                if (i < args.size) chainApiTypeStr = args[i]
             }
             "--account-number" -> {
                 i++
@@ -174,7 +218,10 @@ fun main(args: Array<String>) {
                 println()
                 println("Options:")
                 println("  -d, --data-dir <DIR>                         Path to the data directory (default: ./.data)")
-                println("  --network <NETWORK>                          Network to use: regtest, mainnet (default: regtest)")
+                println("  --network <NETWORK>                          Network to use: regtest, signet, mainnet (default: regtest)")
+                println("  --spark-config <FILE>                        JSON file with Spark operators and SSP configuration (required for signet)")
+                println("  --chain-api-url <URL>                        Chain API base URL (required for signet)")
+                println("  --chain-api-type <TYPE>                      Chain API type: esplora (default) or mempool-space")
                 println("  --account-number <NUM>                       Account number for the Spark signer")
                 println("  --postgres-connection-string <CONN>          PostgreSQL connection string (uses SQLite by default)")
                 println("  --mysql-connection-string <CONN>             MySQL connection string (mutually exclusive with --postgres-connection-string)")
@@ -221,6 +268,10 @@ fun main(args: Array<String>) {
         System.err.println("Error: --postgres-connection-string and --mysql-connection-string are mutually exclusive")
         return
     }
+    if (chainApiTypeStr != null && chainApiUrl == null) {
+        System.err.println("Error: --chain-api-type requires --chain-api-url")
+        return
+    }
     if (proxyUser != null && (proxyAddress == null || proxyPassword == null)) {
         System.err.println("Error: --proxy-user requires --proxy and --proxy-password")
         return
@@ -236,8 +287,9 @@ fun main(args: Array<String>) {
     val networkEnum = when (network.lowercase()) {
         "regtest" -> Network.REGTEST
         "mainnet" -> Network.MAINNET
+        "signet" -> Network.SIGNET
         else -> {
-            System.err.println("Invalid network. Use 'regtest' or 'mainnet'")
+            System.err.println("Invalid network. Use 'regtest', 'signet', or 'mainnet'")
             return
         }
     }
@@ -280,6 +332,30 @@ fun main(args: Array<String>) {
         }
     } else null
 
+    val sparkConfig: SparkConfig? = if (sparkConfigPath != null) {
+        try {
+            loadSparkConfig(sparkConfigPath)
+        } catch (e: Exception) {
+            System.err.println("Failed to load Spark config $sparkConfigPath: ${e.message}")
+            return
+        }
+    } else null
+
+    val chainApiType: ChainApiType? = if (chainApiTypeStr != null) {
+        when (chainApiTypeStr) {
+            "esplora" -> ChainApiType.ESPLORA
+            "mempool-space" -> ChainApiType.MEMPOOL_SPACE
+            else -> {
+                System.err.println("Expected 'esplora' or 'mempool-space' for --chain-api-type")
+                return
+            }
+        }
+    } else null
+
+    val chainApi: Pair<String, ChainApiType>? = chainApiUrl?.let {
+        Pair(it, chainApiType ?: ChainApiType.ESPLORA)
+    }
+
     val proxy = proxyAddress?.let { parseProxy(it, proxyUser, proxyPassword) }
 
     runBlocking {
@@ -287,6 +363,8 @@ fun main(args: Array<String>) {
             resolvedDir,
             networkEnum,
             serverMode,
+            sparkConfig,
+            chainApi,
             accountNumber,
             postgresConnectionString,
             mysqlConnectionString,
@@ -302,6 +380,8 @@ suspend fun runInteractiveMode(
     dataDir: String,
     network: Network,
     serverMode: Boolean,
+    sparkConfig: SparkConfig?,
+    chainApi: Pair<String, ChainApiType>?,
     accountNumber: String?,
     postgresConnectionString: String?,
     mysqlConnectionString: String?,
@@ -331,6 +411,9 @@ suspend fun runInteractiveMode(
     if (!apiKey.isNullOrEmpty()) {
         config.apiKey = apiKey
     }
+    if (sparkConfig != null) {
+        config.sparkConfig = sparkConfig
+    }
     config.stableBalanceConfig = stableBalanceConfig
     config.proxy = proxy
     if (network == Network.MAINNET) {
@@ -358,6 +441,9 @@ suspend fun runInteractiveMode(
 
     // Build SDK
     val builder = SdkBuilder(config, seed)
+    if (chainApi != null) {
+        builder.withRestChainService(chainApi.first, chainApi.second, null)
+    }
     if (postgresConnectionString != null) {
         builder.withStorageBackend(postgresStorage(defaultPostgresStorageConfig(postgresConnectionString)))
     } else if (mysqlConnectionString != null) {
@@ -405,6 +491,7 @@ suspend fun runInteractiveMode(
     val networkLabel = when (network) {
         Network.MAINNET -> "mainnet"
         Network.REGTEST -> "regtest"
+        Network.SIGNET -> "signet"
     }
     val prompt = "breez-spark-cli [$networkLabel]> "
 

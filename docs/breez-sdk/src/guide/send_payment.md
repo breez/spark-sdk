@@ -67,7 +67,7 @@ Spark invoices may require a token (non-Bitcoin) as the payment asset. To determ
 
 Send USDC or USDT from a Spark wallet to a recipient on one of several supported chains: Ethereum-family chains (Arbitrum, Base, and similar EVM networks), Solana, and Tron. The source on the Spark side is BTC sats or [USDB](./stable_balance.md) (a 6-decimal USD-pegged token on Spark). This feature must be enabled in [the SDK configuration](./config.md#usdc-usdt) before using. See [USDC/USDT](./cross_chain.md) for provider details and the status lifecycle.
 
-After [parsing](./parse.md) the recipient address into {{#enum InputType::CrossChainAddress}}, call {{#name get_cross_chain_routes}} with {{#enum CrossChainRouteFilter::Send}} carrying the parsed {{#name CrossChainAddressDetails}}. The returned {{#name CrossChainRoutePair}}s name the provider, destination chain and asset, decimals, optional token contract address, and which source assets (BTC sats or USDB) each route accepts.
+After [parsing](./parse.md) the recipient address into {{#enum InputType::CrossChainAddress}}, call {{#name get_cross_chain_routes}} with {{#enum CrossChainRouteFilter::Send}} carrying the parsed {{#name CrossChainAddressDetails}}. The returned {{#name CrossChainRoutePair}}s name the provider, destination chain and asset, decimals, optional token contract address, and which Spark-side assets (BTC sats or USDB) each route accepts, with the amount bounds published for each. See [Amount limits](./cross_chain.md#amount-limits) for how to read the bounds and what they do and do not guarantee.
 
 {{#tabs cross_chain:cross-chain-get-routes}}
 

@@ -15,7 +15,7 @@ setup: frb
 # Install flutter_rust_bridge_codegen dependencies
 frb:
 	cargo install cargo-expand
-	cargo install flutter_rust_bridge_codegen --version 2.11.1
+	cargo install flutter_rust_bridge_codegen --version 2.13.0
 
 # Check system dependencies
 check-deps:

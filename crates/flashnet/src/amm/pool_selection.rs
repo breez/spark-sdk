@@ -283,7 +283,7 @@ mod tests {
     ) -> Pool {
         Pool {
             lp_public_key: pubkey.parse().unwrap(),
-            host_name: "test".to_string(),
+            host_name: Some("test".to_string()),
             host_fee_bps,
             lp_fee_bps,
             asset_a_address: crate::BTC_ASSET_ADDRESS.to_string(),
@@ -301,8 +301,8 @@ mod tests {
             initial_reserve_a: None,
             bonding_progress_percent: None,
             graduation_threshold_amount: None,
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            created_at: Some("2024-01-01T00:00:00Z".to_string()),
+            updated_at: Some("2024-01-01T00:00:00Z".to_string()),
             current_tick: None,
             tick_spacing: None,
             total_liquidity: None,
@@ -316,7 +316,7 @@ mod tests {
             lp_public_key: "02894808873b896e21d29856a6d7bb346fb13c019739adb9bf0b6a8b7e28da53da"
                 .parse()
                 .unwrap(),
-            host_name: "test".to_string(),
+            host_name: Some("test".to_string()),
             host_fee_bps: 50,
             lp_fee_bps: 100,
             asset_a_address: "asset_a".to_string(),
@@ -334,8 +334,8 @@ mod tests {
             initial_reserve_a: None,
             bonding_progress_percent: None,
             graduation_threshold_amount: None,
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            created_at: Some("2024-01-01T00:00:00Z".to_string()),
+            updated_at: Some("2024-01-01T00:00:00Z".to_string()),
             current_tick: None,
             tick_spacing: None,
             total_liquidity: None,
@@ -357,7 +357,7 @@ mod tests {
             lp_public_key: "0315299b3f9f4e2beb8576ea2bf72ea1bc741eb255bfc3f6387de4d47b5c05972d"
                 .parse()
                 .unwrap(),
-            host_name: "test".to_string(),
+            host_name: Some("test".to_string()),
             host_fee_bps: 50,
             lp_fee_bps: 100,
             asset_a_address: "asset_a".to_string(),
@@ -375,8 +375,8 @@ mod tests {
             initial_reserve_a: None,
             bonding_progress_percent: None,
             graduation_threshold_amount: None,
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            created_at: Some("2024-01-01T00:00:00Z".to_string()),
+            updated_at: Some("2024-01-01T00:00:00Z".to_string()),
             current_tick: None,
             tick_spacing: None,
             total_liquidity: None,
@@ -395,7 +395,7 @@ mod tests {
             lp_public_key: "02a1633caf0d6d2a8b3f4e1f5e6d7c8b9a0b1c2d3e4f5061728394a5b6c7d8e9fa"
                 .parse()
                 .unwrap(),
-            host_name: "test".to_string(),
+            host_name: Some("test".to_string()),
             host_fee_bps: 50,
             lp_fee_bps: 100,
             asset_a_address: "asset_a".to_string(),
@@ -413,8 +413,8 @@ mod tests {
             initial_reserve_a: None,
             bonding_progress_percent: None,
             graduation_threshold_amount: None,
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            created_at: Some("2024-01-01T00:00:00Z".to_string()),
+            updated_at: Some("2024-01-01T00:00:00Z".to_string()),
             current_tick: None,
             tick_spacing: None,
             total_liquidity: None,

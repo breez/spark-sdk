@@ -7,7 +7,7 @@ use bitcoin::{Address, OutPoint, Transaction, Txid};
 use frost_secp256k1_tr::Identifier;
 use platform_utils::time::SystemTime;
 use serde::Serialize;
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 use crate::bitcoin::{sighash_from_multi_input_tx, sighash_from_tx};
 use crate::core::{Network, next_sequence};
@@ -24,6 +24,7 @@ use crate::signer::{
 };
 use crate::ssp::RequestCoopExitInput;
 use crate::ssp::ServiceProvider;
+use crate::ssp::{CoopExitAcceptance, SparkCoopExitRequestStatus};
 use crate::tree::TreeNode;
 use crate::tree::TreeNodeId;
 use crate::utils::frost::derive_leaf_signing_public_key;
@@ -35,6 +36,11 @@ use crate::utils::transactions::{
 
 const COOP_EXIT_EXPIRY_DURATION_MAINNET: Duration = Duration::from_secs(7 * 24 * 60 * 60 + 5 * 60); // 1 week + 5 minutes
 const COOP_EXIT_EXPIRY_DURATION: Duration = Duration::from_secs(35 * 60); // 35 minutes
+
+/// Attempts at the completion request that turns a committed transfer into an
+/// on-chain payout.
+const COMPLETE_EXIT_ATTEMPTS: u32 = 3;
+const COMPLETE_EXIT_RETRY_DELAY: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CoopExitSpeedFeeQuote {
@@ -278,32 +284,102 @@ impl CoopExitService {
                 leaf_key_tweaks,
                 connector_txid,
                 coop_exit_input,
-                unwrapped_transfer_id,
+                unwrapped_transfer_id.clone(),
                 raw_connector_transaction_bytes.clone(),
                 prepared,
             )
             .await;
-        let transfer = match (&transfer_id, res) {
-            (_, Ok(t)) => t,
+        let transfer = match res {
+            Ok(t) => t,
             // The transfer can commit server-side and still lose its response. Bind
             // the recovered transfer rather than returning it: the exit is only
             // finished once complete_coop_exit tells the SSP to broadcast the payout.
-            (Some(transfer_id), Err(e)) => {
+            Err(e) => {
                 self.transfer_service
-                    .recover_transfer_on_rpc_connection_error(transfer_id, e)
+                    .recover_committed_transfer(&unwrapped_transfer_id, e)
                     .await?
             }
-            (None, Err(e)) => return Err(e),
         };
         trace!("Submitted cooperative exit transfer: {transfer:?}");
 
-        let complete_response = self
-            .ssp_client
-            .complete_coop_exit(&transfer.id.to_string(), &coop_exit_request.id)
+        self.request_payout(&unwrapped_transfer_id, &coop_exit_request.id)
             .await?;
-        trace!("Completed cooperative exit: {complete_response:?}",);
 
         Ok(transfer)
+    }
+
+    /// Asks the SSP to broadcast the payout for an exit whose transfer has
+    /// already committed, retrying while the outcome is unknown.
+    ///
+    /// By this point the leaves belong to the SSP, so an unanswered request
+    /// leaves the withdrawal with nowhere to go: re-reading the request between
+    /// attempts settles whether a lost response was in fact received.
+    async fn request_payout(
+        &self,
+        transfer_id: &TransferId,
+        request_id: &str,
+    ) -> Result<(), ServiceError> {
+        let mut last_error = None;
+        for attempt in 0..COMPLETE_EXIT_ATTEMPTS {
+            if attempt > 0 {
+                match self.exit_status(request_id).await {
+                    Ok(status) => match status.acceptance() {
+                        // A lost response that the SSP did in fact receive.
+                        CoopExitAcceptance::Accepted => {
+                            debug!("Cooperative exit {request_id} was accepted as {status:?}");
+                            return Ok(());
+                        }
+                        // Asking again cannot revive it, and reporting success
+                        // would claim a payout that will never be broadcast.
+                        CoopExitAcceptance::Failed => {
+                            return Err(ServiceError::Generic(format!(
+                                "Cooperative exit {request_id} cannot pay out: {status:?}"
+                            )));
+                        }
+                        CoopExitAcceptance::AwaitingCompletion => {}
+                    },
+                    Err(e) => debug!("Could not re-read cooperative exit {request_id}: {e:?}"),
+                }
+                platform_utils::tokio::time::sleep(COMPLETE_EXIT_RETRY_DELAY).await;
+            }
+            match self
+                .ssp_client
+                .complete_coop_exit(&transfer_id.to_string(), request_id)
+                .await
+            {
+                Ok(response) => {
+                    trace!("Completed cooperative exit: {response:?}");
+                    return Ok(());
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to complete cooperative exit {request_id} \
+                         (attempt {}/{COMPLETE_EXIT_ATTEMPTS}): {e:?}",
+                        attempt.saturating_add(1),
+                    );
+                    last_error = Some(e);
+                }
+            }
+        }
+        Err(last_error.map_or_else(
+            || ServiceError::Generic("Cooperative exit completion was never attempted".to_string()),
+            ServiceError::from,
+        ))
+    }
+
+    /// Reads how far the SSP has taken a cooperative exit request.
+    async fn exit_status(
+        &self,
+        request_id: &str,
+    ) -> Result<SparkCoopExitRequestStatus, ServiceError> {
+        let request = self
+            .ssp_client
+            .get_coop_exit_request(request_id)
+            .await?
+            .ok_or_else(|| {
+                ServiceError::Generic(format!("Cooperative exit request {request_id} not found"))
+            })?;
+        Ok(request.exit_status)
     }
 
     /// Submits the cooperative-exit transfer to the coordinator as a single

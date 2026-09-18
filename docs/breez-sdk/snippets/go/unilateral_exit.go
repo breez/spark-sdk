@@ -121,6 +121,21 @@ func ImportExitState(sdk *breez_sdk_spark.BreezSdk, exitState string) error {
 	return nil
 }
 
+func SyncExitData(sdk *breez_sdk_spark.BreezSdk) error {
+	// ANCHOR: sync-exit-data
+	// With automatic collection off, an explicit sync is what collects the data
+	// a unilateral exit needs, and it waits for the collection to finish. Needs
+	// the Spark operators reachable, so run it on a schedule rather than at the
+	// moment an exit is needed.
+	_, err := sdk.SyncWallet(breez_sdk_spark.SyncWalletRequest{})
+	if err != nil {
+		return err
+	}
+	// ANCHOR_END: sync-exit-data
+
+	return nil
+}
+
 // ANCHOR: custom-cpfp-signer
 type MyCpfpSigner struct{}
 

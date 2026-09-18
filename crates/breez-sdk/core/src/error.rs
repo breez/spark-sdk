@@ -33,6 +33,29 @@ pub enum SdkError {
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
+    /// A cross-chain provider rejected the amount as outside what it accepts
+    /// for the route.
+    ///
+    /// The bound fields carry what the route publishes in the direction that
+    /// failed, in whichever denominations the provider publishes. A route can
+    /// enforce a tighter bound than it publishes, so an amount inside the
+    /// published one can still land here.
+    ///
+    /// The message is the provider's own rejection text with the published
+    /// bound appended, so it already names the direction.
+    #[error("{reason}{}", render_bound(*too_small, *bound_amount, *bound_usd_cents))]
+    CrossChainAmountOutOfRange {
+        reason: String,
+        /// `true` for a rejection below the minimum, `false` for one above the
+        /// maximum or beyond available liquidity.
+        too_small: bool,
+        /// The published bound in the base units of the asset paid in: the
+        /// Spark-side asset on a send, the external asset on a receive.
+        bound_amount: Option<u128>,
+        /// The published bound as an order value in USD cents.
+        bound_usd_cents: Option<u64>,
+    },
+
     /// Network error
     #[error("Network error: {0}")]
     NetworkError(String),
@@ -123,6 +146,14 @@ impl From<bitcoin::address::ParseError> for SdkError {
 impl From<flashnet::FlashnetError> for SdkError {
     fn from(e: flashnet::FlashnetError) -> Self {
         match e {
+            flashnet::FlashnetError::AmountOutOfRange { reason, too_small } => {
+                SdkError::CrossChainAmountOutOfRange {
+                    reason,
+                    too_small,
+                    bound_amount: None,
+                    bound_usd_cents: None,
+                }
+            }
             flashnet::FlashnetError::Network { reason, code } => {
                 let code = match code {
                     Some(c) => format!(" (code: {c})"),
@@ -383,5 +414,84 @@ impl From<String> for SignerError {
 impl From<&str> for SignerError {
     fn from(s: &str) -> Self {
         SignerError::Generic(s.to_string())
+    }
+}
+
+/// Renders the bound an amount rejection ran into, for the error message.
+/// Empty when the provider publishes nothing in that direction.
+///
+/// Both denominations are named when both are published: which one the provider
+/// applied is not reported, and they are not interconvertible without a rate.
+/// The bound is the published one, which a route can enforce more tightly than,
+/// so the wording says "published" rather than naming it as the limit.
+fn render_bound(
+    too_small: bool,
+    bound_amount: Option<u128>,
+    bound_usd_cents: Option<u64>,
+) -> String {
+    let mut bounds = Vec::new();
+    if let Some(amount) = bound_amount {
+        bounds.push(format!("{amount} base units"));
+    }
+    if let Some(cents) = bound_usd_cents {
+        bounds.push(format!("{}.{:02} USD", cents / 100, cents % 100));
+    }
+    if bounds.is_empty() {
+        return String::new();
+    }
+    let label = if too_small { "minimum" } else { "maximum" };
+    format!(" (published {label}: {})", bounds.join(" or "))
+}
+
+#[cfg(test)]
+mod render_bound_tests {
+    use super::*;
+
+    /// The rendered message is the only channel bindings that flatten
+    /// `SdkError` to a string have, so the number has to survive into it.
+    fn message(
+        too_small: bool,
+        bound_amount: Option<u128>,
+        bound_usd_cents: Option<u64>,
+    ) -> String {
+        // Orchestra's own wording for each direction.
+        let reason = if too_small {
+            "Amount too small"
+        } else {
+            "Amount too large"
+        };
+        SdkError::CrossChainAmountOutOfRange {
+            reason: reason.to_string(),
+            too_small,
+            bound_amount,
+            bound_usd_cents,
+        }
+        .to_string()
+    }
+
+    #[test]
+    fn names_both_denominations_when_both_are_published() {
+        assert_eq!(
+            message(true, Some(1200), Some(80)),
+            "Amount too small (published minimum: 1200 base units or 0.80 USD)"
+        );
+    }
+
+    #[test]
+    fn a_too_large_rejection_reads_as_a_maximum() {
+        assert_eq!(
+            message(false, None, Some(8_980_000)),
+            "Amount too large (published maximum: 89800.00 USD)"
+        );
+    }
+
+    #[test]
+    fn says_nothing_when_the_provider_publishes_no_bound() {
+        assert_eq!(message(true, None, None), "Amount too small");
+    }
+
+    #[test]
+    fn pads_a_sub_dollar_bound_to_two_decimals() {
+        assert!(message(true, None, Some(5)).ends_with("(published minimum: 0.05 USD)"));
     }
 }

@@ -2,9 +2,10 @@ use breez_sdk_common::input::{
     self, InputType, PaymentRequestSource, SparkInvoiceDetails, parse_spark_address,
 };
 use spark_wallet::{
-    CoopExitFeeQuote, CoopExitSpeedFeeQuote, ExitSpeed, LightningSendPayment, LightningSendStatus,
-    Network as SparkNetwork, PreimageRequest, PreimageRequestStatus, SspUserRequest,
-    TokenTransactionStatus, TransferDirection, TransferStatus, TransferType, WalletTransfer,
+    CoopExitAcceptance, CoopExitFeeQuote, CoopExitSpeedFeeQuote, ExitSpeed, LightningSendPayment,
+    LightningSendStatus, Network as SparkNetwork, PreimageRequest, PreimageRequestStatus,
+    SspUserRequest, TokenTransactionStatus, TransferDirection, TransferStatus, TransferType,
+    WalletTransfer,
 };
 use std::time::Duration;
 
@@ -275,6 +276,15 @@ impl TryFrom<WalletTransfer> for Payment {
                     (fee_sat, transfer.total_value_sat.saturating_sub(fee_sat))
                 }
                 SspUserRequest::CoopExitRequest(r) => {
+                    // A committed transfer hands the funds to the provider; only
+                    // the provider broadcasts the payout, and only once it has
+                    // accepted the exit. Until then the withdrawal is still in
+                    // flight, however far the transfer itself got.
+                    status = match r.exit_status.acceptance() {
+                        CoopExitAcceptance::Accepted => status,
+                        CoopExitAcceptance::AwaitingCompletion => PaymentStatus::Pending,
+                        CoopExitAcceptance::Failed => PaymentStatus::Failed,
+                    };
                     let fee_sat = r
                         .fee
                         .as_sats()
@@ -391,6 +401,7 @@ impl From<Network> for SparkNetwork {
         match network {
             Network::Mainnet => SparkNetwork::Mainnet,
             Network::Regtest => SparkNetwork::Regtest,
+            Network::Signet => SparkNetwork::Signet,
         }
     }
 }

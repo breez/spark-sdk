@@ -38,6 +38,9 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export const ConversionOptions: any;
   export type ConversionOptions = any;
 
+  export const ChainApiType: any;
+  export type ChainApiType = any;
+
   export const ConversionType: any;
   export type ConversionType = any;
 

@@ -32,7 +32,10 @@ dotnet run --project BreezCli.csproj -- [OPTIONS]
 | Option | Default | Description |
 |--------|---------|-------------|
 | `-d`, `--data-dir` | `./.data` | Path to the data directory |
-| `--network` | `regtest` | Network to use (`regtest` or `mainnet`) |
+| `--network` | `regtest` | Network to use (`regtest`, `signet`, or `mainnet`) |
+| `--spark-config` | - | JSON file with Spark operators and SSP configuration (required for signet) |
+| `--chain-api-url` | - | Chain API base URL (required for signet) |
+| `--chain-api-type` | `esplora` | Chain API type: `esplora` or `mempool-space` (requires `--chain-api-url`) |
 | `--account-number` | - | Account number for the Spark signer |
 | `--postgres-connection-string` | - | PostgreSQL connection string (uses SQLite by default) |
 | `--mysql-connection-string` | - | MySQL connection string (uses SQLite by default) |

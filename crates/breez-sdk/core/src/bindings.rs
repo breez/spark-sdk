@@ -128,7 +128,7 @@ impl SdkBuilder {
     /// Sets the account number for key derivation. All wallet keys derive from
     /// the seed at `m/8797555'/<account number>'`, so each account number
     /// yields an independent wallet from the same seed. Defaults to 0 on
-    /// Regtest and 1 on all other networks when unset.
+    /// Regtest and Signet, and 1 on Mainnet when unset.
     /// Arguments:
     /// - `account_number`: The account number in the derivation path.
     pub async fn with_account_number(&self, account_number: u32) {

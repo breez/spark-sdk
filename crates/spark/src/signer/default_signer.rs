@@ -30,8 +30,8 @@ use super::VerifiableSecretShare;
 /// same default so a wallet seed derives the same keys regardless of backend.
 pub fn default_account_number(network: Network) -> u32 {
     match network {
-        Network::Regtest => 0,
-        _ => 1,
+        Network::Regtest | Network::Signet | Network::Testnet => 0,
+        Network::Mainnet => 1,
     }
 }
 
@@ -41,6 +41,14 @@ fn identity_path() -> DerivationPath {
     DerivationPath::from(vec![
         ChildNumber::from_hardened_idx(0).expect("0 is a valid hardened index"),
     ])
+}
+
+/// Derives the identity / ECIES public key (the `0'` child under the account
+/// master) from any low-level [`Signer`]. Lets callers that only hold a
+/// `dyn Signer` (e.g. a self-hosted service) obtain the identity key without a
+/// full [`SparkSigner`](crate::signer::SparkSigner).
+pub async fn derive_identity_public_key(signer: &dyn Signer) -> Result<PublicKey, SignerError> {
+    signer.derive_public_key(&identity_path()).await
 }
 
 /// The Spark account master (`base`): `m/8797555'/{account}'`. Every wallet key
@@ -315,6 +323,73 @@ impl Signer for DefaultSigner {
         Ok(SecretSource::new_encrypted(ciphertext))
     }
 
+    async fn split_signing_key(
+        &self,
+        parent_key: &SecretSource,
+        n: usize,
+    ) -> Result<Vec<(SecretSource, PublicKey)>, SignerError> {
+        if n < 2 {
+            return Err(SignerError::Generic(
+                "Cannot split key into fewer than 2 parts".to_string(),
+            ));
+        }
+
+        let parent_sk = parent_key.to_secret_key(self)?;
+        let encryption_pk = self.encryption_public_key()?;
+
+        // Generate n-1 random keys and set the last to parent - sum(others) so
+        // that all child keys sum back to the parent.
+        let mut child_keys = Vec::with_capacity(n);
+        let mut sum_sk: Option<SecretKey> = None;
+
+        for _ in 0..n - 1 {
+            let (sk, _) = self.secp.generate_keypair(&mut thread_rng());
+            sum_sk = Some(match sum_sk {
+                Some(prev) => prev
+                    .add_tweak(&sk.into())
+                    .map_err(|e| SignerError::Generic(format!("failed to add tweak: {e}")))?,
+                None => sk,
+            });
+            let pk = sk.public_key(&self.secp);
+            let ciphertext = self.encrypt_private_key_ecies(&sk, &encryption_pk)?;
+            child_keys.push((SecretSource::new_encrypted(ciphertext), pk));
+        }
+
+        let last_sk = parent_sk
+            .add_tweak(
+                &sum_sk
+                    .expect("n >= 2 guarantees at least one random key")
+                    .negate()
+                    .into(),
+            )
+            .map_err(|e| SignerError::Generic(format!("failed to compute last child key: {e}")))?;
+        let last_pk = last_sk.public_key(&self.secp);
+        let last_ciphertext = self.encrypt_private_key_ecies(&last_sk, &encryption_pk)?;
+        child_keys.push((SecretSource::new_encrypted(last_ciphertext), last_pk));
+
+        Ok(child_keys)
+    }
+
+    async fn combine_signing_keys(
+        &self,
+        keys: &[SecretSource],
+    ) -> Result<(SecretSource, PublicKey), SignerError> {
+        if keys.is_empty() {
+            return Err(SignerError::Generic("no keys to combine".into()));
+        }
+        let mut combined = keys[0].to_secret_key(self)?;
+        for key in &keys[1..] {
+            let sk = key.to_secret_key(self)?;
+            combined = combined
+                .add_tweak(&sk.into())
+                .map_err(|e| SignerError::Generic(format!("failed to add key: {e}")))?;
+        }
+        let pk = combined.public_key(&self.secp);
+        let ciphertext =
+            self.encrypt_private_key_ecies(&combined, &self.encryption_public_key()?)?;
+        Ok((SecretSource::new_encrypted(ciphertext), pk))
+    }
+
     async fn encrypt_secret_for_receiver(
         &self,
         secret: &SecretSource,
@@ -471,6 +546,7 @@ impl SecretSource {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::{account_master_key, default_account_number, identity_public_key};
     use bitcoin::secp256k1::rand::thread_rng;
     use bitcoin::secp256k1::{self, PublicKey, Secp256k1, SecretKey};
     use macros::async_test_all;
@@ -487,6 +563,105 @@ pub(crate) mod tests {
     pub(crate) fn create_test_signer() -> DefaultSigner {
         let test_seed = [42u8; 32]; // Deterministic seed for testing
         DefaultSigner::new(&test_seed, Network::Regtest).expect("Failed to create test signer")
+    }
+
+    #[test]
+    fn signet_defaults_to_regtest_account() {
+        let seed = [42; 32];
+        for (network, account) in [
+            (Network::Mainnet, 1),
+            (Network::Testnet, 0),
+            (Network::Regtest, 0),
+            (Network::Signet, 0),
+        ] {
+            assert_eq!(default_account_number(network), account);
+            assert_eq!(
+                account_master_key(&seed, network, None).unwrap(),
+                account_master_key(&seed, network, Some(account)).unwrap()
+            );
+        }
+        let signet_key = identity_public_key(&seed, Network::Signet, None).unwrap();
+        assert_eq!(
+            signet_key,
+            identity_public_key(&seed, Network::Regtest, None).unwrap()
+        );
+        assert_ne!(
+            signet_key,
+            identity_public_key(&seed, Network::Mainnet, None).unwrap()
+        );
+        // Pinning account 1 still recovers wallets created with the old default.
+        assert_eq!(
+            identity_public_key(&seed, Network::Signet, Some(1)).unwrap(),
+            identity_public_key(&seed, Network::Mainnet, None).unwrap()
+        );
+    }
+
+    /// Splitting a key and combining the parts gets the key back. A tree's node
+    /// keys are derived this way, so children that did not sum to their parent
+    /// would produce leaves the operators cannot co-sign for.
+    #[async_test_all]
+    async fn test_split_signing_key_children_sum_to_the_parent() {
+        let signer = create_test_signer();
+        let parent = SecretSource::Derived("m/0'".parse::<DerivationPath>().unwrap());
+        let parent_pk = signer
+            .public_key_from_secret(&parent)
+            .await
+            .expect("parent public key");
+
+        for n in [2usize, 3, 8] {
+            let children = signer
+                .split_signing_key(&parent, n)
+                .await
+                .expect("split the parent key");
+            assert_eq!(children.len(), n);
+
+            let sources: Vec<SecretSource> =
+                children.iter().map(|(source, _)| source.clone()).collect();
+            let (_, combined_pk) = signer
+                .combine_signing_keys(&sources)
+                .await
+                .expect("combine the children");
+            assert_eq!(
+                combined_pk, parent_pk,
+                "{n} children must combine back to the parent they came from"
+            );
+        }
+    }
+
+    /// Every split is fresh, so the same parent never yields the same children
+    /// twice and one tree's keys say nothing about another's.
+    #[async_test_all]
+    async fn test_split_signing_key_is_not_deterministic() {
+        let signer = create_test_signer();
+        let parent = SecretSource::Derived("m/0'".parse::<DerivationPath>().unwrap());
+
+        let first = signer
+            .split_signing_key(&parent, 3)
+            .await
+            .expect("first split");
+        let second = signer
+            .split_signing_key(&parent, 3)
+            .await
+            .expect("second split");
+
+        let first_pks: Vec<PublicKey> = first.iter().map(|(_, pk)| *pk).collect();
+        let second_pks: Vec<PublicKey> = second.iter().map(|(_, pk)| *pk).collect();
+        assert_ne!(first_pks, second_pks);
+    }
+
+    /// A split of fewer than two is not a split, and silently returning the
+    /// parent would hand the same key to two places.
+    #[async_test_all]
+    async fn test_split_signing_key_refuses_fewer_than_two() {
+        let signer = create_test_signer();
+        let parent = SecretSource::Derived("m/0'".parse::<DerivationPath>().unwrap());
+
+        for n in [0usize, 1] {
+            assert!(
+                signer.split_signing_key(&parent, n).await.is_err(),
+                "splitting into {n} must be refused"
+            );
+        }
     }
 
     #[async_test_all]

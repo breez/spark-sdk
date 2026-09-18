@@ -691,6 +691,7 @@ pub struct LnurlWithdrawInfo {
 pub enum Network {
     Mainnet,
     Regtest,
+    Signet,
 }
 
 impl std::fmt::Display for Network {
@@ -698,6 +699,7 @@ impl std::fmt::Display for Network {
         match self {
             Network::Mainnet => write!(f, "Mainnet"),
             Network::Regtest => write!(f, "Regtest"),
+            Network::Signet => write!(f, "Signet"),
         }
     }
 }
@@ -1152,6 +1154,20 @@ pub enum SparkAsset {
     Token { token_identifier: String },
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainRouteLimits)]
+pub struct CrossChainRouteLimits {
+    pub min_amount: Option<u128>,
+    pub max_amount: Option<u128>,
+    pub min_usd_cents: Option<u64>,
+    pub max_usd_cents: Option<u64>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainAcceptedAsset)]
+pub struct CrossChainAcceptedAsset {
+    pub asset: SparkAsset,
+    pub limits: Option<CrossChainRouteLimits>,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::DeliveryMethod)]
 pub enum DeliveryMethod {
     Spark,
@@ -1175,7 +1191,7 @@ pub struct CrossChainRoutePair {
     pub contract_address: Option<String>,
     pub decimals: u8,
     pub exact_out_eligible: bool,
-    pub accepted_assets: Vec<SparkAsset>,
+    pub accepted_assets: Vec<CrossChainAcceptedAsset>,
     pub delivery_methods: Vec<DeliveryMethod>,
 }
 
