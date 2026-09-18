@@ -32,7 +32,20 @@ Claiming a deposit the SDK is already claiming, whether from a background attemp
 
 {{#name fetch_claim_deposit_quote}} prices both ways of claiming a deposit, so an app can offer the choice rather than deciding for the user. It returns the deposit's current {{#name confirmations}} alongside a quote for claiming early and one for claiming at maturity, each carrying the fee and the {{#name confirmations_required}}, which is the depth it becomes claimable at rather than a count of blocks still to wait. Subtract the deposit's current confirmations for that: an early claim claimable at 1 confirmation, on a deposit with 0, is available a block from now.
 
-The early quote is absent when the provider will not front this particular deposit, and when claiming early would not actually be earlier: once a deposit has matured, or when the provider would only credit at maturity's own depth, waiting is both cheaper and no slower, so there is no choice left to offer. The early quote is priced whether or not the configured [maximum deposit claim fee](config.md#max-deposit-claim-fee) would allow it, since that ceiling is usually far below a spread and the point of the quote is to let the user decide. Acting on it therefore means passing a {{#name max_fee}} to {{#name claim_deposit}} of at least the quoted {{#name fee_sats}}; with a lower one the call returns {{#enum SdkError::MaxDepositClaimFeeExceeded}} and the deposit waits for maturity instead. The quote for maturity is always present, but may be flagged {{#name is_estimate}} when the provider will not quote a deposit this early, in which case the fee is derived from current on-chain fees and the final one may differ.
+The early quote is absent when the provider will not front this particular deposit, and when claiming early would not actually be earlier: once a deposit has matured, or when the provider would only credit at maturity's own depth, waiting is both cheaper and no slower, so there is no choice left to offer. Whether a deposit is fronted at all, and at what depth, varies with the deposit rather than being a setting you control. An absent early quote therefore means no early claim is offered for this deposit, not that early claiming is unavailable.
+
+The early quote is priced whether or not the configured [maximum deposit claim fee](config.md#max-deposit-claim-fee) would allow it, so the fee it shows is the provider's price rather than what the configured ceiling permits. Acting on the early quote yourself means passing a {{#name max_fee}} to {{#name claim_deposit}} of at least the quoted {{#name fee_sats}}. With a lower one the call returns {{#enum SdkError::MaxDepositClaimFeeExceeded}} and the deposit waits for maturity instead.
+
+The quote for maturity is always present, but may be flagged {{#name is_estimate}} when the provider will not quote a deposit this early, in which case the fee is derived from current on-chain fees and the final one may differ.
+
+What to offer follows from the quote and the configured ceiling. The middle column is the one to check first: where the SDK claims by itself, a dialog defaulting to maturity shows the user one outcome and delivers another.
+
+| Quote state | What the SDK will do | What to present |
+|---|---|---|
+| No early quote | Claim at maturity | The maturity option only |
+| Early quote, depth not yet reached | Claim early once the depth arrives, if the fee fits the ceiling | The maturity option, with early shown as available in N blocks |
+| Early quote at a reachable depth, fee above the ceiling | Wait for maturity | Both, early requiring an explicit higher max fee |
+| Early quote at a reachable depth, fee within the ceiling | Claim early by itself | Default to early, or offer no choice |
 
 A claim made before maturity settles asynchronously, so {{#name claim_deposit}} returns no payment. Watch for it via {{#name list_payments}} or the [payment events](events.md).
 
