@@ -821,7 +821,7 @@ impl OrchestraService {
         destination_amount: u128,
         apply_rounding_margin: bool,
         apply_base_fee_pad: bool,
-    ) -> Result<u128, SdkError> {
+    ) -> Result<SizedDeposit, SdkError> {
         let request = EstimateRequest {
             source_chain: source_chain.to_string(),
             source_asset: source_asset.to_string(),
@@ -868,8 +868,64 @@ impl OrchestraService {
              target={destination_amount} scaled={scaled} base_fee_pad={base_fee_pad} \
              → required_in={required_in}",
         );
-        Ok(required_in)
+        Ok(SizedDeposit {
+            required_in,
+            target: destination_amount,
+            probe_in: source_amount,
+            probe_out: effective_delivered,
+        })
     }
+
+    /// Quotes once more when `quote` delivers too little to pass its drift
+    /// check, growing the deposit by the shortfall at the probe's rate.
+    /// `/estimate` leaves out costs a firm quote takes from its output (the
+    /// source network's gas on a receive from Ethereum, for one), and those
+    /// are close to fixed per quote, so the top-up covers them.
+    async fn requote_if_short(
+        &self,
+        request: QuoteRequest,
+        quote: QuoteResponse,
+        sized: &SizedDeposit,
+        drift_target: u128,
+        max_slippage_bps: u32,
+    ) -> Result<QuoteResponse, SdkError> {
+        let delivered = parse_amount(&quote.estimated_out, "estimatedOut")?;
+        if delivered >= min_acceptable_out(drift_target, max_slippage_bps) {
+            return Ok(quote);
+        }
+        let quoted_in = parse_amount(&quote.amount_in, "amountIn")?;
+        let top_up = top_up_for_shortfall(
+            sized.target.saturating_sub(delivered),
+            sized.probe_in,
+            sized.probe_out,
+        )?;
+        let retry_in = quoted_in.saturating_add(top_up);
+        debug!(
+            "Orchestra: quote delivers {delivered} of {}, quoting again with {top_up} more \
+             in (amount={retry_in})",
+            sized.target
+        );
+        let retry = self
+            .client
+            .quote(QuoteRequest {
+                amount: retry_in.to_string(),
+                ..request
+            })
+            .await?;
+        debug!("Orchestra: re-quote response: {:?}", retry);
+        verify_quote_amount_in(retry_in, parse_amount(&retry.amount_in, "amountIn")?)?;
+        Ok(retry)
+    }
+}
+
+/// A deposit sized from an `/estimate` probe, with the probe's delivery rate
+/// kept for topping up a firm quote that comes back short.
+struct SizedDeposit {
+    required_in: u128,
+    /// What the deposit was sized to deliver, in destination units.
+    target: u128,
+    probe_in: u128,
+    probe_out: u128,
 }
 
 fn parse_amount(value: &str, field: &str) -> Result<u128, SdkError> {
@@ -895,6 +951,24 @@ fn proportional_inflation(
         .and_then(|p| p.checked_div(estimated_delivered))
         .ok_or_else(|| SdkError::Generic("Cross-chain: inflation scaling overflow".to_string()))?;
     Ok(inflated.max(source_amount))
+}
+
+/// Source units that add `shortfall` to delivery at the probe's rate, rounded
+/// up. Errors on a zero `probe_out` or overflow.
+fn top_up_for_shortfall(
+    shortfall: u128,
+    probe_in: u128,
+    probe_out: u128,
+) -> Result<u128, SdkError> {
+    if probe_out == 0 {
+        return Err(SdkError::Generic(
+            "Cross-chain: ExactIn estimate returned zero delivered amount".to_string(),
+        ));
+    }
+    shortfall
+        .checked_mul(probe_in)
+        .map(|scaled| scaled.div_ceil(probe_out))
+        .ok_or_else(|| SdkError::Generic("Cross-chain: top-up scaling overflow".to_string()))
 }
 
 /// Adds `reported_pad` to `scaled`, capping the pad at `scaled` so a bogus
@@ -940,16 +1014,20 @@ fn verify_quote_amount_in(
     Ok(())
 }
 
-/// Errors if `quoted_estimated_out` falls below `destination_amount * (1 −
-/// max_slippage_bps / 10000)`.
+/// `destination_amount * (1 − max_slippage_bps / 10000)`: the least delivery
+/// [`verify_quote_not_drifted`] accepts.
+fn min_acceptable_out(destination_amount: u128, max_slippage_bps: u32) -> u128 {
+    destination_amount.saturating_mul(u128::from(10_000u32.saturating_sub(max_slippage_bps)))
+        / 10_000u128
+}
+
+/// Errors if `quoted_estimated_out` falls below [`min_acceptable_out`].
 fn verify_quote_not_drifted(
     destination_amount: u128,
     quoted_estimated_out: u128,
     max_slippage_bps: u32,
 ) -> Result<(), SdkError> {
-    let min_acceptable = destination_amount
-        .saturating_mul(u128::from(10_000u32.saturating_sub(max_slippage_bps)))
-        / 10_000u128;
+    let min_acceptable = min_acceptable_out(destination_amount, max_slippage_bps);
     if quoted_estimated_out < min_acceptable {
         let drift_bps = destination_amount
             .saturating_sub(quoted_estimated_out)
@@ -1211,13 +1289,13 @@ impl CrossChainService for OrchestraService {
         // FeesExcluded inflates the source to deliver the cross-chain
         // conversion of `amount`; FeesIncluded passes `amount` through (send
         // all, recipient gets `amount − fees`).
-        let (source_amount, destination_amount) = match fee_mode {
+        let (source_amount, sized) = match fee_mode {
             CrossChainFeeMode::FeesIncluded => (amount, None),
             CrossChainFeeMode::FeesExcluded => {
                 let destination_amount = self
                     .compute_target_destination_amount(&source_asset, route, amount)
                     .await?;
-                let required_in = self
+                let sized = self
                     .estimate_required_source_amount(
                         source_chain,
                         &source_asset.asset,
@@ -1230,7 +1308,7 @@ impl CrossChainService for OrchestraService {
                     )
                     .await
                     .map_err(with_limits)?;
-                (required_in, Some(destination_amount))
+                (sized.required_in, Some(sized))
             }
         };
 
@@ -1259,18 +1337,25 @@ impl CrossChainService for OrchestraService {
         );
         let quote: QuoteResponse = self
             .client
-            .quote(request)
+            .quote(request.clone())
             .await
             .map_err(|e| with_limits(SdkError::from(e)))?;
         debug!("Orchestra: quote response: {:?}", quote);
+        verify_quote_amount_in(source_amount, parse_amount(&quote.amount_in, "amountIn")?)?;
+        let quote = match &sized {
+            Some(sized) => self
+                .requote_if_short(request, quote, sized, sized.target, max_slippage_bps)
+                .await
+                .map_err(with_limits)?,
+            None => quote,
+        };
 
         let amount_in = parse_amount(&quote.amount_in, "amountIn")?;
         let estimated_out = parse_amount(&quote.estimated_out, "estimatedOut")?;
         let service_fee_amount = parse_amount(&quote.total_fee_amount, "totalFeeAmount")?;
 
-        verify_quote_amount_in(source_amount, amount_in)?;
-        if let Some(target) = destination_amount {
-            verify_quote_not_drifted(target, estimated_out, max_slippage_bps)?;
+        if let Some(sized) = &sized {
+            verify_quote_not_drifted(sized.target, estimated_out, max_slippage_bps)?;
         }
 
         // `amount_in` expressed in destination-asset units, via the same
@@ -1369,7 +1454,7 @@ impl CrossChainService for OrchestraService {
         // FeesExcluded inflates the deposit so Orchestra delivers `amount`
         // on the Spark side. FeesIncluded passes `amount` through as the
         // deposit.
-        let (source_amount, target_destination_amount) = match fee_mode {
+        let (source_amount, sized) = match fee_mode {
             CrossChainFeeMode::FeesIncluded => (amount, None),
             CrossChainFeeMode::FeesExcluded => {
                 // `target_overpay_bps` applies to SIZING only: it pads the
@@ -1396,7 +1481,7 @@ impl CrossChainService for OrchestraService {
                      (destination_decimals={destination_decimals}, source_decimals={})",
                     route.decimals,
                 );
-                let required_in = self
+                let sized = self
                     .estimate_required_source_amount(
                         &route.chain,
                         &route.asset,
@@ -1409,7 +1494,7 @@ impl CrossChainService for OrchestraService {
                     )
                     .await
                     .map_err(|e| attach_route_limits(e, route, destination))?;
-                (required_in, Some(amount))
+                (sized.required_in, Some(sized))
             }
         };
 
@@ -1443,22 +1528,29 @@ impl CrossChainService for OrchestraService {
         );
         let quote: QuoteResponse = self
             .client
-            .quote(request)
+            .quote(request.clone())
             .await
             .map_err(|e| attach_route_limits(SdkError::from(e), route, destination))?;
         debug!("Orchestra: receive quote response: {:?}", quote);
+        // Verify the quote's amountIn matches what we requested.
+        verify_quote_amount_in(source_amount, parse_amount(&quote.amount_in, "amountIn")?)?;
+        let quote = match &sized {
+            Some(sized) => self
+                .requote_if_short(request, quote, sized, amount, max_slippage_bps)
+                .await
+                .map_err(|e| attach_route_limits(e, route, destination))?,
+            None => quote,
+        };
 
         let deposit_amount = parse_amount(&quote.amount_in, "amountIn")?;
         let quote_estimated_out = parse_amount(&quote.estimated_out, "estimatedOut")?;
         let service_fee_amount = parse_amount(&quote.total_fee_amount, "totalFeeAmount")?;
         let expires_at_secs = parse_rfc3339_to_unix_seconds(&quote.expires_at)?;
 
-        // Verify the quote's amountIn matches what we requested.
-        verify_quote_amount_in(source_amount, deposit_amount)?;
         // FeesExcluded only: reject the quote if Orchestra's delivery
         // estimate drifts outside the slippage tolerance.
-        if let Some(target) = target_destination_amount {
-            verify_quote_not_drifted(target, quote_estimated_out, max_slippage_bps)?;
+        if sized.is_some() {
+            verify_quote_not_drifted(amount, quote_estimated_out, max_slippage_bps)?;
         }
         // Reporting counterpart to the sizing pad: shave the reported
         // estimate by the same margin so we don't over-promise the receiver.
@@ -3907,6 +3999,48 @@ mod tests {
     fn verify_quote_not_drifted_extreme_slippage_accepts_anything() {
         // 100% slippage = no floor.
         assert!(verify_quote_not_drifted(1_000_000, 0, 10_000).is_ok());
+    }
+
+    #[test_all]
+    fn min_acceptable_out_is_the_drift_floor() {
+        assert_eq!(min_acceptable_out(1_000_000, 100), 990_000);
+        assert!(
+            verify_quote_not_drifted(1_000_000, min_acceptable_out(1_000_000, 100), 100).is_ok()
+        );
+    }
+
+    // ---- top_up_for_shortfall ----
+
+    #[test_all]
+    fn top_up_for_shortfall_restores_a_fixed_cost_at_the_probe_rate() {
+        // A $5 USDC receive from Ethereum: the probe priced 5_007_150 units at
+        // 6_141 sats, and the firm quote came back 2_051 sats short.
+        let (probe_in, probe_out): (u128, u128) = (5_007_150, 6_141);
+        let delivered_for = |units: u128| {
+            units
+                .checked_mul(probe_out)
+                .and_then(|v| v.checked_div(probe_in))
+                .unwrap()
+        };
+        let top_up = top_up_for_shortfall(2_051, probe_in, probe_out).unwrap();
+        assert!(delivered_for(top_up) >= 2_051);
+        assert!(delivered_for(top_up.checked_sub(1).unwrap()) < 2_051);
+    }
+
+    #[test_all]
+    fn top_up_for_shortfall_rounds_up() {
+        assert_eq!(top_up_for_shortfall(1, 3, 2).unwrap(), 2);
+        assert_eq!(top_up_for_shortfall(0, 3, 2).unwrap(), 0);
+    }
+
+    #[test_all]
+    fn top_up_for_shortfall_rejects_a_zero_probe_delivery() {
+        assert!(top_up_for_shortfall(1, 3, 0).is_err());
+    }
+
+    #[test_all]
+    fn top_up_for_shortfall_rejects_overflow() {
+        assert!(top_up_for_shortfall(u128::MAX, 2, 1).is_err());
     }
 
     // ---- verify_quote_amount_in ----
