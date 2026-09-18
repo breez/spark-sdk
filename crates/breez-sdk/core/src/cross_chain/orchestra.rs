@@ -872,6 +872,17 @@ impl OrchestraService {
     }
 }
 
+/// Source chains Orchestra only accepts a receive from with a refund address
+/// on that chain. A receive request can't carry one: the payer's address isn't
+/// known when the request is made.
+const RECEIVE_NEEDS_REFUND_ADDRESS: &[&str] = &["ton"];
+
+fn needs_refund_address_to_receive(chain: &str) -> bool {
+    RECEIVE_NEEDS_REFUND_ADDRESS
+        .iter()
+        .any(|c| c.eq_ignore_ascii_case(chain))
+}
+
 fn parse_amount(value: &str, field: &str) -> Result<u128, SdkError> {
     value
         .parse::<u128>()
@@ -1171,12 +1182,11 @@ impl CrossChainService for OrchestraService {
             routes.extend(self.client.filter_routes(chain, is_send).await?);
         }
 
-        Ok(dedupe_routes(
-            &routes,
-            is_send,
-            family_filter,
-            contract_filter,
-        ))
+        let mut pairs = dedupe_routes(&routes, is_send, family_filter, contract_filter);
+        if !is_send {
+            pairs.retain(|pair| !needs_refund_address_to_receive(&pair.chain));
+        }
+        Ok(pairs)
     }
 
     async fn prepare_send(
@@ -3992,5 +4002,12 @@ mod tests {
         // but `accepted_assets` is empty.
         assert_eq!(pairs.len(), 1);
         assert!(pairs[0].accepted_assets.is_empty());
+    }
+
+    #[test_all]
+    fn a_receive_from_ton_needs_a_refund_address() {
+        assert!(needs_refund_address_to_receive("ton"));
+        assert!(needs_refund_address_to_receive("TON"));
+        assert!(!needs_refund_address_to_receive("base"));
     }
 }

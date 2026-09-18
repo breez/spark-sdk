@@ -11,7 +11,7 @@ use crate::{
     ListFiatRatesResponse, Network, OptimizationMode, OptimizeLeavesRequest,
     OptimizeLeavesResponse, PreparePaymentLinkRequest, PreparePaymentLinkResponse,
     RegisterWebhookRequest, RegisterWebhookResponse, SignMessageRequest, SignMessageResponse,
-    UnregisterWebhookRequest, UpdateUserSettingsRequest, UserSettings, Webhook,
+    SparkAsset, UnregisterWebhookRequest, UpdateUserSettingsRequest, UserSettings, Webhook,
     chain::RecommendedFees,
     cross_chain::{
         CrossChainProviderContext, convert_destination_amount_to_sats, fetch_btc_usd_rate,
@@ -122,6 +122,19 @@ impl BreezSdk {
 
         // Filter to USD-pegged destinations only.
         all_routes.retain(|r| crate::cross_chain::is_usd_stable_asset(&r.asset));
+
+        // A receive on any other route fails with no usable Spark destination
+        // unless the caller names one.
+        if matches!(filter, CrossChainRouteFilter::Receive { .. }) {
+            let stable_token = match &self.stable_balance {
+                Some(sb) => sb
+                    .get_active_token_identifier()
+                    .await
+                    .map(|token_identifier| SparkAsset::Token { token_identifier }),
+                None => None,
+            };
+            all_routes.retain(|r| r.receivable_by_default(stable_token.as_ref()));
+        }
 
         all_routes.sort_by(|a, b| {
             a.asset
