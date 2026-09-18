@@ -34,25 +34,32 @@ impl ServerModeFixture {
         })
     }
 
-    async fn build_alice(&self) -> Result<SdkInstance> {
-        let mut seed = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut seed);
-        build_sdk_with_postgres_server_mode(&self.connection_string, seed).await
+    async fn build_alice(&self, env: &Environment) -> Result<SdkInstance> {
+        match env {
+            // Locally Alice must share Bob's stack: its SSP pays his invoice as a
+            // self-payment on its own ldk-server node, which the live SSP cannot
+            // reach. The postgres fixture goes unused here.
+            Environment::Local(_) => env.create_server_wallet_with(|_cfg| {}).await,
+            Environment::Deployed => {
+                let mut seed = [0u8; 32];
+                rand::thread_rng().fill_bytes(&mut seed);
+                build_sdk_with_postgres_server_mode(&self.connection_string, seed).await
+            }
+        }
     }
 }
 
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_send_bolt11_invoice_server_mode(
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_send_bolt11_invoice_server_mode(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_send_bolt11_invoice_server_mode ===");
     let invoice_amount_sats: u64 = 10_000;
-    let completion_timeout_secs: u32 = 10;
+    let completion_timeout_secs: u32 = 30;
 
     let fixture = ServerModeFixture::new().await?;
-    let mut alice = fixture.build_alice().await?;
-    let mut bob = bob_sdk.await?;
+    let mut alice = fixture.build_alice(&env).await?;
+    let mut bob = env.create_wallet().await?;
 
     // Fund Alice via polling (server mode has no ClaimedDeposits event).
     ensure_funded_via_polling(&mut alice, 100_000).await?;

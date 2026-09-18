@@ -71,11 +71,11 @@ fn each_backend(#[case] backend: SignerBackend) {}
 
 async fn new_local_sdk(backend: SignerBackend) -> Result<LocalSdk> {
     let fixtures = Arc::new(TestFixtures::new().await?);
-    build_local_sdk(fixtures, backend).await
+    build_local_sdk(fixtures, backend, None).await
 }
 
-/// Claims through the side-channel `SparkWallet`: the fixture's SSP stub has no
-/// URL, so the public claim path (which fetches a fee quote) can't be used.
+/// Through the side-channel `SparkWallet`, whose deposit claim needs only the
+/// operators, not the SSP.
 async fn deposit_and_claim(sdk: &LocalSdk, amount: Amount) -> Result<()> {
     deposit_with_amount(&sdk.spark_wallet, &sdk.fixtures.bitcoind, amount.to_sat()).await
 }
@@ -1292,8 +1292,8 @@ async fn test_importing_another_wallets_state_takes_nothing(
     // Two wallets over one operator pool and bitcoind. Each `build_local_sdk`
     // derives its own identity, which is what makes them different parties.
     let fixtures = Arc::new(TestFixtures::new().await?);
-    let theirs = build_local_sdk(Arc::clone(&fixtures), backend).await?;
-    let ours = build_local_sdk(fixtures, backend).await?;
+    let theirs = build_local_sdk(Arc::clone(&fixtures), backend, None).await?;
+    let ours = build_local_sdk(fixtures, backend, None).await?;
     deposit_and_claim(&theirs, Amount::from_sat(LEAF_SATS)).await?;
     wait_for_balance(&theirs.sdk, Some(LEAF_SATS), None, 60).await?;
 

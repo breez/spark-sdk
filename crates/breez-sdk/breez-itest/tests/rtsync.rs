@@ -126,13 +126,14 @@ async fn create_sdk_with_rtsync_and_lnurl(
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_01_rtsync_lnurl_info_sync(
+    #[future] env: Result<Environment>,
     #[future] alice_sdks: Result<(SdkInstance, SdkInstance)>,
-    #[future] bob_sdk: Result<SdkInstance>,
 ) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_01_rtsync_lnurl_info_sync ===");
 
     let (mut alice1, mut alice2) = alice_sdks.await?;
-    let bob = bob_sdk.await?;
+    let bob = env.create_wallet().await?;
 
     let ln_address_description = "Bob's Lightning address description".to_string();
     let ln_address_comment = "Test payment".to_string();

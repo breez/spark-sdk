@@ -39,6 +39,17 @@ pub struct FaucetConfig {
     pub password: Option<String>,
 }
 
+impl FaucetConfig {
+    /// The faucet an sspd serves on regtest, which takes no credentials.
+    pub fn for_ssp(ssp_base_url: &str) -> Self {
+        Self {
+            url: format!("{ssp_base_url}/graphql/spark/rc"),
+            username: None,
+            password: None,
+        }
+    }
+}
+
 impl Default for FaucetConfig {
     fn default() -> Self {
         Self {

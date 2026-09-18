@@ -34,14 +34,12 @@ async fn create_mint_test_token(instance: &SdkInstance) -> Result<TokenMetadata>
 /// Test 1: Send payment from Alice to Bob using token transfer
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_01_token_transfer(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_01_token_transfer(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_01_token_transfer ===");
 
-    let alice = alice_sdk.await?;
-    let bob = bob_sdk.await?;
+    let alice = env.create_wallet().await?;
+    let bob = env.create_wallet().await?;
 
     // Create and mint test token
     let token_metadata = create_mint_test_token(&alice).await?;
@@ -246,14 +244,12 @@ async fn test_01_token_transfer(
 /// Test 2: Send payment from Alice to Bob using token invoice
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_02_token_invoice(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_02_token_invoice(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_02_token_invoice ===");
 
-    let alice = alice_sdk.await?;
-    let bob = bob_sdk.await?;
+    let alice = env.create_wallet().await?;
+    let bob = env.create_wallet().await?;
 
     // Create and mint test token
     let token_metadata = create_mint_test_token(&alice).await?;
@@ -436,10 +432,11 @@ async fn test_02_token_invoice(
 /// Test 3: Token burning functionality
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_03_token_burning(#[future] alice_sdk: Result<SdkInstance>) -> Result<()> {
+async fn test_03_token_burning(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_03_token_burning ===");
 
-    let alice = alice_sdk.await?;
+    let alice = env.create_wallet().await?;
 
     // Create and mint test token
     let token_metadata = create_mint_test_token(&alice).await?;
@@ -537,14 +534,12 @@ async fn test_03_token_burning(#[future] alice_sdk: Result<SdkInstance>) -> Resu
 /// Test 4: Token freezing and unfreezing functionality
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_04_token_freeze_unfreeze(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_04_token_freeze_unfreeze(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_04_token_freeze_unfreeze ===");
 
-    let alice = alice_sdk.await?;
-    let bob = bob_sdk.await?;
+    let alice = env.create_wallet().await?;
+    let bob = env.create_wallet().await?;
 
     // Create a freezable token for this test
     let token_metadata = alice
@@ -757,14 +752,12 @@ async fn test_04_token_freeze_unfreeze(
 /// Test 5: Token invoice expiry functionality
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_05_invoice_expiry(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_05_invoice_expiry(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_05_invoice_expiry ===");
 
-    let alice = alice_sdk.await?;
-    let bob = bob_sdk.await?;
+    let alice = env.create_wallet().await?;
+    let bob = env.create_wallet().await?;
 
     // Create and mint test token
     let token_metadata = create_mint_test_token(&alice).await?;
@@ -889,10 +882,11 @@ async fn test_05_invoice_expiry(
 /// Test 6: Token supply limits and max supply validation
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_06_supply_limits(#[future] alice_sdk: Result<SdkInstance>) -> Result<()> {
+async fn test_06_supply_limits(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_06_supply_limits ===");
 
-    let alice = alice_sdk.await?;
+    let alice = env.create_wallet().await?;
 
     // Create a token with small max supply
     let max_supply = 1000;
@@ -1226,14 +1220,12 @@ async fn test_07_token_payment_realtime_event() -> Result<()> {
 /// invoice.
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_08_token_batch(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_08_token_batch(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_08_token_batch ===");
 
-    let alice = alice_sdk.await?;
-    let bob = bob_sdk.await?;
+    let alice = env.create_wallet().await?;
+    let bob = env.create_wallet().await?;
     let token = create_mint_test_token(&alice).await?.identifier;
 
     let bob_address = bob
@@ -1358,14 +1350,12 @@ async fn test_08_token_batch(
 /// Test 9: Prepare rejects a batch that cannot be paid as requested.
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_09_token_batch_prepare_rejections(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_09_token_batch_prepare_rejections(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_09_token_batch_prepare_rejections ===");
 
-    let alice = alice_sdk.await?;
-    let bob = bob_sdk.await?;
+    let alice = env.create_wallet().await?;
+    let bob = env.create_wallet().await?;
     let token = create_mint_test_token(&alice).await?.identifier;
 
     let bob_address = bob
@@ -1466,14 +1456,12 @@ async fn test_09_token_batch_prepare_rejections(
 /// carries an invoice and pays more than one, which prepare refuses up front.
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_10_token_batch_invoice_attribution(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_10_token_batch_invoice_attribution(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_10_token_batch_invoice_attribution ===");
 
-    let alice = alice_sdk.await?;
-    let bob = bob_sdk.await?;
+    let alice = env.create_wallet().await?;
+    let bob = env.create_wallet().await?;
     let token_a = create_mint_test_token(&alice).await?.identifier;
     let token_b = create_mint_test_token(&bob).await?.identifier;
 
@@ -1711,14 +1699,12 @@ async fn test_10_token_batch_invoice_attribution(
 /// while sharing the one transaction.
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_11_token_batch_across_tokens(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_11_token_batch_across_tokens(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_11_token_batch_across_tokens ===");
 
-    let alice = alice_sdk.await?;
-    let bob = bob_sdk.await?;
+    let alice = env.create_wallet().await?;
+    let bob = env.create_wallet().await?;
     let token_a = create_mint_test_token(&alice).await?.identifier;
     let token_b = create_mint_test_token(&bob).await?.identifier;
 
