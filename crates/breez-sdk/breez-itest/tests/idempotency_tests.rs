@@ -8,14 +8,12 @@ use uuid::Uuid;
 /// Test 1: Send payment from Alice to Bob using Spark transfer with idempotency key
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_01_spark_idempotency_key(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_01_spark_idempotency_key(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_01_spark_idempotency_key ===");
 
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
 
     ensure_funded(&mut alice, 10000).await?;
 
@@ -173,14 +171,12 @@ async fn test_01_spark_idempotency_key(
 /// Test 2: Send payment from Alice to Bob using Lightning with idempotency key
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_02_lightning_idempotency_key(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_02_lightning_idempotency_key(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_02_lightning_idempotency_key ===");
 
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
 
     ensure_funded(&mut alice, 10000).await?;
 
@@ -344,14 +340,12 @@ async fn test_02_lightning_idempotency_key(
 /// Send on-chain from Alice to Bob's static deposit address with idempotency key
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_03_bitcoin_idempotency_key(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_03_bitcoin_idempotency_key(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_03_bitcoin_idempotency_key ===");
 
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
 
     // Ensure Alice has enough funds for withdraw amount + fees
     ensure_funded(&mut alice, 50_000).await?;
@@ -483,14 +477,12 @@ async fn test_03_bitcoin_idempotency_key(
 #[rstest]
 #[ignore = "direct Spark HTLCs are temporarily disabled"]
 #[test_log::test(tokio::test)]
-async fn test_04_spark_htlc_idempotency_key(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_04_spark_htlc_idempotency_key(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_04_spark_htlc_idempotency_key ===");
 
-    let mut alice = alice_sdk.await?;
-    let bob = bob_sdk.await?;
+    let mut alice = env.create_wallet().await?;
+    let bob = env.create_wallet().await?;
 
     ensure_funded(&mut alice, 10000).await?;
 

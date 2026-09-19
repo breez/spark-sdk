@@ -1,0 +1,26 @@
+name: 'Restore the itest bootstrap snapshot'
+description: >
+  Restores the bootstrap every local cluster starts from: the operators' signing
+  keyshares, the SSP's stocked leaf pool, and the chain both sit on. It is not
+  committed (a few hundred megabytes), so on a miss the itest targets build it,
+  which costs a full DKG run and a pool stocking, and this caches the result for
+  later jobs.
+runs:
+  using: 'composite'
+  steps:
+    # The key comes from the fixtures themselves rather than a list of paths
+    # kept in step with them here. A cluster refuses a bootstrap whose manifest
+    # disagrees with it, and this is that same manifest, so the cache cannot
+    # hold something the suites will then reject.
+    - name: Work out which bootstrap this cluster needs
+      id: bootstrap
+      shell: bash
+      run: |
+        key=$(cargo run --quiet -p spark-itest --bin itest-bootstrap-snapshot-key)
+        echo "key=$key" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the bootstrap snapshot
+      uses: actions/cache@v4
+      with:
+        path: crates/spark-itest/state-snapshot
+        key: itest-bootstrap-snapshot-${{ runner.os }}-${{ steps.bootstrap.outputs.key }}

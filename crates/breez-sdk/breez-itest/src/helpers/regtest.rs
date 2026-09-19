@@ -16,7 +16,7 @@ use tracing::{Instrument, info};
 
 use super::{ChannelEventListener, wait_for_balance, wait_for_claimed_event};
 use crate::SdkInstance;
-use crate::faucet::RegtestFaucet;
+use crate::faucet::FaucetConfig;
 
 /// Shared PostgreSQL container for tree store testing.
 /// Started once on first access and kept alive for the process lifetime.
@@ -213,6 +213,7 @@ pub async fn build_sdk_with_dir(
         temp_dir,
         data_sync_fixture: None,
         lnurl_fixture: None,
+        faucet: FaucetConfig::default(),
         turnkey_guard: None,
     })
 }
@@ -270,6 +271,7 @@ pub async fn build_sdk_with_shared_context(
         temp_dir,
         data_sync_fixture: None,
         lnurl_fixture: None,
+        faucet: FaucetConfig::default(),
         turnkey_guard: None,
     })
 }
@@ -357,6 +359,7 @@ pub async fn build_sdk_with_custom_config_and_backend(
         temp_dir,
         data_sync_fixture: None,
         lnurl_fixture: None,
+        faucet: FaucetConfig::default(),
         turnkey_guard: None,
     })
 }
@@ -735,6 +738,7 @@ pub async fn build_sdk_with_tree_store_config(
         temp_dir,
         data_sync_fixture: None,
         lnurl_fixture: None,
+        faucet: FaucetConfig::default(),
         turnkey_guard: None,
     })
 }
@@ -792,6 +796,7 @@ pub async fn build_sdk_from_mnemonic(
         temp_dir,
         data_sync_fixture: None,
         lnurl_fixture: None,
+        faucet: FaucetConfig::default(),
         turnkey_guard: None,
     })
 }
@@ -846,6 +851,7 @@ pub async fn build_sdk_with_external_signer(
         temp_dir,
         data_sync_fixture: None,
         lnurl_fixture: None,
+        faucet: FaucetConfig::default(),
         turnkey_guard: None,
     })
 }
@@ -884,6 +890,7 @@ pub async fn build_sdk_with_external_signer_and_config(
         temp_dir,
         data_sync_fixture: None,
         lnurl_fixture: None,
+        faucet: FaucetConfig::default(),
         turnkey_guard: None,
     })
 }
@@ -1096,7 +1103,7 @@ async fn receive_and_fund_inner(
     info!("Generated deposit address: {}", deposit_address);
 
     // Fund the address
-    let faucet = RegtestFaucet::new()?;
+    let faucet = sdk_instance.faucet()?;
     info!(
         "Funding address {} with {} sats from faucet",
         deposit_address, amount_sats
@@ -1179,6 +1186,7 @@ pub async fn build_sdk_with_postgres(
         temp_dir: None,
         data_sync_fixture: None,
         lnurl_fixture: None,
+        faucet: FaucetConfig::default(),
         turnkey_guard: None,
     })
 }
@@ -1237,6 +1245,7 @@ pub async fn build_sdk_with_mysql(
         temp_dir: None,
         data_sync_fixture: None,
         lnurl_fixture: None,
+        faucet: FaucetConfig::default(),
         turnkey_guard: None,
     })
 }
@@ -1292,6 +1301,7 @@ pub async fn build_sdk_with_postgres_server_mode(
         temp_dir: None,
         data_sync_fixture: None,
         lnurl_fixture: None,
+        faucet: FaucetConfig::default(),
         turnkey_guard: None,
     })
 }
@@ -1339,6 +1349,7 @@ pub async fn build_sdk_with_mysql_server_mode(
         temp_dir: None,
         data_sync_fixture: None,
         lnurl_fixture: None,
+        faucet: FaucetConfig::default(),
         turnkey_guard: None,
     })
 }

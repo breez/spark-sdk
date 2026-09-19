@@ -2,7 +2,6 @@ use anyhow::Result;
 use breez_sdk_itest::*;
 use breez_sdk_spark::*;
 use rstest::*;
-use spark_itest::mempool::MempoolClient;
 use tokio::time::{Duration, sleep};
 use tracing::{info, warn};
 
@@ -169,12 +168,10 @@ async fn wait_for_new_deposit(
 /// Send on-chain from Alice to Bob's static deposit address and verify claim.
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_onchain_withdraw_to_static_address(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+async fn test_onchain_withdraw_to_static_address(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
 
     // Ensure Alice has enough funds for withdraw amount + fees
     ensure_funded(&mut alice, 120_000).await?;
@@ -280,10 +277,9 @@ async fn test_onchain_withdraw_to_static_address(
 #[rstest]
 #[ignore]
 #[test_log::test(tokio::test)]
-async fn test_deposit_fee_manual_claim(
-    #[future] bob_strict_fee_sdk: Result<SdkInstance>,
-) -> Result<()> {
-    let mut bob = bob_strict_fee_sdk.await?;
+async fn test_deposit_fee_manual_claim(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
+    let mut bob = env.create_wallet_refusing_claim_fees().await?;
 
     // Acquire a static deposit address
     let addr = bob
@@ -295,7 +291,7 @@ async fn test_deposit_fee_manual_claim(
         .payment_request;
 
     // Fund address via faucet; strict max fee blocks auto-claim
-    let faucet = RegtestFaucet::new()?;
+    let faucet = env.faucet()?;
     let fund_amount = 30_000u64;
     let txid = faucet.fund_address(&addr, fund_amount).await?;
     info!("Faucet txid: {}", txid);
@@ -368,12 +364,10 @@ async fn test_deposit_fee_manual_claim(
 /// Test sending full balance to Bitcoin address with speed selection
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_send_all_to_bitcoin_address(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
-    let mut alice = alice_sdk.await?;
-    let bob = bob_sdk.await?;
+async fn test_send_all_to_bitcoin_address(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
+    let mut alice = env.create_wallet().await?;
+    let bob = env.create_wallet().await?;
 
     // Fund Alice with exactly a known amount
     let funding_amount = 50_000u64;
@@ -479,8 +473,9 @@ async fn test_send_all_to_bitcoin_address(
 #[rstest]
 #[ignore]
 #[test_log::test(tokio::test)]
-async fn test_deposit_fee_refund(#[future] bob_no_fee_sdk: Result<SdkInstance>) -> Result<()> {
-    let mut bob = bob_no_fee_sdk.await?;
+async fn test_deposit_fee_refund(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
+    let mut bob = env.create_wallet_without_claim_fee_ceiling().await?;
 
     // Acquire a static deposit address
     let addr = bob
@@ -492,7 +487,7 @@ async fn test_deposit_fee_refund(#[future] bob_no_fee_sdk: Result<SdkInstance>) 
         .payment_request;
 
     // Fund address via faucet; no max fee blocks auto-claim
-    let faucet = RegtestFaucet::new()?;
+    let faucet = env.faucet()?;
     let fund_amount = 25_000u64;
     let txid = faucet.fund_address(&addr, fund_amount).await?;
     info!("Faucet txid: {}", txid);
@@ -579,8 +574,7 @@ async fn test_deposit_fee_refund(#[future] bob_no_fee_sdk: Result<SdkInstance>) 
 
     // The rest exercises replacing that refund, which only applies while it is
     // still unconfirmed. Once it confirms there is nothing left to replace.
-    let mempool = MempoolClient::new()?;
-    if mempool.get_transaction(&refund.tx_id).await.is_err() {
+    if env.transaction(&refund.tx_id).await.is_err() {
         info!(
             "Refund {} already left the mempool, skipping replacement",
             refund.tx_id
@@ -660,8 +654,8 @@ async fn test_deposit_fee_refund(#[future] bob_no_fee_sdk: Result<SdkInstance>) 
     // allowing for propagation to the mempool API.
     let mut evicted = false;
     for _ in 0..10 {
-        let has_replacement = mempool.get_transaction(&replacement.tx_id).await.is_ok();
-        if has_replacement && mempool.get_transaction(&refund.tx_id).await.is_err() {
+        let has_replacement = env.transaction(&replacement.tx_id).await.is_ok();
+        if has_replacement && env.transaction(&refund.tx_id).await.is_err() {
             evicted = true;
             break;
         }
@@ -680,12 +674,10 @@ async fn test_deposit_fee_refund(#[future] bob_no_fee_sdk: Result<SdkInstance>) 
 #[rstest]
 #[ignore]
 #[tokio::test]
-async fn test_deposit_low_amount_refund_fee_rate(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_no_fee_sdk: Result<SdkInstance>,
-) -> Result<()> {
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_no_fee_sdk.await?;
+async fn test_deposit_low_amount_refund_fee_rate(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet_without_claim_fee_ceiling().await?;
 
     // Ensure Alice has enough funds
     ensure_funded(&mut alice, 10_000).await?;
@@ -773,10 +765,9 @@ async fn test_deposit_low_amount_refund_fee_rate(
 /// 3. Waits until both deposits are claimed by polling balance
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_deposits_to_multiple_addresses(
-    #[future] alice_sdk: Result<SdkInstance>,
-) -> Result<()> {
-    let alice = alice_sdk.await?;
+async fn test_deposits_to_multiple_addresses(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
+    let alice = env.create_wallet().await?;
 
     // Generate several deposit addresses; each call rotates to a new one.
     let mut addresses = Vec::new();
@@ -835,7 +826,7 @@ async fn test_deposits_to_multiple_addresses(
     info!("Funding oldest ({}) and newest ({})", first_addr, last_addr);
 
     // Fund both the oldest and the newest address.
-    let faucet = RegtestFaucet::new()?;
+    let faucet = env.faucet()?;
     let amount_first = 20_000u64;
     let amount_last = 30_000u64;
     let txid_first = faucet.fund_address(first_addr, amount_first).await?;
@@ -886,10 +877,9 @@ async fn test_deposits_to_multiple_addresses(
 /// regtest SSP to have instant claims enabled.
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_manual_instant_deposit_claim(
-    #[future] bob_strict_fee_sdk: Result<SdkInstance>,
-) -> Result<()> {
-    let bob = bob_strict_fee_sdk.await?;
+async fn test_manual_instant_deposit_claim(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
+    let bob = env.create_wallet_refusing_claim_fees().await?;
 
     let start_balance = bob
         .sdk
@@ -899,8 +889,7 @@ async fn test_manual_instant_deposit_claim(
         .await?
         .balance_sats;
 
-    let faucet = RegtestFaucet::new()?;
-    let mempool = MempoolClient::new()?;
+    let faucet = env.faucet()?;
     let fund_amount = 50_000u64;
 
     // Static deposit address.
@@ -917,7 +906,7 @@ async fn test_manual_instant_deposit_claim(
     // indexing window, so by then the 0-conf window is already gone.
     let txid = faucet.fund_address(&addr, fund_amount).await?;
     info!("Funded static deposit, txid: {txid}");
-    let tx = mempool.get_transaction(&txid).await?;
+    let tx = env.transaction(&txid).await?;
     let vout = tx
         .output
         .iter()
@@ -1038,12 +1027,10 @@ async fn test_manual_instant_deposit_claim(
 /// does, the invariants that do not depend on it are still checked.
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_fetch_claim_deposit_quote(
-    #[future] bob_strict_fee_sdk: Result<SdkInstance>,
-) -> Result<()> {
-    let bob = bob_strict_fee_sdk.await?;
-    let faucet = RegtestFaucet::new()?;
-    let mempool = MempoolClient::new()?;
+async fn test_fetch_claim_deposit_quote(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
+    let bob = env.create_wallet_refusing_claim_fees().await?;
+    let faucet = env.faucet()?;
     let fund_amount = 50_000u64;
 
     let addr = bob
@@ -1056,7 +1043,7 @@ async fn test_fetch_claim_deposit_quote(
 
     let txid = faucet.fund_address(&addr, fund_amount).await?;
     info!("Funded static deposit, txid: {txid}");
-    let tx = mempool.get_transaction(&txid).await?;
+    let tx = env.transaction(&txid).await?;
     let vout = tx
         .output
         .iter()
@@ -1243,9 +1230,10 @@ async fn test_fetch_claim_deposit_quote(
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_claim_deposit_rejects_concurrent_calls(
-    #[future] bob_strict_fee_sdk: Result<SdkInstance>,
+    #[future] env: Result<Environment>,
 ) -> Result<()> {
-    let bob = bob_strict_fee_sdk.await?;
+    let env = env.await?;
+    let bob = env.create_wallet_refusing_claim_fees().await?;
 
     let addr = bob
         .sdk
@@ -1257,11 +1245,10 @@ async fn test_claim_deposit_rejects_concurrent_calls(
 
     // Read the vout from the funding tx so the claims can start immediately, while
     // the first is still in flight.
-    let faucet = RegtestFaucet::new()?;
-    let mempool = MempoolClient::new()?;
+    let faucet = env.faucet()?;
     let txid = faucet.fund_address(&addr, 50_000).await?;
     info!("Funded static deposit, txid: {txid}");
-    let tx = mempool.get_transaction(&txid).await?;
+    let tx = env.transaction(&txid).await?;
     let vout = tx
         .output
         .iter()
@@ -1315,10 +1302,13 @@ async fn test_claim_deposit_rejects_concurrent_calls(
 /// best-effort. Requires faucet credentials.
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_zero_conf_deposit_auto_claim(
-    #[future] bob_zero_conf_sdk: Result<SdkInstance>,
-) -> Result<()> {
-    let mut bob = bob_zero_conf_sdk.await?;
+async fn test_zero_conf_deposit_auto_claim(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
+    // The regtest spread carries a ~3% term, so 3000 clears it at the amounts
+    // this test funds.
+    let mut bob = env
+        .create_wallet_with(|cfg| cfg.max_deposit_claim_fee = Some(MaxFee::Fixed { amount: 3_000 }))
+        .await?;
 
     let start_balance = bob
         .sdk
@@ -1337,7 +1327,7 @@ async fn test_zero_conf_deposit_auto_claim(
         .await?
         .payment_request;
 
-    let faucet = RegtestFaucet::new()?;
+    let faucet = env.faucet()?;
     let fund_amount = 50_000u64;
     let txid = faucet.fund_address(&addr, fund_amount).await?;
     info!("Funded watched deposit address, txid: {txid}");
@@ -1400,9 +1390,10 @@ async fn test_zero_conf_deposit_auto_claim(
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_zero_conf_deposit_discovered_without_auto_claim(
-    #[future] bob_no_fee_sdk: Result<SdkInstance>,
+    #[future] env: Result<Environment>,
 ) -> Result<()> {
-    let mut bob = bob_no_fee_sdk.await?;
+    let env = env.await?;
+    let mut bob = env.create_wallet_without_claim_fee_ceiling().await?;
 
     let start_balance = bob
         .sdk
@@ -1421,7 +1412,7 @@ async fn test_zero_conf_deposit_discovered_without_auto_claim(
         .await?
         .payment_request;
 
-    let faucet = RegtestFaucet::new()?;
+    let faucet = env.faucet()?;
     let fund_amount = 50_000u64;
     let txid = faucet.fund_address(&addr, fund_amount).await?;
     info!("Funded watched deposit address with no claim ceiling, txid: {txid}");

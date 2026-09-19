@@ -7,14 +7,12 @@ use tracing::info;
 /// Test 1: Sign and Check Messages with DER encoded signatures
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_01_sign_and_check_der(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_01_sign_and_check_der(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_01_sign_and_check_der ===");
 
-    let alice = alice_sdk.await?;
-    let bob = bob_sdk.await?;
+    let alice = env.create_wallet().await?;
+    let bob = env.create_wallet().await?;
 
     let alice_message = "Hello Bob!".to_string();
     let bob_message = "Hello Alice!".to_string();
@@ -77,14 +75,12 @@ async fn test_01_sign_and_check_der(
 /// Test 2: Sign and Check Messages with compact encoded signatures
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_02_sign_and_check_compact(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_02_sign_and_check_compact(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_02_sign_and_check_compact ===");
 
-    let alice = alice_sdk.await?;
-    let bob = bob_sdk.await?;
+    let alice = env.create_wallet().await?;
+    let bob = env.create_wallet().await?;
 
     let alice_message = "Goodbye Bob!".to_string();
     let bob_message = "Goodbye Alice!".to_string();
