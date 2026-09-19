@@ -232,7 +232,7 @@ spark-itest = { path = "crates/spark-itest" }
 spark-mysql = { path = "crates/spark-mysql" }
 spark-postgres = { path = "crates/spark-postgres" }
 spark-sqlite = { path = "crates/spark-sqlite" }
-spark-token-primitives = "0.1.3"
+spark-primitives = "0.2.0"
 spark-wallet = { path = "crates/spark-wallet", default-features = false }
 syn = "2.0.105"
 test-log = { version = "0.2.18", default-features = false }
