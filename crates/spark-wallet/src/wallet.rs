@@ -70,7 +70,10 @@ use spark::{
         TreeNodeId, TreeNodeStatus, TreeService, TreeStore, chain_reaches_root,
         select_leaves_by_target_amounts, with_reserved_leaves,
     },
-    utils::paging::{PagingFilter, PagingResult},
+    utils::{
+        leaf_key_tweak::with_node_id_keys,
+        paging::{PagingFilter, PagingResult},
+    },
 };
 use tokio::sync::{broadcast, watch};
 use tonic_types::StatusExt;
@@ -676,7 +679,7 @@ impl SparkWallet {
             |leaves_reservation| self.lightning_service.pay_lightning_invoice(
                 invoice,
                 amount_to_send,
-                &leaves_reservation.leaves,
+                &with_node_id_keys(leaves_reservation.leaves.clone()),
                 transfer_id.clone(),
             )
         )?;
@@ -1104,7 +1107,7 @@ impl SparkWallet {
             Some(&target_amounts),
             "Transfer",
             |leaves_reservation| self.transfer_service.transfer_leaves_to(
-                leaves_reservation.leaves.clone(),
+                &with_node_id_keys(leaves_reservation.leaves.clone()),
                 &receiver_address.identity_public_key,
                 transfer_id.clone(),
                 spark_invoice.clone(),
@@ -1173,7 +1176,7 @@ impl SparkWallet {
             Some(&target_amounts),
             "HTLC creation",
             |leaves_reservation| self.htlc_service.create_htlc(
-                leaves_reservation.leaves.clone(),
+                &with_node_id_keys(leaves_reservation.leaves.clone()),
                 &receiver_address.identity_public_key,
                 payment_hash,
                 expiry_time,
@@ -1562,12 +1565,12 @@ impl SparkWallet {
         let transfer = self
             .coop_exit_service
             .coop_exit(CoopExitParams {
-                leaves: withdraw_leaves,
+                leaves: with_node_id_keys(withdraw_leaves),
                 withdrawal_address: &address,
                 withdraw_all,
                 exit_speed,
                 fee_quote_id,
-                fee_leaves,
+                fee_leaves: fee_leaves.map(with_node_id_keys),
                 fee_sats,
                 transfer_id,
             })
@@ -1942,7 +1945,7 @@ impl SparkWallet {
             });
             let pubkey = self
                 .spark_signer
-                .get_public_key_for_leaf(&refund_output.leaf_id)
+                .get_public_key_for_leaf(&refund_output.signing_key.derived_from)
                 .await?;
             let addr = Address::p2tr(&secp, pubkey.x_only_public_key().0, None, network);
             prev_outputs.push(TxOut {
@@ -2013,7 +2016,10 @@ impl SparkWallet {
                 })?;
             let sig = self
                 .spark_signer
-                .sign_leaf_refund_spend(&refund_output.leaf_id, &sighash.to_byte_array())
+                .sign_leaf_refund_spend(
+                    &refund_output.signing_key.derived_from,
+                    &sighash.to_byte_array(),
+                )
                 .await?;
             psbt.inputs[i] = PsbtInput {
                 witness_utxo: Some(prev_outputs[i].clone()),
@@ -3423,7 +3429,7 @@ mod tests {
     use spark::{
         Network,
         operator::{OperatorConfig, OperatorPoolConfig},
-        signer::{DefaultSigner, SparkSignerAdapter},
+        signer::{DefaultSigner, LeafSigningKey, SparkSignerAdapter},
         tree::{
             TreeNodeStatus,
             tests::{create_test_node_with_parent, create_test_tree_node},
@@ -4389,5 +4395,55 @@ mod tests {
         ];
         let result = validate_invoiced_transaction_is_single_token(&outputs);
         assert!(matches!(result, Err(SparkWalletError::ValidationError(_))));
+    }
+
+    /// A refund output is swept with the key its leaf was held under, which need
+    /// not derive from the leaf's node id: the refund pays to that key.
+    #[macros::async_test_all]
+    async fn a_refund_is_swept_with_the_key_its_leaf_was_held_under() {
+        let wallet = wallet_over(Arc::new(InMemoryTreeStore::new())).await;
+        let secp = Secp256k1::new();
+        let held_under = TreeNodeId::generate();
+        let held_key = wallet
+            .spark_signer
+            .get_public_key_for_leaf(&held_under)
+            .await
+            .unwrap();
+        let refund_address = Address::p2tr(
+            &secp,
+            held_key.x_only_public_key().0,
+            None,
+            bitcoin::Network::Regtest,
+        );
+        let refund = RefundOutput {
+            outpoint: OutPoint::null(),
+            leaf_id: "leaf".parse().unwrap(),
+            value: 10_000,
+            signing_key: LeafSigningKey {
+                derived_from: held_under,
+            },
+        };
+
+        let psbt = wallet
+            .create_refund_sweep_transaction(vec![refund], Vec::new(), refund_address.clone(), 250)
+            .await
+            .unwrap();
+
+        let prevout = psbt.inputs[0].witness_utxo.clone().unwrap();
+        assert_eq!(prevout.script_pubkey, refund_address.script_pubkey());
+        let witness = psbt.inputs[0].final_script_witness.clone().unwrap();
+        let signature =
+            bitcoin::secp256k1::schnorr::Signature::from_slice(&witness.to_vec()[0]).unwrap();
+        let sighash =
+            sighash_from_multi_input_tx(&psbt.unsigned_tx, 0, std::slice::from_ref(&prevout))
+                .unwrap();
+        let output_key =
+            bitcoin::XOnlyPublicKey::from_slice(&prevout.script_pubkey.as_bytes()[2..]).unwrap();
+        secp.verify_schnorr(
+            &signature,
+            &bitcoin::secp256k1::Message::from_digest(sighash.to_byte_array()),
+            &output_key,
+        )
+        .expect("the sweep signs with the key the refund pays to");
     }
 }

@@ -43,10 +43,9 @@ pub struct OperatorPackage {
 /// Which key the signer should use to produce a FROST share. These are
 /// Spark-level concepts, never derivation paths; each `SparkSigner`
 /// implementation maps them onto its own key material.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FrostDerivation {
-    /// The signing key for a tree node. Covers transfer/coop-exit refund
-    /// signing, deposit tree-root signing, and timelock renewal.
+    /// The leaf signing key derived from `leaf_id`.
     SigningLeaf { leaf_id: TreeNodeId },
     /// The static-deposit key at `index` (static-deposit refund).
     StaticDeposit { index: u32 },
@@ -54,6 +53,22 @@ pub enum FrostDerivation {
     HtlcPreimage,
     /// The wallet identity key.
     Identity,
+}
+
+/// The key a leaf is held under: the leaf signing key derived from
+/// `derived_from`. That is the leaf's own node id, except for a tree node whose
+/// id the operators assigned after its key was committed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeafSigningKey {
+    pub derived_from: TreeNodeId,
+}
+
+impl From<&LeafSigningKey> for FrostDerivation {
+    fn from(key: &LeafSigningKey) -> Self {
+        FrostDerivation::SigningLeaf {
+            leaf_id: key.derived_from.clone(),
+        }
+    }
 }
 
 /// A single FROST share-signing job: produce a partial signature over
@@ -84,15 +99,16 @@ pub struct FrostShareResult {
 
 // ─── prepare_transfer ─────────────────────────────────────────────────────
 
-/// A single leaf being sent in an outbound transfer. The signer derives the old
-/// leaf key from `node.id` and the new (post-transfer) leaf key from
-/// `new_leaf_id`: a freshly generated id supplied per send, so the new key is a
-/// deterministic HD derivation distinct from the old one (a key-addressed
+/// A single leaf being sent in an outbound transfer. The signer derives the new
+/// (post-transfer) leaf key from `new_leaf_id`: a freshly generated id supplied
+/// per send, so the new key is a deterministic HD derivation (a key-addressed
 /// signer backend cannot use a random key).
 #[derive(Debug, Clone)]
 pub struct TransferLeafInput {
     pub node: TreeNode,
     pub new_leaf_id: TreeNodeId,
+    /// The key this leaf is currently held under, which is what signs it away.
+    pub signing_key: LeafSigningKey,
 }
 
 #[derive(Debug, Clone)]
@@ -327,8 +343,9 @@ pub trait SparkSigner: Send + Sync + 'static {
     /// Returns the wallet's identity public key.
     async fn get_identity_public_key(&self) -> Result<PublicKey, SignerError>;
 
-    /// Returns the signing public key for a tree leaf. Needed by callers that
-    /// must construct transactions (refunds, etc.) before signing them.
+    /// Returns the public key of the leaf signing key derived from `leaf_id`.
+    /// Needed by callers that must construct transactions (refunds, etc.)
+    /// before signing them.
     async fn get_public_key_for_leaf(&self, leaf_id: &TreeNodeId)
     -> Result<PublicKey, SignerError>;
 
@@ -360,7 +377,8 @@ pub trait SparkSigner: Send + Sync + 'static {
     async fn sign_message(&self, message: &[u8]) -> Result<ecdsa::Signature, SignerError>;
 
     /// Schnorr-sign `sighash` to spend a tree leaf's P2TR refund output as a
-    /// BIP341 key-path spend, with the leaf key as sole signer.
+    /// BIP341 key-path spend, with the leaf signing key derived from `leaf_id`
+    /// as sole signer.
     async fn sign_leaf_refund_spend(
         &self,
         leaf_id: &TreeNodeId,
@@ -448,4 +466,27 @@ pub trait SparkSigner: Send + Sync + 'static {
         &self,
         request: PrepareTokenTransactionRequest,
     ) -> Result<PreparedTokenTransaction, SignerError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use macros::test_all;
+
+    use super::{FrostDerivation, LeafSigningKey};
+    use crate::tree::TreeNodeId;
+
+    #[test_all]
+    fn a_leaf_signing_key_signs_as_the_leaf_key_of_the_id_it_derives_from() {
+        let derived_from = TreeNodeId::generate();
+        let key = LeafSigningKey {
+            derived_from: derived_from.clone(),
+        };
+
+        assert_eq!(
+            FrostDerivation::from(&key),
+            FrostDerivation::SigningLeaf {
+                leaf_id: derived_from
+            }
+        );
+    }
 }

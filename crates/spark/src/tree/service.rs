@@ -24,16 +24,19 @@ use crate::{
             },
         },
     },
-    services::{Swap, TimelockManager},
-    signer::SparkSigner,
+    services::{RenewalCandidate, Swap, TimelockManager},
+    signer::{LeafSigningKey, SparkSigner},
     tree::{
         LeavesReservation, LeavesReservationId, TargetAmounts, TreeNodeId, TreeService, TreeStore,
         assemble_exit_chains, chain_reaches_root, select_helper,
     },
-    utils::paging::{PagingFilter, PagingResult, pager},
+    utils::{
+        leaf_key_tweak::with_node_id_keys,
+        paging::{PagingFilter, PagingResult, pager},
+    },
 };
 
-use super::{TreeNode, error::TreeServiceError};
+use super::{LeafKeyTweak, TreeNode, error::TreeServiceError};
 
 pub struct SynchronousTreeService {
     identity_pubkey: PublicKey,
@@ -57,7 +60,7 @@ pub struct SynchronousTreeService {
 }
 
 #[cfg(test)]
-type RenewStub = Box<dyn Fn(Vec<LeafPedigree>) -> Vec<LeafPedigree> + Send + Sync>;
+type RenewStub = Box<dyn Fn(Vec<RenewalCandidate>) -> Vec<LeafPedigree> + Send + Sync>;
 
 /// Leaves after a renewal pass, the renewed and the untouched alike. A renewed
 /// leaf comes back with rebuilt transactions, usually under the parent it
@@ -510,6 +513,22 @@ impl TreeService for SynchronousTreeService {
     async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
         self.state.get_available_balance().await
     }
+
+    async fn leaves_to_send(
+        &self,
+        leaves: Vec<TreeNode>,
+    ) -> Result<Vec<LeafKeyTweak>, TreeServiceError> {
+        let owned = self
+            .retain_owned(&leaves.iter().collect::<Vec<_>>())
+            .await?;
+        if let Some(leaf) = leaves.iter().find(|leaf| !owned.contains(&leaf.id)) {
+            return Err(TreeServiceError::Generic(format!(
+                "leaf {} is not held under the key derived from its node id",
+                leaf.id
+            )));
+        }
+        Ok(with_node_id_keys(leaves))
+    }
 }
 
 impl SynchronousTreeService {
@@ -546,6 +565,9 @@ impl SynchronousTreeService {
         Ok(owned)
     }
 
+    /// The service renews and swaps only leaves it has checked are held under the
+    /// key derived from their node id, the key it signs with, and
+    /// `refresh_leaves` drops any other leaf.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         identity_pubkey: PublicKey,
@@ -908,19 +930,43 @@ impl SynchronousTreeService {
         pedigrees: Vec<LeafPedigree>,
     ) -> Result<RenewalOutcome, TreeServiceError> {
         let before = refund_sequences(&pedigrees);
+        // A due leaf held under any key but the one derived from its node id is
+        // left as it is: that is the key a renewal here signs with.
+        let mut due = Vec::new();
+        for pedigree in &pedigrees {
+            if pedigree.leaf.needs_refund_tx_renewed()? {
+                due.push(&pedigree.leaf);
+            }
+        }
+        let owned = self.retain_owned(&due).await?;
+        let due: HashSet<TreeNodeId> = due.iter().map(|leaf| leaf.id.clone()).collect();
+        let (renewable, left_alone): (Vec<_>, Vec<_>) = pedigrees
+            .into_iter()
+            .partition(|p| !due.contains(&p.leaf.id) || owned.contains(&p.leaf.id));
+        let candidates: Vec<RenewalCandidate> = renewable
+            .into_iter()
+            .map(|pedigree| RenewalCandidate {
+                signing_key: LeafSigningKey {
+                    derived_from: pedigree.leaf.id.clone(),
+                },
+                pedigree,
+            })
+            .collect();
         #[cfg(test)]
         if let Some(renew) = &self.renew_stub {
-            let pedigrees = renew(pedigrees);
+            let mut pedigrees = renew(candidates);
+            pedigrees.extend(left_alone);
             return Ok(RenewalOutcome {
                 any_renewal_landed: any_renewal_landed(&before, &pedigrees),
                 pedigrees,
             });
         }
-        let pedigrees = self
+        let mut pedigrees = self
             .timelock_manager
-            .check_renew_nodes(pedigrees)
+            .check_renew_nodes(candidates)
             .await
             .map_err(|e| TreeServiceError::Generic(format!("Failed to check time lock: {e:?}")))?;
+        pedigrees.extend(left_alone);
         Ok(RenewalOutcome {
             any_renewal_landed: any_renewal_landed(&before, &pedigrees),
             pedigrees,
@@ -1070,7 +1116,7 @@ impl SynchronousTreeService {
                     "leaves cannot be swapped without a service provider to swap with".to_string(),
                 )
             })?
-            .swap_leaves(leaves, target_amounts)
+            .swap_leaves(&self.leaves_to_send(leaves.to_vec()).await?, target_amounts)
             .await?;
 
         // The swap outputs go on without their chains: resolving them here would
@@ -1354,6 +1400,18 @@ mod tests {
         });
     }
 
+    /// A leaf held under the key derived from its node id, as the service's own
+    /// leaves are, carrying a refund tx with `sequence`.
+    async fn our_leaf_with_refund_sequence(
+        service: &SynchronousTreeService,
+        id: &str,
+        sequence: u32,
+    ) -> TreeNode {
+        let mut leaf = owned_leaf(service, id, Some("root"), TreeNodeStatus::Available).await;
+        set_refund_sequence(&mut leaf, sequence);
+        leaf
+    }
+
     /// A leaf carrying a refund tx with `sequence`.
     fn leaf_with_refund_sequence(id: &str, sequence: u32) -> TreeNode {
         let mut leaf = create_test_node_with_parent(id, Some("root"), TreeNodeStatus::Available);
@@ -1377,10 +1435,10 @@ mod tests {
 
     /// What the timelock manager returns for the ordinary renewal: the leaf
     /// where it was, its refund transaction rebuilt.
-    fn renew_in_place(pedigrees: Vec<LeafPedigree>) -> Vec<LeafPedigree> {
-        pedigrees
+    fn renew_in_place(candidates: Vec<RenewalCandidate>) -> Vec<LeafPedigree> {
+        candidates
             .into_iter()
-            .map(|mut pedigree| {
+            .map(|RenewalCandidate { mut pedigree, .. }| {
                 set_refund_sequence(&mut pedigree.leaf, RENEWED_REFUND_SEQUENCE);
                 pedigree
             })
@@ -1389,14 +1447,14 @@ mod tests {
 
     /// What it returns for a renewal the operators refused: the leaf exactly as
     /// it arrived, to be tried again on the next pass.
-    fn renewal_refused(pedigrees: Vec<LeafPedigree>) -> Vec<LeafPedigree> {
-        pedigrees
+    fn renewal_refused(candidates: Vec<RenewalCandidate>) -> Vec<LeafPedigree> {
+        candidates.into_iter().map(|c| c.pedigree).collect()
     }
 
     /// What it returns for the renewal that injects a split node: the same
     /// rebuilt leaf, reparented onto the split node the chain now leads with.
-    fn reparent_onto_split(pedigrees: Vec<LeafPedigree>) -> Vec<LeafPedigree> {
-        renew_in_place(pedigrees)
+    fn reparent_onto_split(candidates: Vec<RenewalCandidate>) -> Vec<LeafPedigree> {
+        renew_in_place(candidates)
             .into_iter()
             .map(|mut pedigree| {
                 let split =
@@ -1449,13 +1507,71 @@ mod tests {
         );
     }
 
+    /// The service renews each of its leaves under the key derived from the
+    /// leaf's node id.
+    #[async_test_all]
+    async fn leaves_are_renewed_under_the_key_derived_from_their_node_id() {
+        let mut service = service_over(Arc::new(InMemoryTreeStore::new()), None).await;
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&seen);
+        service.renew_stub = Some(Box::new(move |candidates: Vec<RenewalCandidate>| {
+            recorded.lock().unwrap().extend(
+                candidates
+                    .iter()
+                    .map(|c| (c.pedigree.leaf.id.clone(), c.signing_key.clone())),
+            );
+            renewal_refused(candidates)
+        }));
+
+        service
+            .insert_leaves(vec![
+                our_leaf_with_refund_sequence(&service, "due", 50).await,
+                leaf_with_refund_sequence("fresh", 2_000),
+            ])
+            .await
+            .unwrap();
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        for (leaf_id, key) in seen.iter() {
+            assert_eq!(key.derived_from, *leaf_id);
+        }
+    }
+
+    /// A due leaf held under a key other than the one derived from its node id
+    /// is left as it arrived: the service never renews it under the wrong key.
+    #[async_test_all]
+    async fn a_due_leaf_held_under_another_key_is_left_alone() {
+        let mut service = service_over(Arc::new(InMemoryTreeStore::new()), None).await;
+        let offered = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&offered);
+        service.renew_stub = Some(Box::new(move |candidates: Vec<RenewalCandidate>| {
+            recorded
+                .lock()
+                .unwrap()
+                .extend(candidates.iter().map(|c| c.pedigree.leaf.id.to_string()));
+            renew_in_place(candidates)
+        }));
+        let mut elsewhere = leaf_held_elsewhere(&service, "elsewhere").await;
+        set_refund_sequence(&mut elsewhere, 50);
+        let ours = our_leaf_with_refund_sequence(&service, "ours", 50).await;
+
+        let inserted = service
+            .insert_leaves(vec![elsewhere.clone(), ours])
+            .await
+            .unwrap();
+
+        assert_eq!(*offered.lock().unwrap(), ["ours"]);
+        assert!(inserted.contains(&elsewhere));
+    }
+
     #[async_test_all]
     async fn renewing_a_leaf_signals_the_exit_state_changed() {
         let (tx, rx) = tokio::sync::watch::channel(());
         let mut service = service_over(Arc::new(InMemoryTreeStore::new()), Some(tx)).await;
         service.renew_stub = Some(Box::new(reparent_onto_split));
 
-        let expiring = leaf_with_refund_sequence("leaf", 50);
+        let expiring = our_leaf_with_refund_sequence(&service, "leaf", 50).await;
         service.insert_leaves(vec![expiring]).await.unwrap();
 
         assert!(rx.has_changed().unwrap());
@@ -1473,7 +1589,7 @@ mod tests {
         // wait on the tree changing shape around it.
         service.renew_stub = Some(Box::new(renew_in_place));
 
-        let expiring = leaf_with_refund_sequence("leaf", 50);
+        let expiring = our_leaf_with_refund_sequence(&service, "leaf", 50).await;
         service.insert_leaves(vec![expiring]).await.unwrap();
 
         assert!(rx.has_changed().unwrap());
@@ -1488,7 +1604,7 @@ mod tests {
         // would re-announce on every refresh for an exit state that never moved.
         service.renew_stub = Some(Box::new(renewal_refused));
 
-        let expiring = leaf_with_refund_sequence("leaf", 50);
+        let expiring = our_leaf_with_refund_sequence(&service, "leaf", 50).await;
         service.insert_leaves(vec![expiring]).await.unwrap();
 
         assert!(!rx.has_changed().unwrap());
@@ -1839,5 +1955,65 @@ mod tests {
 
         let result = find_exact_multiple_match(&leaves, 3080);
         assert!(result.is_none());
+    }
+
+    /// A leaf held under a key other than the one derived from its node id, the
+    /// key the service signs with.
+    async fn leaf_held_elsewhere(service: &SynchronousTreeService, id: &str) -> TreeNode {
+        let mut leaf = create_test_node_with_parent(id, Some("root"), TreeNodeStatus::Available);
+        let elsewhere = service
+            .spark_signer
+            .get_public_key_for_leaf(&TreeNodeId::generate())
+            .await
+            .unwrap();
+        leaf.verifying_public_key = elsewhere
+            .combine(&leaf.signing_keyshare.public_key)
+            .unwrap();
+        set_refund_sequence(&mut leaf, 2_000);
+        leaf
+    }
+
+    /// The service sends a leaf under the key derived from its node id only
+    /// once it has checked the leaf is held under that key.
+    #[async_test_all]
+    async fn leaves_are_sent_only_under_the_key_they_are_held_under() {
+        let service = service_over(Arc::new(InMemoryTreeStore::new()), None).await;
+        let ours = owned_leaf(&service, "ours", Some("root"), TreeNodeStatus::Available).await;
+        let elsewhere = leaf_held_elsewhere(&service, "elsewhere").await;
+
+        let tweaks = service.leaves_to_send(vec![ours.clone()]).await.unwrap();
+        assert_eq!(tweaks.len(), 1);
+        assert_eq!(tweaks[0].node, ours);
+        assert_eq!(tweaks[0].signing_key.derived_from, ours.id);
+
+        let refused = service.leaves_to_send(vec![ours, elsewhere]).await;
+        assert!(
+            matches!(&refused, Err(TreeServiceError::Generic(message)) if message.contains("elsewhere")),
+            "{refused:?}"
+        );
+    }
+
+    /// A payment that needs a swap refuses a leaf held under another key before
+    /// asking the service provider for anything.
+    #[async_test_all]
+    async fn a_swap_refuses_a_leaf_held_under_another_key() {
+        let store = Arc::new(InMemoryTreeStore::new());
+        let service = service_over(Arc::clone(&store) as Arc<dyn TreeStore>, None).await;
+        let elsewhere = leaf_held_elsewhere(&service, "elsewhere").await;
+        store.add_leaves(&[elsewhere]).await.unwrap();
+
+        let result = service
+            .select_leaves(
+                Some(&TargetAmounts::new_amount_and_fee(600, None)),
+                ReservationPurpose::Payment,
+                SelectLeavesOptions::no_wait(),
+            )
+            .await;
+
+        assert!(
+            matches!(&result, Err(TreeServiceError::Generic(message))
+                if message.contains("not held under the key derived from its node id")),
+            "{result:?}"
+        );
     }
 }

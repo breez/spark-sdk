@@ -7,7 +7,10 @@
 use std::str::FromStr;
 use std::time::Duration;
 
-use bitcoin::{Transaction, absolute::LockTime, secp256k1::PublicKey, transaction::Version};
+use bitcoin::{
+    Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, absolute::LockTime,
+    secp256k1::PublicKey, transaction::Version,
+};
 use frost_secp256k1_tr::Identifier;
 use platform_utils::time::SystemTime;
 
@@ -54,6 +57,44 @@ pub fn create_test_tree_node(id: &str, value: u64) -> TreeNode {
         },
         status: crate::tree::TreeNodeStatus::Available,
     }
+}
+
+/// A leaf held under `user_key`, with the node tx and refund tx that signing
+/// its refunds builds on. Its verifying key is `user_key` plus the operators'
+/// keyshare, as for a real leaf.
+pub fn create_test_leaf_held_under(id: &str, user_key: PublicKey) -> TreeNode {
+    let mut leaf = create_test_tree_node(id, 10_000);
+    leaf.verifying_public_key = user_key.combine(&leaf.signing_keyshare.public_key).unwrap();
+    leaf.node_tx = Transaction {
+        version: Version::non_standard(3),
+        lock_time: LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: OutPoint::null(),
+            sequence: Sequence::ZERO,
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(leaf.value),
+            script_pubkey: ScriptBuf::new(),
+        }],
+    };
+    leaf.refund_tx = Some(Transaction {
+        version: Version::non_standard(3),
+        lock_time: LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: OutPoint {
+                txid: leaf.node_tx.compute_txid(),
+                vout: 0,
+            },
+            sequence: Sequence::from_consensus(2_000),
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(leaf.value),
+            script_pubkey: ScriptBuf::new(),
+        }],
+    });
+    leaf
 }
 
 /// Creates a test `TreeNode` with a parent link and status, for exit-chain tests.

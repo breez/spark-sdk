@@ -24,6 +24,8 @@ pub use store::{
 };
 use tracing::trace;
 
+use crate::services::LeafKeyTweak;
+
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::Duration;
@@ -1126,4 +1128,12 @@ pub trait TreeService: Send + Sync {
         id: LeavesReservationId,
         new_leaves: Option<&[TreeNode]>,
     ) -> Result<(), TreeServiceError>;
+
+    /// Pairs each of `leaves` with the key derived from its node id, the key
+    /// this service signs with, after checking the leaf is held under that key.
+    /// Errors on a leaf held under any other key.
+    async fn leaves_to_send(
+        &self,
+        leaves: Vec<TreeNode>,
+    ) -> Result<Vec<LeafKeyTweak>, TreeServiceError>;
 }

@@ -527,11 +527,19 @@ impl LeafOptimizer {
             swap.leaves_to_receive.iter().sum::<u64>(),
         );
 
-        match self
-            .swap_service
-            .swap_leaves(&swap_reservation.leaves, Some(swap.leaves_to_receive))
-            .await
-        {
+        let swapped = async {
+            let leaves = self
+                .tree_service
+                .leaves_to_send(swap_reservation.leaves.clone())
+                .await?;
+            Ok::<_, TreeServiceError>(
+                self.swap_service
+                    .swap_leaves(&leaves, Some(swap.leaves_to_receive))
+                    .await?,
+            )
+        }
+        .await;
+        match swapped {
             Ok(new_leaves) => {
                 let gave_values: Vec<u64> =
                     swap_reservation.leaves.iter().map(|l| l.value).collect();

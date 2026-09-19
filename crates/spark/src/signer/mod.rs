@@ -4,6 +4,8 @@ mod models;
 mod secret_sharing;
 mod spark_signer;
 mod spark_signer_adapter;
+#[cfg(test)]
+pub(crate) mod testing;
 
 use bitcoin::bip32::DerivationPath;
 use bitcoin::secp256k1::ecdsa::Signature;
