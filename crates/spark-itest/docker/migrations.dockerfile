@@ -1,5 +1,7 @@
-ARG VERSION=0b3a32a05c9ac06cc411683551dd1f1bde9d0caa
-ARG REPOSITORY=https://github.com/buildonspark/spark.git
+# Pinned to the same commit as spark-so.dockerfile: these define the schema the
+# operator built from that commit expects.
+ARG VERSION=42afde75a5197ea8ffffbd29d3a5f5425823f4c4
+ARG REPOSITORY=https://github.com/breez/spark.git
 
 FROM debian:bookworm-20250721-slim AS downloader
 
