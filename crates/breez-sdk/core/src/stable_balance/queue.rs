@@ -3,11 +3,14 @@
 //! Serializes all conversion tasks (per-receive, auto-convert, and deactivation)
 //! through a single queue to eliminate race conditions between the paths.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use platform_utils::tokio;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, Notify, watch};
+use tokio::{
+    sync::{Mutex, Notify, watch},
+    time::sleep,
+};
 use tracing::{Instrument, debug, info, warn};
 
 use crate::models::ConversionStatus;
@@ -41,7 +44,7 @@ pub(crate) enum PendingState {
 }
 
 /// How long to keep a deferred task before marking it as failed (seconds).
-const DEFERRED_TASK_TIMEOUT_SECS: u64 = 120;
+pub(super) const DEFERRED_TASK_TIMEOUT_SECS: u64 = 120;
 
 /// A pending per-receive conversion with its processing state.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -222,8 +225,48 @@ impl ConversionQueue {
         Some(resolved.payment_id)
     }
 
+    /// Merge conversions recovered from a previous session, skipping any already
+    /// queued.
+    ///
+    /// Entries cached before `created_at` existed restore as 0, which both the
+    /// expiry sweep and the deadline calculation skip. Such an entry could never
+    /// expire and never reported a deadline, leaving the worker parked on it for
+    /// good, so it is stamped with a fresh deferral window here.
+    pub async fn restore_pending(&self, pending: Vec<PendingConversion>) {
+        let mut state = self.state.lock().await;
+        for mut entry in pending {
+            if state
+                .per_receive
+                .iter()
+                .any(|p| p.payment_id == entry.payment_id)
+            {
+                continue;
+            }
+            if entry.created_at == 0 {
+                entry.created_at = now_secs();
+            }
+            state.per_receive.push(entry);
+        }
+        self.persist_pending(&state).await;
+    }
+
+    /// How long until the earliest deferred task times out, or `None` when no
+    /// deferred task is waiting. `Some(ZERO)` means one is already due.
+    pub async fn next_expiry_in(&self) -> Option<Duration> {
+        let now = now_secs();
+        let state = self.state.lock().await;
+        state
+            .per_receive
+            .iter()
+            .filter(|p| p.state == PendingState::Deferred && p.created_at > 0)
+            .map(|p| {
+                let elapsed = now.saturating_sub(p.created_at);
+                Duration::from_secs(DEFERRED_TASK_TIMEOUT_SECS.saturating_sub(elapsed))
+            })
+            .min()
+    }
+
     /// Remove deferred tasks that have exceeded the timeout and return their `payment_ids`.
-    /// Called on `Synced` events to clean up tasks that were never resolved.
     pub async fn clear_expired_tasks(&self) -> Vec<String> {
         let now = now_secs();
         let mut state = self.state.lock().await;
@@ -231,7 +274,7 @@ impl ConversionQueue {
         state.per_receive.retain(|p| {
             if p.state == PendingState::Deferred
                 && p.created_at > 0
-                && now.saturating_sub(p.created_at) > DEFERRED_TASK_TIMEOUT_SECS
+                && now.saturating_sub(p.created_at) >= DEFERRED_TASK_TIMEOUT_SECS
             {
                 timed_out.push(p.payment_id.clone());
                 false
@@ -282,7 +325,7 @@ impl StableBalance {
                 }
 
                 // Restore pending conversions before waiting for sync, so the
-                // first Synced event can expire any stale deferred tasks.
+                // first sweep below can expire any stale deferred tasks.
                 stable_balance.recover_pending_conversions().await;
 
                 // Wait for initial sync before processing any tasks
@@ -304,6 +347,8 @@ impl StableBalance {
                 loop {
                     // Register notify future BEFORE checking the queue to avoid missed wakeups
                     let notified = stable_balance.core.queue.notify.notified();
+
+                    stable_balance.expire_deferred_tasks().await;
 
                     // Drain all available tasks
                     while let Some(task) = stable_balance.core.queue.next_task().await {
@@ -365,6 +410,11 @@ impl StableBalance {
                         }
                     }
 
+                    // Sleeping until the next deferral expires keeps the sweep on
+                    // the queue's own clock. Without it the timeout would only be
+                    // observed when something else happened to wake the worker.
+                    let expiry_sleep = stable_balance.core.queue.next_expiry_in().await;
+
                     debug!("Conversion worker: queue drained, waiting for new tasks");
                     tokio::select! {
                         _ = shutdown_receiver.changed() => {
@@ -374,11 +424,36 @@ impl StableBalance {
                         () = notified => {
                             debug!("Conversion worker: woken by notify");
                         }
+                        () = sleep(expiry_sleep.unwrap_or_default()), if expiry_sleep.is_some() => {
+                            debug!("Conversion worker: woken to expire a deferred task");
+                        }
                     }
                 }
             }
             .instrument(span),
         );
+    }
+
+    /// Fails per-receive tasks that outlived the deferral window. Runs here
+    /// rather than on the `Synced` event so the emitter is in scope, and a
+    /// timed-out conversion surfaces the same way a completed one does.
+    async fn expire_deferred_tasks(&self) {
+        for payment_id in self.core.queue.clear_expired_tasks().await {
+            warn!("Per-receive conversion timed out for {payment_id}");
+            if let Err(e) = crate::utils::payments::record_payment_metadata_update_by_id(
+                &self.core.storage,
+                &self.event_emitter,
+                payment_id.clone(),
+                PaymentMetadata {
+                    conversion_status: Some(ConversionStatus::Failed),
+                    ..Default::default()
+                },
+            )
+            .await
+            {
+                warn!("Failed to persist Failed status for {payment_id}: {e:?}");
+            }
+        }
     }
 
     /// Process a per-receive conversion task.
@@ -389,17 +464,16 @@ impl StableBalance {
         match self.per_receive_convert(&payment_id).await {
             Ok(converted) => {
                 if converted
-                    && let Err(e) = self
-                        .core
-                        .storage
-                        .insert_payment_metadata(
-                            payment_id.clone(),
-                            PaymentMetadata {
-                                conversion_status: Some(ConversionStatus::Completed),
-                                ..Default::default()
-                            },
-                        )
-                        .await
+                    && let Err(e) = crate::utils::payments::record_payment_metadata_update_by_id(
+                        &self.core.storage,
+                        &self.event_emitter,
+                        payment_id.clone(),
+                        PaymentMetadata {
+                            conversion_status: Some(ConversionStatus::Completed),
+                            ..Default::default()
+                        },
+                    )
+                    .await
                 {
                     warn!("Failed to persist Completed status for {payment_id}: {e:?}");
                 }
@@ -428,7 +502,7 @@ impl StableBalance {
     ///
     /// Loads persisted pending conversions and restores them into the queue.
     /// Stale deferred tasks are cleaned up by `clear_expired_tasks()` on the
-    /// first `Synced` event.
+    /// conversion worker's next pass.
     async fn recover_pending_conversions(&self) {
         let cache = ObjectCacheRepository::new(self.core.storage.clone());
         match cache.fetch_pending_conversions().await {
@@ -438,18 +512,7 @@ impl StableBalance {
                         "Recovering {} pending conversion(s) from previous session",
                         pending.len()
                     );
-                    let mut state = self.core.queue.state.lock().await;
-                    for entry in pending {
-                        if state
-                            .per_receive
-                            .iter()
-                            .any(|p| p.payment_id == entry.payment_id)
-                        {
-                            continue;
-                        }
-                        state.per_receive.push(entry);
-                    }
-                    self.core.queue.persist_pending(&state).await;
+                    self.core.queue.restore_pending(pending).await;
                 }
             }
             Ok(None) => {}
@@ -457,5 +520,131 @@ impl StableBalance {
                 warn!("Failed to load pending conversions for recovery: {e:?}");
             }
         }
+    }
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::persist::sqlite::SqliteStorage;
+
+    fn create_temp_dir(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!("breez-test-{}-{}", name, uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn test_queue(name: &str) -> ConversionQueue {
+        let dir = create_temp_dir(name);
+        ConversionQueue::new(Arc::new(SqliteStorage::new(&dir).unwrap()))
+    }
+
+    /// A conversion cached before `created_at` existed restores as 0. Both the
+    /// expiry sweep and the deadline skip those, so once deferred it would park
+    /// the worker with nothing left to wake it. Recovery stamps it instead.
+    #[tokio::test]
+    async fn restore_stamps_entries_missing_a_creation_time() {
+        let queue = test_queue("queue_restore_stamps");
+
+        queue
+            .restore_pending(vec![PendingConversion {
+                payment_id: "legacy".to_string(),
+                state: PendingState::Deferred,
+                created_at: 0,
+            }])
+            .await;
+
+        assert!(
+            queue.next_task().await.is_none(),
+            "a deferred-only queue yields no task, so the worker parks"
+        );
+        let due_in = queue
+            .next_expiry_in()
+            .await
+            .expect("a restored entry must report a deadline, or nothing wakes the worker");
+        assert!(
+            due_in.as_secs() <= DEFERRED_TASK_TIMEOUT_SECS,
+            "deadline {due_in:?} must fall within the deferral window"
+        );
+    }
+
+    /// The sweep and the deadline have to agree about when an entry is due. If
+    /// the deadline hits zero while the sweep still declines, the worker wakes
+    /// immediately, clears nothing, recomputes the same zero and spins.
+    #[tokio::test]
+    async fn deadline_and_sweep_agree_at_the_timeout_boundary() {
+        let queue = test_queue("queue_expiry_boundary");
+        let now = now_secs();
+
+        // Inside the window: not due, and still reporting time to wait. The
+        // margin is wide because the clock is read again inside each call, and
+        // asserting an exact remaining duration would race the second hand.
+        queue
+            .restore_pending(vec![PendingConversion {
+                payment_id: "not-yet".to_string(),
+                state: PendingState::Deferred,
+                created_at: now - (DEFERRED_TASK_TIMEOUT_SECS / 2),
+            }])
+            .await;
+        assert!(
+            queue
+                .next_expiry_in()
+                .await
+                .is_some_and(|d| d > Duration::ZERO),
+            "an entry inside the window still has time left to wait"
+        );
+        assert!(
+            queue.clear_expired_tasks().await.is_empty(),
+            "an entry inside the window must not be swept"
+        );
+
+        // Exactly on the boundary: the deadline reads zero, so the sweep must
+        // act on this pass rather than leave the worker to wake on it again.
+        let queue = test_queue("queue_expiry_boundary_exact");
+        queue
+            .restore_pending(vec![PendingConversion {
+                payment_id: "due-now".to_string(),
+                state: PendingState::Deferred,
+                created_at: now - DEFERRED_TASK_TIMEOUT_SECS,
+            }])
+            .await;
+        assert_eq!(
+            queue.next_expiry_in().await,
+            Some(Duration::ZERO),
+            "an entry on the boundary reports no remaining time"
+        );
+        assert_eq!(
+            queue.clear_expired_tasks().await,
+            vec!["due-now".to_string()],
+            "a zero deadline must mean the sweep clears it on this pass"
+        );
+    }
+
+    /// Restoring must not duplicate a conversion already queued, nor reset the
+    /// creation time of the one that is.
+    #[tokio::test]
+    async fn restore_skips_conversions_already_queued() {
+        let queue = test_queue("queue_restore_dedup");
+
+        queue.push_per_receive("pay1".to_string()).await;
+        queue
+            .restore_pending(vec![PendingConversion {
+                payment_id: "pay1".to_string(),
+                state: PendingState::Deferred,
+                created_at: 0,
+            }])
+            .await;
+
+        match queue.next_task().await {
+            Some(ConversionTask::PerReceive(id)) => assert_eq!(id, "pay1"),
+            other => panic!("expected the queued conversion, got {other:?}"),
+        }
+        assert!(
+            queue.next_expiry_in().await.is_none(),
+            "the live entry must stay Ready rather than adopt the restored Deferred state"
+        );
     }
 }

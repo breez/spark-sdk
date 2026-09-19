@@ -621,32 +621,51 @@ class SqliteStorage {
 
   insertPaymentMetadata(paymentId, metadata) {
     try {
-      const stmt = this.db.prepare(`
-                INSERT INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(payment_id) DO UPDATE SET
-                    parent_payment_id = COALESCE(excluded.parent_payment_id, parent_payment_id),
-                    lnurl_pay_info = COALESCE(excluded.lnurl_pay_info, lnurl_pay_info),
-                    lnurl_withdraw_info = COALESCE(excluded.lnurl_withdraw_info, lnurl_withdraw_info),
-                    lnurl_description = COALESCE(excluded.lnurl_description, lnurl_description),
-                    conversion_info = COALESCE(excluded.conversion_info, conversion_info),
-                    conversion_status = COALESCE(excluded.conversion_status, conversion_status)
-            `);
-
-      stmt.run(
-        paymentId,
-        metadata.parentPaymentId,
-        metadata.lnurlPayInfo ? JSON.stringify(metadata.lnurlPayInfo) : null,
-        metadata.lnurlWithdrawInfo
+      const incoming = {
+        parent_payment_id: metadata.parentPaymentId ?? null,
+        lnurl_pay_info: metadata.lnurlPayInfo
+          ? JSON.stringify(metadata.lnurlPayInfo)
+          : null,
+        lnurl_withdraw_info: metadata.lnurlWithdrawInfo
           ? JSON.stringify(metadata.lnurlWithdrawInfo)
           : null,
-        metadata.lnurlDescription,
-        metadata.conversionInfo
+        lnurl_description: metadata.lnurlDescription ?? null,
+        conversion_info: metadata.conversionInfo
           ? JSON.stringify(metadata.conversionInfo)
           : null,
-        metadata.conversionStatus ?? null
-      );
-      return Promise.resolve();
+        conversion_status: metadata.conversionStatus ?? null,
+      };
+      // The `WHERE` arm on `DO UPDATE` skips the write when every column
+      // the caller is trying to set already matches the stored value, so
+      // `stmt.run().changes` is 0 for a no-op replay.
+      const result = this.db
+        .prepare(
+          `INSERT INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(payment_id) DO UPDATE SET
+              parent_payment_id = COALESCE(excluded.parent_payment_id, parent_payment_id),
+              lnurl_pay_info = COALESCE(excluded.lnurl_pay_info, lnurl_pay_info),
+              lnurl_withdraw_info = COALESCE(excluded.lnurl_withdraw_info, lnurl_withdraw_info),
+              lnurl_description = COALESCE(excluded.lnurl_description, lnurl_description),
+              conversion_info = COALESCE(excluded.conversion_info, conversion_info),
+              conversion_status = COALESCE(excluded.conversion_status, conversion_status)
+           WHERE (excluded.parent_payment_id IS NOT NULL AND excluded.parent_payment_id IS NOT parent_payment_id)
+              OR (excluded.lnurl_pay_info IS NOT NULL AND excluded.lnurl_pay_info IS NOT lnurl_pay_info)
+              OR (excluded.lnurl_withdraw_info IS NOT NULL AND excluded.lnurl_withdraw_info IS NOT lnurl_withdraw_info)
+              OR (excluded.lnurl_description IS NOT NULL AND excluded.lnurl_description IS NOT lnurl_description)
+              OR (excluded.conversion_info IS NOT NULL AND excluded.conversion_info IS NOT conversion_info)
+              OR (excluded.conversion_status IS NOT NULL AND excluded.conversion_status IS NOT conversion_status)`
+        )
+        .run(
+          paymentId,
+          incoming.parent_payment_id,
+          incoming.lnurl_pay_info,
+          incoming.lnurl_withdraw_info,
+          incoming.lnurl_description,
+          incoming.conversion_info,
+          incoming.conversion_status
+        );
+      return Promise.resolve(result.changes > 0);
     } catch (error) {
       return Promise.reject(
         new StorageError(

@@ -28,11 +28,15 @@ use crate::{
 
 pub(crate) struct BoltzSdkEventListener {
     storage: Arc<dyn Storage>,
+    event_emitter: Arc<crate::EventEmitter>,
 }
 
 impl BoltzSdkEventListener {
-    pub(crate) fn new(storage: Arc<dyn Storage>) -> Self {
-        Self { storage }
+    pub(crate) fn new(storage: Arc<dyn Storage>, event_emitter: Arc<crate::EventEmitter>) -> Self {
+        Self {
+            storage,
+            event_emitter,
+        }
     }
 
     async fn handle_swap_updated(
@@ -58,6 +62,7 @@ impl BoltzSdkEventListener {
         };
 
         let payment_id = existing.id.clone();
+        let cache_key = crate::utils::payments::payment_metadata_cache_key(&existing).to_string();
 
         let Some(conversion_info) = extract_conversion_info(existing.details) else {
             // Race window between `insert_payment` and `insert_payment_metadata`
@@ -83,10 +88,15 @@ impl BoltzSdkEventListener {
             return Ok(());
         };
 
-        self.storage
-            .insert_payment_metadata(payment_id.clone(), updated)
-            .await
-            .map_err(|e| format!("persist updated metadata for {payment_id}: {e}"))?;
+        crate::utils::payments::record_payment_metadata_update(
+            &self.storage,
+            &self.event_emitter,
+            payment_id.clone(),
+            &cache_key,
+            updated,
+        )
+        .await
+        .map_err(|e| format!("persist updated metadata for {payment_id}: {e}"))?;
         Ok(())
     }
 
@@ -108,6 +118,7 @@ impl BoltzSdkEventListener {
         };
 
         let payment_id = existing.id.clone();
+        let cache_key = crate::utils::payments::payment_metadata_cache_key(&existing).to_string();
 
         let Some(ConversionInfo::Boltz {
             swap_id,
@@ -163,10 +174,15 @@ impl BoltzSdkEventListener {
             }),
             ..Default::default()
         };
-        self.storage
-            .insert_payment_metadata(payment_id, updated)
-            .await
-            .map_err(|e| format!("persist degraded-flag update: {e}"))?;
+        crate::utils::payments::record_payment_metadata_update(
+            &self.storage,
+            &self.event_emitter,
+            payment_id.clone(),
+            &cache_key,
+            updated,
+        )
+        .await
+        .map_err(|e| format!("persist degraded-flag update for {payment_id}: {e}"))?;
         Ok(())
     }
 }
@@ -292,6 +308,7 @@ pub(crate) fn boltz_metadata_from_swap(
 pub(crate) async fn reconcile_pending_boltz_conversions(
     client: &BoltzService,
     storage: &Arc<dyn Storage>,
+    event_emitter: &Arc<crate::EventEmitter>,
 ) {
     // Bound the scan to Lightning payments carrying a non-terminal Boltz
     // conversion (the swap's hold-invoice leg), so history size doesn't matter.
@@ -314,6 +331,7 @@ pub(crate) async fn reconcile_pending_boltz_conversions(
 
     for payment in payments {
         let payment_id = payment.id.clone();
+        let cache_key = crate::utils::payments::payment_metadata_cache_key(&payment).to_string();
         let Some(conversion_info) = extract_conversion_info(payment.details) else {
             continue;
         };
@@ -342,9 +360,14 @@ pub(crate) async fn reconcile_pending_boltz_conversions(
         let Some(updated) = boltz_metadata_from_swap(conversion_info, &swap) else {
             continue;
         };
-        match storage
-            .insert_payment_metadata(payment_id.clone(), updated)
-            .await
+        match crate::utils::payments::record_payment_metadata_update(
+            storage,
+            event_emitter,
+            payment_id.clone(),
+            &cache_key,
+            updated,
+        )
+        .await
         {
             Ok(()) => info!(
                 payment_id = %payment_id,
@@ -573,12 +596,144 @@ mod tests {
         async fn missing_payment_is_silent_noop() {
             let dir = create_temp_dir("boltz_event_missing_payment");
             let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&dir).unwrap());
-            let listener = BoltzSdkEventListener::new(Arc::clone(&storage));
+            let event_emitter = Arc::new(crate::EventEmitter::new(false));
+            let listener = BoltzSdkEventListener::new(Arc::clone(&storage), event_emitter);
 
             // No payment row carrying this invoice — the listener should
             // short-circuit without erroring.
             let swap = make_swap("orphan_swap", BoltzSwapStatus::InvoicePaid);
             listener.handle_swap_updated(&swap).await.unwrap();
+        }
+
+        struct RecordingListener {
+            events: Arc<tokio::sync::Mutex<Vec<crate::SdkEvent>>>,
+        }
+
+        #[macros::async_trait]
+        impl crate::EventListener for RecordingListener {
+            async fn on_event(&self, event: crate::SdkEvent) {
+                self.events.lock().await.push(event);
+            }
+        }
+
+        /// A settled payment carrying a still-pending Boltz conversion: the
+        /// shape the swap listener heals once the provider reaches a terminal
+        /// state.
+        async fn settled_payment_with_pending_conversion(
+            storage: &Arc<dyn Storage>,
+            invoice: &str,
+        ) -> String {
+            let payment_id = "boltz_pmt_1".to_string();
+            storage
+                .apply_payment_update(crate::Payment {
+                    id: payment_id.clone(),
+                    payment_type: crate::PaymentType::Send,
+                    status: crate::PaymentStatus::Completed,
+                    amount: 100_000,
+                    fees: 500,
+                    timestamp: 1_700_000_000,
+                    method: crate::PaymentMethod::Lightning,
+                    details: Some(crate::PaymentDetails::Lightning {
+                        description: None,
+                        invoice: invoice.to_string(),
+                        destination_pubkey: "03aa".to_string(),
+                        htlc_details: crate::SparkHtlcDetails {
+                            payment_hash: "ab".repeat(32),
+                            preimage: None,
+                            expiry_time: 0,
+                            status: crate::SparkHtlcStatus::PreimageShared,
+                        },
+                        lnurl_pay_info: None,
+                        lnurl_withdraw_info: None,
+                        lnurl_receive_metadata: None,
+                        conversion_info: None,
+                    }),
+                    conversion_details: None,
+                })
+                .await
+                .unwrap();
+            storage
+                .insert_payment_metadata(
+                    payment_id.clone(),
+                    PaymentMetadata {
+                        conversion_info: Some(pending_boltz_conversion_for(invoice)),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            payment_id
+        }
+
+        fn pending_boltz_conversion_for(invoice: &str) -> ConversionInfo {
+            ConversionInfo::Boltz {
+                swap_id: "swap_terminal".to_string(),
+                invoice: invoice.to_string(),
+                invoice_amount_sats: 100_000,
+                bridge_ref: None,
+                max_slippage_bps: 100,
+                quote_degraded: false,
+                chain: "Arbitrum One".to_string(),
+                chain_id: Some("42161".to_string()),
+                asset: "USDT".to_string(),
+                recipient_address: "0xdest".to_string(),
+                asset_amount_in: Some(70_900_000),
+                estimated_out: 70_900_000,
+                delivered_amount: None,
+                status: ConversionStatus::Pending,
+                fee_amount: Some(500),
+                service_fee_amount: Some(500),
+                service_fee_asset: Some("USDT".to_string()),
+                asset_decimals: 6,
+                asset_contract: None,
+            }
+        }
+
+        /// The terminal swap event attaches conversion metadata to a payment
+        /// that already settled, so it emits `PaymentUpdated` — and a replay of
+        /// the same event writes nothing and stays silent.
+        #[tokio::test]
+        async fn terminal_swap_emits_payment_updated_once() {
+            let dir = create_temp_dir("boltz_event_emits_updated");
+            let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&dir).unwrap());
+            let invoice = "lnbc1000n";
+            let payment_id = settled_payment_with_pending_conversion(&storage, invoice).await;
+
+            let event_emitter = Arc::new(crate::EventEmitter::new(false));
+            let events = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+            event_emitter
+                .add_external_listener(Box::new(RecordingListener {
+                    events: Arc::clone(&events),
+                }))
+                .await;
+
+            let listener =
+                BoltzSdkEventListener::new(Arc::clone(&storage), Arc::clone(&event_emitter));
+            let mut swap = make_swap("swap_terminal", BoltzSwapStatus::Completed);
+            swap.invoice = invoice.to_string();
+            swap.delivered_amount = Some(70_800_000);
+
+            listener.handle_swap_updated(&swap).await.unwrap();
+
+            {
+                let seen = events.lock().await;
+                assert_eq!(seen.len(), 1, "expected exactly one event, got {seen:?}");
+                match &seen[0] {
+                    crate::SdkEvent::PaymentUpdated { payment } => {
+                        assert_eq!(payment.id, payment_id);
+                    }
+                    other => panic!("expected PaymentUpdated, got {other:?}"),
+                }
+            }
+
+            // Replay: the row already carries this state, so the upsert is a
+            // no-op and no second event is emitted.
+            listener.handle_swap_updated(&swap).await.unwrap();
+            assert_eq!(
+                events.lock().await.len(),
+                1,
+                "replay of an identical swap event must not re-emit"
+            );
         }
     }
 }

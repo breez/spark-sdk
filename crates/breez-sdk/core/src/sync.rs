@@ -1,4 +1,4 @@
-use std::{str::FromStr, sync::Arc};
+use std::{collections::HashSet, str::FromStr, sync::Arc};
 
 use spark_wallet::{
     ListTokenTransactionsRequest, ListTransfersRequest, Order, PagingFilter, SparkWallet,
@@ -7,10 +7,10 @@ use spark_wallet::{
 use tracing::{debug, error, info};
 
 use crate::{
-    EventEmitter, Payment, PaymentDetails, PaymentStatus, SdkError, Storage,
+    EventEmitter, Payment, PaymentStatus, SdkError, Storage,
     persist::{CachedSyncInfo, ObjectCacheRepository, StorageListPaymentsRequest},
     utils::{
-        payments::record_payment_update,
+        payments::{emit_payment_updated_if_terminal, record_payment_update},
         token::{token_transaction_to_payments, token_tx_inputs_are_ours},
     },
 };
@@ -87,22 +87,36 @@ impl SparkSyncService {
                 // Create a payment record
                 let payment: Payment = transfer.clone().try_into()?;
                 // Apply any payment metadata for the payment
-                if let Err(e) = self.apply_payment_metadata(&payment).await {
-                    error!(
-                        "Failed to apply payment metadata for payment {}: {e:?}",
-                        payment.id
-                    );
-                }
+                let metadata_changed = match self.apply_payment_metadata(&payment).await {
+                    Ok(changed) => changed,
+                    Err(e) => {
+                        error!(
+                            "Failed to apply payment metadata for payment {}: {e:?}",
+                            payment.id
+                        );
+                        false
+                    }
+                };
 
                 // Emit events for new payment statuses after initial sync, or even before initial sync if the payment is pending
                 let should_emit = initial_sync_complete || payment.status == PaymentStatus::Pending;
-                record_payment_update(
+                let emitted = record_payment_update(
                     &self.storage,
                     &self.event_emitter,
                     payment.clone(),
                     should_emit,
                 )
                 .await;
+                // Reapplied metadata that no status event carried: the row was
+                // already terminal, so only `PaymentUpdated` surfaces it.
+                if initial_sync_complete && metadata_changed && !emitted {
+                    emit_payment_updated_if_terminal(
+                        &self.storage,
+                        &self.event_emitter,
+                        payment.id.clone(),
+                    )
+                    .await;
+                }
                 if payment.status == PaymentStatus::Pending {
                     pending_payments = pending_payments.saturating_add(1);
                 }
@@ -214,27 +228,27 @@ impl SparkSyncService {
         }
     }
 
-    pub(crate) async fn apply_payment_metadata(&self, payment: &Payment) -> Result<(), SdkError> {
-        let identifier = match &payment.details {
-            Some(PaymentDetails::Lightning { invoice, .. }) => invoice,
-            Some(PaymentDetails::Token { tx_hash, .. }) => tx_hash,
-            _ => payment.id.as_str(),
-        };
+    /// Reapplies cached metadata onto the payment row. Returns whether the row
+    /// actually changed, so the caller can surface an update the status event
+    /// would not carry.
+    pub(crate) async fn apply_payment_metadata(&self, payment: &Payment) -> Result<bool, SdkError> {
+        let identifier = crate::utils::payments::payment_metadata_cache_key(payment);
 
         // Get the payment metadata from storage for this payment
         let cache = ObjectCacheRepository::new(self.storage.clone());
         let Some(metadata) = cache.fetch_payment_metadata(identifier).await? else {
-            return Ok(());
+            return Ok(false);
         };
 
-        self.storage
+        let changed = self
+            .storage
             .insert_payment_metadata(payment.id.clone(), metadata)
             .await?;
 
         // Delete the payment metadata since we have applied it
         cache.delete_payment_metadata(identifier).await?;
 
-        Ok(())
+        Ok(changed)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -255,6 +269,7 @@ impl SparkSyncService {
 
         // We'll keep querying in batches until we have all token tranactions
         let mut payments_to_sync = Vec::new();
+        let mut metadata_changed_ids: HashSet<String> = HashSet::new();
         let mut next_offset = 0;
         let mut has_more = true;
         // We'll keep querying in pages until we already have a completed or failed payment stored
@@ -369,11 +384,15 @@ impl SparkSyncService {
 
                 for payment in payments {
                     // Apply any payment metadata for the payment
-                    if let Err(e) = self.apply_payment_metadata(&payment).await {
-                        error!(
+                    match self.apply_payment_metadata(&payment).await {
+                        Ok(true) => {
+                            metadata_changed_ids.insert(payment.id.clone());
+                        }
+                        Ok(false) => {}
+                        Err(e) => error!(
                             "Failed to apply payment metadata for payment {}: {e:?}",
                             payment.id
-                        );
+                        ),
                     }
                     if last_synced_final_token_payment_id
                         .as_ref()
@@ -383,6 +402,16 @@ impl SparkSyncService {
                             "Last synced token payment id found ({last_synced_final_token_payment_id:?}), stopping sync and processing {} payments",
                             payments_to_sync.len()
                         );
+                        // This payment never reaches the loop below, so no
+                        // status event will carry a reapply that landed on it.
+                        if initial_sync_complete && metadata_changed_ids.contains(&payment.id) {
+                            emit_payment_updated_if_terminal(
+                                &self.storage,
+                                &self.event_emitter,
+                                payment.id.clone(),
+                            )
+                            .await;
+                        }
                         has_more = false;
                         break 'page_loop;
                     }
@@ -402,13 +431,23 @@ impl SparkSyncService {
             let should_emit = initial_sync_complete || payment.status == PaymentStatus::Pending;
 
             debug!("Syncing token payment: {payment:?}");
-            record_payment_update(
+            let emitted = record_payment_update(
                 &self.storage,
                 &self.event_emitter,
                 payment.clone(),
                 should_emit,
             )
             .await;
+            // Reapplied metadata that no status event carried: the row was
+            // already terminal, so only `PaymentUpdated` surfaces it.
+            if initial_sync_complete && metadata_changed_ids.contains(&payment.id) && !emitted {
+                emit_payment_updated_if_terminal(
+                    &self.storage,
+                    &self.event_emitter,
+                    payment.id.clone(),
+                )
+                .await;
+            }
         }
 
         // We have synced all token transactions or found the last synced payment id.
