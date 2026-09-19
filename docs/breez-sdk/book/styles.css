@@ -1,0 +1,437 @@
+/* ---- Text rendering (from the design mockup) ---------------------------- */
+/* Without antialiased smoothing, macOS draws light-on-dark text with
+   subpixel AA that visibly thickens strokes — headings at weight 700 read
+   as "extra bold". The mockup sets both of these. */
+html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+}
+
+.content li:has(> input[type="checkbox"]) {
+    list-style: none;
+}
+
+.content ul:has(> li > input[type="checkbox"]) {
+    padding-left: 15px;
+}
+
+h1:has(.tag), h2:has(.tag), h3:has(.tag) {
+  display: flex;
+}
+
+a.tag {
+    color: #fff;
+    cursor: pointer;
+    font-size: 0.4em;
+    padding: 0.3em 0.5em;
+    margin: 0.8em;
+    display: flex;
+    border-radius: 10px;
+    border: 1px solid #fff;
+    background-color: var(--searchresults-header-fg);
+    white-space: nowrap;
+    max-height: 1.5em;
+}
+
+h1 a.tag {
+    font-size: 0.3em;
+    align-self: flex-end;
+}
+
+a.tag:link, a.tag:visited, a.tag:active {
+    color: #fff;
+    text-decoration: none;
+}
+
+a.tag:hover {
+    opacity: 0.8;
+    text-decoration: none;
+}
+
+/* Hide mdbook-help-container even if ? was pressed */
+#mdbook-help-container {
+  height: 0;
+  width: 0;
+  top: -10000px;
+  left: -10000px;
+}
+
+/* Language-aware function names - visibility controlled by tabs.js */
+.lang-fn span { display: none; }
+.lang-fn span.fn-rust { display: inline; } /* Default before JS runs */
+
+/* =========================================================================
+   Breez SDK - Spark design (mockup: "Breez SDK Docs.dc.html")
+   The brand header lives in theme/header.hbs; controls are moved into it by
+   brand-header.js. Everything below styles that header and repaints mdBook's
+   content chrome to match the design. Palette tokens are in css/variables.css.
+   ========================================================================= */
+
+/* ---- Fixed brand header ------------------------------------------------- */
+.brand-header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--brz-header-h);
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 22px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(2, 10, 26, 0.72);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+}
+/* The four light themes get an opaque header (blur over a light bg looks muddy). */
+html.light .brand-header,
+html.rust .brand-header {
+    background: var(--bg);
+    border-bottom: 1px solid var(--table-border-color);
+}
+
+.brand-header .brand-logo { display: flex; align-items: center; flex: none; }
+.brand-header .brand-logo img { height: 26px; display: block; }
+html.light .brand-logo img,
+html.rust .brand-logo img { filter: brightness(0) invert(0.15); }
+
+.brand-header .brand-sep {
+    width: 1px;
+    height: 22px;
+    background: rgba(255, 255, 255, 0.14);
+    flex: none;
+}
+html.light .brand-sep, html.rust .brand-sep { background: var(--table-border-color); }
+
+.brand-header .brand-product {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--brz-heading);
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    flex: none;
+}
+html.light .brand-product, html.rust .brand-product { color: var(--fg); }
+
+.brand-header .brand-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 9px;
+    border: 1px solid rgba(0, 133, 251, 0.4);
+    background: rgba(0, 133, 251, 0.12);
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--brz-blue-soft);
+    white-space: nowrap;
+    flex: none;
+}
+.brand-header .brand-badge img { width: 11px; height: 11px; }
+
+.brand-header .brand-spacer { flex: 1 1 auto; }
+
+.brand-header .brand-nav {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    flex: none;
+}
+.brand-header .brand-nav a {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--fg);
+    letter-spacing: 0.02em;
+    display: flex;
+    align-items: center;
+    text-decoration: none;
+}
+.brand-header .brand-nav a:hover,
+.brand-header .brand-nav a.is-active { color: var(--brz-heading); }
+.brand-header .brand-nav a img { width: 19px; height: 19px; opacity: 0.7; }
+html.light .brand-nav a img, html.rust .brand-nav a img { filter: brightness(0) invert(0.2); }
+
+.brand-header .brand-cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    height: 38px;
+    padding: 0 18px;
+    background: var(--brz-blue);
+    color: #fff;
+    border-radius: 7px;
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    text-decoration: none;
+    white-space: nowrap;
+    flex: none;
+}
+.brand-header .brand-cta:hover { background: #1a93ff; text-decoration: none; }
+
+/* Relocated mdBook controls (theme switcher, search, mobile sidebar toggle). */
+.brand-controls {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: none;
+}
+#brand-header .icon-button {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: var(--fg);
+    width: 34px;
+    height: 34px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    font-size: 1.3rem;
+}
+#brand-header .icon-button:hover { background: rgba(255, 255, 255, 0.06); color: var(--brz-heading); }
+html.light #brand-header .icon-button:hover,
+html.rust #brand-header .icon-button:hover { background: var(--theme-hover); }
+/* The sidebar toggle stays visible at every width (mdBook auto-hides the
+   sidebar on narrow windows and never restores it on grow) and leads the
+   bar, left of the logo, next to the sidebar it controls. */
+#brand-header #sidebar-toggle { display: inline-flex; margin-right: 6px; }
+
+/* ---- Reconcile the fixed header with mdBook's layout -------------------- */
+/* The brand header replaces mdBook's #menu-bar entirely. */
+#menu-bar,
+#menu-bar-hover-placeholder { display: none !important; }
+/* general.css pulls .page up by --menu-bar-height to sit under the (now hidden)
+   placeholder; cancel that and instead clear the fixed header. */
+.page { margin-block-start: 0 !important; padding-top: var(--brz-header-h); }
+/* The sidebar is fixed at top:0; drop it below the header. */
+.sidebar { top: var(--brz-header-h); }
+/* Keep the right-hand page TOC clear of the header too. */
+.pagetoc { top: calc(var(--brz-header-h) + 1.5rem); }
+/* Breathing room between the fixed header and the page title. The article
+   container gets a modest inset; the title itself carries the real space so
+   it reads as a deliberate title block, not content crammed under the bar. */
+#content { padding-top: 34px; }
+/* The snippets preprocessor wraps page content in .content-wrap, so cover
+   both the wrapped and unwrapped structure. */
+.content main > h1:first-child,
+.content main > .content-wrap > h1:first-child { margin-top: 27px; }
+/* Anchor jumps (#some-heading) must not tuck the target under the fixed
+   header. */
+.content :is(h1, h2, h3, h4, h5, h6) { scroll-margin-top: calc(var(--brz-header-h) + 24px); }
+
+/* ---- Top glow (navy only, from the design mockup) ----------------------- */
+/* The mockup paints a soft blue radial glow across the WHOLE main area right
+   of the sidebar, so it goes on the page wrapper — not #content — and is
+   pulled left under the 8px sidebar resize-handle gutter so no dark seam
+   shows between the sidebar and the glow. pointer-events: none keeps the
+   resize handle draggable. */
+html.navy #page-wrapper { position: relative; isolation: isolate; }
+html.navy #page-wrapper::before {
+    content: "";
+    position: absolute;
+    /* Behind the text: positioned pseudo-elements otherwise paint on top of
+       normal-flow content, tinting the headings. isolation:isolate on the
+       wrapper keeps z-index:-1 from dropping below the page background. */
+    z-index: -1;
+    top: var(--brz-header-h);
+    left: calc(-1 * var(--sidebar-resize-indicator-width, 8px));
+    right: 0;
+    height: 340px;
+    pointer-events: none;
+    background: radial-gradient(circle at 12% -20%, rgba(0, 133, 251, 0.16) 0%, rgba(0, 80, 160, 0.06) 34%, transparent 62%);
+    /* On wide viewports the radial still has visible alpha at the box's
+       340px bottom edge, which reads as a hard horizontal line. Fade the
+       whole overlay out toward the bottom so it always ends smoothly. */
+    -webkit-mask-image: linear-gradient(to bottom, #000 45%, transparent);
+    mask-image: linear-gradient(to bottom, #000 45%, transparent);
+}
+
+/* ---- Sidebar (left nav) ------------------------------------------------- */
+.sidebar { border-right: 1px solid rgba(255, 255, 255, 0.08); }
+html.light .sidebar, html.rust .sidebar { border-right: 1px solid var(--table-border-color); }
+.chapter li.part-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--brz-blue-soft);
+    margin: 22px 0 6px;
+    padding: 0 11px;
+}
+.chapter li.chapter-item {
+    margin: 1px 0;
+    line-height: 1.4;
+}
+.chapter li a {
+    border-radius: 7px;
+    padding: 6px 10px;
+    transition: background 0.12s, color 0.12s;
+}
+.chapter li a:hover { background: rgba(255, 255, 255, 0.06); }
+html.light .chapter li a:hover, html.rust .chapter li a:hover { background: var(--theme-hover); }
+.chapter li a.active {
+    background: rgba(0, 133, 251, 0.12);
+    color: var(--brz-blue-soft);
+    font-weight: 600;
+}
+
+/* ---- Content: headings -------------------------------------------------- */
+.content h1 {
+    font-size: 3.8rem;
+    line-height: 1.1;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--brz-heading);
+    margin-top: 1rem;
+}
+html.light .content h1, html.rust .content h1 { color: var(--fg); }
+.content h2 {
+    font-size: 2.6rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--brz-heading);
+}
+html.light .content h2, html.rust .content h2 { color: var(--fg); }
+.content h3 { font-size: 2rem; font-weight: 600; color: var(--brz-heading); }
+html.light .content h3, html.rust .content h3 { color: var(--fg); }
+.content p, .content li { line-height: 1.7; }
+
+/* ---- Inline code as a pill --------------------------------------------- */
+.content :not(pre) > code {
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 0.1em 0.4em;
+    border-radius: 5px;
+}
+html.light .content :not(pre) > code,
+html.rust .content :not(pre) > code {
+    background: var(--theme-hover);
+    border-color: var(--table-border-color);
+}
+
+/* ---- Code blocks ------------------------------------------------------- */
+.content pre {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    overflow: hidden;
+}
+html.light .content pre, html.rust .content pre { border-color: var(--table-border-color); }
+/* The <code> inside is the scroll container carrying the hljs background. It
+   must stay square: the pre's overflow:hidden clips it to the border's inner
+   curve. Giving it its own radius carves the background tighter than that
+   curve and lets the page background peek through at the corners. */
+.content pre > code { border-radius: 0; }
+/* Design-mockup code boxes: deep-navy panel instead of tomorrow-night's
+   green-gray, matching border and radius. Scoped to navy so the stock
+   themes keep their stock highlight styling. */
+html.navy .content pre {
+    border-color: rgba(255, 255, 255, 0.1);
+    border-radius: 11px;
+}
+html.navy .content pre > code {
+    background: #020a1c;
+    color: #cbdcee;
+    line-height: 1.62;
+    padding: 17px 18px;
+}
+/* Syntax token palette from the design mockup (overrides tomorrow-night,
+   navy only). The mockup defines four token colors — comments, strings,
+   numbers, keywords — on the #cbdcee base; titles/attributes reuse the
+   brand's inline-code blue for tokens the mockup's mini-highlighter
+   doesn't distinguish. */
+html.navy .hljs-comment,
+html.navy .hljs-quote,
+html.navy .hljs-meta { color: #5f7a91; font-style: italic; }
+html.navy .hljs-string,
+html.navy .hljs-regexp,
+html.navy .hljs-addition { color: #63d69a; }
+html.navy .hljs-number,
+html.navy .hljs-literal,
+html.navy .hljs-symbol,
+html.navy .hljs-bullet { color: #e0a35e; }
+html.navy .hljs-keyword,
+html.navy .hljs-selector-tag,
+html.navy .hljs-type,
+html.navy .hljs-built_in,
+html.navy .hljs-tag,
+html.navy .hljs-deletion { color: #ff8bb0; }
+html.navy .hljs-title,
+html.navy .hljs-section,
+html.navy .hljs-name,
+html.navy .hljs-attr,
+html.navy .hljs-attribute { color: #8fc6ff; }
+html.navy .hljs-variable,
+html.navy .hljs-template-variable,
+html.navy .hljs-params { color: #cbdcee; }
+
+/* ---- Blockquote callouts (design's Note boxes) ------------------------- */
+blockquote {
+    border: none !important;
+    border-inline-start: 3px solid var(--brz-blue) !important;
+    border-radius: 0 8px 8px 0;
+    padding: 14px 18px;
+    margin: 20px 0;
+}
+
+/* ---- Tables ------------------------------------------------------------ */
+table { width: 100%; }
+table thead { background: var(--table-header-bg); }
+table th, table td { text-align: left; }
+
+/* ---- CTA card feel for the wide prev/next nav -------------------------- */
+.nav-wide-wrapper .nav-chapters { color: var(--brz-blue-soft); }
+
+/* ---- Wide screens: reserve the right TOC column ------------------------
+   The page TOC is position:fixed so it takes no layout space; without a
+   reserved gutter the article centers in (viewport - sidebar) and drifts
+   right, leaving a large empty band on its left. Reserve the column and pin
+   the TOC inside it so the article centers between sidebar and TOC, matching
+   the design's three-column balance. */
+@media only screen and (min-width: 1440px) {
+    /* The right padding reserves the TOC column; the left padding keeps a
+       gutter at least as wide as mdBook's fixed previous-chapter arrow
+       (min-width 90px, pinned to the sidebar edge) so it can never overlap
+       the article. */
+    #content { padding-right: 280px; padding-left: 100px; }
+    .sidetoc { left: auto !important; right: 0 !important; }
+    .pagetoc {
+        left: auto !important;
+        right: 28px !important;
+        width: 240px !important;
+    }
+}
+
+/* ---- Search: align with the article column ------------------------------
+   The search wrapper sits in the full-width .page, so give it the same
+   inline geometry as #content and cap the bar + results to the article
+   width. Keeps results clear of the fixed page TOC on the right. */
+#search-wrapper { padding: 24px 5px 0; }
+/* Teasers can contain very long unbroken identifiers (the snippets
+   processor concatenates every language tab's content, e.g.
+   "SdkBuilderSdkBuilder…"); break them rather than letting a result
+   expand beyond its box. */
+ul#searchresults span.teaser { word-wrap: break-word; overflow-wrap: anywhere; }
+#search-wrapper .searchbar-outer,
+#search-wrapper .searchresults-outer {
+    max-width: var(--content-max-width);
+    margin-inline: auto;
+}
+@media only screen and (min-width: 1440px) {
+    #search-wrapper { padding-left: 100px; padding-right: 280px; }
+}
+
+/* ---- Mobile ------------------------------------------------------------ */
+@media only screen and (max-width: 900px) {
+    .brand-header { gap: 12px; padding: 0 14px; }
+    .brand-header .brand-product,
+    .brand-header .brand-badge,
+    .brand-header .brand-nav { display: none; }
+}
+
