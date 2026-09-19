@@ -453,8 +453,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracker.close();
 
     tracker.wait().await;
-    if shutdown.is_failure() {
-        return Err("sspd shut down after a subsystem failed".into());
+    if let Some(failure) = shutdown.failure() {
+        return Err(format!("sspd shut down: {failure}").into());
     }
     info!("shutdown complete");
     Ok(())
