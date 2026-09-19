@@ -19,14 +19,6 @@ async fn data_sync_fixture() -> DataSyncFixture {
         .expect("Failed to start DataSync service")
 }
 
-/// Fixture: Lnurl service for RTSync testing
-#[fixture]
-async fn lnurl_fixture() -> LnurlFixture {
-    LnurlFixture::new()
-        .await
-        .expect("Failed to start Lnurl service")
-}
-
 /// Fixture: Alice seed fixture
 #[fixture]
 fn alice_seed() -> [u8; 32] {
@@ -35,86 +27,43 @@ fn alice_seed() -> [u8; 32] {
     seed
 }
 
-/// Fixture: Alice SDKs with shared RTSync service
-#[fixture]
-async fn alice_sdks(
-    #[future] data_sync_fixture: DataSyncFixture,
-    alice_seed: [u8; 32],
-) -> Result<(SdkInstance, SdkInstance)> {
-    let data_sync = Arc::new(data_sync_fixture.await);
-    let sync_url = data_sync.grpc_url().to_string();
-
-    let mut alice1 = create_sdk_with_rtsync("alice1", alice_seed, &sync_url).await?;
-    alice1.data_sync_fixture = Some(Arc::clone(&data_sync));
-
-    let mut alice2 = create_sdk_with_rtsync("alice2", alice_seed, &sync_url).await?;
-    alice2.data_sync_fixture = Some(Arc::clone(&data_sync));
-
-    Ok((alice1, alice2))
-}
-
-/// Fixture: Bob's SDK with Lnurl configured
-#[fixture]
-async fn bob_sdk(#[future] lnurl_fixture: LnurlFixture) -> Result<SdkInstance> {
-    let lnurl = Arc::new(lnurl_fixture.await);
-    let lnurl_domain = lnurl.http_url().to_string();
-
-    let temp_dir = tempfile::Builder::new().prefix("breez-sdk-bob").tempdir()?;
-
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-
-    let mut config = default_config(Network::Regtest);
-    config.api_key = None; // Regtest: no API key needed
-    config.lnurl_domain = Some(lnurl_domain.to_string());
-    config.sync_interval_secs = 1; // Faster sync for testing
-    config.real_time_sync_server_url = None;
-
-    let mut sdk_instance = build_sdk_with_custom_config(
-        temp_dir.path().to_string_lossy().to_string(),
-        seed,
-        config,
-        Some(temp_dir),
-        false,
-    )
-    .await?;
-    sdk_instance.lnurl_fixture = Some(Arc::clone(&lnurl));
-    Ok(sdk_instance)
-}
-
 // ---------------------
 // Helper Functions
 // ---------------------
 
-async fn create_sdk_with_rtsync(name: &str, seed: [u8; 32], sync_url: &str) -> Result<SdkInstance> {
-    create_sdk_with_rtsync_and_lnurl(name, seed, sync_url, None).await
+/// A wallet with identity `seed` that syncs through `data_sync`, and registers
+/// lightning addresses with `lnurl` when given one.
+async fn create_sdk_with_rtsync(
+    env: &Environment,
+    seed: [u8; 32],
+    data_sync: &Arc<DataSyncFixture>,
+    lnurl: Option<&Arc<LnurlFixture>>,
+) -> Result<SdkInstance> {
+    let sync_url = data_sync.grpc_url().to_string();
+    let lnurl_domain = lnurl.map(|lnurl| lnurl.http_url().to_string());
+    let mut sdk = env
+        .create_wallet_from_seed(seed, move |config| {
+            config.sync_interval_secs = 1;
+            config.real_time_sync_server_url = Some(sync_url);
+            config.lnurl_domain = lnurl_domain;
+        })
+        .await?;
+    sdk.data_sync_fixture = Some(Arc::clone(data_sync));
+    sdk.lnurl_fixture = lnurl.cloned();
+    Ok(sdk)
 }
 
-async fn create_sdk_with_rtsync_and_lnurl(
-    name: &str,
-    seed: [u8; 32],
-    sync_url: &str,
-    lnurl_domain: Option<String>,
-) -> Result<SdkInstance> {
-    let temp_dir = tempfile::Builder::new()
-        .prefix(format!("breez-sdk-{name}").as_str())
-        .tempdir()?;
-
-    let mut config = default_config(Network::Regtest);
-    config.api_key = None;
-    config.prefer_spark_over_lightning = true;
-    config.sync_interval_secs = 1;
-    config.real_time_sync_server_url = Some(sync_url.to_string());
-    config.lnurl_domain = lnurl_domain;
-
-    build_sdk_with_custom_config(
-        temp_dir.path().to_string_lossy().to_string(),
-        seed,
-        config,
-        Some(temp_dir),
-        false,
-    )
-    .await
+/// Bob's wallet, which registers lightning addresses with `lnurl`.
+async fn create_bob_sdk(env: &Environment, lnurl: &Arc<LnurlFixture>) -> Result<SdkInstance> {
+    let lnurl_domain = lnurl.http_url().to_string();
+    let mut sdk = env
+        .create_wallet_with(move |config| {
+            config.sync_interval_secs = 1;
+            config.lnurl_domain = Some(lnurl_domain);
+        })
+        .await?;
+    sdk.lnurl_fixture = Some(Arc::clone(lnurl));
+    Ok(sdk)
 }
 
 // ---------------------
@@ -127,13 +76,17 @@ async fn create_sdk_with_rtsync_and_lnurl(
 #[test_log::test(tokio::test)]
 async fn test_01_rtsync_lnurl_info_sync(
     #[future] env: Result<Environment>,
-    #[future] alice_sdks: Result<(SdkInstance, SdkInstance)>,
+    #[future] data_sync_fixture: DataSyncFixture,
+    alice_seed: [u8; 32],
 ) -> Result<()> {
     let env = env.await?;
     info!("=== Starting test_01_rtsync_lnurl_info_sync ===");
 
-    let (mut alice1, mut alice2) = alice_sdks.await?;
-    let bob = env.create_wallet().await?;
+    let data_sync = Arc::new(data_sync_fixture.await);
+    let mut alice1 = create_sdk_with_rtsync(&env, alice_seed, &data_sync, None).await?;
+    let mut alice2 = create_sdk_with_rtsync(&env, alice_seed, &data_sync, None).await?;
+    let lnurl = Arc::new(env.lnurl_server().await?);
+    let bob = create_bob_sdk(&env, &lnurl).await?;
 
     let ln_address_description = "Bob's Lightning address description".to_string();
     let ln_address_comment = "Test payment".to_string();
@@ -227,37 +180,19 @@ async fn test_01_rtsync_lnurl_info_sync(
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_02_rtsync_lightning_address_sync(
+    #[future] env: Result<Environment>,
     #[future] data_sync_fixture: DataSyncFixture,
-    #[future] lnurl_fixture: LnurlFixture,
     alice_seed: [u8; 32],
 ) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_02_rtsync_lightning_address_sync ===");
 
     let data_sync = Arc::new(data_sync_fixture.await);
-    let sync_url = data_sync.grpc_url().to_string();
-    let lnurl = Arc::new(lnurl_fixture.await);
-    let lnurl_domain = lnurl.http_url().to_string();
+    let lnurl = Arc::new(env.lnurl_server().await?);
 
     // Create two instances from the same seed with rtsync + lnurl
-    let mut alice1 = create_sdk_with_rtsync_and_lnurl(
-        "alice1-la",
-        alice_seed,
-        &sync_url,
-        Some(lnurl_domain.clone()),
-    )
-    .await?;
-    alice1.data_sync_fixture = Some(Arc::clone(&data_sync));
-    alice1.lnurl_fixture = Some(Arc::clone(&lnurl));
-
-    let mut alice2 = create_sdk_with_rtsync_and_lnurl(
-        "alice2-la",
-        alice_seed,
-        &sync_url,
-        Some(lnurl_domain.clone()),
-    )
-    .await?;
-    alice2.data_sync_fixture = Some(Arc::clone(&data_sync));
-    alice2.lnurl_fixture = Some(Arc::clone(&lnurl));
+    let alice1 = create_sdk_with_rtsync(&env, alice_seed, &data_sync, Some(&lnurl)).await?;
+    let mut alice2 = create_sdk_with_rtsync(&env, alice_seed, &data_sync, Some(&lnurl)).await?;
 
     // Instance 1 registers a lightning address
     let registered = alice1

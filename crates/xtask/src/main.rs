@@ -1013,8 +1013,8 @@ fn itest_cmd() -> Result<()> {
 
     // The breez-itest suites that take an `Environment` and pass on a local stack.
     // Left out: lnurl, whose payment flows need a second Lightning node to pay
-    // from, and rtsync, whose LNURL info sync needs an LNURL server. The rest of
-    // breez-itest reaches the deployed regtest and runs in `make breez-itest`.
+    // from. The rest of breez-itest reaches the deployed regtest and runs in
+    // `make breez-itest`.
     let local_suites = [
         "breez_sdk_tests",
         "coop_exit_local",
@@ -1027,6 +1027,7 @@ fn itest_cmd() -> Result<()> {
         "message_signing",
         "optimization",
         "recovery",
+        "rtsync",
         "spark_htlcs",
         "static_deposit_instant",
         "tokens",

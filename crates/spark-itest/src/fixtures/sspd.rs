@@ -66,6 +66,8 @@ pub struct SspdFixture {
     pub container: ContainerAsync<GenericImage>,
     pub postgres: ContainerAsync<Postgres>,
     pub base_url: String,
+    /// [`Self::base_url`] as a container on the cluster's docker network reaches it.
+    pub network_base_url: String,
     pub internal_url: String,
     pub wallet_seed_hex: String,
     pub identity_public_key: PublicKey,
@@ -211,6 +213,7 @@ impl SspdFixture {
             container,
             postgres,
             base_url,
+            network_base_url: format!("http://{container_name}:{GRAPHQL_PORT}"),
             internal_url,
             wallet_seed_hex: wallet_seed_hex.to_string(),
             identity_public_key,

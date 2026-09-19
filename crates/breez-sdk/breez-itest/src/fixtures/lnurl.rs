@@ -1,5 +1,6 @@
 use crate::fixtures::docker::{DockerImageConfig, build_docker_image};
 use anyhow::Result;
+use spark_wallet::SparkWalletConfig;
 use testcontainers::{
     ContainerAsync, GenericImage, ImageExt,
     core::{ContainerPort, Host, WaitFor, wait::HttpWaitStrategy},
@@ -9,6 +10,7 @@ use testcontainers_modules::postgres::Postgres;
 use tracing::info;
 
 const HTTP_PORT: u16 = 8080;
+const SPARK_CONFIG_PATH: &str = "/spark-config.json";
 
 /// Configuration for building the lnurl Docker image
 #[derive(Debug, Clone)]
@@ -89,6 +91,26 @@ impl LnurlFixture {
     /// Starts a PostgreSQL testcontainer and points the LNURL server at it:
     /// postgres is the server's only supported database.
     pub async fn with_config(config: LnurlImageConfig) -> Result<Self> {
+        Self::start(config, None).await
+    }
+
+    /// An LNURL server on a local cluster's docker network, using the operators and
+    /// SSP in `spark_config` instead of the network's.
+    pub async fn on_local_cluster(
+        docker_network: &str,
+        spark_config: &SparkWalletConfig,
+    ) -> Result<Self> {
+        Self::start(
+            LnurlImageConfig::default(),
+            Some((docker_network, spark_config)),
+        )
+        .await
+    }
+
+    async fn start(
+        config: LnurlImageConfig,
+        local_cluster: Option<(&str, &SparkWalletConfig)>,
+    ) -> Result<Self> {
         // Build the Docker image from the context
         build_docker_image(&config.docker_config).await?;
 
@@ -145,6 +167,12 @@ impl LnurlFixture {
             )
             // Allow the container to reach services on the host via host.docker.internal
             .with_host("host.docker.internal", Host::HostGateway);
+        if let Some((docker_network, spark_config)) = local_cluster {
+            container = container
+                .with_network(docker_network)
+                .with_copy_to(SPARK_CONFIG_PATH, serde_json::to_vec(spark_config)?)
+                .with_env_var("BREEZ_LNURL_SPARK_CONFIG", SPARK_CONFIG_PATH);
+        }
 
         let container = container.start().await?;
 

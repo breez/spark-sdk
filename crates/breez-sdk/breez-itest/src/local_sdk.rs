@@ -17,13 +17,15 @@ use breez_sdk_spark::{
 use spark_itest::fixtures::setup::TestFixtures;
 use spark_itest::fixtures::sspd::internal_api;
 use spark_wallet::{
-    DefaultSigner, SparkSignerAdapter, SparkWallet, SparkWalletConfig, WalletEvent,
+    DefaultSigner, RetryConfig, ServiceProviderConfig, SparkSignerAdapter, SparkWallet,
+    SparkWalletConfig, WalletEvent,
 };
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 use tracing::debug;
 
 use crate::chain_service::LocalBitcoindChainService;
+use crate::fixtures::lnurl::LnurlFixture;
 use crate::helpers::regtest::SignerBackend;
 use crate::{FaucetConfig, SdkInstance};
 
@@ -476,6 +478,19 @@ impl LocalStack {
             faucet: FaucetConfig::for_ssp(&stack.ssp_base_url),
             turnkey_guard: None,
         })
+    }
+
+    /// An LNURL server that issues invoices through this stack's SSP.
+    pub async fn lnurl_server(&self) -> Result<LnurlFixture> {
+        let sspd = self.fixtures.sspd().await?;
+        let spark_config = self.fixtures.network_wallet_config(ServiceProviderConfig {
+            base_url: sspd.network_base_url.clone(),
+            schema_endpoint: Some("graphql/spark/rc".to_string()),
+            identity_public_key: sspd.identity_public_key,
+            user_agent: None,
+            retry_config: RetryConfig::default(),
+        })?;
+        LnurlFixture::on_local_cluster(&self.fixtures.fixture_id.to_network(), &spark_config).await
     }
 }
 
