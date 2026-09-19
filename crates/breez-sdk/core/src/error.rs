@@ -56,6 +56,18 @@ pub enum SdkError {
         bound_usd_cents: Option<u64>,
     },
 
+    /// A cross-chain provider won't serve the route, for now or at all.
+    ///
+    /// The message leads with a fixed phrase for each case, for bindings that
+    /// only see the text, followed by the provider's own reason.
+    #[error("{}: {reason}", if *temporary { "Cross-chain route temporarily unavailable" } else { "Cross-chain route not supported" })]
+    CrossChainRouteUnavailable {
+        reason: String,
+        /// `true` when the provider expects the route back shortly, so the
+        /// same request can succeed later. Otherwise try another route.
+        temporary: bool,
+    },
+
     /// Network error
     #[error("Network error: {0}")]
     NetworkError(String),
@@ -153,6 +165,9 @@ impl From<flashnet::FlashnetError> for SdkError {
                     bound_amount: None,
                     bound_usd_cents: None,
                 }
+            }
+            flashnet::FlashnetError::RouteUnavailable { reason, temporary } => {
+                SdkError::CrossChainRouteUnavailable { reason, temporary }
             }
             flashnet::FlashnetError::Network { reason, code } => {
                 let code = match code {
@@ -493,5 +508,46 @@ mod render_bound_tests {
     #[test]
     fn pads_a_sub_dollar_bound_to_two_decimals() {
         assert!(message(true, None, Some(5)).ends_with("(published minimum: 0.05 USD)"));
+    }
+}
+
+#[cfg(test)]
+mod route_unavailable_tests {
+    use super::*;
+
+    fn from_provider(temporary: bool, reason: &str) -> SdkError {
+        flashnet::FlashnetError::RouteUnavailable {
+            reason: reason.to_string(),
+            temporary,
+        }
+        .into()
+    }
+
+    #[test]
+    fn keeps_whether_a_retry_can_succeed() {
+        assert!(matches!(
+            from_provider(true, "busy"),
+            SdkError::CrossChainRouteUnavailable {
+                temporary: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn the_message_names_the_case_before_the_provider_reason() {
+        assert_eq!(
+            from_provider(
+                true,
+                "This route is temporarily unavailable. Please try again later."
+            )
+            .to_string(),
+            "Cross-chain route temporarily unavailable: This route is temporarily unavailable. \
+             Please try again later."
+        );
+        assert_eq!(
+            from_provider(false, "Unsupported route").to_string(),
+            "Cross-chain route not supported: Unsupported route"
+        );
     }
 }

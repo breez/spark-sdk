@@ -361,9 +361,10 @@ pub fn derive_idempotency_key(scope: &str, key_input: &str) -> String {
 /// Classify an Orchestra error body, which has the shape
 /// `{"error":{"code":"...","message":"..."}}`.
 ///
-/// The amount-rejection codes become [`FlashnetError::AmountOutOfRange`] so
-/// callers can react to them without matching on prose. Orchestra does not
-/// include the bound it applied, so the error carries the direction only.
+/// The amount-rejection codes become [`FlashnetError::AmountOutOfRange`] and
+/// the route refusals [`FlashnetError::RouteUnavailable`], so callers can
+/// react to them without matching on prose. Orchestra does not include the
+/// bound it applied, so the amount error carries the direction only.
 /// Anything else keeps its message and the HTTP status.
 fn error_from_body(body: &str, status: u16) -> FlashnetError {
     let parsed = serde_json::from_str::<serde_json::Value>(body).ok();
@@ -384,6 +385,19 @@ fn error_from_body(body: &str, status: u16) -> FlashnetError {
         Some("amount_too_large" | "amount_exceeds_liquidity") => FlashnetError::AmountOutOfRange {
             reason,
             too_small: false,
+        },
+        Some(
+            "route_unavailable"
+            | "estimate_unavailable"
+            | "service_unavailable"
+            | "spot_unavailable",
+        ) => FlashnetError::RouteUnavailable {
+            reason,
+            temporary: true,
+        },
+        Some("unsupported_route" | "route_disabled") => FlashnetError::RouteUnavailable {
+            reason,
+            temporary: false,
         },
         _ => FlashnetError::Network {
             reason,
@@ -423,14 +437,42 @@ mod error_body_tests {
     }
 
     #[test]
-    fn other_errors_keep_the_message_and_status() {
-        let err = error_from_body(
-            r#"{"error":{"code":"route_unavailable","message":"No route"}}"#,
+    fn route_refusals_become_typed_errors() {
+        // Bodies as Orchestra returns them for a HyperCore estimate and an
+        // Arc to Spark BTC estimate.
+        let busy = error_from_body(
+            r#"{"error":{"code":"estimate_unavailable","message":"This route is temporarily unavailable. Please try again later."}}"#,
             503,
         );
         assert!(matches!(
+            busy,
+            FlashnetError::RouteUnavailable {
+                temporary: true,
+                ..
+            }
+        ));
+        let unsupported = error_from_body(
+            r#"{"error":{"code":"unsupported_route","message":"Unsupported route"}}"#,
+            400,
+        );
+        assert!(matches!(
+            unsupported,
+            FlashnetError::RouteUnavailable {
+                temporary: false,
+                ref reason
+            } if reason == "Unsupported route"
+        ));
+    }
+
+    #[test]
+    fn other_errors_keep_the_message_and_status() {
+        let err = error_from_body(
+            r#"{"error":{"code":"internal_error","message":"Something broke"}}"#,
+            500,
+        );
+        assert!(matches!(
             err,
-            FlashnetError::Network { code: Some(503), ref reason } if reason == "No route"
+            FlashnetError::Network { code: Some(500), ref reason } if reason == "Something broke"
         ));
     }
 
