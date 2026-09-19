@@ -13,6 +13,12 @@ It prints where its services are, and the Spark config a wallet connects with,
 once the SSP can serve one. `make local-env-up` runs it in the background,
 `make local-env-down` stops it, `make local-env-reset` deletes its state.
 
+The same services run natively under Nix, as processes rather than containers:
+
+```bash
+nix run .#local-env
+```
+
 ## Settings
 
 Every setting is an environment variable read when the environment starts:
@@ -40,6 +46,13 @@ Every setting is an environment variable read when the environment starts:
 | `MAX_DENOMINATION_POWER` | `16` | Largest denomination the SSP keeps, in powers of two sats |
 | `DKG_MIN_AVAILABLE_KEYS` | `12000` | Keyshares each operator keeps unused. The SSP's pool spends over 10,000 |
 | `READY_TIMEOUT_SECONDS` | `2400` | How long the environment reports progress before it gives up |
+| `SPARK_LOCAL_DIR` | `./.spark-local` | Where Nix keeps the environment's state |
+
+Nix reads a few more, for the ports its services hold to one host:
+`POSTGRES_PORT`, `ELECTRS_PORT`, `ELECTRS_ELECTRUM_PORT`,
+`ELECTRS_MONITORING_PORT`, `MEMPOOL_API_PORT`, `LDK_GRPC_PORT`,
+`LDK_ALICE_GRPC_PORT` and `BITCOIND_ZMQ_PORT`. Their defaults are in
+[nix/local-env.nix](nix/local-env.nix).
 
 The keys the environment runs on are fixed in [.env](.env). They belong to this
 regtest network alone. It also pins `DATA_SYNC_VERSION`, the commit of
@@ -53,6 +66,7 @@ regtest network alone. It also pins `DATA_SYNC_VERSION`, the commit of
 | [scripts/](scripts) | What sets the environment up and keeps it running |
 | [tools.dockerfile](tools.dockerfile) | The image those scripts run in, with the SSP's and the nodes' CLIs |
 | [config/](config) | What a service reads unchanged |
+| [nix/](nix) | The same environment, built and run by Nix |
 
 The operator, the SSP and the Lightning nodes are built from the dockerfiles in
 `crates/spark-itest/docker/`, which the integration tests build their own images
