@@ -5,6 +5,9 @@ packages/
 regtest/
 target/
 examples/
+flake.nix
+flake.lock
+.spark-local/
 
 **/node_modules/
 **/target/
