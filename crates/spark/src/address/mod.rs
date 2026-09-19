@@ -24,7 +24,7 @@ use prost::{Message as ProstMessage, encoding};
 
 use error::AddressError;
 use platform_utils::time::{SystemTime, UNIX_EPOCH};
-use spark_token_primitives::{
+use spark_primitives::{
     FinalizeTokenInvoiceRequest, PrepareTokenInvoiceRequest, PreparedTokenInvoice,
     finalize_token_invoice, prepare_token_invoice,
 };
@@ -1019,7 +1019,7 @@ mod tests {
     }
 
     /// Cross-language signing-hash fixtures. JS is the source of truth; these vectors are
-    /// shared with Go and spark-token-primitives. If this test fails, Breez's hash has drifted
+    /// shared with Go and spark-primitives. If this test fails, Breez's hash has drifted
     /// from the rest of the ecosystem and signatures produced elsewhere will not verify.
     mod invoice_hash_fixtures {
         use super::super::*;
