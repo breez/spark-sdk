@@ -1,0 +1,487 @@
+# A Spark regtest environment of your own: bitcoind, three operators, a Spark
+# service provider (SSP) with its Lightning node, and the mempool explorer.
+# `docker compose up` builds the images and runs it, and prints what a wallet
+# connects to once the SSP can serve one. `make local-env-up` does the same in
+# the background. Add `--build` after changing the daemon or the operator pin.
+#
+# The images are this environment's own: the integration tests build their own
+# from the same dockerfiles, under tags of theirs.
+#
+# Every published port can be set in the environment, for example
+# `BITCOIND_RPC_PORT=18500 docker compose up`.
+
+name: spark-local
+
+x-tools: &tools
+  image: spark-local-tools:latest
+  build:
+    context: .
+    dockerfile: tools.dockerfile
+    additional_contexts:
+      sspd: service:sspd
+      ldk_server: service:ldk-server
+  env_file: .env
+  environment: &tools-env
+    LOCAL_DIR: /local
+    OUT_DIR: /out
+    BITCOIND_RPC_URL: http://bitcoind:18443
+    SSP_GRPC_URI: http://sspd:59050
+    CHAIN_API_URL: http://mempool/api
+    LNURL_URL: http://lnurl:8080
+    DATA_SYNC_WEB_URL: http://data-sync:${DATA_SYNC_WEB_PORT:-8082}
+  volumes:
+    - local:/local
+    - ./data:/out
+
+x-operator: &operator
+  image: spark-local-so:latest
+  build:
+    context: ../../crates/spark-itest/docker
+    dockerfile: spark-so.dockerfile
+  restart: unless-stopped
+  volumes:
+    - local:/local:ro
+    - ./scripts:/scripts:ro
+  healthcheck:
+    test: [CMD, /scripts/operator-ready.sh]
+    interval: 5s
+    start_period: 15m
+  environment: &operator-env
+    SPARK_THRESHOLD: "2"
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres
+    BITCOIND_HOST: bitcoind:18443
+    BITCOIND_ZMQPUBRAWBLOCK: tcp://bitcoind:28332
+    OPERATORS_JSON: /local/operators.json
+    SERVER_CERT: /local/certs/server.crt
+    SERVER_KEY: /local/certs/server.key
+    # The SSP creates its pool's trees together, reserving over 10,000 keyshares
+    # for the default pool.
+    DKG_MIN_AVAILABLE_KEYS: ${DKG_MIN_AVAILABLE_KEYS:-12000}
+    DKG_BATCH_SIZE: ${DKG_BATCH_SIZE:-2000}
+    # Not read by the operator: a change recreates the container, so it serves
+    # the certificate init reissues for the new host names.
+    PUBLIC_HOST: ${PUBLIC_HOST:-127.0.0.1}
+    TLS_EXTRA_HOSTS: ${TLS_EXTRA_HOSTS:-}
+
+x-ldk-node: &ldk-node
+  image: spark-local-ldk-server:latest
+  build:
+    context: ../../crates/spark-itest/docker
+    dockerfile: ldk-server.dockerfile
+  restart: unless-stopped
+  healthcheck:
+    test: [CMD, test, -f, /data/tls.crt]
+    interval: 2s
+    retries: 30
+
+x-migrations: &migrations
+  image: spark-local-migrations:latest
+  build:
+    context: ../../crates/spark-itest/docker
+    dockerfile: migrations.dockerfile
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  init:
+    <<: *tools
+    command: [/scripts/init.sh]
+    environment:
+      <<: *tools-env
+      OPERATOR_ADDRESSES: spark-so-0:8535 spark-so-1:8535 spark-so-2:8535
+      OPERATOR_PUBLIC_PORTS: ${OPERATOR_0_PORT:-8535} ${OPERATOR_1_PORT:-8536} ${OPERATOR_2_PORT:-8537}
+      SSP_PUBLIC_PORT: ${SSP_PORT:-59049}
+      SSP_ADDRESS: sspd:59049
+      PUBLIC_HOST: ${PUBLIC_HOST:-127.0.0.1}
+      TLS_EXTRA_HOSTS: ${TLS_EXTRA_HOSTS:-}
+      LDK_BITCOIND_RPC_ADDRESS: bitcoind:18443
+      LDK_SSP_DIR: /data
+      LDK_SSP_SEED_DIR: /ldk-ssp
+      LDK_GRPC_ADDRESS: 0.0.0.0:3536
+      LDK_TLS_HOST: ldk-server
+      LDK_ALICE_DIR: /data
+      LDK_ALICE_SEED_DIR: /ldk-alice
+      LDK_ALICE_GRPC_ADDRESS: 0.0.0.0:3536
+      LDK_ALICE_LISTEN_PORT: "9735"
+      LDK_ALICE_TLS_HOST: ldk-alice
+    volumes:
+      - local:/local
+      - ldk-data:/ldk-ssp
+      - ldk-alice-data:/ldk-alice
+      - ./data:/out
+
+  bitcoind:
+    image: bitcoin/bitcoin:31.0
+    restart: unless-stopped
+    command:
+      - -regtest
+      - -server
+      - -txindex
+      - -addresstype=bech32
+      - -fallbackfee=0.00000253
+      - -rpcport=18443
+      - -rpcuser=${BITCOIND_RPC_USER}
+      - -rpcpassword=${BITCOIND_RPC_PASSWORD}
+      - -rpcbind=0.0.0.0
+      - -rpcallowip=0.0.0.0/0
+      - -zmqpubrawblock=tcp://0.0.0.0:28332
+      - -zmqpubrawtx=tcp://0.0.0.0:28333
+    volumes:
+      - bitcoind:/home/bitcoin/.bitcoin
+    ports:
+      - ${BIND_ADDRESS:-127.0.0.1}:${BITCOIND_RPC_PORT:-18443}:18443
+      - ${BIND_ADDRESS:-127.0.0.1}:${BITCOIND_P2P_PORT:-18444}:18444
+    healthcheck:
+      test:
+        - CMD
+        - bitcoin-cli
+        - -regtest
+        - -rpcport=18443
+        - -rpcuser=${BITCOIND_RPC_USER}
+        - -rpcpassword=${BITCOIND_RPC_PASSWORD}
+        - getblockchaininfo
+      interval: 2s
+      retries: 30
+
+  miner:
+    <<: *tools
+    command: [/scripts/miner.sh]
+    restart: unless-stopped
+    environment:
+      <<: *tools-env
+      BLOCK_INTERVAL_SECONDS: ${BLOCK_INTERVAL_SECONDS:-5}
+    depends_on:
+      bitcoind:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    command: [postgres, -c, max_connections=300]
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      - ./config/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: [CMD, pg_isready, -U, postgres]
+      interval: 2s
+      retries: 30
+
+  migrations-0:
+    <<: *migrations
+    command:
+      [migrate, apply, --url, "postgres://postgres:postgres@postgres:5432/sparkoperator_0?sslmode=disable"]
+  migrations-1:
+    <<: *migrations
+    command:
+      [migrate, apply, --url, "postgres://postgres:postgres@postgres:5432/sparkoperator_1?sslmode=disable"]
+  migrations-2:
+    <<: *migrations
+    command:
+      [migrate, apply, --url, "postgres://postgres:postgres@postgres:5432/sparkoperator_2?sslmode=disable"]
+
+  spark-so-0:
+    <<: *operator
+    environment:
+      <<: *operator-env
+      SPARK_OPERATOR_INDEX: "0"
+      SPARK_OPERATOR_KEY: "0101010101010101010101010101010101010101010101010101010101010101"
+    ports:
+      - ${BIND_ADDRESS:-127.0.0.1}:${OPERATOR_0_PORT:-8535}:8535
+    depends_on: &operator-depends-on
+      init:
+        condition: service_completed_successfully
+      bitcoind:
+        condition: service_healthy
+      migrations-0:
+        condition: service_completed_successfully
+      migrations-1:
+        condition: service_completed_successfully
+      migrations-2:
+        condition: service_completed_successfully
+  spark-so-1:
+    <<: *operator
+    environment:
+      <<: *operator-env
+      SPARK_OPERATOR_INDEX: "1"
+      SPARK_OPERATOR_KEY: "0202020202020202020202020202020202020202020202020202020202020202"
+    ports:
+      - ${BIND_ADDRESS:-127.0.0.1}:${OPERATOR_1_PORT:-8536}:8535
+    depends_on: *operator-depends-on
+  spark-so-2:
+    <<: *operator
+    environment:
+      <<: *operator-env
+      SPARK_OPERATOR_INDEX: "2"
+      SPARK_OPERATOR_KEY: "0303030303030303030303030303030303030303030303030303030303030303"
+    ports:
+      - ${BIND_ADDRESS:-127.0.0.1}:${OPERATOR_2_PORT:-8537}:8535
+    depends_on: *operator-depends-on
+
+  ldk-server:
+    <<: *ldk-node
+    command: [/local/ldk-ssp.toml]
+    volumes:
+      - local:/local:ro
+      - ldk-data:/data
+    ports:
+      - ${BIND_ADDRESS:-127.0.0.1}:${LDK_P2P_PORT:-9735}:9735
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      bitcoind:
+        condition: service_healthy
+
+  ldk-alice:
+    <<: *ldk-node
+    command: [/local/ldk-alice.toml]
+    volumes:
+      - local:/local:ro
+      - ldk-alice-data:/data
+    ports:
+      - ${BIND_ADDRESS:-127.0.0.1}:${LDK_ALICE_P2P_PORT:-9736}:9735
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      bitcoind:
+        condition: service_healthy
+
+  lightning:
+    <<: *tools
+    command: [/scripts/lightning.sh]
+    restart: on-failure
+    environment:
+      <<: *tools-env
+      SSP_NODE_ADDRESS: ldk-server:9735
+      SSP_BASE_URL: ldk-server:3536
+      SSP_TLS_CERT: /ldk-ssp/tls.crt
+      ALICE_BASE_URL: ldk-alice:3536
+      CHANNEL_SATS: ${CHANNEL_SATS:-5000000000}
+    volumes:
+      - local:/local
+      - ldk-alice-data:/data:ro
+      - ldk-data:/ldk-ssp:ro
+    depends_on:
+      ldk-server:
+        condition: service_healthy
+      ldk-alice:
+        condition: service_healthy
+      miner:
+        condition: service_started
+
+  sspd:
+    image: spark-local-sspd:latest
+    build:
+      context: ../..
+      dockerfile: crates/spark-itest/docker/sspd.dockerfile
+    restart: unless-stopped
+    environment:
+      SSPD_DB_URL: postgres://postgres:postgres@postgres:5432/sspd
+      SSPD_BITCOIND_RPC_PASSWORD: ${BITCOIND_RPC_PASSWORD}
+      SSPD_WALLET_SEED: ${SSP_WALLET_SEED}
+      SSPD_LDK_SERVER_API_KEY: ${LDK_SERVER_API_KEY}
+      SSPD_LDK_SERVER_INVOICE_SIGNING_KEY: ${LDK_SERVER_NODE_SECRET_KEY}
+    command:
+      - --config=/local/sspd.toml
+      - --address=0.0.0.0:59049
+      - --internal-address=0.0.0.0:59050
+      - --network=regtest
+      - --auto-migrate
+      - --chain-poll-interval-seconds=1
+      - --bitcoind-rpc-address=http://bitcoind:18443
+      - --bitcoind-rpc-user=${BITCOIND_RPC_USER}
+      - --leaves-per-denomination=${LEAVES_PER_DENOMINATION:-8}
+      - --max-denomination-power=${MAX_DENOMINATION_POWER:-16}
+      - --ldk-server-url=ldk-server:3536
+      - --ldk-server-cert-path=/ldk/tls.crt
+    volumes:
+      - local:/local:ro
+      - ldk-data:/ldk:ro
+    ports:
+      - ${BIND_ADDRESS:-127.0.0.1}:${SSP_PORT:-59049}:59049
+      # Unauthenticated: it spends the SSP's funds. Loopback only.
+      - 127.0.0.1:${SSP_INTERNAL_PORT:-59050}:59050
+    depends_on:
+      postgres:
+        condition: service_healthy
+      spark-so-0:
+        condition: service_healthy
+      spark-so-1:
+        condition: service_healthy
+      spark-so-2:
+        condition: service_healthy
+      ldk-server:
+        condition: service_healthy
+
+  # Serves the lightning addresses wallets register with it, taking their
+  # invoices from the SSP.
+  lnurl:
+    image: spark-local-lnurl:latest
+    build:
+      context: ../..
+      dockerfile: crates/breez-sdk/lnurl/Dockerfile
+    restart: unless-stopped
+    environment:
+      BREEZ_LNURL_NETWORK: regtest
+      BREEZ_LNURL_SPARK_CONFIG: /local/spark-config-internal.json
+      BREEZ_LNURL_DB_URL: postgres://postgres:postgres@postgres:5432/lnurl
+      BREEZ_LNURL_AUTO_MIGRATE: "true"
+      BREEZ_LNURL_SCHEME: http
+      # A wallet signs the address it reaches the server by, which is PUBLIC_HOST
+      # from another device and loopback on this one.
+      BREEZ_LNURL_DOMAINS: ${PUBLIC_HOST:-127.0.0.1}:${LNURL_PORT:-8080},127.0.0.1:${LNURL_PORT:-8080},localhost:${LNURL_PORT:-8080}
+      BREEZ_LNURL_SSP_AUTH_SEED: ${LNURL_AUTH_SEED}
+      # A local environment is registered against as often as its test needs.
+      BREEZ_LNURL_MAX_REGISTRATIONS_PER_DAY: "0"
+    volumes:
+      - local:/local:ro
+    ports:
+      - ${BIND_ADDRESS:-127.0.0.1}:${LNURL_PORT:-8080}:8080
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      sspd:
+        condition: service_started
+
+  # Keeps a wallet's data in step across the devices it runs on.
+  data-sync:
+    image: spark-local-data-sync:latest
+    build:
+      context: https://github.com/breez/data-sync.git#${DATA_SYNC_VERSION}
+    restart: unless-stopped
+    environment:
+      GRPC_LISTEN_ADDRESS: 0.0.0.0:${DATA_SYNC_PORT:-8081}
+      GRPC_WEB_LISTEN_ADDRESS: 0.0.0.0:${DATA_SYNC_WEB_PORT:-8082}
+      SQLITE_DIR_PATH: /data
+    volumes:
+      - data-sync:/data
+    ports:
+      - ${BIND_ADDRESS:-127.0.0.1}:${DATA_SYNC_PORT:-8081}:${DATA_SYNC_PORT:-8081}
+      - ${BIND_ADDRESS:-127.0.0.1}:${DATA_SYNC_WEB_PORT:-8082}:${DATA_SYNC_WEB_PORT:-8082}
+
+  electrs:
+    image: mempool/electrs:v3.3.0
+    restart: unless-stopped
+    command:
+      - --network=regtest
+      - --daemon-rpc-addr=bitcoind:18443
+      - --cookie=${BITCOIND_RPC_USER}:${BITCOIND_RPC_PASSWORD}
+      - --jsonrpc-import
+      - --db-dir=/electrs
+      - --http-addr=0.0.0.0:3002
+      - --electrum-rpc-addr=0.0.0.0:60401
+    volumes:
+      - electrs:/electrs
+    depends_on:
+      bitcoind:
+        condition: service_healthy
+
+  mempool-api:
+    image: mempool/backend:v3.3.1
+    restart: unless-stopped
+    environment:
+      MEMPOOL_NETWORK: regtest
+      MEMPOOL_BACKEND: esplora
+      ESPLORA_REST_API_URL: http://electrs:3002
+      CORE_RPC_HOST: bitcoind
+      CORE_RPC_PORT: "18443"
+      CORE_RPC_USERNAME: ${BITCOIND_RPC_USER}
+      CORE_RPC_PASSWORD: ${BITCOIND_RPC_PASSWORD}
+      # With a database, the first start fetches the mining pool list from
+      # GitHub and exits when it cannot.
+      DATABASE_ENABLED: "false"
+      STATISTICS_ENABLED: "false"
+      FIAT_PRICE_ENABLED: "false"
+    depends_on:
+      electrs:
+        condition: service_started
+
+  mempool-web:
+    image: mempool/frontend:v3.3.1
+    restart: unless-stopped
+    environment:
+      FRONTEND_HTTP_PORT: "8080"
+      BACKEND_MAINNET_HTTP_HOST: mempool-api
+      ROOT_NETWORK: regtest
+      REGTEST_ENABLED: "true"
+      MAINNET_ENABLED: "false"
+      MINING_DASHBOARD: "false"
+    depends_on:
+      mempool-api:
+        condition: service_started
+
+  mempool:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    volumes:
+      - ./config/mempool-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - ${BIND_ADDRESS:-127.0.0.1}:${MEMPOOL_PORT:-8090}:80
+    depends_on:
+      mempool-web:
+        condition: service_started
+
+  funder:
+    <<: *tools
+    command: [/scripts/funder.sh]
+    restart: unless-stopped
+    environment:
+      <<: *tools-env
+      LEAVES_PER_DENOMINATION: ${LEAVES_PER_DENOMINATION:-8}
+      MAX_DENOMINATION_POWER: ${MAX_DENOMINATION_POWER:-16}
+    healthcheck:
+      test: [CMD, test, -f, /local/ready]
+      interval: 5s
+      start_period: 30m
+    depends_on:
+      sspd:
+        condition: service_started
+
+  # Reports what the others are doing until a wallet can be served. Its log is
+  # what starting the environment shows.
+  ready:
+    <<: *tools
+    command: [/scripts/ready.sh]
+    environment:
+      <<: *tools-env
+      SPARK_CONFIG_PATH: regtest/local/data/spark-config.json
+      PUBLIC_HOST: ${PUBLIC_HOST:-127.0.0.1}
+      OPERATOR_PUBLIC_PORTS: ${OPERATOR_0_PORT:-8535} ${OPERATOR_1_PORT:-8536} ${OPERATOR_2_PORT:-8537}
+      MEMPOOL_PORT: ${MEMPOOL_PORT:-8090}
+      SSP_PORT: ${SSP_PORT:-59049}
+      LNURL_PORT: ${LNURL_PORT:-8080}
+      DATA_SYNC_PORT: ${DATA_SYNC_PORT:-8081}
+      LDK_P2P_PORT: ${LDK_P2P_PORT:-9735}
+      LDK_ALICE_P2P_PORT: ${LDK_ALICE_P2P_PORT:-9736}
+      BITCOIND_RPC_PORT: ${BITCOIND_RPC_PORT:-18443}
+      BITCOIND_P2P_PORT: ${BITCOIND_P2P_PORT:-18444}
+      LEAVES_PER_DENOMINATION: ${LEAVES_PER_DENOMINATION:-8}
+      MAX_DENOMINATION_POWER: ${MAX_DENOMINATION_POWER:-16}
+      DKG_MIN_AVAILABLE_KEYS: ${DKG_MIN_AVAILABLE_KEYS:-12000}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      BITCOIN_CLI: docker compose -f regtest/local/docker-compose.yml exec bitcoind bitcoin-cli -regtest -rpcport=18443 -rpcuser=${BITCOIND_RPC_USER} -rpcpassword=${BITCOIND_RPC_PASSWORD}
+      SSP_CLI: docker compose -f regtest/local/docker-compose.yml exec sspd ssp-cli
+      SSP_NODE_CLI: docker compose -f regtest/local/docker-compose.yml exec ldk-server ldk-server-cli --config /local/ldk-ssp.toml --base-url localhost:3536
+      ALICE_CLI: docker compose -f regtest/local/docker-compose.yml exec ldk-alice ldk-server-cli --config /local/ldk-alice.toml --base-url localhost:3536
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  local:
+  data-sync:
+  ldk-data:
+  ldk-alice-data:
+  bitcoind:
+  postgres:
+  electrs:

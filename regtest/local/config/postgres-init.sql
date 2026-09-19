@@ -1,0 +1,5 @@
+CREATE DATABASE sparkoperator_0;
+CREATE DATABASE sparkoperator_1;
+CREATE DATABASE sparkoperator_2;
+CREATE DATABASE sspd;
+CREATE DATABASE lnurl;
