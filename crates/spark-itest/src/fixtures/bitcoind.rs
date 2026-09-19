@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
@@ -80,6 +81,7 @@ impl BitcoindFixture {
             copy_dir(source, datadir.path())
                 .with_context(|| format!("restoring bitcoind state from {}", source.display()))?;
         }
+        let uid = datadir.path().metadata()?.uid();
 
         // Define bitcoind container with command line arguments
         let container_name = format!("bitcoind-{fixture_id}");
@@ -96,6 +98,10 @@ impl BitcoindFixture {
                 datadir.path().display().to_string(),
                 BITCOIN_DATA,
             ))
+            // The entrypoint gives its `bitcoin` user this uid before chowning the
+            // data directory, so on Linux the host can still copy it out. Not `GID`:
+            // macOS's group 20 is taken in the image, and the entrypoint exits on it.
+            .with_env_var("UID", uid.to_string())
             .with_cmd([
                 "-regtest",
                 "-server",
