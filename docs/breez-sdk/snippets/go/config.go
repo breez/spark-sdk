@@ -186,9 +186,17 @@ func ConfigureLocalEnvironment() error {
 	}
 	config.SparkConfig = &sparkConfig
 
-	// Its service provider charges more than the default ceiling to claim a deposit
+	// Its SSP charges more than the default ceiling to claim a deposit
 	feeRateInterface := breez_sdk_spark.MaxFee(breez_sdk_spark.MaxFeeRate{SatPerVbyte: 5})
 	config.MaxDepositClaimFee = &feeRateInterface
+
+	// Its LNURL server serves the lightning addresses wallets register
+	lnurlDomain := "http://127.0.0.1:8080"
+	config.LnurlDomain = &lnurlDomain
+
+	// Its data-sync service keeps this wallet's instances in step
+	syncServerUrl := "http://127.0.0.1:8081"
+	config.RealTimeSyncServerUrl = &syncServerUrl
 	// ANCHOR_END: local-spark-config
 	log.Printf("Config: %+v", config)
 	return nil

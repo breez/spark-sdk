@@ -175,7 +175,13 @@ def configure_local_environment():
         spark_config = spark_config_file.read()
     config.spark_config = parse_spark_config(json=spark_config)
 
-    # Its service provider charges more than the default ceiling to claim a deposit
+    # Its SSP charges more than the default ceiling to claim a deposit
     config.max_deposit_claim_fee = MaxFee.RATE(sat_per_vbyte=5)
+
+    # Its LNURL server serves the lightning addresses wallets register
+    config.lnurl_domain = "http://127.0.0.1:8080"
+
+    # Its data-sync service keeps this wallet's instances in step
+    config.real_time_sync_server_url = "http://127.0.0.1:8081"
     # ANCHOR_END: local-spark-config
     logging.info(f"Config: {config}")

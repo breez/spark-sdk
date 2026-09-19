@@ -165,8 +165,14 @@ const exampleConfigureLocalEnvironment = async () => {
     await RNFS.readFile(`${RNFS.DocumentDirectoryPath}/spark-config.json`, 'utf8')
   )
 
-  // Its service provider charges more than the default ceiling to claim a deposit
+  // Its SSP charges more than the default ceiling to claim a deposit
   config.maxDepositClaimFee = new MaxFee.Rate({ satPerVbyte: BigInt(5) })
+
+  // Its LNURL server serves the lightning addresses wallets register
+  config.lnurlDomain = 'http://127.0.0.1:8080'
+
+  // Its data-sync service keeps this wallet's instances in step
+  config.realTimeSyncServerUrl = 'http://127.0.0.1:8081'
   // ANCHOR_END: local-spark-config
   console.log('Config:', config)
 }
