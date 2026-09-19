@@ -135,6 +135,8 @@ members = [
   "crates/xtask",
   "crates/internal",
   "crates/nip65-publisher",
+  "crates/spark-service-provider/sspd",
+  "crates/spark-service-provider/ssp-cli",
 ]
 # spark-compat-itest links the previous SDK release (git tag) next to the
 # workspace crates; it builds standalone so normal workspace commands don't
@@ -160,7 +162,9 @@ arithmetic_side_effects = "warn"
 [workspace.dependencies]
 aes = "0.8.4"
 anyhow = "1.0.98"
+async-graphql = { version = "7", features = ["chrono", "uuid"] }
 async-trait = "0.1.88"
+axum = "0.8"
 base64 = "0.22.1"
 bech32 = "0.11.0"
 bip39 = "2.2.0"
@@ -204,6 +208,7 @@ mime = "0.3.17"
 nostr = { version = "0.43.1", default-features = false, features = ["std"] }
 nostr-sdk = { version = "0.43.0", default-features = false }
 platform-utils = { path = "crates/platform-utils" }
+tokio-util = "0.7.13"
 utils = { path = "crates/utils" }
 proc-macro2 = "1.0.97"
 prost = "0.13.4"

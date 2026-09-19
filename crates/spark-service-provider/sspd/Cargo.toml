@@ -1,0 +1,55 @@
+[package]
+name = "sspd"
+version.workspace = true
+edition = "2024"
+rust-version.workspace = true
+
+[[bin]]
+name = "sspd"
+path = "src/main.rs"
+
+[lib]
+name = "sspd_lib"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+lightning.workspace = true
+tokio-stream = "0.1"
+lightning-invoice.workspace = true
+async-graphql.workspace = true
+base64 = { workspace = true }
+async-graphql-axum = "7"
+async-trait = { workspace = true }
+axum.workspace = true
+bitcoin = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+figment = { workspace = true, features = ["env", "toml"] }
+futures = { workspace = true, features = ["alloc"] }
+hex = { workspace = true }
+prost = { workspace = true }
+reqwest = { workspace = true, features = ["stream"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_with = { workspace = true }
+spark-postgres = { workspace = true }
+spark = { workspace = true }
+frost-secp256k1-tr = { workspace = true }
+sqlx = { version = "0.8.2", features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki", "chrono", "json"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+tokio-util = { workspace = true, features = ["rt"] }
+tonic = { workspace = true, features = ["transport", "tls", "codegen", "prost"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+utils = { workspace = true }
+uuid = { workspace = true }
+
+[build-dependencies]
+tonic-build = { workspace = true }
+
+[dev-dependencies]
+toml = "0.8"

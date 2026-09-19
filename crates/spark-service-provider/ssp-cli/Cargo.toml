@@ -1,0 +1,20 @@
+[package]
+name = "ssp-cli"
+version.workspace = true
+edition = "2024"
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+hex = { workspace = true }
+prost = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tonic = { workspace = true, features = ["transport", "codegen", "prost"] }
+
+[build-dependencies]
+tonic-build = { workspace = true }
