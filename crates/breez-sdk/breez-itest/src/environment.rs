@@ -16,7 +16,7 @@ use spark_itest::mempool::MempoolClient;
 
 use crate::SdkInstance;
 use crate::faucet::{FaucetConfig, RegtestFaucet};
-use crate::fixtures::{random_mnemonic, stable_balance_config};
+use crate::fixtures::{lnurl::LnurlFixture, random_mnemonic, stable_balance_config};
 use crate::helpers::regtest::{
     build_sdk_with_custom_config, build_sdk_with_dir, build_sdk_with_external_signer,
 };
@@ -109,7 +109,26 @@ impl Environment {
         &self,
         configure: impl FnOnce(&mut Config) + Send,
     ) -> Result<SdkInstance> {
-        self.create_configured_wallet(false, configure).await
+        self.create_configured_wallet(rand::random(), false, configure)
+            .await
+    }
+
+    /// [`Self::create_wallet_with`] for the identity `seed`, so several instances
+    /// can share one wallet.
+    pub async fn create_wallet_from_seed(
+        &self,
+        seed: [u8; 32],
+        configure: impl FnOnce(&mut Config) + Send,
+    ) -> Result<SdkInstance> {
+        self.create_configured_wallet(seed, false, configure).await
+    }
+
+    /// An LNURL server that issues invoices for this environment's wallets.
+    pub async fn lnurl_server(&self) -> Result<LnurlFixture> {
+        match self {
+            Environment::Deployed => LnurlFixture::new().await,
+            Environment::Local(stack) => stack.lnurl_server().await,
+        }
     }
 
     /// A wallet that runs no background tasks, as a server deployment does.
@@ -117,7 +136,8 @@ impl Environment {
         &self,
         configure: impl FnOnce(&mut Config) + Send,
     ) -> Result<SdkInstance> {
-        self.create_configured_wallet(true, configure).await
+        self.create_configured_wallet(rand::random(), true, configure)
+            .await
     }
 
     /// A wallet whose keys live behind the external signer interface.
@@ -179,6 +199,7 @@ impl Environment {
 
     async fn create_configured_wallet(
         &self,
+        seed: [u8; 32],
         server_mode: bool,
         configure: impl FnOnce(&mut Config) + Send,
     ) -> Result<SdkInstance> {
@@ -193,12 +214,15 @@ impl Environment {
                 } else {
                     default_config(Network::Regtest)
                 };
+                config.sync_interval_secs = 5;
+                config.real_time_sync_server_url = None;
+                config.lnurl_domain = None;
                 configure(&mut config);
-                build_sdk_with_custom_config(path, rand::random(), config, Some(dir), true).await
+                build_sdk_with_custom_config(path, seed, config, Some(dir), false).await
             }
             Environment::Local(stack) => {
                 stack
-                    .create_wallet(LocalIdentity::Seed(rand::random()), server_mode, configure)
+                    .create_wallet(LocalIdentity::Seed(seed), server_mode, configure)
                     .await
             }
         }

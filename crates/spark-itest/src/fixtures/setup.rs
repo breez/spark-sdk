@@ -11,7 +11,7 @@ use tracing::info;
 
 use crate::fixtures::{
     bitcoind::BitcoindFixture,
-    spark_so::SparkSoFixture,
+    spark_so::{OperatorFixture, SparkSoFixture},
     sspd::{LdkSettings, SspdFixture},
     state_snapshot,
 };
@@ -141,12 +141,33 @@ impl TestFixtures {
         &self,
         ssp_config: Option<ServiceProviderConfig>,
     ) -> Result<SparkWalletConfig> {
+        self.wallet_config(ssp_config, |operator| {
+            format!("https://127.0.0.1:{}", operator.host_port)
+        })
+    }
+
+    /// A wallet config for a client on the cluster's docker network, which reaches
+    /// the operators by container name.
+    pub fn network_wallet_config(
+        &self,
+        ssp_config: ServiceProviderConfig,
+    ) -> Result<SparkWalletConfig> {
+        self.wallet_config(Some(ssp_config), |operator| {
+            format!("https://{}:{}", operator.host_name, operator.internal_port)
+        })
+    }
+
+    fn wallet_config(
+        &self,
+        ssp_config: Option<ServiceProviderConfig>,
+        address: impl Fn(&OperatorFixture) -> String,
+    ) -> Result<SparkWalletConfig> {
         // Create a wallet configuration that points to our service operators
         let mut operator_configs = Vec::new();
 
         for operator in &self.spark_so.operators {
             operator_configs.push(OperatorConfig {
-                address: format!("https://127.0.0.1:{}", operator.host_port).parse()?,
+                address: address(operator).parse()?,
                 ca_cert: Some(operator.ca_cert.as_bytes().to_vec()),
                 id: operator.index,
                 identifier: operator.identifier,
