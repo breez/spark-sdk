@@ -125,9 +125,62 @@ jobs:
             exit 1
           fi
 
+  state-snapshot:
+    name: Itest state snapshot
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Builds only crates the itest jobs build, so it borrows their Rust cache
+      # rather than adding one of its own.
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          rust-cache-shared-key: itest
+          rust-cache-save: 'false'
+
+      # The key comes from the fixtures themselves rather than a list of paths
+      # kept in step with them here. A cluster refuses a snapshot whose manifest
+      # disagrees with it, and this is that same manifest, so the cache cannot
+      # hold something the suites will then reject.
+      - name: Work out which snapshot this tree needs
+        id: snapshot
+        run: |
+          key=$(cargo run --quiet -p spark-itest --bin itest-bootstrap-snapshot-key)
+          echo "key=itest-bootstrap-snapshot-${{ runner.os }}-$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the snapshot
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: crates/spark-itest/state-snapshot
+          key: ${{ steps.snapshot.outputs.key }}
+
+      - name: Build the snapshot
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: make capture-itest-state
+
+      - name: Cache the snapshot
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: crates/spark-itest/state-snapshot
+          key: ${{ steps.snapshot.outputs.key }}
+
+      - name: Hand the snapshot to the itest jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: itest-state-snapshot
+          path: crates/spark-itest/state-snapshot
+          include-hidden-files: true
+          overwrite: true
+          retention-days: 1
+
   itest:
     name: Integration test (${{ matrix.backend.name }})
     runs-on: ubuntu-latest
+    needs: state-snapshot
     continue-on-error: ${{ matrix.backend.allow-failure }}
     strategy:
       fail-fast: false
@@ -147,8 +200,11 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Restore the state snapshot
-        uses: ./.github/actions/state-snapshot-cache
+      - name: Download the state snapshot
+        uses: actions/download-artifact@v4
+        with:
+          name: itest-state-snapshot
+          path: crates/spark-itest/state-snapshot
 
       - name: Run Tests
         run: make ${{ matrix.backend.target }}
@@ -156,6 +212,7 @@ jobs:
   compat-itest:
     name: Signer compatibility tests
     runs-on: ubuntu-latest
+    needs: state-snapshot
     steps:
       - uses: actions/checkout@v4
 
@@ -164,8 +221,11 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Restore the state snapshot
-        uses: ./.github/actions/state-snapshot-cache
+      - name: Download the state snapshot
+        uses: actions/download-artifact@v4
+        with:
+          name: itest-state-snapshot
+          path: crates/spark-itest/state-snapshot
 
       - name: Run cross-version signer tests
         run: make compat-itest
@@ -190,6 +250,7 @@ jobs:
   breez-test:
     name: Breez integration tests
     runs-on: ubuntu-latest
+    needs: state-snapshot
     env:
       FAUCET_USERNAME: ${{ secrets.FAUCET_USERNAME }}
       FAUCET_PASSWORD: ${{ secrets.FAUCET_PASSWORD }}
@@ -208,8 +269,11 @@ jobs:
         id: lnurl-image
         uses: ./.github/actions/lnurl-image-cache
 
-      - name: Restore the state snapshot
-        uses: ./.github/actions/state-snapshot-cache
+      - name: Download the state snapshot
+        uses: actions/download-artifact@v4
+        with:
+          name: itest-state-snapshot
+          path: crates/spark-itest/state-snapshot
 
       - name: Run Tests
         run: make breez-itest
