@@ -30,6 +30,11 @@ pub enum FlashnetError {
     #[error("{reason}")]
     AmountOutOfRange { reason: String, too_small: bool },
 
+    /// The provider won't serve the route. `temporary` is set when it expects
+    /// the route back shortly, so the same request can succeed later.
+    #[error("{reason}")]
+    RouteUnavailable { reason: String, temporary: bool },
+
     #[error("Session: {0}")]
     Session(#[from] SessionStoreError),
 
