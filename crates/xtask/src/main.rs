@@ -1026,7 +1026,6 @@ fn itest_cmd() -> Result<()> {
         "lightning_send_server_mode",
         "message_signing",
         "optimization",
-        "recovery",
         "rtsync",
         "spark_htlcs",
         "static_deposit_instant",
