@@ -1565,6 +1565,8 @@ pub struct ResolvedBatchRecipient {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::BatchTotal)]
 pub struct BatchTotal {
     pub token_identifier: Option<String>,
+    #[tsify(type = "string")]
+    #[serde(with = "serde_u128_as_string")]
     pub amount: u128,
 }
 
