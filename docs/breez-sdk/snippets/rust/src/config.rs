@@ -181,8 +181,14 @@ pub(crate) fn configure_local_environment() -> Result<()> {
     let spark_config = std::fs::read_to_string("regtest/local/data/spark-config.json")?;
     config.spark_config = Some(parse_spark_config(spark_config)?);
 
-    // Its service provider charges more than the default ceiling to claim a deposit
+    // Its SSP charges more than the default ceiling to claim a deposit
     config.max_deposit_claim_fee = Some(MaxFee::Rate { sat_per_vbyte: 5 });
+
+    // Its LNURL server serves the lightning addresses wallets register
+    config.lnurl_domain = Some("http://127.0.0.1:8080".to_string());
+
+    // Its data-sync service keeps this wallet's instances in step
+    config.real_time_sync_server_url = Some("http://127.0.0.1:8081".to_string());
     // ANCHOR_END: local-spark-config
     info!("Config: {:?}", config);
     Ok(())
