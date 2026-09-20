@@ -171,5 +171,22 @@ namespace BreezSdkSnippets
             // ANCHOR_END: config-proxy
             Console.WriteLine($"Config: {config}");
         }
+
+        public void ConfigureLocalEnvironment()
+        {
+            // ANCHOR: local-spark-config
+            // The local environment writes this file when it starts
+            var sparkConfigJson = File.ReadAllText("regtest/local/data/spark-config.json");
+
+            var config = BreezSdkSparkMethods.DefaultConfig(Network.Regtest) with
+            {
+                sparkConfig = BreezSdkSparkMethods.ParseSparkConfig(sparkConfigJson),
+
+                // Its service provider charges more than the default ceiling to claim a deposit
+                maxDepositClaimFee = new MaxFee.Rate(satPerVbyte: 5)
+            };
+            // ANCHOR_END: local-spark-config
+            Console.WriteLine($"Config: {config}");
+        }
     }
 }

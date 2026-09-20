@@ -1025,6 +1025,35 @@ pub struct SparkConfig {
     pub max_token_transaction_inputs: Option<u32>,
 }
 
+impl From<&SparkConfig> for spark_wallet::SparkDeployment {
+    fn from(config: &SparkConfig) -> Self {
+        Self {
+            coordinator_identifier: config.coordinator_identifier.clone(),
+            threshold: config.threshold,
+            signing_operators: config
+                .signing_operators
+                .iter()
+                .map(|operator| spark_wallet::SparkDeploymentOperator {
+                    id: operator.id,
+                    identifier: operator.identifier.clone(),
+                    address: operator.address.clone(),
+                    identity_public_key: operator.identity_public_key.clone(),
+                    ca_cert_pem: operator.ca_cert_pem.clone(),
+                })
+                .collect(),
+            ssp_config: spark_wallet::SparkDeploymentSsp {
+                base_url: config.ssp_config.base_url.clone(),
+                identity_public_key: config.ssp_config.identity_public_key.clone(),
+                schema_endpoint: config.ssp_config.schema_endpoint.clone(),
+            },
+            expected_withdraw_bond_sats: config.expected_withdraw_bond_sats,
+            expected_withdraw_relative_block_locktime: config
+                .expected_withdraw_relative_block_locktime,
+            max_token_transaction_inputs: config.max_token_transaction_inputs,
+        }
+    }
+}
+
 /// A Spark signing operator.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

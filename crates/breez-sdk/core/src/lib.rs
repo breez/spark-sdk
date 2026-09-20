@@ -54,7 +54,7 @@ pub use persist::{
 };
 pub use sdk::{
     BreezSdk, GetSparkStatusRequest, default_config, default_server_config, get_spark_status,
-    init_logging,
+    init_logging, parse_spark_config,
 };
 pub use sdk_builder::SdkBuilder;
 pub use sdk_context::{SdkContext, SdkContextConfig, new_shared_sdk_context};

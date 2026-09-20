@@ -1,4 +1,5 @@
-import { defaultConfig } from '@breeztech/breez-sdk-spark'
+import { defaultConfig, parseSparkConfig } from '@breeztech/breez-sdk-spark'
+import { readFileSync } from 'fs'
 
 const exampleConfigureSdk = async () => {
   // ANCHOR: max-deposit-claim-fee
@@ -130,4 +131,19 @@ export {
   exampleConfigureSparkConfig,
   exampleConfigureBackgroundTasks,
   exampleConfigureCrossChain
+}
+
+const exampleConfigureLocalEnvironment = async () => {
+  // ANCHOR: local-spark-config
+  const config = defaultConfig('regtest')
+
+  // The local environment writes this file when it starts
+  config.sparkConfig = parseSparkConfig(
+    readFileSync('regtest/local/data/spark-config.json', 'utf8')
+  )
+
+  // Its service provider charges more than the default ceiling to claim a deposit
+  config.maxDepositClaimFee = { type: 'rate', satPerVbyte: 5 }
+  // ANCHOR_END: local-spark-config
+  console.log('Config:', config)
 }

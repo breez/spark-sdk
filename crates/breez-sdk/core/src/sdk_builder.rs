@@ -410,56 +410,9 @@ impl SdkBuilder {
         network: spark_wallet::Network,
         env_config: &crate::models::SparkConfig,
     ) -> Result<SparkWalletConfig, SdkError> {
-        let coordinator_index = env_config
-            .signing_operators
-            .iter()
-            .position(|op| op.identifier == env_config.coordinator_identifier)
-            .ok_or_else(|| {
-                SdkError::InvalidInput(
-                    "coordinator_identifier does not match any signing operator".to_string(),
-                )
-            })?;
-
-        let operators: Vec<_> = env_config
-            .signing_operators
-            .iter()
-            .map(|op| {
-                let ca_cert = op.ca_cert_pem.as_ref().map(|pem| pem.as_bytes().to_vec());
-                SparkWalletConfig::create_operator_config(
-                    op.id as usize,
-                    &op.identifier,
-                    &op.address,
-                    ca_cert.as_deref(),
-                    &op.identity_public_key,
-                )
-                .map_err(|e| SdkError::InvalidInput(e.to_string()))
-            })
-            .collect::<Result<_, _>>()?;
-
-        let operator_pool = spark_wallet::OperatorPoolConfig::new(coordinator_index, operators)
-            .map_err(|e| SdkError::InvalidInput(e.to_string()))?;
-
-        let service_provider_config = SparkWalletConfig::create_service_provider_config(
-            &env_config.ssp_config.base_url,
-            &env_config.ssp_config.identity_public_key,
-            env_config.ssp_config.schema_endpoint.clone(),
-        )
-        .map_err(|e| SdkError::InvalidInput(e.to_string()))?;
-
-        let mut config = SparkWalletConfig::default_config(network);
-        config.operator_pool = operator_pool;
-        config.split_secret_threshold = env_config.threshold;
-        config.service_provider_config = service_provider_config;
-        config.tokens_config.expected_withdraw_bond_sats = env_config.expected_withdraw_bond_sats;
-        config
-            .tokens_config
-            .expected_withdraw_relative_block_locktime =
-            env_config.expected_withdraw_relative_block_locktime;
-        if let Some(max_tx_inputs) = env_config.max_token_transaction_inputs {
-            config.tokens_config.max_tx_inputs = max_tx_inputs as usize;
-        }
-
-        Ok(config)
+        spark_wallet::SparkDeployment::from(env_config)
+            .wallet_config(network)
+            .map_err(|e| SdkError::InvalidInput(e.to_string()))
     }
 
     /// Warns when a proxy is configured alongside a caller-supplied service.
