@@ -172,3 +172,18 @@ pub(crate) fn configure_proxy() -> Result<()> {
     info!("Config: {config:?}");
     Ok(())
 }
+
+pub(crate) fn configure_local_environment() -> Result<()> {
+    // ANCHOR: local-spark-config
+    let mut config = default_config(Network::Regtest);
+
+    // The local environment writes this file when it starts
+    let spark_config = std::fs::read_to_string("regtest/local/data/spark-config.json")?;
+    config.spark_config = Some(parse_spark_config(spark_config)?);
+
+    // Its service provider charges more than the default ceiling to claim a deposit
+    config.max_deposit_claim_fee = Some(MaxFee::Rate { sat_per_vbyte: 5 });
+    // ANCHOR_END: local-spark-config
+    info!("Config: {:?}", config);
+    Ok(())
+}

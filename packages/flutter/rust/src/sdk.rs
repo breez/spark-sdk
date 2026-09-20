@@ -21,6 +21,14 @@ pub async fn connect(request: ConnectRequest) -> Result<BreezSdk, SdkError> {
     })
 }
 
+/// Reads a [`SparkConfig`] from JSON, for a deployment that publishes its
+/// operators, service provider and certificates as a file. Set it on
+/// [`Config::spark_config`] to connect a wallet to that deployment.
+#[frb(sync)]
+pub fn parse_spark_config(json: String) -> Result<SparkConfig, SdkError> {
+    breez_sdk_spark::parse_spark_config(json)
+}
+
 #[frb(sync)]
 pub fn default_config(network: Network) -> Config {
     breez_sdk_spark::default_config(network)

@@ -2,8 +2,10 @@ import {
   defaultConfig,
   Network,
   MaxFee,
+  parseSparkConfig,
   StableBalanceConfig
 } from '@breeztech/breez-sdk-spark-react-native'
+import RNFS from 'react-native-fs'
 
 const exampleConfigureSdk = () => {
   // ANCHOR: max-deposit-claim-fee
@@ -154,6 +156,21 @@ const exampleConfigureProxy = async () => {
   console.debug('Config:', config)
 }
 
+const exampleConfigureLocalEnvironment = async () => {
+  // ANCHOR: local-spark-config
+  const config = defaultConfig(Network.Regtest)
+
+  // The local environment writes this file when it starts
+  config.sparkConfig = parseSparkConfig(
+    await RNFS.readFile(`${RNFS.DocumentDirectoryPath}/spark-config.json`, 'utf8')
+  )
+
+  // Its service provider charges more than the default ceiling to claim a deposit
+  config.maxDepositClaimFee = new MaxFee.Rate({ satPerVbyte: BigInt(5) })
+  // ANCHOR_END: local-spark-config
+  console.log('Config:', config)
+}
+
 export {
   exampleConfigureSdk,
   exampleConfigurePrivateEnabledDefault,
@@ -162,5 +179,6 @@ export {
   exampleConfigureSparkConfig,
   exampleConfigureBackgroundTasks,
   exampleConfigureCrossChain,
-  exampleConfigureProxy
+  exampleConfigureProxy,
+  exampleConfigureLocalEnvironment
 }

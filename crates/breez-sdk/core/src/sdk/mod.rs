@@ -29,8 +29,8 @@ use tokio::sync::{Mutex, OnceCell, oneshot, watch};
 use crate::{
     BitcoinChainService, LeafOptimizationConfig, Logger, Network, TokenOptimizationConfig,
     error::SdkError, events::EventEmitter, lnurl::LnurlServerClient, logger, models::Config,
-    persist::Storage, signer::lnurl_auth::LnurlAuthSignerAdapter, stable_balance::StableBalance,
-    token_conversion::TokenConverter,
+    models::SparkConfig, persist::Storage, signer::lnurl_auth::LnurlAuthSignerAdapter,
+    stable_balance::StableBalance, token_conversion::TokenConverter,
 };
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -225,6 +225,16 @@ pub async fn connect_with_signing_only_signer(
     .with_default_storage(request.storage_dir);
     let sdk = builder.build().await?;
     Ok(sdk)
+}
+
+/// Reads a [`SparkConfig`] from JSON, for a deployment that publishes its
+/// operators, service provider and certificates as a file. Set it on
+/// [`Config::spark_config`] to connect a wallet to that deployment.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+// The bindings pass an owned string.
+#[allow(clippy::needless_pass_by_value)]
+pub fn parse_spark_config(json: String) -> Result<SparkConfig, SdkError> {
+    serde_json::from_str(&json).map_err(|e| SdkError::InvalidInput(e.to_string()))
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -518,5 +528,49 @@ mod tests {
         assert!(default_config(Network::Mainnet).background_tasks_enabled);
         assert!(default_config(Network::Regtest).background_tasks_enabled);
         assert!(default_config(Network::Signet).background_tasks_enabled);
+    }
+
+    /// The shape a local environment writes, which a wallet loads as it is.
+    #[test]
+    fn parse_spark_config_reads_an_environments_file() {
+        let json = r#"{
+          "coordinator_identifier": "01",
+          "threshold": 2,
+          "signing_operators": [
+            {
+              "id": 0,
+              "identifier": "01",
+              "address": "https://127.0.0.1:8535",
+              "identity_public_key": "02aa",
+              "ca_cert_pem": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+            }
+          ],
+          "ssp_config": {
+            "base_url": "http://127.0.0.1:59049",
+            "identity_public_key": "03bb",
+            "schema_endpoint": "graphql/spark/rc"
+          },
+          "expected_withdraw_bond_sats": 10000,
+          "expected_withdraw_relative_block_locktime": 1000
+        }"#;
+
+        let config = parse_spark_config(json.to_string()).unwrap();
+
+        assert_eq!(config.threshold, 2);
+        assert_eq!(config.signing_operators.len(), 1);
+        assert!(
+            config.signing_operators[0]
+                .ca_cert_pem
+                .as_ref()
+                .is_some_and(|pem| pem.starts_with("-----BEGIN CERTIFICATE-----"))
+        );
+        assert_eq!(config.ssp_config.base_url, "http://127.0.0.1:59049");
+        // Absent from the file, and not required of it.
+        assert!(config.max_token_transaction_inputs.is_none());
+    }
+
+    #[test]
+    fn parse_spark_config_rejects_what_is_not_one() {
+        assert!(parse_spark_config("{}".to_string()).is_err());
     }
 }

@@ -2,6 +2,7 @@ package example
 
 import (
 	"log"
+	"os"
 
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
@@ -168,4 +169,27 @@ func ConfigureProxy() {
 	}
 	// ANCHOR_END: config-proxy
 	log.Printf("Config: %v", config)
+}
+
+func ConfigureLocalEnvironment() error {
+	// ANCHOR: local-spark-config
+	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkRegtest)
+
+	// The local environment writes this file when it starts
+	sparkConfigJson, err := os.ReadFile("regtest/local/data/spark-config.json")
+	if err != nil {
+		return err
+	}
+	sparkConfig, err := breez_sdk_spark.ParseSparkConfig(string(sparkConfigJson))
+	if err != nil {
+		return err
+	}
+	config.SparkConfig = &sparkConfig
+
+	// Its service provider charges more than the default ceiling to claim a deposit
+	feeRateInterface := breez_sdk_spark.MaxFee(breez_sdk_spark.MaxFeeRate{SatPerVbyte: 5})
+	config.MaxDepositClaimFee = &feeRateInterface
+	// ANCHOR_END: local-spark-config
+	log.Printf("Config: %+v", config)
+	return nil
 }
