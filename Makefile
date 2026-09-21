@@ -74,14 +74,21 @@ wasm-test-js-ssl-mode:
 flutter-check:
 	cargo xtask flutter-check
 
+# The suites that run against a local cluster. GROUP runs one group of them
+# (unilateral-exit, timelocks, exits, lightning, tokens, wallets); without it, all
+# of them.
 itest:
-	cargo xtask itest
+	cargo xtask itest $(if $(GROUP),--group $(GROUP))
 
 spark-itest-pg:
 	USE_POSTGRES_BACKEND=true cargo xtask itest
 
 spark-itest-mysql:
 	USE_MYSQL_BACKEND=true cargo xtask itest
+
+# The spark-itest suites that reach the deployed regtest, which needs no cluster.
+deployed-itest:
+	cargo xtask deployed-itest
 
 # Build the images a local cluster runs, skipping those already present.
 itest-images:

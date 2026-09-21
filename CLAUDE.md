@@ -38,7 +38,9 @@ make build-wasm         # Build for WASM target
 ```bash
 make cargo-test         # Run Rust unit tests
 make wasm-test          # Run WASM tests (browser + Node.js)
-make itest              # Integration tests (requires Docker)
+make itest              # Integration tests on a local cluster (requires Docker)
+make itest GROUP=lightning  # One group of those (see `xtask`'s GROUPS)
+make deployed-itest     # The spark-itest suites that reach the deployed regtest
 make breez-itest        # Breez integration tests (requires faucet credentials)
 make cli-itest          # Shared CLI scenarios via the Rust CLI (faucet credentials; Docker for lnurl)
 make wasm-itest         # Same scenarios via the wasm CLI port + npm-API smoke suite (Node 22)

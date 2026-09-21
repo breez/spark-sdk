@@ -21,6 +21,11 @@ This command will:
 2. Build or check the state snapshot every test restores
 3. Run the test suite
 
+To split a run across machines, run one group of suites: `make itest
+GROUP=lightning`. The groups are unilateral-exit, timelocks, exits, lightning,
+tokens and wallets. The suites that reach the deployed regtest rather than a local cluster
+run separately, with `make deployed-itest`.
+
 ## Available Test Fixtures
 
 The integration tests use several fixture components that set up the testing environment:
