@@ -39,9 +39,9 @@ It’s a nodeless integration that offers a non-custodial, end-to-end solution f
 
 ## Getting Started 
 
-Head over to the [Breez SDK documentation](https://sdk-doc-spark.breez.technology/) to start implementing instant bitcoin in your app.
+Head over to the [Breez SDK documentation](https://sdk-doc-spark.breez.technology/) to start integrating instant bitcoin and stablecoins into your app or service.
 
-You'll need an API key to use the Breez SDK. To request an API key is free - you just need to [complete this simple form](https://breez.technology/request-api-key/#contact-us-form-sdk).
+You'll need an API key to use the Breez SDK. It's free: [complete this simple form to request one](https://breez.technology/request-api-key/#contact-us-form-sdk).
 
 
 ## **API**
