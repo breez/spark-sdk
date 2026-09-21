@@ -31,9 +31,11 @@ run separately, with `make deployed-itest`.
 The integration tests use several fixture components that set up the testing environment:
 
 1. **BitcoindFixture**: A Bitcoin Core node running in regtest mode
-2. **PostgresFixture**: PostgreSQL databases for the Spark Service Operators
+2. **DatabaseFixture**: One PostgreSQL server holding a database per operator and
+   one for the daemon, started from an image the state snapshot is restored into
 3. **SparkSoFixture**: Multiple Spark Service Operators that work together using Threshold Signatures
-4. **WaitForLogConsumer**: Utility for waiting for specific log patterns in container outputs
+4. **SspdFixture**: The service provider daemon the wallets pay through
+5. **WaitForLogConsumer**: Utility for waiting for specific log patterns in container outputs
 
 ## Keeping Fixtures Alive
 
