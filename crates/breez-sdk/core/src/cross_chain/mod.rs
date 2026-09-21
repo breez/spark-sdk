@@ -257,9 +257,7 @@ pub enum CrossChainRouteFilter {
         address_details: CrossChainAddressDetails,
     },
     /// Routes for receiving to Spark from another chain.
-    /// Optionally filtered by the source token contract address. Lists only
-    /// routes a receive completes on without naming a destination: into
-    /// Bitcoin, or into the wallet's active stable-balance token.
+    /// Optionally filtered by the source token contract address.
     Receive { contract_address: Option<String> },
     /// Routes for a payment link that sends a stablecoin funded by an external
     /// rail (Cash App over Lightning) rather than the Spark wallet.
@@ -310,14 +308,6 @@ impl CrossChainRoutePair {
     /// Whether `asset` is one of the Spark-side assets this route accepts.
     pub fn accepts_asset(&self, asset: &SparkAsset) -> bool {
         self.accepted_assets.iter().any(|a| &a.asset == asset)
-    }
-
-    /// Whether a receive on this route lands without the caller naming a
-    /// destination: in Bitcoin, or in `stable_token`, the wallet's active
-    /// stable-balance token.
-    pub(crate) fn receivable_by_default(&self, stable_token: Option<&SparkAsset>) -> bool {
-        self.accepts_asset(&SparkAsset::Bitcoin)
-            || stable_token.is_some_and(|token| self.accepts_asset(token))
     }
 
     /// Infers the destination address family from the route's
@@ -1340,45 +1330,5 @@ mod tests {
             build_receive_payment_request(solana_addr, "tron", None, None, 1_000_000).is_err(),
             "solana address must not be accepted for tron route",
         );
-    }
-
-    fn usdc_route(accepted: &[SparkAsset]) -> CrossChainRoutePair {
-        CrossChainRoutePair {
-            provider: CrossChainProvider::Orchestra,
-            chain: "arc".to_string(),
-            chain_id: None,
-            asset: "USDC".to_string(),
-            contract_address: None,
-            decimals: 6,
-            exact_out_eligible: false,
-            accepted_assets: accepted
-                .iter()
-                .cloned()
-                .map(|asset| CrossChainAcceptedAsset {
-                    asset,
-                    limits: None,
-                })
-                .collect(),
-            delivery_methods: vec![DeliveryMethod::Spark],
-        }
-    }
-
-    #[test_all]
-    fn a_token_only_route_is_receivable_only_while_the_wallet_holds_that_token() {
-        let usdb = SparkAsset::Token {
-            token_identifier: "btkn1usdb".to_string(),
-        };
-        let other = SparkAsset::Token {
-            token_identifier: "btkn1other".to_string(),
-        };
-        let route = usdc_route(std::slice::from_ref(&usdb));
-        assert!(!route.receivable_by_default(None));
-        assert!(!route.receivable_by_default(Some(&other)));
-        assert!(route.receivable_by_default(Some(&usdb)));
-    }
-
-    #[test_all]
-    fn a_bitcoin_route_is_receivable_without_a_stable_token() {
-        assert!(usdc_route(&[SparkAsset::Bitcoin]).receivable_by_default(None));
     }
 }
