@@ -34,6 +34,10 @@ impl EventListener for ChannelEventListener {
     }
 }
 
+/// How often a wait re-checks. Short, since a local cluster answers in
+/// milliseconds and every wait of a test is time the suite spends.
+const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
 pub async fn wait_for<F, Fut, T>(mut check_fn: F, timeout_secs: u64) -> Result<T>
 where
     F: FnMut() -> Fut,
@@ -59,7 +63,7 @@ where
                         e
                     ));
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                tokio::time::sleep(POLL_INTERVAL).await;
             }
         }
     }
