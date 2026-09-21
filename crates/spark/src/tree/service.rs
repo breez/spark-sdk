@@ -1179,17 +1179,14 @@ fn bare_pedigrees(leaves: Vec<TreeNode>) -> Vec<LeafPedigree> {
         .collect()
 }
 
-/// The statuses a leaf we still hold can be reported in. `Available` is the
-/// spendable one. `OnChain` and `Exited` are the two an exit drives a leaf
-/// through, and they have to be asked for: a refresh that requested only
-/// `Available` lost the leaf from every operator's response at once the moment
-/// its node txs confirmed, and the store, reading that absence as a spend,
-/// deleted the chain the exit still needed to resume.
+/// The statuses a leaf we still hold can be reported in.
 fn held_leaf_statuses() -> Vec<i32> {
     vec![
         ProtoTreeNodeStatus::Available as i32,
         ProtoTreeNodeStatus::OnChain as i32,
         ProtoTreeNodeStatus::Exited as i32,
+        ProtoTreeNodeStatus::ParentExited as i32,
+        ProtoTreeNodeStatus::RenewLocked as i32,
     ]
 }
 
@@ -1810,6 +1807,8 @@ mod tests {
                 ProtoTreeNodeStatus::Available as i32,
                 ProtoTreeNodeStatus::OnChain as i32,
                 ProtoTreeNodeStatus::Exited as i32,
+                ProtoTreeNodeStatus::ParentExited as i32,
+                ProtoTreeNodeStatus::RenewLocked as i32,
             ]
         );
         assert!(
