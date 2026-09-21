@@ -80,11 +80,12 @@ flutter-check:
 itest:
 	cargo xtask itest $(if $(GROUP),--group $(GROUP))
 
+# Both env vars: one picks spark-wallet's stores, the other the SDK's.
 spark-itest-pg:
-	USE_POSTGRES_BACKEND=true cargo xtask itest
+	USE_POSTGRES_BACKEND=true USE_POSTGRES_TREE_STORE=true cargo xtask itest $(if $(GROUP),--group $(GROUP))
 
 spark-itest-mysql:
-	USE_MYSQL_BACKEND=true cargo xtask itest
+	USE_MYSQL_BACKEND=true USE_MYSQL_TREE_STORE=true cargo xtask itest $(if $(GROUP),--group $(GROUP))
 
 # The spark-itest suites that reach the deployed regtest, which needs no cluster.
 deployed-itest:
