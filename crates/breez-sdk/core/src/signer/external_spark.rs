@@ -33,7 +33,7 @@ pub trait ExternalSparkSigner: Send + Sync {
     /// The wallet identity public key (33 bytes compressed).
     async fn get_identity_public_key(&self) -> Result<PublicKeyBytes, SignerError>;
 
-    /// The signing public key for a tree leaf.
+    /// The public key of the leaf signing key derived from `leaf_id`.
     async fn get_public_key_for_leaf(
         &self,
         leaf_id: ExternalTreeNodeId,
@@ -63,7 +63,8 @@ pub trait ExternalSparkSigner: Send + Sync {
     async fn sign_message(&self, message: Vec<u8>) -> Result<EcdsaSignatureBytes, SignerError>;
 
     /// Schnorr-sign `sighash` to spend a tree leaf's P2TR refund output as a
-    /// BIP341 key-path spend (empty script tree).
+    /// BIP341 key-path spend (empty script tree), with the leaf signing key
+    /// derived from `leaf_id`.
     async fn sign_leaf_refund_spend(
         &self,
         leaf_id: ExternalTreeNodeId,

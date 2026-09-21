@@ -61,7 +61,7 @@ impl SparkWallet {
                 let transfer_id = transfer_id.unwrap_or_else(TransferId::generate);
                 let prepare_transfer = self.transfer_service.build_transfer_approval_request(
                     &transfer_id,
-                    &leaves,
+                    &with_node_id_keys(leaves),
                     &receiver_address.identity_public_key,
                 );
                 Ok(SendPackagePreparation::Ready(prepare_transfer))
@@ -70,7 +70,7 @@ impl SparkWallet {
                 let swap_targets = vec![amount_sat];
                 let prepare_transfer = self
                     .swap_service
-                    .prepare_swap(&leaves, Some(swap_targets.clone()))?;
+                    .prepare_swap(&with_node_id_keys(leaves), Some(swap_targets.clone()))?;
                 Ok(SendPackagePreparation::SwapRequired {
                     prepare_transfer,
                     target_amounts: swap_targets,
@@ -96,11 +96,12 @@ impl SparkWallet {
             .reserve_leaves_by_ids(&leaf_ids, ReservationPurpose::Payment)
             .await?;
 
+        let leaves = with_node_id_keys(reservation.leaves.clone());
         let transfer = with_reserved_leaves(
             self.tree_service.as_ref(),
             self.transfer_service.submit_transfer_with_prepared(
                 &transfer_id,
-                &reservation.leaves,
+                &leaves,
                 &receiver_public_key,
                 approved_transfer,
                 spark_invoice,
@@ -168,11 +169,12 @@ impl SparkWallet {
             .reserve_leaves_by_ids(&leaf_ids, ReservationPurpose::Swap)
             .await?;
 
+        let leaves = with_node_id_keys(reservation.leaves.clone());
         let claimed = match self
             .swap_service
             .submit_swap(
                 transfer_id,
-                &reservation.leaves,
+                &leaves,
                 Some(target_amounts),
                 approved_transfer,
             )
@@ -216,14 +218,14 @@ impl SparkWallet {
             LeafSelection::Exact(leaves) => {
                 let prepare_transfer = self
                     .lightning_service
-                    .prepare_lightning_send(&leaves, transfer_id);
+                    .prepare_lightning_send(&with_node_id_keys(leaves), transfer_id);
                 Ok(SendPackagePreparation::Ready(prepare_transfer))
             }
             LeafSelection::SwapNeeded(leaves) => {
                 let swap_targets = vec![total_amount_sat];
                 let prepare_transfer = self
                     .swap_service
-                    .prepare_swap(&leaves, Some(swap_targets.clone()))?;
+                    .prepare_swap(&with_node_id_keys(leaves), Some(swap_targets.clone()))?;
                 Ok(SendPackagePreparation::SwapRequired {
                     prepare_transfer,
                     target_amounts: swap_targets,
@@ -245,11 +247,12 @@ impl SparkWallet {
             .reserve_leaves_by_ids(&leaf_ids, ReservationPurpose::Payment)
             .await?;
 
+        let leaves = with_node_id_keys(reservation.leaves.clone());
         let lightning_payment = with_reserved_leaves(
             self.tree_service.as_ref(),
             self.lightning_service.submit_lightning_send(
                 transfer_id,
-                &reservation.leaves,
+                &leaves,
                 &invoice,
                 amount_to_send,
                 approved_transfer,
@@ -295,14 +298,14 @@ impl SparkWallet {
                     .collect();
                 let prepare_transfer = self
                     .coop_exit_service
-                    .prepare_coop_exit(&ordered, transfer_id);
+                    .prepare_coop_exit(&with_node_id_keys(ordered), transfer_id);
                 Ok(SendPackagePreparation::Ready(prepare_transfer))
             }
             LeafSelection::SwapNeeded(leaves) => {
                 let swap_targets = vec![amount_sats, fee_sats];
                 let prepare_transfer = self
                     .swap_service
-                    .prepare_swap(&leaves, Some(swap_targets.clone()))?;
+                    .prepare_swap(&with_node_id_keys(leaves), Some(swap_targets.clone()))?;
                 Ok(SendPackagePreparation::SwapRequired {
                     prepare_transfer,
                     target_amounts: swap_targets,
@@ -365,12 +368,12 @@ impl SparkWallet {
             .coop_exit_service
             .submit_coop_exit(
                 CoopExitParams {
-                    leaves: target_leaves.amount_leaves,
+                    leaves: with_node_id_keys(target_leaves.amount_leaves),
                     withdrawal_address: &withdrawal_address,
                     withdraw_all: false,
                     exit_speed,
                     fee_quote_id: Some(fee_quote.id.clone()),
-                    fee_leaves: target_leaves.fee_leaves,
+                    fee_leaves: target_leaves.fee_leaves.map(with_node_id_keys),
                     fee_sats,
                     transfer_id: Some(transfer_id.clone()),
                 },

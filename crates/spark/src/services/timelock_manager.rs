@@ -17,7 +17,7 @@ use crate::{
         },
     },
     services::{ServiceError, map_signing_nonce_commitments},
-    signer::SparkSigner,
+    signer::{LeafSigningKey, SparkSigner},
     tree::{LeafPedigree, TreeNode, TreeNodeId, assemble_exit_chains},
     utils::{
         signing_job::{SigningJob, SigningJobType, sign_signing_jobs},
@@ -28,8 +28,17 @@ use crate::{
         },
     },
 };
+use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments};
 use std::collections::BTreeMap;
+
+/// A leaf to check for renewal: its chain and the key it is held under.
+#[derive(Debug)]
+pub struct RenewalCandidate {
+    pub pedigree: LeafPedigree,
+    pub signing_key: LeafSigningKey,
+}
+
 pub struct TimelockManager {
     spark_signer: Arc<dyn SparkSigner>,
     network: Network,
@@ -72,24 +81,37 @@ impl TimelockManager {
         Ok(signing_commitments)
     }
 
-    /// Renews any leaf whose refund timelock is expiring, returning each leaf with
-    /// its ancestor chain. An unrenewed leaf passes through unchanged. A renewed leaf
-    /// carries its new chain, rebuilt in memory from the ancestors it came in with
-    /// plus the new split node the coordinator returns. The parent that drives the
-    /// renewal normally comes from the pedigree; if the stored chain is incomplete it
-    /// is fetched from the operators as a fallback.
+    /// The public key of `signing_key`, from the signer and never from persisted
+    /// tree data: the renewed refund pays to this key, so a coordinator that lied
+    /// about the stored keyshare pubkey could otherwise steer the exit refund to a
+    /// key it controls.
+    async fn signing_public_key(
+        &self,
+        signing_key: &LeafSigningKey,
+    ) -> Result<PublicKey, ServiceError> {
+        Ok(self
+            .spark_signer
+            .get_public_key_for_leaf(&signing_key.derived_from)
+            .await?)
+    }
+
+    /// Renews each leaf whose refund timelock is expiring, signing with the key it
+    /// is held under and paying the new refunds to that key. Every leaf comes back
+    /// with its chain: as it arrived if not renewed, otherwise rebuilt from its
+    /// ancestors plus the new split node the coordinator returns. A parent missing
+    /// from the stored chain is fetched from the operators.
     pub async fn check_renew_nodes(
         &self,
-        pedigrees: Vec<LeafPedigree>,
+        candidates: Vec<RenewalCandidate>,
     ) -> Result<Vec<LeafPedigree>, ServiceError> {
-        trace!("Checking renew nodes: {:?}", pedigrees);
+        trace!("Checking renew nodes: {:?}", candidates);
         let mut ready = Vec::new();
         let mut renewable = Vec::new();
-        for pedigree in pedigrees {
-            if pedigree.leaf.needs_refund_tx_renewed()? {
-                renewable.push(pedigree);
+        for candidate in candidates {
+            if candidate.pedigree.leaf.needs_refund_tx_renewed()? {
+                renewable.push(candidate);
             } else {
-                ready.push(pedigree);
+                ready.push(candidate.pedigree);
             }
         }
 
@@ -98,21 +120,21 @@ impl TimelockManager {
         }
 
         let fetched = self.fetch_missing_renewal_parents(&renewable).await?;
-        let renew_futures = renewable
-            .iter()
-            .map(|pedigree| self.renew_pedigree(pedigree, &fetched));
+        let renew_futures = renewable.iter().map(|candidate| {
+            self.renew_pedigree(&candidate.pedigree, &candidate.signing_key, &fetched)
+        });
         // One leaf the operators will not renew does not fail the batch: it is
         // kept as it arrived and tried again on the next pass.
         let renew_results = futures::future::join_all(renew_futures).await;
-        for (pedigree, result) in renewable.into_iter().zip(renew_results) {
+        for (candidate, result) in renewable.into_iter().zip(renew_results) {
             match result {
                 Ok(renewed) => ready.push(renewed),
                 Err(e) => {
                     error!(
                         "Timelock renewal failed for leaf {}, keeping it unrenewed for the next pass: {e:?}",
-                        pedigree.leaf.id
+                        candidate.pedigree.leaf.id
                     );
-                    ready.push(pedigree);
+                    ready.push(candidate.pedigree);
                 }
             }
         }
@@ -127,10 +149,11 @@ impl TimelockManager {
     /// usual case and costs no call at all.
     async fn fetch_missing_renewal_parents(
         &self,
-        renewable: &[LeafPedigree],
+        renewable: &[RenewalCandidate],
     ) -> Result<HashMap<TreeNodeId, TreeNode>, ServiceError> {
         let node_ids: Vec<String> = renewable
             .iter()
+            .map(|candidate| &candidate.pedigree)
             // A zero-timelock renewal builds on no parent.
             .filter(|pedigree| !pedigree.leaf.is_zero_timelock())
             .filter(|pedigree| match &pedigree.leaf.parent_node_id {
@@ -175,6 +198,7 @@ impl TimelockManager {
     async fn renew_pedigree(
         &self,
         pedigree: &LeafPedigree,
+        signing_key: &LeafSigningKey,
         fetched: &HashMap<TreeNodeId, TreeNode>,
     ) -> Result<LeafPedigree, ServiceError> {
         let leaf = &pedigree.leaf;
@@ -185,13 +209,13 @@ impl TimelockManager {
             .collect();
 
         let (renewed_leaf, split_node) = if leaf.is_zero_timelock() {
-            self.renew_zero_timelock(leaf).await?
+            self.renew_zero_timelock(leaf, signing_key).await?
         } else {
             let parent = Self::resolve_renewal_parent(leaf, &mut nodes, fetched)?;
             if leaf.needs_node_tx_renewed() {
-                self.renew_node(leaf, &parent).await?
+                self.renew_node(leaf, signing_key, &parent).await?
             } else {
-                self.renew_refund(leaf, &parent).await?
+                self.renew_refund(leaf, signing_key, &parent).await?
             }
         };
 
@@ -245,16 +269,13 @@ impl TimelockManager {
     async fn renew_node(
         &self,
         node: &TreeNode,
+        signing_key: &LeafSigningKey,
         parent_node: &TreeNode,
     ) -> Result<(TreeNode, Option<TreeNode>), ServiceError> {
         info!("Renewing node: {:?}", node.id);
         let mut signing_jobs = Vec::new();
 
-        // Fetch the signing key from the signer, never derived from persisted
-        // tree data: the renewed refund pays to this key, so a coordinator that
-        // lied about the stored keyshare pubkey could otherwise steer the exit
-        // refund to a key it controls.
-        let signing_public_key = self.spark_signer.get_public_key_for_leaf(&node.id).await?;
+        let signing_public_key = self.signing_public_key(signing_key).await?;
 
         let parent_node_tx = &parent_node.node_tx;
 
@@ -352,6 +373,7 @@ impl TimelockManager {
 
         let signed_jobs = sign_signing_jobs(
             &self.spark_signer,
+            signing_key,
             signing_jobs,
             signing_commitments,
             self.network,
@@ -436,16 +458,13 @@ impl TimelockManager {
     async fn renew_refund(
         &self,
         node: &TreeNode,
+        signing_key: &LeafSigningKey,
         parent_node: &TreeNode,
     ) -> Result<(TreeNode, Option<TreeNode>), ServiceError> {
         info!("Renewing refund: {:?}", node.id);
         let mut signing_jobs = Vec::new();
 
-        // Fetch the signing key from the signer, never derived from persisted
-        // tree data: the renewed refund pays to this key, so a coordinator that
-        // lied about the stored keyshare pubkey could otherwise steer the exit
-        // refund to a key it controls.
-        let signing_public_key = self.spark_signer.get_public_key_for_leaf(&node.id).await?;
+        let signing_public_key = self.signing_public_key(signing_key).await?;
 
         let parent_node_tx = &parent_node.node_tx;
         let node_tx = &node.node_tx;
@@ -521,6 +540,7 @@ impl TimelockManager {
 
         let signed_jobs = sign_signing_jobs(
             &self.spark_signer,
+            signing_key,
             signing_jobs,
             signing_commitments,
             self.network,
@@ -595,15 +615,12 @@ impl TimelockManager {
     pub async fn renew_zero_timelock(
         &self,
         node: &TreeNode,
+        signing_key: &LeafSigningKey,
     ) -> Result<(TreeNode, Option<TreeNode>), ServiceError> {
         info!("Renewing zero timelock: {:?}", node.id);
         let mut signing_jobs = Vec::new();
 
-        // Fetch the signing key from the signer, never derived from persisted
-        // tree data: the renewed refund pays to this key, so a coordinator that
-        // lied about the stored keyshare pubkey could otherwise steer the exit
-        // refund to a key it controls.
-        let signing_public_key = self.spark_signer.get_public_key_for_leaf(&node.id).await?;
+        let signing_public_key = self.signing_public_key(signing_key).await?;
 
         let node_tx = &node.node_tx;
 
@@ -667,6 +684,7 @@ impl TimelockManager {
 
         let signed_jobs = sign_signing_jobs(
             &self.spark_signer,
+            signing_key,
             signing_jobs,
             signing_commitments,
             self.network,
@@ -730,5 +748,84 @@ impl TimelockManager {
             .try_into()?;
         let split_node = renew_result.split_node.map(TryInto::try_into).transpose()?;
         Ok((node, split_node))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use macros::async_test_all;
+
+    use super::{RenewalCandidate, TimelockManager};
+    use crate::Network;
+    use crate::operator::testing::unroutable_operator_pool;
+    use crate::signer::{LeafSigningKey, SparkSigner, SparkSignerAdapter, create_test_signer};
+    use crate::tree::tests::create_test_leaf_held_under;
+    use crate::tree::{LeafPedigree, TreeNodeId};
+
+    async fn timelock_manager() -> (TimelockManager, Arc<dyn SparkSigner>) {
+        let signer: Arc<dyn SparkSigner> =
+            Arc::new(SparkSignerAdapter::new(Arc::new(create_test_signer())));
+        let manager = TimelockManager::new(
+            Arc::clone(&signer),
+            Network::Regtest,
+            unroutable_operator_pool(&signer).await,
+        );
+        (manager, signer)
+    }
+
+    /// A renewal pays its refunds to the public key of the key the leaf is held
+    /// under, as the signer derives it, not to the key derived from the node id.
+    #[async_test_all]
+    async fn a_renewal_pays_the_key_the_leaf_is_held_under() {
+        let (manager, signer) = timelock_manager().await;
+        let held_under = TreeNodeId::generate();
+
+        let refund_key = manager
+            .signing_public_key(&LeafSigningKey {
+                derived_from: held_under.clone(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            refund_key,
+            signer.get_public_key_for_leaf(&held_under).await.unwrap()
+        );
+        assert_ne!(
+            refund_key,
+            signer
+                .get_public_key_for_leaf(&"leaf".parse().unwrap())
+                .await
+                .unwrap()
+        );
+    }
+
+    /// A leaf whose refund timelock is not expiring comes back as it went in,
+    /// without a call to the operators.
+    #[async_test_all]
+    async fn a_leaf_not_due_comes_back_as_it_went_in() {
+        let (manager, signer) = timelock_manager().await;
+        let held_under = TreeNodeId::generate();
+        let held_key = signer.get_public_key_for_leaf(&held_under).await.unwrap();
+        let pedigree = LeafPedigree {
+            leaf: create_test_leaf_held_under("leaf", held_key),
+            ancestors: Vec::new(),
+        };
+
+        let checked = manager
+            .check_renew_nodes(vec![RenewalCandidate {
+                pedigree: pedigree.clone(),
+                signing_key: LeafSigningKey {
+                    derived_from: held_under,
+                },
+            }])
+            .await
+            .unwrap();
+
+        assert_eq!(checked.len(), 1);
+        assert_eq!(checked[0].leaf, pedigree.leaf);
+        assert_eq!(checked[0].ancestors, pedigree.ancestors);
     }
 }

@@ -6,21 +6,19 @@ use crate::operator::rpc::spark::{
     InitiatePreimageSwapResponse, SecretShare, StartTransferRequest, StorePreimageShareV2Request,
 };
 use crate::services::{
-    Preimage, ServiceError, Transfer, TransferId, TransferObserver, TransferService,
+    LeafKeyTweak, Preimage, ServiceError, Transfer, TransferId, TransferObserver, TransferService,
     TransferStatus, TransferType,
 };
 use crate::signer::{
     OperatorRecipient, PrepareLightningReceiveRequest, PrepareTransferRequest, PreparedTransfer,
-    SecretToSplit, Signer,
+    SecretToSplit, Signer, SparkSigner,
 };
 use crate::ssp::{
     LightningReceiveRequestStatus, RequestLightningReceiveInput, RequestLightningSendInput,
     ServiceProvider,
 };
 use crate::utils::bolt11_fallback::{SparkFallback, extract_spark_fallback};
-use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::preimage_swap::{SwapNodesForPreimageRequest, swap_nodes_for_preimage};
-use crate::{signer::SparkSigner, tree::TreeNode};
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
 use hex::ToHex;
@@ -692,7 +690,7 @@ impl LightningService {
         &self,
         invoice: &str,
         amount_to_send: Option<u64>,
-        leaves: &[TreeNode],
+        leaves: &[LeafKeyTweak],
         transfer_id: Option<TransferId>,
     ) -> Result<PayLightningResult, ServiceError> {
         let unwrapped_transfer_id = transfer_id.unwrap_or_else(TransferId::generate);
@@ -709,7 +707,7 @@ impl LightningService {
     async fn send_lightning_inner(
         &self,
         transfer_id: &TransferId,
-        leaves: &[TreeNode],
+        leaves: &[LeafKeyTweak],
         invoice: &str,
         amount_to_send: Option<u64>,
         prepared: Option<PreparedTransfer>,
@@ -724,14 +722,12 @@ impl LightningService {
         self.notify_before_send_lightning(transfer_id, invoice, amount_sats)
             .await?;
 
-        let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(leaves.to_vec());
-
         let prepared_transfer_request = match prepared {
             Some(prepared) => {
                 self.transfer_service
                     .assemble_transfer_request_with_prepared(
                         transfer_id,
-                        &leaf_key_tweaks,
+                        leaves,
                         &ssp_identity_public_key,
                         Some(&payment_hash),
                         Some(expiry_time),
@@ -744,7 +740,7 @@ impl LightningService {
                 self.transfer_service
                     .prepare_transfer_request(
                         transfer_id,
-                        &leaf_key_tweaks,
+                        leaves,
                         &ssp_identity_public_key,
                         Some(&payment_hash),
                         Some(expiry_time),
@@ -889,7 +885,7 @@ impl LightningService {
 
     pub fn prepare_lightning_send(
         &self,
-        leaves: &[TreeNode],
+        leaves: &[LeafKeyTweak],
         transfer_id: Option<TransferId>,
     ) -> PrepareTransferRequest {
         let ssp_identity_public_key = self.ssp_client.identity_public_key();
@@ -918,7 +914,7 @@ impl LightningService {
     pub async fn submit_lightning_send(
         &self,
         transfer_id: TransferId,
-        leaves: &[TreeNode],
+        leaves: &[LeafKeyTweak],
         invoice: &str,
         amount_to_send: Option<u64>,
         approved_transfer: PreparedTransfer,

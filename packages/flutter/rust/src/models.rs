@@ -794,10 +794,16 @@ pub struct _EcdsaSignatureBytes {
     pub bytes: Vec<u8>,
 }
 
+#[frb(mirror(ExternalLeafSigningKey))]
+pub struct _ExternalLeafSigningKey {
+    pub derived_from: ExternalTreeNodeId,
+}
+
 #[frb(mirror(ExternalTransferLeafInput))]
 pub struct _ExternalTransferLeafInput {
     pub node_id: ExternalTreeNodeId,
     pub new_leaf_id: ExternalTreeNodeId,
+    pub signing_key: ExternalLeafSigningKey,
 }
 
 #[frb(mirror(ExternalOperatorRecipient))]

@@ -259,6 +259,8 @@ pub struct CrossChainAddressDetails {
     pub address_family: CrossChainAddressFamily,
     pub contract_address: Option<String>,
     pub chain_id: Option<u64>,
+    #[tsify(type = "string")]
+    #[serde(default, with = "serde_option_u128_as_string")]
     pub amount: Option<u128>,
 }
 
@@ -1156,7 +1158,11 @@ pub enum SparkAsset {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainRouteLimits)]
 pub struct CrossChainRouteLimits {
+    #[tsify(type = "string")]
+    #[serde(default, with = "serde_option_u128_as_string")]
     pub min_amount: Option<u128>,
+    #[tsify(type = "string")]
+    #[serde(default, with = "serde_option_u128_as_string")]
     pub max_amount: Option<u128>,
     pub min_usd_cents: Option<u64>,
     pub max_usd_cents: Option<u64>,
@@ -2326,3 +2332,6 @@ pub struct RegisterWebhookResponse {
 pub struct UnregisterWebhookRequest {
     pub webhook_id: String,
 }
+
+#[cfg(test)]
+mod tests;

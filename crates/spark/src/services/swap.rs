@@ -64,7 +64,7 @@ impl Swap {
     /// If no target amounts are provided, the leaves will be swapped for an optimized set of leaves.
     pub async fn swap_leaves(
         &self,
-        leaves: &[TreeNode],
+        leaves: &[LeafKeyTweak],
         maybe_target_amounts: Option<Vec<u64>>,
     ) -> Result<Vec<TreeNode>, ServiceError> {
         let prepare_transfer = self.prepare_swap(leaves, maybe_target_amounts.clone())?;
@@ -76,7 +76,7 @@ impl Swap {
 
     pub fn prepare_swap(
         &self,
-        leaves: &[TreeNode],
+        leaves: &[LeafKeyTweak],
         maybe_target_amounts: Option<Vec<u64>>,
     ) -> Result<PrepareTransferRequest, ServiceError> {
         debug!(
@@ -97,7 +97,7 @@ impl Swap {
             }
         }
 
-        let leaf_sum: u64 = leaves.iter().map(|leaf| leaf.value).sum();
+        let leaf_sum: u64 = leaves.iter().map(|leaf| leaf.node.value).sum();
 
         let target_sum: u64 = maybe_target_amounts
             .as_ref()
@@ -121,18 +121,11 @@ impl Swap {
     pub async fn submit_swap(
         &self,
         transfer_id: TransferId,
-        leaves: &[TreeNode],
+        leaves: &[LeafKeyTweak],
         maybe_target_amounts: Option<Vec<u64>>,
         prepared: PreparedTransfer,
     ) -> Result<Vec<TreeNode>, ServiceError> {
-        let leaf_sum: u64 = leaves.iter().map(|leaf| leaf.value).sum();
-        let leaf_key_tweaks: Vec<LeafKeyTweak> = leaves
-            .iter()
-            .map(|leaf| LeafKeyTweak {
-                node: leaf.clone(),
-                incoming_key: None,
-            })
-            .collect();
+        let leaf_sum: u64 = leaves.iter().map(|leaf| leaf.node.value).sum();
         let expiry_time =
             SystemTime::now()
                 .checked_add(SWAP_EXPIRY_DURATION)
@@ -148,7 +141,7 @@ impl Swap {
             .transfer_service
             .assemble_transfer_request_with_prepared(
                 &transfer_id,
-                &leaf_key_tweaks,
+                leaves,
                 &receiver_public_key,
                 None,
                 Some(expiry_time),
@@ -165,10 +158,7 @@ impl Swap {
             transfer_package.direct_from_cpfp_leaves_to_send.clear();
         }
 
-        let leaf_ids_for_log: Vec<String> = leaf_key_tweaks
-            .iter()
-            .map(|l| l.node.id.to_string())
-            .collect();
+        let leaf_ids_for_log: Vec<String> = leaves.iter().map(|l| l.node.id.to_string()).collect();
         debug!(
             "leaf_lifecycle swap_rpc_initiate: transfer_id={} leaf_ids={:?}",
             transfer_id, leaf_ids_for_log
@@ -230,7 +220,7 @@ impl Swap {
                 })?;
 
             // Find the matching LeafKeyTweak to get the signing key
-            let leaf_key_tweak = leaf_key_tweaks
+            let leaf_key_tweak = leaves
                 .iter()
                 .find(|l| l.node.id == leaf_id)
                 .ok_or_else(|| {
