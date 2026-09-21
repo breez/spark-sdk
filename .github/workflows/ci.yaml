@@ -243,6 +243,27 @@ jobs:
       - name: Run Tests
         run: make ${{ matrix.backend.target }} GROUP=${{ matrix.group }}
 
+  deployed-itest:
+    name: Deployed regtest tests
+    runs-on: ubuntu-latest
+    env:
+      FAUCET_USERNAME: ${{ secrets.FAUCET_USERNAME }}
+      FAUCET_PASSWORD: ${{ secrets.FAUCET_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          rust-cache-shared-key: itest
+          rust-cache-save: 'false'
+
+      # Reaches the deployed regtest, so it needs neither a cluster's images nor
+      # the state snapshot they start from.
+      - name: Run Tests
+        run: make deployed-itest
+
   compat-itest:
     name: Signer compatibility tests
     runs-on: ubuntu-latest
