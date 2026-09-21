@@ -1626,6 +1626,7 @@ dependencies = [
  "serde-wasm-bindgen",
  "serde_bytes",
  "spark-wallet",
+ "syn 2.0.117",
  "tracing",
  "tracing-subscriber",
  "tsify-next",
