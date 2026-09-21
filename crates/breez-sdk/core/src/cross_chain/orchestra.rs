@@ -1139,6 +1139,10 @@ fn find_destination_asset_symbol<'a>(
 #[macros::async_trait]
 #[allow(clippy::too_many_lines)]
 impl CrossChainService for OrchestraService {
+    fn wake_monitor(&self) {
+        self.trigger_monitor();
+    }
+
     async fn get_routes(
         &self,
         filter: &CrossChainRouteFilter,

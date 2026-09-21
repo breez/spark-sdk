@@ -365,6 +365,44 @@ impl CrossChainContext {
     }
 }
 
+/// Wakes the provider monitors when a payment lands, so a cross-chain receive
+/// is marked as one while the user is still looking at it. Internal: it runs
+/// ahead of the middleware that hides conversion children, and a child is as
+/// good a signal as any that a delivery has arrived.
+pub(crate) struct PaymentArrivalListener {
+    services: Vec<Arc<dyn CrossChainService>>,
+}
+
+impl PaymentArrivalListener {
+    pub(crate) fn new(services: Vec<Arc<dyn CrossChainService>>) -> Self {
+        Self { services }
+    }
+}
+
+/// Whether an event says money has landed. Pending counts: the delivery is
+/// on the row by then, which is all the poll needs to match it.
+fn payment_arrived(event: &crate::events::SdkEvent) -> bool {
+    match event {
+        crate::events::SdkEvent::PaymentSucceeded { payment }
+        | crate::events::SdkEvent::PaymentPending { payment } => {
+            payment.payment_type == crate::PaymentType::Receive
+        }
+        _ => false,
+    }
+}
+
+#[macros::async_trait]
+impl crate::events::EventListener for PaymentArrivalListener {
+    async fn on_event(&self, event: crate::events::SdkEvent) {
+        if !payment_arrived(&event) {
+            return;
+        }
+        for service in &self.services {
+            service.wake_monitor();
+        }
+    }
+}
+
 /// Provider-internal state produced by `prepare` and consumed by `send`.
 /// Typed per provider so the send stage can resume without re-quoting and
 /// without a serde round-trip. Callers should round-trip this value as-is.
@@ -486,6 +524,12 @@ pub(crate) struct CrossChainSendPrepared {
 #[allow(clippy::too_many_arguments)]
 #[macros::async_trait]
 pub(crate) trait CrossChainService: Send + Sync {
+    /// Polls the provider now rather than on the monitor's own schedule.
+    /// A receive is only marked as cross-chain once the provider reports the
+    /// order complete, so a delivery that lands between ticks would otherwise
+    /// read as a plain Spark transfer for up to [`MONITOR_INTERVAL`].
+    fn wake_monitor(&self) {}
+
     /// Returns the available cross-chain route pairs.
     ///
     /// The returned [`CrossChainRoutePair`] always describes the non-Spark
@@ -787,6 +831,36 @@ mod tests {
         assert_eq!(DeliveryMethod::Spark.to_string(), "Spark");
         assert_eq!(DeliveryMethod::Lightning.to_string(), "Lightning");
         assert_eq!(DeliveryMethod::Bitcoin.to_string(), "Bitcoin");
+    }
+
+    #[test_all]
+    fn only_an_arriving_payment_wakes_the_monitors() {
+        let payment = |payment_type| crate::Payment {
+            id: "p1".to_string(),
+            payment_type,
+            status: crate::PaymentStatus::Completed,
+            amount: 1_000,
+            fees: 0,
+            timestamp: 100,
+            method: crate::PaymentMethod::Spark,
+            details: None,
+            conversion_details: None,
+        };
+        let received = payment(crate::PaymentType::Receive);
+        let sent = payment(crate::PaymentType::Send);
+
+        assert!(payment_arrived(
+            &crate::events::SdkEvent::PaymentSucceeded {
+                payment: received.clone()
+            }
+        ));
+        assert!(payment_arrived(&crate::events::SdkEvent::PaymentPending {
+            payment: received.clone()
+        }));
+        assert!(!payment_arrived(
+            &crate::events::SdkEvent::PaymentSucceeded { payment: sent }
+        ));
+        assert!(!payment_arrived(&crate::events::SdkEvent::Synced));
     }
 
     #[test_all]

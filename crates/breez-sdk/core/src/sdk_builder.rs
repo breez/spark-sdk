@@ -630,6 +630,18 @@ impl SdkBuilder {
             shutdown_sender.subscribe(),
         );
 
+        // A cross-chain receive is marked as one only after the provider
+        // reports its order complete, so the monitor is woken by the delivery
+        // itself rather than left to find it on its next pass.
+        let cross_chain_services: Vec<_> = cross_chain_context.values().map(Arc::clone).collect();
+        if !cross_chain_services.is_empty() {
+            event_emitter
+                .add_internal_listener(Box::new(crate::cross_chain::PaymentArrivalListener::new(
+                    cross_chain_services,
+                )))
+                .await;
+        }
+
         let stable_balance = build_stable_balance(
             &self.config,
             &token_converter,
