@@ -1281,6 +1281,26 @@ impl TryFrom<operator_rpc::spark_token::token_transaction::TokenInputs> for Toke
     }
 }
 
+impl TryFrom<operator_rpc::spark_token::final_token_transaction::TokenInputs> for TokenInputs {
+    type Error = ServiceError;
+
+    fn try_from(
+        inputs: operator_rpc::spark_token::final_token_transaction::TokenInputs,
+    ) -> Result<Self, Self::Error> {
+        match inputs {
+            operator_rpc::spark_token::final_token_transaction::TokenInputs::MintInput(input) => {
+                Ok(TokenInputs::Mint(input.try_into()?))
+            }
+            operator_rpc::spark_token::final_token_transaction::TokenInputs::TransferInput(
+                input,
+            ) => Ok(TokenInputs::Transfer(input.try_into()?)),
+            operator_rpc::spark_token::final_token_transaction::TokenInputs::CreateInput(input) => {
+                Ok(TokenInputs::Create(input.try_into()?))
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TokenMintInput {
     pub issuer_public_key: PublicKey,
