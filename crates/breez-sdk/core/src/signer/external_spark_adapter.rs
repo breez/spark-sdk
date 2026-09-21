@@ -12,8 +12,10 @@ use spark_wallet::{
     PrepareStaticDepositClaimRequest, PrepareStaticDepositRequest, PrepareTokenTransactionRequest,
     PrepareTransferRequest, PreparedClaim, PreparedLightningReceive, PreparedStaticDeposit,
     PreparedStaticDepositClaim, PreparedTokenTransaction, PreparedTransfer,
-    SignSparkInvoiceRequest, SignStaticDepositRefundRequest, SignedSparkInvoice, SignerError,
-    StartStaticDepositRefundRequest, StartedStaticDepositRefund, TreeNodeId,
+    SignSparkInvoiceRequest, SignStaticDepositRefundRequest, SignWatchtowerExitRecoveryRequest,
+    SignedSparkInvoice, SignerError, StartStaticDepositRefundRequest,
+    StartWatchtowerExitRecoveryRequest, StartedStaticDepositRefund, StartedWatchtowerExitRecovery,
+    TreeNodeId,
 };
 
 use super::ExternalSparkSigner;
@@ -22,7 +24,8 @@ use super::external_spark_types::{
     ExternalPrepareLightningReceiveRequest, ExternalPrepareStaticDepositClaimRequest,
     ExternalPrepareStaticDepositRequest, ExternalPrepareTokenTransactionRequest,
     ExternalPrepareTransferRequest, ExternalSignSparkInvoiceRequest,
-    ExternalSignStaticDepositRefundRequest, ExternalStartStaticDepositRefundRequest,
+    ExternalSignStaticDepositRefundRequest, ExternalSignWatchtowerExitRecoveryRequest,
+    ExternalStartStaticDepositRefundRequest, ExternalStartWatchtowerExitRecoveryRequest,
 };
 use super::external_types::ExternalTreeNodeId;
 
@@ -218,6 +221,40 @@ impl spark_wallet::SparkSigner for ExternalSparkSignerAdapter {
         .map_err(to_spark_err)?;
         self.inner
             .sign_static_deposit_refund(ext)
+            .await
+            .map_err(to_spark_err)?
+            .to_frost_signature()
+            .map_err(to_spark_err)
+    }
+
+    async fn start_watchtower_exit_recovery(
+        &self,
+        request: StartWatchtowerExitRecoveryRequest,
+    ) -> Result<StartedWatchtowerExitRecovery, SignerError> {
+        let ext =
+            ExternalStartWatchtowerExitRecoveryRequest::from_start_watchtower_exit_recovery_request(
+                &request,
+            )
+            .map_err(to_spark_err)?;
+        self.inner
+            .start_watchtower_exit_recovery(ext)
+            .await
+            .map_err(to_spark_err)?
+            .to_started_watchtower_exit_recovery()
+            .map_err(to_spark_err)
+    }
+
+    async fn sign_watchtower_exit_recovery(
+        &self,
+        request: SignWatchtowerExitRecoveryRequest,
+    ) -> Result<frost_secp256k1_tr::Signature, SignerError> {
+        let ext =
+            ExternalSignWatchtowerExitRecoveryRequest::from_sign_watchtower_exit_recovery_request(
+                &request,
+            )
+            .map_err(to_spark_err)?;
+        self.inner
+            .sign_watchtower_exit_recovery(ext)
             .await
             .map_err(to_spark_err)?
             .to_frost_signature()
