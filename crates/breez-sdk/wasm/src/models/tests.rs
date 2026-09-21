@@ -94,11 +94,12 @@ const MIRRORED: &[&str] = &[
     include_str!("../turnkey.rs"),
 ];
 
-// The rule behind the tests above, checked across every model: the models
-// macro tags each enum that carries data, so a u128 anywhere below one must use
-// `serde_u128_as_string` or `serde_option_u128_as_string`.
+// The rule behind the tests above, checked across every model. The models
+// macro tags each enum that carries data, and a flattened field buffers the
+// same way, so a u128 anywhere below either must use `serde_u128_as_string`
+// or `serde_option_u128_as_string`.
 #[wasm_bindgen_test]
-fn tagged_enums_reach_no_bigint() {
+fn buffered_models_hold_no_bigint() {
     let mut mirrored = Mirrored::default();
     for source in MIRRORED {
         mirrored.visit_file(&syn::parse_file(source).unwrap());
@@ -121,14 +122,14 @@ fn tagged_enums_reach_no_bigint() {
         if !seen.insert(name.clone()) {
             continue;
         }
-        for field in &fields[&name] {
+        // A flattened field names a type, not a model, so it can be missing.
+        let Some(type_fields) = fields.get(&name) else {
+            continue;
+        };
+        for field in type_fields {
             let mut idents = Idents::default();
             idents.visit_type(&field.ty);
-            let as_string = field.attrs.iter().any(|attr| match &attr.meta {
-                syn::Meta::List(list) => list.tokens.to_string().contains("u128_as_string"),
-                _ => false,
-            });
-            if !as_string && idents.0.iter().any(|ident| ident == "u128") {
+            if !serde_attr_has(field, "u128_as_string") && idents.0.iter().any(|i| i == "u128") {
                 let field_name = field.ident.as_ref().map(ToString::to_string);
                 bigints.push(format!("{name}.{}", field_name.unwrap_or_default()));
             }
@@ -137,23 +138,38 @@ fn tagged_enums_reach_no_bigint() {
     }
     assert!(
         bigints.is_empty(),
-        "u128 below a tagged enum can't be read back from JS: use serde_u128_as_string, \
+        "u128 below a tagged enum or a flattened field can't be read back from JS: \
+         use serde_u128_as_string, \
          or list the enum in OUTPUT_ONLY if JS never passes it back. {bigints:?}"
     );
 }
 
-// Fields by type name, and the tagged enums to start the walk from. Visiting
-// rather than reading `file.items` also reaches types declared inside a module.
+// Fields by type name, and where the walk starts: tagged enums and anything
+// flattened. Visiting rather than reading `file.items` also reaches types
+// declared inside a module.
 #[derive(Default)]
 struct Mirrored {
     fields: HashMap<String, Vec<syn::Field>>,
     pending: Vec<String>,
 }
 
+impl Mirrored {
+    fn record(&mut self, name: String, fields: Vec<syn::Field>) {
+        for field in &fields {
+            if serde_attr_has(field, "flatten") {
+                let mut idents = Idents::default();
+                idents.visit_type(&field.ty);
+                self.pending.extend(idents.0);
+            }
+        }
+        self.fields.insert(name, fields);
+    }
+}
+
 impl Visit<'_> for Mirrored {
     fn visit_item_struct(&mut self, item: &syn::ItemStruct) {
         let fields = item.fields.iter().cloned().collect();
-        self.fields.insert(item.ident.to_string(), fields);
+        self.record(item.ident.to_string(), fields);
     }
 
     fn visit_item_enum(&mut self, item: &syn::ItemEnum) {
@@ -164,8 +180,15 @@ impl Visit<'_> for Mirrored {
             self.pending.push(name.clone());
         }
         let variant_fields = item.variants.iter().flat_map(|v| v.fields.iter().cloned());
-        self.fields.insert(name, variant_fields.collect());
+        self.record(name, variant_fields.collect());
     }
+}
+
+fn serde_attr_has(field: &syn::Field, needle: &str) -> bool {
+    field.attrs.iter().any(|attr| match &attr.meta {
+        syn::Meta::List(list) => list.tokens.to_string().contains(needle),
+        _ => false,
+    })
 }
 
 #[derive(Default)]
