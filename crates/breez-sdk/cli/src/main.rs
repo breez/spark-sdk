@@ -105,6 +105,11 @@ struct Cli {
     #[arg(long)]
     lnurl_domain: Option<String>,
 
+    /// Real-time sync server URL, for example the data-sync service of a local
+    /// environment. Overrides the network default.
+    #[arg(long, value_name = "URL")]
+    real_time_sync_server_url: Option<String>,
+
     /// Route every connection through a SOCKS5 proxy, as `HOST:PORT`
     /// (e.g. `127.0.0.1:9050` for a local Tor daemon).
     #[arg(long, value_name = "HOST:PORT")]
@@ -215,6 +220,7 @@ async fn run_interactive_mode(
     stable_balance_config: Option<StableBalanceConfig>,
     passkey_config: Option<PasskeyConfig>,
     lnurl_domain: Option<String>,
+    real_time_sync_server_url: Option<String>,
     proxy: Option<ProxyConfig>,
 ) -> Result<()> {
     breez_sdk_spark::init_logging(Some(data_dir.to_string_lossy().into()), None, None)?;
@@ -250,6 +256,9 @@ async fn run_interactive_mode(
     config.proxy.clone_from(&proxy);
     if lnurl_domain.is_some() {
         config.lnurl_domain = lnurl_domain;
+    }
+    if real_time_sync_server_url.is_some() {
+        config.real_time_sync_server_url = real_time_sync_server_url;
     }
     // Cross-chain sends are opt-in by the caller and mainnet-only (enabling on
     // other networks fails config validation). Enable with default slippage so
@@ -440,6 +449,7 @@ async fn main() -> Result<(), anyhow::Error> {
         stable_balance_config,
         passkey_config,
         cli.lnurl_domain,
+        cli.real_time_sync_server_url,
         proxy,
     ))
     .await?;
