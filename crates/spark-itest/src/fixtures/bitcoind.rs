@@ -437,8 +437,9 @@ impl BitcoindFixture {
 
         if !response.is_success() {
             return Err(anyhow::anyhow!(
-                "bitcoind returned error status: {}",
-                response.status
+                "bitcoind returned error status {}: {}",
+                response.status,
+                response.body
             ));
         }
 
