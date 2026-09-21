@@ -5,7 +5,7 @@ set -e
 # Wait for postgres to be ready
 until PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -c '\q'; do
   echo "Postgres is unavailable - sleeping"
-  sleep 1
+  sleep 0.1
 done
 
 echo "Postgres is up - preparing configuration"
@@ -72,12 +72,19 @@ SERVER_KEY="${SERVER_KEY:-/data/server.key}"
 # known once every operator container runs.
 echo "Waiting for updated operators.json file..."
 until grep -q identity_public_key "$OPERATORS_JSON" 2>/dev/null; do
-  sleep 1
+  sleep 0.05
 done
 echo "operators.json lists the operators, proceeding with startup"
 
-# Give the signer a moment to start up
-sleep 1
+waited=0
+until [ -S /tmp/frost.sock ]; do
+  waited=$((waited + 1))
+  if [ "$waited" -gt 600 ]; then
+    echo "spark-frost-signer never opened /tmp/frost.sock"
+    exit 1
+  fi
+  sleep 0.05
+done
 
 
 echo "Starting spark operator..."
