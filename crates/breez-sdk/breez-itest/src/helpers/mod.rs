@@ -38,6 +38,7 @@ impl EventListener for ChannelEventListener {
 /// milliseconds and every wait of a test is time the suite spends.
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
+#[tracing::instrument(level = "debug", name = "wait.condition", skip_all)]
 pub async fn wait_for<F, Fut, T>(mut check_fn: F, timeout_secs: u64) -> Result<T>
 where
     F: FnMut() -> Fut,
@@ -82,6 +83,7 @@ where
 ///
 /// # Returns
 /// The current balance once it reaches the minimum, or error if timeout
+#[tracing::instrument(level = "debug", name = "wait.balance", skip_all)]
 pub async fn wait_for_balance(
     sdk: &BreezSdk,
     min_balance: Option<u64>,
@@ -150,6 +152,7 @@ pub async fn wait_for_balance(
 ///
 /// # Returns
 /// The new token balance once it exceeds `previous_balance`, or error if timeout
+#[tracing::instrument(level = "debug", name = "wait.token_balance_increase", skip_all)]
 pub async fn wait_for_token_balance_increase(
     sdk: &BreezSdk,
     token_identifier: &str,
@@ -202,6 +205,7 @@ pub async fn wait_for_token_balance_increase(
 ///
 /// # Returns
 /// The token balance once it equals `expected_balance`, or error if timeout
+#[tracing::instrument(level = "debug", name = "wait.token_balance", skip_all)]
 pub async fn wait_for_token_balance(
     sdk: &BreezSdk,
     token_identifier: &str,
@@ -337,6 +341,7 @@ where
 ///
 /// # Returns
 /// The number of matching events seen during the window
+#[tracing::instrument(level = "debug", name = "wait.count_events_during", skip_all)]
 pub async fn count_events_during<F>(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     window_secs: u64,
@@ -373,6 +378,11 @@ where
 }
 
 /// Count the `UnilateralExitStateChanged` events arriving over a fixed window.
+#[tracing::instrument(
+    level = "debug",
+    name = "wait.count_unilateral_exit_state_changed_events",
+    skip_all
+)]
 pub async fn count_unilateral_exit_state_changed_events(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     window_secs: u64,
@@ -397,6 +407,7 @@ pub async fn count_unilateral_exit_state_changed_events(
 ///
 /// # Returns
 /// Ok if claim succeeded, Error if timeout or terminal failure
+#[tracing::instrument(level = "debug", name = "wait.claimed_event", skip_all)]
 pub async fn wait_for_claimed_event(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     timeout_secs: u64,
@@ -462,6 +473,7 @@ pub async fn wait_for_claimed_event(
 ///
 /// # Returns
 /// The payment details from the PaymentSucceeded event
+#[tracing::instrument(level = "debug", name = "wait.payment_succeeded_event", skip_all)]
 pub async fn wait_for_payment_succeeded_event(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     payment_type: PaymentType,
@@ -495,6 +507,11 @@ pub async fn wait_for_payment_succeeded_event(
 /// Wait for a PaymentSucceeded event matching both payment type and method.
 /// This is more specific than `wait_for_payment_succeeded_event` and should be
 /// used when multiple payments of the same type but different methods might arrive.
+#[tracing::instrument(
+    level = "debug",
+    name = "wait.payment_succeeded_event_with_method",
+    skip_all
+)]
 pub async fn wait_for_payment_succeeded_event_with_method(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     payment_type: PaymentType,
@@ -535,6 +552,7 @@ pub async fn wait_for_payment_succeeded_event_with_method(
     })
 }
 
+#[tracing::instrument(level = "debug", name = "wait.payment_pending_event", skip_all)]
 pub async fn wait_for_payment_pending_event(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     payment_type: PaymentType,
@@ -566,6 +584,11 @@ pub async fn wait_for_payment_pending_event(
 }
 
 /// Wait for a PaymentMetadataUpdated event for the given payment id.
+#[tracing::instrument(
+    level = "debug",
+    name = "wait.payment_metadata_updated_event",
+    skip_all
+)]
 pub async fn wait_for_payment_metadata_updated_event(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     payment_id: &str,
@@ -596,6 +619,7 @@ pub async fn wait_for_payment_metadata_updated_event(
     })
 }
 
+#[tracing::instrument(level = "debug", name = "wait.payment_failed_event", skip_all)]
 pub async fn wait_for_payment_failed_event(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     payment_type: PaymentType,
@@ -631,6 +655,7 @@ pub async fn wait_for_payment_failed_event(
 /// # Arguments
 /// * `event_rx` - Event receiver channel from build_sdk
 /// * `timeout_secs` - Maximum time to wait in seconds
+#[tracing::instrument(level = "debug", name = "wait.synced_event", skip_all)]
 pub async fn wait_for_synced_event(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     timeout_secs: u64,
@@ -646,6 +671,11 @@ pub async fn wait_for_synced_event(
     .map(|_| ())
 }
 
+#[tracing::instrument(
+    level = "debug",
+    name = "wait.lightning_address_changed_event",
+    skip_all
+)]
 pub async fn wait_for_lightning_address_changed_event(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     timeout_secs: u64,
@@ -750,6 +780,7 @@ async fn wait_for_payment_events_unordered(
 /// * `event_rx` - Event receiver channel from build_sdk
 /// * `receive_method` - The payment method of the incoming payment (Spark or Lightning)
 /// * `timeout_secs` - Maximum time to wait in seconds
+#[tracing::instrument(level = "debug", name = "wait.auto_conversion_events", skip_all)]
 pub async fn wait_for_auto_conversion_events(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     receive_method: PaymentMethod,
@@ -776,6 +807,7 @@ pub async fn wait_for_auto_conversion_events(
 /// * `event_rx` - Event receiver channel from build_sdk
 /// * `payment_method` - The payment method of the final outgoing payment (Spark or Lightning)
 /// * `timeout_secs` - Maximum time to wait in seconds
+#[tracing::instrument(level = "debug", name = "wait.payment_conversion_events", skip_all)]
 pub async fn wait_for_payment_conversion_events(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     payment_method: PaymentMethod,

@@ -150,6 +150,7 @@ impl RegtestFaucet {
     ///
     /// # Returns
     /// The transaction hash of the funding transaction
+    #[tracing::instrument(level = "debug", name = "faucet.fund_address", skip_all)]
     pub async fn fund_address(&self, address: &str, amount_sats: u64) -> Result<String> {
         const MAX_RETRIES: u32 = 3;
 

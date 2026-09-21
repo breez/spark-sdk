@@ -974,6 +974,7 @@ pub async fn connect_turnkey_without_initial_sync(
 }
 
 /// Waits for an `UnclaimedDeposits` event, returning the unclaimed deposits.
+#[tracing::instrument(level = "debug", name = "wait.unclaimed_event", skip_all)]
 pub async fn wait_for_unclaimed_event(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     timeout_secs: u64,
@@ -998,6 +999,7 @@ pub async fn wait_for_unclaimed_event(
 }
 
 /// Ensure SDK has at least the specified balance, funding if necessary
+#[tracing::instrument(level = "debug", name = "fund.ensure_funded", skip_all)]
 pub async fn ensure_funded(sdk_instance: &mut SdkInstance, min_balance: u64) -> Result<()> {
     let span = sdk_instance.span.clone();
     return ensure_funded_inner(sdk_instance, min_balance)
@@ -1028,6 +1030,7 @@ async fn ensure_funded_inner(sdk_instance: &mut SdkInstance, min_balance: u64) -
 /// SDKs don't run the spark-wallet `BackgroundProcessor`, so the event would
 /// never fire on its own; `wait_for_balance` (which polls `sync_wallet` +
 /// `get_info`) is the only mechanism that works in both modes.
+#[tracing::instrument(level = "debug", name = "fund.ensure_funded_via_polling", skip_all)]
 pub async fn ensure_funded_via_polling(
     sdk_instance: &mut SdkInstance,
     min_balance: u64,
@@ -1068,6 +1071,7 @@ async fn ensure_funded_via_polling_inner(
 ///
 /// # Returns
 /// Tuple of (deposit_address, funding_txid)
+#[tracing::instrument(level = "debug", name = "fund.receive_and_fund", skip_all)]
 pub async fn receive_and_fund(
     sdk_instance: &mut SdkInstance,
     amount_sats: u64,

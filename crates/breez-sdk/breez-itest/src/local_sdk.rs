@@ -501,9 +501,12 @@ impl LocalStack {
                 .get_info(GetInfoRequest {
                     ensure_synced: Some(true),
                 })
+                .instrument(debug_span!("sdk.first_sync"))
                 .await?;
         } else {
-            sdk.sync_wallet(SyncWalletRequest {}).await?;
+            sdk.sync_wallet(SyncWalletRequest {})
+                .instrument(debug_span!("sdk.first_sync"))
+                .await?;
         }
 
         Ok(SdkInstance {

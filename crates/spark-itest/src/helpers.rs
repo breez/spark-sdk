@@ -22,7 +22,7 @@ use spark_wallet::{
     SparkWalletConfig, WalletBuilder, WalletEvent, is_ephemeral_anchor_output,
 };
 use tokio::sync::broadcast::Receiver;
-use tracing::{debug, info};
+use tracing::{Instrument, debug, info, instrument};
 
 use crate::backend::Backend;
 use crate::faucet::RegtestFaucet;
@@ -43,6 +43,16 @@ use crate::mempool::MempoolClient;
 /// wallet's first `WalletEvent::Synced` fires before any listener exists and
 /// is dropped.
 pub async fn build_test_wallet(
+    config: SparkWalletConfig,
+    signer: Arc<dyn Signer>,
+    backend: &Backend,
+) -> Result<SparkWallet> {
+    build_test_wallet_steps(config, signer, backend)
+        .instrument(tracing::debug_span!("setup.build_wallet"))
+        .await
+}
+
+async fn build_test_wallet_steps(
     config: SparkWalletConfig,
     signer: Arc<dyn Signer>,
     backend: &Backend,
@@ -77,6 +87,7 @@ pub async fn build_test_wallet(
     Ok(builder.build().await?)
 }
 
+#[instrument(level = "debug", name = "wait.event", skip_all, fields(event = event_name))]
 pub async fn wait_for_event<F>(
     event_rx: &mut Receiver<WalletEvent>,
     timeout_secs: u64,
@@ -208,7 +219,12 @@ pub struct WalletsFixture {
 
 #[fixture]
 pub async fn wallets(#[future] test_fixtures: TestFixtures) -> WalletsFixture {
-    let fixtures = test_fixtures.await;
+    build_wallets(test_fixtures.await)
+        .instrument(tracing::debug_span!("setup.wallets"))
+        .await
+}
+
+async fn build_wallets(fixtures: TestFixtures) -> WalletsFixture {
     let config = fixtures
         .create_wallet_config()
         .await
@@ -261,6 +277,7 @@ pub async fn wallets(#[future] test_fixtures: TestFixtures) -> WalletsFixture {
     }
 }
 
+#[instrument(level = "debug", name = "deposit_to_wallet", skip_all)]
 pub async fn deposit_to_wallet(wallet: &SparkWallet, bitcoind: &BitcoindFixture) -> Result<()> {
     // Generate a non-static deposit address
     let deposit_address = wallet.generate_deposit_address().await?.address;
@@ -334,6 +351,7 @@ pub async fn deposit_to_wallet(wallet: &SparkWallet, bitcoind: &BitcoindFixture)
 
 /// Non-static deposit a specific amount to a wallet.
 /// Similar to deposit_to_wallet but allows specifying the amount.
+#[instrument(level = "debug", name = "deposit_with_amount", skip_all)]
 pub async fn deposit_with_amount(
     wallet: &SparkWallet,
     bitcoind: &BitcoindFixture,
@@ -407,6 +425,7 @@ pub async fn deposit_with_amount(
 /// transaction, and the operators refuse the claim until every one of them has
 /// the UTXO at the required depth. Both are retried, with a fresh quote each
 /// round, until the claim goes through or `quote_timeout_secs` elapses.
+#[instrument(level = "debug", name = "fund_wallet_via_static_deposit", skip_all)]
 pub async fn fund_wallet_via_static_deposit(
     wallet: &SparkWallet,
     faucet: &RegtestFaucet,
@@ -465,6 +484,12 @@ pub async fn fund_wallet_via_static_deposit(
 
 /// Polls a condition function every 50ms until it returns true or the timeout is reached.
 /// Returns Ok(()) if the condition was met, or an error if the timeout was reached.
+#[instrument(
+    level = "debug",
+    name = "wait.condition",
+    skip_all,
+    fields(description)
+)]
 pub async fn wait_for<F, Fut>(condition: F, timeout_secs: u64, description: &str) -> Result<()>
 where
     F: Fn() -> Fut,
@@ -505,12 +530,14 @@ pub struct FundedUtxo {
 }
 
 /// Fund a new P2TR address from bitcoind and return the UTXO details.
+#[instrument(level = "debug", name = "fund_p2tr_utxo", skip_all)]
 pub async fn fund_p2tr_utxo(bitcoind: &BitcoindFixture, amount: Amount) -> Result<FundedUtxo> {
     fund_p2tr_utxo_with_key(bitcoind, amount, &SecretKey::new(&mut rand::thread_rng())).await
 }
 
 /// Fund a new P2TR address but leave the funding transaction unconfirmed in the
 /// mempool (no block mined).
+#[instrument(level = "debug", name = "fund_p2tr_utxo_unmined", skip_all)]
 pub async fn fund_p2tr_utxo_unmined(
     bitcoind: &BitcoindFixture,
     amount: Amount,
@@ -541,6 +568,7 @@ pub async fn fund_p2tr_utxo_unmined(
 }
 
 /// Fund a P2TR address for a caller-supplied key.
+#[instrument(level = "debug", name = "fund_p2tr_utxo_with_key", skip_all)]
 pub async fn fund_p2tr_utxo_with_key(
     bitcoind: &BitcoindFixture,
     amount: Amount,
@@ -574,11 +602,13 @@ pub async fn fund_p2tr_utxo_with_key(
 }
 
 /// Fund a new P2WPKH address from bitcoind and return the UTXO details.
+#[instrument(level = "debug", name = "fund_p2wpkh_utxo", skip_all)]
 pub async fn fund_p2wpkh_utxo(bitcoind: &BitcoindFixture, amount: Amount) -> Result<FundedUtxo> {
     fund_p2wpkh_utxo_with_key(bitcoind, amount, &SecretKey::new(&mut rand::thread_rng())).await
 }
 
 /// Fund a P2WPKH address for a caller-supplied key.
+#[instrument(level = "debug", name = "fund_p2wpkh_utxo_with_key", skip_all)]
 pub async fn fund_p2wpkh_utxo_with_key(
     bitcoind: &BitcoindFixture,
     amount: Amount,
@@ -675,6 +705,7 @@ pub fn sign_cpfp_psbt_p2tr(psbt: &Psbt, secret_key: &SecretKey) -> Result<Transa
 
 /// Submit a signed parent+child package, retrying once after mining the
 /// required blocks if the first attempt fails on a BIP68 CSV timelock.
+#[instrument(level = "debug", name = "submit_package_with_csv_retry", skip_all)]
 pub async fn submit_package_with_csv_retry(
     bitcoind: &BitcoindFixture,
     parent: &Transaction,
