@@ -1194,6 +1194,8 @@ fn held_leaf_statuses() -> Vec<i32> {
         ProtoTreeNodeStatus::Exited as i32,
         ProtoTreeNodeStatus::ParentExited as i32,
         ProtoTreeNodeStatus::RenewLocked as i32,
+        ProtoTreeNodeStatus::WatchtowerExited as i32,
+        ProtoTreeNodeStatus::WatchtowerExitRecovered as i32,
     ]
 }
 
@@ -1488,6 +1490,9 @@ mod tests {
             TreeNodeStatus::Aggregated,
             TreeNodeStatus::Reimbursed,
             TreeNodeStatus::ParentExited,
+            TreeNodeStatus::Consolidated,
+            TreeNodeStatus::WatchtowerExited,
+            TreeNodeStatus::WatchtowerExitRecovered,
             TreeNodeStatus::Unknown,
         ]
         .into_iter()
@@ -1816,6 +1821,8 @@ mod tests {
                 ProtoTreeNodeStatus::Exited as i32,
                 ProtoTreeNodeStatus::ParentExited as i32,
                 ProtoTreeNodeStatus::RenewLocked as i32,
+                ProtoTreeNodeStatus::WatchtowerExited as i32,
+                ProtoTreeNodeStatus::WatchtowerExitRecovered as i32,
             ]
         );
         assert!(
