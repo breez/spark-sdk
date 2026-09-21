@@ -613,36 +613,145 @@ impl ExternalSignStaticDepositRefundRequest {
     pub fn from_sign_static_deposit_refund_request(
         r: &spark_wallet::SignStaticDepositRefundRequest,
     ) -> Result<Self, SdkError> {
-        let statechain_commitments = r
-            .statechain_commitments
-            .iter()
-            .map(|(id, comm)| {
-                Ok(IdentifierCommitmentPair {
-                    identifier: ExternalIdentifier::from_identifier(id),
-                    commitment: ExternalSigningCommitments::from_signing_commitments(comm)?,
-                })
-            })
-            .collect::<Result<Vec<_>, SdkError>>()?;
-        let statechain_signatures = r
-            .statechain_signatures
-            .iter()
-            .map(|(id, share)| {
-                Ok(IdentifierSignaturePair {
-                    identifier: ExternalIdentifier::from_identifier(id),
-                    signature: ExternalFrostSignatureShare::from_signature_share(share)?,
-                })
-            })
-            .collect::<Result<Vec<_>, SdkError>>()?;
-        let statechain_public_keys = r
-            .statechain_public_keys
-            .iter()
-            .map(|(id, pk)| IdentifierPublicKeyPair {
-                identifier: ExternalIdentifier::from_identifier(id),
-                public_key: pk.serialize().to_vec(),
-            })
-            .collect();
+        let (statechain_commitments, statechain_signatures, statechain_public_keys) =
+            operator_share_pairs(
+                &r.statechain_commitments,
+                &r.statechain_signatures,
+                &r.statechain_public_keys,
+            )?;
         Ok(Self {
             index: r.index,
+            sighash: r.sighash.to_vec(),
+            verifying_key: r.verifying_key.serialize().to_vec(),
+            nonce_commitment: ExternalFrostCommitments::from_frost_commitments(
+                &r.nonce_commitment,
+            )?,
+            statechain_commitments,
+            statechain_signatures,
+            statechain_public_keys,
+        })
+    }
+}
+
+type OperatorSharePairs = (
+    Vec<IdentifierCommitmentPair>,
+    Vec<IdentifierSignaturePair>,
+    Vec<IdentifierPublicKeyPair>,
+);
+
+fn operator_share_pairs(
+    commitments: &BTreeMap<
+        frost_secp256k1_tr::Identifier,
+        frost_secp256k1_tr::round1::SigningCommitments,
+    >,
+    signatures: &BTreeMap<
+        frost_secp256k1_tr::Identifier,
+        frost_secp256k1_tr::round2::SignatureShare,
+    >,
+    public_keys: &BTreeMap<frost_secp256k1_tr::Identifier, secp256k1::PublicKey>,
+) -> Result<OperatorSharePairs, SdkError> {
+    let commitments = commitments
+        .iter()
+        .map(|(id, comm)| {
+            Ok(IdentifierCommitmentPair {
+                identifier: ExternalIdentifier::from_identifier(id),
+                commitment: ExternalSigningCommitments::from_signing_commitments(comm)?,
+            })
+        })
+        .collect::<Result<_, SdkError>>()?;
+    let signatures = signatures
+        .iter()
+        .map(|(id, share)| {
+            Ok(IdentifierSignaturePair {
+                identifier: ExternalIdentifier::from_identifier(id),
+                signature: ExternalFrostSignatureShare::from_signature_share(share)?,
+            })
+        })
+        .collect::<Result<_, SdkError>>()?;
+    let public_keys = public_keys
+        .iter()
+        .map(|(id, pk)| IdentifierPublicKeyPair {
+            identifier: ExternalIdentifier::from_identifier(id),
+            public_key: pk.serialize().to_vec(),
+        })
+        .collect();
+    Ok((commitments, signatures, public_keys))
+}
+
+// ─── watchtower-exit recovery ───────────────────────────────────────────────
+
+/// FFI-safe representation of `spark_wallet::StartWatchtowerExitRecoveryRequest`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ExternalStartWatchtowerExitRecoveryRequest {
+    pub leaf_id: ExternalTreeNodeId,
+    /// What the operators require signed with the identity key before they
+    /// co-sign.
+    pub user_statement: Vec<u8>,
+}
+
+impl ExternalStartWatchtowerExitRecoveryRequest {
+    pub fn from_start_watchtower_exit_recovery_request(
+        r: &spark_wallet::StartWatchtowerExitRecoveryRequest,
+    ) -> Result<Self, SdkError> {
+        Ok(Self {
+            leaf_id: ExternalTreeNodeId::from_tree_node_id(&r.leaf_id)?,
+            user_statement: r.user_statement.clone(),
+        })
+    }
+}
+
+/// FFI-safe representation of `spark_wallet::StartedWatchtowerExitRecovery`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ExternalStartedWatchtowerExitRecovery {
+    /// The leaf's signing public key (33 bytes compressed).
+    pub signing_public_key: Vec<u8>,
+    pub nonce_commitment: ExternalFrostCommitments,
+    pub user_signature: EcdsaSignatureBytes,
+}
+
+impl ExternalStartedWatchtowerExitRecovery {
+    pub fn to_started_watchtower_exit_recovery(
+        &self,
+    ) -> Result<spark_wallet::StartedWatchtowerExitRecovery, SdkError> {
+        Ok(spark_wallet::StartedWatchtowerExitRecovery {
+            signing_public_key: public_key_from_bytes(
+                &self.signing_public_key,
+                "leaf signing public key",
+            )?,
+            nonce_commitment: self.nonce_commitment.to_frost_commitments()?,
+            user_signature: self.user_signature.to_signature()?,
+        })
+    }
+}
+
+/// FFI-safe representation of `spark_wallet::SignWatchtowerExitRecoveryRequest`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ExternalSignWatchtowerExitRecoveryRequest {
+    pub leaf_id: ExternalTreeNodeId,
+    pub sighash: Vec<u8>,
+    /// FROST group verifying key (33 bytes compressed).
+    pub verifying_key: Vec<u8>,
+    pub nonce_commitment: ExternalFrostCommitments,
+    pub statechain_commitments: Vec<IdentifierCommitmentPair>,
+    pub statechain_signatures: Vec<IdentifierSignaturePair>,
+    pub statechain_public_keys: Vec<IdentifierPublicKeyPair>,
+}
+
+impl ExternalSignWatchtowerExitRecoveryRequest {
+    pub fn from_sign_watchtower_exit_recovery_request(
+        r: &spark_wallet::SignWatchtowerExitRecoveryRequest,
+    ) -> Result<Self, SdkError> {
+        let (statechain_commitments, statechain_signatures, statechain_public_keys) =
+            operator_share_pairs(
+                &r.statechain_commitments,
+                &r.statechain_signatures,
+                &r.statechain_public_keys,
+            )?;
+        Ok(Self {
+            leaf_id: ExternalTreeNodeId::from_tree_node_id(&r.leaf_id)?,
             sighash: r.sighash.to_vec(),
             verifying_key: r.verifying_key.serialize().to_vec(),
             nonce_commitment: ExternalFrostCommitments::from_frost_commitments(
