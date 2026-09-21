@@ -166,12 +166,24 @@ impl ExitChainState {
     /// Whether nothing is left of this leaf's exit: its refund was swept, or its
     /// branch was taken by a spend the exit cannot continue from and no refund
     /// surfaced.
+    ///
+    /// A stranded leaf is not finished: its value is still there to recover, and
+    /// the scan stops calling it stranded once a confirmed spend takes it.
     #[must_use]
     pub fn is_finished(&self, leaf_id: &TreeNodeId) -> bool {
         match self.refunds.iter().find(|r| r.leaf_id == *leaf_id) {
             Some(refund) => matches!(refund.state, ExitRefundState::Swept),
-            None => self.stopped_leaves.contains(leaf_id),
+            None => self.stopped_leaves.contains(leaf_id) && !self.is_stranded(leaf_id),
         }
+    }
+
+    /// Whether this leaf's value is sitting in an output only an
+    /// operator-co-signed spend can reach.
+    #[must_use]
+    pub fn is_stranded(&self, leaf_id: &TreeNodeId) -> bool {
+        self.stranded_leaves
+            .iter()
+            .any(|output| output.leaf_id == *leaf_id)
     }
 }
 

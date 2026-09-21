@@ -1099,8 +1099,23 @@ fn walk_branch(
             trace!(%leaf_id, node = %node.id, spender = %info.spender_txid, "walk: cpfp lineage taken by an uncontinuable tx, branch stopped");
             stopped.insert(leaf_id.clone());
             if let Some(output) = stranded_output(node, leaf, info.spender_txid) {
-                trace!(%leaf_id, node = %node.id, outpoint = %output.outpoint, "walk: value recoverable from the confirmed direct tx");
-                stranded.insert(leaf_id.clone(), output);
+                // A recovery already confirmed leaves nothing to recover. An
+                // unconfirmed one is rebuilt rather than dropped, as a sweep
+                // sitting in the mempool is.
+                let query = ChainQuery::Outspend(output.outpoint);
+                match observed.get(&query) {
+                    None => {
+                        trace!(%leaf_id, outpoint = %output.outpoint, "walk: awaiting the stranded output's spend");
+                        pending.push(query);
+                    }
+                    Some(ChainResult::Spend(Some(spend))) if spend.confirmed => {
+                        trace!(%leaf_id, outpoint = %output.outpoint, "walk: the stranded value was already recovered");
+                    }
+                    Some(_) => {
+                        trace!(%leaf_id, node = %node.id, outpoint = %output.outpoint, "walk: value recoverable from the confirmed direct tx");
+                        stranded.insert(leaf_id.clone(), output);
+                    }
+                }
             }
             return;
         }
@@ -3356,21 +3371,86 @@ mod interpret_tests {
         let tree = to_node_map(vec![root, split, leaf]);
         let addresses = HashMap::new();
 
+        let stranded_out = OutPoint {
+            txid: direct_txid,
+            vout: 0,
+        };
         let observed = vec![
             spent(deposit, root_txid),
             spent(root_out, direct_txid),
+            unspent(stranded_out),
             no_refund(&leaf_id),
         ];
         let scan = scan_exit_chain(&tree, std::slice::from_ref(&leaf_id), &addresses, &observed);
 
         assert!(scan.pending.is_empty(), "{:?}", scan.pending);
         assert_eq!(scan.state.stopped_leaves, vec![leaf_id.clone()]);
+        assert!(
+            !scan.state.is_finished(&leaf_id),
+            "a leaf with value still to recover is not finished"
+        );
         assert_eq!(scan.state.stranded_leaves.len(), 1);
         let stranded = &scan.state.stranded_leaves[0];
         assert_eq!(stranded.leaf_id, leaf_id);
         assert_eq!(stranded.outpoint.txid, direct_txid);
         assert_eq!(stranded.outpoint.vout, 0);
         assert_eq!(stranded.value_sat, 99_000);
+    }
+
+    /// Once a recovery is in a block the value is gone from that output, so the
+    /// exit stops offering to recover it and the leaf is finished.
+    #[test]
+    fn scan_stops_reporting_a_stranded_output_once_its_spend_confirms() {
+        let deposit = OutPoint {
+            txid: Txid::from_byte_array([9; 32]),
+            vout: 0,
+        };
+        let root = treenode("root", None, tx_spending(deposit, 1), 0);
+        let root_txid = root.node_tx.compute_txid();
+        let root_out = OutPoint {
+            txid: root_txid,
+            vout: 0,
+        };
+        let mut split = treenode("split", Some("root"), tx_spending(root_out, 2), 0);
+        let mut direct = tx_spending(root_out, 3);
+        direct.output = vec![TxOut {
+            value: Amount::from_sat(99_000),
+            script_pubkey: ScriptBuf::new_p2tr(
+                &bitcoin::secp256k1::Secp256k1::verification_only(),
+                pubkey().x_only_public_key().0,
+                None,
+            ),
+        }];
+        let direct_txid = direct.compute_txid();
+        split.direct_tx = Some(direct);
+        let split_out = OutPoint {
+            txid: split.node_tx.compute_txid(),
+            vout: 0,
+        };
+        let leaf = treenode("leaf", Some("split"), tx_spending(split_out, 4), 0);
+        let leaf_id = leaf.id.clone();
+        let tree = to_node_map(vec![root, split, leaf]);
+        let addresses = HashMap::new();
+
+        let stranded_out = OutPoint {
+            txid: direct_txid,
+            vout: 0,
+        };
+        let recovery = Txid::from_byte_array([5; 32]);
+        let observed = vec![
+            spent(deposit, root_txid),
+            spent(root_out, direct_txid),
+            spent(stranded_out, recovery),
+            no_refund(&leaf_id),
+        ];
+        let scan = scan_exit_chain(&tree, std::slice::from_ref(&leaf_id), &addresses, &observed);
+
+        assert!(scan.pending.is_empty(), "{:?}", scan.pending);
+        assert!(scan.state.stranded_leaves.is_empty());
+        assert!(
+            scan.state.is_finished(&leaf_id),
+            "nothing is left of this leaf's exit"
+        );
     }
 
     /// A foreign transaction taking the same output leaves nothing to recover:
