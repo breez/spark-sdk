@@ -1187,6 +1187,8 @@ fn held_leaf_statuses() -> Vec<i32> {
         ProtoTreeNodeStatus::Exited as i32,
         ProtoTreeNodeStatus::ParentExited as i32,
         ProtoTreeNodeStatus::RenewLocked as i32,
+        ProtoTreeNodeStatus::WatchtowerExited as i32,
+        ProtoTreeNodeStatus::WatchtowerExitRecovered as i32,
     ]
 }
 
@@ -1481,6 +1483,9 @@ mod tests {
             TreeNodeStatus::Aggregated,
             TreeNodeStatus::Reimbursed,
             TreeNodeStatus::ParentExited,
+            TreeNodeStatus::Consolidated,
+            TreeNodeStatus::WatchtowerExited,
+            TreeNodeStatus::WatchtowerExitRecovered,
             TreeNodeStatus::Unknown,
         ]
         .into_iter()
@@ -1786,10 +1791,10 @@ mod tests {
     }
 
     /// The refresh asks for the statuses a leaf we hold can be reported in, so a
-    /// leaf part-way through an exit keeps coming back instead of vanishing from
-    /// every operator at once. `TransferLocked` is deliberately not among them: a
-    /// leaf of ours in that status is one we are sending, and re-reading it would
-    /// undo the send.
+    /// leaf part-way through an exit, or one the watchtower stranded, keeps
+    /// coming back instead of vanishing from every operator at once.
+    /// `TransferLocked` is deliberately not among them: a leaf of ours in that
+    /// status is one we are sending, and re-reading it would undo the send.
     #[test_all]
     fn refresh_query_requests_held_leaf_statuses() {
         let owner = PublicKey::from_slice(&[2; 33]).unwrap();
@@ -1809,6 +1814,8 @@ mod tests {
                 ProtoTreeNodeStatus::Exited as i32,
                 ProtoTreeNodeStatus::ParentExited as i32,
                 ProtoTreeNodeStatus::RenewLocked as i32,
+                ProtoTreeNodeStatus::WatchtowerExited as i32,
+                ProtoTreeNodeStatus::WatchtowerExitRecovered as i32,
             ]
         );
         assert!(
