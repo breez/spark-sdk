@@ -5,6 +5,7 @@
 //! runs against.
 
 use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::Result;
 use bitcoin::{Transaction, Txid};
@@ -77,7 +78,9 @@ impl Environment {
     fn faucet_config(&self) -> FaucetConfig {
         match self {
             Environment::Deployed => FaucetConfig::default(),
-            Environment::Local(stack) => FaucetConfig::for_ssp(&stack.ssp_base_url()),
+            Environment::Local(stack) => {
+                FaucetConfig::for_local_stack(&stack.ssp_base_url(), Arc::clone(stack.fixtures()))
+            }
         }
     }
 

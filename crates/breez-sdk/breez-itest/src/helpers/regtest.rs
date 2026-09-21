@@ -1115,15 +1115,64 @@ async fn receive_and_fund_inner(
         txid
     );
 
+    let miner = sdk_instance.faucet.miner.clone();
     if must_be_claimer {
-        wait_for_claimed_event(&mut sdk_instance.events, 180).await?;
+        match miner {
+            Some(miner) => claim_on_local_chain(sdk_instance, &miner).await?,
+            None => wait_for_claimed_event(&mut sdk_instance.events, 180).await?,
+        }
         wait_for_balance(&sdk_instance.sdk, Some(initial_balance + 1), None, 20).await?;
     } else {
+        if let Some(miner) = miner {
+            miner.mine_block().await?;
+            sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
+        }
         wait_for_balance(&sdk_instance.sdk, Some(initial_balance + 1), None, 200).await?;
     }
     sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     Ok((deposit_address, txid))
+}
+
+/// Confirms the deposit and syncs until it is claimed, rather than waiting for
+/// the SDK's periodic sync. A sync claims inline, so the event of a claim it made
+/// is queued by the time it returns. The operators can still be processing the
+/// block, so an attempt can find the deposit unclaimable yet.
+#[tracing::instrument(level = "debug", name = "wait.claimed_on_local_chain", skip_all)]
+async fn claim_on_local_chain(
+    sdk_instance: &mut SdkInstance,
+    miner: &crate::faucet::LocalMiner,
+) -> Result<()> {
+    miner.mine_block().await?;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(180);
+    loop {
+        sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
+        while let Ok(event) = sdk_instance.events.try_recv() {
+            match event {
+                SdkEvent::ClaimedDeposits { .. } => return Ok(()),
+                SdkEvent::UnclaimedDeposits { unclaimed_deposits } => {
+                    if let Some(terminal) = unclaimed_deposits.iter().find(|deposit| {
+                        matches!(
+                            deposit.claim_error,
+                            Some(DepositClaimError::MaxDepositClaimFeeExceeded { .. })
+                        )
+                    }) {
+                        anyhow::bail!(
+                            "Deposit {}:{} cannot be claimed: {:?}",
+                            terminal.txid,
+                            terminal.vout,
+                            terminal.claim_error
+                        );
+                    }
+                }
+                other => info!("Ignored SDK event: {other:?}"),
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("the deposit was not claimed within 180 seconds");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
 }
 
 /// Build and initialize a BreezSDK instance backed by PostgreSQL storage

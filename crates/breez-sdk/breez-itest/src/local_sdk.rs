@@ -513,7 +513,7 @@ impl LocalStack {
             temp_dir: Some(storage_dir),
             data_sync_fixture: None,
             lnurl_fixture: None,
-            faucet: FaucetConfig::for_ssp(&stack.ssp_base_url),
+            faucet: FaucetConfig::for_local_stack(&stack.ssp_base_url, Arc::clone(&stack.fixtures)),
             turnkey_guard: None,
         })
     }
