@@ -88,12 +88,24 @@ pub struct ExitChainState {
     /// Leaves whose cpfp lineage was taken on-chain by a transaction the exit
     /// cannot continue from.
     pub stopped_leaves: Vec<TreeNodeId>,
+    /// Stopped leaves whose value an operator-co-signed spend can still reach.
+    pub stranded_leaves: Vec<StrandedLeafOutput>,
     /// Nodes whose own lookup failed. Their state is unknown, not absent.
     pub unverified_nodes: Vec<TreeNodeId>,
     /// Nodes taken to be confirmed on the operators' word because the chain
     /// could not be read. Their spend is invisible, so anything built over them
     /// risks double-spending an output already gone.
     pub unverifiable_confirmed_nodes: Vec<TreeNodeId>,
+}
+
+/// A leaf's whole value sitting in one output that no pre-signed transaction
+/// spends: an ancestor's direct transaction confirmed, and its output pays the
+/// leaf's verifying key. Only a spend co-signed with the operators reaches it.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct StrandedLeafOutput {
+    pub leaf_id: TreeNodeId,
+    pub outpoint: OutPoint,
+    pub value_sat: u64,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

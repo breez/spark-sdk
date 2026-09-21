@@ -2914,6 +2914,9 @@ pub enum UnilateralExitTxKind {
     Node,
     /// A leaf's refund transaction.
     Refund,
+    /// A spend of a stranded leaf's on-chain output, co-signed with the
+    /// operators. It pays the destination directly and its own fee.
+    Recovery,
     /// The final transaction sweeping all refund outputs to the destination.
     Sweep,
 }
@@ -3019,6 +3022,9 @@ pub struct ExitChainState {
     /// Leaves whose lineage was taken on-chain by a transaction the exit cannot
     /// continue from. Nothing further can be driven for them.
     pub stopped_leaf_ids: Vec<String>,
+    /// Stopped leaves whose value is still reachable, by co-signing a spend of
+    /// the output it landed in with the operators.
+    pub stranded_leaves: Vec<StrandedLeafOutput>,
     /// Nodes a chain lookup could not read, so their state is unknown rather
     /// than absent. Transactions depending on them come back
     /// `ExitTransactionStatus::Unverified`.
@@ -3027,6 +3033,17 @@ pub struct ExitChainState {
     /// unreadable. Their spend is invisible, so anything built over them risks
     /// double-spending an output that is already gone.
     pub unverifiable_confirmed_node_ids: Vec<String>,
+}
+
+/// A leaf's whole value in one on-chain output that no pre-signed transaction
+/// spends, left there by an ancestor's direct transaction confirming.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct StrandedLeafOutput {
+    pub leaf_id: String,
+    pub txid: String,
+    pub vout: u32,
+    pub value_sat: u64,
 }
 
 /// A node of the exit tree that is already on-chain.

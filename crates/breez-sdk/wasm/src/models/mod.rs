@@ -870,6 +870,7 @@ pub enum UnilateralExitTxKind {
     FanOut,
     Node,
     Refund,
+    Recovery,
     Sweep,
 }
 
@@ -919,8 +920,17 @@ pub struct ExitChainState {
     pub confirmed_nodes: Vec<ConfirmedExitNode>,
     pub refunds: Vec<ExitRefund>,
     pub stopped_leaf_ids: Vec<String>,
+    pub stranded_leaves: Vec<StrandedLeafOutput>,
     pub unverified_node_ids: Vec<String>,
     pub unverifiable_confirmed_node_ids: Vec<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::StrandedLeafOutput)]
+pub struct StrandedLeafOutput {
+    pub leaf_id: String,
+    pub txid: String,
+    pub vout: u32,
+    pub value_sat: u64,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConfirmedExitNode)]

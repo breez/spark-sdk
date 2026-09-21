@@ -8,7 +8,7 @@ use std::{
 };
 
 use bitcoin::{
-    Address, Amount, Transaction, TxIn, TxOut, Witness,
+    Address, Amount, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness,
     absolute::LockTime,
     address::NetworkUnchecked,
     hashes::{Hash as _, sha256::Hash},
@@ -48,9 +48,10 @@ use spark::{
         ExitChainState, ExitSpeed, Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription,
         LightningReceivePayment, LightningSendPayment, LightningService, PayLightningResult,
         Preimage, PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
-        QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap, TimelockManager,
-        TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
-        TransferTokenOutput, TransferType, UnilateralExitLeafFilter, Utxo,
+        QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, StrandedLeafOutput, Swap,
+        TimelockManager, TokenTransaction, Transfer, TransferId, TransferObserver, TransferService,
+        TransferStatus, TransferTokenOutput, TransferType, UnilateralExitLeafFilter, Utxo,
+        WatchtowerRecoveryService, compute_sweep_fee, p2tr_key_path_input_weight,
     },
     session_store::{InMemorySessionStore, SessionStore},
     signer::{PrepareTransferRequest, PreparedTransfer, SparkSigner},
@@ -383,6 +384,7 @@ pub struct SparkWallet {
     token_output_service: Arc<dyn TokenOutputService>,
     coop_exit_service: Arc<CoopExitService>,
     transfer_service: Arc<TransferService>,
+    watchtower_recovery_service: Arc<WatchtowerRecoveryService>,
     swap_service: Arc<Swap>,
     lightning_service: Arc<LightningService>,
     ssp_client: Arc<ServiceProvider>,
@@ -515,6 +517,11 @@ impl SparkWallet {
             Arc::clone(&spark_signer),
             transfer_observer.clone(),
         ));
+        let watchtower_recovery_service = Arc::new(WatchtowerRecoveryService::new(
+            Arc::clone(&spark_signer),
+            config.network,
+            operator_pool.clone(),
+        ));
         let swap_service = Arc::new(Swap::new(
             config.network,
             operator_pool.clone(),
@@ -600,6 +607,7 @@ impl SparkWallet {
             token_output_service,
             coop_exit_service,
             transfer_service,
+            watchtower_recovery_service,
             swap_service,
             lightning_service,
             ssp_client: service_provider.clone(),
@@ -1808,6 +1816,62 @@ impl SparkWallet {
             skipped_conflicting_leaves,
             skipped_chains,
         })
+    }
+
+    /// Co-signs a spend of the output a watchtower-exited leaf's value landed
+    /// in, paying `destination` and taking its own fee out of the value.
+    ///
+    /// Only the operators can complete this signature, so it is the one part of
+    /// an exit that is not unilateral. It spends an output already on-chain, so
+    /// the result stands alone: no fee-bumping child, no dependency on anything
+    /// else the exit broadcasts. Re-signing at a higher fee rate is safe, every
+    /// attempt spending the same output.
+    pub async fn recover_stranded_leaf(
+        &self,
+        leaf: &TreeNode,
+        stranded: &StrandedLeafOutput,
+        destination: &Address,
+        fee_rate_sat_per_kw: u64,
+    ) -> Result<Transaction, SparkWalletError> {
+        let script_pubkey = destination.script_pubkey();
+        let fee_sat = compute_sweep_fee(
+            p2tr_key_path_input_weight(),
+            script_pubkey.len(),
+            fee_rate_sat_per_kw,
+        );
+        let value = stranded.value_sat.checked_sub(fee_sat).ok_or_else(|| {
+            SparkWalletError::Generic(format!(
+                "Recovering leaf {} costs more in fees ({fee_sat} sats) than it holds ({} sats)",
+                stranded.leaf_id, stranded.value_sat
+            ))
+        })?;
+
+        let recovery_tx = Transaction {
+            version: Version::non_standard(3),
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: stranded.outpoint,
+                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(value),
+                script_pubkey,
+            }],
+        };
+        let prev_out = TxOut {
+            value: Amount::from_sat(stranded.value_sat),
+            script_pubkey: ScriptBuf::new_p2tr(
+                &Secp256k1::verification_only(),
+                leaf.verifying_public_key.x_only_public_key().0,
+                None,
+            ),
+        };
+
+        Ok(self
+            .watchtower_recovery_service
+            .sign_recovery_tx(&stranded.leaf_id, recovery_tx, &prev_out)
+            .await?)
     }
 
     /// The leaves an exit would move and the tree behind them. Held apart from

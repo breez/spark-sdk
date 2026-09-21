@@ -1,10 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
-use bitcoin::{Address, OutPoint, Transaction, Txid};
+use bitcoin::secp256k1::Secp256k1;
+use bitcoin::{Address, OutPoint, ScriptBuf, Transaction, Txid};
 use spark::{
     services::{
         ConfirmedExitNode, CpfpInput, ExitChainState, ExitNodeConfirmation, ExitRefund,
-        ExitRefundState, UnilateralExitPlan, build_cpfp_child, csv_timelock,
+        ExitRefundState, StrandedLeafOutput, UnilateralExitPlan, build_cpfp_child, csv_timelock,
         walk_unilateral_exit_chain,
     },
     signer::LeafSigningKey,
@@ -122,6 +123,10 @@ pub enum ExitTxKind {
     FanOut,
     Node,
     Refund,
+    /// A spend of a stranded leaf's on-chain output, co-signed with the
+    /// operators. Pays its own fee and depends on nothing, the output it spends
+    /// already being confirmed.
+    Recovery,
 }
 
 /// A built exit tx's on-chain state, resolved from the chain observations.
@@ -271,6 +276,7 @@ struct ExitChainWalk {
     nodes: HashMap<TreeNodeId, NodeState>,
     refunds: HashMap<TreeNodeId, RefundState>,
     stopped: HashSet<TreeNodeId>,
+    stranded: HashMap<TreeNodeId, StrandedLeafOutput>,
     unverified: HashSet<TreeNodeId>,
     /// Confirmed nodes whose on-chain spend `scan_funding` cannot see: the
     /// operator-OnChain fallback taken because the chain lookup was unavailable.
@@ -641,6 +647,11 @@ fn restore_exit_chain_walk(state: &ExitChainState, leaf_ids: &[TreeNodeId]) -> E
         nodes,
         refunds,
         stopped,
+        stranded: state
+            .stranded_leaves
+            .iter()
+            .map(|output| (output.leaf_id.clone(), output.clone()))
+            .collect(),
         unverified: state.unverified_nodes.iter().cloned().collect(),
         unverifiable_confirmed: state.unverifiable_confirmed_nodes.iter().cloned().collect(),
         pending: Vec::new(),
@@ -735,12 +746,18 @@ pub fn scan_exit_chain(
         ids.sort();
         ids
     };
+    let sorted_stranded = |outputs: HashMap<TreeNodeId, StrandedLeafOutput>| {
+        let mut outputs: Vec<StrandedLeafOutput> = outputs.into_values().collect();
+        outputs.sort_by(|a, b| a.leaf_id.cmp(&b.leaf_id));
+        outputs
+    };
 
     ExitChainScan {
         state: ExitChainState {
             nodes,
             refunds,
             stopped_leaves: sorted(walk.stopped),
+            stranded_leaves: sorted_stranded(walk.stranded),
             unverified_nodes: sorted(walk.unverified),
             unverifiable_confirmed_nodes: sorted(walk.unverifiable_confirmed),
         },
@@ -797,6 +814,7 @@ fn interpret_chain(plan: &UnilateralExitPlan, state: &ExitChainState) -> ChainIn
         nodes,
         refunds,
         stopped,
+        stranded: _,
         mut unverified,
         unverifiable_confirmed,
         pending: _,
@@ -937,6 +955,7 @@ fn walk_branch(
         nodes,
         refunds,
         stopped,
+        stranded,
         unverified,
         unverifiable_confirmed,
         pending,
@@ -1079,9 +1098,48 @@ fn walk_branch(
             // children can't continue (they spend the cpfp output it never makes).
             trace!(%leaf_id, node = %node.id, spender = %info.spender_txid, "walk: cpfp lineage taken by an uncontinuable tx, branch stopped");
             stopped.insert(leaf_id.clone());
+            if let Some(output) = stranded_output(node, leaf, info.spender_txid) {
+                trace!(%leaf_id, node = %node.id, outpoint = %output.outpoint, "walk: value recoverable from the confirmed direct tx");
+                stranded.insert(leaf_id.clone(), output);
+            }
             return;
         }
     }
+}
+
+/// The output a stopped branch's value can still be recovered from, if any.
+///
+/// Only the confirmed transaction's own outputs are considered, and only one
+/// paying the leaf's verifying key: renewal copies that key onto the split node
+/// it inserts, so the split node's direct transaction pays it, while a genuine
+/// tree split divides the key and a sibling's output never matches.
+fn stranded_output(
+    node: &TreeNode,
+    leaf: &TreeNode,
+    spender_txid: Txid,
+) -> Option<StrandedLeafOutput> {
+    let direct_tx = node.direct_tx.as_ref()?;
+    if direct_tx.compute_txid() != spender_txid {
+        return None;
+    }
+    let script = ScriptBuf::new_p2tr(
+        &Secp256k1::verification_only(),
+        leaf.verifying_public_key.x_only_public_key().0,
+        None,
+    );
+    let (vout, output) = direct_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, out)| out.script_pubkey == script)?;
+    Some(StrandedLeafOutput {
+        leaf_id: leaf.id.clone(),
+        outpoint: OutPoint {
+            txid: spender_txid,
+            vout: u32::try_from(vout).ok()?,
+        },
+        value_sat: output.value.to_sat(),
+    })
 }
 
 /// Resolves a leaf's refund from its address. The address scan returns every
@@ -1189,9 +1247,15 @@ pub fn build_unilateral_exit(
     plan: &UnilateralExitPlan,
     state: &ExitChainState,
     fee_rate_sat_per_kw: u64,
+    recoveries: &HashMap<TreeNodeId, Transaction>,
 ) -> Result<UnilateralExitBuild, SparkWalletError> {
     let interpretation = interpret_chain(plan, state);
-    let mut build = build_exit(plan, &interpretation.resolved, fee_rate_sat_per_kw)?;
+    let mut build = build_exit(
+        plan,
+        &interpretation.resolved,
+        fee_rate_sat_per_kw,
+        recoveries,
+    )?;
     flag_unverified_txs(&mut build, &interpretation);
     Ok(build)
 }
@@ -1215,6 +1279,7 @@ pub(crate) fn build_exit(
     plan: &UnilateralExitPlan,
     resolved: &ResolvedExitState,
     fee_rate_sat_per_kw: u64,
+    recoveries: &HashMap<TreeNodeId, Transaction>,
 ) -> Result<UnilateralExitBuild, SparkWalletError> {
     let node_map = &plan.tree_nodes;
 
@@ -1252,7 +1317,19 @@ pub(crate) fn build_exit(
         })?;
 
         let stopped = resolved.stopped.contains(leaf_id);
-        if stopped {
+        // A recovery spends an output that is already on-chain, so it hangs off
+        // nothing the build emits and carries no child to fund it.
+        let recovery = recoveries.get(leaf_id).map(|tx| ExitTx {
+            kind: ExitTxKind::Recovery,
+            node_id: Some(leaf_id.clone()),
+            txid: tx.compute_txid(),
+            base_tx: tx.clone(),
+            to_sign: None,
+            csv_timelock_blocks: None,
+            depends_on: vec![],
+            status: ExitTxStatus::Unconfirmed,
+        });
+        if stopped && recovery.is_none() {
             warn!(
                 %leaf_id,
                 "unilateral exit: branch STOPPED. Its cpfp lineage was taken on-chain by a \
@@ -1265,6 +1342,7 @@ pub(crate) fn build_exit(
         }
         let mut funding = branch_funding.clone();
         let mut txs: Vec<ExitTx> = Vec::new();
+        txs.extend(recovery);
         let mut fan_out_dep = fan_out_txid;
         // Tracked so dependencies survive skipped shared ancestors.
         let mut prev_txid: Option<Txid> = None;
@@ -1641,8 +1719,13 @@ mod exit_build_tests {
 
     #[test]
     fn build_fresh_drives_node_and_refund() {
-        let build =
-            build_exit(&single_leaf_plan(), &ResolvedExitState::default(), FEE_RATE).unwrap();
+        let build = build_exit(
+            &single_leaf_plan(),
+            &ResolvedExitState::default(),
+            FEE_RATE,
+            &HashMap::new(),
+        )
+        .unwrap();
 
         assert!(
             build.fan_out.is_none(),
@@ -1685,7 +1768,7 @@ mod exit_build_tests {
             ..Default::default()
         };
 
-        let build = build_exit(&single_leaf_plan(), &resolved, FEE_RATE).unwrap();
+        let build = build_exit(&single_leaf_plan(), &resolved, FEE_RATE, &HashMap::new()).unwrap();
         let refund = build.branches[0].txs.last().unwrap();
         assert_eq!(refund.kind, ExitTxKind::Refund);
         assert!(
@@ -1710,7 +1793,7 @@ mod exit_build_tests {
                 .collect(),
             ..Default::default()
         };
-        let build = build_exit(&single_leaf_plan(), &resolved, FEE_RATE).unwrap();
+        let build = build_exit(&single_leaf_plan(), &resolved, FEE_RATE, &HashMap::new()).unwrap();
         let txs = &build.branches[0].txs;
         let root = &txs[0];
         assert_eq!(root.node_id.as_ref(), Some(&id("root")));
@@ -1739,7 +1822,7 @@ mod exit_build_tests {
                 .collect(),
             ..Default::default()
         };
-        let build = build_exit(&direct_leaf_plan(), &resolved, FEE_RATE).unwrap();
+        let build = build_exit(&direct_leaf_plan(), &resolved, FEE_RATE, &HashMap::new()).unwrap();
         let txs = &build.branches[0].txs;
         assert_eq!(txs.len(), 3, "root, leaf (direct), refund (direct)");
         let leaf_tx = &txs[1];
@@ -1765,7 +1848,7 @@ mod exit_build_tests {
             stopped: [id("leaf")].into_iter().collect(),
             ..Default::default()
         };
-        let build = build_exit(&single_leaf_plan(), &resolved, FEE_RATE).unwrap();
+        let build = build_exit(&single_leaf_plan(), &resolved, FEE_RATE, &HashMap::new()).unwrap();
         assert!(
             build.branches[0].txs.is_empty(),
             "a stopped branch emits no transactions"
@@ -1798,7 +1881,7 @@ mod exit_build_tests {
             .collect(),
             ..Default::default()
         };
-        let build = build_exit(&single_leaf_plan(), &resolved, FEE_RATE).unwrap();
+        let build = build_exit(&single_leaf_plan(), &resolved, FEE_RATE, &HashMap::new()).unwrap();
         assert_eq!(build.refund_outputs.len(), 1);
         assert_eq!(build.refund_outputs[0].signing_key.derived_from, id("leaf"));
         assert_eq!(build.refund_outputs[0].outpoint, adopted_outpoint);
@@ -1816,7 +1899,7 @@ mod exit_build_tests {
             refunds: [(id("leaf"), RefundState::Swept)].into_iter().collect(),
             ..Default::default()
         };
-        let build = build_exit(&single_leaf_plan(), &resolved, FEE_RATE).unwrap();
+        let build = build_exit(&single_leaf_plan(), &resolved, FEE_RATE, &HashMap::new()).unwrap();
         assert!(
             build.refund_outputs.is_empty(),
             "a swept leaf yields no refund output to sweep"
@@ -1864,7 +1947,13 @@ mod exit_build_tests {
     fn build_dedups_shared_ancestors_and_threads_dependencies() {
         let plan = shared_ancestor_plan();
         let mid_txid = anchor_tx(2).compute_txid();
-        let build = build_exit(&plan, &ResolvedExitState::default(), FEE_RATE).unwrap();
+        let build = build_exit(
+            &plan,
+            &ResolvedExitState::default(),
+            FEE_RATE,
+            &HashMap::new(),
+        )
+        .unwrap();
 
         assert_eq!(build.branches.len(), 2);
         let all_txs: Vec<&ExitTx> = build.branches.iter().flat_map(|b| b.txs.iter()).collect();
@@ -1954,7 +2043,13 @@ mod exit_build_tests {
             .unwrap()
             .unsigned_tx
             .compute_txid();
-        let build = build_exit(&plan, &ResolvedExitState::default(), FEE_RATE).unwrap();
+        let build = build_exit(
+            &plan,
+            &ResolvedExitState::default(),
+            FEE_RATE,
+            &HashMap::new(),
+        )
+        .unwrap();
 
         // The first branch drives root first, so its root depends on the fan-out.
         let first_root = build.branches[0]
@@ -2013,7 +2108,7 @@ mod exit_build_tests {
             .collect(),
             ..Default::default()
         };
-        let build = build_exit(&plan, &resolved, FEE_RATE).unwrap();
+        let build = build_exit(&plan, &resolved, FEE_RATE, &HashMap::new()).unwrap();
 
         for branch in &build.branches {
             let carrying: Vec<&ExitTx> = branch
@@ -2100,8 +2195,13 @@ mod exit_build_tests {
 
     #[test]
     fn build_cpfp_fee_sums_built_cpfp_children() {
-        let build =
-            build_exit(&single_leaf_plan(), &ResolvedExitState::default(), FEE_RATE).unwrap();
+        let build = build_exit(
+            &single_leaf_plan(),
+            &ResolvedExitState::default(),
+            FEE_RATE,
+            &HashMap::new(),
+        )
+        .unwrap();
         assert!(
             build.fan_out.is_none(),
             "single-input plan needs no fan-out"
@@ -2120,15 +2220,21 @@ mod exit_build_tests {
 
     #[test]
     fn resume_confirmed_node_lowers_total_fee() {
-        let all_driven =
-            build_exit(&single_leaf_plan(), &ResolvedExitState::default(), FEE_RATE).unwrap();
+        let all_driven = build_exit(
+            &single_leaf_plan(),
+            &ResolvedExitState::default(),
+            FEE_RATE,
+            &HashMap::new(),
+        )
+        .unwrap();
         let resolved = ResolvedExitState {
             nodes: [(id("root"), NodeState::ConfirmedCpfp { block_height: None })]
                 .into_iter()
                 .collect(),
             ..Default::default()
         };
-        let resumed = build_exit(&single_leaf_plan(), &resolved, FEE_RATE).unwrap();
+        let resumed =
+            build_exit(&single_leaf_plan(), &resolved, FEE_RATE, &HashMap::new()).unwrap();
         assert!(
             resumed.cpfp_fee_sat < all_driven.cpfp_fee_sat,
             "a confirmed node is not rebuilt, so the resume pays less \
@@ -2217,8 +2323,13 @@ mod exit_build_tests {
         let plan = two(floor_two).expect("funding at the two-UTXO floor plans");
         assert!(plan.fan_out_psbt.is_none());
         assert_eq!(plan.per_branch_funding.len(), 1);
-        let build = build_exit(&plan, &ResolvedExitState::default(), FEE_RATE)
-            .expect("funding at the plan floor also builds");
+        let build = build_exit(
+            &plan,
+            &ResolvedExitState::default(),
+            FEE_RATE,
+            &HashMap::new(),
+        )
+        .expect("funding at the plan floor also builds");
         assert_eq!(build.cpfp_change_inputs.len(), 1);
 
         // One sat under rejects up front with that exact floor.
@@ -2296,7 +2407,13 @@ mod exit_build_tests {
                 .all(|(_, ins)| ins.len() == 2),
             "each branch is funded with two inputs"
         );
-        let build = build_exit(&plan, &ResolvedExitState::default(), FEE_RATE).unwrap();
+        let build = build_exit(
+            &plan,
+            &ResolvedExitState::default(),
+            FEE_RATE,
+            &HashMap::new(),
+        )
+        .unwrap();
         assert_eq!(build.branches.len(), 2);
     }
 
@@ -2342,7 +2459,13 @@ mod exit_build_tests {
         );
         assert_eq!(plan.per_branch_funding.len(), 3);
 
-        let build = build_exit(&plan, &ResolvedExitState::default(), FEE_RATE).unwrap();
+        let build = build_exit(
+            &plan,
+            &ResolvedExitState::default(),
+            FEE_RATE,
+            &HashMap::new(),
+        )
+        .unwrap();
         assert!(build.fan_out.is_some());
         assert_eq!(build.branches.len(), 3);
     }
@@ -3192,6 +3315,100 @@ mod interpret_tests {
                 block_height: None,
             }]),
         }
+    }
+
+    /// A renewal split node's direct transaction confirming takes the output its
+    /// cpfp twin needed, which every one of the leaf's own transactions hangs
+    /// off. The branch is stopped, but the value is sitting in that
+    /// transaction's output, which pays the leaf's key.
+    #[test]
+    fn scan_reports_where_a_stranded_leaf_value_landed() {
+        let deposit = OutPoint {
+            txid: Txid::from_byte_array([9; 32]),
+            vout: 0,
+        };
+        let root = treenode("root", None, tx_spending(deposit, 1), 0);
+        let root_txid = root.node_tx.compute_txid();
+        let root_out = OutPoint {
+            txid: root_txid,
+            vout: 0,
+        };
+        let mut split = treenode("split", Some("root"), tx_spending(root_out, 2), 0);
+        // The split node's self-fee twin: same input, and its output pays the
+        // key the leaf is verified under.
+        let mut direct = tx_spending(root_out, 3);
+        direct.output = vec![TxOut {
+            value: Amount::from_sat(99_000),
+            script_pubkey: ScriptBuf::new_p2tr(
+                &bitcoin::secp256k1::Secp256k1::verification_only(),
+                pubkey().x_only_public_key().0,
+                None,
+            ),
+        }];
+        let direct_txid = direct.compute_txid();
+        split.direct_tx = Some(direct);
+        let split_out = OutPoint {
+            txid: split.node_tx.compute_txid(),
+            vout: 0,
+        };
+        let leaf = treenode("leaf", Some("split"), tx_spending(split_out, 4), 0);
+        let leaf_id = leaf.id.clone();
+        let tree = to_node_map(vec![root, split, leaf]);
+        let addresses = HashMap::new();
+
+        let observed = vec![
+            spent(deposit, root_txid),
+            spent(root_out, direct_txid),
+            no_refund(&leaf_id),
+        ];
+        let scan = scan_exit_chain(&tree, std::slice::from_ref(&leaf_id), &addresses, &observed);
+
+        assert!(scan.pending.is_empty(), "{:?}", scan.pending);
+        assert_eq!(scan.state.stopped_leaves, vec![leaf_id.clone()]);
+        assert_eq!(scan.state.stranded_leaves.len(), 1);
+        let stranded = &scan.state.stranded_leaves[0];
+        assert_eq!(stranded.leaf_id, leaf_id);
+        assert_eq!(stranded.outpoint.txid, direct_txid);
+        assert_eq!(stranded.outpoint.vout, 0);
+        assert_eq!(stranded.value_sat, 99_000);
+    }
+
+    /// A foreign transaction taking the same output leaves nothing to recover:
+    /// its outputs pay someone else, so no spend the operators would co-sign
+    /// reaches the value.
+    #[test]
+    fn scan_reports_no_stranded_output_for_a_foreign_spend() {
+        let deposit = OutPoint {
+            txid: Txid::from_byte_array([9; 32]),
+            vout: 0,
+        };
+        let root = treenode("root", None, tx_spending(deposit, 1), 0);
+        let root_txid = root.node_tx.compute_txid();
+        let root_out = OutPoint {
+            txid: root_txid,
+            vout: 0,
+        };
+        let split = treenode("split", Some("root"), tx_spending(root_out, 2), 0);
+        let split_out = OutPoint {
+            txid: split.node_tx.compute_txid(),
+            vout: 0,
+        };
+        let leaf = treenode("leaf", Some("split"), tx_spending(split_out, 4), 0);
+        let leaf_id = leaf.id.clone();
+        let tree = to_node_map(vec![root, split, leaf]);
+        let addresses = HashMap::new();
+
+        let foreign = Txid::from_byte_array([7; 32]);
+        let observed = vec![
+            spent(deposit, root_txid),
+            spent(root_out, foreign),
+            no_refund(&leaf_id),
+        ];
+        let scan = scan_exit_chain(&tree, std::slice::from_ref(&leaf_id), &addresses, &observed);
+
+        assert!(scan.pending.is_empty(), "{:?}", scan.pending);
+        assert_eq!(scan.state.stopped_leaves, vec![leaf_id]);
+        assert!(scan.state.stranded_leaves.is_empty());
     }
 
     fn unspent(outpoint: OutPoint) -> Observation {

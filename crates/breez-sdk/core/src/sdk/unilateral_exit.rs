@@ -15,8 +15,9 @@ use spark_wallet::{
     ExitChainState as WalletExitChainState, ExitCheck, ExitCheckInput,
     ExitNodeConfirmation as WalletExitNodeConfirmation, ExitRefund as WalletExitRefund,
     ExitRefundState as WalletExitRefundState, ExitTxKind, ExitTxStatus, Observation, SpendInfo,
-    TreeNode, TreeNodeId, UnilateralExitBuild, build_unilateral_exit, check_exit_chain,
-    is_ephemeral_anchor_output, leaf_refund_addresses, scan_exit_chain, scan_funding,
+    StrandedLeafOutput as WalletStrandedLeafOutput, TreeNode, TreeNodeId, UnilateralExitBuild,
+    build_unilateral_exit, check_exit_chain, is_ephemeral_anchor_output, leaf_refund_addresses,
+    scan_exit_chain, scan_funding,
 };
 
 use tracing::{debug, trace, warn};
@@ -29,9 +30,9 @@ use crate::{
         CpfpFundingKind, CpfpInput as ModelCpfpInput, ExitChainState as ModelExitChainState,
         ExitLeafSelection, ExitNodeConfirmation, ExitRefund, ExitRefundState,
         ExitTransactionStatus, PerBranchFunding, PrepareUnilateralExitRequest,
-        PrepareUnilateralExitResponse, UnilateralExitLeaf, UnilateralExitRedoReason,
-        UnilateralExitRequest, UnilateralExitResponse, UnilateralExitTransaction,
-        UnilateralExitTxKind, UnilateralExitVerdict,
+        PrepareUnilateralExitResponse, StrandedLeafOutput, UnilateralExitLeaf,
+        UnilateralExitRedoReason, UnilateralExitRequest, UnilateralExitResponse,
+        UnilateralExitTransaction, UnilateralExitTxKind, UnilateralExitVerdict,
     },
     signer::CpfpSigner,
 };
@@ -304,7 +305,22 @@ impl BreezSdk {
             })
             .collect();
 
-        let build = build_unilateral_exit(&prepared_exit, &chain_state, fee_rate_sat_per_kw)?;
+        // Co-signed with the operators, so it happens before the build rather
+        // than inside it: the build itself signs nothing.
+        let recoveries = recover_stranded_leaves(
+            &self.spark_wallet,
+            &prepared_exit,
+            &chain_state,
+            &destination,
+            fee_rate_sat_per_kw,
+        )
+        .await;
+        let build = build_unilateral_exit(
+            &prepared_exit,
+            &chain_state,
+            fee_rate_sat_per_kw,
+            &recoveries,
+        )?;
         let recoverable_value_sat = build.recoverable_value_sat;
         let cpfp_fee_sat = build.cpfp_fee_sat;
         let fanout_fee_sat = build.fanout_fee_sat;
@@ -353,6 +369,7 @@ impl BreezSdk {
                 let kind = match tx.kind {
                     ExitTxKind::Node => UnilateralExitTxKind::Node,
                     ExitTxKind::Refund => UnilateralExitTxKind::Refund,
+                    ExitTxKind::Recovery => UnilateralExitTxKind::Recovery,
                     // The fan-out is emitted above, never inside a branch.
                     ExitTxKind::FanOut => continue,
                 };
@@ -615,6 +632,51 @@ fn parse_xonly(pubkey: &str) -> Result<XOnlyPublicKey, SdkError> {
     Ok(pk.x_only_public_key().0)
 }
 
+/// Co-signs one spend per stranded leaf, so the build can emit them
+/// alongside the exit's own transactions.
+///
+/// A leaf whose recovery the operators refuse is left out rather than
+/// failing the exit: every other branch is unaffected, and the refusal is
+/// reported through the leaf simply having nothing to broadcast.
+/// Co-signs one spend per stranded leaf, so the build can emit them alongside
+/// the exit's own transactions.
+///
+/// A leaf whose recovery the operators refuse is left out rather than failing
+/// the exit: every other branch is unaffected, and the refusal shows up as that
+/// leaf having nothing to broadcast.
+async fn recover_stranded_leaves(
+    wallet: &spark_wallet::SparkWallet,
+    plan: &spark_wallet::UnilateralExitPlan,
+    state: &WalletExitChainState,
+    destination: &Address,
+    fee_rate_sat_per_kw: u64,
+) -> HashMap<TreeNodeId, Transaction> {
+    let mut recoveries = HashMap::new();
+    for stranded in &state.stranded_leaves {
+        let Some(leaf) = plan.tree_nodes.get(&stranded.leaf_id) else {
+            continue;
+        };
+        match wallet
+            .recover_stranded_leaf(leaf, stranded, destination, fee_rate_sat_per_kw)
+            .await
+        {
+            Ok(tx) => {
+                debug!(
+                    leaf_id = %stranded.leaf_id,
+                    outpoint = %stranded.outpoint,
+                    "unilateral_exit: recovery co-signed"
+                );
+                recoveries.insert(stranded.leaf_id.clone(), tx);
+            }
+            Err(e) => warn!(
+                leaf_id = %stranded.leaf_id,
+                "unilateral_exit: leaf could not be recovered: {e}"
+            ),
+        }
+    }
+    recoveries
+}
+
 /// Reads what the chain has already done to `leaf_ids`, before any funding is
 /// considered. Same loop as [`resolve_exit_check`], over the scan that needs no
 /// plan.
@@ -709,6 +771,22 @@ fn exit_chain_state_from_model(
             })
             .collect::<Result<_, SdkError>>()?,
         stopped_leaves: node_ids(&state.stopped_leaf_ids)?,
+        stranded_leaves: state
+            .stranded_leaves
+            .iter()
+            .map(|output| {
+                Ok(WalletStrandedLeafOutput {
+                    leaf_id: node_id(&output.leaf_id)?,
+                    outpoint: OutPoint {
+                        txid: Txid::from_str(&output.txid).map_err(|e| {
+                            SdkError::InvalidInput(format!("Invalid stranded txid: {e}"))
+                        })?,
+                        vout: output.vout,
+                    },
+                    value_sat: output.value_sat,
+                })
+            })
+            .collect::<Result<_, SdkError>>()?,
         unverified_nodes: node_ids(&state.unverified_node_ids)?,
         unverifiable_confirmed_nodes: node_ids(&state.unverifiable_confirmed_node_ids)?,
     })
@@ -761,6 +839,16 @@ fn exit_chain_state_model(state: WalletExitChainState) -> ModelExitChainState {
             })
             .collect(),
         stopped_leaf_ids: ids(state.stopped_leaves),
+        stranded_leaves: state
+            .stranded_leaves
+            .into_iter()
+            .map(|output| StrandedLeafOutput {
+                leaf_id: output.leaf_id.to_string(),
+                txid: output.outpoint.txid.to_string(),
+                vout: output.outpoint.vout,
+                value_sat: output.value_sat,
+            })
+            .collect(),
         unverified_node_ids: ids(state.unverified_nodes),
         unverifiable_confirmed_node_ids: ids(state.unverifiable_confirmed_nodes),
     }

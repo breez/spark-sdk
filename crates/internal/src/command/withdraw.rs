@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 
 use bitcoin::{
@@ -160,8 +161,12 @@ pub async fn handle_command(
                 34,
                 &ExitChainState::default(),
             )?;
-            let exit =
-                build_unilateral_exit(&prepared, &ExitChainState::default(), fee_rate_sat_per_kw)?;
+            let exit = build_unilateral_exit(
+                &prepared,
+                &ExitChainState::default(),
+                fee_rate_sat_per_kw,
+                &HashMap::new(),
+            )?;
 
             if let Some(fan_out) = &exit.fan_out
                 && let Some(psbt) = &fan_out.to_sign
