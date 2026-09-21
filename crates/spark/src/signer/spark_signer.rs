@@ -263,6 +263,56 @@ pub struct SignStaticDepositRefundRequest {
     pub statechain_public_keys: BTreeMap<Identifier, PublicKey>,
 }
 
+// ─── watchtower-exit recovery ─────────────────────────────────────────────
+
+/// Begin recovering a watchtower-exited leaf. Like the static-deposit refund
+/// this is *user-commits-first*: the user's nonce commitment must reach the
+/// operators in `recover_watchtower_exited_leaf` before they produce their
+/// shares, so signing is split across the operator round-trip.
+#[derive(Debug, Clone)]
+pub struct StartWatchtowerExitRecoveryRequest {
+    /// The leaf whose value is being recovered; its signing key signs.
+    pub leaf_id: TreeNodeId,
+    /// The recovery user-statement bytes to ECDSA-sign with the identity key
+    /// (sent to the operators as `user_signature`).
+    pub user_statement: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StartedWatchtowerExitRecovery {
+    /// The leaf signing public key (operator `SigningJob.signing_public_key`).
+    pub signing_public_key: PublicKey,
+    /// The user's FROST nonce commitment: forward it to the operators, then pass
+    /// it back into
+    /// [`sign_watchtower_exit_recovery`](SparkSigner::sign_watchtower_exit_recovery).
+    pub nonce_commitment: FrostSigningCommitmentsWithNonces,
+    /// ECDSA identity signature over `user_statement`.
+    pub user_signature: ecdsa::Signature,
+}
+
+/// Finish recovering a watchtower-exited leaf once the operators have produced
+/// their signing result for the recovery transaction.
+#[derive(Debug, Clone)]
+pub struct SignWatchtowerExitRecoveryRequest {
+    /// The same leaf
+    /// [`start_watchtower_exit_recovery`](SparkSigner::start_watchtower_exit_recovery)
+    /// committed for.
+    pub leaf_id: TreeNodeId,
+    /// 32-byte BIP-341 sighash of the recovery transaction.
+    pub sighash: [u8; 32],
+    /// FROST group verifying key (from the operator response).
+    pub verifying_key: PublicKey,
+    /// The nonce commitment returned by
+    /// [`start_watchtower_exit_recovery`](SparkSigner::start_watchtower_exit_recovery).
+    pub nonce_commitment: FrostSigningCommitmentsWithNonces,
+    /// Operators' round-1 commitments for the recovery tx.
+    pub statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
+    /// Operators' round-2 signature shares for the recovery tx.
+    pub statechain_signatures: BTreeMap<Identifier, SignatureShare>,
+    /// Operators' public keys for the recovery tx.
+    pub statechain_public_keys: BTreeMap<Identifier, PublicKey>,
+}
+
 // ─── static-deposit claim ─────────────────────────────────────────────────
 
 /// Prepare a static-deposit claim. Like the refund, this is the
@@ -441,6 +491,24 @@ pub trait SparkSigner: Send + Sync + 'static {
     async fn sign_static_deposit_refund(
         &self,
         request: SignStaticDepositRefundRequest,
+    ) -> Result<frost_secp256k1_tr::Signature, SignerError>;
+
+    /// Begin recovering a watchtower-exited leaf: return the leaf signing public
+    /// key, a fresh user FROST nonce commitment, and the identity-key ECDSA
+    /// signature over the recovery user-statement. See
+    /// [`StartWatchtowerExitRecoveryRequest`] for why this is split from
+    /// [`sign_watchtower_exit_recovery`](Self::sign_watchtower_exit_recovery).
+    async fn start_watchtower_exit_recovery(
+        &self,
+        request: StartWatchtowerExitRecoveryRequest,
+    ) -> Result<StartedWatchtowerExitRecovery, SignerError>;
+
+    /// Finish recovering a watchtower-exited leaf. Returns the final aggregated
+    /// signature; the user's contribution is bound to the nonce committed by
+    /// [`start_watchtower_exit_recovery`](Self::start_watchtower_exit_recovery).
+    async fn sign_watchtower_exit_recovery(
+        &self,
+        request: SignWatchtowerExitRecoveryRequest,
     ) -> Result<frost_secp256k1_tr::Signature, SignerError>;
 
     /// Prepare a static-deposit claim. Returns the static-deposit secret in the

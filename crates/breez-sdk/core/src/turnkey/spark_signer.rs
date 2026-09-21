@@ -50,10 +50,12 @@ use crate::signer::{
     ExternalPreparedLightningReceive, ExternalPreparedStaticDeposit,
     ExternalPreparedStaticDepositClaim, ExternalPreparedTokenTransaction, ExternalPreparedTransfer,
     ExternalSignSparkInvoiceRequest, ExternalSignStaticDepositRefundRequest,
-    ExternalSignedSparkInvoice, ExternalSparkSigner, ExternalStartStaticDepositRefundRequest,
-    ExternalStartedStaticDepositRefund, ExternalTransferLeafInput, ExternalTreeNodeId,
-    IdentifierCommitmentPair, IdentifierPublicKeyPair, IdentifierSignaturePair, PublicKeyBytes,
-    SchnorrSignatureBytes, SecretBytes,
+    ExternalSignWatchtowerExitRecoveryRequest, ExternalSignedSparkInvoice, ExternalSparkSigner,
+    ExternalStartStaticDepositRefundRequest, ExternalStartWatchtowerExitRecoveryRequest,
+    ExternalStartedStaticDepositRefund, ExternalStartedWatchtowerExitRecovery,
+    ExternalTransferLeafInput, ExternalTreeNodeId, IdentifierCommitmentPair,
+    IdentifierPublicKeyPair, IdentifierSignaturePair, PublicKeyBytes, SchnorrSignatureBytes,
+    SecretBytes,
 };
 
 use super::accounts::{
@@ -896,6 +898,33 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
         })
         .map_err(to_spark_err)?;
         ExternalFrostSignature::from_frost_signature(&signature).map_err(to_spark_err)
+    }
+
+    /// Turnkey holds a leaf's key behind `SPARK_SIGN_FROST`, which commits to a
+    /// nonce and signs in one activity. Recovery needs the commitment first, so
+    /// there is no Turnkey path for it until an activity exists that splits the
+    /// two. The static-deposit refund works only because that key is exported to
+    /// a local signer.
+    async fn start_watchtower_exit_recovery(
+        &self,
+        _request: ExternalStartWatchtowerExitRecoveryRequest,
+    ) -> Result<ExternalStartedWatchtowerExitRecovery, SignerError> {
+        Err(SignerError::Generic(
+            "Turnkey cannot commit to a FROST nonce for a leaf key before signing, \
+             so a watchtower-exited leaf cannot be recovered with it"
+                .to_string(),
+        ))
+    }
+
+    async fn sign_watchtower_exit_recovery(
+        &self,
+        _request: ExternalSignWatchtowerExitRecoveryRequest,
+    ) -> Result<ExternalFrostSignature, SignerError> {
+        Err(SignerError::Generic(
+            "Turnkey cannot commit to a FROST nonce for a leaf key before signing, \
+             so a watchtower-exited leaf cannot be recovered with it"
+                .to_string(),
+        ))
     }
 
     async fn sign_spark_invoice(

@@ -19,12 +19,19 @@ use prost::Message as _;
 
 use super::spark_signer::*;
 use super::{
-    AggregateFrostRequest, SecretSource, SecretToSplit, SignFrostRequest, Signer, SignerError,
-    VerifiableSecretShare,
+    AggregateFrostRequest, FrostSigningCommitmentsWithNonces, SecretSource, SecretToSplit,
+    SignFrostRequest, Signer, SignerError, VerifiableSecretShare,
 };
 use crate::operator::rpc::spark as proto;
 use crate::utils::frost::aggregate_frost;
 use crate::utils::tagged_hasher::TaggedHasher;
+
+/// The operators' half of a FROST round, as their signing result carries it.
+struct OperatorShares {
+    statechain_commitments: BTreeMap<Identifier, frost_secp256k1_tr::round1::SigningCommitments>,
+    statechain_signatures: BTreeMap<Identifier, frost_secp256k1_tr::round2::SignatureShare>,
+    statechain_public_keys: BTreeMap<Identifier, PublicKey>,
+}
 
 /// Length of a Lightning payment preimage in bytes.
 const PREIMAGE_LEN: usize = 32;
@@ -61,6 +68,73 @@ impl SparkSignerAdapter {
                 "Identity FROST derivation not supported".to_string(),
             )),
         }
+    }
+
+    /// The first half of a user-commits-first round: the nonce is generated now
+    /// and forwarded to the operators, which is what lets them sign against it.
+    async fn start_commit_first(
+        &self,
+        derivation: &FrostDerivation,
+        user_statement: &[u8],
+    ) -> Result<
+        (
+            PublicKey,
+            FrostSigningCommitmentsWithNonces,
+            bitcoin::secp256k1::ecdsa::Signature,
+        ),
+        SignerError,
+    > {
+        let private_key = self.secret_source_for(derivation)?;
+        let signing_public_key = self.signer.public_key_from_secret(&private_key).await?;
+        let nonce_commitment = self.signer.generate_random_signing_commitment().await?;
+        let user_signature = self
+            .signer
+            .sign_message_ecdsa(&identity_path()?, user_statement)
+            .await?;
+        Ok((signing_public_key, nonce_commitment, user_signature))
+    }
+
+    /// The second half: sign with the pre-committed nonce, then aggregate the
+    /// user share with the operators' shares (pure public math).
+    async fn finish_commit_first(
+        &self,
+        derivation: &FrostDerivation,
+        sighash: &[u8; 32],
+        verifying_key: &PublicKey,
+        nonce_commitment: &FrostSigningCommitmentsWithNonces,
+        operators: OperatorShares,
+    ) -> Result<frost_secp256k1_tr::Signature, SignerError> {
+        let OperatorShares {
+            statechain_commitments,
+            statechain_signatures,
+            statechain_public_keys,
+        } = operators;
+        let private_key = self.secret_source_for(derivation)?;
+        let aggregating_public_key = self.signer.public_key_from_secret(&private_key).await?;
+        let user_signature = self
+            .signer
+            .sign_frost(SignFrostRequest {
+                message: sighash,
+                public_key: &aggregating_public_key,
+                private_key: &private_key,
+                verifying_key,
+                self_nonce_commitment: nonce_commitment,
+                statechain_commitments: statechain_commitments.clone(),
+                adaptor_public_key: None,
+            })
+            .await?;
+
+        aggregate_frost(AggregateFrostRequest {
+            message: sighash,
+            statechain_signatures,
+            statechain_public_keys,
+            verifying_key,
+            statechain_commitments,
+            self_commitment: &nonce_commitment.commitments,
+            public_key: &aggregating_public_key,
+            self_signature: &user_signature,
+            adaptor_public_key: None,
+        })
     }
 
     /// Signs one FROST job: generates a fresh nonce commitment, derives the
@@ -522,19 +596,9 @@ impl SparkSigner for SparkSignerAdapter {
             index,
             user_statement,
         } = request;
-
-        let signing_public_key = self
-            .signer
-            .derive_public_key(&static_deposit_path(index)?)
+        let (signing_public_key, nonce_commitment, user_signature) = self
+            .start_commit_first(&FrostDerivation::StaticDeposit { index }, &user_statement)
             .await?;
-        // User-commits-first: the nonce is generated now and forwarded to the
-        // operators; it is consumed later by `sign_static_deposit_refund`.
-        let nonce_commitment = self.signer.generate_random_signing_commitment().await?;
-        let user_signature = self
-            .signer
-            .sign_message_ecdsa(&identity_path()?, &user_statement)
-            .await?;
-
         Ok(StartedStaticDepositRefund {
             signing_public_key,
             nonce_commitment,
@@ -555,39 +619,63 @@ impl SparkSigner for SparkSignerAdapter {
             statechain_signatures,
             statechain_public_keys,
         } = request;
+        self.finish_commit_first(
+            &FrostDerivation::StaticDeposit { index },
+            &sighash,
+            &verifying_key,
+            &nonce_commitment,
+            OperatorShares {
+                statechain_commitments,
+                statechain_signatures,
+                statechain_public_keys,
+            },
+        )
+        .await
+    }
 
-        let signing_private_key = SecretSource::Derived(static_deposit_path(index)?);
-        let aggregating_public_key = self
-            .signer
-            .derive_public_key(&static_deposit_path(index)?)
+    async fn start_watchtower_exit_recovery(
+        &self,
+        request: StartWatchtowerExitRecoveryRequest,
+    ) -> Result<StartedWatchtowerExitRecovery, SignerError> {
+        let StartWatchtowerExitRecoveryRequest {
+            leaf_id,
+            user_statement,
+        } = request;
+        let (signing_public_key, nonce_commitment, user_signature) = self
+            .start_commit_first(&FrostDerivation::SigningLeaf { leaf_id }, &user_statement)
             .await?;
+        Ok(StartedWatchtowerExitRecovery {
+            signing_public_key,
+            nonce_commitment,
+            user_signature,
+        })
+    }
 
-        // User-commits-first: sign with the pre-committed nonce, then aggregate
-        // the user share with the operators' shares (pure public math).
-        let user_signature = self
-            .signer
-            .sign_frost(SignFrostRequest {
-                message: &sighash,
-                public_key: &verifying_key,
-                private_key: &signing_private_key,
-                verifying_key: &verifying_key,
-                self_nonce_commitment: &nonce_commitment,
-                statechain_commitments: statechain_commitments.clone(),
-                adaptor_public_key: None,
-            })
-            .await?;
-
-        aggregate_frost(AggregateFrostRequest {
-            message: &sighash,
+    async fn sign_watchtower_exit_recovery(
+        &self,
+        request: SignWatchtowerExitRecoveryRequest,
+    ) -> Result<frost_secp256k1_tr::Signature, SignerError> {
+        let SignWatchtowerExitRecoveryRequest {
+            leaf_id,
+            sighash,
+            verifying_key,
+            nonce_commitment,
+            statechain_commitments,
             statechain_signatures,
             statechain_public_keys,
-            verifying_key: &verifying_key,
-            statechain_commitments,
-            self_commitment: &nonce_commitment.commitments,
-            public_key: &aggregating_public_key,
-            self_signature: &user_signature,
-            adaptor_public_key: None,
-        })
+        } = request;
+        self.finish_commit_first(
+            &FrostDerivation::SigningLeaf { leaf_id },
+            &sighash,
+            &verifying_key,
+            &nonce_commitment,
+            OperatorShares {
+                statechain_commitments,
+                statechain_signatures,
+                statechain_public_keys,
+            },
+        )
+        .await
     }
 
     async fn prepare_static_deposit_claim(
