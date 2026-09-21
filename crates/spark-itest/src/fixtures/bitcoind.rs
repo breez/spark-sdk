@@ -381,6 +381,17 @@ impl BitcoindFixture {
         Ok(bitcoin::consensus::deserialize(&tx_bytes)?)
     }
 
+    /// Pays `amount` to each of `addresses` in one transaction.
+    pub async fn fund_addresses(&self, addresses: &[Address], amount: Amount) -> Result<Txid> {
+        let outputs: serde_json::Map<String, Value> = addresses
+            .iter()
+            .map(|address| (address.to_string(), json!(amount.to_btc())))
+            .collect();
+        self.rpc_call::<String>("sendmany", &[json!(""), Value::Object(outputs)])
+            .map_ok(|txid_str| txid_str.parse().unwrap())
+            .await
+    }
+
     pub async fn fund_address(&self, address: &Address, amount: Amount) -> Result<Txid> {
         self.rpc_call::<String>(
             "sendtoaddress",
@@ -390,6 +401,7 @@ impl BitcoindFixture {
         .await
     }
 
+    #[instrument(level = "debug", name = "wait.tx_confirmation", skip_all)]
     pub async fn wait_for_tx_confirmation(
         &self,
         txid: &Txid,

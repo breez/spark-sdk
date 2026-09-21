@@ -10,35 +10,29 @@ use spark_wallet::{
 use sspd_lib::lightning::ldk::LdkServerNode;
 use sspd_lib::wakeup::Wakeup;
 
-use crate::fixtures::ldk_server::{GRPC_PORT, LdkServerFixture};
-use crate::fixtures::setup::{SSPD_WALLET_SEED_HEX, TestFixtures, create_test_signer_alice};
-use crate::fixtures::sspd::{LdkSettings, SspdFixture, internal_api};
+use crate::fixtures::setup::{TestFixtures, create_test_signer_alice};
+use crate::fixtures::sspd::{SspdFixture, internal_api};
 
 const POOL_TIMEOUT: Duration = Duration::from_secs(600);
 
-const ONCHAIN_UTXO_SATS: u64 = 1_000_000;
-const ONCHAIN_UTXO_COUNT: usize = 4;
-
 pub struct LightningStack {
     pub fixtures: TestFixtures,
-    pub sspd: SspdFixture,
     pub ssp_node: Arc<LdkServerNode>,
     pub counterparty: Arc<LdkServerNode>,
     pub alice: SparkWallet,
     pub alice_signer: Arc<dyn Signer>,
     pub alice_config: SparkWalletConfig,
     pub ssp_config: ServiceProviderConfig,
-    /// Held so the containers stay up for as long as the stack.
-    pub ldk: (LdkServerFixture, LdkServerFixture),
 }
 
 impl LightningStack {
     pub async fn start() -> Result<Self> {
-        let fixtures = TestFixtures::new().await?;
-        let (ssp_ldk, cp_ldk) = tokio::try_join!(
-            LdkServerFixture::start(&fixtures.fixture_id, &fixtures.bitcoind, "ssp"),
-            LdkServerFixture::start(&fixtures.fixture_id, &fixtures.bitcoind, "cp"),
-        )?;
+        let fixtures = TestFixtures::builder()
+            .with_lightning(&["ssp", "cp"])
+            .build()
+            .await?;
+        let ssp_ldk = fixtures.lightning("ssp");
+        let cp_ldk = fixtures.lightning("cp");
 
         let ssp_node = Arc::new(LdkServerNode::new(
             ssp_ldk.base_url.clone(),
@@ -55,21 +49,7 @@ impl LightningStack {
             Wakeup::new(),
         )?);
 
-        let sspd = SspdFixture::start(
-            &fixtures.fixture_id,
-            &fixtures.bitcoind,
-            &fixtures.spark_so.operators,
-            SSPD_WALLET_SEED_HEX,
-            Some(&LdkSettings {
-                internal_url: format!("{}:{}", ssp_ldk.container_name, GRPC_PORT),
-                api_key: ssp_ldk.api_key.clone(),
-                cert_pem: ssp_ldk.cert_pem.clone(),
-                invoice_signing_key_hex: ssp_ldk.node_secret_key_hex(),
-            }),
-        )
-        .await?;
-        sspd.fund_onchain(&fixtures.bitcoind, ONCHAIN_UTXO_SATS, ONCHAIN_UTXO_COUNT)
-            .await?;
+        let sspd = fixtures.sspd();
         sspd.wait_for_pool(&fixtures.bitcoind, 1, POOL_TIMEOUT)
             .await
             .context("waiting for the daemon to stock its pool")?;
@@ -98,14 +78,12 @@ impl LightningStack {
 
         Ok(Self {
             fixtures,
-            sspd,
             ssp_node,
             counterparty,
             alice,
             alice_signer,
             alice_config,
             ssp_config,
-            ldk: (ssp_ldk, cp_ldk),
         })
     }
 
@@ -124,11 +102,22 @@ impl LightningStack {
         &self,
         id: &str,
     ) -> Result<internal_api::GetLightningRequestResponse> {
-        self.sspd.lightning_request(id).await
+        self.sspd().lightning_request(id).await
     }
 
     #[must_use]
     pub fn counterparty_peer_address(&self) -> String {
-        self.ldk.1.peer_address()
+        self.fixtures.lightning("cp").peer_address()
+    }
+
+    /// The daemon the stack's wallets pay through.
+    #[must_use]
+    pub fn sspd(&self) -> &SspdFixture {
+        self.fixtures.sspd()
+    }
+
+    /// The daemon, for a test that stops and starts it.
+    pub fn sspd_mut(&mut self) -> &mut SspdFixture {
+        self.fixtures.sspd_mut()
     }
 }

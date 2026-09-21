@@ -1,4 +1,5 @@
 pub mod bitcoind;
+pub mod database;
 pub mod keyshares;
 pub mod ldk_server;
 pub mod log;

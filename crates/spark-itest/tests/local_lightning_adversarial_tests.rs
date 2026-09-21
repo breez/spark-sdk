@@ -143,7 +143,7 @@ async fn send_rejects_payment_hash_mismatch() -> Result<()> {
         &stack.alice_config,
         stack.alice_signer.clone(),
         &stack.ssp_config,
-        &stack.sspd.identity_public_key,
+        &stack.sspd().identity_public_key,
         &committed_hash,
         &leaf,
     )
@@ -185,7 +185,7 @@ async fn send_rejects_insufficient_committed_amount() -> Result<()> {
         &stack.alice_config,
         stack.alice_signer.clone(),
         &stack.ssp_config,
-        &stack.sspd.identity_public_key,
+        &stack.sspd().identity_public_key,
         &payment_hash,
         &leaf,
     )

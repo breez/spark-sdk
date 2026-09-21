@@ -16,6 +16,7 @@ async fn test_sspd_daemon_starts_against_the_local_cluster() -> Result<()> {
         &fixtures.fixture_id,
         &fixtures.bitcoind,
         &fixtures.spark_so.operators,
+        &fixtures.database,
         WALLET_SEED,
         None,
     )
@@ -35,6 +36,7 @@ async fn test_sspd_stocks_its_own_leaf_pool() -> Result<()> {
         &fixtures.fixture_id,
         &fixtures.bitcoind,
         &fixtures.spark_so.operators,
+        &fixtures.database,
         WALLET_SEED,
         None,
     )
@@ -66,6 +68,7 @@ async fn test_stocked_leaves_carry_their_exit_chains() -> Result<()> {
         &fixtures.fixture_id,
         &fixtures.bitcoind,
         &fixtures.spark_so.operators,
+        &fixtures.database,
         WALLET_SEED,
         None,
     )
@@ -101,6 +104,7 @@ async fn test_claimed_leaves_gain_their_exit_chains() -> Result<()> {
         &fixtures.fixture_id,
         &fixtures.bitcoind,
         &fixtures.spark_so.operators,
+        &fixtures.database,
         WALLET_SEED,
         None,
     )

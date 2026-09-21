@@ -409,7 +409,7 @@ async fn send_over_real_channel() -> Result<()> {
         &stack.alice_config,
         stack.alice_signer.clone(),
         &stack.ssp_config,
-        &stack.sspd.identity_public_key,
+        &stack.sspd().identity_public_key,
         &payment_hash,
         &leaf,
     )
@@ -431,7 +431,7 @@ async fn send_over_real_channel() -> Result<()> {
         "the daemon took the leaf the user committed"
     );
 
-    let counts = stack.sspd.pool_leaf_counts().await?;
+    let counts = stack.sspd().pool_leaf_counts().await?;
     assert!(
         counts.contains_key(&16384),
         "Alice's leaf should be in the daemon's pool; got {counts:?}"
@@ -629,7 +629,7 @@ async fn send_failure_does_not_claim() -> Result<()> {
         &stack.alice_config,
         stack.alice_signer.clone(),
         &stack.ssp_config,
-        &stack.sspd.identity_public_key,
+        &stack.sspd().identity_public_key,
         &payment_hash,
         &leaf,
     )
@@ -777,7 +777,7 @@ async fn receive_recovers_after_a_restart() -> Result<()> {
         .context("the daemon should have issued an invoice")?
         .encoded_invoice;
 
-    stack.sspd.restart_stopped().await?;
+    stack.sspd().restart_stopped().await?;
 
     let _: api::Bolt11SendResponse = stack
         .counterparty
@@ -797,7 +797,7 @@ async fn receive_recovers_after_a_restart() -> Result<()> {
     })
     .await?;
 
-    stack.sspd.start_again().await?;
+    stack.sspd_mut().start_again().await?;
     let claimed = wait_for_ok("the daemon to front Alice her leaves anyway", || async {
         client_claim_htlc(&stack.alice_config, stack.alice_signer.clone(), &preimage).await
     })
@@ -850,7 +850,7 @@ async fn receive_refuses_when_deadline_too_close() -> Result<()> {
 
     // Stopped before the payment, since a running daemon fronts leaves as soon as
     // the HTLC is held.
-    stack.sspd.restart_stopped().await?;
+    stack.sspd().restart_stopped().await?;
 
     let _: api::Bolt11SendResponse = stack
         .counterparty
@@ -885,7 +885,7 @@ async fn receive_refuses_when_deadline_too_close() -> Result<()> {
     })
     .await?;
 
-    stack.sspd.start_again().await?;
+    stack.sspd_mut().start_again().await?;
     wait_until("the daemon to refuse and refund", || async {
         Ok(stack
             .lightning_request(&request.id)
@@ -965,7 +965,7 @@ async fn send_never_routes_above_the_collected_fee() -> Result<()> {
         &stack.alice_config,
         stack.alice_signer.clone(),
         &stack.ssp_config,
-        &stack.sspd.identity_public_key,
+        &stack.sspd().identity_public_key,
         &payment_hash,
         &leaf,
     )

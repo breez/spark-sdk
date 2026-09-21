@@ -53,7 +53,7 @@ async fn deposit_outpoint_unspent(fixtures: &TestFixtures, txid: bitcoin::Txid, 
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_instant_static_deposit_claim_local() -> Result<()> {
-    let fixtures = Arc::new(TestFixtures::new().await?);
+    let fixtures = Arc::new(TestFixtures::builder().with_sspd().build().await?);
 
     // A zero fee ceiling stops background claims, so only the explicit claim below,
     // with its own ceiling, claims the deposit.

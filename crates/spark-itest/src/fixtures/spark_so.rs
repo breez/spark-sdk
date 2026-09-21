@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::SecretKey;
 use rcgen::{CertifiedKey, generate_simple_self_signed};
@@ -6,30 +6,25 @@ use serde_json::json;
 use spark_wallet::Identifier;
 use std::collections::HashSet;
 use std::fs;
+use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
 use testcontainers::GenericImage;
+use testcontainers::ImageExt;
 use testcontainers::core::wait::{ExitWaitStrategy, LogWaitStrategy};
 use testcontainers::core::{ContainerPort, Mount, WaitFor};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, ImageExt};
-use testcontainers_modules::postgres::Postgres;
 use tokio::sync::oneshot;
 use tokio::time::{sleep, timeout};
 use tokio_postgres::NoTls;
-use tracing::{info, warn};
+use tracing::{Instrument, debug_span, info, instrument, warn};
 
 use crate::fixtures::bitcoind::BitcoindFixture;
-use crate::fixtures::keyshares::{MIN_AVAILABLE_KEYS, available_per_coordinator};
+use crate::fixtures::database::{DatabaseFixture, operator_database};
 use crate::fixtures::log::TracingConsumer;
 use crate::fixtures::setup::FixtureId;
-use crate::fixtures::state_snapshot;
 use crate::fixtures::wait_log::WaitForLogConsumer;
-
-const POSTGRES_USER: &str = "postgres";
-const POSTGRES_PASSWORD: &str = "postgres";
-const POSTGRES_DB: &str = "postgres";
-const POSTGRES_PORT: u16 = 5432;
+use crate::fixtures::{Container, database};
 
 // Default ports for operators - starting from 8535
 const OPERATOR_PORT: u16 = 8535;
@@ -37,8 +32,7 @@ pub const NUM_OPERATORS: usize = 3; // Using 3 operators by default
 pub const MIN_SIGNERS: usize = 2; // Threshold for signing
 
 pub struct OperatorFixture {
-    pub postgres: ContainerAsync<Postgres>,
-    pub container: ContainerAsync<GenericImage>,
+    pub container: Container<GenericImage>,
     pub index: usize,
     pub identifier: Identifier,
     pub public_key: bitcoin::secp256k1::PublicKey,
@@ -73,14 +67,7 @@ pub enum StateSource {
     },
 }
 
-impl StateSource {
-    fn ready_at(self) -> usize {
-        match self {
-            Self::Snapshot => MIN_AVAILABLE_KEYS,
-            Self::Dkg { target } => target,
-        }
-    }
-}
+impl StateSource {}
 
 pub struct SparkSoFixture {
     pub operators: Vec<OperatorFixture>,
@@ -93,6 +80,7 @@ pub struct SparkSoFixture {
 
 /// Waits for the container's exit, not a log line, so what runs next sees every
 /// migration applied.
+#[instrument(level = "debug", name = "operator.migrations", skip_all)]
 async fn run_migrations(
     fixture_id: &FixtureId,
     index: usize,
@@ -109,6 +97,13 @@ async fn run_migrations(
     Ok(())
 }
 
+fn entrypoint_path() -> String {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("docker/entrypoint.sh")
+        .display()
+        .to_string()
+}
+
 // Function to generate a self-signed certificate for all operator hostnames
 pub(crate) fn generate_self_signed_certificate(host_names: &[String]) -> Result<(String, String)> {
     let CertifiedKey { cert, signing_key } = generate_simple_self_signed(host_names).unwrap();
@@ -116,13 +111,25 @@ pub(crate) fn generate_self_signed_certificate(host_names: &[String]) -> Result<
 }
 
 impl SparkSoFixture {
-    pub async fn new(fixture_id: &FixtureId, bitcoind_fixture: &BitcoindFixture) -> Result<Self> {
-        Self::new_with_keyshares(fixture_id, bitcoind_fixture, StateSource::Snapshot).await
+    pub async fn new(
+        fixture_id: &FixtureId,
+        bitcoind_fixture: &BitcoindFixture,
+        database: &DatabaseFixture,
+    ) -> Result<Self> {
+        Self::new_with_keyshares(
+            fixture_id,
+            bitcoind_fixture,
+            database,
+            StateSource::Snapshot,
+        )
+        .await
     }
 
+    #[instrument(level = "debug", name = "operators.start", skip_all)]
     pub async fn new_with_keyshares(
         fixture_id: &FixtureId,
         bitcoind_fixture: &BitcoindFixture,
+        database: &DatabaseFixture,
         state_source: StateSource,
     ) -> Result<Self> {
         // The entrypoint keeps so.config.yaml's values for an empty variable.
@@ -178,121 +185,103 @@ impl SparkSoFixture {
             let dkg_min_available_keys = dkg_min_available_keys.clone();
             let dkg_batch_size = dkg_batch_size.clone();
 
+            let postgres_host = database.host_name.clone();
+            let database_name = operator_database(i);
+            let internal_database_url = database.internal_url(&database_name);
+            let postgres_connectionstring = database.host_url(&database_name);
+            let entrypoint = entrypoint_path();
+
             // Create async task for each operator
-            let operator_future = tokio::spawn(async move {
-                // Each operator gets their own postgres container for simplicity.
-                let postgres_container_name = format!("postgres-{i}-{fixture_id}");
-                let postgres = Postgres::default()
-                    .with_network(fixture_id.to_network())
-                    .with_container_name(&postgres_container_name)
-                    .with_mount(state_snapshot::mount())
-                    .start()
-                    .await?;
+            let operator_future = tokio::spawn(
+                async move {
+                    // A restored database already carries every revision.
+                    if let StateSource::Dkg { .. } = state_source {
+                        run_migrations(&fixture_id, i, &internal_database_url).await?;
+                    }
 
-                let postgres_port =
-                    crate::fixtures::published_port(&postgres, POSTGRES_PORT).await?;
-                let internal_postgres_connectionstring = format!(
-                    "postgres://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{postgres_container_name}:{POSTGRES_PORT}/{POSTGRES_DB}?sslmode=disable"
-                );
-                let postgres_connectionstring = format!(
-                    "postgres://{}:{}@{}:{}/{}?sslmode=disable",
-                    POSTGRES_USER, POSTGRES_PASSWORD, "127.0.0.1", postgres_port, POSTGRES_DB
-                );
-                match state_source {
-                    // Restore before migrating: the dump carries the schema, and
-                    // Atlas's revision table with it, so migrating afterwards
-                    // applies only the revisions the dump lacks.
-                    StateSource::Snapshot => {
-                        state_snapshot::restore_database(
-                            &fixture_id.to_network(),
-                            &postgres_container_name,
-                            &format!("operator-{i}"),
-                        )
+                    let secret_key = SecretKey::from_slice(&[i as u8 + 1; 32])?;
+
+                    // Create channel for detecting log messages
+                    let (startup_complete_tx, startup_complete_rx) = oneshot::channel();
+
+                    // Create a custom log consumer that will signal when specific log messages are seen
+                    let log_consumer = WaitForLogConsumer::new(
+                        format!("operator {i}"),
+                        STARTUP_COMPLETE_PATTERN,
+                        startup_complete_tx,
+                    );
+
+                    // Store a reference to the log consumer for later use
+                    let log_consumer_ref = log_consumer.clone();
+
+                    // Create container for this operator using the pre-generated host name
+                    let container = crate::images::image(crate::images::SPARK_SO)?
+                        .with_exposed_port(ContainerPort::Tcp(OPERATOR_PORT))
+                        .with_wait_for(WaitFor::Log(LogWaitStrategy::stdout(
+                            "Waiting for updated operators.json file",
+                        )))
+                        .with_log_consumer(log_consumer)
+                        .with_network(fixture_id.to_network())
+                        .with_container_name(&operator_host_name)
+                        .with_mount(Mount::bind_mount(
+                            operators_json_path.display().to_string(),
+                            "/config/operators.json",
+                        ))
+                        .with_mount(Mount::bind_mount(
+                            cert_path.display().to_string(),
+                            "/data/server.crt",
+                        ))
+                        .with_mount(Mount::bind_mount(
+                            key_path.display().to_string(),
+                            "/data/server.key",
+                        ))
+                        // The worktree's entrypoint rather than the image's: the image is
+                        // shared by every worktree that pins the same operator.
+                        .with_mount(Mount::bind_mount(entrypoint, "/entrypoint.sh"))
+                        // Basic configuration
+                        .with_env_var("SPARK_OPERATOR_INDEX", i.to_string())
+                        .with_env_var("SPARK_OPERATOR_KEY", hex::encode(secret_key.secret_bytes()))
+                        .with_env_var("SPARK_THRESHOLD", MIN_SIGNERS.to_string())
+                        // Postgres configuration
+                        .with_env_var("POSTGRES_HOST", &postgres_host)
+                        .with_env_var("POSTGRES_PORT", database::PORT.to_string())
+                        .with_env_var("POSTGRES_USER", database::USER)
+                        .with_env_var("POSTGRES_PASSWORD", database::PASSWORD)
+                        .with_env_var("DB_NAME", &database_name)
+                        // Bitcoind connection
+                        .with_env_var("BITCOIND_HOST", &internal_rpc_url)
+                        .with_env_var("BITCOIND_ZMQPUBRAWBLOCK", &internal_zmqpubrawblock_url)
+                        .with_env_var("DKG_MIN_AVAILABLE_KEYS", &dkg_min_available_keys)
+                        .with_env_var("DKG_BATCH_SIZE", &dkg_batch_size)
+                        .start()
+                        .instrument(debug_span!("operator.container"))
                         .await?;
-                        run_migrations(&fixture_id, i, &internal_postgres_connectionstring).await?;
-                        info!("Restored operator {i}'s database from the state snapshot");
-                    }
-                    StateSource::Dkg { .. } => {
-                        run_migrations(&fixture_id, i, &internal_postgres_connectionstring).await?;
-                    }
+
+                    let host_port =
+                        crate::fixtures::published_port(&container, OPERATOR_PORT).await?;
+
+                    info!("Operator {} running on port {}", i, host_port);
+
+                    let identifier =
+                        Identifier::deserialize(&hex::decode(format!("{:0>64}", i + 1))?)?;
+                    let public_key = secret_key.public_key(&secp);
+
+                    let operator = OperatorFixture {
+                        container: Container::new(container),
+                        identifier,
+                        host_port,
+                        index: i,
+                        public_key,
+                        internal_port: OPERATOR_PORT,
+                        host_name: operator_host_name,
+                        postgres_connectionstring,
+                        ca_cert: cert_pem_clone,
+                    };
+
+                    Ok::<_, anyhow::Error>((operator, startup_complete_rx, log_consumer_ref))
                 }
-
-                let secret_key = SecretKey::from_slice(&[i as u8 + 1; 32])?;
-
-                // Create channel for detecting log messages
-                let (startup_complete_tx, startup_complete_rx) = oneshot::channel();
-
-                // Create a custom log consumer that will signal when specific log messages are seen
-                let log_consumer = WaitForLogConsumer::new(
-                    format!("operator {i}"),
-                    STARTUP_COMPLETE_PATTERN,
-                    startup_complete_tx,
-                );
-
-                // Store a reference to the log consumer for later use
-                let log_consumer_ref = log_consumer.clone();
-
-                // Create container for this operator using the pre-generated host name
-                let container = crate::images::image(crate::images::SPARK_SO)?
-                    .with_exposed_port(ContainerPort::Tcp(OPERATOR_PORT))
-                    .with_wait_for(WaitFor::Log(LogWaitStrategy::stdout(
-                        "Waiting for updated operators.json file",
-                    )))
-                    .with_log_consumer(log_consumer)
-                    .with_network(fixture_id.to_network())
-                    .with_container_name(&operator_host_name)
-                    .with_mount(Mount::bind_mount(
-                        operators_json_path.display().to_string(),
-                        "/config/operators.json",
-                    ))
-                    .with_mount(Mount::bind_mount(
-                        cert_path.display().to_string(),
-                        "/data/server.crt",
-                    ))
-                    .with_mount(Mount::bind_mount(
-                        key_path.display().to_string(),
-                        "/data/server.key",
-                    ))
-                    // Basic configuration
-                    .with_env_var("SPARK_OPERATOR_INDEX", i.to_string())
-                    .with_env_var("SPARK_OPERATOR_KEY", hex::encode(secret_key.secret_bytes()))
-                    .with_env_var("SPARK_THRESHOLD", MIN_SIGNERS.to_string())
-                    // Postgres configuration
-                    .with_env_var("POSTGRES_HOST", &postgres_container_name)
-                    .with_env_var("POSTGRES_PORT", POSTGRES_PORT.to_string())
-                    .with_env_var("POSTGRES_USER", POSTGRES_USER)
-                    .with_env_var("POSTGRES_PASSWORD", POSTGRES_PASSWORD)
-                    .with_env_var("DB_NAME", POSTGRES_DB)
-                    // Bitcoind connection
-                    .with_env_var("BITCOIND_HOST", &internal_rpc_url)
-                    .with_env_var("BITCOIND_ZMQPUBRAWBLOCK", &internal_zmqpubrawblock_url)
-                    .with_env_var("DKG_MIN_AVAILABLE_KEYS", &dkg_min_available_keys)
-                    .with_env_var("DKG_BATCH_SIZE", &dkg_batch_size)
-                    .start()
-                    .await?;
-
-                let host_port = crate::fixtures::published_port(&container, OPERATOR_PORT).await?;
-
-                info!("Operator {} running on port {}", i, host_port);
-
-                let identifier = Identifier::deserialize(&hex::decode(format!("{:0>64}", i + 1))?)?;
-                let public_key = secret_key.public_key(&secp);
-
-                let operator = OperatorFixture {
-                    postgres,
-                    container,
-                    identifier,
-                    host_port,
-                    index: i,
-                    public_key,
-                    internal_port: OPERATOR_PORT,
-                    host_name: operator_host_name,
-                    postgres_connectionstring,
-                    ca_cert: cert_pem_clone,
-                };
-
-                Ok::<_, anyhow::Error>((operator, startup_complete_rx, log_consumer_ref))
-            });
+                .instrument(debug_span!("operator.start", index = i)),
+            );
 
             operator_futures.push(operator_future);
         }
@@ -356,56 +345,47 @@ impl SparkSoFixture {
         );
     }
 
-    pub async fn initialize(&mut self) -> Result<()> {
+    /// Waits for every operator to report its startup tasks done. Borrows
+    /// nothing of the fixture, so a caller can start what needs the operators'
+    /// addresses while they finish.
+    pub fn startup_wait(&mut self) -> impl Future<Output = Result<()>> + 'static {
         info!("Waiting for all operators to complete initialization...");
-
-        // Take the receivers out of self to avoid borrowing issues
         let startup_receivers = std::mem::take(&mut self.startup_receivers);
-
-        // Wait for all startup complete signals
-        for (index, startup_rx) in startup_receivers {
-            match timeout(LOG_WAIT_TIMEOUT, startup_rx).await {
-                Ok(Ok(())) => info!("Operator {} startup tasks completed", index),
-                _ => info!(
-                    "Timeout waiting for operator {} startup tasks to complete",
-                    index
-                ),
+        async move {
+            for (index, startup_rx) in startup_receivers {
+                timeout(LOG_WAIT_TIMEOUT, startup_rx)
+                    .instrument(debug_span!("wait.operator_startup_log", index))
+                    .await
+                    .with_context(|| {
+                        format!("operator {index} did not report its startup tasks done")
+                    })?
+                    .with_context(|| format!("operator {index} stopped while starting"))?;
+                info!("Operator {index} startup tasks completed");
             }
+            Ok(())
         }
+        .instrument(debug_span!("operators.initialize"))
+    }
 
-        match self.state_source {
-            StateSource::Snapshot => self.verify_restored_keyshares().await?,
-            StateSource::Dkg { .. } => self.wait_for_keyshares().await?,
+    /// What is left once the operators have started: a cluster that ran DKG waits
+    /// for its keyshares, a restored one had them checked with its snapshot.
+    pub async fn finish_startup(&mut self) -> Result<()> {
+        if let StateSource::Dkg { target } = self.state_source {
+            self.wait_for_keyshares(target).await?;
         }
-
         info!("All operators are initialized and ready");
         Ok(())
     }
 
-    // No polling: the rows are restored before the operators boot, so a shortfall
-    // is a broken snapshot rather than a slow one.
-    async fn verify_restored_keyshares(&self) -> Result<()> {
-        for operator in &self.operators {
-            let counts = available_per_coordinator(&operator.postgres_connectionstring).await?;
-            for coordinator in 0..NUM_OPERATORS {
-                let available = counts.get(&(coordinator as i64)).copied().unwrap_or(0);
-                if available <= MIN_AVAILABLE_KEYS {
-                    return Err(anyhow::anyhow!(
-                        "operator {}'s database holds {available} keyshares for coordinator \
-                         {coordinator}, need more than {MIN_AVAILABLE_KEYS}. The state snapshot \
-                         is incomplete; rebuild it with `make capture-itest-state`.",
-                        operator.index,
-                    ));
-                }
-            }
-        }
-
-        info!("Restored keyshares are available in all operator databases");
-        Ok(())
+    /// Waits for the operators to start and finishes their setup.
+    pub async fn initialize(&mut self) -> Result<()> {
+        self.startup_wait().await?;
+        self.finish_startup().await
     }
 
     /// Stops every operator container so their RPC endpoints refuse connections,
     /// simulating the operators being offline.
+    #[instrument(level = "debug", name = "operators.stop", skip_all)]
     pub async fn stop_operators(&self) -> Result<()> {
         for operator in &self.operators {
             info!("Stopping operator {}", operator.index);
@@ -416,6 +396,7 @@ impl SparkSoFixture {
     }
 
     // Wait for a specific log message to appear in any of the operators' logs
+    #[instrument(level = "debug", name = "wait.operator_log", skip_all, fields(pattern = log_pattern))]
     pub async fn wait_for_log(&self, log_pattern: &str) -> Result<()> {
         info!(
             "Waiting for log pattern: {} in any operator's log",
@@ -467,7 +448,8 @@ impl SparkSoFixture {
     // keyshare a coordinator can pick to be visible in the other operators' databases, not
     // just each operator having keyshares of its own. The snapshot must also be identical on
     // two consecutive polls, so a DKG batch that is mid-commit cannot slip past the check.
-    pub async fn wait_for_keyshares(&self) -> Result<()> {
+    #[instrument(level = "debug", name = "wait.keyshares", skip_all)]
+    pub async fn wait_for_keyshares(&self, target: usize) -> Result<()> {
         info!("Checking for available signing keyshares in all operators...");
 
         let result = timeout(KEYSHARE_CHECK_TIMEOUT, async {
@@ -480,7 +462,7 @@ impl SparkSoFixture {
                         info!("Available keyshares per operator database: {:?}", counts);
 
                         if previous.as_ref() == Some(&snapshot)
-                            && Self::keyshares_ready(&snapshot, self.state_source.ready_at())
+                            && Self::keyshares_ready(&snapshot, target)
                         {
                             info!("Keyshares are propagated across all operator databases");
                             return Ok(());

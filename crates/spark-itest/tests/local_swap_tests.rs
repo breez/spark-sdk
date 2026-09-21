@@ -32,7 +32,7 @@ struct SwapFixture {
 
 impl SwapFixture {
     async fn swaps(&self) -> Result<Vec<internal_api::Swap>> {
-        self.fixtures.sspd().await?.swaps().await
+        self.fixtures.sspd().swaps().await
     }
 }
 
@@ -118,8 +118,8 @@ async fn client_swap_leaves(
 }
 
 async fn setup_swap_fixture() -> Result<SwapFixture> {
-    let fixtures = TestFixtures::new().await?;
-    let sspd = fixtures.sspd().await?;
+    let fixtures = TestFixtures::builder().with_sspd().build().await?;
+    let sspd = fixtures.sspd();
     sspd.wait_for_pool(&fixtures.bitcoind, 1, Duration::from_secs(600))
         .await
         .context("waiting for the daemon to stock its pool")?;
@@ -241,7 +241,7 @@ async fn test_swap_ssp_claims_user_leaves() -> Result<()> {
     // A claimed leaf is admitted to the pool separately, after its refund
     // timelock is checked.
     let claimed_id: Vec<String> = inbound.iter().map(|l| l.leaf_id.clone()).collect();
-    let store = fixture.fixtures.sspd().await?.tree_store().await?;
+    let store = fixture.fixtures.sspd().tree_store().await?;
     let deadline = std::time::Instant::now() + Duration::from_secs(120);
     loop {
         let pooled = store.get_leaves().await?;
@@ -378,7 +378,6 @@ async fn test_swap_never_hands_one_leaf_to_two_users() -> Result<()> {
     let stocked = *fixture
         .fixtures
         .sspd()
-        .await?
         .pool_leaf_counts()
         .await?
         .get(&top_denomination)

@@ -22,7 +22,7 @@ use spark_wallet::{
 };
 use tempfile::TempDir;
 use tokio::sync::mpsc;
-use tracing::debug;
+use tracing::{Instrument, debug, debug_span, instrument};
 
 use crate::chain_service::LocalBitcoindChainService;
 use crate::fixtures::lnurl::LnurlFixture;
@@ -57,7 +57,6 @@ impl LocalSdk {
         let claim = self
             .fixtures
             .sspd()
-            .await?
             .manager_client()
             .await?
             .get_static_deposit_claim(internal_api::GetStaticDepositClaimRequest {
@@ -76,7 +75,6 @@ impl LocalSdk {
         Ok(self
             .fixtures
             .sspd()
-            .await?
             .manager_client()
             .await?
             .list_coop_exits(internal_api::ListCoopExitsRequest { limit: 0 })
@@ -146,9 +144,22 @@ async fn build_local_sdk_inner(
     server_mode: bool,
     configure: Option<Box<dyn FnOnce(&mut Config) + Send>>,
 ) -> Result<LocalSdk> {
+    build_local_sdk_steps(fixtures, backend, entropy, server_mode, configure)
+        .instrument(debug_span!("setup.wallet"))
+        .await
+}
+
+#[allow(clippy::type_complexity)]
+async fn build_local_sdk_steps(
+    fixtures: Arc<TestFixtures>,
+    backend: SignerBackend,
+    entropy: Option<Vec<u8>>,
+    server_mode: bool,
+    configure: Option<Box<dyn FnOnce(&mut Config) + Send>>,
+) -> Result<LocalSdk> {
     let wallet_config = fixtures.create_wallet_config().await?;
 
-    let sspd = fixtures.sspd().await?;
+    let sspd = fixtures.sspd();
 
     // Server mode runs no background sync, so the store only ever holds what
     // something wrote to it explicitly.
@@ -188,12 +199,15 @@ async fn build_local_sdk_inner(
                 .with_chain_service(chain_service)
                 .with_default_storage(storage_path)
                 .build()
+                .instrument(debug_span!("sdk.build"))
                 .await?;
             // `DefaultSigner::new` and `SdkBuilder::new(Seed::Entropy)` derive
             // the same identity key, so both wallets see the same leaves.
             let signer = Arc::new(DefaultSigner::new(&seed, spark_wallet::Network::Regtest)?);
             let spark_signer = Arc::new(SparkSignerAdapter::new(signer));
-            let spark_wallet = SparkWallet::connect(wallet_config, spark_signer).await?;
+            let spark_wallet = SparkWallet::connect(wallet_config, spark_signer)
+                .instrument(debug_span!("spark_wallet.connect"))
+                .await?;
             (sdk, spark_wallet, Some(seed.to_vec()))
         }
         #[cfg(feature = "turnkey")]
@@ -236,7 +250,10 @@ async fn build_local_sdk_inner(
     // trying to attribute to something else.
     if !server_mode {
         let mut wallet_events = spark_wallet.subscribe_events();
-        spark_wallet.start_background_processing().await;
+        spark_wallet
+            .start_background_processing()
+            .instrument(debug_span!("spark_wallet.start_background"))
+            .await;
         tokio::time::timeout(std::time::Duration::from_secs(90), async {
             loop {
                 if matches!(wallet_events.recv().await?, WalletEvent::Synced) {
@@ -245,6 +262,7 @@ async fn build_local_sdk_inner(
             }
             Ok::<_, anyhow::Error>(())
         })
+        .instrument(debug_span!("wait.side_channel_synced"))
         .await
         .map_err(|_| anyhow::anyhow!("side-channel SparkWallet did not sync within 90s"))??;
     }
@@ -327,9 +345,6 @@ pub struct LocalStack {
     fixtures: Arc<TestFixtures>,
     /// Cached from [`TestFixtures::sspd`], which this stack has already started.
     ssp_base_url: String,
-    /// Lightning payments between this stack's wallets settle as self-payments on
-    /// this node, so it needs no channels.
-    _ldk: spark_itest::fixtures::ldk_server::LdkServerFixture,
     /// Mines until the stack is dropped.
     driver: tokio::task::JoinHandle<()>,
     /// Locked by the driver while it mines a block.
@@ -375,49 +390,26 @@ impl LocalStack {
 
     /// Starts operators, an sspd and a bitcoind, and stocks the SSP's pool.
     pub async fn start() -> Result<Self> {
-        let fixtures = Arc::new(TestFixtures::new().await?);
+        // Boxed: spans deepen the future type past the layout recursion limit.
+        Box::pin(Self::start_traced()).await
+    }
 
-        let fixtures_for_ldk = Arc::clone(&fixtures);
-        let ssp_ldk = tokio::task::spawn_blocking(move || -> Result<_> {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            rt.block_on(spark_itest::fixtures::ldk_server::LdkServerFixture::start(
-                &fixtures_for_ldk.fixture_id,
-                &fixtures_for_ldk.bitcoind,
-                "ssp",
-            ))
-        })
-        .await??;
-
-        let sspd = fixtures
-            .sspd_with_ldk(Some(&spark_itest::fixtures::sspd::LdkSettings {
-                internal_url: format!(
-                    "{}:{}",
-                    ssp_ldk.container_name,
-                    spark_itest::fixtures::ldk_server::GRPC_PORT
-                ),
-                api_key: ssp_ldk.api_key.clone(),
-                cert_pem: ssp_ldk.cert_pem.clone(),
-                invoice_signing_key_hex: ssp_ldk.node_secret_key_hex(),
-            }))
+    #[instrument(level = "debug", name = "setup.stack", skip_all)]
+    async fn start_traced() -> Result<Self> {
+        let fixtures = TestFixtures::builder()
+            .with_lightning(&["ssp"])
+            .build()
             .await?;
-        let ssp_base_url = sspd.base_url.clone();
+        let fixtures = Arc::new(fixtures);
+
+        let ssp_base_url = fixtures.sspd().base_url.clone();
 
         let mining = Arc::new(tokio::sync::Mutex::new(()));
         let driver = spawn_local_driver(Arc::clone(&fixtures), Arc::clone(&mining));
 
-        sspd.wait_for_pool(
-            &fixtures.bitcoind,
-            spark_itest::fixtures::sspd::LEAVES_PER_DENOMINATION,
-            POOL_TIMEOUT,
-        )
-        .await?;
-
         Ok(Self {
             fixtures,
             ssp_base_url,
-            _ldk: ssp_ldk,
             driver,
             mining,
         })
@@ -432,6 +424,7 @@ impl LocalStack {
         configure: impl FnOnce(&mut Config) + Send,
     ) -> Result<SdkInstance> {
         self.build_wallet(identity, server_mode, false, configure)
+            .instrument(debug_span!("setup.wallet"))
             .await
     }
 
@@ -442,7 +435,9 @@ impl LocalStack {
         identity: LocalIdentity,
         configure: impl FnOnce(&mut Config) + Send,
     ) -> Result<SdkInstance> {
-        self.build_wallet(identity, false, true, configure).await
+        self.build_wallet(identity, false, true, configure)
+            .instrument(debug_span!("setup.wallet"))
+            .await
     }
 
     async fn build_wallet(
@@ -454,7 +449,7 @@ impl LocalStack {
     ) -> Result<SdkInstance> {
         let stack = self;
         let wallet_config = stack.fixtures.create_wallet_config().await?;
-        let sspd = stack.fixtures.sspd().await?;
+        let sspd = stack.fixtures.sspd();
 
         let mut config = base_local_config(
             &wallet_config,
@@ -481,6 +476,7 @@ impl LocalStack {
                     .with_chain_service(chain_service)
                     .with_default_storage(storage_path)
                     .build()
+                    .instrument(debug_span!("sdk.build"))
                     .await?
             }
             LocalIdentity::ExternalMnemonic(mnemonic) => {
@@ -489,6 +485,7 @@ impl LocalStack {
                     .with_chain_service(chain_service)
                     .with_default_storage(storage_path)
                     .build()
+                    .instrument(debug_span!("sdk.build"))
                     .await?
             }
         };
@@ -523,7 +520,7 @@ impl LocalStack {
 
     /// An LNURL server that issues invoices through this stack's SSP.
     pub async fn lnurl_server(&self) -> Result<LnurlFixture> {
-        let sspd = self.fixtures.sspd().await?;
+        let sspd = self.fixtures.sspd();
         let spark_config = self.fixtures.network_wallet_config(ServiceProviderConfig {
             base_url: sspd.network_base_url.clone(),
             schema_endpoint: Some("graphql/spark/rc".to_string()),
@@ -535,8 +532,6 @@ impl LocalStack {
     }
 }
 
-const POOL_TIMEOUT: Duration = Duration::from_secs(300);
-
 /// Mines in the background: test bodies written for the live regtest never mine,
 /// because it mines on its own.
 fn spawn_local_driver(
@@ -547,7 +542,12 @@ fn spawn_local_driver(
         loop {
             {
                 let _mining = mining.lock().await;
-                if let Err(e) = fixtures.bitcoind.generate_blocks(1).await {
+                if let Err(e) = fixtures
+                    .bitcoind
+                    .generate_blocks(1)
+                    .instrument(debug_span!("driver.mine"))
+                    .await
+                {
                     debug!("local driver: mining a block failed: {e}");
                 }
             }

@@ -6,11 +6,12 @@ use spark_wallet::{
     DefaultSigner, LeafOptimizationOptions, Network, OperatorConfig, OperatorPoolConfig, PublicKey,
     RetryConfig, ServiceProviderConfig, SparkWalletConfig, TokenOutputsOptimizationOptions,
 };
-use tokio::sync::OnceCell;
-use tracing::info;
+use tracing::{Instrument, debug_span, info, instrument};
 
 use crate::fixtures::{
     bitcoind::BitcoindFixture,
+    database::DatabaseFixture,
+    ldk_server::{GRPC_PORT, LdkServerFixture},
     spark_so::{OperatorFixture, SparkSoFixture},
     sspd::{LdkSettings, SspdFixture},
     state_snapshot,
@@ -24,8 +25,39 @@ pub const SSPD_WALLET_SEED_HEX: &str =
 pub struct TestFixtures {
     pub fixture_id: FixtureId,
     pub bitcoind: BitcoindFixture,
+    pub database: DatabaseFixture,
     pub spark_so: SparkSoFixture,
-    sspd: OnceCell<SspdFixture>,
+    sspd: Option<SspdFixture>,
+    lightning: Vec<(&'static str, LdkServerFixture)>,
+}
+
+/// What a cluster runs, beyond the operators, bitcoind and Postgres every one
+/// has. A test asks for what it needs before the cluster starts, so the daemon
+/// and the lightning nodes come up while the operators finish starting.
+#[derive(Default)]
+pub struct ClusterBuilder {
+    sspd: bool,
+    lightning: Vec<&'static str>,
+}
+
+impl ClusterBuilder {
+    /// Runs the daemon the wallets pay through.
+    pub fn with_sspd(mut self) -> Self {
+        self.sspd = true;
+        self
+    }
+
+    /// Runs a lightning node per name, and gives the daemon the first of them.
+    pub fn with_lightning(mut self, names: &[&'static str]) -> Self {
+        self.lightning = names.to_vec();
+        self.sspd = true;
+        self
+    }
+
+    pub async fn build(self) -> Result<TestFixtures> {
+        // Boxed: spans deepen the future type past the layout recursion limit.
+        Box::pin(TestFixtures::start(self)).await
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -63,61 +95,132 @@ impl std::fmt::Display for FixtureId {
     }
 }
 
-/// Together two full pools' worth: the daemon spends its on-chain funds on its
-/// leaf pool and on fronting coop-exit withdrawals.
-const SSPD_ONCHAIN_UTXO_SATS: u64 = 1_000_000;
-const SSPD_ONCHAIN_UTXO_COUNT: usize =
-    2 * (crate::fixtures::sspd::FULL_POOL_ONCHAIN_SATS / 1_000_000) as usize;
+/// Starts a lightning node per name, together.
+async fn start_lightning(
+    fixture_id: &FixtureId,
+    bitcoind: &BitcoindFixture,
+    names: &[&'static str],
+) -> Result<Vec<(&'static str, LdkServerFixture)>> {
+    let started = futures::future::try_join_all(
+        names
+            .iter()
+            .map(|name| LdkServerFixture::start(fixture_id, bitcoind, name)),
+    )
+    .await?;
+    Ok(names.iter().copied().zip(started).collect())
+}
+
+/// Starts the daemon, paying through `lightning` when the cluster runs one.
+async fn start_sspd(
+    fixture_id: &FixtureId,
+    bitcoind: &BitcoindFixture,
+    database: &DatabaseFixture,
+    spark_so: &SparkSoFixture,
+    lightning: Option<&(&'static str, LdkServerFixture)>,
+) -> Result<SspdFixture> {
+    let ldk = lightning.map(|(_, node)| LdkSettings {
+        internal_url: format!("{}:{GRPC_PORT}", node.container_name),
+        api_key: node.api_key.clone(),
+        cert_pem: node.cert_pem.clone(),
+        invoice_signing_key_hex: node.node_secret_key_hex(),
+    });
+    SspdFixture::start(
+        fixture_id,
+        bitcoind,
+        &spark_so.operators,
+        database,
+        SSPD_WALLET_SEED_HEX,
+        ldk.as_ref(),
+    )
+    .instrument(debug_span!("setup.sspd"))
+    .await
+}
 
 impl TestFixtures {
+    /// A cluster of operators, bitcoind and Postgres, and nothing else.
     pub async fn new() -> Result<Self> {
+        Self::builder().build().await
+    }
+
+    pub fn builder() -> ClusterBuilder {
+        ClusterBuilder::default()
+    }
+
+    #[instrument(level = "debug", name = "setup.fixtures", skip_all)]
+    async fn start(builder: ClusterBuilder) -> Result<Self> {
         state_snapshot::check()?;
         let fixture_id = FixtureId::new();
 
-        let mut bitcoind =
-            BitcoindFixture::restored(&fixture_id, &state_snapshot::bitcoind_datadir()).await?;
-        bitcoind.adopt_restored_wallet().await?;
+        let (bitcoind, database) = tokio::try_join!(
+            async {
+                let mut bitcoind =
+                    BitcoindFixture::restored(&fixture_id, &state_snapshot::bitcoind_datadir())
+                        .await?;
+                bitcoind
+                    .adopt_restored_wallet()
+                    .instrument(debug_span!("bitcoind.adopt_wallet"))
+                    .await?;
+                Ok::<_, anyhow::Error>(bitcoind)
+            },
+            DatabaseFixture::start(&fixture_id, true),
+        )?;
 
-        // Create the SparkSoFixture with the docker_ref and bitcoind connection
-        let mut spark_so = SparkSoFixture::new(&fixture_id, &bitcoind).await?;
-        spark_so.initialize().await?;
+        let mut spark_so = SparkSoFixture::new(&fixture_id, &bitcoind, &database).await?;
+        // The daemon and the lightning nodes need the operators' addresses and
+        // keys, not their readiness, so they start while the operators finish.
+        let startup = spark_so.startup_wait();
+        let ((), (lightning, sspd)) = tokio::try_join!(startup, async {
+            let lightning = start_lightning(&fixture_id, &bitcoind, &builder.lightning).await?;
+            let sspd = match builder.sspd {
+                true => Some(
+                    start_sspd(
+                        &fixture_id,
+                        &bitcoind,
+                        &database,
+                        &spark_so,
+                        lightning.first(),
+                    )
+                    .await?,
+                ),
+                false => None,
+            };
+            Ok((lightning, sspd))
+        })?;
+        spark_so.finish_startup().await?;
 
         info!("All test fixtures initialized");
 
         Ok(Self {
             fixture_id,
             bitcoind,
+            database,
             spark_so,
-            sspd: OnceCell::new(),
+            sspd,
+            lightning,
         })
     }
 
-    /// Started and funded on first use, without a lightning node.
-    pub async fn sspd(&self) -> Result<&SspdFixture> {
-        self.sspd_with_ldk(None).await
+    /// The daemon this cluster runs.
+    pub fn sspd(&self) -> &SspdFixture {
+        self.sspd
+            .as_ref()
+            .expect("this cluster was built without a daemon: ask the builder for one")
     }
 
-    /// This cluster's daemon, started with `ldk` if this call is what starts it.
-    pub async fn sspd_with_ldk(&self, ldk: Option<&LdkSettings>) -> Result<&SspdFixture> {
+    /// The daemon, for a test that stops and starts it.
+    pub fn sspd_mut(&mut self) -> &mut SspdFixture {
         self.sspd
-            .get_or_try_init(|| async {
-                let sspd = SspdFixture::start(
-                    &self.fixture_id,
-                    &self.bitcoind,
-                    &self.spark_so.operators,
-                    SSPD_WALLET_SEED_HEX,
-                    ldk,
-                )
-                .await?;
-                sspd.fund_onchain(
-                    &self.bitcoind,
-                    SSPD_ONCHAIN_UTXO_SATS,
-                    SSPD_ONCHAIN_UTXO_COUNT,
-                )
-                .await?;
-                Ok(sspd)
-            })
-            .await
+            .as_mut()
+            .expect("this cluster was built without a daemon: ask the builder for one")
+    }
+
+    /// The lightning node this cluster runs under `name`.
+    pub fn lightning(&self, name: &str) -> &LdkServerFixture {
+        self.lightning
+            .iter()
+            .find(|(node, _)| *node == name)
+            .map(|(_, fixture)| fixture)
+            .unwrap_or_else(|| panic!("this cluster runs no lightning node named {name}"))
     }
 
     /// Takes all operators offline by stopping their containers; bitcoind stays up.
