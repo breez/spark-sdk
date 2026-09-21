@@ -48,7 +48,7 @@ use crate::{
 pub const DEFAULT_MAX_TOKEN_TX_INPUTS: usize = 500;
 /// Cap on the outputs a single token transaction may create, counting the change
 /// output each token with a remainder gets. Mirrors the constant the transaction
-/// builder enforces, which `spark-token-primitives` keeps private: exceeding it
+/// builder enforces, which `spark-primitives` keeps private: exceeding it
 /// fails deep in construction, so callers sizing a transfer check it up front.
 pub const MAX_TOKEN_TX_OUTPUTS: usize = 500;
 const MAX_TRANSFER_TOKEN_TOO_MANY_OUTPUTS_RETRY_ATTEMPTS: usize = 3;
@@ -822,7 +822,7 @@ impl TokenService {
                                 o.output.token_identifier
                             ))
                         })?;
-                Ok(spark_token_primitives::SelectedTokenOutput {
+                Ok(spark_primitives::SelectedTokenOutput {
                     previous_transaction_hash: hex::decode(&o.prev_tx_hash)
                         .map_err(|_| ServiceError::Generic("Invalid prev tx hash".to_string()))?,
                     previous_transaction_vout: o.prev_tx_vout,
@@ -855,7 +855,7 @@ impl TokenService {
         let prim_receiver_outputs = prepared_receivers
             .iter()
             .map(|o| {
-                Ok(spark_token_primitives::ReceiverTokenOutput {
+                Ok(spark_primitives::ReceiverTokenOutput {
                     receiver_spark_address: o.pay_request.clone(),
                     token_identifier: Some(
                         bech32m_decode_token_id(&o.token_id, Some(self.network)).map_err(|e| {
@@ -879,8 +879,8 @@ impl TokenService {
         )
         .map_err(|_| ServiceError::Generic("client_created_timestamp overflows i64".to_string()))?;
 
-        let result = spark_token_primitives::construct_partial_transfer_transaction(
-            spark_token_primitives::TransferBuildRequest {
+        let result = spark_primitives::construct_partial_transfer_transaction(
+            spark_primitives::TransferBuildRequest {
                 identity_public_key: identity_public_key_bytes,
                 selected_outputs,
                 receiver_outputs: prim_receiver_outputs,
@@ -935,7 +935,7 @@ impl TokenService {
         let owner_signatures = spent_outpoints
             .iter()
             .enumerate()
-            .map(|(i, _)| spark_token_primitives::SignatureWithIndexInput {
+            .map(|(i, _)| spark_primitives::SignatureWithIndexInput {
                 input_index: i as u32,
                 public_key: identity_public_key_bytes.clone(),
                 signature: signature.clone(),
@@ -960,8 +960,8 @@ impl TokenService {
                 .await?;
         }
 
-        let broadcast_bytes = spark_token_primitives::build_broadcast_transaction_request(
-            spark_token_primitives::BroadcastBuildRequest {
+        let broadcast_bytes = spark_primitives::build_broadcast_transaction_request(
+            spark_primitives::BroadcastBuildRequest {
                 identity_public_key: identity_public_key_bytes,
                 partial_token_transaction_bytes,
                 owner_signatures,
@@ -994,7 +994,7 @@ impl TokenService {
         // Fall back to the partial txid if the response is malformed, so a parse failure can't roll
         // back the now-broadcast reservation.
         let final_outputs = match final_token_transaction {
-            Some(final_token_transaction) => spark_token_primitives::hash_final_token_transaction(
+            Some(final_token_transaction) => spark_primitives::hash_final_token_transaction(
                 final_token_transaction.encode_to_vec(),
             )
             .map_err(|e| format!("Failed to compute final token transaction hash: {e}"))
