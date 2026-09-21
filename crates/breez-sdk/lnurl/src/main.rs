@@ -48,6 +48,7 @@ mod partner_jwt;
 mod postgresql;
 mod repository;
 mod routes;
+mod spark_config;
 mod state;
 #[cfg(test)]
 mod test_support;
@@ -122,7 +123,9 @@ struct Args {
     pub dev_dont_use_lnurl_include_spark_address: bool,
 
     /// JSON file with the Spark operators and SSP to use instead of the
-    /// network's, such as a local cluster.
+    /// network's, such as a local cluster. Either what a deployment publishes,
+    /// the file the SDK's `parse_spark_config` reads, or a serialized wallet
+    /// config.
     #[arg(long)]
     pub spark_config: Option<PathBuf>,
 
@@ -321,12 +324,14 @@ where
 {
     let auth_seed = parse_auth_seed(args.ssp_auth_seed.as_deref())?;
 
-    let mut spark_config = SparkWalletConfig::default_config(args.network);
-    spark_config.service_provider_config.schema_endpoint = Some("graphql/spark/rc".to_string());
-    if let Some(path) = &args.spark_config {
-        spark_config = serde_json::from_slice(&std::fs::read(path)?)
-            .map_err(|e| anyhow!("invalid spark_config {}: {e}", path.display()))?;
-    }
+    let mut spark_config = match &args.spark_config {
+        Some(path) => spark_config::load(args.network, path)?,
+        None => SparkWalletConfig::default_config(args.network),
+    };
+    spark_config
+        .service_provider_config
+        .schema_endpoint
+        .get_or_insert_with(|| "graphql/spark/rc".to_string());
     // One HTTP client (one connection pool) shared by all SSP traffic.
     let ssp_http_client = platform_utils::create_http_client(Some(&default_user_agent()))?;
 
