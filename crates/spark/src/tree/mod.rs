@@ -182,6 +182,16 @@ pub enum TreeNodeStatus {
     /// ParentExited is the status of a tree node whose parent is exiting,
     /// making this node not valid for transfer, timelock refresh, etc.
     ParentExited,
+    /// Consolidated is the status of a tree node whose subtree was aggregated
+    /// back into it, leaving it exit-only.
+    Consolidated,
+    /// WatchtowerExited is the status of a tree node below one whose direct
+    /// transaction confirmed, spending the output this node's own transaction
+    /// claims. Its pre-signed exit path is gone.
+    WatchtowerExited,
+    /// WatchtowerExitRecovered is the status of a watchtower-exited tree node
+    /// whose owner has co-signed a spend of the swept output with the operators.
+    WatchtowerExitRecovered,
     /// Unknown is a status not yet recognized by this SDK version.
     Unknown,
 }
@@ -204,6 +214,9 @@ impl std::fmt::Display for TreeNodeStatus {
             TreeNodeStatus::Reimbursed => write!(f, "Reimbursed"),
             TreeNodeStatus::RenewLocked => write!(f, "RenewLocked"),
             TreeNodeStatus::ParentExited => write!(f, "ParentExited"),
+            TreeNodeStatus::Consolidated => write!(f, "Consolidated"),
+            TreeNodeStatus::WatchtowerExited => write!(f, "WatchtowerExited"),
+            TreeNodeStatus::WatchtowerExitRecovered => write!(f, "WatchtowerExitRecovered"),
             TreeNodeStatus::Unknown => write!(f, "Unknown"),
         }
     }
@@ -227,6 +240,9 @@ impl From<&str> for TreeNodeStatus {
             "REIMBURSED" => TreeNodeStatus::Reimbursed,
             "RENEW_LOCKED" => TreeNodeStatus::RenewLocked,
             "PARENT_EXITED" => TreeNodeStatus::ParentExited,
+            "CONSOLIDATED" => TreeNodeStatus::Consolidated,
+            "WATCHTOWER_EXITED" => TreeNodeStatus::WatchtowerExited,
+            "WATCHTOWER_EXIT_RECOVERED" => TreeNodeStatus::WatchtowerExitRecovered,
             other => {
                 tracing::warn!("Unrecognized TreeNodeStatus: {other}");
                 TreeNodeStatus::Unknown
