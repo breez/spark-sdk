@@ -206,7 +206,7 @@ jobs:
           build: 'true'
 
   itest:
-    name: Integration test (${{ matrix.backend.name }})
+    name: Integration test (${{ matrix.backend.name }}, ${{ matrix.group }})
     runs-on: ubuntu-latest
     needs: [state-snapshot, itest-images]
     continue-on-error: ${{ matrix.backend.allow-failure }}
@@ -217,6 +217,9 @@ jobs:
           - { name: in-memory, target: itest,             allow-failure: false }
           - { name: postgres,  target: spark-itest-pg,    allow-failure: true }
           - { name: mysql,     target: spark-itest-mysql, allow-failure: true }
+        # One group of suites per machine, each testing one thing. The names are
+        # xtask's GROUPS.
+        group: [unilateral-exit, timelocks, exits, lightning, tokens, wallets]
     env:
       FAUCET_USERNAME: ${{ secrets.FAUCET_USERNAME }}
       FAUCET_PASSWORD: ${{ secrets.FAUCET_PASSWORD }}
@@ -238,7 +241,7 @@ jobs:
         uses: ./.github/actions/itest-images
 
       - name: Run Tests
-        run: make ${{ matrix.backend.target }}
+        run: make ${{ matrix.backend.target }} GROUP=${{ matrix.group }}
 
   compat-itest:
     name: Signer compatibility tests
