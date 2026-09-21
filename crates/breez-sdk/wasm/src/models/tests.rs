@@ -80,31 +80,39 @@ const OUTPUT_ONLY: &[&str] = &[
     "PublishSignedTransferPackageResponse",
 ];
 
+// Every file that mirrors SDK types for JS, since a tagged enum in one reaches
+// structs in the others.
+const MIRRORED: &[&str] = &[
+    include_str!("mod.rs"),
+    include_str!("chain_service.rs"),
+    include_str!("issuer.rs"),
+    include_str!("rest_client.rs"),
+    include_str!("../passkey.rs"),
+    include_str!("../sdk_builder.rs"),
+    include_str!("../sdk_context.rs"),
+    include_str!("../signer.rs"),
+    include_str!("../turnkey.rs"),
+];
+
 // The rule behind the tests above, checked across every model: the models
 // macro tags each enum that carries data, so a u128 anywhere below one must use
 // `serde_u128_as_string` or `serde_option_u128_as_string`.
 #[wasm_bindgen_test]
 fn tagged_enums_reach_no_bigint() {
-    let file = syn::parse_file(include_str!("mod.rs")).unwrap();
-    let mut fields: HashMap<String, Vec<syn::Field>> = HashMap::new();
-    let mut pending = Vec::new();
-    for item in file.items {
-        match item {
-            syn::Item::Struct(s) => {
-                fields.insert(s.ident.to_string(), s.fields.into_iter().collect());
-            }
-            syn::Item::Enum(e) => {
-                let name = e.ident.to_string();
-                if e.variants.iter().any(|v| !v.fields.is_empty())
-                    && !OUTPUT_ONLY.contains(&name.as_str())
-                {
-                    pending.push(name.clone());
-                }
-                let variant_fields = e.variants.into_iter().flat_map(|v| v.fields);
-                fields.insert(name, variant_fields.collect());
-            }
-            _ => {}
-        }
+    let mut mirrored = Mirrored::default();
+    for source in MIRRORED {
+        mirrored.visit_file(&syn::parse_file(source).unwrap());
+    }
+    let Mirrored {
+        fields,
+        mut pending,
+    } = mirrored;
+
+    for name in OUTPUT_ONLY {
+        assert!(
+            fields.contains_key(*name),
+            "OUTPUT_ONLY names no type: {name}"
+        );
     }
 
     let mut seen = HashSet::new();
@@ -132,6 +140,32 @@ fn tagged_enums_reach_no_bigint() {
         "u128 below a tagged enum can't be read back from JS: use serde_u128_as_string, \
          or list the enum in OUTPUT_ONLY if JS never passes it back. {bigints:?}"
     );
+}
+
+// Fields by type name, and the tagged enums to start the walk from. Visiting
+// rather than reading `file.items` also reaches types declared inside a module.
+#[derive(Default)]
+struct Mirrored {
+    fields: HashMap<String, Vec<syn::Field>>,
+    pending: Vec<String>,
+}
+
+impl Visit<'_> for Mirrored {
+    fn visit_item_struct(&mut self, item: &syn::ItemStruct) {
+        let fields = item.fields.iter().cloned().collect();
+        self.fields.insert(item.ident.to_string(), fields);
+    }
+
+    fn visit_item_enum(&mut self, item: &syn::ItemEnum) {
+        let name = item.ident.to_string();
+        if item.variants.iter().any(|v| !v.fields.is_empty())
+            && !OUTPUT_ONLY.contains(&name.as_str())
+        {
+            self.pending.push(name.clone());
+        }
+        let variant_fields = item.variants.iter().flat_map(|v| v.fields.iter().cloned());
+        self.fields.insert(name, variant_fields.collect());
+    }
 }
 
 #[derive(Default)]
