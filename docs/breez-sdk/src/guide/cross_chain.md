@@ -72,7 +72,7 @@ Validate the amount against the bounds before preparing the payment. A route can
 
 A rejected amount surfaces as {{#enum SdkError::CrossChainAmountOutOfRange}}, carrying {{#name too_small}} for the direction and the published bound in whichever denominations the provider publishes.
 
-A route the provider won't serve surfaces as {{#enum SdkError::CrossChainRouteUnavailable}}. {{#name temporary}} tells a route that should be back shortly, where the same request can succeed later, from one that is refused, where another route is the way forward.
+A route the provider won't serve surfaces as {{#enum SdkError::CrossChainRouteUnavailable}}. {{#name temporary}} indicates that a route is currently unavailable and the same request may succeed later, rather than requiring another route.
 
 ## Slippage
 
