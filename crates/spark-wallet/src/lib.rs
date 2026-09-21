@@ -1,4 +1,5 @@
 mod config;
+mod deployment;
 mod error;
 mod event;
 mod model;
@@ -8,6 +9,7 @@ mod wallet_builder;
 
 pub use bitcoin::secp256k1::PublicKey;
 pub use config::*;
+pub use deployment::*;
 pub use error::*;
 pub use model::*;
 pub use spark::operator::{OperatorConfig, OperatorError, OperatorPoolConfig};
