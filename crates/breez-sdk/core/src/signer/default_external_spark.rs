@@ -9,6 +9,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::SignatureShare};
+
 use crate::error::SignerError;
 use crate::signer::external_spark::ExternalSparkSigner;
 use crate::signer::external_spark_types::{
@@ -19,21 +21,24 @@ use crate::signer::external_spark_types::{
     ExternalPreparedLightningReceive, ExternalPreparedStaticDeposit,
     ExternalPreparedStaticDepositClaim, ExternalPreparedTokenTransaction, ExternalPreparedTransfer,
     ExternalSignSparkInvoiceRequest, ExternalSignStaticDepositRefundRequest,
-    ExternalSignedSparkInvoice, ExternalSparkInvoiceKind, ExternalStartStaticDepositRefundRequest,
-    ExternalStartedStaticDepositRefund, ExternalTokenTransactionKind, ExternalTransferLeafInput,
+    ExternalSignWatchtowerExitRecoveryRequest, ExternalSignedSparkInvoice,
+    ExternalSparkInvoiceKind, ExternalStartStaticDepositRefundRequest,
+    ExternalStartWatchtowerExitRecoveryRequest, ExternalStartedStaticDepositRefund,
+    ExternalStartedWatchtowerExitRecovery, ExternalTokenTransactionKind, ExternalTransferLeafInput,
 };
 use crate::signer::external_types::{
     EcdsaSignatureBytes, ExternalFrostCommitments, ExternalFrostSignature, ExternalTreeNodeId,
-    PublicKeyBytes, SchnorrSignatureBytes, SecretBytes,
+    IdentifierCommitmentPair, IdentifierPublicKeyPair, IdentifierSignaturePair, PublicKeyBytes,
+    SchnorrSignatureBytes, SecretBytes,
 };
 use crate::{Network, SdkError, Seed};
 use spark_wallet::{
     ClaimLeafInput, DefaultSigner, PrepareClaimRequest, PrepareLightningReceiveRequest,
     PrepareStaticDepositClaimRequest, PrepareStaticDepositRequest, PrepareTokenTransactionRequest,
     PrepareTransferRequest, SignSparkInvoiceRequest, SignStaticDepositRefundRequest,
-    SigningKeyshare, SparkInvoiceKind, SparkSigner, SparkSignerAdapter,
-    StartStaticDepositRefundRequest, TokenTransactionKind, TransferLeafInput, TreeNode, TreeNodeId,
-    TreeNodeStatus,
+    SignWatchtowerExitRecoveryRequest, SigningKeyshare, SparkInvoiceKind, SparkSigner,
+    SparkSignerAdapter, StartStaticDepositRefundRequest, StartWatchtowerExitRecoveryRequest,
+    TokenTransactionKind, TransferLeafInput, TreeNode, TreeNodeId, TreeNodeStatus,
 };
 
 /// Default `ExternalSparkSigner` backed by the in-process `DefaultSigner`.
@@ -75,6 +80,47 @@ fn hash_32(bytes: &[u8], what: &str) -> Result<[u8; 32], SignerError> {
 
 fn public_key(bytes: &[u8]) -> Result<bitcoin::secp256k1::PublicKey, SignerError> {
     bitcoin::secp256k1::PublicKey::from_slice(bytes).map_err(err)
+}
+
+type OperatorShares = (
+    BTreeMap<Identifier, SigningCommitments>,
+    BTreeMap<Identifier, SignatureShare>,
+    BTreeMap<Identifier, bitcoin::secp256k1::PublicKey>,
+);
+
+fn operator_shares(
+    commitments: &[IdentifierCommitmentPair],
+    signatures: &[IdentifierSignaturePair],
+    public_keys: &[IdentifierPublicKeyPair],
+) -> Result<OperatorShares, SignerError> {
+    let commitments = commitments
+        .iter()
+        .map(|p| {
+            Ok((
+                p.identifier.to_identifier().map_err(err)?,
+                p.commitment.to_signing_commitments().map_err(err)?,
+            ))
+        })
+        .collect::<Result<_, SignerError>>()?;
+    let signatures = signatures
+        .iter()
+        .map(|p| {
+            Ok((
+                p.identifier.to_identifier().map_err(err)?,
+                p.signature.to_signature_share().map_err(err)?,
+            ))
+        })
+        .collect::<Result<_, SignerError>>()?;
+    let public_keys = public_keys
+        .iter()
+        .map(|p| {
+            Ok((
+                p.identifier.to_identifier().map_err(err)?,
+                public_key(&p.public_key)?,
+            ))
+        })
+        .collect::<Result<_, SignerError>>()?;
+    Ok((commitments, signatures, public_keys))
 }
 
 /// The native leaf inputs carry a full `TreeNode` so policy-enforcing signers
@@ -357,41 +403,68 @@ impl ExternalSparkSigner for DefaultExternalSparkSigner {
         &self,
         request: ExternalSignStaticDepositRefundRequest,
     ) -> Result<ExternalFrostSignature, SignerError> {
-        let statechain_commitments = request
-            .statechain_commitments
-            .iter()
-            .map(|p| {
-                Ok((
-                    p.identifier.to_identifier().map_err(err)?,
-                    p.commitment.to_signing_commitments().map_err(err)?,
-                ))
-            })
-            .collect::<Result<BTreeMap<_, _>, SignerError>>()?;
-        let statechain_signatures = request
-            .statechain_signatures
-            .iter()
-            .map(|p| {
-                Ok((
-                    p.identifier.to_identifier().map_err(err)?,
-                    p.signature.to_signature_share().map_err(err)?,
-                ))
-            })
-            .collect::<Result<BTreeMap<_, _>, SignerError>>()?;
-        let statechain_public_keys = request
-            .statechain_public_keys
-            .iter()
-            .map(|p| {
-                Ok((
-                    p.identifier.to_identifier().map_err(err)?,
-                    public_key(&p.public_key)?,
-                ))
-            })
-            .collect::<Result<BTreeMap<_, _>, SignerError>>()?;
+        let (statechain_commitments, statechain_signatures, statechain_public_keys) =
+            operator_shares(
+                &request.statechain_commitments,
+                &request.statechain_signatures,
+                &request.statechain_public_keys,
+            )?;
         let signature = self
             .inner
             .sign_static_deposit_refund(SignStaticDepositRefundRequest {
                 index: request.index,
                 sighash: hash_32(&request.sighash, "refund sighash")?,
+                verifying_key: public_key(&request.verifying_key)?,
+                nonce_commitment: request
+                    .nonce_commitment
+                    .to_frost_commitments()
+                    .map_err(err)?,
+                statechain_commitments,
+                statechain_signatures,
+                statechain_public_keys,
+            })
+            .await
+            .map_err(err)?;
+        ExternalFrostSignature::from_frost_signature(&signature).map_err(err)
+    }
+
+    async fn start_watchtower_exit_recovery(
+        &self,
+        request: ExternalStartWatchtowerExitRecoveryRequest,
+    ) -> Result<ExternalStartedWatchtowerExitRecovery, SignerError> {
+        let started = self
+            .inner
+            .start_watchtower_exit_recovery(StartWatchtowerExitRecoveryRequest {
+                leaf_id: request.leaf_id.to_tree_node_id().map_err(err)?,
+                user_statement: request.user_statement,
+            })
+            .await
+            .map_err(err)?;
+        Ok(ExternalStartedWatchtowerExitRecovery {
+            signing_public_key: started.signing_public_key.serialize().to_vec(),
+            nonce_commitment: ExternalFrostCommitments::from_frost_commitments(
+                &started.nonce_commitment,
+            )
+            .map_err(err)?,
+            user_signature: EcdsaSignatureBytes::from_signature(&started.user_signature),
+        })
+    }
+
+    async fn sign_watchtower_exit_recovery(
+        &self,
+        request: ExternalSignWatchtowerExitRecoveryRequest,
+    ) -> Result<ExternalFrostSignature, SignerError> {
+        let (statechain_commitments, statechain_signatures, statechain_public_keys) =
+            operator_shares(
+                &request.statechain_commitments,
+                &request.statechain_signatures,
+                &request.statechain_public_keys,
+            )?;
+        let signature = self
+            .inner
+            .sign_watchtower_exit_recovery(SignWatchtowerExitRecoveryRequest {
+                leaf_id: request.leaf_id.to_tree_node_id().map_err(err)?,
+                sighash: hash_32(&request.sighash, "recovery sighash")?,
                 verifying_key: public_key(&request.verifying_key)?,
                 nonce_commitment: request
                     .nonce_commitment
@@ -477,10 +550,153 @@ impl ExternalSparkSigner for DefaultExternalSparkSigner {
 
 #[cfg(test)]
 mod tests {
-    use spark_wallet::{LeafSigningKey, TransferLeafInput, TreeNodeId};
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Arc;
 
-    use super::node_with_id;
+    use bitcoin::hashes::{Hash, sha256};
+    use bitcoin::key::TapTweak;
+    use bitcoin::secp256k1::rand::thread_rng;
+    use bitcoin::secp256k1::{Message, PublicKey, Secp256k1, SecretKey, schnorr};
+    use frost_secp256k1_tr::keys::{KeyPackage, SigningShare, VerifyingShare};
+    use frost_secp256k1_tr::{Identifier, SigningPackage, VerifyingKey};
+    use spark_wallet::{
+        DefaultSigner, LeafSigningKey, SignWatchtowerExitRecoveryRequest, SparkSigner,
+        SparkSignerAdapter, StartWatchtowerExitRecoveryRequest, TransferLeafInput, TreeNodeId,
+    };
+
+    use super::{DefaultExternalSparkSigner, node_with_id};
+    use crate::signer::ExternalSparkSignerAdapter;
     use crate::signer::external_spark_types::{ExternalLeafSigningKey, ExternalTransferLeafInput};
+    use crate::{Network, Seed};
+
+    const MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon \
+                            abandon abandon abandon about";
+
+    /// One operator standing in for the statechain: its key adds to the user's
+    /// leaf key, and its share carries the taproot tweak, as the operators' does.
+    struct Operator {
+        identifier: Identifier,
+        secret: SecretKey,
+    }
+
+    impl Operator {
+        fn public_key(&self) -> PublicKey {
+            self.secret.public_key(&Secp256k1::new())
+        }
+
+        fn sign(
+            &self,
+            signing_package: &SigningPackage,
+            nonces: &frost_secp256k1_tr::round1::SigningNonces,
+            verifying_key: &PublicKey,
+        ) -> frost_secp256k1_tr::round2::SignatureShare {
+            let key_package = KeyPackage::new(
+                self.identifier,
+                SigningShare::deserialize(&self.secret.secret_bytes()).unwrap(),
+                VerifyingShare::deserialize(&self.public_key().serialize()).unwrap(),
+                VerifyingKey::deserialize(&verifying_key.serialize()).unwrap(),
+                1,
+            );
+            frost_secp256k1_tr::round2::sign_with_tweak(
+                signing_package,
+                nonces,
+                &key_package,
+                Some(&[]),
+            )
+            .unwrap()
+        }
+    }
+
+    async fn assert_recovery_round_signs(signer: &dyn SparkSigner) {
+        let secp = Secp256k1::new();
+        let leaf_id = TreeNodeId::generate();
+        let sighash = [7u8; 32];
+        let statement = b"statement".to_vec();
+        let started = signer
+            .start_watchtower_exit_recovery(StartWatchtowerExitRecoveryRequest {
+                leaf_id: leaf_id.clone(),
+                user_statement: statement.clone(),
+            })
+            .await
+            .unwrap();
+        secp.verify_ecdsa(
+            &Message::from_digest(sha256::Hash::hash(&statement).to_byte_array()),
+            &started.user_signature,
+            &signer.get_identity_public_key().await.unwrap(),
+        )
+        .expect("the statement is signed with the identity key");
+
+        let operator = Operator {
+            identifier: Identifier::derive(b"operator").unwrap(),
+            secret: SecretKey::from_slice(&[9; 32]).unwrap(),
+        };
+        let verifying_key = started
+            .signing_public_key
+            .combine(&operator.public_key())
+            .unwrap();
+        let (nonces, commitments) = frost_secp256k1_tr::round1::commit(
+            &SigningShare::deserialize(&operator.secret.secret_bytes()).unwrap(),
+            &mut thread_rng(),
+        );
+        let user = Identifier::derive(b"user").unwrap();
+        let signing_package = SigningPackage::new_with_adaptor(
+            BTreeMap::from([
+                (operator.identifier, commitments),
+                (user, started.nonce_commitment.commitments),
+            ]),
+            Some(vec![
+                BTreeSet::from([operator.identifier]),
+                BTreeSet::from([user]),
+            ]),
+            &sighash,
+            None,
+        );
+        let share = operator.sign(&signing_package, &nonces, &verifying_key);
+
+        let signature = signer
+            .sign_watchtower_exit_recovery(SignWatchtowerExitRecoveryRequest {
+                leaf_id,
+                sighash,
+                verifying_key,
+                nonce_commitment: started.nonce_commitment,
+                statechain_commitments: BTreeMap::from([(operator.identifier, commitments)]),
+                statechain_signatures: BTreeMap::from([(operator.identifier, share)]),
+                statechain_public_keys: BTreeMap::from([(
+                    operator.identifier,
+                    operator.public_key(),
+                )]),
+            })
+            .await
+            .unwrap();
+
+        let (output_key, _) = verifying_key.x_only_public_key().0.tap_tweak(&secp, None);
+        secp.verify_schnorr(
+            &schnorr::Signature::from_slice(&signature.serialize().unwrap()).unwrap(),
+            &Message::from_digest(sighash),
+            &output_key.to_x_only_public_key(),
+        )
+        .expect("the aggregate spends the output the leaf key and the operator key pay");
+    }
+
+    #[macros::async_test_all]
+    async fn the_recovery_round_signs_through_either_signer() {
+        let seed = Seed::Mnemonic {
+            mnemonic: MNEMONIC.to_string(),
+            passphrase: None,
+        }
+        .to_bytes()
+        .unwrap();
+        let master =
+            spark_wallet::account_master_key(&seed, Network::Regtest.into(), None).unwrap();
+        let seed_signer = SparkSignerAdapter::new(Arc::new(DefaultSigner::from_master(master)));
+        let external_signer = ExternalSparkSignerAdapter::new(Arc::new(
+            DefaultExternalSparkSigner::new(MNEMONIC.to_string(), None, Network::Regtest, None)
+                .unwrap(),
+        ));
+
+        assert_recovery_round_signs(&seed_signer).await;
+        assert_recovery_round_signs(&external_signer).await;
+    }
 
     #[test]
     fn a_leaf_signing_key_crosses_the_ffi_unchanged() {
