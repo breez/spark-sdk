@@ -3102,15 +3102,22 @@ pub struct PrepareUnilateralExitResponse {
     /// stopped.
     pub leaves: Vec<UnilateralExitLeaf>,
     /// Total value of the selected leaves, in satoshis.
+    ///
+    /// A leaf the watchtower stranded counts for what its on-chain output holds,
+    /// which is less than the leaf was worth: the transaction that put it there
+    /// took a fee on the way. Recovering that value needs the operators to
+    /// co-sign, so it is counted even though an exit run with them unreachable
+    /// will not reach it.
     pub recoverable_value_sat: u64,
     /// Total on-chain fee when funding with a single UTXO (fanned out across
     /// branches), in satoshis. Exact for the given funding kind; nodes the
     /// operators report on-chain are assumed already paid, so a partially-exited
     /// tree quotes a lower fee than a fresh one.
     ///
-    /// The sum of the three components below, which say who pays what:
-    /// `cpfp_fee_sat + fanout_fee_sat + sweep_fee_sat`. The first two come from
-    /// your funding UTXO, the third off the value being recovered.
+    /// The sum of the four components below, which say who pays what:
+    /// `cpfp_fee_sat + fanout_fee_sat + sweep_fee_sat + recovery_fee_sat`. The
+    /// first two come from your funding UTXO, the last two off the value being
+    /// recovered.
     pub total_fee_sat: u64,
     /// The part of `total_fee_sat` the CPFP children pay, funded by your UTXOs.
     /// It does not reduce what the exit recovers.
@@ -3123,6 +3130,11 @@ pub struct PrepareUnilateralExitResponse {
     /// from the value it moves, so this is the one component subtracted from
     /// what reaches `destination`.
     pub sweep_fee_sat: u64,
+    /// The part of `total_fee_sat` the recoveries of watchtower-stranded leaves
+    /// pay. Each takes its fee from the output it spends, so like the sweep's
+    /// fee this is subtracted from what reaches the destination rather than
+    /// funded by your UTXOs. Zero when no selected leaf is stranded.
+    pub recovery_fee_sat: u64,
     /// Fund a single UTXO of at least this many satoshis to exit with a fan-out.
     /// Above `cpfp_fee_sat + fanout_fee_sat` by design: it carries the sweep fee
     /// and a per-branch dust allowance as headroom, both of which come back to
@@ -3159,14 +3171,21 @@ pub struct UnilateralExitRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct UnilateralExitResponse {
     /// Total value of the selected leaves, in satoshis.
+    ///
+    /// A leaf the watchtower stranded counts for what its on-chain output holds,
+    /// which is less than the leaf was worth: the transaction that put it there
+    /// took a fee on the way. It is counted whether or not the operators
+    /// co-signed its recovery, so compare it against the transactions actually
+    /// returned before treating it as what this run will deliver.
     pub recoverable_value_sat: u64,
     /// The actual total on-chain fee the returned transactions pay at the
     /// requested rate, in satoshis. A resumed or partially-confirmed exit pays
     /// less because already-confirmed steps are not rebuilt.
     ///
-    /// The sum of the three components below, which say who pays what:
-    /// `cpfp_fee_sat + fanout_fee_sat + sweep_fee_sat`. The first two come from
-    /// your funding UTXOs, the third off the value being recovered.
+    /// The sum of the four components below, which say who pays what:
+    /// `cpfp_fee_sat + fanout_fee_sat + sweep_fee_sat + recovery_fee_sat`. The
+    /// first two come from your funding UTXOs, the last two off the value being
+    /// recovered.
     pub total_fee_sat: u64,
     /// The part of `total_fee_sat` the CPFP children pay, funded by your UTXOs.
     /// It does not reduce what the exit recovers.
@@ -3180,6 +3199,11 @@ pub struct UnilateralExitResponse {
     /// destination. Zero while no refund is on-chain yet and the set carries no
     /// sweep.
     pub sweep_fee_sat: u64,
+    /// The part of `total_fee_sat` the recoveries of watchtower-stranded leaves
+    /// pay. Each takes its fee from the output it spends, so like the sweep's
+    /// fee this is subtracted from what reaches the destination rather than
+    /// funded by your UTXOs. Zero when no selected leaf is stranded.
+    pub recovery_fee_sat: u64,
     pub leaves: Vec<UnilateralExitLeaf>,
     /// The full signed transaction set, in valid topological (broadcast) order
     /// with shared ancestors appearing once and the sweep last.

@@ -299,10 +299,11 @@ mod tests {
     fn sample_exit() -> UnilateralExitResponse {
         UnilateralExitResponse {
             recoverable_value_sat: 100_000,
-            total_fee_sat: 1_500,
+            total_fee_sat: 1_600,
             cpfp_fee_sat: 900,
             fanout_fee_sat: 400,
             sweep_fee_sat: 200,
+            recovery_fee_sat: 100,
             leaves: vec![UnilateralExitLeaf {
                 leaf_id: "leaf-1".to_string(),
                 value: 100_000,

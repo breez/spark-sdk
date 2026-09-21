@@ -177,13 +177,20 @@ impl ExitChainState {
         }
     }
 
+    /// The output this leaf's value is sitting in, when only an
+    /// operator-co-signed spend can reach it.
+    #[must_use]
+    pub fn stranded_output(&self, leaf_id: &TreeNodeId) -> Option<&StrandedLeafOutput> {
+        self.stranded_leaves
+            .iter()
+            .find(|output| output.leaf_id == *leaf_id)
+    }
+
     /// Whether this leaf's value is sitting in an output only an
     /// operator-co-signed spend can reach.
     #[must_use]
     pub fn is_stranded(&self, leaf_id: &TreeNodeId) -> bool {
-        self.stranded_leaves
-            .iter()
-            .any(|output| output.leaf_id == *leaf_id)
+        self.stranded_output(leaf_id).is_some()
     }
 }
 
@@ -222,11 +229,6 @@ pub fn plan_unilateral_exit(
     destination_script_len: usize,
     on_chain: &ExitChainState,
 ) -> Result<UnilateralExitPlan, ServiceError> {
-    if inputs.is_empty() {
-        return Err(ServiceError::ValidationError(
-            "At least one CPFP input is required".to_string(),
-        ));
-    }
     if leaf_ids.is_empty() {
         return Ok(UnilateralExitPlan {
             selected_leaves: vec![],
@@ -236,12 +238,18 @@ pub fn plan_unilateral_exit(
         });
     }
 
-    let change_script = &inputs[0].witness_utxo.script_pubkey;
-    let change_dust_limit = change_script.minimal_non_dust().to_sat();
+    // An exit of nothing but stranded leaves drives no pre-signed transaction, so
+    // it takes no funding at all and there is no change script to size against.
+    let funding_input = inputs.first();
+    let change_script = funding_input.map(|i| i.witness_utxo.script_pubkey.clone());
+    let change_dust_limit = change_script
+        .as_ref()
+        .map_or(0, |script| script.minimal_non_dust().to_sat());
+    let input_weight = Weight::from_wu(funding_input.map_or(0, |i| i.signed_input_weight));
     let params = UnilateralExitLeafCostParams {
-        initial_cpfp_input_weight: Weight::from_wu(inputs[0].signed_input_weight),
-        single_cpfp_input_weight: Weight::from_wu(inputs[0].signed_input_weight),
-        change_script_len: change_script.len(),
+        initial_cpfp_input_weight: input_weight,
+        single_cpfp_input_weight: input_weight,
+        change_script_len: change_script.as_ref().map_or(0, |script| script.len()),
         destination_script_len,
         fee_rate_sat_per_kw,
     };
@@ -257,11 +265,20 @@ pub fn plan_unilateral_exit(
         });
     }
 
+    // Recovery-only branches are left out: the build emits one self-fee spend for
+    // each, which takes no funding and so wants no share of a fan-out either.
     let to_build: Vec<UnilateralExitSelectedLeaf> = selected
         .iter()
-        .filter(|leaf| !is_complete_on_chain(on_chain, &tree_nodes, &leaf.id))
+        .filter(|leaf| {
+            !leaf.recovery_only && !is_complete_on_chain(on_chain, &tree_nodes, &leaf.id)
+        })
         .cloned()
         .collect();
+    if !to_build.is_empty() && inputs.is_empty() {
+        return Err(ServiceError::ValidationError(
+            "At least one CPFP input is required".to_string(),
+        ));
+    }
 
     let (assigned, fan_out_psbt) = if to_build.is_empty() {
         (Vec::new(), None)
@@ -371,7 +388,10 @@ pub struct UnilateralExitQuote {
     /// The sweep's fee, paid out of the value being swept rather than by the
     /// funding.
     pub sweep_fee_sat: u64,
-    /// `cpfp_fee_sat + fanout_fee_sat + sweep_fee_sat`.
+    /// What the recoveries of stranded leaves take out of the value they spend,
+    /// priced the same way the build signs them.
+    pub recovery_fee_sat: u64,
+    /// `cpfp_fee_sat + fanout_fee_sat + sweep_fee_sat + recovery_fee_sat`.
     pub total_fee_sat: u64,
 }
 
@@ -407,6 +427,7 @@ pub fn quote_unilateral_exit(
             cpfp_fee_sat: 0,
             fanout_fee_sat: 0,
             sweep_fee_sat: 0,
+            recovery_fee_sat: 0,
             total_fee_sat: 0,
         });
     }
@@ -430,13 +451,28 @@ pub fn quote_unilateral_exit(
         .map(|l| l.estimated_cost.saturating_sub(l.cpfp_cost))
         .fold(0u64, u64::saturating_add);
 
-    let fanout_fee_sat = if selected.len() == 1 {
+    // One self-fee spend of one P2TR output per stranded leaf, which is the shape
+    // the build signs.
+    let recovery_fee_sat: u64 = selected
+        .iter()
+        .filter(|l| l.recovery_only)
+        .map(|_| {
+            compute_sweep_fee(
+                p2tr_key_path_input_weight(),
+                destination_script_len,
+                fee_rate_sat_per_kw,
+            )
+        })
+        .fold(0u64, u64::saturating_add);
+
+    let funded_branches = selected.iter().filter(|l| !l.recovery_only).count();
+    let fanout_fee_sat = if funded_branches <= 1 {
         0
     } else {
         fan_out_fee(
             Weight::from_wu(funding_input_weight),
             funding_output_script_len,
-            selected.len(),
+            funded_branches,
             fee_rate_sat_per_kw,
         )
     };
@@ -445,12 +481,14 @@ pub fn quote_unilateral_exit(
         single_utxo_funding_sat: leaves_total.saturating_add(fanout_fee_sat),
         total_fee_sat: cpfp_fee_sat
             .saturating_add(fanout_fee_sat)
-            .saturating_add(sweep_fee_sat),
+            .saturating_add(sweep_fee_sat)
+            .saturating_add(recovery_fee_sat),
         selected_leaves: selected,
         per_branch_funding,
         cpfp_fee_sat,
         fanout_fee_sat,
         sweep_fee_sat,
+        recovery_fee_sat,
     })
 }
 
@@ -488,6 +526,10 @@ pub struct UnilateralExitSelectedLeaf {
     /// floor, since the sweep is paid from the swept value rather than the funding
     /// UTXO. Always `<= estimated_cost`.
     pub cpfp_cost: u64,
+    /// The leaf's value is already on-chain and only a co-signed recovery
+    /// reaches it. Such a branch drives no pre-signed transaction, so it takes
+    /// no funding, pays no CPFP fee and joins no sweep.
+    pub recovery_only: bool,
 }
 
 pub struct UnilateralExitLeafCostParams {
@@ -505,6 +547,9 @@ pub struct UnilateralExitLeafCostParams {
 /// dust. Single source of truth every affordability gate and the quote share.
 #[inline]
 pub fn branch_required_funding(leaf: &UnilateralExitSelectedLeaf, change_dust_limit: u64) -> u64 {
+    if leaf.recovery_only {
+        return 0;
+    }
     leaf.estimated_cost.saturating_add(change_dust_limit)
 }
 
@@ -689,6 +734,21 @@ pub fn evaluate_unilateral_exit_leaf_costs(
     let mut covered_txids: HashSet<bitcoin::Txid> = HashSet::new();
 
     for (leaf_id, leaf) in &leaves {
+        // A stranded leaf is exited by a co-signed spend of an output already
+        // on-chain, which pays its own fee. Nothing is driven for it, so it
+        // costs nothing to add and is worth what that output holds rather than
+        // what the leaf did before the watchtower took its fee.
+        if let Some(stranded) = on_chain.stranded_output(leaf_id) {
+            selected.push(UnilateralExitSelectedLeaf {
+                id: (*leaf_id).clone(),
+                value: stranded.value_sat,
+                estimated_cost: 0,
+                cpfp_cost: 0,
+                recovery_only: true,
+            });
+            continue;
+        }
+
         // No status gate here on purpose. A leaf's status is the operators' label
         // for it, not the state of its output: an already-exited leaf still has to
         // be selectable so a re-run can pick up the exit where it left off, and a
@@ -786,6 +846,7 @@ pub fn evaluate_unilateral_exit_leaf_costs(
                 value: leaf.value,
                 estimated_cost: total_marginal_cost,
                 cpfp_cost,
+                recovery_only: false,
             });
             for ancestor in &ancestors {
                 covered_txids.insert(ancestor.node_tx.compute_txid());
@@ -1340,6 +1401,7 @@ mod tests {
                 value,
                 estimated_cost: cost,
                 cpfp_cost: cost,
+                recovery_only: false,
             }
         }
 
@@ -2026,6 +2088,108 @@ mod tests {
             assert_eq!(quote.total_fee_sat, est);
             assert_eq!(quote.cpfp_fee_sat, quote.selected_leaves[0].cpfp_cost);
             assert_eq!(quote.sweep_fee_sat, est - quote.cpfp_fee_sat);
+        }
+
+        /// A leaf the watchtower stranded is exited by one self-fee spend of an
+        /// output already on-chain. It drives nothing, so it asks for no funding
+        /// and pays no CPFP or fan-out fee, and it is worth what that output
+        /// holds rather than what the leaf held before the watchtower's fee.
+        #[test_all]
+        fn quote_prices_a_stranded_leaf_at_its_recovery_alone() {
+            let node = leaf_node("leaf", 1_000_000);
+            let id = node.id.clone();
+            let nodes: HashMap<TreeNodeId, TreeNode> = [(id.clone(), node)].into_iter().collect();
+            let on_chain = ExitChainState {
+                stranded_leaves: vec![StrandedLeafOutput {
+                    leaf_id: id.clone(),
+                    outpoint: OutPoint {
+                        txid: bitcoin::Txid::from_byte_array([3; 32]),
+                        vout: 0,
+                    },
+                    value_sat: 999_000,
+                }],
+                ..Default::default()
+            };
+
+            let quote = quote_unilateral_exit(
+                &nodes,
+                &[id],
+                UnilateralExitLeafFilter::ProfitableOnly,
+                272,
+                22,
+                DUST,
+                250,
+                22,
+                &on_chain,
+            )
+            .unwrap();
+
+            assert_eq!(quote.selected_leaves.len(), 1);
+            assert!(quote.selected_leaves[0].recovery_only);
+            assert_eq!(
+                quote.selected_leaves[0].value, 999_000,
+                "worth the stranded output, not the leaf"
+            );
+            assert_eq!(quote.single_utxo_funding_sat, 0, "nothing to fund");
+            assert_eq!(quote.per_branch_funding[0].1, 0);
+            assert_eq!(quote.cpfp_fee_sat, 0);
+            assert_eq!(quote.fanout_fee_sat, 0);
+            assert_eq!(quote.sweep_fee_sat, 0, "a recovery pays the destination");
+            assert_eq!(quote.recovery_fee_sat, quote.total_fee_sat);
+            assert!(quote.recovery_fee_sat > 0);
+        }
+
+        /// Nothing but stranded leaves means nothing to fund, so the plan is made
+        /// without a single CPFP input. Funding is only refused when a branch
+        /// would actually be driven.
+        #[test_all]
+        fn plan_recovers_stranded_leaves_without_any_funding() {
+            let node = leaf_node("leaf", 1_000_000);
+            let id = node.id.clone();
+            let nodes: HashMap<TreeNodeId, TreeNode> = [(id.clone(), node)].into_iter().collect();
+            let on_chain = ExitChainState {
+                stranded_leaves: vec![StrandedLeafOutput {
+                    leaf_id: id.clone(),
+                    outpoint: OutPoint {
+                        txid: bitcoin::Txid::from_byte_array([3; 32]),
+                        vout: 0,
+                    },
+                    value_sat: 999_000,
+                }],
+                ..Default::default()
+            };
+
+            let plan = plan_unilateral_exit(
+                nodes.clone(),
+                std::slice::from_ref(&id),
+                UnilateralExitLeafFilter::ProfitableOnly,
+                vec![],
+                250,
+                22,
+                &on_chain,
+            )
+            .unwrap();
+
+            assert_eq!(plan.selected_leaves.len(), 1);
+            assert!(plan.fan_out_psbt.is_none(), "nothing to split");
+            assert_eq!(plan.per_branch_funding.len(), 1, "the branch is kept");
+            assert!(
+                plan.per_branch_funding[0].1.is_empty(),
+                "and funded with nothing"
+            );
+
+            // The same leaf without the stranding does need funding.
+            let err = plan_unilateral_exit(
+                nodes,
+                std::slice::from_ref(&id),
+                UnilateralExitLeafFilter::ProfitableOnly,
+                vec![],
+                250,
+                22,
+                &ExitChainState::default(),
+            )
+            .unwrap_err();
+            assert!(matches!(err, ServiceError::ValidationError(_)), "{err:?}");
         }
 
         #[test_all]

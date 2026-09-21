@@ -52,7 +52,7 @@ Call {{#name prepare_unilateral_exit}} with the target {{#name fee_rate_sat_per_
 
 The quote returns a {{#name PrepareUnilateralExitResponse}}. Its fields tell you how much Bitcoin to gather and how to structure it:
 
-- {{#name recoverable_value_sat}} is the total value of the selected {{#name leaves}}, and {{#name total_fee_sat}} is the on-chain fee to recover it, broken down into its three components below. Compare them to decide whether the exit is worth it at the current fee rate.
+- {{#name recoverable_value_sat}} is the total value of the selected {{#name leaves}}, and {{#name total_fee_sat}} is the on-chain fee to recover it, broken down into its four components below. Compare them to decide whether the exit is worth it at the current fee rate.
 - {{#name single_utxo_funding_sat}} is the simplest option: fund **one** UTXO of at least this many satoshis and the SDK fans it out across branches.
 - {{#name per_branch_funding}} lets you skip the fan-out (and its {{#name fanout_fee_sat}}) by funding **one UTXO per branch**, each of at least the amount in its {{#name PerBranchFunding}} entry.
 
@@ -60,19 +60,28 @@ So you do not have to guess how much to send or how many UTXOs to prepare: the q
 
 ### The fee components, and what arrives
 
-An exit pays its mining fees from two different places, so {{#name total_fee_sat}} comes with the split that says which is which. Both {{#name prepare_unilateral_exit}} and {{#name unilateral_exit}} report all four numbers.
+An exit pays its mining fees from two different places, so {{#name total_fee_sat}} comes with the split that says which is which. Both {{#name prepare_unilateral_exit}} and {{#name unilateral_exit}} report every component.
 
 | Component | Paid by |
 |---|---|
 | {{#name cpfp_fee_sat}} | The funding UTXOs, through the CPFP children that fee-bump the tree transactions |
 | {{#name fanout_fee_sat}} | The funding UTXO, by the fan-out transaction. Zero when there is no fan-out |
 | {{#name sweep_fee_sat}} | The value being recovered, by the final sweep |
+| {{#name recovery_fee_sat}} | The value being recovered, by a stranded leaf's recovery. Zero unless a selected leaf is stranded |
 
-The three always add up to the total: {{#name cpfp_fee_sat}} plus {{#name fanout_fee_sat}} plus {{#name sweep_fee_sat}} is {{#name total_fee_sat}}.
+The four always add up to the total: {{#name cpfp_fee_sat}} plus {{#name fanout_fee_sat}} plus {{#name sweep_fee_sat}} plus {{#name recovery_fee_sat}} is {{#name total_fee_sat}}.
 
-The first two come out of the Bitcoin you supplied as funding and do not reduce what the exit recovers. The third is different: the sweep spends the refunds and pays out what is left after its own fee, so it comes off the money on its way to your address.
+The first two come out of the Bitcoin you supplied as funding and do not reduce what the exit recovers. The last two are different: each spends the money itself and pays out what is left after its own fee, so they come off the value on its way to your address.
 
-**What arrives at {{#name destination}}** is therefore {{#name recoverable_value_sat}} less {{#name sweep_fee_sat}}, plus any funding that was not spent on fees. The sweep also collects the leftover change of the CPFP children it built, so unused funding is delivered to the same address rather than left behind.
+**What arrives at {{#name destination}}** is therefore {{#name recoverable_value_sat}} less {{#name sweep_fee_sat}} and {{#name recovery_fee_sat}}, plus any funding that was not spent on fees. The sweep also collects the leftover change of the CPFP children it built, so unused funding is delivered to the same address rather than left behind.
+
+### Stranded leaves
+
+A leaf can end up with its value on-chain in an output none of its pre-signed transactions can spend, after the operators' watchtower broadcasts a transaction on its behalf. {{#name exit_chain_state}} lists these under {{#name stranded_leaves}}.
+
+Such a leaf is exited by a single transaction that spends that output straight to {{#name destination}}, paying its own fee, which is what {{#name recovery_fee_sat}} reports. It needs no funding and joins no sweep, so an exit covering nothing but stranded leaves can be built with no funding UTXOs at all.
+
+The one difference that matters: this transaction is co-signed with the operators, so unlike the rest of an exit it cannot be produced while they are unreachable. Such a leaf is then left out and the other branches proceed unaffected. Its value is still counted in {{#name recoverable_value_sat}}, so check the returned {{#name transactions}} for the leaves you expected before treating that figure as what a given run will deliver.
 
 **What the exit costs in total** is {{#name total_fee_sat}}, across the funding UTXO and the recovered value together. Beginning with {{#name recoverable_value_sat}} in Spark and a funding UTXO worth F, the destination ends up with those two added together, less {{#name total_fee_sat}}.
 
@@ -247,7 +256,7 @@ An out of date value can restore leaves that have since been spent, so the balan
 | A leaf you are mid-exit on is missing from a new {{#enum ExitLeafSelection::Auto}} quote | The new quote reselected leaves instead of naming them | Quote with {{#enum ExitLeafSelection::Specific}}, naming the leaves from your stored response |
 | {{#name check_unilateral_exit}} returns {{#enum UnilateralExitVerdict::Redo}} | Something on-chain no longer matches the transactions you hold | Quote and build again, naming the same leaves; see [Starting over](#starting-over) |
 | The exit has stopped confirming | On-chain fees rose above what its transactions pay | Quote and build again at a higher {{#name fee_rate_sat_per_vbyte}}; see [Starting over](#starting-over) |
-| Less arrived than {{#name recoverable_value_sat}} less {{#name sweep_fee_sat}} | A step sat unbroadcast long enough for a watchtower to send its own version, which pays its fee out of the leaf | Broadcast each step while it is {{#enum ExitTransactionStatus::Ready}}; see [A step left waiting changes who pays its fee](#broadcast-the-transactions) |
+| Less arrived than {{#name recoverable_value_sat}} less {{#name sweep_fee_sat}} and {{#name recovery_fee_sat}} | A step sat unbroadcast long enough for a watchtower to send its own version, which pays its fee out of the leaf | Broadcast each step while it is {{#enum ExitTransactionStatus::Ready}}; see [A step left waiting changes who pays its fee](#broadcast-the-transactions) |
 | {{#name total_fee_sat}} is close to or above {{#name recoverable_value_sat}} | The shared fan-out fee makes a single-UTXO multi-leaf exit uneconomical | Fund one UTXO per branch ({{#name per_branch_funding}}) to drop the fan-out fee, exit fewer leaves with {{#enum ExitLeafSelection::Specific}}, or wait for a lower fee rate |
 | The build/sweep fails with a "below the dust limit" error | The recoverable value net of fees is below the destination's dust limit | Exit higher-value leaves with {{#enum ExitLeafSelection::Specific}}, lower the {{#name fee_rate_sat_per_vbyte}}, or wait for a cheaper fee rate |
 | {{#enum SdkError::InsufficientCpfpFunds}} | The funding you gave, once followed to what it became, is below what the exit needs | Fund at least {{#name single_utxo_funding_sat}}, or the amount in each {{#name PerBranchFunding}}; you can pass fresh UTXOs alongside the old ones |

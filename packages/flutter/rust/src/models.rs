@@ -348,8 +348,17 @@ pub struct _ExitChainState {
     pub confirmed_nodes: Vec<ConfirmedExitNode>,
     pub refunds: Vec<ExitRefund>,
     pub stopped_leaf_ids: Vec<String>,
+    pub stranded_leaves: Vec<StrandedLeafOutput>,
     pub unverified_node_ids: Vec<String>,
     pub unverifiable_confirmed_node_ids: Vec<String>,
+}
+
+#[frb(mirror(StrandedLeafOutput))]
+pub struct _StrandedLeafOutput {
+    pub leaf_id: String,
+    pub txid: String,
+    pub vout: u32,
+    pub value_sat: u64,
 }
 
 #[frb(mirror(ConfirmedExitNode))]
@@ -390,6 +399,7 @@ pub struct _PrepareUnilateralExitResponse {
     pub cpfp_fee_sat: u64,
     pub fanout_fee_sat: u64,
     pub sweep_fee_sat: u64,
+    pub recovery_fee_sat: u64,
     pub single_utxo_funding_sat: u64,
     pub per_branch_funding: Vec<PerBranchFunding>,
     pub fee_rate_sat_per_vbyte: u64,
@@ -433,6 +443,7 @@ pub struct _UnilateralExitResponse {
     pub cpfp_fee_sat: u64,
     pub fanout_fee_sat: u64,
     pub sweep_fee_sat: u64,
+    pub recovery_fee_sat: u64,
     pub leaves: Vec<UnilateralExitLeaf>,
     pub transactions: Vec<UnilateralExitTransaction>,
     pub funding_inputs: Vec<CpfpInput>,

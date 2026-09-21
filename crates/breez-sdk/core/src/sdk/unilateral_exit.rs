@@ -141,6 +141,7 @@ impl BreezSdk {
             cpfp_fee_sat: quote.cpfp_fee_sat,
             fanout_fee_sat: quote.fanout_fee_sat,
             sweep_fee_sat: quote.sweep_fee_sat,
+            recovery_fee_sat: quote.recovery_fee_sat,
             single_utxo_funding_sat: quote.single_utxo_funding_sat,
             per_branch_funding,
             fee_rate_sat_per_vbyte: request.fee_rate_sat_per_vbyte,
@@ -255,19 +256,14 @@ impl BreezSdk {
             .into_iter()
             .map(|i| i.into_funding_input(btc_network))
             .collect::<Result<Vec<_>, SdkError>>()?;
-        if funding_inputs.is_empty() {
-            return Err(SdkError::InvalidInput(
-                "At least one funding input is required".to_string(),
-            ));
-        }
-
         // A prior run spends the funding it was given, so what the caller hands
         // back may name outputs that are gone. Follow them to what they became
         // before planning, so the plan is made over what can actually be spent.
         let funding_inputs = resolve_funding(chain, funding_inputs).await?;
-        // Followed to nothing: a previous run spent all of it. That is a
-        // shortfall, not a malformed request.
-        if funding_inputs.is_empty() {
+        // Nothing to spend, either because none was offered or because a previous
+        // run spent it all. An exit that only recovers stranded leaves drives no
+        // pre-signed transaction and so needs none; anything else is a shortfall.
+        if funding_inputs.is_empty() && prepared.single_utxo_funding_sat > 0 {
             return Err(SdkError::InsufficientCpfpFunds {
                 required_sat: prepared.single_utxo_funding_sat,
             });
@@ -324,7 +320,10 @@ impl BreezSdk {
         let recoverable_value_sat = build.recoverable_value_sat;
         let cpfp_fee_sat = build.cpfp_fee_sat;
         let fanout_fee_sat = build.fanout_fee_sat;
-        let build_fee_sat = cpfp_fee_sat.saturating_add(fanout_fee_sat);
+        let recovery_fee_sat = build.recovery_fee_sat;
+        let build_fee_sat = cpfp_fee_sat
+            .saturating_add(fanout_fee_sat)
+            .saturating_add(recovery_fee_sat);
         // Captured before the loop below consumes `build.branches`.
         let sweep_status = sweep_initial_status(&build);
         debug!(
@@ -411,6 +410,7 @@ impl BreezSdk {
                 cpfp_fee_sat,
                 fanout_fee_sat,
                 sweep_fee_sat: 0,
+                recovery_fee_sat,
                 leaves,
                 transactions,
                 funding_inputs: supplied_funding,
@@ -463,6 +463,7 @@ impl BreezSdk {
             cpfp_fee_sat,
             fanout_fee_sat,
             sweep_fee_sat,
+            recovery_fee_sat,
             leaves,
             transactions,
             funding_inputs: supplied_funding,
@@ -1213,6 +1214,7 @@ fn empty_exit_response() -> UnilateralExitResponse {
         cpfp_fee_sat: 0,
         fanout_fee_sat: 0,
         sweep_fee_sat: 0,
+        recovery_fee_sat: 0,
         leaves: Vec::new(),
         transactions: Vec::new(),
         funding_inputs: Vec::new(),
@@ -1319,6 +1321,7 @@ mod tests {
             recoverable_value_sat: 0,
             cpfp_fee_sat: 0,
             fanout_fee_sat: 0,
+            recovery_fee_sat: 0,
         }
     }
 

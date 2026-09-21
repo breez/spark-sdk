@@ -169,6 +169,9 @@ pub struct UnilateralExitBuild {
     /// A freshly-broadcast fan-out's fee, paid by the funding UTXO. Zero when
     /// there is no fan-out or it was adopted already-confirmed.
     pub fanout_fee_sat: u64,
+    /// What the recoveries take out of the stranded value they spend. Paid by
+    /// that value, like the sweep's fee, rather than by the funding UTXOs.
+    pub recovery_fee_sat: u64,
 }
 
 /// A refund output sitting on-chain after a unilateral exit.
@@ -1545,6 +1548,17 @@ pub(crate) fn build_exit(
         .iter()
         .map(|l| l.value)
         .fold(0u64, u64::saturating_add);
+    // A recovery spends the stranded output whole, so what it leaves behind is
+    // its fee. The leaf's selected value is that output's, not the leaf's.
+    let recovery_fee_sat = plan
+        .selected_leaves
+        .iter()
+        .filter_map(|leaf| {
+            let tx = recoveries.get(&leaf.id)?;
+            let paid: u64 = tx.output.iter().map(|o| o.value.to_sat()).sum();
+            Some(leaf.value.saturating_sub(paid))
+        })
+        .fold(0u64, u64::saturating_add);
     let fanout_fee_sat = fresh_fan_out_fee(plan, fan_out.as_ref());
 
     debug!(
@@ -1565,6 +1579,7 @@ pub(crate) fn build_exit(
         recoverable_value_sat,
         cpfp_fee_sat,
         fanout_fee_sat,
+        recovery_fee_sat,
     })
 }
 
@@ -1721,6 +1736,7 @@ mod exit_build_tests {
                 value: 100_000,
                 estimated_cost: 2_000,
                 cpfp_cost: 2_000,
+                recovery_only: false,
             }],
             fan_out_psbt: None,
             per_branch_funding: vec![(leaf.id.clone(), vec![funding(100_000)])],
@@ -1857,6 +1873,95 @@ mod exit_build_tests {
         );
     }
 
+    /// A recovery is the branch's whole output: one transaction, no CPFP child
+    /// to fund it, nothing handed to the sweep. Its fee is what it leaves behind
+    /// of the stranded value, which the selected leaf is valued at.
+    #[test]
+    fn build_emits_a_recovery_and_prices_its_fee() {
+        let mut plan = single_leaf_plan();
+        plan.selected_leaves[0].value = 99_000;
+        plan.selected_leaves[0].recovery_only = true;
+        let resolved = ResolvedExitState {
+            stopped: [id("leaf")].into_iter().collect(),
+            ..Default::default()
+        };
+        let mut recovery = anchor_tx(7);
+        recovery.output = vec![TxOut {
+            value: Amount::from_sat(98_800),
+            script_pubkey: ScriptBuf::new(),
+        }];
+        let recoveries = [(id("leaf"), recovery.clone())].into_iter().collect();
+
+        let build = build_exit(&plan, &resolved, FEE_RATE, &recoveries).unwrap();
+
+        let txs = &build.branches[0].txs;
+        assert_eq!(txs.len(), 1, "a stranded branch drives nothing else");
+        assert_eq!(txs[0].kind, ExitTxKind::Recovery);
+        assert_eq!(txs[0].txid, recovery.compute_txid());
+        assert!(
+            txs[0].to_sign.is_none(),
+            "a recovery pays its own fee, so it carries no child"
+        );
+        assert!(txs[0].depends_on.is_empty(), "it spends a confirmed output");
+        assert!(
+            build.refund_outputs.is_empty(),
+            "it pays the destination itself rather than joining the sweep"
+        );
+        assert_eq!(build.recovery_fee_sat, 200);
+        assert_eq!(build.cpfp_fee_sat, 0);
+        assert_eq!(build.recoverable_value_sat, 99_000);
+    }
+
+    /// Only the operators can sign a recovery, and some signers cannot ask them
+    /// at all. The stranded leaf is then left with nothing to broadcast, which
+    /// must not stop the rest of the exit from building.
+    #[test]
+    fn build_skips_a_stranded_leaf_whose_recovery_is_missing() {
+        let root = node("root", None, anchor_tx(1), None);
+        let healthy = node("healthy", Some("root"), anchor_tx(2), Some(anchor_tx(3)));
+        let stranded = node("stranded", Some("root"), anchor_tx(4), Some(anchor_tx(5)));
+        let plan = UnilateralExitPlan {
+            selected_leaves: vec![
+                UnilateralExitSelectedLeaf {
+                    id: healthy.id.clone(),
+                    value: 100_000,
+                    estimated_cost: 2_000,
+                    cpfp_cost: 2_000,
+                    recovery_only: false,
+                },
+                UnilateralExitSelectedLeaf {
+                    id: stranded.id.clone(),
+                    value: 99_000,
+                    estimated_cost: 0,
+                    cpfp_cost: 0,
+                    recovery_only: true,
+                },
+            ],
+            fan_out_psbt: None,
+            per_branch_funding: vec![
+                (healthy.id.clone(), vec![funding(100_000)]),
+                (stranded.id.clone(), vec![]),
+            ],
+            tree_nodes: to_node_map(vec![root, healthy, stranded]),
+        };
+        let resolved = ResolvedExitState {
+            stopped: [id("stranded")].into_iter().collect(),
+            ..Default::default()
+        };
+
+        // No recovery for the stranded leaf: nothing could sign one.
+        let build = build_exit(&plan, &resolved, FEE_RATE, &HashMap::new()).unwrap();
+
+        let txs: HashMap<TreeNodeId, usize> = build
+            .branches
+            .iter()
+            .map(|b| (b.leaf_id.clone(), b.txs.len()))
+            .collect();
+        assert_eq!(txs[&id("stranded")], 0, "it has nothing to broadcast");
+        assert!(txs[&id("healthy")] > 0, "the rest of the exit still builds");
+        assert_eq!(build.recovery_fee_sat, 0, "no recovery, no recovery fee");
+    }
+
     #[test]
     fn build_emits_nothing_for_stopped_branch() {
         let resolved = ResolvedExitState {
@@ -1941,12 +2046,14 @@ mod exit_build_tests {
                     value: 100_000,
                     estimated_cost: 2_000,
                     cpfp_cost: 2_000,
+                    recovery_only: false,
                 },
                 UnilateralExitSelectedLeaf {
                     id: leaf_b.id.clone(),
                     value: 100_000,
                     estimated_cost: 2_000,
                     cpfp_cost: 2_000,
+                    recovery_only: false,
                 },
             ],
             fan_out_psbt: None,
@@ -2032,12 +2139,14 @@ mod exit_build_tests {
                     value: 100_000,
                     estimated_cost: 2_000,
                     cpfp_cost: 2_000,
+                    recovery_only: false,
                 },
                 UnilateralExitSelectedLeaf {
                     id: leaf_b.id.clone(),
                     value: 100_000,
                     estimated_cost: 2_000,
                     cpfp_cost: 2_000,
+                    recovery_only: false,
                 },
             ],
             fan_out_psbt: Some(fan_out_psbt),
@@ -2172,6 +2281,7 @@ mod exit_build_tests {
             recoverable_value_sat: 0,
             cpfp_fee_sat: 0,
             fanout_fee_sat: 0,
+            recovery_fee_sat: 0,
         };
         let interpretation = ChainInterpretation {
             resolved: ResolvedExitState::default(),
