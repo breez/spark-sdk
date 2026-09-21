@@ -15,22 +15,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use testcontainers::{
-    ContainerAsync, GenericImage, ImageExt,
+    GenericImage, ImageExt,
     core::{ContainerPort, Mount, WaitFor, wait::LogWaitStrategy},
     runners::AsyncRunner,
 };
 use tokio::time::sleep;
-use tracing::{info, warn};
+use tracing::{Instrument, debug_span, info, instrument, warn};
 
-use crate::fixtures::{log::TracingConsumer, setup::FixtureId};
+use crate::fixtures::{log::TracingConsumer, setup::FixtureId, state_snapshot};
 
 // Official Bitcoin Core image from Docker Hub (pulled by testcontainers, warmed
 // by `cargo xtask itest`). Pinned to 31.0, which supports the `submitpackage`
 // 1p1c relay and TRUC/v3 policy the unilateral exit packages rely on. Its
 // entrypoint prepends `bitcoind` to the `-`-prefixed args below, appends
 // `-datadir=$BITCOIN_DATA`, and runs it as the `bitcoin` user.
-const BITCOIND_DOCKER_IMAGE: &str = "bitcoin/bitcoin";
-const BITCOIND_VERSION: &str = "31.0";
+pub(crate) const BITCOIND_DOCKER_IMAGE: &str = "bitcoin/bitcoin";
+pub(crate) const BITCOIND_VERSION: &str = "31.0";
 const REGTEST_RPC_USER: &str = "rpcuser";
 const REGTEST_RPC_PASSWORD: &str = "rpcpassword";
 const REGTEST_RPC_PORT: u16 = 8332;
@@ -45,13 +45,16 @@ const GENERATE_BLOCKS_BATCH: u64 = 100;
 /// chowning it first.
 const BITCOIN_DATA: &str = "/home/bitcoin/.bitcoin";
 
+/// The node's wallet, which mines to itself and funds the tests.
+const WALLET: &str = "default";
+
 pub struct BitcoindFixture {
-    pub container: ContainerAsync<GenericImage>,
-    /// On the host, so a capture can copy the chain state out and a restore can
-    /// copy it in.
-    datadir: TempDir,
+    pub container: crate::fixtures::Container<GenericImage>,
+    /// A fresh node's data directory, on the host so a capture can copy the chain
+    /// state out. A restored node's lives in its container: writing blocks
+    /// through a host mount costs several times as much.
+    datadir: Option<TempDir>,
     pub rpc_url: String,
-    pub zmqpubrawblock_url: String,
     pub internal_rpc_url: String,
     pub internal_zmqpubrawblock_url: String,
     pub rpcuser: String,
@@ -67,6 +70,43 @@ struct RpcResponse<T> {
     // id: Value,
 }
 
+/// A restored node loads the snapshot's wallet and chain as it starts, rather
+/// than answering calls to load them afterwards. A fresh node has neither: it
+/// creates them.
+fn node_args(restored: bool) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "-regtest",
+        "-server",
+        "-logtimestamps",
+        "-nolisten",
+        "-addresstype=bech32",
+        "-txindex",
+        "-fallbackfee=0.00000253",
+        "-debug=mempool",
+        "-debug=rpc",
+        "-rpcbind=0.0.0.0",
+        "-rpcallowip=0.0.0.0/0",
+        "-rpcservertimeout=3600",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    args.push(format!("-rpcport={REGTEST_RPC_PORT}"));
+    args.push(format!("-rpcuser={REGTEST_RPC_USER}"));
+    args.push(format!("-rpcpassword={REGTEST_RPC_PASSWORD}"));
+    args.push(format!(
+        "-zmqpubrawblock=tcp://0.0.0.0:{ZMQPUBRAWBLOCK_RPC_PORT}"
+    ));
+    args.push(format!(
+        "-zmqpubrawtx=tcp://0.0.0.0:{ZMQPUBRAWBLOCK_RPC_PORT}"
+    ));
+    if restored {
+        args.push(format!("-wallet={WALLET}"));
+        args.push(format!("-datadir={}", state_snapshot::chain_datadir()));
+    }
+    args
+}
+
 impl BitcoindFixture {
     pub async fn new(fixture_id: &FixtureId) -> anyhow::Result<Self> {
         Self::start(fixture_id, None).await
@@ -76,75 +116,77 @@ impl BitcoindFixture {
         Self::start(fixture_id, Some(restore_from)).await
     }
 
+    #[instrument(level = "debug", name = "bitcoind.start", skip_all, fields(restored = restore_from.is_some()))]
     async fn start(fixture_id: &FixtureId, restore_from: Option<&Path>) -> anyhow::Result<Self> {
-        let datadir = tempfile::Builder::new().prefix("bitcoind-data").tempdir()?;
-        if let Some(source) = restore_from {
-            copy_dir(source, datadir.path())
-                .with_context(|| format!("restoring bitcoind state from {}", source.display()))?;
-        }
-        let uid = datadir.path().metadata()?.uid();
+        // The host directory the node starts from: the snapshot's, copied into the
+        // container, or a fresh one mounted into it.
+        let (datadir, host_dir) = match restore_from {
+            Some(source) => (None, source.to_path_buf()),
+            None => {
+                let datadir = tempfile::Builder::new().prefix("bitcoind-data").tempdir()?;
+                let path = datadir.path().to_path_buf();
+                (Some(datadir), path)
+            }
+        };
+        let uid = host_dir.metadata()?.uid();
 
         // Define bitcoind container with command line arguments
         let container_name = format!("bitcoind-{fixture_id}");
-        let container = GenericImage::new(BITCOIND_DOCKER_IMAGE, BITCOIND_VERSION)
+        // A restored node runs the image that carries the snapshot's chain, and
+        // starts bitcoind itself: the image's entrypoint chowns the whole data
+        // directory, which copies that chain out of the image's layers. A fresh
+        // node starts empty, on a directory the host keeps so it can archive it.
+        let image = match restore_from {
+            Some(_) => {
+                let (name, tag) = state_snapshot::chain_image().await?;
+                GenericImage::new(name, tag).with_entrypoint("bitcoind")
+            }
+            None => GenericImage::new(
+                BITCOIND_DOCKER_IMAGE.to_string(),
+                BITCOIND_VERSION.to_string(),
+            ),
+        };
+        let container = image
+            // Only the RPC port is published: the operators reach ZMQ over the
+            // cluster's network, and every published port is one Docker Desktop
+            // can fail to bind on the host.
             .with_exposed_port(ContainerPort::Tcp(REGTEST_RPC_PORT))
-            .with_exposed_port(ContainerPort::Tcp(ZMQPUBRAWBLOCK_RPC_PORT))
             .with_wait_for(WaitFor::Log(LogWaitStrategy::stdout(
                 "init message: Done loading",
             )))
             .with_network(fixture_id.to_network())
             .with_container_name(&container_name)
-            .with_log_consumer(TracingConsumer::new("bitcoind"))
-            .with_mount(Mount::bind_mount(
-                datadir.path().display().to_string(),
+            .with_log_consumer(TracingConsumer::new("bitcoind"));
+        let container = match datadir {
+            Some(_) => container.with_mount(Mount::bind_mount(
+                host_dir.display().to_string(),
                 BITCOIN_DATA,
-            ))
+            )),
+            None => container,
+        };
+        let container = container
             // The entrypoint gives its `bitcoin` user this uid before chowning the
             // data directory, so on Linux the host can still copy it out. Not `GID`:
             // macOS's group 20 is taken in the image, and the entrypoint exits on it.
             .with_env_var("UID", uid.to_string())
-            .with_cmd([
-                "-regtest",
-                "-server",
-                "-logtimestamps",
-                "-nolisten",
-                "-addresstype=bech32",
-                "-txindex",
-                "-fallbackfee=0.00000253",
-                "-debug=mempool",
-                "-debug=rpc",
-                format!("-rpcport={REGTEST_RPC_PORT}").as_str(),
-                format!("-rpcuser={REGTEST_RPC_USER}").as_str(),
-                format!("-rpcpassword={REGTEST_RPC_PASSWORD}").as_str(),
-                format!("-zmqpubrawblock=tcp://0.0.0.0:{ZMQPUBRAWBLOCK_RPC_PORT}").as_str(),
-                format!("-zmqpubrawtx=tcp://0.0.0.0:{ZMQPUBRAWBLOCK_RPC_PORT}").as_str(),
-                "-rpcbind=0.0.0.0",
-                "-rpcallowip=0.0.0.0/0",
-                "-rpcservertimeout=3600",
-            ])
+            .with_cmd(node_args(restore_from.is_some()))
             .start()
+            .instrument(debug_span!("bitcoind.container"))
             .await?;
 
         info!("Bitcoind container running");
         let host_rpc_port = crate::fixtures::published_port(&container, REGTEST_RPC_PORT).await?;
-        let host_zmq_port =
-            crate::fixtures::published_port(&container, ZMQPUBRAWBLOCK_RPC_PORT).await?;
         let rpc_url = format!("http://127.0.0.1:{host_rpc_port}/");
-        let zmqpubrawblock_url = format!("tcp://127.0.0.1:{host_zmq_port}");
 
         let internal_rpc_url = format!("{container_name}:{REGTEST_RPC_PORT}");
         let internal_zmqpubrawblock_url =
             format!("tcp://{container_name}:{ZMQPUBRAWBLOCK_RPC_PORT}");
-        info!(
-            "Got bitcoind exposed rpc and zmq ports: {} and. {}",
-            host_rpc_port, host_zmq_port
-        );
+        info!("Got bitcoind's exposed rpc port: {host_rpc_port}");
         // Create instance with RPC URL
         let instance = Self {
-            container,
+            container: crate::fixtures::Container::new(container),
             datadir,
             rpc_url,
-            zmqpubrawblock_url,
             internal_rpc_url,
             internal_zmqpubrawblock_url,
             rpcuser: REGTEST_RPC_USER.to_string(),
@@ -157,7 +199,10 @@ impl BitcoindFixture {
         info!("Created bitcoind container. Ensure wallet created.");
 
         // Wait for RPC to be available and create wallet using the RPC API
-        instance.ensure_wallet_available().await?;
+        instance
+            .ensure_wallet_available()
+            .instrument(debug_span!("bitcoind.wallet"))
+            .await?;
 
         info!("Bitcoin wallet is created.");
         Ok(instance)
@@ -170,7 +215,7 @@ impl BitcoindFixture {
             return Ok(());
         }
         // Present but not loaded: Core only auto-loads what its settings list.
-        let loaded: Result<Value> = self.rpc_call("loadwallet", &[json!("default")]).await;
+        let loaded: Result<Value> = self.rpc_call("loadwallet", &[json!(WALLET)]).await;
         if loaded.is_ok() && self.get_new_address().await.is_ok() {
             return Ok(());
         }
@@ -205,7 +250,7 @@ impl BitcoindFixture {
     }
 
     async fn create_wallet_rpc(&self) -> Result<()> {
-        let result: Result<Value> = self.rpc_call("createwallet", &[json!("default")]).await;
+        let result: Result<Value> = self.rpc_call("createwallet", &[json!(WALLET)]).await;
 
         match result {
             Ok(_) => {
@@ -365,6 +410,7 @@ impl BitcoindFixture {
         }
     }
 
+    #[instrument(level = "debug", name = "bitcoind.rpc", skip_all, fields(method = method))]
     async fn rpc_call<T: for<'de> Deserialize<'de>>(
         &self,
         method: &str,
@@ -438,10 +484,14 @@ impl BitcoindFixture {
             .stop()
             .await
             .context("stopping bitcoind before archiving its state")?;
+        let datadir = self
+            .datadir
+            .as_ref()
+            .context("only a fresh node's chain state is on the host to archive")?;
         if dest.exists() {
             std::fs::remove_dir_all(dest)?;
         }
-        copy_dir(self.datadir.path(), dest)
+        copy_dir(datadir.path(), dest)
             .with_context(|| format!("archiving bitcoind state to {}", dest.display()))
     }
 }

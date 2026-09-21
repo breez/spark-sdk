@@ -14,6 +14,7 @@ use testcontainers::core::wait::ExitWaitStrategy;
 use testcontainers::core::{Mount, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{GenericImage, ImageExt};
+use tracing::Instrument;
 
 use crate::fixtures::spark_so::{MIN_SIGNERS, NUM_OPERATORS};
 
@@ -259,6 +260,46 @@ pub async fn capture_database(network: &str, host: &str, name: &str) -> Result<(
     .with_context(|| format!("dumping {name}"))
 }
 
+/// What the snapshot holds, hashed when it is captured. The image tags are
+/// derived from it, so a snapshot restored from a clone or a CI artifact keeps
+/// the tags it was captured with: mtimes do not survive either.
+fn digest_path() -> PathBuf {
+    snapshot_dir().join("digest")
+}
+
+/// Hashes the dumps and the chain, for [`write_digest`] to record.
+fn content_digest() -> Result<String> {
+    let mut hasher = Sha256::new();
+    let mut files: Vec<PathBuf> = (0..NUM_OPERATORS).map(operator_dump).collect();
+    files.push(sspd_dump());
+    collect_files(&bitcoind_datadir(), &mut files)?;
+    files.sort();
+    for file in files {
+        hasher.update(file.to_string_lossy().as_bytes());
+        hasher.update(std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?);
+    }
+    Ok(hex::encode(&hasher.finalize()[..8]))
+}
+
+/// Records what the capture wrote, beside the dumps it wrote.
+pub fn write_digest() -> Result<()> {
+    let digest = content_digest()?;
+    std::fs::write(digest_path(), &digest)
+        .with_context(|| format!("failed to write {}", digest_path().display()))
+}
+
+/// Recorded by the capture. A snapshot that predates the record is hashed once,
+/// here, rather than sending every test process over its contents.
+fn digest() -> Result<String> {
+    if let Ok(digest) = std::fs::read_to_string(digest_path()) {
+        return Ok(digest.trim().to_string());
+    }
+    write_digest()?;
+    std::fs::read_to_string(digest_path())
+        .map(|digest| digest.trim().to_string())
+        .with_context(|| format!("failed to read {}", digest_path().display()))
+}
+
 /// The dump carries the schema, so this has to run before anything migrates the
 /// database: restoring over existing tables fails.
 pub async fn restore_database(network: &str, host: &str, name: &str) -> Result<()> {
@@ -282,6 +323,99 @@ pub async fn restore_database(network: &str, host: &str, name: &str) -> Result<(
     )
     .await
     .with_context(|| format!("restoring {name}"))
+}
+
+const CHAIN_IMAGE: &str = "spark-itest-chain";
+
+/// The bitcoind image that holds the snapshot's chain. Copying the data into
+/// every test's container costs more than starting one that has it.
+pub async fn chain_image() -> Result<(String, String)> {
+    static IMAGE: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
+    let tag = IMAGE
+        .get_or_try_init(|| async {
+            tokio::task::spawn_blocking(build_chain_image)
+                .instrument(tracing::debug_span!("snapshot.chain_image"))
+                .await?
+        })
+        .await?;
+    Ok((CHAIN_IMAGE.to_string(), tag.clone()))
+}
+
+/// The node's data stays out of the base image's volume, so it lives in the
+/// image's own layers rather than being copied into a volume at every start.
+pub fn chain_datadir() -> &'static str {
+    "/snapshot/bitcoin"
+}
+
+fn chain_dockerfile() -> String {
+    let datadir = chain_datadir();
+    format!(
+        "FROM {}:{}\n\
+         COPY --chown=bitcoin:bitcoin bitcoind/ {datadir}/\n\
+         ENV BITCOIN_DATA={datadir}\n",
+        crate::fixtures::bitcoind::BITCOIND_DOCKER_IMAGE,
+        crate::fixtures::bitcoind::BITCOIND_VERSION,
+    )
+}
+
+fn build_chain_image() -> Result<String> {
+    let dockerfile = chain_dockerfile();
+    let mut hasher = Sha256::new();
+    hasher.update(dockerfile.as_bytes());
+    hasher.update(digest()?.as_bytes());
+    let tag = hex::encode(&hasher.finalize()[..8]);
+    build_snapshot_image(CHAIN_IMAGE, &tag, &dockerfile)?;
+    Ok(tag)
+}
+
+fn collect_files(dir: &Path, into: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_files(&path, into)?;
+        } else {
+            into.push(path);
+        }
+    }
+    Ok(())
+}
+
+/// Builds `<image>:<tag>` from `dockerfile` with the snapshot as its context,
+/// unless that tag is already there.
+fn build_snapshot_image(image: &str, tag: &str, dockerfile: &str) -> Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let image = format!("{image}:{tag}");
+    let present = Command::new("docker")
+        .args(["image", "inspect", &image])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("running docker")?
+        .success();
+    if present {
+        return Ok(());
+    }
+
+    tracing::info!("Building {image} from the state snapshot");
+    let mut build = Command::new("docker")
+        .args(["build", "--quiet", "-t", &image, "-f", "-"])
+        .arg(snapshot_dir())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .context("running docker build")?;
+    build
+        .stdin
+        .take()
+        .context("docker build's stdin")?
+        .write_all(dockerfile.as_bytes())?;
+    let status = build.wait()?;
+    if !status.success() {
+        bail!("building {image} failed with {status}");
+    }
+    Ok(())
 }
 
 /// A container of its own rather than an exec in the database's container:
