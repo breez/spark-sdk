@@ -406,6 +406,16 @@ fn pool_denominations() -> Vec<u64> {
 async fn wait_until_answering(
     container: &ContainerAsync<GenericImage>,
 ) -> Result<(String, String)> {
+    match answering_urls(container).await {
+        Ok(urls) => Ok(urls),
+        Err(e) => Err(e.context(format!(
+            "sspd's last output:\n{}",
+            crate::fixtures::last_output(container).await
+        ))),
+    }
+}
+
+async fn answering_urls(container: &ContainerAsync<GenericImage>) -> Result<(String, String)> {
     let graphql_port = crate::fixtures::published_port(container, GRAPHQL_PORT).await?;
     let internal_port = crate::fixtures::published_port(container, INTERNAL_PORT).await?;
     let base_url = format!("http://127.0.0.1:{graphql_port}");
