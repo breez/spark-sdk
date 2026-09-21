@@ -41,7 +41,7 @@ use spark_itest::fixtures::setup::TestFixtures;
 use spark_itest::helpers::{
     FundedUtxo, deposit_with_amount, fund_p2tr_utxo, fund_p2tr_utxo_unmined,
     fund_p2tr_utxo_with_key, fund_p2wpkh_utxo, fund_p2wpkh_utxo_with_key, sign_cpfp_psbt_p2tr,
-    submit_package_with_csv_retry,
+    submit_package_with_csv_retry, wait_for_event,
 };
 use spark_wallet::is_ephemeral_anchor_output;
 
@@ -386,7 +386,9 @@ fn assert_fee_rate(
                     parent.weight().to_wu() + child.weight().to_wu(),
                 )
             }
-            UnilateralExitTxKind::FanOut | UnilateralExitTxKind::Sweep => {
+            UnilateralExitTxKind::FanOut
+            | UnilateralExitTxKind::Recovery
+            | UnilateralExitTxKind::Sweep => {
                 let tx = decode_tx(&entry.tx_hex)?;
                 let tx_in = tx_input_value(&tx, &map).expect("input values known");
                 let tx_out: u64 = tx.output.iter().map(|o| o.value.to_sat()).sum();
@@ -460,7 +462,8 @@ async fn assert_all_mined(
             UnilateralExitTxKind::Node | UnilateralExitTxKind::Refund => {
                 broadcast_and_mine(sdk, entry).await?;
             }
-            UnilateralExitTxKind::FanOut => {
+            // A recovery pays its own fee, so it goes out alone like the fan-out.
+            UnilateralExitTxKind::FanOut | UnilateralExitTxKind::Recovery => {
                 let tx = decode_tx(&entry.tx_hex)?;
                 sdk.fixtures.bitcoind.broadcast_transaction(&tx).await?;
                 sdk.fixtures.bitcoind.generate_blocks(1).await?;
@@ -921,7 +924,8 @@ async fn test_sweep_is_rbf_replaceable(#[case] backend: SignerBackend) -> Result
             UnilateralExitTxKind::Node | UnilateralExitTxKind::Refund => {
                 broadcast_and_mine(&sdk, entry).await?;
             }
-            UnilateralExitTxKind::FanOut => {
+            // A recovery pays its own fee, so it goes out alone like the fan-out.
+            UnilateralExitTxKind::FanOut | UnilateralExitTxKind::Recovery => {
                 let tx = decode_tx(&entry.tx_hex)?;
                 sdk.fixtures.bitcoind.broadcast_transaction(&tx).await?;
                 sdk.fixtures.bitcoind.generate_blocks(1).await?;
@@ -3177,7 +3181,9 @@ fn assert_unconfirmed_fee_rate(
                     parent.weight().to_wu() + child.weight().to_wu(),
                 )
             }
-            UnilateralExitTxKind::FanOut | UnilateralExitTxKind::Sweep => {
+            UnilateralExitTxKind::FanOut
+            | UnilateralExitTxKind::Recovery
+            | UnilateralExitTxKind::Sweep => {
                 let tx = decode_tx(&entry.tx_hex)?;
                 let tx_in = tx_input_value(&tx, &map).expect("input values known");
                 let tx_out: u64 = tx.output.iter().map(|o| o.value.to_sat()).sum();
@@ -3213,7 +3219,7 @@ async fn assert_resumed_all_mined(
                 }
                 broadcast_and_mine(sdk, entry).await?;
             }
-            UnilateralExitTxKind::FanOut => {
+            UnilateralExitTxKind::FanOut | UnilateralExitTxKind::Recovery => {
                 if matches!(entry.status, ExitTransactionStatus::Confirmed { .. }) {
                     continue;
                 }
@@ -3476,4 +3482,248 @@ async fn test_refund_confirmed_by_foreign_cpfp_is_adopted(
     assert_unconfirmed_fee_rate(&second, &[&cpfp], FEE_RATE_KW)?;
     assert_resumed_all_mined(&sdk, &second, &destination).await?;
     Ok(())
+}
+
+/// A renewal inserts a split node above the leaf and signs its self-fee twin at
+/// a 50-block timelock, with no refund spending it. If the owner's exit stalls
+/// past those 50 blocks, the operators' watchtower broadcasts that twin, taking
+/// the output every one of the leaf's pre-signed transactions hangs off. The
+/// only way back to the value is the spend the operators co-sign, which the
+/// exit now builds and broadcasts like any other transaction.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn test_exit_recovers_a_watchtower_exited_leaf(#[case] backend: SignerBackend) -> Result<()> {
+    let sdk = new_local_sdk(backend).await?;
+    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+    let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(CPFP_SATS)).await?;
+    let destination = cpfp.address.clone();
+
+    // Twice: the first split node takes the leaf's place at the top of the tree,
+    // where the watchtower leaves it alone for want of a parent to time it
+    // against. The second hangs off the first, which is the shape that strands.
+    let partner = build_local_sdk(Arc::clone(&sdk.fixtures), backend).await?;
+    transfer_until_renewed(&sdk, &partner).await?;
+    transfer_until_renewed(&sdk, &partner).await?;
+    let leaf_id = single_leaf_id(&sdk).await?;
+
+    // Start the exit and stop after its first transaction: that confirmation is
+    // what starts the watchtower's clock on the split node below it.
+    let (_, started, _) = quote_then_build_single(&sdk, CPFP_SATS, FEE_RATE).await?;
+    let first_node = started
+        .transactions
+        .iter()
+        .find(|t| matches!(t.kind, UnilateralExitTxKind::Node))
+        .expect("the exit drives at least one node");
+    if let Some(fan_out) = started
+        .transactions
+        .iter()
+        .find(|t| matches!(t.kind, UnilateralExitTxKind::FanOut))
+    {
+        let tx = decode_tx(&fan_out.tx_hex)?;
+        sdk.fixtures.bitcoind.broadcast_transaction(&tx).await?;
+        sdk.fixtures.bitcoind.generate_blocks(1).await?;
+    }
+    broadcast_and_mine(&sdk, first_node).await?;
+
+    // Past the 50 blocks the split node's twin waits out, and then some for the
+    // operators to see them.
+    sdk.fixtures.bitcoind.generate_blocks(60).await?;
+
+    let stranded = wait_for_stranded_leaf(&sdk, &destination).await?;
+    assert_eq!(stranded.leaf_id, leaf_id.to_string());
+    assert!(
+        stranded.value_sat > 0,
+        "the stranded output holds the leaf's value"
+    );
+
+    // The exit now carries a recovery for it, co-signed with the operators, and
+    // takes no funding: a recovery spends an output already on-chain and pays its
+    // own fee, so there is nothing for a CPFP input to do.
+    let recovering_quote = sdk
+        .sdk
+        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: CpfpFundingKind::P2tr,
+            destination: destination.to_string(),
+            selection: ExitLeafSelection::Auto,
+        })
+        .await?;
+    assert_eq!(
+        recovering_quote.single_utxo_funding_sat, 0,
+        "a stranded leaf drives nothing, so it asks for no funding"
+    );
+    assert_eq!(recovering_quote.cpfp_fee_sat, 0);
+    assert_eq!(recovering_quote.fanout_fee_sat, 0);
+    assert_eq!(
+        recovering_quote.recovery_fee_sat, recovering_quote.total_fee_sat,
+        "the recovery's own fee is the whole cost"
+    );
+    assert!(recovering_quote.recovery_fee_sat > 0);
+
+    let recovering = sdk
+        .sdk
+        .unilateral_exit(
+            UnilateralExitRequest {
+                prepared: recovering_quote,
+                funding_inputs: vec![],
+            },
+            signer_for(&[7u8; 32])?,
+        )
+        .await?;
+    assert!(
+        recovering.funding_inputs.is_empty(),
+        "nothing was funded, so nothing is spent"
+    );
+    assert_eq!(recovering.recovery_fee_sat, recovering.total_fee_sat);
+    let recovery = recovering
+        .transactions
+        .iter()
+        .find(|t| matches!(t.kind, UnilateralExitTxKind::Recovery))
+        .expect("a stranded leaf is recovered rather than written off");
+    assert!(
+        recovery.cpfp_tx_hex.is_none(),
+        "a recovery pays its own fee, so it carries no child"
+    );
+
+    let tx = decode_tx(&recovery.tx_hex)?;
+    assert_eq!(
+        tx.input.len(),
+        1,
+        "a recovery spends the one stranded output"
+    );
+    assert_eq!(
+        tx.input[0].previous_output.txid.to_string(),
+        stranded.txid,
+        "and it is the output the scan reported"
+    );
+    sdk.fixtures.bitcoind.broadcast_transaction(&tx).await?;
+    sdk.fixtures.bitcoind.generate_blocks(1).await?;
+
+    let mined = sdk
+        .fixtures
+        .bitcoind
+        .get_transaction(&tx.compute_txid())
+        .await?;
+    assert_eq!(
+        mined.output[0].script_pubkey,
+        destination.script_pubkey(),
+        "the recovered value reaches the exit's destination"
+    );
+    Ok(())
+}
+
+/// Passes the balance back and forth until the wallet renews the leaf of its own
+/// accord, which is what inserts the split node this test needs. Each transfer
+/// takes one interval off the refund timelock; the wallet renews once that
+/// reaches its threshold.
+///
+/// Loops until the renewal shows up rather than counting transfers, and reports
+/// where the timelock got to if it never does, so a wrong assumption about the
+/// interval says so instead of failing later as an unexplained absence.
+async fn transfer_until_renewed(sdk: &LocalSdk, partner: &LocalSdk) -> Result<()> {
+    let before = chain_len(sdk).await?;
+    for hop in 0..MAX_TRANSFERS_PER_RENEWAL {
+        let (from, to) = if hop % 2 == 0 {
+            (sdk, partner)
+        } else {
+            (partner, sdk)
+        };
+        let address = to.spark_wallet.get_spark_address()?;
+        let mut events = to.spark_wallet.subscribe_events();
+        let balance = from.spark_wallet.get_balance().await?;
+        from.spark_wallet.transfer(balance, &address, None).await?;
+        wait_for_event(&mut events, 30, "TransferClaimed", |event| match &event {
+            spark_wallet::WalletEvent::TransferClaimed(_) => Ok(Some(event)),
+            _ => Ok(None),
+        })
+        .await?;
+
+        // An even number of hops leaves the leaf back where it started, which is
+        // where the rest of the test expects it.
+        if hop % 2 == 1 && chain_len(sdk).await? > before {
+            return Ok(());
+        }
+    }
+
+    // The loop's own checks are cheap and can lag: a renewed leaf's new ancestor
+    // is fetched in the background, so the last word before calling it a failure
+    // is a patient look rather than another transfer.
+    if renewed(sdk, before).await? {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "no renewal after {MAX_TRANSFERS_PER_RENEWAL} transfers; the leaf's refund timelock is {:?}",
+        refund_sequence(sdk).await?
+    )
+}
+
+/// Whether the leaf's chain has grown since `before`, waiting out the background
+/// worker that fetches a renewed leaf's new ancestor.
+async fn renewed(sdk: &LocalSdk, before: usize) -> Result<bool> {
+    for _ in 0..20 {
+        if chain_len(sdk).await? > before {
+            return Ok(true);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    Ok(false)
+}
+
+/// The relative timelock on the wallet's one leaf's refund, as the exported exit
+/// state carries it. Only read to explain a renewal that never came.
+async fn refund_sequence(sdk: &LocalSdk) -> Result<Option<u64>> {
+    let exported = sdk.sdk.export_unilateral_exit_state().await?;
+    let envelope: serde_json::Value = serde_json::from_str(&exported.exit_state)?;
+    Ok(envelope["pedigrees"][0]["leaf"]["refund_tx"]["input"][0]["sequence"].as_u64())
+}
+
+/// How many nodes the wallet's one leaf hangs off, itself included. A renewal
+/// inserts one, so this growing is how the test sees one happen.
+async fn chain_len(sdk: &LocalSdk) -> Result<usize> {
+    let exported = sdk.sdk.export_unilateral_exit_state().await?;
+    let chains = exit_state_chains(&exported.exit_state)?;
+    match chains.values().next() {
+        Some(chain) if chains.len() == 1 => Ok(chain.len()),
+        other => anyhow::bail!("expected one exported chain, got {:?}", other.map(Vec::len)),
+    }
+}
+
+/// The wallet's one leaf. Every test here deposits once and moves the whole
+/// balance, so a second would mean something split it.
+async fn single_leaf_id(sdk: &LocalSdk) -> Result<spark_wallet::TreeNodeId> {
+    let leaves = sdk.spark_wallet.list_leaves().await?;
+    match leaves.available.as_slice() {
+        [leaf] => Ok(leaf.id.clone()),
+        other => anyhow::bail!("expected one available leaf, got {}", other.len()),
+    }
+}
+
+/// Enough transfers to walk a fresh leaf's refund timelock down to the wallet's
+/// renewal threshold, with room to spare. Only a bound: the loop stops as soon
+/// as the renewal lands.
+const MAX_TRANSFERS_PER_RENEWAL: usize = 60;
+
+/// Polls until the chain scan reports the leaf's value stranded, which takes as
+/// long as the operators need to see the blocks that let their watchtower act.
+async fn wait_for_stranded_leaf(
+    sdk: &LocalSdk,
+    destination: &Address,
+) -> Result<breez_sdk_spark::StrandedLeafOutput> {
+    for _ in 0..30 {
+        let quote = sdk
+            .sdk
+            .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+                fee_rate_sat_per_vbyte: FEE_RATE,
+                funding_kind: CpfpFundingKind::P2tr,
+                destination: destination.to_string(),
+                selection: ExitLeafSelection::Auto,
+            })
+            .await?;
+        if let Some(stranded) = quote.exit_chain_state.stranded_leaves.first() {
+            return Ok(stranded.clone());
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        sdk.fixtures.bitcoind.generate_blocks(1).await?;
+    }
+    anyhow::bail!("the watchtower never took the split node on-chain")
 }
