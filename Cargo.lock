@@ -7549,6 +7549,7 @@ dependencies = [
  "bytes",
  "futures",
  "hex",
+ "libc",
  "platform-utils 0.1.0",
  "prost",
  "rand 0.8.6",

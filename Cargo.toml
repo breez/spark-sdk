@@ -200,6 +200,7 @@ http-body-util = "0.1.3"
 js-sys = "0.3.77"
 k256 = { version = "0.13.0", features = ["arithmetic"] }
 p256 = { version = "0.13.2", features = ["ecdsa"] }
+libc = "0.2"
 lightning = "0.1.3"
 lightning-invoice = "0.33.1"
 lnurl-models = { path = "crates/breez-sdk/lnurl-models" }
