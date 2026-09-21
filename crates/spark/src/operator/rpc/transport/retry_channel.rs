@@ -11,7 +11,7 @@ use std::{
 };
 use tonic::{Status, body::BoxBody};
 use tower_service::Service;
-use tracing::{debug, trace};
+use tracing::{Instrument, debug, debug_span, trace};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RetryChannelError {
@@ -71,8 +71,9 @@ where
 
         // Prepare the request body first
         let (head, body) = req.into_parts();
+        let span = debug_span!("grpc", path = head.uri.path());
 
-        Box::pin(async move {
+        let call = async move {
             let data = body.collect().await?.to_bytes();
             let full_body =
                 http_body_util::Full::new(data).map_err(|_| Status::internal("infallible error"));
@@ -98,6 +99,7 @@ where
             poll_fn(|cx| inner_clone.poll_ready(cx)).await?;
             trace!("RetryChannel: making retry call");
             Ok(inner_clone.call(retry_req).await?)
-        })
+        };
+        Box::pin(call.instrument(span))
     }
 }

@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::warn;
+use tracing::{Instrument, debug_span, warn};
 
 use platform_utils::tokio;
 use platform_utils::{ContentType, HttpClient, add_content_type_header};
@@ -49,6 +49,7 @@ where
 
     let response = client
         .post(url.to_string(), Some(all_headers), Some(body_str))
+        .instrument(debug_span!("graphql", op = body.operation_name))
         .await?;
 
     let status_code = response.status;
