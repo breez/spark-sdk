@@ -76,6 +76,7 @@ fn route_filter_accepts_address_details_with_an_amount() {
 // BigInt.
 const OUTPUT_ONLY: &[&str] = &[
     "SdkEvent",
+    "ClaimDepositOutcome",
     "PublishSignedLnurlPayResponse",
     "PublishSignedTransferPackageResponse",
 ];
