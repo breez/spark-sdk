@@ -148,6 +148,11 @@ class BreezSdkSpark {
           // context to show the user.
           final _ = payment;
           break;
+        case SdkEvent_PaymentMetadataUpdated(:final payment):
+          // Details of a payment already reported changed, such as the
+          // conversion info of a cross-chain receive.
+          final _ = payment;
+          break;
         case SdkEvent_AutoOptimization(:final optimizationEvent):
           // Background optimizer progress: started, round completed, or a
           // terminal outcome. Manual optimizeLeaves calls do not emit these.

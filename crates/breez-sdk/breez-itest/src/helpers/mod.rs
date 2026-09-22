@@ -247,6 +247,8 @@ pub enum EventResult {
     PaymentPending(Box<Payment>),
     /// Payment failed with details
     PaymentFailed(Box<Payment>),
+    /// Metadata of an already reported payment changed
+    PaymentMetadataUpdated(Box<Payment>),
     /// Synced event occurred
     Synced,
     /// Lightning address changed
@@ -555,6 +557,37 @@ pub async fn wait_for_payment_pending_event(
     .await
     .and_then(|result| match result {
         EventResult::PaymentPending(payment) => Ok(*payment),
+        _ => Err(anyhow::anyhow!("Unexpected event result")),
+    })
+}
+
+/// Wait for a PaymentMetadataUpdated event for the given payment id.
+pub async fn wait_for_payment_metadata_updated_event(
+    event_rx: &mut mpsc::Receiver<SdkEvent>,
+    payment_id: &str,
+    timeout_secs: u64,
+) -> Result<Payment> {
+    wait_for_event(
+        event_rx,
+        timeout_secs,
+        "PaymentMetadataUpdated",
+        |event| match event {
+            SdkEvent::PaymentMetadataUpdated { payment } if payment.id == payment_id => {
+                info!(
+                    "Received PaymentMetadataUpdated event: {} sats, type: {:?}",
+                    payment.amount, payment.payment_type
+                );
+                Ok(Some(EventResult::PaymentMetadataUpdated(Box::new(payment))))
+            }
+            other => {
+                info!("Ignored SDK event: {:?}", other);
+                Ok(None)
+            }
+        },
+    )
+    .await
+    .and_then(|result| match result {
+        EventResult::PaymentMetadataUpdated(payment) => Ok(*payment),
         _ => Err(anyhow::anyhow!("Unexpected event result")),
     })
 }

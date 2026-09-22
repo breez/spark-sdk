@@ -15,6 +15,7 @@ use crate::token_conversion::{
     ConversionAmount, ConversionError, ConversionOptions, ConversionPurpose, ConversionType,
     FetchConversionLimitsRequest,
 };
+use crate::utils::payments::emit_payment_metadata_updated;
 
 use super::{StableBalance, per_receive_transfer_id};
 
@@ -245,6 +246,12 @@ impl StableBalance {
                 },
             )
             .await?;
+        emit_payment_metadata_updated(
+            &self.core.storage,
+            &self.event_emitter,
+            &response.received_payment_id,
+        )
+        .await;
 
         Ok(true)
     }
@@ -338,6 +345,12 @@ impl StableBalance {
                 },
             )
             .await?;
+        emit_payment_metadata_updated(
+            &self.core.storage,
+            &self.event_emitter,
+            &response.received_payment_id,
+        )
+        .await;
 
         info!(
             "Deactivation conversion completed: converted {token_balance} tokens (sent={}, received={})",

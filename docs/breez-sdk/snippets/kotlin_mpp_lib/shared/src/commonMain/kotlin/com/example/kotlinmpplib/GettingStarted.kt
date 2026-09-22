@@ -93,6 +93,11 @@ class GettingStarted {
                     // context to show the user.
                     val failedPayment = e.payment
                 }
+                is SdkEvent.PaymentMetadataUpdated -> {
+                    // Details of a payment already reported changed, such as the
+                    // conversion info of a cross-chain receive.
+                    val updatedPayment = e.payment
+                }
                 is SdkEvent.AutoOptimization -> {
                     // Background optimizer progress: started, round completed, or a
                     // terminal outcome. Manual optimizeLeaves calls do not emit these.
