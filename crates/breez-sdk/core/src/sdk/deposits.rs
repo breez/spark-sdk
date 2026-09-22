@@ -18,10 +18,11 @@ use spark_wallet::{
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
-    ClaimDepositQuote, ClaimDepositRequest, ClaimDepositResponse, DepositInfo, Fee,
-    FetchClaimDepositQuoteRequest, FetchClaimDepositQuoteResponse, InstantClaimStatus,
-    ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, MaxFee, Network,
-    RefundDepositRequest, RefundDepositResponse, RefundState,
+    ClaimDeferredReason, ClaimDepositOutcome, ClaimDepositQuote, ClaimDepositRequest,
+    ClaimDepositResponse, DepositInfo, Fee, FetchClaimDepositQuoteRequest,
+    FetchClaimDepositQuoteResponse, InstantClaimStatus, ListUnclaimedDepositsRequest,
+    ListUnclaimedDepositsResponse, MaxFee, Network, RefundDepositRequest, RefundDepositResponse,
+    RefundState,
     chain::Outspend,
     error::SdkError,
     models::Payment,
@@ -60,9 +61,8 @@ impl BreezSdk {
                 .fetch_detailed_utxo(&request.txid, request.vout)
                 .await?;
 
-        let max_fee = request
-            .max_fee
-            .or(self.config.max_deposit_claim_fee.clone());
+        let ceiling =
+            resolve_claim_ceiling(request.max_fee, self.config.max_deposit_claim_fee.clone());
 
         // Held for the whole attempt, so a sync pass or a second call on the same
         // outpoint cannot run one alongside it. Keyed on the parsed txid rather
@@ -80,6 +80,8 @@ impl BreezSdk {
             });
         };
 
+        let max_fee = ceiling.effective;
+
         // An unreadable depth counts as mature.
         let confirmations = self
             .deposit_confirmations(&request.txid)
@@ -91,69 +93,34 @@ impl BreezSdk {
                 );
                 u32::MAX
             });
-        // Immature deposits take the early path, bounded by the same ceiling.
-        if !self
-            .is_deposit_mature_at(&detailed_utxo, confirmations)
-            .await?
+        let stored = self.stored_deposit(&txid, detailed_utxo.vout).await?;
+        let is_mature = self.is_deposit_mature_at(&detailed_utxo, confirmations, stored.as_ref());
+        // A claim already has this deposit and an early one cannot be made twice.
+        // Decided before the ceiling is recorded, so this leaves the deposit as it
+        // was, the same as losing the claim guard does.
+        if !is_mature
+            && claim_already_made(
+                stored
+                    .as_ref()
+                    .and_then(|d| d.instant_claim_status.as_ref()),
+            )
         {
+            return Err(SdkError::DepositClaimInProgress {
+                tx: txid,
+                vout: detailed_utxo.vout,
+            });
+        }
+        let row_exists = self
+            .store_max_claim_fee(&detailed_utxo, ceiling.stored, is_mature, stored.is_some())
+            .await?;
+        // Immature deposits take the early path, bounded by the same ceiling.
+        if !is_mature {
             return self
-                .instant_claim_deposit(&detailed_utxo, max_fee, confirmations)
+                .instant_claim_deposit(&detailed_utxo, max_fee, confirmations, row_exists)
                 .await;
         }
 
-        match self.claim_utxo(&detailed_utxo, max_fee).await {
-            Ok(transfer_id) => {
-                let transfer = self.lookup_claim_transfer_with_retry(transfer_id).await?;
-                let payment: Payment = transfer.try_into()?;
-                // Insert the payment before returning so callers that
-                // immediately list payments see the claim.
-                let should_emit_event = self.storage.apply_payment_update(payment.clone()).await?;
-                self.storage
-                    .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
-                    .await?;
-                self.event_emitter
-                    .emit_runtime_event(RuntimeEvent::DepositClaimed {
-                        payment: Box::new(payment.clone()),
-                        should_emit_event,
-                    })
-                    .await;
-                Ok(ClaimDepositResponse {
-                    payment: Some(payment),
-                })
-            }
-            // An earlier claim took it, so the deposit is settled rather than
-            // failed and records no claim error. The caller still gets the error:
-            // the claim they asked for did not happen here.
-            Err(e) if is_already_claimed_error(&e.to_string()) => {
-                info!(
-                    "Deposit {}:{} was already claimed, marking it",
-                    detailed_utxo.txid, detailed_utxo.vout
-                );
-                self.storage
-                    .update_deposit(
-                        detailed_utxo.txid.to_string(),
-                        detailed_utxo.vout,
-                        UpdateDepositPayload::InstantClaim {
-                            status: InstantClaimStatus::Claimed,
-                        },
-                    )
-                    .await?;
-                Err(e)
-            }
-            Err(e) => {
-                error!("Failed to claim deposit: {e:?}");
-                self.storage
-                    .update_deposit(
-                        detailed_utxo.txid.to_string(),
-                        detailed_utxo.vout,
-                        UpdateDepositPayload::ClaimError {
-                            error: e.clone().into(),
-                        },
-                    )
-                    .await?;
-                Err(e)
-            }
-        }
+        self.claim_mature_deposit(&detailed_utxo, max_fee).await
     }
 
     /// Quotes both ways of claiming a deposit, so the caller can offer a choice
@@ -178,9 +145,10 @@ impl BreezSdk {
         );
         let confirmations = confirmations?;
         let mature = mature?;
-        let is_mature = self
-            .is_deposit_mature_at(&detailed_utxo, confirmations)
+        let stored = self
+            .stored_deposit(&detailed_utxo.txid.to_string(), detailed_utxo.vout)
             .await?;
+        let is_mature = self.is_deposit_mature_at(&detailed_utxo, confirmations, stored.as_ref());
         // Withhold the early claim unless it credits sooner than maturity. The
         // depth it becomes claimable at is reported, not filtered on.
         let instant = instant.filter(|quote| {
@@ -312,6 +280,121 @@ impl BreezSdk {
 }
 
 impl BreezSdk {
+    /// Claims a deposit that has matured. The claim settles synchronously, so the
+    /// payment is returned with the response.
+    async fn claim_mature_deposit(
+        &self,
+        detailed_utxo: &DetailedUtxo,
+        max_fee: Option<MaxFee>,
+    ) -> Result<ClaimDepositResponse, SdkError> {
+        match self.claim_utxo(detailed_utxo, max_fee).await {
+            Ok(transfer_id) => {
+                let transfer = self.lookup_claim_transfer_with_retry(transfer_id).await?;
+                let payment: Payment = transfer.try_into()?;
+                // Insert the payment before returning so callers that
+                // immediately list payments see the claim.
+                let should_emit_event = self.storage.apply_payment_update(payment.clone()).await?;
+                self.storage
+                    .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
+                    .await?;
+                self.event_emitter
+                    .emit_runtime_event(RuntimeEvent::DepositClaimed {
+                        payment: Box::new(payment.clone()),
+                        should_emit_event,
+                    })
+                    .await;
+                Ok(ClaimDepositResponse {
+                    payment: Some(payment),
+                    outcome: ClaimDepositOutcome::Settled,
+                })
+            }
+            // An earlier claim took it, so the deposit is settled rather than
+            // failed and records no claim error. The caller still gets the error:
+            // the claim they asked for did not happen here.
+            Err(e) if is_already_claimed_error(&e.to_string()) => {
+                info!(
+                    "Deposit {}:{} was already claimed, marking it",
+                    detailed_utxo.txid, detailed_utxo.vout
+                );
+                self.storage
+                    .update_deposit(
+                        detailed_utxo.txid.to_string(),
+                        detailed_utxo.vout,
+                        UpdateDepositPayload::InstantClaim {
+                            status: InstantClaimStatus::Claimed,
+                        },
+                    )
+                    .await?;
+                Err(e)
+            }
+            Err(e) => {
+                error!("Failed to claim deposit: {e:?}");
+                self.storage
+                    .update_deposit(
+                        detailed_utxo.txid.to_string(),
+                        detailed_utxo.vout,
+                        UpdateDepositPayload::ClaimError {
+                            error: e.clone().into(),
+                        },
+                    )
+                    .await?;
+                Err(e)
+            }
+        }
+    }
+
+    /// Records the ceiling standing for a deposit. It is written before the claim is
+    /// attempted, so it stands whatever that attempt does, and it governs every
+    /// later automatic attempt, the one at maturity included.
+    ///
+    /// `update_deposit` is a no-op on a deposit with no row, which a manual claim
+    /// can reach before the syncer has inserted one, so a ceiling to store inserts
+    /// the row first.
+    ///
+    /// Returns whether the deposit has a row once this is done.
+    async fn store_max_claim_fee(
+        &self,
+        detailed_utxo: &DetailedUtxo,
+        max_fee: Option<MaxFee>,
+        is_mature: bool,
+        row_exists: bool,
+    ) -> Result<bool, SdkError> {
+        let txid = detailed_utxo.txid.to_string();
+        if let Some(max_fee) = &max_fee {
+            info!(
+                "Recording max claim fee {max_fee:?} on deposit {txid}:{}",
+                detailed_utxo.vout
+            );
+        } else {
+            // Every claim that names no ceiling clears, so this is the ordinary
+            // path and says nothing on its own.
+            debug!(
+                "Clearing any max claim fee on deposit {txid}:{}, \
+                 which returns it to the configured one",
+                detailed_utxo.vout
+            );
+        }
+        let inserted = max_fee.is_some() && !row_exists;
+        if inserted {
+            self.storage
+                .add_deposit(
+                    txid.clone(),
+                    detailed_utxo.vout,
+                    detailed_utxo.value,
+                    is_mature,
+                )
+                .await?;
+        }
+        self.storage
+            .update_deposit(
+                txid,
+                detailed_utxo.vout,
+                UpdateDepositPayload::MaxClaimFee { max_fee },
+            )
+            .await?;
+        Ok(row_exists || inserted)
+    }
+
     /// Looks up the transfer produced by a static deposit claim, retrying
     /// while the Spark operators have not yet indexed it. The SSP commits
     /// the claim synchronously, but there is a brief window before the
@@ -560,18 +643,13 @@ impl BreezSdk {
     /// the stored flag is only as fresh as the last deposit sync, which need never
     /// have run, and trusting it alone pays a spread on a deposit that was already
     /// claimable at maturity.
-    async fn is_deposit_mature_at(
+    fn is_deposit_mature_at(
         &self,
         detailed_utxo: &DetailedUtxo,
         confirmations: u32,
-    ) -> Result<bool, SdkError> {
-        let stored_mature = self
-            .storage
-            .list_deposits()
-            .await?
-            .into_iter()
-            .find(|d| d.txid == detailed_utxo.txid.to_string() && d.vout == detailed_utxo.vout)
-            .is_some_and(|d| d.is_mature);
+        stored: Option<&DepositInfo>,
+    ) -> bool {
+        let stored_mature = stored.is_some_and(|d| d.is_mature);
         let required = maturity_confirmations(self.config.network);
         let is_mature = stored_mature || confirmations >= required;
         info!(
@@ -591,7 +669,22 @@ impl BreezSdk {
             confirmations,
             required
         );
-        Ok(is_mature)
+        is_mature
+    }
+
+    /// The stored row for one deposit, or `None` when the syncer has not recorded
+    /// it yet.
+    pub(super) async fn stored_deposit(
+        &self,
+        txid: &str,
+        vout: u32,
+    ) -> Result<Option<DepositInfo>, SdkError> {
+        Ok(self
+            .storage
+            .list_deposits()
+            .await?
+            .into_iter()
+            .find(|d| d.txid == txid && d.vout == vout))
     }
 
     /// Claims a specific not-yet-mature deposit instantly, on demand.
@@ -601,21 +694,8 @@ impl BreezSdk {
         detailed_utxo: &DetailedUtxo,
         max_fee: Option<MaxFee>,
         confirmations: u32,
+        row_exists: bool,
     ) -> Result<ClaimDepositResponse, SdkError> {
-        let stored = self
-            .storage
-            .list_deposits()
-            .await?
-            .into_iter()
-            .find(|d| d.txid == detailed_utxo.txid.to_string() && d.vout == detailed_utxo.vout);
-        let row_exists = stored.is_some();
-        let claim_already_made = stored.is_some_and(|d| {
-            matches!(
-                d.instant_claim_status,
-                Some(InstantClaimStatus::Submitted { .. } | InstantClaimStatus::Claimed)
-            )
-        });
-
         let resolved_max_fee = self.resolve_max_claim_fee(max_fee).await?;
         let outcome = match self
             .instant_claim_utxo(detailed_utxo, resolved_max_fee, confirmations)
@@ -644,35 +724,26 @@ impl BreezSdk {
                 )
                 .await?;
         }
-        // A deposit already claimed keeps that status. Replacing it with a
-        // decline would let the cascade submit a second claim, and let
-        // reconciliation drop the record while the first claim is still settling.
-        let status = outcome.status(confirmations);
-        let downgrades_existing_claim =
-            claim_already_made && matches!(status, InstantClaimStatus::Declined { .. });
-        if !downgrades_existing_claim {
-            self.storage
-                .update_deposit(
-                    detailed_utxo.txid.to_string(),
-                    detailed_utxo.vout,
-                    UpdateDepositPayload::InstantClaim { status },
-                )
-                .await?;
-        }
+        self.storage
+            .update_deposit(
+                detailed_utxo.txid.to_string(),
+                detailed_utxo.vout,
+                UpdateDepositPayload::InstantClaim {
+                    status: outcome.status(confirmations),
+                },
+            )
+            .await?;
 
-        match outcome {
-            InstantClaimOutcome::Submitted(claim_id) => {
-                info!(
-                    "Instant claimed utxo {}:{} with claim_id: {claim_id}",
-                    detailed_utxo.txid, detailed_utxo.vout
-                );
-                Ok(ClaimDepositResponse { payment: None })
-            }
+        match &outcome {
+            InstantClaimOutcome::Submitted(claim_id) => info!(
+                "Instant claimed utxo {}:{} with claim_id: {claim_id}",
+                detailed_utxo.txid, detailed_utxo.vout
+            ),
             InstantClaimOutcome::Declined { error, .. } => {
-                error!("Instant claim declined: {error:?}");
-                Err(error)
+                info!("Instant claim declined: {error}");
             }
         }
+        Ok(instant_claim_response(&outcome))
     }
 
     /// Attempts an instant static deposit claim for `detailed_utxo`, ahead of
@@ -725,23 +796,34 @@ impl BreezSdk {
                     // confirmations, or the operators disagree on how deep it is.
                     Err(e) if is_pending_confirmation_error(&e.to_string()) => Err(e.into()),
                     // The provider rejected the submission or could not be reached.
-                    Err(e) => Ok(InstantClaimOutcome::Declined {
-                        error: e.into(),
-                        max_fee_sats: None,
-                    }),
+                    Err(e) => {
+                        let error: SdkError = e.into();
+                        Ok(InstantClaimOutcome::Declined {
+                            reason: ClaimDeferredReason::ProviderDeclined {
+                                message: error.to_string(),
+                            },
+                            error,
+                            max_fee_sats: None,
+                        })
+                    }
                 }
             }
             InstantClaimPlan::NoPlan => Ok(InstantClaimOutcome::Declined {
                 error: SdkError::Generic("No instant claim plan available".to_string()),
                 max_fee_sats: None,
+                reason: ClaimDeferredReason::NoEarlyClaimAvailable,
             }),
+            // A quote crediting more than the deposit is the provider's, not a
+            // depth the deposit will reach.
             InstantClaimPlan::CreditAboveDeposit { credit_sats } => {
+                let message = format!(
+                    "Instant quote credits {credit_sats} sats for {}:{}, which is worth {} sats",
+                    detailed_utxo.txid, detailed_utxo.vout, detailed_utxo.value
+                );
                 Ok(InstantClaimOutcome::Declined {
-                    error: SdkError::Generic(format!(
-                        "Instant quote credits {credit_sats} sats for {}:{}, which is worth {} sats",
-                        detailed_utxo.txid, detailed_utxo.vout, detailed_utxo.value
-                    )),
+                    error: SdkError::Generic(message.clone()),
                     max_fee_sats: None,
+                    reason: ClaimDeferredReason::ProviderDeclined { message },
                 })
             }
             InstantClaimPlan::FeeExceeded {
@@ -756,6 +838,10 @@ impl BreezSdk {
                     required_fee_rate_sat_per_vbyte: quoted_rate,
                 },
                 max_fee_sats: Some(max_fee_sats),
+                reason: ClaimDeferredReason::MaxFeeExceeded {
+                    required_fee_sats: quoted_sats,
+                    max_fee_sats,
+                },
             }),
         }
     }
@@ -771,6 +857,7 @@ pub(super) enum InstantClaimOutcome {
     Declined {
         error: SdkError,
         max_fee_sats: Option<u64>,
+        reason: ClaimDeferredReason,
     },
 }
 
@@ -814,6 +901,73 @@ fn is_pending_confirmation_error(message: &str) -> bool {
     PENDING_CONFIRMATION_MARKERS
         .iter()
         .any(|marker| message.contains(marker))
+}
+
+/// What an explicit claim runs under, and what it leaves standing on the deposit.
+pub(super) struct ClaimCeiling {
+    /// The ceiling to record on the deposit. `None` clears any standing one.
+    pub stored: Option<MaxFee>,
+    /// The ceiling this claim is held to.
+    pub effective: Option<MaxFee>,
+}
+
+/// Resolves an explicit claim's ceiling. A requested ceiling becomes the deposit's
+/// standing one, so later automatic attempts are held to what the caller chose here.
+/// Requesting none claims under the configured ceiling and clears any standing one.
+pub(super) fn resolve_claim_ceiling(
+    requested: Option<MaxFee>,
+    config_default: Option<MaxFee>,
+) -> ClaimCeiling {
+    ClaimCeiling {
+        stored: requested.clone(),
+        effective: requested.or(config_default),
+    }
+}
+
+/// Resolves an automatic attempt's ceiling: the deposit's standing ceiling, else
+/// the configured one. A standing ceiling wins in both directions, so one set below
+/// the configured ceiling holds that deposit back rather than being ignored.
+pub(super) fn resolve_auto_claim_ceiling(
+    stored: Option<&MaxFee>,
+    config_default: Option<&MaxFee>,
+) -> Option<MaxFee> {
+    stored.or(config_default).cloned()
+}
+
+/// The response for a resolved early claim. Nothing is claimed synchronously
+/// ahead of maturity, so neither outcome carries a payment: a submitted claim
+/// settles asynchronously, and a declined one moved nothing at all.
+pub(super) fn instant_claim_response(outcome: &InstantClaimOutcome) -> ClaimDepositResponse {
+    let outcome = match outcome {
+        InstantClaimOutcome::Submitted(_) => ClaimDepositOutcome::Submitted,
+        InstantClaimOutcome::Declined { reason, .. } => ClaimDepositOutcome::Deferred {
+            reason: reason.clone(),
+        },
+    };
+    ClaimDepositResponse {
+        payment: None,
+        outcome,
+    }
+}
+
+/// Whether a claim has already taken this deposit, still settling or credited.
+/// The chain and the operators go on reporting the UTXO until the provider
+/// spends it, so a deposit that is already spoken for still appears unclaimed.
+pub(super) fn claim_already_made(status: Option<&InstantClaimStatus>) -> bool {
+    matches!(
+        status,
+        Some(InstantClaimStatus::Submitted { .. } | InstantClaimStatus::Claimed)
+    )
+}
+
+/// Whether a deposit's standing ceiling has to be resolved for that deposit alone.
+/// Only one that differs from the configured ceiling does: an equal one resolves to
+/// the same sats as the ceiling already resolved once for the pass.
+pub(super) fn needs_own_ceiling_resolution(
+    stored: Option<&MaxFee>,
+    config_default: Option<&MaxFee>,
+) -> bool {
+    stored.is_some() && stored != config_default
 }
 
 /// Prices one way of claiming a deposit, from the credit it would leave.
@@ -1024,10 +1178,179 @@ mod tests {
     };
 
     use super::{
-        ClaimGuards, InstantClaimPlan, PendingRefund, SdkError, TxOutput, check_replacement_fee,
-        claim_deposit_quote, is_already_claimed_error, is_pending_confirmation_error,
-        refund_fee_sats, replacement_min_fee_sats, select_instant_claim_plan,
+        ClaimDeferredReason, ClaimDepositOutcome, ClaimGuards, InstantClaimOutcome,
+        InstantClaimPlan, MaxFee, PendingRefund, SdkError, TxOutput, check_replacement_fee,
+        claim_deposit_quote, instant_claim_response, is_already_claimed_error,
+        is_pending_confirmation_error, needs_own_ceiling_resolution, refund_fee_sats,
+        replacement_min_fee_sats, resolve_auto_claim_ceiling, resolve_claim_ceiling,
+        select_instant_claim_plan,
     };
+
+    // ---- resolve_claim_ceiling / resolve_auto_claim_ceiling ----
+
+    fn fixed(amount: u64) -> MaxFee {
+        MaxFee::Fixed { amount }
+    }
+
+    #[test]
+    fn a_requested_ceiling_is_used_and_recorded() {
+        let ceiling = resolve_claim_ceiling(Some(fixed(50_000)), Some(fixed(99)));
+        assert_eq!(ceiling.effective, Some(fixed(50_000)));
+        // Recorded so later automatic attempts are held to what the caller chose,
+        // which is what lets a raised ceiling claim a deposit early unattended.
+        assert_eq!(ceiling.stored, Some(fixed(50_000)));
+    }
+
+    #[test]
+    fn requesting_no_ceiling_claims_under_config_and_clears_the_stored_one() {
+        let ceiling = resolve_claim_ceiling(None, Some(fixed(99)));
+        assert_eq!(ceiling.effective, Some(fixed(99)));
+        // A bare claim means "claim under the wallet defaults", so it also retires
+        // any ceiling standing on the deposit.
+        assert_eq!(ceiling.stored, None);
+    }
+
+    #[test]
+    fn no_ceiling_anywhere_leaves_nothing_to_claim_within() {
+        let ceiling = resolve_claim_ceiling(None, None);
+        assert_eq!(ceiling.effective, None);
+        assert_eq!(ceiling.stored, None);
+    }
+
+    #[test]
+    fn a_requested_ceiling_replaces_the_configured_one() {
+        // Not combined with it: a request below config must lower the claim, not
+        // be raised back up to it.
+        let ceiling = resolve_claim_ceiling(Some(fixed(10)), Some(fixed(99)));
+        assert_eq!(ceiling.effective, Some(fixed(10)));
+    }
+
+    #[test]
+    fn a_stored_ceiling_governs_automatic_attempts() {
+        assert_eq!(
+            resolve_auto_claim_ceiling(Some(&fixed(50_000)), Some(&fixed(99))),
+            Some(fixed(50_000))
+        );
+    }
+
+    #[test]
+    fn a_stored_ceiling_below_config_still_wins() {
+        // The hold-to-maturity direction. Taking the larger of the two would claim
+        // the deposit early anyway, which is the opposite of what was asked.
+        assert_eq!(
+            resolve_auto_claim_ceiling(Some(&fixed(10)), Some(&fixed(99))),
+            Some(fixed(10))
+        );
+    }
+
+    // ---- instant_claim_response ----
+
+    fn declined(reason: ClaimDeferredReason) -> InstantClaimOutcome {
+        InstantClaimOutcome::Declined {
+            error: SdkError::Generic("declined".to_string()),
+            max_fee_sats: None,
+            reason,
+        }
+    }
+
+    #[test]
+    fn a_submitted_early_claim_returns_no_payment_yet() {
+        let response =
+            instant_claim_response(&InstantClaimOutcome::Submitted("claim-1".to_string()));
+        assert_eq!(response.outcome, ClaimDepositOutcome::Submitted);
+        // The transfer settles asynchronously, so the caller watches for it rather
+        // than reading it off this response.
+        assert!(response.payment.is_none());
+    }
+
+    #[test]
+    fn a_declined_early_claim_defers_rather_than_failing() {
+        // The deposit falls through to the claim at maturity, so this is an
+        // ordinary outcome and the caller is told what it would have cost.
+        let response = instant_claim_response(&declined(ClaimDeferredReason::MaxFeeExceeded {
+            required_fee_sats: 5_000,
+            max_fee_sats: 1_000,
+        }));
+        assert_eq!(
+            response.outcome,
+            ClaimDepositOutcome::Deferred {
+                reason: ClaimDeferredReason::MaxFeeExceeded {
+                    required_fee_sats: 5_000,
+                    max_fee_sats: 1_000,
+                }
+            }
+        );
+        assert!(response.payment.is_none(), "a deferred claim moves nothing");
+    }
+
+    #[test]
+    fn a_deposit_too_shallow_for_any_plan_defers_without_a_fee() {
+        let response =
+            instant_claim_response(&declined(ClaimDeferredReason::NoEarlyClaimAvailable));
+        assert_eq!(
+            response.outcome,
+            ClaimDepositOutcome::Deferred {
+                reason: ClaimDeferredReason::NoEarlyClaimAvailable
+            }
+        );
+    }
+
+    #[test]
+    fn a_provider_decline_is_not_reported_as_a_depth_to_wait_out() {
+        // Waiting for a confirmation does not address an unreachable provider, so
+        // this must not collapse into NoEarlyClaimAvailable.
+        let response = instant_claim_response(&declined(ClaimDeferredReason::ProviderDeclined {
+            message: "transport error".to_string(),
+        }));
+        assert_eq!(
+            response.outcome,
+            ClaimDepositOutcome::Deferred {
+                reason: ClaimDeferredReason::ProviderDeclined {
+                    message: "transport error".to_string()
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn only_a_ceiling_differing_from_config_is_resolved_on_its_own() {
+        let config = fixed(99);
+        // Nothing of its own, so the ceiling resolved once for the pass serves.
+        assert!(!needs_own_ceiling_resolution(None, Some(&config)));
+        // The same value resolves to the same sats, so re-resolving it would buy a
+        // second fee lookup and nothing else.
+        assert!(!needs_own_ceiling_resolution(
+            Some(&fixed(99)),
+            Some(&config)
+        ));
+        assert!(needs_own_ceiling_resolution(
+            Some(&fixed(50_000)),
+            Some(&config)
+        ));
+        // Lower than the configured ceiling counts as differing too: the deposit is
+        // being held back, which the pass ceiling would not do.
+        assert!(needs_own_ceiling_resolution(
+            Some(&fixed(10)),
+            Some(&config)
+        ));
+        // Nothing configured at all, so the pass has no ceiling to fall back on.
+        assert!(needs_own_ceiling_resolution(Some(&fixed(10)), None));
+        assert!(!needs_own_ceiling_resolution(None, None));
+        // Equal values of a different variant are still equal.
+        assert!(!needs_own_ceiling_resolution(
+            Some(&MaxFee::Rate { sat_per_vbyte: 4 }),
+            Some(&MaxFee::Rate { sat_per_vbyte: 4 })
+        ));
+    }
+
+    #[test]
+    fn a_deposit_with_no_ceiling_falls_back_to_config() {
+        assert_eq!(
+            resolve_auto_claim_ceiling(None, Some(&fixed(99))),
+            Some(fixed(99))
+        );
+        assert_eq!(resolve_auto_claim_ceiling(None, None), None);
+    }
 
     fn sats(value: u64) -> CurrencyAmount {
         CurrencyAmount {

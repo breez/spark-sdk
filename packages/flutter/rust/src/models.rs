@@ -179,9 +179,29 @@ pub struct _ClaimDepositRequest {
     pub max_fee: Option<MaxFee>,
 }
 
+#[frb(mirror(ClaimDeferredReason))]
+pub enum _ClaimDeferredReason {
+    MaxFeeExceeded {
+        required_fee_sats: u64,
+        max_fee_sats: u64,
+    },
+    NoEarlyClaimAvailable,
+    ProviderDeclined {
+        message: String,
+    },
+}
+
+#[frb(mirror(ClaimDepositOutcome))]
+pub enum _ClaimDepositOutcome {
+    Settled,
+    Submitted,
+    Deferred { reason: ClaimDeferredReason },
+}
+
 #[frb(mirror(ClaimDepositResponse))]
 pub struct _ClaimDepositResponse {
     pub payment: Option<Payment>,
+    pub outcome: ClaimDepositOutcome,
 }
 
 #[frb(mirror(FetchClaimDepositQuoteRequest))]
@@ -240,6 +260,7 @@ pub struct _DepositInfo {
     pub claim_error: Option<DepositClaimError>,
     pub instant_claim_status: Option<InstantClaimStatus>,
     pub refund_state: Option<RefundState>,
+    pub max_claim_fee: Option<MaxFee>,
 }
 
 #[frb(mirror(MaxFee))]
@@ -1468,6 +1489,9 @@ pub enum _UpdateDepositPayload {
     RefundBroadcastState {
         refund_txid: String,
         state: RefundState,
+    },
+    MaxClaimFee {
+        max_fee: Option<MaxFee>,
     },
 }
 

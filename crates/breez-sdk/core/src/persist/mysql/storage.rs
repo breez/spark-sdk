@@ -567,6 +567,14 @@ impl MysqlStorage {
                     PRIMARY KEY (user_id, address)
                 )",
             )],
+            // Migration 25: The fee ceiling standing for one deposit as a
+            // JSON-encoded MaxFee, overriding the configured one. NULL when the
+            // configured one applies.
+            vec![Migration::AddColumn {
+                table: "brz_unclaimed_deposits",
+                column: "max_claim_fee",
+                definition: "JSON NULL",
+            }],
         ]
     }
 }
@@ -1411,7 +1419,7 @@ impl Storage for MysqlStorage {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         let rows: Vec<Row> = conn
             .exec(
-                "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status, refund_state FROM brz_unclaimed_deposits WHERE user_id = ?",
+                "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status, refund_state, max_claim_fee FROM brz_unclaimed_deposits WHERE user_id = ?",
                 (self.identity.clone(),),
             )
             .await
@@ -1440,6 +1448,7 @@ impl Storage for MysqlStorage {
                 refund_tx_id: get_opt_str(row, 6),
                 instant_claim_status: from_json_string_opt(get_opt_str(row, 7))?,
                 refund_state: from_json_string_opt(get_opt_str(row, 8))?,
+                max_claim_fee: from_json_string_opt(get_opt_str(row, 9))?,
             });
         }
         Ok(deposits)
@@ -1499,6 +1508,18 @@ impl Storage for MysqlStorage {
                         i32::try_from(vout)?,
                         refund_txid,
                     ),
+                )
+                .await
+                .map_err(map_db_error)?;
+            }
+            UpdateDepositPayload::MaxClaimFee { max_fee } => {
+                let max_fee_json = max_fee
+                    .map(|max_fee| serde_json::to_string(&max_fee))
+                    .transpose()
+                    .map_err(|e| StorageError::Serialization(e.to_string()))?;
+                conn.exec_drop(
+                    "UPDATE brz_unclaimed_deposits SET max_claim_fee = ? WHERE user_id = ? AND txid = ? AND vout = ?",
+                    (max_fee_json, self.identity.clone(), txid, i32::try_from(vout)?),
                 )
                 .await
                 .map_err(map_db_error)?;
@@ -2448,6 +2469,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_deposit_max_claim_fee() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_deposit_max_claim_fee(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
     async fn test_payment_type_filtering() {
         let fixture = MysqlTestFixture::new().await;
         crate::persist::tests::test_payment_type_filtering(Box::new(fixture.storage)).await;
@@ -3134,7 +3161,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(24), "migration version must advance to 24");
+        assert_eq!(version, Some(25), "migration version must advance to 25");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())
@@ -3406,7 +3433,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(24), "migration must advance to 24");
+        assert_eq!(version, Some(25), "migration must advance to 25");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())

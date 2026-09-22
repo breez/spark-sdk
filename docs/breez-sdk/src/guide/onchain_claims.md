@@ -1,6 +1,8 @@
 # Claiming on-chain deposits
 
-On-chain deposits go through three stages. A deposit is detected while it is still unconfirmed, once it reaches the mempool. Once detected, the deposit is visible in the SDK and each deposit includes a {{#name is_mature}} field. After **3 on-chain confirmations** the deposit has sufficient confirmations ({{#name is_mature}} is true) and the SDK [automatically attempts](#setting-a-max-fee-for-automatic-claims) to claim it. The SDK also claims automatically [before maturity](#claiming-before-maturity) when the configured ceiling covers the provider's spread, so a deposit can be credited sooner than 3 confirmations. If the maximum deposit claim fee is too low for either, the deposit won't be automatically claimed and should be [manually claimed](#manually-claiming-deposits).
+On-chain deposits go through three stages. A deposit is detected once it reaches the mempool, while it is still unconfirmed. From then on it is visible in the SDK, and each deposit carries an {{#name is_mature}} field. After **3 on-chain confirmations** on mainnet the deposit is mature ({{#name is_mature}} is true) and the SDK [automatically attempts](#setting-a-max-fee-for-automatic-claims) to claim it. Regtest matures a deposit at 1 confirmation.
+
+The SDK can also claim [before maturity](#claiming-before-maturity) when the cost of claiming early fits the configured [maximum deposit claim fee](config.md#max-deposit-claim-fee), so a deposit can be credited sooner. If that fee is too low for either kind of claim, the deposit is not claimed automatically and should be [manually claimed](#manually-claiming-deposits).
 
 ## Detecting a deposit before it confirms
 
@@ -10,7 +12,7 @@ Each watched address costs one chain-service request per sync. Requesting a rece
 
 ## Setting a max fee for automatic claims
 
-The [maximum deposit claim fee](config.md#max-deposit-claim-fee) setting in the SDK configuration defines the maximum fee the SDK uses when automatically claiming an on-chain deposit. The SDK's default fee limit is set to 1 sats/vbyte, which is low and requires manual claiming when fees exceed this threshold. You can set a higher fee, either in sats/vbyte, in absolute sats, or to the fastest recommended fee at the time of claim, with a leeway in sats/vbyte.
+The [maximum deposit claim fee](config.md#max-deposit-claim-fee) in the SDK configuration is the most the SDK will pay when it claims a deposit automatically. This page calls it the ceiling. The default is 1 sat/vbyte, which is low, so deposits need manual claiming until it is raised. The forms the setting takes (absolute sats, sats/vbyte, or the fastest recommended fee with a leeway) are described on the [configuration page](config.md#max-deposit-claim-fee).
 
 This ceiling is not only an on-chain fee tolerance. It also caps what the provider may take to credit a deposit [before it matures](#claiming-before-maturity), so the value you choose decides both how much on-chain fee the SDK will pay and whether deposits are claimed early at all.
 
@@ -22,25 +24,59 @@ However, even when setting a high fee, the SDK might still fail to automatically
 
 ## Claiming before maturity
 
-A deposit does not have to wait for maturity. The Spark Service Provider will front the credited amount earlier and take a spread for carrying the risk, and the SDK claims this way automatically whenever the spread fits within the [maximum deposit claim fee](config.md#max-deposit-claim-fee). The default of 1 sat/vbyte works out to about 99 sats, below any spread the provider charges, so deposits are claimed at maturity until the ceiling is raised enough to cover one. The same applies to {{#name claim_deposit}}, which claims a not-yet-mature deposit early when its own {{#name max_fee}} allows.
+A deposit does not have to wait for maturity. The Spark Service Provider will front the credited amount earlier, taking a spread for carrying the risk. The SDK claims this way automatically whenever the spread fits within the [maximum deposit claim fee](config.md#max-deposit-claim-fee). The default of 1 sat/vbyte works out to about 99 sats, below any spread the provider charges, so deposits are claimed at maturity until the ceiling is raised enough to cover one. The same applies to {{#name claim_deposit}}, which claims a not-yet-mature deposit early when its own {{#name max_fee}} allows.
 
 The spread is largely the on-chain cost of the provider's claim plus a percentage of the deposit, so it grows with the deposit.
 
+## Setting a max fee for one deposit
+
+The ceiling passed to {{#name claim_deposit}} is recorded on that deposit and governs every later automatic attempt on it, so it is how one deposit is treated differently from the rest without changing the configuration for all of them.
+
+Raising it above the provider's spread lets that single deposit be claimed early. The SDK goes on applying it on later sync passes, so an app does not have to keep calling {{#name claim_deposit}} until the claim lands. Lowering it below the spread does the opposite: it holds that one deposit to maturity while other deposits keep claiming early under the configured ceiling.
+
+One ceiling governs both ways of claiming that deposit, so a ceiling raised to cover the provider's spread also covers its claim at maturity, should the early claim never happen. Raise it for what you are willing to pay for the deposit, not only for the early claim.
+
+Calling {{#name claim_deposit}} without a {{#name max_fee}} means "claim under the wallet defaults", so it claims under the configured [maximum deposit claim fee](config.md#max-deposit-claim-fee) and clears any ceiling standing on the deposit.
+
+The ceiling is recorded before the claim is attempted, so it stands whatever the attempt does. What the attempt itself reports is covered under [Claim outcomes](#claim-outcomes).
+
+The recorded ceiling is readable as {{#name max_claim_fee}} on each deposit from {{#name list_unclaimed_deposits}}, unset while the configured ceiling applies.
+
+Deposits are not part of the synced wallet records, so a ceiling set on one device stays on that device. The same deposit seen from another device runs under whatever that device has configured.
+
+## Claim outcomes
+
+{{#name claim_deposit}} reports what it did as {{#name outcome}}, which is worth handling in full:
+
+- {{#enum ClaimDepositOutcome::Settled}} carries the payment.
+- {{#enum ClaimDepositOutcome::Submitted}} means a claim made before maturity is settling asynchronously. Watch for the payment via {{#name list_payments}} or the [payment events](events.md).
+- {{#enum ClaimDepositOutcome::Deferred}} means nothing was claimed yet and no further call is needed.
+
+Which one occurs follows from the deposit's maturity and the fee ceiling rather than from anything you ask for. A {{#name max_fee}} below what an early claim costs returns {{#enum ClaimDepositOutcome::Deferred}} rather than failing. A deposit that has already matured and whose claim exceeds the ceiling is a different matter and returns {{#enum SdkError::MaxDepositClaimFeeExceeded}}, because nothing will claim it until the ceiling rises or on-chain fees fall.
+
+Whether a deferred deposit actually waits for maturity depends on its {{#name reason}}. The SDK re-attempts an early claim as the deposit gains confirmations, so a claim declined at a depth the provider will not yet front is often claimed early a block or two later.
+
+- {{#enum ClaimDeferredReason::NoEarlyClaimAvailable}} usually clears with the next confirmation.
+- {{#enum ClaimDeferredReason::MaxFeeExceeded}} does not clear on its own. The deposit waits for maturity unless the ceiling is raised.
+- {{#enum ClaimDeferredReason::ProviderDeclined}} means the provider refused or could not be reached, which another confirmation does not address.
+
+Only the first is a wait you can put a time on, so showing a user "claimed in about 30 minutes" for the others would be wrong.
+
 ## Manually claiming deposits
 
-When a deposit cannot be automatically claimed due to the configured maximum fee being too low, you can manually claim it by specifying a higher fee limit. The recommended approach is to display a user interface showing the required fee amount and request user approval before proceeding with manual claiming.
+When a deposit cannot be claimed automatically because the configured maximum deposit claim fee is too low, claim it manually with a higher {{#name max_fee}}. The recommended approach is to show the user the required fee and ask for approval before claiming.
 
-Claiming a deposit the SDK is already claiming, whether from a background attempt or another call, returns {{#enum SdkError::DepositClaimInProgress}}. The claim already running may still succeed, so treat this as transient rather than as a failure to show the user.
+Claiming a deposit a claim already has returns {{#enum SdkError::DepositClaimInProgress}}. That covers a claim still running, from a background attempt or another call, and one that has already credited the deposit and is waiting for the provider to spend the output. Neither is a failure to show the user, and neither needs anything from you: check {{#name instant_claim_status}} to tell them apart.
 
 {{#tabs refunding_payments:handle-fee-exceeded}}
 
 ### Showing the choice to the user
 
-{{#name fetch_claim_deposit_quote}} prices both ways of claiming a deposit, so an app can offer the choice rather than deciding for the user. It returns the deposit's current {{#name confirmations}} alongside a quote for claiming early and one for claiming at maturity, each carrying the fee and the {{#name confirmations_required}}, which is the depth it becomes claimable at rather than a count of blocks still to wait. Subtract the deposit's current confirmations for that: an early claim claimable at 1 confirmation, on a deposit with 0, is available a block from now.
+{{#name fetch_claim_deposit_quote}} prices both ways of claiming a deposit, so an app can offer the choice rather than deciding for the user. It returns the deposit's current {{#name confirmations}} alongside two quotes, one for claiming early and one for claiming at maturity. Each quote carries the fee and the {{#name confirmations_required}}. That is the depth the deposit becomes claimable at, not a count of blocks still to wait, so subtract the deposit's current confirmations to get the wait: an early claim claimable at 1 confirmation, on a deposit with 0, is available a block from now.
 
-The early quote is absent when the provider will not front this particular deposit, and when claiming early would not actually be earlier: once a deposit has matured, or when the provider would only credit at maturity's own depth, waiting is both cheaper and no slower, so there is no choice left to offer. Whether a deposit is fronted at all, and at what depth, varies with the deposit rather than being a setting you control. An absent early quote therefore means no early claim is offered for this deposit, not that early claiming is unavailable.
+The early quote is absent when the provider will not front this particular deposit. It is also absent when claiming early would not actually be earlier: once a deposit has matured, or when the provider would only credit at maturity's own depth, waiting is both cheaper and no slower, so there is no choice left to offer. Whether a deposit is fronted at all, and at what depth, varies with the deposit rather than being a setting you control. An absent early quote therefore means no early claim is offered for this deposit, not that early claiming is unavailable.
 
-The early quote is priced whether or not the configured [maximum deposit claim fee](config.md#max-deposit-claim-fee) would allow it, so the fee it shows is the provider's price rather than what the configured ceiling permits. Acting on the early quote yourself means passing a {{#name max_fee}} to {{#name claim_deposit}} of at least the quoted {{#name fee_sats}}. With a lower one the call returns {{#enum SdkError::MaxDepositClaimFeeExceeded}} and the deposit waits for maturity instead.
+The early quote is priced whether or not the configured [maximum deposit claim fee](config.md#max-deposit-claim-fee) would allow it, so the fee it shows is the provider's price rather than what the configured ceiling permits. Acting on the early quote yourself means passing a {{#name max_fee}} to {{#name claim_deposit}} of at least the quoted {{#name fee_sats}}. With a lower one the call returns {{#enum ClaimDepositOutcome::Deferred}} with {{#enum ClaimDeferredReason::MaxFeeExceeded}}, carrying what the early claim would have cost, and the deposit waits for maturity unless the ceiling is raised (see [Claim outcomes](#claim-outcomes)).
 
 The quote for maturity is always present, but may be flagged {{#name is_estimate}} when the provider will not quote a deposit this early, in which case the fee is derived from current on-chain fees and the final one may differ.
 
@@ -53,15 +89,13 @@ What to offer follows from the quote and the configured ceiling. The middle colu
 | Early quote at a reachable depth, fee above the ceiling | Wait for maturity | Both, early requiring an explicit higher max fee |
 | Early quote at a reachable depth, fee within the ceiling | Claim early by itself | Default to early, or offer no choice |
 
-A claim made before maturity settles asynchronously, so {{#name claim_deposit}} returns no payment. Watch for it via {{#name list_payments}} or the [payment events](events.md).
-
 {{#tabs refunding_payments:fetch-claim-deposit-quote}}
 
 ## Listing unclaimed deposits
 
 Retrieve the deposits the SDK is tracking. This includes pending deposits that do not yet have sufficient confirmations, deposits with sufficient confirmations that failed to claim (with the specific failure reason), and deposits already claimed whose output the provider has not yet spent. Pending deposits will be automatically claimed once they have sufficient confirmations, or sooner if the configured ceiling covers an early claim.
 
-A deposit claimed before maturity carries {{#enum InstantClaimStatus::Submitted}} in its {{#name instant_claim_status}} while the claim settles, and {{#enum InstantClaimStatus::Claimed}} once the amount is credited. It stays in the list until the provider spends the deposit output, some time after the credit, so treat {{#enum InstantClaimStatus::Claimed}} as settled and branch on it rather than showing the deposit as awaiting action. When the SDK claims automatically it emits {{#enum SdkEvent::ClaimedDeposits}} at submission, so a deposit can appear both in that event and in this list.
+A deposit claimed before maturity carries {{#enum InstantClaimStatus::Submitted}} in its {{#name instant_claim_status}} while the claim settles, and {{#enum InstantClaimStatus::Claimed}} once the amount is credited. It stays in the list until the provider spends the deposit output, some time after the credit. Treat {{#enum InstantClaimStatus::Claimed}} as settled and branch on it rather than showing the deposit as awaiting action. When the SDK claims automatically it emits {{#enum SdkEvent::ClaimedDeposits}} at submission, so a deposit can appear both in that event and in this list.
 
 A deposit claimed elsewhere, by another instance sharing the wallet or on another device, reaches {{#enum InstantClaimStatus::Claimed}} the next time the SDK tries to claim it and the provider reports it as already claimed. No {{#enum SdkEvent::ClaimedDeposits}} event is emitted, because the claim was not made here. The credit still arrives as a payment, so follow it through {{#name list_payments}} or the [payment events](events.md).
 

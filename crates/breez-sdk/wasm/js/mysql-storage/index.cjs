@@ -801,7 +801,7 @@ class MysqlStorage {
   async listDeposits() {
     try {
       const [rows] = await this.pool.query(
-        "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status, refund_state FROM brz_unclaimed_deposits WHERE user_id = ?",
+        "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status, refund_state, max_claim_fee FROM brz_unclaimed_deposits WHERE user_id = ?",
         [this.identity]
       );
 
@@ -816,6 +816,7 @@ class MysqlStorage {
         refundTxId: row.refund_tx_id,
         instantClaimStatus: parseJson(row.instant_claim_status),
         refundState: parseJson(row.refund_state),
+        maxClaimFee: parseJson(row.max_claim_fee),
       }));
     } catch (error) {
       throw new StorageError(
@@ -866,6 +867,18 @@ class MysqlStorage {
             txid,
             vout,
             payload.refundTxid,
+          ]
+        );
+      } else if (payload.type === "maxClaimFee") {
+        await this.pool.query(
+          `UPDATE brz_unclaimed_deposits
+           SET max_claim_fee = ?
+           WHERE user_id = ? AND txid = ? AND vout = ?`,
+          [
+            payload.maxFee ? JSON.stringify(payload.maxFee) : null,
+            this.identity,
+            txid,
+            vout,
           ]
         );
       } else {
