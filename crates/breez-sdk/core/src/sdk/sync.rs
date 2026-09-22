@@ -7,8 +7,8 @@ use tracing::{debug, error, info, trace, warn};
 use super::{
     BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncType,
     deposits::{
-        InstantClaimOutcome, claim_already_made, is_already_claimed_error,
-        needs_own_ceiling_resolution, resolve_auto_claim_ceiling,
+        InstantClaimOutcome, claim_already_made, is_already_claimed_error, larger_ceiling,
+        needs_own_ceiling_resolution,
     },
 };
 use crate::utils::time::now_secs;
@@ -406,10 +406,7 @@ impl BreezSdk {
                 // Mature deposit: claim via the normal path.
                 self.claim_utxo_and_resolve_deposit(
                     &detailed_utxo,
-                    resolve_auto_claim_ceiling(
-                        stored_max_fee,
-                        self.config.max_deposit_claim_fee.as_ref(),
-                    ),
+                    self.mature_claim_ceiling(stored_max_fee).await,
                     stored_max_fee.cloned(),
                     &mut claimed_deposits,
                     &mut unclaimed_deposits,
@@ -489,6 +486,37 @@ impl BreezSdk {
                 .await;
         }
         Ok(())
+    }
+
+    /// The ceiling a mature deposit's automatic claim runs under. Both sides are
+    /// resolved here because comparing them needs sats, and a ceiling that will not
+    /// resolve leaves the deposit on its own, which is what was asked for.
+    async fn mature_claim_ceiling(&self, stored: Option<&MaxFee>) -> Option<MaxFee> {
+        let config_default = self.config.max_deposit_claim_fee.as_ref();
+        let (Some(stored), Some(config_default)) = (stored, config_default) else {
+            return stored.or(config_default).cloned();
+        };
+        let stored_sats = self.ceiling_sats(stored).await;
+        let config_sats = self.ceiling_sats(config_default).await;
+        match (stored_sats, config_sats) {
+            (Some(stored_sats), Some(config_sats)) => Some(larger_ceiling(
+                stored,
+                stored_sats,
+                config_default,
+                config_sats,
+            )),
+            _ => Some(stored.clone()),
+        }
+    }
+
+    /// One ceiling in sats, or `None` when it cannot be resolved.
+    async fn ceiling_sats(&self, max_fee: &MaxFee) -> Option<u64> {
+        self.resolve_max_claim_fee(Some(max_fee.clone()))
+            .await
+            .inspect_err(|e| warn!("Could not resolve a max claim fee: {e}"))
+            .ok()
+            .flatten()
+            .map(|(_, sats)| sats)
     }
 
     async fn claim_utxo_and_resolve_deposit(

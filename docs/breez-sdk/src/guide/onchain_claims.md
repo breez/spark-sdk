@@ -30,13 +30,13 @@ The spread is largely the on-chain cost of the provider's claim plus a percentag
 
 ## Setting a max fee for one deposit
 
-The ceiling passed to {{#name claim_deposit}} is recorded on that deposit and governs every later automatic attempt on it, so it is how one deposit is treated differently from the rest without changing the configuration for all of them.
+The ceiling passed to {{#name claim_deposit}} is recorded on that deposit and carried into later automatic attempts on it, so it is how one deposit is treated differently from the rest without changing the configuration for all of them.
 
-Raising it above the provider's spread lets that single deposit be claimed early. The SDK goes on applying it on later sync passes, so an app does not have to keep calling {{#name claim_deposit}} until the claim lands. Lowering it below the spread does the opposite: it holds that one deposit to maturity while other deposits keep claiming early under the configured ceiling.
+Raising it above the provider's spread lets that single deposit be claimed early, and the SDK goes on applying it on later sync passes, so the app does not have to keep calling {{#name claim_deposit}} until the claim lands. Lowering it below the spread keeps that one deposit from being claimed early: it waits for maturity while the others keep claiming early under the configured ceiling.
 
-One ceiling governs both ways of claiming that deposit, so a ceiling raised to cover the provider's spread also covers its claim at maturity, should the early claim never happen. Raise it for what you are willing to pay for the deposit, not only for the early claim.
+An automatic claim at maturity runs under whichever ceiling is larger, the deposit's or the configured one. A raised ceiling therefore applies at maturity too, if the early claim never happens, so raise it to what you are willing to pay for the deposit, not only for the early claim. A lowered one restricts only the early claim, and holding a deposit back never leaves it stuck: at maturity there is no spread to avoid, only an ordinary on-chain fee.
 
-Calling {{#name claim_deposit}} without a {{#name max_fee}} means "claim under the wallet defaults", so it claims under the configured [maximum deposit claim fee](config.md#max-deposit-claim-fee) and clears any ceiling standing on the deposit.
+Calling {{#name claim_deposit}} without a {{#name max_fee}} claims under the configured [maximum deposit claim fee](config.md#max-deposit-claim-fee), and clears any ceiling standing on the deposit.
 
 The ceiling is recorded before the claim is attempted, so it stands whatever the attempt does. What the attempt itself reports is covered under [Claim outcomes](#claim-outcomes).
 
