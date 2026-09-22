@@ -924,14 +924,27 @@ pub(super) fn resolve_claim_ceiling(
     }
 }
 
-/// Resolves an automatic attempt's ceiling: the deposit's standing ceiling, else
-/// the configured one. A standing ceiling wins in both directions, so one set below
-/// the configured ceiling holds that deposit back rather than being ignored.
-pub(super) fn resolve_auto_claim_ceiling(
-    stored: Option<&MaxFee>,
-    config_default: Option<&MaxFee>,
-) -> Option<MaxFee> {
-    stored.or(config_default).cloned()
+/// The ceiling an automatic claim at maturity runs under: whichever of the
+/// deposit's own and the configured one admits more.
+///
+/// A deposit's ceiling governs whether it is claimed early. Letting a lowered one
+/// also cap the claim at maturity would leave a deposit set below the on-chain
+/// claim cost unclaimable until someone intervened, and that claim costs only what
+/// the wallet would have paid anyway.
+///
+/// Takes both already resolved to sats: a fixed amount and a fee rate are not
+/// comparable until they are.
+pub(super) fn larger_ceiling(
+    stored: &MaxFee,
+    stored_sats: u64,
+    config_default: &MaxFee,
+    config_sats: u64,
+) -> MaxFee {
+    if stored_sats >= config_sats {
+        stored.clone()
+    } else {
+        config_default.clone()
+    }
 }
 
 /// The response for a resolved early claim. Nothing is claimed synchronously
@@ -1181,12 +1194,12 @@ mod tests {
         ClaimDeferredReason, ClaimDepositOutcome, ClaimGuards, InstantClaimOutcome,
         InstantClaimPlan, MaxFee, PendingRefund, SdkError, TxOutput, check_replacement_fee,
         claim_deposit_quote, instant_claim_response, is_already_claimed_error,
-        is_pending_confirmation_error, needs_own_ceiling_resolution, refund_fee_sats,
-        replacement_min_fee_sats, resolve_auto_claim_ceiling, resolve_claim_ceiling,
+        is_pending_confirmation_error, larger_ceiling, needs_own_ceiling_resolution,
+        refund_fee_sats, replacement_min_fee_sats, resolve_claim_ceiling,
         select_instant_claim_plan,
     };
 
-    // ---- resolve_claim_ceiling / resolve_auto_claim_ceiling ----
+    // ---- resolve_claim_ceiling / larger_ceiling ----
 
     fn fixed(amount: u64) -> MaxFee {
         MaxFee::Fixed { amount }
@@ -1226,21 +1239,34 @@ mod tests {
     }
 
     #[test]
-    fn a_stored_ceiling_governs_automatic_attempts() {
+    fn a_raised_ceiling_governs_the_claim_at_maturity() {
         assert_eq!(
-            resolve_auto_claim_ceiling(Some(&fixed(50_000)), Some(&fixed(99))),
-            Some(fixed(50_000))
+            larger_ceiling(&fixed(50_000), 50_000, &fixed(99), 99),
+            fixed(50_000)
         );
     }
 
     #[test]
-    fn a_stored_ceiling_below_config_still_wins() {
-        // The hold-to-maturity direction. Taking the larger of the two would claim
-        // the deposit early anyway, which is the opposite of what was asked.
-        assert_eq!(
-            resolve_auto_claim_ceiling(Some(&fixed(10)), Some(&fixed(99))),
-            Some(fixed(10))
-        );
+    fn a_ceiling_lowered_to_hold_a_deposit_back_does_not_cap_its_mature_claim() {
+        // Lowering it keeps the deposit from being claimed early. Capping the claim
+        // at maturity too would leave a deposit set below the on-chain cost stuck
+        // until someone intervened.
+        assert_eq!(larger_ceiling(&fixed(10), 10, &fixed(99), 99), fixed(99));
+    }
+
+    #[test]
+    fn ceilings_are_compared_as_sats_not_by_shape() {
+        // A rate and a fixed amount are only comparable once resolved, and the rate
+        // here admits more despite the smaller number on its face.
+        let rate = MaxFee::Rate { sat_per_vbyte: 5 };
+        assert_eq!(larger_ceiling(&rate, 495, &fixed(99), 99), rate);
+        assert_eq!(larger_ceiling(&fixed(99), 99, &rate, 495), rate);
+    }
+
+    #[test]
+    fn an_equal_ceiling_keeps_the_deposit_own() {
+        // Nothing to gain from swapping, and the deposit's own is the more specific.
+        assert_eq!(larger_ceiling(&fixed(99), 99, &fixed(99), 99), fixed(99));
     }
 
     // ---- instant_claim_response ----
@@ -1341,15 +1367,6 @@ mod tests {
             Some(&MaxFee::Rate { sat_per_vbyte: 4 }),
             Some(&MaxFee::Rate { sat_per_vbyte: 4 })
         ));
-    }
-
-    #[test]
-    fn a_deposit_with_no_ceiling_falls_back_to_config() {
-        assert_eq!(
-            resolve_auto_claim_ceiling(None, Some(&fixed(99))),
-            Some(fixed(99))
-        );
-        assert_eq!(resolve_auto_claim_ceiling(None, None), None);
     }
 
     fn sats(value: u64) -> CurrencyAmount {
