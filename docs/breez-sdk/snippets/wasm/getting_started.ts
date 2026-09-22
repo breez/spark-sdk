@@ -114,6 +114,12 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
           const failedPayment = event.payment
           break
         }
+        case 'paymentMetadataUpdated': {
+          // Details of a payment already reported changed, such as the
+          // conversion info of a cross-chain receive.
+          const updatedPayment = event.payment
+          break
+        }
         case 'autoOptimization': {
           // Background optimizer progress: started, round completed, or a
           // terminal outcome. Manual optimizeLeaves calls do not emit these.

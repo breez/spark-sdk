@@ -111,6 +111,11 @@ func (SdkListener) OnEvent(e breez_sdk_spark.SdkEvent) {
 		// context to show the user.
 		failedPayment := event.Payment
 		_ = failedPayment
+	case breez_sdk_spark.SdkEventPaymentMetadataUpdated:
+		// Details of a payment already reported changed, such as the
+		// conversion info of a cross-chain receive.
+		updatedPayment := event.Payment
+		_ = updatedPayment
 	case breez_sdk_spark.SdkEventAutoOptimization:
 		// Background optimizer progress: started, round completed, or a
 		// terminal outcome. Manual OptimizeLeaves calls do not emit these.

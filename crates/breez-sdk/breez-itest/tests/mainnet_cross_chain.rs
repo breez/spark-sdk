@@ -225,6 +225,13 @@ const TX_CONFIRM_TIMEOUT_SECS: u64 = 300;
 /// already landed. The event trails the balance by a sync pass at most.
 const RECEIVE_EVENT_TIMEOUT_SECS: u64 = 120;
 
+/// How long after PaymentSucceeded the conversion info may take to show up.
+/// The SDK polls Orchestra as soon as the inbound payment is seen, so the
+/// info normally lands within a second or two, or is already on the success
+/// event. Without that wake-up it would wait for the 30 second monitor pass,
+/// which lands past this bound on most runs, though not every one.
+const CONVERSION_INFO_LATENCY_LIMIT: Duration = Duration::from_secs(10);
+
 /// The conversion info a payment carries, whichever details variant holds it.
 fn conversion_info_of(payment: &Payment) -> Option<&ConversionInfo> {
     match payment.details.as_ref()? {
@@ -1135,6 +1142,48 @@ async fn run_cross_chain_evm_receive(
         event_payment.amount,
         event_payment.method,
         conversion_info_of(&event_payment).is_some()
+    );
+
+    // The conversion info usually lands after the payment was reported, once
+    // Orchestra confirms the order. The SDK announces that with a
+    // PaymentMetadataUpdated event, so the app never has to poll for it.
+    let (event_payment, conversion_info_latency) = if conversion_info_of(&event_payment).is_some() {
+        (event_payment, Duration::ZERO)
+    } else {
+        let waited = Instant::now();
+        let updated = wait_for_payment_metadata_updated_event(
+            &mut alice.events,
+            &event_payment.id,
+            RECEIVE_EVENT_TIMEOUT_SECS,
+        )
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "cross-chain receive {source_asset}→{dest_label}: PaymentSucceeded for {} \
+                 carried no conversion info and no PaymentMetadataUpdated followed: {e}",
+                event_payment.id
+            )
+        })?;
+        (updated, waited.elapsed())
+    };
+    info!(
+        "Conversion info for {} available {conversion_info_latency:?} after PaymentSucceeded",
+        event_payment.id
+    );
+    assert!(
+        conversion_info_latency < CONVERSION_INFO_LATENCY_LIMIT,
+        "cross-chain receive {source_asset}→{dest_label}: conversion info took \
+         {conversion_info_latency:?} to reach payment {} (limit {CONVERSION_INFO_LATENCY_LIMIT:?})",
+        event_payment.id
+    );
+    assert!(
+        matches!(
+            conversion_info_of(&event_payment),
+            Some(ConversionInfo::Orchestra { .. })
+        ),
+        "cross-chain receive {source_asset}→{dest_label}: payment {} reported without \
+         Orchestra conversion info",
+        event_payment.id
     );
 
     // On a receive the external side is the source, so the hash has to be the

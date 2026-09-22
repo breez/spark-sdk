@@ -100,6 +100,12 @@ namespace BreezSdkSnippets
                         var failedPayment = paymentFailedEvent.payment;
                         break;
 
+                    case SdkEvent.PaymentMetadataUpdated paymentMetadataUpdatedEvent:
+                        // Details of a payment already reported changed, such as the
+                        // conversion info of a cross-chain receive.
+                        var updatedPayment = paymentMetadataUpdatedEvent.payment;
+                        break;
+
                     case SdkEvent.AutoOptimization optimizationEvent:
                         // Background optimizer progress: started, round completed, or a
                         // terminal outcome. Manual OptimizeLeaves calls do not emit these.
