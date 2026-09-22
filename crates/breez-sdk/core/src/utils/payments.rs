@@ -10,7 +10,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     ConversionInfo, ConversionStatus, EventEmitter, Payment, PaymentMetadata, PaymentStatus,
-    PaymentType, Storage,
+    PaymentType, Storage, StorageError,
     error::SdkError,
     events::SdkEvent,
     persist::{CachedAccountInfo, ObjectCacheRepository},
@@ -63,6 +63,45 @@ pub(crate) async fn get_payment_and_emit_event(
         };
     debug!("Emitting payment event: {payment:?}");
     event_emitter.emit(&SdkEvent::from_payment(payment)).await;
+}
+
+/// Writes `metadata` onto the payment row and announces the change with
+/// `PaymentMetadataUpdated`.
+///
+/// Meant for writes that land after the payment's own status event, like a
+/// provider monitor filling in conversion info. Writes done before that event
+/// don't need it: the status event already carries the metadata.
+pub(crate) async fn insert_payment_metadata_and_emit(
+    storage: &Arc<dyn Storage>,
+    event_emitter: &EventEmitter,
+    payment_id: String,
+    metadata: PaymentMetadata,
+) -> Result<(), StorageError> {
+    storage
+        .insert_payment_metadata(payment_id.clone(), metadata)
+        .await?;
+    emit_payment_metadata_updated(storage, event_emitter, &payment_id).await;
+    Ok(())
+}
+
+/// Emits `PaymentMetadataUpdated` for a payment whose metadata was just
+/// written. Reads the payment back so the event carries the new details.
+///
+/// Silent when the payment row doesn't exist yet: the status event emitted
+/// once it does will include the metadata.
+pub(crate) async fn emit_payment_metadata_updated(
+    storage: &Arc<dyn Storage>,
+    event_emitter: &EventEmitter,
+    payment_id: &str,
+) {
+    match get_payment_with_conversion_details(payment_id.to_string(), Arc::clone(storage)).await {
+        Ok(payment) => {
+            event_emitter
+                .emit(&SdkEvent::PaymentMetadataUpdated { payment })
+                .await;
+        }
+        Err(e) => debug!("Not emitting PaymentMetadataUpdated for {payment_id}: {e:?}"),
+    }
 }
 
 /// Process an already-fetched Spark transfer, claiming it when the transfer is
@@ -860,5 +899,59 @@ mod tests {
             .unwrap();
 
         assert!(payment.conversion_details.is_none());
+    }
+
+    #[cfg(feature = "sqlite")]
+    struct CapturingListener {
+        events: Arc<std::sync::Mutex<Vec<SdkEvent>>>,
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[macros::async_trait]
+    impl crate::events::EventListener for CapturingListener {
+        async fn on_event(&self, event: SdkEvent) {
+            self.events.lock().unwrap().push(event);
+        }
+    }
+
+    #[cfg(feature = "sqlite")]
+    async fn emitter_with_capture() -> (EventEmitter, Arc<std::sync::Mutex<Vec<SdkEvent>>>) {
+        let emitter = EventEmitter::new(false);
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        emitter
+            .add_external_listener(Box::new(CapturingListener {
+                events: Arc::clone(&events),
+            }))
+            .await;
+        (emitter, events)
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn metadata_updated_carries_the_stored_payment() {
+        let storage = test_storage();
+        let payment = parent_send_no_crosschain();
+        storage.apply_payment_update(payment.clone()).await.unwrap();
+        let (emitter, events) = emitter_with_capture().await;
+
+        emit_payment_metadata_updated(&storage, &emitter, &payment.id).await;
+
+        let events = events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            SdkEvent::PaymentMetadataUpdated { payment: p } if p.id == payment.id
+        ));
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn metadata_updated_is_silent_for_an_unknown_payment() {
+        let storage = test_storage();
+        let (emitter, events) = emitter_with_capture().await;
+
+        emit_payment_metadata_updated(&storage, &emitter, "missing").await;
+
+        assert!(events.lock().unwrap().is_empty());
     }
 }

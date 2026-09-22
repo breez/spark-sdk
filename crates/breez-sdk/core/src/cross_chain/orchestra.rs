@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use breez_sdk_common::breez_server::BreezServer;
 use breez_sdk_common::fiat::FiatService;
@@ -26,11 +27,14 @@ use tokio::{
 use tracing::{Instrument, debug, error, info, warn};
 
 use crate::error::SdkError;
+use crate::events::{EventEmitter, EventListener, SdkEvent};
 use crate::persist::{
     ConversionFilter, ObjectCacheRepository, StorageListPaymentsRequest,
     StoragePaymentDetailsFilter,
 };
-use crate::{ConversionInfo, ConversionStatus, Payment, PaymentDetails, PaymentStatus, Storage};
+use crate::{
+    ConversionInfo, ConversionStatus, Payment, PaymentDetails, PaymentStatus, PaymentType, Storage,
+};
 
 use super::{
     CrossChainAcceptedAsset, CrossChainFeeMode, CrossChainProvider, CrossChainProviderContext,
@@ -42,7 +46,10 @@ use super::{
 };
 
 use crate::utils::{
-    payments::{fetch_and_process_payment, resolve_payment_id},
+    payments::{
+        emit_payment_metadata_updated, fetch_and_process_payment, insert_payment_metadata_and_emit,
+        resolve_payment_id,
+    },
     polling::{PollSchedule, poll_until},
     time::{now_secs, try_now_secs},
 };
@@ -146,22 +153,56 @@ struct ResolvedSparkAsset {
     decimals: u8,
 }
 
+/// Wakes the monitor when a payment comes in while a cross-chain receive is
+/// open, so its conversion info is attached right away instead of on the
+/// next timed pass.
+struct InboundPaymentListener {
+    monitor_trigger: broadcast::Sender<()>,
+    has_active_receives: Arc<AtomicBool>,
+}
+
+#[macros::async_trait]
+impl EventListener for InboundPaymentListener {
+    async fn on_event(&self, event: SdkEvent) {
+        let (SdkEvent::PaymentSucceeded { payment } | SdkEvent::PaymentPending { payment }) =
+            &event
+        else {
+            return;
+        };
+        if payment.payment_type != PaymentType::Receive
+            || !self.has_active_receives.load(Ordering::Relaxed)
+        {
+            return;
+        }
+        debug!(
+            "Orchestra: inbound payment {} while a receive is open, waking the monitor",
+            payment.id
+        );
+        let _ = self.monitor_trigger.send(());
+    }
+}
+
 /// Flashnet Orchestra cross-chain provider.
 pub(crate) struct OrchestraService {
     client: Arc<OrchestraClient>,
     spark_wallet: Arc<SparkWallet>,
     storage: Arc<dyn Storage>,
     fiat_service: Arc<dyn FiatService>,
+    event_emitter: Arc<EventEmitter>,
     monitor_trigger: broadcast::Sender<()>,
+    /// Whether any receive row is still open. Refreshed by every monitor
+    /// pass, set when a receive is prepared.
+    has_active_receives: Arc<AtomicBool>,
 }
 
 impl OrchestraService {
-    pub(crate) fn new(
+    pub(crate) async fn new(
         config_resolver: Arc<dyn OrchestraConfigResolver>,
         spark_wallet: Arc<SparkWallet>,
         storage: Arc<dyn Storage>,
         fiat_service: Arc<dyn FiatService>,
         http_client: Arc<dyn platform_utils::HttpClient>,
+        event_emitter: Arc<EventEmitter>,
         shutdown_receiver: watch::Receiver<()>,
     ) -> Self {
         let client = Arc::new(OrchestraClient::new(
@@ -170,13 +211,23 @@ impl OrchestraService {
             http_client,
         ));
         let (monitor_trigger, _) = broadcast::channel(10);
+        let has_active_receives = Arc::new(AtomicBool::new(false));
+
+        event_emitter
+            .add_internal_listener(Box::new(InboundPaymentListener {
+                monitor_trigger: monitor_trigger.clone(),
+                has_active_receives: Arc::clone(&has_active_receives),
+            }))
+            .await;
 
         let service = Self {
             client,
             spark_wallet,
             storage,
             fiat_service,
+            event_emitter,
             monitor_trigger: monitor_trigger.clone(),
+            has_active_receives,
         };
         info!("Orchestra service initialized");
         service.spawn_monitor(shutdown_receiver, &monitor_trigger);
@@ -197,6 +248,8 @@ impl OrchestraService {
         let client = Arc::clone(&self.client);
         let spark_wallet = Arc::clone(&self.spark_wallet);
         let fiat_service = Arc::clone(&self.fiat_service);
+        let event_emitter = Arc::clone(&self.event_emitter);
+        let has_active_receives = Arc::clone(&self.has_active_receives);
         let mut trigger_receiver = monitor_trigger.subscribe();
         let span = tracing::Span::current();
 
@@ -209,7 +262,8 @@ impl OrchestraService {
                 let mut probe_clock: HashMap<String, u64> = HashMap::new();
                 loop {
                     if let Err(e) =
-                        Self::poll_in_flight_sends(&storage, &client, &spark_wallet).await
+                        Self::poll_in_flight_sends(&storage, &client, &spark_wallet, &event_emitter)
+                            .await
                     {
                         error!("Orchestra send-monitor poll failed: {e:?}");
                     }
@@ -219,6 +273,8 @@ impl OrchestraService {
                         &client,
                         &spark_wallet,
                         fiat_service.as_ref(),
+                        &event_emitter,
+                        &has_active_receives,
                         &mut probe_clock,
                     )
                     .await
@@ -311,6 +367,7 @@ impl OrchestraService {
         storage: &Arc<dyn Storage>,
         client: &Arc<OrchestraClient>,
         spark_wallet: &Arc<SparkWallet>,
+        event_emitter: &EventEmitter,
     ) -> Result<(), SdkError> {
         let pending = storage
             .list_payments(StorageListPaymentsRequest {
@@ -378,15 +435,16 @@ impl OrchestraService {
             // status, not the payment's, so nothing else clears this row.
             if payment.status == PaymentStatus::Failed {
                 if let Some(metadata) = with_status(conversion_info, ConversionStatus::Failed)
-                    && let Err(e) = storage
-                        .insert_payment_metadata(
-                            payment.id.clone(),
-                            crate::PaymentMetadata {
-                                conversion_info: Some(metadata),
-                                ..Default::default()
-                            },
-                        )
-                        .await
+                    && let Err(e) = insert_payment_metadata_and_emit(
+                        storage,
+                        event_emitter,
+                        payment.id.clone(),
+                        crate::PaymentMetadata {
+                            conversion_info: Some(metadata),
+                            ..Default::default()
+                        },
+                    )
+                    .await
                 {
                     warn!("Failed to mark {} conversion failed: {e}", payment.id);
                 }
@@ -408,9 +466,13 @@ impl OrchestraService {
                     conversion_info: Some(updated.clone()),
                     ..Default::default()
                 };
-                if let Err(e) = storage
-                    .insert_payment_metadata(payment.id.clone(), metadata)
-                    .await
+                if let Err(e) = insert_payment_metadata_and_emit(
+                    storage,
+                    event_emitter,
+                    payment.id.clone(),
+                    metadata,
+                )
+                .await
                 {
                     warn!(
                         "Failed to record Orchestra order {id} for payment {}: {e}",
@@ -484,9 +546,13 @@ impl OrchestraService {
                 payment.id
             );
 
-            if let Err(e) = storage
-                .insert_payment_metadata(payment.id.clone(), updated_metadata)
-                .await
+            if let Err(e) = insert_payment_metadata_and_emit(
+                storage,
+                event_emitter,
+                payment.id.clone(),
+                updated_metadata,
+            )
+            .await
             {
                 error!(
                     "Failed to update Orchestra status for payment {}: {e}",
@@ -507,12 +573,15 @@ impl OrchestraService {
     /// Each row is resolved to an order handle by
     /// [`Self::ensure_receive_order_handle`], then polled by
     /// [`Self::poll_receive_order_status`].
+    #[allow(clippy::too_many_arguments)]
     async fn poll_in_flight_receives(
         storage: &Arc<dyn Storage>,
         swap_storage: &OrchestraStorageAdapter,
         client: &Arc<OrchestraClient>,
         spark_wallet: &Arc<SparkWallet>,
         fiat_service: &dyn FiatService,
+        event_emitter: &EventEmitter,
+        has_active_receives: &AtomicBool,
         probe_clock: &mut HashMap<String, u64>,
     ) -> Result<(), SdkError> {
         let active = swap_storage.list_active().await?;
@@ -520,6 +589,7 @@ impl OrchestraService {
             "Orchestra monitor: found {} active receive rows",
             active.len()
         );
+        has_active_receives.store(!active.is_empty(), Ordering::Relaxed);
         prune_probe_clock(probe_clock, &active);
 
         for (row, data) in active {
@@ -549,6 +619,7 @@ impl OrchestraService {
                 client,
                 spark_wallet,
                 fiat_service,
+                event_emitter,
                 row,
                 data,
                 &order_id,
@@ -652,6 +723,7 @@ impl OrchestraService {
         client: &Arc<OrchestraClient>,
         spark_wallet: &Arc<SparkWallet>,
         fiat_service: &dyn FiatService,
+        event_emitter: &EventEmitter,
         row: crate::StoredCrossChainSwap,
         data: OrchestraSwapData,
         order_id: &str,
@@ -694,7 +766,10 @@ impl OrchestraService {
                 )
                 .await
                 {
-                    Ok(ReceiveMetadataOutcome::Attached) => true,
+                    Ok(ReceiveMetadataOutcome::Attached(payment_id)) => {
+                        emit_payment_metadata_updated(storage, event_emitter, &payment_id).await;
+                        true
+                    }
                     Ok(ReceiveMetadataOutcome::Pending) => {
                         debug!(
                             "Orchestra receive {quote_id} Completed, metadata not on the \
@@ -1512,6 +1587,7 @@ impl CrossChainService for OrchestraService {
 
         let adapter = OrchestraStorageAdapter::new(Arc::clone(&self.storage));
         adapter.upsert(&data).await?;
+        self.has_active_receives.store(true, Ordering::Relaxed);
 
         Ok(CrossChainReceivePrepared {
             payment_request,
@@ -1926,8 +2002,8 @@ fn apply_terminal_status(
 
 /// Where a receive order's `ConversionInfo` ended up.
 enum ReceiveMetadataOutcome {
-    /// Written against the inbound `Payment` row.
-    Attached,
+    /// Written against the inbound `Payment` row with this id.
+    Attached(String),
     /// Not on the row yet, and cached under the order's `sparkTxHash`: the
     /// order carries no hash, the hash did not resolve to a payment id, or
     /// the row write failed.
@@ -1972,7 +2048,7 @@ async fn attach_receive_metadata(
             .insert_payment_metadata(payment_id.clone(), metadata.clone())
             .await
         {
-            Ok(()) => return Ok(ReceiveMetadataOutcome::Attached),
+            Ok(()) => return Ok(ReceiveMetadataOutcome::Attached(payment_id)),
             Err(e) => warn!(
                 "Orchestra receive {}: failed to write metadata onto payment {payment_id} ({e}), \
                  caching it",
@@ -4009,5 +4085,66 @@ mod tests {
         assert!(needs_refund_address_to_receive("ton"));
         assert!(needs_refund_address_to_receive("TON"));
         assert!(!needs_refund_address_to_receive("base"));
+    }
+
+    fn inbound_listener(active: bool) -> (InboundPaymentListener, broadcast::Receiver<()>) {
+        let (trigger, receiver) = broadcast::channel(4);
+        let listener = InboundPaymentListener {
+            monitor_trigger: trigger,
+            has_active_receives: Arc::new(AtomicBool::new(active)),
+        };
+        (listener, receiver)
+    }
+
+    fn inbound_spark_payment() -> crate::Payment {
+        let mut payment = dummy_payment(
+            crate::PaymentMethod::Spark,
+            PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: None,
+                conversion_info: None,
+            },
+        );
+        payment.payment_type = PaymentType::Receive;
+        payment
+    }
+
+    #[async_test_all]
+    async fn inbound_payment_wakes_the_monitor_while_a_receive_is_open() {
+        let (listener, mut receiver) = inbound_listener(true);
+
+        listener
+            .on_event(SdkEvent::PaymentSucceeded {
+                payment: inbound_spark_payment(),
+            })
+            .await;
+
+        assert!(receiver.try_recv().is_ok());
+    }
+
+    #[async_test_all]
+    async fn inbound_payment_is_ignored_without_an_open_receive() {
+        let (listener, mut receiver) = inbound_listener(false);
+
+        listener
+            .on_event(SdkEvent::PaymentSucceeded {
+                payment: inbound_spark_payment(),
+            })
+            .await;
+
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[async_test_all]
+    async fn outbound_payment_does_not_wake_the_monitor() {
+        let (listener, mut receiver) = inbound_listener(true);
+        let mut payment = inbound_spark_payment();
+        payment.payment_type = PaymentType::Send;
+
+        listener
+            .on_event(SdkEvent::PaymentSucceeded { payment })
+            .await;
+
+        assert!(receiver.try_recv().is_err());
     }
 }

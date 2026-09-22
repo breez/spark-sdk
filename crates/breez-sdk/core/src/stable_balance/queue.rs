@@ -12,6 +12,7 @@ use tracing::{Instrument, debug, info, warn};
 
 use crate::models::ConversionStatus;
 use crate::persist::{ObjectCacheRepository, PaymentMetadata, Storage};
+use crate::utils::payments::insert_payment_metadata_and_emit;
 use crate::utils::time::now_secs;
 
 use super::{StableBalance, per_receive_transfer_id};
@@ -389,17 +390,16 @@ impl StableBalance {
         match self.per_receive_convert(&payment_id).await {
             Ok(converted) => {
                 if converted
-                    && let Err(e) = self
-                        .core
-                        .storage
-                        .insert_payment_metadata(
-                            payment_id.clone(),
-                            PaymentMetadata {
-                                conversion_status: Some(ConversionStatus::Completed),
-                                ..Default::default()
-                            },
-                        )
-                        .await
+                    && let Err(e) = insert_payment_metadata_and_emit(
+                        &self.core.storage,
+                        &self.event_emitter,
+                        payment_id.clone(),
+                        PaymentMetadata {
+                            conversion_status: Some(ConversionStatus::Completed),
+                            ..Default::default()
+                        },
+                    )
+                    .await
                 {
                     warn!("Failed to persist Completed status for {payment_id}: {e:?}");
                 }

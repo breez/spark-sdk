@@ -100,6 +100,10 @@ class SdkListener(EventListener):
             # A payment failed. payment.details carries the method-specific
             # context to show the user.
             failed_payment = event.payment
+        elif isinstance(event, SdkEvent.PAYMENT_METADATA_UPDATED):
+            # Details of a payment already reported changed, such as the
+            # conversion info of a cross-chain receive.
+            updated_payment = event.payment
         elif isinstance(event, SdkEvent.AUTO_OPTIMIZATION):
             # Background optimizer progress: started, round completed, or a
             # terminal outcome. Manual optimize_leaves calls do not emit these.

@@ -149,6 +149,7 @@ use crate::models::{
 };
 use crate::persist::{ObjectCacheRepository, PaymentMetadata, Storage};
 use crate::sdk::RuntimeEvent;
+use crate::utils::payments::insert_payment_metadata_and_emit;
 use crate::{
     SdkError,
     models::StableBalanceConfig,
@@ -322,7 +323,33 @@ impl StableBalance {
     }
 
     /// Sets the active token by label, or deactivates stable balance if `None`.
+    ///
+    /// Pending conversions for the old token are no longer relevant: the
+    /// queue is cleared and cleared per-receive tasks are marked Failed.
     pub(crate) async fn set_active_token(&self, label: Option<String>) -> Result<(), SdkError> {
+        let cleared_payment_ids = self.core.queue.clear_queue().await;
+        if !cleared_payment_ids.is_empty() {
+            info!(
+                "Cleared {} pending conversion(s) from queue due to token change",
+                cleared_payment_ids.len()
+            );
+        }
+        for payment_id in &cleared_payment_ids {
+            if let Err(e) = insert_payment_metadata_and_emit(
+                &self.core.storage,
+                &self.event_emitter,
+                payment_id.clone(),
+                PaymentMetadata {
+                    conversion_status: Some(ConversionStatus::Failed),
+                    ..Default::default()
+                },
+            )
+            .await
+            {
+                warn!("Failed to persist Failed status for cleared conversion {payment_id}: {e:?}");
+            }
+        }
+
         self.core.set_active_token(label).await
     }
 
@@ -364,35 +391,10 @@ impl StableBalanceCore {
 
     /// Sets the active token by label, or deactivates stable balance if `None`.
     ///
-    /// Validates that the label exists in the configured tokens list.
-    /// Clears the conversion queue (pending conversions for the old token are no longer
-    /// relevant), marks cleared per-receive tasks as Failed, and caches the choice locally.
+    /// Validates that the label exists in the configured tokens list and
+    /// caches the choice locally.
     async fn set_active_token(&self, label: Option<String>) -> Result<(), SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
-
-        // Clear the queue — pending conversions for the old token are no longer relevant
-        let cleared_payment_ids = self.queue.clear_queue().await;
-        if !cleared_payment_ids.is_empty() {
-            info!(
-                "Cleared {} pending conversion(s) from queue due to token change",
-                cleared_payment_ids.len()
-            );
-        }
-        for payment_id in &cleared_payment_ids {
-            if let Err(e) = self
-                .storage
-                .insert_payment_metadata(
-                    payment_id.clone(),
-                    PaymentMetadata {
-                        conversion_status: Some(ConversionStatus::Failed),
-                        ..Default::default()
-                    },
-                )
-                .await
-            {
-                warn!("Failed to persist Failed status for cleared conversion {payment_id}: {e:?}");
-            }
-        }
 
         let new_active = if let Some(label) = label {
             let token = self
