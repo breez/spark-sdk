@@ -1299,13 +1299,13 @@ impl CrossChainService for OrchestraService {
         // FeesExcluded inflates the source to deliver the cross-chain
         // conversion of `amount`; FeesIncluded passes `amount` through (send
         // all, recipient gets `amount − fees`).
-        let (source_amount, sized) = match fee_mode {
+        let (source_amount, destination_amount) = match fee_mode {
             CrossChainFeeMode::FeesIncluded => (amount, None),
             CrossChainFeeMode::FeesExcluded => {
                 let destination_amount = self
                     .compute_target_destination_amount(&source_asset, route, amount)
                     .await?;
-                let sized = self
+                let required_in = self
                     .estimate_required_source_amount(
                         source_chain,
                         &source_asset.asset,
@@ -1317,8 +1317,9 @@ impl CrossChainService for OrchestraService {
                         false,
                     )
                     .await
-                    .map_err(with_limits)?;
-                (sized.required_in, Some(sized))
+                    .map_err(with_limits)?
+                    .required_in;
+                (required_in, Some(destination_amount))
             }
         };
 
@@ -1347,25 +1348,18 @@ impl CrossChainService for OrchestraService {
         );
         let quote: QuoteResponse = self
             .client
-            .quote(request.clone())
+            .quote(request)
             .await
             .map_err(|e| with_limits(SdkError::from(e)))?;
         debug!("Orchestra: quote response: {:?}", quote);
-        verify_quote_amount_in(source_amount, parse_amount(&quote.amount_in, "amountIn")?)?;
-        let quote = match &sized {
-            Some(sized) => self
-                .requote_if_short(request, quote, sized, sized.target, max_slippage_bps)
-                .await
-                .map_err(with_limits)?,
-            None => quote,
-        };
 
         let amount_in = parse_amount(&quote.amount_in, "amountIn")?;
         let estimated_out = parse_amount(&quote.estimated_out, "estimatedOut")?;
         let service_fee_amount = parse_amount(&quote.total_fee_amount, "totalFeeAmount")?;
 
-        if let Some(sized) = &sized {
-            verify_quote_not_drifted(sized.target, estimated_out, max_slippage_bps)?;
+        verify_quote_amount_in(source_amount, amount_in)?;
+        if let Some(target) = destination_amount {
+            verify_quote_not_drifted(target, estimated_out, max_slippage_bps)?;
         }
 
         // `amount_in` expressed in destination-asset units, via the same
