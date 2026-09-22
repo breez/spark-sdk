@@ -26,7 +26,7 @@ use crate::signer::{
     SparkSigner,
 };
 use crate::ssp::BitcoinNetwork;
-use crate::token::{HashableTokenTransaction, bech32m_encode_token_id};
+use crate::token::bech32m_encode_token_id;
 use crate::token::{TokenMetadata, TokenOutput, TokenOutputWithPrevOut};
 use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId, TreeNodeStatus};
 use crate::utils::byte_padding::BytePadding;
@@ -1139,56 +1139,6 @@ pub struct TokenTransaction {
     pub fulfilled_invoices: Vec<String>,
 }
 
-impl TryFrom<(operator_rpc::spark_token::TokenTransaction, Network)> for TokenTransaction {
-    type Error = ServiceError;
-
-    fn try_from(
-        (token_transaction, network): (operator_rpc::spark_token::TokenTransaction, Network),
-    ) -> Result<Self, Self::Error> {
-        let hash = hex::encode(token_transaction.compute_hash(false)?);
-
-        let inputs = token_transaction
-            .token_inputs
-            .ok_or(ServiceError::Generic("Missing token inputs".to_string()))?
-            .try_into()?;
-
-        let outputs = token_transaction
-            .token_outputs
-            .into_iter()
-            .map(|output| (output, network).try_into())
-            .collect::<Result<Vec<TokenOutput>, _>>()?;
-
-        let status = TokenTransactionStatus::Unknown;
-
-        // client_created_timestamp will always be filled for V2 transactions and V1 transactions will be discontinued soon
-        let created_timestamp = token_transaction
-            .client_created_timestamp
-            .ok_or(ServiceError::Generic(
-                "Missing client created timestamp. Could this be a V1 transaction?".to_string(),
-            ))
-            .and_then(|ts| {
-                prost_timestamp_to_web_time(&ts).ok_or_else(|| {
-                    ServiceError::ValidationError("invalid client created timestamp".to_string())
-                })
-            })?;
-
-        let invoice_attachments = token_transaction
-            .invoice_attachments
-            .into_iter()
-            .map(|attachment| attachment.spark_invoice)
-            .collect();
-
-        Ok(TokenTransaction {
-            hash,
-            inputs,
-            outputs,
-            status,
-            created_timestamp,
-            fulfilled_invoices: invoice_attachments,
-        })
-    }
-}
-
 impl
     TryFrom<(
         operator_rpc::spark_token::TokenTransactionWithStatus,
@@ -1275,6 +1225,26 @@ impl TryFrom<operator_rpc::spark_token::token_transaction::TokenInputs> for Toke
                 Ok(TokenInputs::Transfer(input.try_into()?))
             }
             operator_rpc::spark_token::token_transaction::TokenInputs::CreateInput(input) => {
+                Ok(TokenInputs::Create(input.try_into()?))
+            }
+        }
+    }
+}
+
+impl TryFrom<operator_rpc::spark_token::final_token_transaction::TokenInputs> for TokenInputs {
+    type Error = ServiceError;
+
+    fn try_from(
+        inputs: operator_rpc::spark_token::final_token_transaction::TokenInputs,
+    ) -> Result<Self, Self::Error> {
+        match inputs {
+            operator_rpc::spark_token::final_token_transaction::TokenInputs::MintInput(input) => {
+                Ok(TokenInputs::Mint(input.try_into()?))
+            }
+            operator_rpc::spark_token::final_token_transaction::TokenInputs::TransferInput(
+                input,
+            ) => Ok(TokenInputs::Transfer(input.try_into()?)),
+            operator_rpc::spark_token::final_token_transaction::TokenInputs::CreateInput(input) => {
                 Ok(TokenInputs::Create(input.try_into()?))
             }
         }
