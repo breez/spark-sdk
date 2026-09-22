@@ -193,14 +193,13 @@ pub enum _ClaimDeferredReason {
 
 #[frb(mirror(ClaimDepositOutcome))]
 pub enum _ClaimDepositOutcome {
-    Settled,
+    Settled { payment: Payment },
     Submitted,
     Deferred { reason: ClaimDeferredReason },
 }
 
 #[frb(mirror(ClaimDepositResponse))]
 pub struct _ClaimDepositResponse {
-    pub payment: Option<Payment>,
     pub outcome: ClaimDepositOutcome,
 }
 

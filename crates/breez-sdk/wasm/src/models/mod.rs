@@ -169,16 +169,16 @@ pub enum ClaimDeferredReason {
     },
 }
 
+#[allow(clippy::large_enum_variant)]
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimDepositOutcome)]
 pub enum ClaimDepositOutcome {
-    Settled,
+    Settled { payment: Payment },
     Submitted,
     Deferred { reason: ClaimDeferredReason },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimDepositResponse)]
 pub struct ClaimDepositResponse {
-    pub payment: Option<Payment>,
     pub outcome: ClaimDepositOutcome,
 }
 
