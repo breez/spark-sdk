@@ -48,11 +48,11 @@ Deposits are not part of the synced wallet records, so a ceiling set on one devi
 
 {{#name claim_deposit}} reports what it did as {{#name outcome}}, which is worth handling in full:
 
-- {{#enum ClaimDepositOutcome::Settled}} carries the payment.
+- {{#enum ClaimDepositOutcome::Settled}} carries the payment it produced.
 - {{#enum ClaimDepositOutcome::Submitted}} means a claim made before maturity is settling asynchronously. Watch for the payment via {{#name list_payments}} or the [payment events](events.md).
 - {{#enum ClaimDepositOutcome::Deferred}} means nothing was claimed yet and no further call is needed.
 
-Which one occurs follows from the deposit's maturity and the fee ceiling rather than from anything you ask for. A {{#name max_fee}} below what an early claim costs returns {{#enum ClaimDepositOutcome::Deferred}} rather than failing. A deposit that has already matured and whose claim exceeds the ceiling is a different matter and returns {{#enum SdkError::MaxDepositClaimFeeExceeded}}, because nothing will claim it until the ceiling rises or on-chain fees fall.
+Which outcome occurs follows from the deposit's maturity and the fee ceiling rather than from anything you ask for. A {{#name max_fee}} below what an early claim costs returns {{#enum ClaimDepositOutcome::Deferred}} rather than failing. A deposit that has already matured and whose claim exceeds the ceiling is a different matter and returns {{#enum SdkError::MaxDepositClaimFeeExceeded}}, because nothing will claim it until the ceiling rises or on-chain fees fall.
 
 Whether a deferred deposit actually waits for maturity depends on its {{#name reason}}. The SDK re-attempts an early claim as the deposit gains confirmations, so a claim declined at a depth the provider will not yet front is often claimed early a block or two later.
 

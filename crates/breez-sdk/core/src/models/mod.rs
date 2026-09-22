@@ -1310,9 +1310,11 @@ pub struct DepositInfo {
     pub claim_error: Option<DepositClaimError>,
     /// Unset when no instant claim has been attempted.
     pub instant_claim_status: Option<InstantClaimStatus>,
-    /// The fee ceiling standing for this deposit alone, capping both the claim at
-    /// maturity and the earlier claim. Unset means the configured max deposit
-    /// claim fee applies.
+    /// The fee ceiling standing for this deposit alone. It caps what may be paid
+    /// to claim the deposit ahead of maturity. The claim at maturity runs under
+    /// whichever is larger, this or the configured max deposit claim fee, so a
+    /// ceiling set below that one does not hold the deposit back from it. Unset
+    /// means the configured ceiling applies to both.
     pub max_claim_fee: Option<MaxFee>,
 }
 
@@ -1320,18 +1322,20 @@ pub struct DepositInfo {
 pub struct ClaimDepositRequest {
     pub txid: String,
     pub vout: u32,
-    /// Caps what the claim may cost. A deposit that has not matured is claimed
-    /// instantly when the provider's spread fits within this, so the same ceiling
-    /// governs both.
+    /// Caps what the claim may cost, and is recorded on the deposit so later
+    /// automatic attempts are held to it too.
     ///
-    /// Recorded on the deposit and applied to every later automatic attempt on it,
-    /// so raising it above the quoted spread is what lets a deposit be claimed
-    /// early without further input, and lowering it below holds the deposit to
-    /// maturity. Unset claims under the configured max deposit claim fee and
-    /// clears any ceiling previously recorded on the deposit.
+    /// Raising it above the quoted spread is what lets a deposit be claimed ahead
+    /// of maturity without further input. Lowering it below the spread keeps the
+    /// deposit from being claimed early, and does not hold back its claim at
+    /// maturity: that one runs under whichever is larger, this or the configured
+    /// max deposit claim fee.
+    ///
+    /// Unset claims under the configured max deposit claim fee and clears any
+    /// ceiling previously recorded on the deposit.
     ///
     /// The ceiling is recorded before the claim is attempted, so it stands even
-    /// when the attempt fails for exceeding it.
+    /// when the attempt is then declined for exceeding it.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub max_fee: Option<MaxFee>,
 }
@@ -1365,11 +1369,12 @@ pub enum ClaimDeferredReason {
 }
 
 /// What became of a claim.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ClaimDepositOutcome {
-    /// Claimed at maturity and settled. The response carries the payment.
-    Settled,
+    /// Claimed at maturity and settled, carrying the payment it produced.
+    Settled { payment: Payment },
     /// Claimed ahead of maturity and submitted. The transfer settles
     /// asynchronously, so no payment is returned yet: watch for it via events or
     /// `list_payments`.
@@ -1389,10 +1394,6 @@ pub enum ClaimDepositOutcome {
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ClaimDepositResponse {
-    /// The settled claim payment, present only when the outcome is `Settled`. A
-    /// claim made ahead of maturity settles asynchronously, and a deferred claim
-    /// moved nothing at all.
-    pub payment: Option<Payment>,
     /// What the call did. Which outcome occurs follows from the deposit's maturity
     /// and the fee ceiling, not from anything the caller asks for, so handle all
     /// three on every claim.

@@ -304,8 +304,7 @@ impl BreezSdk {
                     })
                     .await;
                 Ok(ClaimDepositResponse {
-                    payment: Some(payment),
-                    outcome: ClaimDepositOutcome::Settled,
+                    outcome: ClaimDepositOutcome::Settled { payment },
                 })
             }
             // An earlier claim took it, so the deposit is settled rather than
@@ -947,9 +946,8 @@ pub(super) fn larger_ceiling(
     }
 }
 
-/// The response for a resolved early claim. Nothing is claimed synchronously
-/// ahead of maturity, so neither outcome carries a payment: a submitted claim
-/// settles asynchronously, and a declined one moved nothing at all.
+/// The response for a resolved early claim. Neither outcome carries a payment: a
+/// submitted claim settles asynchronously, and a declined one moved nothing.
 pub(super) fn instant_claim_response(outcome: &InstantClaimOutcome) -> ClaimDepositResponse {
     let outcome = match outcome {
         InstantClaimOutcome::Submitted(_) => ClaimDepositOutcome::Submitted,
@@ -957,10 +955,7 @@ pub(super) fn instant_claim_response(outcome: &InstantClaimOutcome) -> ClaimDepo
             reason: reason.clone(),
         },
     };
-    ClaimDepositResponse {
-        payment: None,
-        outcome,
-    }
+    ClaimDepositResponse { outcome }
 }
 
 /// Whether a claim has already taken this deposit, still settling or credited.
@@ -1283,10 +1278,9 @@ mod tests {
     fn a_submitted_early_claim_returns_no_payment_yet() {
         let response =
             instant_claim_response(&InstantClaimOutcome::Submitted("claim-1".to_string()));
-        assert_eq!(response.outcome, ClaimDepositOutcome::Submitted);
         // The transfer settles asynchronously, so the caller watches for it rather
-        // than reading it off this response.
-        assert!(response.payment.is_none());
+        // than reading it off this response: only Settled carries a payment.
+        assert!(matches!(response.outcome, ClaimDepositOutcome::Submitted));
     }
 
     #[test]
@@ -1297,28 +1291,26 @@ mod tests {
             required_fee_sats: 5_000,
             max_fee_sats: 1_000,
         }));
+        let ClaimDepositOutcome::Deferred { reason } = response.outcome else {
+            panic!("a declined early claim must defer, not fail")
+        };
         assert_eq!(
-            response.outcome,
-            ClaimDepositOutcome::Deferred {
-                reason: ClaimDeferredReason::MaxFeeExceeded {
-                    required_fee_sats: 5_000,
-                    max_fee_sats: 1_000,
-                }
+            reason,
+            ClaimDeferredReason::MaxFeeExceeded {
+                required_fee_sats: 5_000,
+                max_fee_sats: 1_000,
             }
         );
-        assert!(response.payment.is_none(), "a deferred claim moves nothing");
     }
 
     #[test]
     fn a_deposit_too_shallow_for_any_plan_defers_without_a_fee() {
         let response =
             instant_claim_response(&declined(ClaimDeferredReason::NoEarlyClaimAvailable));
-        assert_eq!(
-            response.outcome,
-            ClaimDepositOutcome::Deferred {
-                reason: ClaimDeferredReason::NoEarlyClaimAvailable
-            }
-        );
+        let ClaimDepositOutcome::Deferred { reason } = response.outcome else {
+            panic!("too shallow for a plan must defer")
+        };
+        assert_eq!(reason, ClaimDeferredReason::NoEarlyClaimAvailable);
     }
 
     #[test]
@@ -1328,12 +1320,13 @@ mod tests {
         let response = instant_claim_response(&declined(ClaimDeferredReason::ProviderDeclined {
             message: "transport error".to_string(),
         }));
+        let ClaimDepositOutcome::Deferred { reason } = response.outcome else {
+            panic!("a provider decline must defer")
+        };
         assert_eq!(
-            response.outcome,
-            ClaimDepositOutcome::Deferred {
-                reason: ClaimDeferredReason::ProviderDeclined {
-                    message: "transport error".to_string()
-                }
+            reason,
+            ClaimDeferredReason::ProviderDeclined {
+                message: "transport error".to_string()
             }
         );
     }

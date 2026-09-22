@@ -334,9 +334,9 @@ async fn test_deposit_fee_manual_claim(
         })
         .await?;
     // A standard (mature) claim settles synchronously and returns the payment.
-    let payment = claim_resp
-        .payment
-        .expect("standard claim should return a settled payment");
+    let ClaimDepositOutcome::Settled { payment } = claim_resp.outcome else {
+        panic!("standard claim should settle: {:?}", claim_resp.outcome)
+    };
     assert!(matches!(payment.payment_type, PaymentType::Receive));
     assert!(matches!(payment.method, PaymentMethod::Deposit));
     assert!(
@@ -428,7 +428,6 @@ async fn test_claim_deposit_records_the_max_fee(
                 "a 1 sat ceiling cannot cover any claim: {:?}",
                 resp.outcome
             );
-            assert!(resp.payment.is_none(), "a deferred claim moves nothing");
         }
         Err(e) => info!("Claim at maturity refused as expected: {e}"),
     }
@@ -1092,7 +1091,7 @@ async fn test_manual_instant_deposit_claim(
     // and only a submitted early claim leaves anything for the assertions below.
     match &claim_resp.outcome {
         ClaimDepositOutcome::Submitted => {}
-        ClaimDepositOutcome::Settled => {
+        ClaimDepositOutcome::Settled { .. } => {
             warn!(
                 "SKIP early-claim assertions: the deposit matured before the claim \
                  landed, so it settled at maturity"
