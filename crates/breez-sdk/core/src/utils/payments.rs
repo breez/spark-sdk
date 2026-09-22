@@ -10,7 +10,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     ConversionInfo, ConversionStatus, EventEmitter, Payment, PaymentMetadata, PaymentStatus,
-    PaymentType, Storage,
+    PaymentType, Storage, StorageError,
     error::SdkError,
     events::SdkEvent,
     persist::{CachedAccountInfo, ObjectCacheRepository},
@@ -65,12 +65,27 @@ pub(crate) async fn get_payment_and_emit_event(
     event_emitter.emit(&SdkEvent::from_payment(payment)).await;
 }
 
-/// Emits `PaymentMetadataUpdated` for a payment whose metadata was just
-/// written. Reads the payment back so the event carries the new details.
+/// Writes `metadata` onto the payment row and announces the change with
+/// `PaymentMetadataUpdated`.
 ///
 /// Meant for writes that land after the payment's own status event, like a
 /// provider monitor filling in conversion info. Writes done before that event
 /// don't need it: the status event already carries the metadata.
+pub(crate) async fn insert_payment_metadata_and_emit(
+    storage: &Arc<dyn Storage>,
+    event_emitter: &EventEmitter,
+    payment_id: String,
+    metadata: PaymentMetadata,
+) -> Result<(), StorageError> {
+    storage
+        .insert_payment_metadata(payment_id.clone(), metadata)
+        .await?;
+    emit_payment_metadata_updated(storage, event_emitter, &payment_id).await;
+    Ok(())
+}
+
+/// Emits `PaymentMetadataUpdated` for a payment whose metadata was just
+/// written. Reads the payment back so the event carries the new details.
 ///
 /// Silent when the payment row doesn't exist yet: the status event emitted
 /// once it does will include the metadata.

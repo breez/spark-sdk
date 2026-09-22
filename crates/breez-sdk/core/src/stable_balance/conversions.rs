@@ -15,7 +15,7 @@ use crate::token_conversion::{
     ConversionAmount, ConversionError, ConversionOptions, ConversionPurpose, ConversionType,
     FetchConversionLimitsRequest,
 };
-use crate::utils::payments::emit_payment_metadata_updated;
+use crate::utils::payments::insert_payment_metadata_and_emit;
 
 use super::{StableBalance, per_receive_transfer_id};
 
@@ -236,22 +236,16 @@ impl StableBalance {
         );
 
         // Persist Completed status for the received token payment
-        self.core
-            .storage
-            .insert_payment_metadata(
-                response.received_payment_id.clone(),
-                PaymentMetadata {
-                    conversion_status: Some(ConversionStatus::Completed),
-                    ..Default::default()
-                },
-            )
-            .await?;
-        emit_payment_metadata_updated(
+        insert_payment_metadata_and_emit(
             &self.core.storage,
             &self.event_emitter,
-            &response.received_payment_id,
+            response.received_payment_id.clone(),
+            PaymentMetadata {
+                conversion_status: Some(ConversionStatus::Completed),
+                ..Default::default()
+            },
         )
-        .await;
+        .await?;
 
         Ok(true)
     }
@@ -335,22 +329,16 @@ impl StableBalance {
             .await?;
 
         // Persist Completed status for the received BTC payment
-        self.core
-            .storage
-            .insert_payment_metadata(
-                response.received_payment_id.clone(),
-                PaymentMetadata {
-                    conversion_status: Some(ConversionStatus::Completed),
-                    ..Default::default()
-                },
-            )
-            .await?;
-        emit_payment_metadata_updated(
+        insert_payment_metadata_and_emit(
             &self.core.storage,
             &self.event_emitter,
-            &response.received_payment_id,
+            response.received_payment_id.clone(),
+            PaymentMetadata {
+                conversion_status: Some(ConversionStatus::Completed),
+                ..Default::default()
+            },
         )
-        .await;
+        .await?;
 
         info!(
             "Deactivation conversion completed: converted {token_balance} tokens (sent={}, received={})",
