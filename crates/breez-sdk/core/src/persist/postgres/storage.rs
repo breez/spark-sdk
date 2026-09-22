@@ -17,7 +17,8 @@ use tracing::warn;
 use crate::{
     AssetFilter, Contact, ConversionDetails, ConversionInfo, ConversionStatus, DepositInfo,
     InstantClaimStatus, ListContactsRequest, LnurlPayInfo, LnurlReceiveMetadata, LnurlWithdrawInfo,
-    PaymentDetails, PaymentMethod, PaymentStatus, RefundState, SparkHtlcDetails, SparkHtlcStatus,
+    MaxFee, PaymentDetails, PaymentMethod, PaymentStatus, RefundState, SparkHtlcDetails,
+    SparkHtlcStatus,
     error::DepositClaimError,
     persist::{
         Payment, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,
@@ -500,6 +501,10 @@ impl PostgresStorage {
                  )"
                 .to_string(),
             ],
+            // Migration 24: The fee ceiling standing for one deposit as a
+            // JSON-encoded MaxFee, overriding the configured one. NULL when the
+            // configured one applies.
+            vec!["ALTER TABLE brz_unclaimed_deposits ADD COLUMN max_claim_fee JSONB".to_string()],
         ]
     }
 }
@@ -1291,7 +1296,7 @@ impl Storage for PostgresStorage {
         let client = self.pool.get().await.map_err(map_pool_error)?;
         let rows = client
             .query(
-                "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status, refund_state FROM brz_unclaimed_deposits WHERE user_id = $1",
+                "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status, refund_state, max_claim_fee FROM brz_unclaimed_deposits WHERE user_id = $1",
                 &[&self.identity],
             )
             .await?;
@@ -1305,6 +1310,8 @@ impl Storage for PostgresStorage {
                 from_json_opt(instant_claim_status_json)?;
             let refund_state_json: Option<serde_json::Value> = row.get(8);
             let refund_state: Option<RefundState> = from_json_opt(refund_state_json)?;
+            let max_claim_fee_json: Option<serde_json::Value> = row.get(9);
+            let max_claim_fee: Option<MaxFee> = from_json_opt(max_claim_fee_json)?;
 
             deposits.push(DepositInfo {
                 txid: row.get(0),
@@ -1320,6 +1327,7 @@ impl Storage for PostgresStorage {
                 refund_tx_id: row.get(6),
                 instant_claim_status,
                 refund_state,
+                max_claim_fee,
             });
         }
         Ok(deposits)
@@ -1374,6 +1382,18 @@ impl Storage for PostgresStorage {
                     .execute(
                         "UPDATE brz_unclaimed_deposits SET refund_state = $1 WHERE user_id = $2 AND txid = $3 AND vout = $4 AND refund_tx_id = $5",
                         &[&state_json, &self.identity, &txid, &i32::try_from(vout)?, &refund_txid],
+                    )
+                    .await?;
+            }
+            UpdateDepositPayload::MaxClaimFee { max_fee } => {
+                let max_fee_json = max_fee
+                    .map(|max_fee| serde_json::to_value(&max_fee))
+                    .transpose()
+                    .map_err(|e| StorageError::Serialization(e.to_string()))?;
+                client
+                    .execute(
+                        "UPDATE brz_unclaimed_deposits SET max_claim_fee = $1 WHERE user_id = $2 AND txid = $3 AND vout = $4",
+                        &[&max_fee_json, &self.identity, &txid, &i32::try_from(vout)?],
                     )
                     .await?;
             }
@@ -2287,6 +2307,12 @@ mod tests {
     async fn test_instant_claim_status() {
         let fixture = PostgresTestFixture::new().await;
         crate::persist::tests::test_instant_claim_status(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_deposit_max_claim_fee() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_deposit_max_claim_fee(Box::new(fixture.storage)).await;
     }
 
     #[tokio::test]
@@ -3321,7 +3347,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 23, "migration version must advance to 23");
+        assert_eq!(version, 24, "migration version must advance to 24");
 
         // Seed payment row is preserved on the renamed table — proves the
         // table + PK constraint rename worked and the columns line up.
@@ -3617,7 +3643,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 23, "migration must advance to 23");
+        assert_eq!(version, 24, "migration must advance to 24");
 
         // Seed data preserved (multi-tenant backfilled user_id to current tenant).
         let payment_count: i64 = client

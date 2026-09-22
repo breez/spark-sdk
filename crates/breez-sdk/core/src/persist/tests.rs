@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use chrono::Utc;
 
 use crate::{
-    DepositClaimError, InstantClaimStatus, LnurlWithdrawInfo, Payment, PaymentDetails,
+    DepositClaimError, InstantClaimStatus, LnurlWithdrawInfo, MaxFee, Payment, PaymentDetails,
     PaymentMetadata, PaymentMethod, PaymentStatus, PaymentType, RefundState, SparkHtlcDetails,
     SparkHtlcStatus, Storage, TokenMetadata, TokenTransactionType, UpdateDepositPayload,
     UpdateWatchedAddressPayload,
@@ -1858,6 +1858,164 @@ pub async fn test_instant_claim_status(storage: Box<dyn Storage>) {
         .delete_deposit("tx_instant".to_string(), 0)
         .await
         .unwrap();
+}
+
+pub async fn test_deposit_max_claim_fee(storage: Box<dyn Storage>) {
+    // A freshly-added deposit has no ceiling of its own, so the configured one
+    // applies.
+    storage
+        .add_deposit("tx_max_fee".to_string(), 0, 100_000, false)
+        .await
+        .unwrap();
+    let deposits = storage.list_deposits().await.unwrap();
+    assert_eq!(deposits.len(), 1);
+    assert_eq!(deposits[0].max_claim_fee, None);
+
+    // Every variant round-trips: each encodes differently, so one standing in for
+    // the others would leave two encodings unexercised.
+    for max_fee in [
+        MaxFee::Fixed { amount: 25_000 },
+        MaxFee::Rate { sat_per_vbyte: 12 },
+        MaxFee::NetworkRecommended {
+            leeway_sat_per_vbyte: 3,
+        },
+    ] {
+        storage
+            .update_deposit(
+                "tx_max_fee".to_string(),
+                0,
+                UpdateDepositPayload::MaxClaimFee {
+                    max_fee: Some(max_fee.clone()),
+                },
+            )
+            .await
+            .unwrap();
+        let deposits = storage.list_deposits().await.unwrap();
+        assert_eq!(deposits.len(), 1);
+        assert_eq!(
+            deposits[0].max_claim_fee,
+            Some(max_fee),
+            "each write replaces the last rather than merging with it"
+        );
+    }
+
+    // Clearing returns the deposit to the configured ceiling.
+    storage
+        .update_deposit(
+            "tx_max_fee".to_string(),
+            0,
+            UpdateDepositPayload::MaxClaimFee { max_fee: None },
+        )
+        .await
+        .unwrap();
+    let deposits = storage.list_deposits().await.unwrap();
+    assert_eq!(deposits[0].max_claim_fee, None);
+
+    let ceiling = MaxFee::Fixed { amount: 7_000 };
+    storage
+        .update_deposit(
+            "tx_max_fee".to_string(),
+            0,
+            UpdateDepositPayload::MaxClaimFee {
+                max_fee: Some(ceiling.clone()),
+            },
+        )
+        .await
+        .unwrap();
+
+    // Re-observing the UTXO (the syncer upserts is_mature/amount) must preserve
+    // the ceiling, otherwise a deposit would silently fall back to the configured
+    // one on the next sync.
+    storage
+        .add_deposit("tx_max_fee".to_string(), 0, 100_000, true)
+        .await
+        .unwrap();
+    let deposits = storage.list_deposits().await.unwrap();
+    assert!(deposits[0].is_mature);
+    assert_eq!(
+        deposits[0].max_claim_fee,
+        Some(ceiling.clone()),
+        "max_claim_fee must survive an add_deposit upsert"
+    );
+
+    assert_max_claim_fee_coexists(storage.as_ref(), &ceiling).await;
+
+    storage
+        .delete_deposit("tx_max_fee".to_string(), 0)
+        .await
+        .unwrap();
+}
+
+/// The ceiling shares a row with the claim status, the last claim error and the
+/// refund. Each is written by a different path, so a narrow update in any one of
+/// them must leave the others standing.
+async fn assert_max_claim_fee_coexists(storage: &dyn Storage, ceiling: &MaxFee) {
+    let status = InstantClaimStatus::Declined {
+        max_fee_sats: Some(7_000),
+        confirmations: 1,
+    };
+    let claim_error = DepositClaimError::Generic {
+        message: "claim failed under the deposit's own ceiling".to_string(),
+    };
+    for payload in [
+        UpdateDepositPayload::InstantClaim {
+            status: status.clone(),
+        },
+        UpdateDepositPayload::ClaimError {
+            error: claim_error.clone(),
+        },
+        UpdateDepositPayload::Refund {
+            refund_txid: "refund_tx_max_fee".to_string(),
+            refund_tx: "0200000000".to_string(),
+            state: RefundState::BroadcastPending { last_error: None },
+        },
+    ] {
+        storage
+            .update_deposit("tx_max_fee".to_string(), 0, payload)
+            .await
+            .unwrap();
+        let deposits = storage.list_deposits().await.unwrap();
+        assert_eq!(
+            deposits[0].max_claim_fee.as_ref(),
+            Some(ceiling),
+            "a write to another field must leave the ceiling standing"
+        );
+    }
+
+    // And the reverse: setting the ceiling must not disturb what the claim and
+    // refund paths recorded. The refund write clears claim_error by design, so
+    // the error is re-recorded before the check.
+    storage
+        .update_deposit(
+            "tx_max_fee".to_string(),
+            0,
+            UpdateDepositPayload::ClaimError {
+                error: claim_error.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    storage
+        .update_deposit(
+            "tx_max_fee".to_string(),
+            0,
+            UpdateDepositPayload::MaxClaimFee {
+                max_fee: Some(ceiling.clone()),
+            },
+        )
+        .await
+        .unwrap();
+    let deposits = storage.list_deposits().await.unwrap();
+    assert_eq!(deposits[0].instant_claim_status, Some(status));
+    assert_eq!(deposits[0].claim_error, Some(claim_error));
+    assert_eq!(
+        deposits[0].refund_tx_id,
+        Some("refund_tx_max_fee".to_string())
+    );
+    assert_eq!(
+        deposits[0].refund_state,
+        Some(RefundState::BroadcastPending { last_error: None })
+    );
 }
 
 pub async fn test_payment_type_filtering(storage: Box<dyn Storage>) {

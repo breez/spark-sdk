@@ -599,6 +599,14 @@ class MysqlMigrationManager {
           )`,
         ],
       },
+      {
+        // The fee ceiling standing for one deposit as a JSON-encoded MaxFee,
+        // overriding the configured one. NULL when the configured one applies.
+        name: "Add max claim fee to brz_unclaimed_deposits",
+        sql: [
+          `ALTER TABLE brz_unclaimed_deposits ADD COLUMN max_claim_fee JSON NULL`,
+        ],
+      },
     ];
   }
 }
