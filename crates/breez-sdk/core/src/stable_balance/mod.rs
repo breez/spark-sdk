@@ -149,7 +149,7 @@ use crate::models::{
 };
 use crate::persist::{ObjectCacheRepository, PaymentMetadata, Storage};
 use crate::sdk::RuntimeEvent;
-use crate::utils::payments::emit_payment_metadata_updated;
+use crate::utils::payments::insert_payment_metadata_and_emit;
 use crate::{
     SdkError,
     models::StableBalanceConfig,
@@ -335,29 +335,18 @@ impl StableBalance {
             );
         }
         for payment_id in &cleared_payment_ids {
-            match self
-                .core
-                .storage
-                .insert_payment_metadata(
-                    payment_id.clone(),
-                    PaymentMetadata {
-                        conversion_status: Some(ConversionStatus::Failed),
-                        ..Default::default()
-                    },
-                )
-                .await
+            if let Err(e) = insert_payment_metadata_and_emit(
+                &self.core.storage,
+                &self.event_emitter,
+                payment_id.clone(),
+                PaymentMetadata {
+                    conversion_status: Some(ConversionStatus::Failed),
+                    ..Default::default()
+                },
+            )
+            .await
             {
-                Ok(()) => {
-                    emit_payment_metadata_updated(
-                        &self.core.storage,
-                        &self.event_emitter,
-                        payment_id,
-                    )
-                    .await;
-                }
-                Err(e) => warn!(
-                    "Failed to persist Failed status for cleared conversion {payment_id}: {e:?}"
-                ),
+                warn!("Failed to persist Failed status for cleared conversion {payment_id}: {e:?}");
             }
         }
 

@@ -46,7 +46,10 @@ use super::{
 };
 
 use crate::utils::{
-    payments::{emit_payment_metadata_updated, fetch_and_process_payment, resolve_payment_id},
+    payments::{
+        emit_payment_metadata_updated, fetch_and_process_payment, insert_payment_metadata_and_emit,
+        resolve_payment_id,
+    },
     polling::{PollSchedule, poll_until},
     time::{now_secs, try_now_secs},
 };
@@ -431,25 +434,19 @@ impl OrchestraService {
             // no order to find. The pending filter reads the conversion's
             // status, not the payment's, so nothing else clears this row.
             if payment.status == PaymentStatus::Failed {
-                if let Some(metadata) = with_status(conversion_info, ConversionStatus::Failed) {
-                    match storage
-                        .insert_payment_metadata(
-                            payment.id.clone(),
-                            crate::PaymentMetadata {
-                                conversion_info: Some(metadata),
-                                ..Default::default()
-                            },
-                        )
-                        .await
-                    {
-                        Ok(()) => {
-                            emit_payment_metadata_updated(storage, event_emitter, &payment.id)
-                                .await;
-                        }
-                        Err(e) => {
-                            warn!("Failed to mark {} conversion failed: {e}", payment.id);
-                        }
-                    }
+                if let Some(metadata) = with_status(conversion_info, ConversionStatus::Failed)
+                    && let Err(e) = insert_payment_metadata_and_emit(
+                        storage,
+                        event_emitter,
+                        payment.id.clone(),
+                        crate::PaymentMetadata {
+                            conversion_info: Some(metadata),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                {
+                    warn!("Failed to mark {} conversion failed: {e}", payment.id);
                 }
                 continue;
             }
@@ -469,17 +466,18 @@ impl OrchestraService {
                     conversion_info: Some(updated.clone()),
                     ..Default::default()
                 };
-                match storage
-                    .insert_payment_metadata(payment.id.clone(), metadata)
-                    .await
+                if let Err(e) = insert_payment_metadata_and_emit(
+                    storage,
+                    event_emitter,
+                    payment.id.clone(),
+                    metadata,
+                )
+                .await
                 {
-                    Ok(()) => {
-                        emit_payment_metadata_updated(storage, event_emitter, &payment.id).await;
-                    }
-                    Err(e) => warn!(
+                    warn!(
                         "Failed to record Orchestra order {id} for payment {}: {e}",
                         payment.id
-                    ),
+                    );
                 }
                 Some(updated)
             } else {
@@ -548,9 +546,13 @@ impl OrchestraService {
                 payment.id
             );
 
-            if let Err(e) = storage
-                .insert_payment_metadata(payment.id.clone(), updated_metadata)
-                .await
+            if let Err(e) = insert_payment_metadata_and_emit(
+                storage,
+                event_emitter,
+                payment.id.clone(),
+                updated_metadata,
+            )
+            .await
             {
                 error!(
                     "Failed to update Orchestra status for payment {}: {e}",
@@ -561,7 +563,6 @@ impl OrchestraService {
                     "Orchestra order for payment {} reached terminal state",
                     payment.id
                 );
-                emit_payment_metadata_updated(storage, event_emitter, &payment.id).await;
             }
         }
 
