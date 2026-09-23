@@ -516,7 +516,7 @@ Future<void> _handlePay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args
 
   if (prepareResponse.paymentMethod is SendPaymentMethod_CrossChainAddress) {
     final cc = prepareResponse.paymentMethod as SendPaymentMethod_CrossChainAddress;
-    final serviceFeeDenom = cc.serviceFeeAsset ?? 'sats';
+    final serviceFeeDenom = _serviceFeeDenomination(cc.serviceFeeAsset, cc.serviceFeeAssetDecimals);
     final denomination = tokenIdentifier != null ? 'token base units' : 'sats';
     print(
       'Cross-chain send: ${cc.amountIn} $denomination '
@@ -1003,7 +1003,7 @@ Future<void> _handlePreparePaymentLink(BreezSdk sdk, TokenIssuer tokenIssuer, Li
   print(
     'Deposit ~${response.amountSats} sats; recipient receives ~${response.estimatedOut} '
     '${response.asset}, service fee ${response.serviceFeeAmount} '
-    '${response.serviceFeeAsset ?? "sats"}, expires ${response.expiresAt}',
+    '${_serviceFeeDenomination(response.serviceFeeAsset, response.serviceFeeAssetDecimals)}, expires ${response.expiresAt}',
   );
 }
 
@@ -1360,6 +1360,12 @@ String _maybeTruncateAddress(String? addr) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+String _serviceFeeDenomination(String? asset, int? decimals) {
+  if (asset == null) return 'sats';
+  if (decimals != null) return '$asset ($decimals decimals)';
+  return asset;
+}
 
 String _bytesToHex(List<int> bytes) {
   final sb = StringBuffer();

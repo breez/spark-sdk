@@ -681,7 +681,7 @@ async function handlePay(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterf
   // Show cross-chain quote details
   if (prepareResponse.paymentMethod?.tag === SendPaymentMethod_Tags.CrossChainAddress) {
     const pm = prepareResponse.paymentMethod.inner
-    const serviceFeeAsset = pm.serviceFeeAsset ?? 'sats'
+    const serviceFeeAsset = serviceFeeDenomination(pm.serviceFeeAsset, pm.serviceFeeAssetDecimals)
     const denomination = tokenIdentifier ? 'token base units' : 'sats'
     lines.push(
       `Cross-chain send: ${pm.amountIn} ${denomination} (~${pm.assetAmountIn} ${pm.route.asset})` +
@@ -1176,7 +1176,7 @@ async function handlePreparePaymentLink(sdk: BreezSdkInterface, _tokenIssuer: To
   const lines = [routeResult.message]
   lines.push('Open this URL in a browser to complete the purchase:')
   lines.push(response.url)
-  const serviceFeeAsset = response.serviceFeeAsset ?? 'sats'
+  const serviceFeeAsset = serviceFeeDenomination(response.serviceFeeAsset, response.serviceFeeAssetDecimals)
   lines.push(
     `Deposit ~${response.amountSats} sats; recipient receives ~${response.estimatedOut} ${response.asset}, ` +
     `service fee ${response.serviceFeeAmount} ${serviceFeeAsset}, expires ${response.expiresAt}`
@@ -1417,6 +1417,12 @@ async function handleStableBalance(sdk: BreezSdkInterface, _tokenIssuer: TokenIs
 // ---------------------------------------------------------------------------
 // Cross-chain helpers
 // ---------------------------------------------------------------------------
+
+function serviceFeeDenomination(asset: string | undefined | null, decimals: number | undefined | null): string {
+  if (!asset) return 'sats'
+  if (decimals != null) return `${asset} (${decimals} decimals)`
+  return asset
+}
 
 function maybeTruncateAddress(addr: string | undefined | null): string {
   if (!addr) return ''
