@@ -72,6 +72,8 @@ Validate the amount against the bounds before preparing the payment. A route can
 
 A rejected amount surfaces as {{#enum SdkError::CrossChainAmountOutOfRange}}, carrying {{#name too_small}} for the direction and the published bound in whichever denominations the provider publishes.
 
+A route the provider won't serve surfaces as {{#enum SdkError::CrossChainRouteUnavailable}}. {{#name temporary}} indicates that a route is currently unavailable and the same request may succeed later, rather than requiring another route.
+
 ## Slippage
 
 Cross-chain slippage protects against price movement between quote and delivery. Values are expressed in basis points (1 bps = 0.01%).
@@ -115,7 +117,7 @@ The cross-chain status walks one of:
 - **{{#enum ConversionStatus::Refunded}}**: the funds have been refunded back to the wallet.
 - **{{#enum ConversionStatus::Failed}}**: terminal failure with no refund pending.
 
-A background monitor runs while the SDK is active and reconciles non-terminal payments by polling the provider.
+A background monitor runs while the SDK is active and reconciles non-terminal payments by polling the provider. When it changes the conversion info of a payment that was already reported, the SDK emits {{#enum SdkEvent::PaymentMetadataUpdated}} with the updated payment. On a receive, the inbound payment can be reported as a plain Spark transfer first: the conversion info follows in that event once the provider confirms the order.
 
 ## Send
 

@@ -10,8 +10,8 @@ use rusqlite_migration::{M, Migrations, SchemaVersion};
 use crate::{
     AssetFilter, Contact, ConversionDetails, ConversionInfo, ConversionStatus, DepositInfo,
     InstantClaimStatus, ListContactsRequest, LnurlPayInfo, LnurlReceiveMetadata, LnurlWithdrawInfo,
-    PaymentDetails, PaymentMethod, PaymentStatus, RefundState, SparkHtlcDetails, SparkHtlcStatus,
-    TokenTransactionType,
+    MaxFee, PaymentDetails, PaymentMethod, PaymentStatus, RefundState, SparkHtlcDetails,
+    SparkHtlcStatus, TokenTransactionType,
     error::DepositClaimError,
     persist::{
         PaymentMetadata, SetLnurlMetadataItem, SparkSettledBolt11Receive, SparkSettledBolt11Send,
@@ -399,6 +399,9 @@ impl SqliteStorage {
                 issued_at INTEGER NOT NULL,
                 seen INTEGER NOT NULL DEFAULT 0
             );",
+            // The fee ceiling standing for one deposit as a JSON-encoded MaxFee,
+            // overriding the configured one. NULL when the configured one applies.
+            "ALTER TABLE unclaimed_deposits ADD COLUMN max_claim_fee TEXT;",
             // Bolt11s settled over Spark, one table per direction, joined when
             // a payment is read: sends by the payment id, receives by a digest
             // of the Spark invoice the Bolt11 embeds, which the Spark details
@@ -1061,7 +1064,7 @@ impl Storage for SqliteStorage {
     async fn list_deposits(&self) -> Result<Vec<DepositInfo>, StorageError> {
         let connection = self.get_connection()?;
         let mut stmt =
-            connection.prepare("SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status, refund_state FROM unclaimed_deposits")?;
+            connection.prepare("SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status, refund_state, max_claim_fee FROM unclaimed_deposits")?;
         let rows = stmt.query_map(params![], |row| {
             Ok(DepositInfo {
                 txid: row.get(0)?,
@@ -1073,6 +1076,7 @@ impl Storage for SqliteStorage {
                 refund_tx_id: row.get(6)?,
                 instant_claim_status: row.get(7)?,
                 refund_state: row.get(8)?,
+                max_claim_fee: row.get(9)?,
             })
         })?;
         let mut deposits = Vec::new();
@@ -1116,6 +1120,12 @@ impl Storage for SqliteStorage {
                 connection.execute(
                     "UPDATE unclaimed_deposits SET refund_state = ? WHERE txid = ? AND vout = ? AND refund_tx_id = ?",
                     params![state, txid, vout, refund_txid],
+                )?;
+            }
+            UpdateDepositPayload::MaxClaimFee { max_fee } => {
+                connection.execute(
+                    "UPDATE unclaimed_deposits SET max_claim_fee = ? WHERE txid = ? AND vout = ?",
+                    params![max_fee, txid, vout],
                 )?;
             }
         }
@@ -2103,6 +2113,18 @@ impl FromSql for InstantClaimStatus {
     }
 }
 
+impl ToSql for MaxFee {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        to_sql_json(self)
+    }
+}
+
+impl FromSql for MaxFee {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        from_sql_json(value)
+    }
+}
+
 impl ToSql for LnurlPayInfo {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
         to_sql_json(self)
@@ -2235,6 +2257,14 @@ mod tests {
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_instant_claim_status(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_deposit_max_claim_fee() {
+        let temp_dir = create_temp_dir("sqlite_storage_max_claim_fee");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        crate::persist::tests::test_deposit_max_claim_fee(Box::new(storage)).await;
     }
 
     #[tokio::test]

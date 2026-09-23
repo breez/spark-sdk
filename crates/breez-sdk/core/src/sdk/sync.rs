@@ -6,7 +6,10 @@ use tracing::{debug, error, info, trace, warn};
 
 use super::{
     BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncType,
-    deposits::{InstantClaimOutcome, is_already_claimed_error},
+    deposits::{
+        InstantClaimOutcome, claim_already_made, is_already_claimed_error, larger_ceiling,
+        needs_own_ceiling_resolution,
+    },
 };
 use crate::utils::time::now_secs;
 use crate::{
@@ -39,16 +42,6 @@ fn instant_claim_worth_attempting(
         }) => confirmations > *declined_at || max_fee_sats.is_some_and(|prev| ceiling_sats > prev),
         _ => true,
     }
-}
-
-/// Whether a claim has already taken this deposit, still settling or credited.
-/// The chain and the operators go on reporting the UTXO until the provider
-/// spends it, so a deposit that is already spoken for still appears unclaimed.
-fn claim_already_made(status: Option<&InstantClaimStatus>) -> bool {
-    matches!(
-        status,
-        Some(InstantClaimStatus::Submitted { .. } | InstantClaimStatus::Claimed)
-    )
 }
 
 impl BreezSdk {
@@ -359,8 +352,10 @@ impl BreezSdk {
                 .await;
         }
 
+        let has_immature = all_utxos.iter().any(|(_, is_mature)| !is_mature);
         // Resolved once per pass, and only when an immature deposit could use it.
-        let instant_ceiling = if all_utxos.iter().any(|(_, is_mature)| !is_mature) {
+        // A deposit whose own ceiling differs from it resolves that separately, below.
+        let instant_ceiling = if has_immature {
             match self
                 .resolve_max_claim_fee(self.config.max_deposit_claim_fee.clone())
                 .await
@@ -375,13 +370,11 @@ impl BreezSdk {
             None
         };
 
-        // The tip is the same for every deposit in the pass, so read it once. A
-        // failure falls back to a per-deposit read.
-        let tip_height = if instant_ceiling.is_some() {
-            self.chain_service.tip_height().await.ok()
-        } else {
-            None
-        };
+        // The tip is the same for every deposit in the pass, so it is read once and
+        // reused. Read on first need rather than up front: whether any deposit gets
+        // as far as needing it depends on the ceiling each one resolves to, which is
+        // only known inside the loop. A failed read falls back to a per-deposit one.
+        let mut tip_height: Option<u32> = None;
 
         let mut claimed_deposits: Vec<DepositInfo> = Vec::new();
         let mut unclaimed_deposits: Vec<DepositInfo> = Vec::new();
@@ -394,15 +387,34 @@ impl BreezSdk {
             let Some(_claim_guard) = self.claim_guards.try_acquire(key.clone()) else {
                 continue;
             };
-            let instant_status = self.deposit_instant_claim_status(&key).await;
+            let stored = match self.stored_deposit(&key.txid, key.vout).await {
+                Ok(stored) => stored,
+                Err(e) => {
+                    warn!(
+                        "Could not read the stored deposit {}:{}: {e}",
+                        key.txid, key.vout
+                    );
+                    continue;
+                }
+            };
+            let instant_status = stored.as_ref().and_then(|d| d.instant_claim_status.clone());
             if claim_already_made(instant_status.as_ref()) {
                 continue;
+            }
+            let stored_max_fee = stored.as_ref().and_then(|d| d.max_claim_fee.as_ref());
+            if let Some(max_fee) = stored_max_fee {
+                debug!(
+                    "Deposit {}:{} runs under its own max claim fee {max_fee:?} \
+                     rather than the configured one",
+                    detailed_utxo.txid, detailed_utxo.vout
+                );
             }
             let res = if is_mature {
                 // Mature deposit: claim via the normal path.
                 self.claim_utxo_and_resolve_deposit(
                     &detailed_utxo,
-                    self.config.max_deposit_claim_fee.clone(),
+                    self.mature_claim_ceiling(stored_max_fee).await,
+                    stored_max_fee.cloned(),
                     &mut claimed_deposits,
                     &mut unclaimed_deposits,
                 )
@@ -410,9 +422,29 @@ impl BreezSdk {
             } else {
                 // Not yet mature: attempt one early claim, held to the same
                 // ceiling. Without a ceiling there is nothing to claim within.
-                let Some(ceiling) = instant_ceiling.clone() else {
+                let ceiling = if needs_own_ceiling_resolution(
+                    stored_max_fee,
+                    self.config.max_deposit_claim_fee.as_ref(),
+                ) {
+                    match self.resolve_max_claim_fee(stored_max_fee.cloned()).await {
+                        Ok(resolved) => resolved,
+                        Err(e) => {
+                            warn!(
+                                "Could not resolve the max claim fee for {}:{}: {e}",
+                                detailed_utxo.txid, detailed_utxo.vout
+                            );
+                            continue;
+                        }
+                    }
+                } else {
+                    instant_ceiling.clone()
+                };
+                let Some(ceiling) = ceiling else {
                     continue;
                 };
+                if tip_height.is_none() {
+                    tip_height = self.chain_service.tip_height().await.ok();
+                }
                 let Ok(confirmations) = self
                     .deposit_confirmations_at_tip(&detailed_utxo.txid.to_string(), tip_height)
                     .await
@@ -430,6 +462,7 @@ impl BreezSdk {
                     &detailed_utxo,
                     Some(ceiling),
                     confirmations,
+                    stored_max_fee.cloned(),
                     &mut claimed_deposits,
                 )
                 .await
@@ -462,23 +495,42 @@ impl BreezSdk {
         Ok(())
     }
 
-    /// One deposit's instant-claim status, or `None` when it has none or cannot
-    /// be read.
-    async fn deposit_instant_claim_status(&self, key: &TxOutput) -> Option<InstantClaimStatus> {
-        self.storage
-            .list_deposits()
+    /// The ceiling a mature deposit's automatic claim runs under. Both sides are
+    /// resolved here because comparing them needs sats, and a ceiling that will not
+    /// resolve leaves the deposit on its own, which is what was asked for.
+    async fn mature_claim_ceiling(&self, stored: Option<&MaxFee>) -> Option<MaxFee> {
+        let config_default = self.config.max_deposit_claim_fee.as_ref();
+        let (Some(stored), Some(config_default)) = (stored, config_default) else {
+            return stored.or(config_default).cloned();
+        };
+        let stored_sats = self.ceiling_sats(stored).await;
+        let config_sats = self.ceiling_sats(config_default).await;
+        match (stored_sats, config_sats) {
+            (Some(stored_sats), Some(config_sats)) => Some(larger_ceiling(
+                stored,
+                stored_sats,
+                config_default,
+                config_sats,
+            )),
+            _ => Some(stored.clone()),
+        }
+    }
+
+    /// One ceiling in sats, or `None` when it cannot be resolved.
+    async fn ceiling_sats(&self, max_fee: &MaxFee) -> Option<u64> {
+        self.resolve_max_claim_fee(Some(max_fee.clone()))
             .await
-            .inspect_err(|e| warn!("Could not read the instant claim status: {e}"))
-            .ok()?
-            .into_iter()
-            .find(|d| d.txid == key.txid && d.vout == key.vout)?
-            .instant_claim_status
+            .inspect_err(|e| warn!("Could not resolve a max claim fee: {e}"))
+            .ok()
+            .flatten()
+            .map(|(_, sats)| sats)
     }
 
     async fn claim_utxo_and_resolve_deposit(
         &self,
         detailed_utxo: &DetailedUtxo,
         max_claim_fee: Option<MaxFee>,
+        stored_max_fee: Option<MaxFee>,
         claimed_deposits: &mut Vec<DepositInfo>,
         unclaimed_deposits: &mut Vec<DepositInfo>,
     ) -> Result<(), SdkError> {
@@ -488,7 +540,9 @@ impl BreezSdk {
                 self.storage
                     .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
                     .await?;
-                claimed_deposits.push(detailed_utxo.clone().into_deposit_info(true));
+                let mut info = detailed_utxo.clone().into_deposit_info(true);
+                info.max_claim_fee = stored_max_fee;
+                claimed_deposits.push(info);
             }
             // The deposit is settled, not failed: an earlier claim took it, here
             // or elsewhere. Marking it stops every later pass re-claiming it, and
@@ -514,7 +568,10 @@ impl BreezSdk {
                     "Failed to claim utxo {}:{}: {e}",
                     detailed_utxo.txid, detailed_utxo.vout
                 );
-                unclaimed_deposits.push(self.record_unclaimed_deposit(detailed_utxo, e).await?);
+                unclaimed_deposits.push(
+                    self.record_unclaimed_deposit(detailed_utxo, e, stored_max_fee)
+                        .await?,
+                );
             }
         }
         Ok(())
@@ -525,6 +582,7 @@ impl BreezSdk {
         detailed_utxo: &DetailedUtxo,
         resolved_max_fee: Option<(Fee, u64)>,
         confirmations: u32,
+        stored_max_fee: Option<MaxFee>,
         claimed_deposits: &mut Vec<DepositInfo>,
     ) -> Result<(), SdkError> {
         let outcome = match self
@@ -564,6 +622,7 @@ impl BreezSdk {
                 );
                 let mut info = detailed_utxo.clone().into_deposit_info(false);
                 info.instant_claim_status = Some(status);
+                info.max_claim_fee = stored_max_fee;
                 claimed_deposits.push(info);
             }
             InstantClaimOutcome::Declined { error, .. } => {
@@ -581,11 +640,13 @@ impl BreezSdk {
     }
 
     /// Persists a claim failure on the deposit and returns the matching
-    /// `DepositInfo` (with `claim_error` set) for the `UnclaimedDeposits` event.
+    /// `DepositInfo`, carrying the failure and the deposit's own ceiling, for the
+    /// `UnclaimedDeposits` event.
     async fn record_unclaimed_deposit(
         &self,
         utxo: &DetailedUtxo,
         error: SdkError,
+        max_claim_fee: Option<MaxFee>,
     ) -> Result<DepositInfo, SdkError> {
         self.storage
             .update_deposit(
@@ -598,6 +659,7 @@ impl BreezSdk {
             .await?;
         let mut info = utxo.clone().into_deposit_info(true);
         info.claim_error = Some(error.into());
+        info.max_claim_fee = max_claim_fee;
         Ok(info)
     }
 
@@ -701,7 +763,11 @@ impl BreezSdk {
 
         let resolved_max_fee = self.resolve_max_claim_fee(max_claim_fee).await?;
         if let Some((_, max_fee_sats)) = &resolved_max_fee {
-            info!("User max fee: {max_fee_sats} spark requested fee: {spark_requested_fee_sats}");
+            info!(
+                "Claiming {}:{} under a {max_fee_sats} sat ceiling, \
+                 provider asks {spark_requested_fee_sats} sats",
+                detailed_utxo.txid, detailed_utxo.vout
+            );
         }
         let within_limit = resolved_max_fee
             .as_ref()
@@ -813,6 +879,26 @@ mod tests {
             Some(&declined(Some(500), 2)),
             1,
             500
+        ));
+    }
+
+    #[test]
+    fn a_ceiling_set_on_one_deposit_drives_its_retry() {
+        // Declined under the configured ceiling, then given a higher one of its
+        // own at the same depth: the deposit is re-quoted without waiting for a
+        // confirmation. This is what makes raising a ceiling claim a deposit
+        // early unattended.
+        assert!(instant_claim_worth_attempting(
+            Some(&declined(Some(99), 0)),
+            0,
+            50_000
+        ));
+        // Lowered below the ceiling that declined it, at the same depth: nothing
+        // has opened up, so the hold-to-maturity direction costs no provider call.
+        assert!(!instant_claim_worth_attempting(
+            Some(&declined(Some(50_000), 0)),
+            0,
+            99
         ));
     }
 

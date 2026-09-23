@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use breez_sdk_common::breez_server::BreezServer;
 use breez_sdk_common::fiat::FiatService;
@@ -26,11 +27,14 @@ use tokio::{
 use tracing::{Instrument, debug, error, info, warn};
 
 use crate::error::SdkError;
+use crate::events::{EventEmitter, EventListener, SdkEvent};
 use crate::persist::{
     ConversionFilter, ObjectCacheRepository, StorageListPaymentsRequest,
     StoragePaymentDetailsFilter,
 };
-use crate::{ConversionInfo, ConversionStatus, Payment, PaymentDetails, PaymentStatus, Storage};
+use crate::{
+    ConversionInfo, ConversionStatus, Payment, PaymentDetails, PaymentStatus, PaymentType, Storage,
+};
 
 use super::{
     CrossChainAcceptedAsset, CrossChainFeeMode, CrossChainProvider, CrossChainProviderContext,
@@ -42,7 +46,10 @@ use super::{
 };
 
 use crate::utils::{
-    payments::{fetch_and_process_payment, resolve_payment_id},
+    payments::{
+        emit_payment_metadata_updated, fetch_and_process_payment, insert_payment_metadata_and_emit,
+        resolve_payment_id,
+    },
     polling::{PollSchedule, poll_until},
     time::{now_secs, try_now_secs},
 };
@@ -146,22 +153,56 @@ struct ResolvedSparkAsset {
     decimals: u8,
 }
 
+/// Wakes the monitor when a payment comes in while a cross-chain receive is
+/// open, so its conversion info is attached right away instead of on the
+/// next timed pass.
+struct InboundPaymentListener {
+    monitor_trigger: broadcast::Sender<()>,
+    has_active_receives: Arc<AtomicBool>,
+}
+
+#[macros::async_trait]
+impl EventListener for InboundPaymentListener {
+    async fn on_event(&self, event: SdkEvent) {
+        let (SdkEvent::PaymentSucceeded { payment } | SdkEvent::PaymentPending { payment }) =
+            &event
+        else {
+            return;
+        };
+        if payment.payment_type != PaymentType::Receive
+            || !self.has_active_receives.load(Ordering::Relaxed)
+        {
+            return;
+        }
+        debug!(
+            "Orchestra: inbound payment {} while a receive is open, waking the monitor",
+            payment.id
+        );
+        let _ = self.monitor_trigger.send(());
+    }
+}
+
 /// Flashnet Orchestra cross-chain provider.
 pub(crate) struct OrchestraService {
     client: Arc<OrchestraClient>,
     spark_wallet: Arc<SparkWallet>,
     storage: Arc<dyn Storage>,
     fiat_service: Arc<dyn FiatService>,
+    event_emitter: Arc<EventEmitter>,
     monitor_trigger: broadcast::Sender<()>,
+    /// Whether any receive row is still open. Refreshed by every monitor
+    /// pass, set when a receive is prepared.
+    has_active_receives: Arc<AtomicBool>,
 }
 
 impl OrchestraService {
-    pub(crate) fn new(
+    pub(crate) async fn new(
         config_resolver: Arc<dyn OrchestraConfigResolver>,
         spark_wallet: Arc<SparkWallet>,
         storage: Arc<dyn Storage>,
         fiat_service: Arc<dyn FiatService>,
         http_client: Arc<dyn platform_utils::HttpClient>,
+        event_emitter: Arc<EventEmitter>,
         shutdown_receiver: watch::Receiver<()>,
     ) -> Self {
         let client = Arc::new(OrchestraClient::new(
@@ -170,13 +211,23 @@ impl OrchestraService {
             http_client,
         ));
         let (monitor_trigger, _) = broadcast::channel(10);
+        let has_active_receives = Arc::new(AtomicBool::new(false));
+
+        event_emitter
+            .add_internal_listener(Box::new(InboundPaymentListener {
+                monitor_trigger: monitor_trigger.clone(),
+                has_active_receives: Arc::clone(&has_active_receives),
+            }))
+            .await;
 
         let service = Self {
             client,
             spark_wallet,
             storage,
             fiat_service,
+            event_emitter,
             monitor_trigger: monitor_trigger.clone(),
+            has_active_receives,
         };
         info!("Orchestra service initialized");
         service.spawn_monitor(shutdown_receiver, &monitor_trigger);
@@ -197,6 +248,8 @@ impl OrchestraService {
         let client = Arc::clone(&self.client);
         let spark_wallet = Arc::clone(&self.spark_wallet);
         let fiat_service = Arc::clone(&self.fiat_service);
+        let event_emitter = Arc::clone(&self.event_emitter);
+        let has_active_receives = Arc::clone(&self.has_active_receives);
         let mut trigger_receiver = monitor_trigger.subscribe();
         let span = tracing::Span::current();
 
@@ -209,7 +262,8 @@ impl OrchestraService {
                 let mut probe_clock: HashMap<String, u64> = HashMap::new();
                 loop {
                     if let Err(e) =
-                        Self::poll_in_flight_sends(&storage, &client, &spark_wallet).await
+                        Self::poll_in_flight_sends(&storage, &client, &spark_wallet, &event_emitter)
+                            .await
                     {
                         error!("Orchestra send-monitor poll failed: {e:?}");
                     }
@@ -219,6 +273,8 @@ impl OrchestraService {
                         &client,
                         &spark_wallet,
                         fiat_service.as_ref(),
+                        &event_emitter,
+                        &has_active_receives,
                         &mut probe_clock,
                     )
                     .await
@@ -311,6 +367,7 @@ impl OrchestraService {
         storage: &Arc<dyn Storage>,
         client: &Arc<OrchestraClient>,
         spark_wallet: &Arc<SparkWallet>,
+        event_emitter: &EventEmitter,
     ) -> Result<(), SdkError> {
         let pending = storage
             .list_payments(StorageListPaymentsRequest {
@@ -378,15 +435,16 @@ impl OrchestraService {
             // status, not the payment's, so nothing else clears this row.
             if payment.status == PaymentStatus::Failed {
                 if let Some(metadata) = with_status(conversion_info, ConversionStatus::Failed)
-                    && let Err(e) = storage
-                        .insert_payment_metadata(
-                            payment.id.clone(),
-                            crate::PaymentMetadata {
-                                conversion_info: Some(metadata),
-                                ..Default::default()
-                            },
-                        )
-                        .await
+                    && let Err(e) = insert_payment_metadata_and_emit(
+                        storage,
+                        event_emitter,
+                        payment.id.clone(),
+                        crate::PaymentMetadata {
+                            conversion_info: Some(metadata),
+                            ..Default::default()
+                        },
+                    )
+                    .await
                 {
                     warn!("Failed to mark {} conversion failed: {e}", payment.id);
                 }
@@ -408,9 +466,13 @@ impl OrchestraService {
                     conversion_info: Some(updated.clone()),
                     ..Default::default()
                 };
-                if let Err(e) = storage
-                    .insert_payment_metadata(payment.id.clone(), metadata)
-                    .await
+                if let Err(e) = insert_payment_metadata_and_emit(
+                    storage,
+                    event_emitter,
+                    payment.id.clone(),
+                    metadata,
+                )
+                .await
                 {
                     warn!(
                         "Failed to record Orchestra order {id} for payment {}: {e}",
@@ -484,9 +546,13 @@ impl OrchestraService {
                 payment.id
             );
 
-            if let Err(e) = storage
-                .insert_payment_metadata(payment.id.clone(), updated_metadata)
-                .await
+            if let Err(e) = insert_payment_metadata_and_emit(
+                storage,
+                event_emitter,
+                payment.id.clone(),
+                updated_metadata,
+            )
+            .await
             {
                 error!(
                     "Failed to update Orchestra status for payment {}: {e}",
@@ -507,12 +573,15 @@ impl OrchestraService {
     /// Each row is resolved to an order handle by
     /// [`Self::ensure_receive_order_handle`], then polled by
     /// [`Self::poll_receive_order_status`].
+    #[allow(clippy::too_many_arguments)]
     async fn poll_in_flight_receives(
         storage: &Arc<dyn Storage>,
         swap_storage: &OrchestraStorageAdapter,
         client: &Arc<OrchestraClient>,
         spark_wallet: &Arc<SparkWallet>,
         fiat_service: &dyn FiatService,
+        event_emitter: &EventEmitter,
+        has_active_receives: &AtomicBool,
         probe_clock: &mut HashMap<String, u64>,
     ) -> Result<(), SdkError> {
         let active = swap_storage.list_active().await?;
@@ -520,6 +589,7 @@ impl OrchestraService {
             "Orchestra monitor: found {} active receive rows",
             active.len()
         );
+        has_active_receives.store(!active.is_empty(), Ordering::Relaxed);
         prune_probe_clock(probe_clock, &active);
 
         for (row, data) in active {
@@ -549,6 +619,7 @@ impl OrchestraService {
                 client,
                 spark_wallet,
                 fiat_service,
+                event_emitter,
                 row,
                 data,
                 &order_id,
@@ -652,6 +723,7 @@ impl OrchestraService {
         client: &Arc<OrchestraClient>,
         spark_wallet: &Arc<SparkWallet>,
         fiat_service: &dyn FiatService,
+        event_emitter: &EventEmitter,
         row: crate::StoredCrossChainSwap,
         data: OrchestraSwapData,
         order_id: &str,
@@ -694,7 +766,10 @@ impl OrchestraService {
                 )
                 .await
                 {
-                    Ok(ReceiveMetadataOutcome::Attached) => true,
+                    Ok(ReceiveMetadataOutcome::Attached(payment_id)) => {
+                        emit_payment_metadata_updated(storage, event_emitter, &payment_id).await;
+                        true
+                    }
                     Ok(ReceiveMetadataOutcome::Pending) => {
                         debug!(
                             "Orchestra receive {quote_id} Completed, metadata not on the \
@@ -821,7 +896,7 @@ impl OrchestraService {
         destination_amount: u128,
         apply_rounding_margin: bool,
         apply_base_fee_pad: bool,
-    ) -> Result<u128, SdkError> {
+    ) -> Result<SizedDeposit, SdkError> {
         let request = EstimateRequest {
             source_chain: source_chain.to_string(),
             source_asset: source_asset.to_string(),
@@ -868,8 +943,75 @@ impl OrchestraService {
              target={destination_amount} scaled={scaled} base_fee_pad={base_fee_pad} \
              → required_in={required_in}",
         );
-        Ok(required_in)
+        Ok(SizedDeposit {
+            required_in,
+            target: destination_amount,
+            probe_in: source_amount,
+            probe_out: effective_delivered,
+        })
     }
+
+    /// Quotes once more when `quote` delivers too little to pass its drift
+    /// check, growing the deposit by the shortfall at the probe's rate.
+    /// `/estimate` leaves out costs a firm quote takes from its output (the
+    /// source network's gas on a receive from Ethereum, for one), and those
+    /// are close to fixed per quote, so the top-up covers them.
+    async fn requote_if_short(
+        &self,
+        request: QuoteRequest,
+        quote: QuoteResponse,
+        sized: &SizedDeposit,
+        drift_target: u128,
+        max_slippage_bps: u32,
+    ) -> Result<QuoteResponse, SdkError> {
+        let delivered = parse_amount(&quote.estimated_out, "estimatedOut")?;
+        if delivered >= min_acceptable_out(drift_target, max_slippage_bps) {
+            return Ok(quote);
+        }
+        let quoted_in = parse_amount(&quote.amount_in, "amountIn")?;
+        let top_up = top_up_for_shortfall(
+            sized.target.saturating_sub(delivered),
+            sized.probe_in,
+            sized.probe_out,
+        )?;
+        let retry_in = quoted_in.saturating_add(top_up);
+        debug!(
+            "Orchestra: quote delivers {delivered} of {}, quoting again with {top_up} more \
+             in (amount={retry_in})",
+            sized.target
+        );
+        let retry = self
+            .client
+            .quote(QuoteRequest {
+                amount: retry_in.to_string(),
+                ..request
+            })
+            .await?;
+        debug!("Orchestra: re-quote response: {:?}", retry);
+        verify_quote_amount_in(retry_in, parse_amount(&retry.amount_in, "amountIn")?)?;
+        Ok(retry)
+    }
+}
+
+/// A deposit sized from an `/estimate` probe, with the probe's delivery rate
+/// kept for topping up a firm quote that comes back short.
+struct SizedDeposit {
+    required_in: u128,
+    /// What the deposit was sized to deliver, in destination units.
+    target: u128,
+    probe_in: u128,
+    probe_out: u128,
+}
+
+/// Source chains Orchestra only accepts a receive from with a refund address
+/// on that chain. A receive request can't carry one: the payer's address isn't
+/// known when the request is made.
+const RECEIVE_NEEDS_REFUND_ADDRESS: &[&str] = &["ton"];
+
+fn needs_refund_address_to_receive(chain: &str) -> bool {
+    RECEIVE_NEEDS_REFUND_ADDRESS
+        .iter()
+        .any(|c| c.eq_ignore_ascii_case(chain))
 }
 
 fn parse_amount(value: &str, field: &str) -> Result<u128, SdkError> {
@@ -895,6 +1037,24 @@ fn proportional_inflation(
         .and_then(|p| p.checked_div(estimated_delivered))
         .ok_or_else(|| SdkError::Generic("Cross-chain: inflation scaling overflow".to_string()))?;
     Ok(inflated.max(source_amount))
+}
+
+/// Source units that add `shortfall` to delivery at the probe's rate, rounded
+/// up. Errors on a zero `probe_out` or overflow.
+fn top_up_for_shortfall(
+    shortfall: u128,
+    probe_in: u128,
+    probe_out: u128,
+) -> Result<u128, SdkError> {
+    if probe_out == 0 {
+        return Err(SdkError::Generic(
+            "Cross-chain: ExactIn estimate returned zero delivered amount".to_string(),
+        ));
+    }
+    shortfall
+        .checked_mul(probe_in)
+        .map(|scaled| scaled.div_ceil(probe_out))
+        .ok_or_else(|| SdkError::Generic("Cross-chain: top-up scaling overflow".to_string()))
 }
 
 /// Adds `reported_pad` to `scaled`, capping the pad at `scaled` so a bogus
@@ -940,16 +1100,20 @@ fn verify_quote_amount_in(
     Ok(())
 }
 
-/// Errors if `quoted_estimated_out` falls below `destination_amount * (1 −
-/// max_slippage_bps / 10000)`.
+/// `destination_amount * (1 − max_slippage_bps / 10000)`: the least delivery
+/// [`verify_quote_not_drifted`] accepts.
+fn min_acceptable_out(destination_amount: u128, max_slippage_bps: u32) -> u128 {
+    destination_amount.saturating_mul(u128::from(10_000u32.saturating_sub(max_slippage_bps)))
+        / 10_000u128
+}
+
+/// Errors if `quoted_estimated_out` falls below [`min_acceptable_out`].
 fn verify_quote_not_drifted(
     destination_amount: u128,
     quoted_estimated_out: u128,
     max_slippage_bps: u32,
 ) -> Result<(), SdkError> {
-    let min_acceptable = destination_amount
-        .saturating_mul(u128::from(10_000u32.saturating_sub(max_slippage_bps)))
-        / 10_000u128;
+    let min_acceptable = min_acceptable_out(destination_amount, max_slippage_bps);
     if quoted_estimated_out < min_acceptable {
         let drift_bps = destination_amount
             .saturating_sub(quoted_estimated_out)
@@ -1171,12 +1335,11 @@ impl CrossChainService for OrchestraService {
             routes.extend(self.client.filter_routes(chain, is_send).await?);
         }
 
-        Ok(dedupe_routes(
-            &routes,
-            is_send,
-            family_filter,
-            contract_filter,
-        ))
+        let mut pairs = dedupe_routes(&routes, is_send, family_filter, contract_filter);
+        if !is_send {
+            pairs.retain(|pair| !needs_refund_address_to_receive(&pair.chain));
+        }
+        Ok(pairs)
     }
 
     async fn prepare_send(
@@ -1229,7 +1392,8 @@ impl CrossChainService for OrchestraService {
                         false,
                     )
                     .await
-                    .map_err(with_limits)?;
+                    .map_err(with_limits)?
+                    .required_in;
                 (required_in, Some(destination_amount))
             }
         };
@@ -1369,7 +1533,7 @@ impl CrossChainService for OrchestraService {
         // FeesExcluded inflates the deposit so Orchestra delivers `amount`
         // on the Spark side. FeesIncluded passes `amount` through as the
         // deposit.
-        let (source_amount, target_destination_amount) = match fee_mode {
+        let (source_amount, sized) = match fee_mode {
             CrossChainFeeMode::FeesIncluded => (amount, None),
             CrossChainFeeMode::FeesExcluded => {
                 // `target_overpay_bps` applies to SIZING only: it pads the
@@ -1396,7 +1560,7 @@ impl CrossChainService for OrchestraService {
                      (destination_decimals={destination_decimals}, source_decimals={})",
                     route.decimals,
                 );
-                let required_in = self
+                let sized = self
                     .estimate_required_source_amount(
                         &route.chain,
                         &route.asset,
@@ -1409,7 +1573,7 @@ impl CrossChainService for OrchestraService {
                     )
                     .await
                     .map_err(|e| attach_route_limits(e, route, destination))?;
-                (required_in, Some(amount))
+                (sized.required_in, Some(sized))
             }
         };
 
@@ -1443,22 +1607,29 @@ impl CrossChainService for OrchestraService {
         );
         let quote: QuoteResponse = self
             .client
-            .quote(request)
+            .quote(request.clone())
             .await
             .map_err(|e| attach_route_limits(SdkError::from(e), route, destination))?;
         debug!("Orchestra: receive quote response: {:?}", quote);
+        // Verify the quote's amountIn matches what we requested.
+        verify_quote_amount_in(source_amount, parse_amount(&quote.amount_in, "amountIn")?)?;
+        let quote = match &sized {
+            Some(sized) => self
+                .requote_if_short(request, quote, sized, amount, max_slippage_bps)
+                .await
+                .map_err(|e| attach_route_limits(e, route, destination))?,
+            None => quote,
+        };
 
         let deposit_amount = parse_amount(&quote.amount_in, "amountIn")?;
         let quote_estimated_out = parse_amount(&quote.estimated_out, "estimatedOut")?;
         let service_fee_amount = parse_amount(&quote.total_fee_amount, "totalFeeAmount")?;
         let expires_at_secs = parse_rfc3339_to_unix_seconds(&quote.expires_at)?;
 
-        // Verify the quote's amountIn matches what we requested.
-        verify_quote_amount_in(source_amount, deposit_amount)?;
         // FeesExcluded only: reject the quote if Orchestra's delivery
         // estimate drifts outside the slippage tolerance.
-        if let Some(target) = target_destination_amount {
-            verify_quote_not_drifted(target, quote_estimated_out, max_slippage_bps)?;
+        if sized.is_some() {
+            verify_quote_not_drifted(amount, quote_estimated_out, max_slippage_bps)?;
         }
         // Reporting counterpart to the sizing pad: shave the reported
         // estimate by the same margin so we don't over-promise the receiver.
@@ -1502,6 +1673,7 @@ impl CrossChainService for OrchestraService {
 
         let adapter = OrchestraStorageAdapter::new(Arc::clone(&self.storage));
         adapter.upsert(&data).await?;
+        self.has_active_receives.store(true, Ordering::Relaxed);
 
         Ok(CrossChainReceivePrepared {
             payment_request,
@@ -1916,8 +2088,8 @@ fn apply_terminal_status(
 
 /// Where a receive order's `ConversionInfo` ended up.
 enum ReceiveMetadataOutcome {
-    /// Written against the inbound `Payment` row.
-    Attached,
+    /// Written against the inbound `Payment` row with this id.
+    Attached(String),
     /// Not on the row yet, and cached under the order's `sparkTxHash`: the
     /// order carries no hash, the hash did not resolve to a payment id, or
     /// the row write failed.
@@ -1962,7 +2134,7 @@ async fn attach_receive_metadata(
             .insert_payment_metadata(payment_id.clone(), metadata.clone())
             .await
         {
-            Ok(()) => return Ok(ReceiveMetadataOutcome::Attached),
+            Ok(()) => return Ok(ReceiveMetadataOutcome::Attached(payment_id)),
             Err(e) => warn!(
                 "Orchestra receive {}: failed to write metadata onto payment {payment_id} ({e}), \
                  caching it",
@@ -3909,6 +4081,48 @@ mod tests {
         assert!(verify_quote_not_drifted(1_000_000, 0, 10_000).is_ok());
     }
 
+    #[test_all]
+    fn min_acceptable_out_is_the_drift_floor() {
+        assert_eq!(min_acceptable_out(1_000_000, 100), 990_000);
+        assert!(
+            verify_quote_not_drifted(1_000_000, min_acceptable_out(1_000_000, 100), 100).is_ok()
+        );
+    }
+
+    // ---- top_up_for_shortfall ----
+
+    #[test_all]
+    fn top_up_for_shortfall_restores_a_fixed_cost_at_the_probe_rate() {
+        // A $5 USDC receive from Ethereum: the probe priced 5_007_150 units at
+        // 6_141 sats, and the firm quote came back 2_051 sats short.
+        let (probe_in, probe_out): (u128, u128) = (5_007_150, 6_141);
+        let delivered_for = |units: u128| {
+            units
+                .checked_mul(probe_out)
+                .and_then(|v| v.checked_div(probe_in))
+                .unwrap()
+        };
+        let top_up = top_up_for_shortfall(2_051, probe_in, probe_out).unwrap();
+        assert!(delivered_for(top_up) >= 2_051);
+        assert!(delivered_for(top_up.checked_sub(1).unwrap()) < 2_051);
+    }
+
+    #[test_all]
+    fn top_up_for_shortfall_rounds_up() {
+        assert_eq!(top_up_for_shortfall(1, 3, 2).unwrap(), 2);
+        assert_eq!(top_up_for_shortfall(0, 3, 2).unwrap(), 0);
+    }
+
+    #[test_all]
+    fn top_up_for_shortfall_rejects_a_zero_probe_delivery() {
+        assert!(top_up_for_shortfall(1, 3, 0).is_err());
+    }
+
+    #[test_all]
+    fn top_up_for_shortfall_rejects_overflow() {
+        assert!(top_up_for_shortfall(u128::MAX, 2, 1).is_err());
+    }
+
     // ---- verify_quote_amount_in ----
 
     #[test_all]
@@ -3992,5 +4206,73 @@ mod tests {
         // but `accepted_assets` is empty.
         assert_eq!(pairs.len(), 1);
         assert!(pairs[0].accepted_assets.is_empty());
+    }
+
+    #[test_all]
+    fn a_receive_from_ton_needs_a_refund_address() {
+        assert!(needs_refund_address_to_receive("ton"));
+        assert!(needs_refund_address_to_receive("TON"));
+        assert!(!needs_refund_address_to_receive("base"));
+    }
+
+    fn inbound_listener(active: bool) -> (InboundPaymentListener, broadcast::Receiver<()>) {
+        let (trigger, receiver) = broadcast::channel(4);
+        let listener = InboundPaymentListener {
+            monitor_trigger: trigger,
+            has_active_receives: Arc::new(AtomicBool::new(active)),
+        };
+        (listener, receiver)
+    }
+
+    fn inbound_spark_payment() -> crate::Payment {
+        let mut payment = dummy_payment(
+            crate::PaymentMethod::Spark,
+            PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: None,
+                conversion_info: None,
+            },
+        );
+        payment.payment_type = PaymentType::Receive;
+        payment
+    }
+
+    #[async_test_all]
+    async fn inbound_payment_wakes_the_monitor_while_a_receive_is_open() {
+        let (listener, mut receiver) = inbound_listener(true);
+
+        listener
+            .on_event(SdkEvent::PaymentSucceeded {
+                payment: inbound_spark_payment(),
+            })
+            .await;
+
+        assert!(receiver.try_recv().is_ok());
+    }
+
+    #[async_test_all]
+    async fn inbound_payment_is_ignored_without_an_open_receive() {
+        let (listener, mut receiver) = inbound_listener(false);
+
+        listener
+            .on_event(SdkEvent::PaymentSucceeded {
+                payment: inbound_spark_payment(),
+            })
+            .await;
+
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[async_test_all]
+    async fn outbound_payment_does_not_wake_the_monitor() {
+        let (listener, mut receiver) = inbound_listener(true);
+        let mut payment = inbound_spark_payment();
+        payment.payment_type = PaymentType::Send;
+
+        listener
+            .on_event(SdkEvent::PaymentSucceeded { payment })
+            .await;
+
+        assert!(receiver.try_recv().is_err());
     }
 }

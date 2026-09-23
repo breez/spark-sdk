@@ -764,7 +764,7 @@ class SqliteStorage {
   listDeposits() {
     try {
       const stmt = this.db.prepare(`
-                SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status, refund_state
+                SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status, refund_state, max_claim_fee
                 FROM unclaimed_deposits
             `);
 
@@ -782,6 +782,9 @@ class SqliteStorage {
             ? JSON.parse(row.instant_claim_status)
             : null,
           refundState: row.refund_state ? JSON.parse(row.refund_state) : null,
+          maxClaimFee: row.max_claim_fee
+            ? JSON.parse(row.max_claim_fee)
+            : null,
         }))
       );
     } catch (error) {
@@ -831,6 +834,18 @@ class SqliteStorage {
         `);
 
         stmt.run(JSON.stringify(payload.state), txid, vout, payload.refundTxid);
+      } else if (payload.type === "maxClaimFee") {
+        const stmt = this.db.prepare(`
+          UPDATE unclaimed_deposits
+          SET max_claim_fee = ?
+          WHERE txid = ? AND vout = ?
+        `);
+
+        stmt.run(
+          payload.maxFee ? JSON.stringify(payload.maxFee) : null,
+          txid,
+          vout
+        );
       } else {
         return Promise.reject(
           new StorageError(`Unknown payload type: ${payload.type}`)

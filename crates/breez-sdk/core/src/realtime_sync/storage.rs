@@ -2,7 +2,10 @@ use std::{
     collections::HashMap,
     fmt::{Display, Formatter},
     str::FromStr,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use breez_sdk_common::sync::{
@@ -24,7 +27,7 @@ use crate::{
         StoredCrossChainSwap, parse_cached_lightning_address,
     },
     sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
-    utils::time::now_secs,
+    utils::{payments::emit_payment_metadata_updated, time::now_secs},
 };
 use platform_utils::tokio;
 use serde::{Deserialize, Serialize};
@@ -124,6 +127,9 @@ pub struct SyncedRecordHandler {
     storage: Arc<dyn Storage>,
     event_emitter: Arc<EventEmitter>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
+    /// Set once the first pull finished. Metadata applied before that is the
+    /// catch-up of everything missed while offline, and is not announced.
+    initial_pull_done: AtomicBool,
 }
 
 #[macros::async_trait]
@@ -148,6 +154,8 @@ impl NewRecordHandler for SyncedRecordHandler {
             "real-time sync completed for {:?} incoming, {:?} outgoing records",
             incoming_count, outgoing_count
         );
+
+        self.initial_pull_done.store(true, Ordering::Relaxed);
 
         // No need to emit an event if no pull was done.
         if incoming_count.is_none() {
@@ -293,6 +301,7 @@ impl SyncedRecordHandler {
             storage,
             event_emitter,
             lnurl_server_client,
+            initial_pull_done: AtomicBool::new(false),
         }
     }
 
@@ -411,8 +420,11 @@ impl SyncedRecordHandler {
         .map_err(|e| StorageError::Serialization(e.to_string()))?;
 
         self.storage
-            .insert_payment_metadata(data_id, metadata)
+            .insert_payment_metadata(data_id.clone(), metadata)
             .await?;
+        if self.initial_pull_done.load(Ordering::Relaxed) {
+            emit_payment_metadata_updated(&self.storage, &self.event_emitter, &data_id).await;
+        }
         Ok(())
     }
 

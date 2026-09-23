@@ -550,7 +550,6 @@ impl SparkWallet {
             Arc::clone(&spark_signer),
             operator_pool.clone(),
             config.network,
-            config.split_secret_threshold,
             config.tokens_config.clone(),
             transfer_observer.clone(),
         ));

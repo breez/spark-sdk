@@ -7,7 +7,7 @@ The SDK supports various configuration options to customize its behavior. During
 
 ## Max deposit claim fee
 
-Receiving Bitcoin payments through on-chain deposits may involve fees. This configuration option controls the automatic claiming of incoming funds, allowing it when the required fees are below specified thresholds. The available options are:
+Receiving Bitcoin payments through on-chain deposits may involve fees. This option controls automatic claiming of incoming funds: the SDK claims a deposit when the required fees fit the configured threshold. The available options are:
 
 - Absolute fee amount in sats
 - Feerate in sats/vbyte
@@ -15,9 +15,11 @@ Receiving Bitcoin payments through on-chain deposits may involve fees. This conf
 
 You can also disable automatic claiming entirely. Deposits that are not automatically claimed require manual intervention.
 
-By default, automatic claiming is enabled with a maximum feerate of 1 sats/vbyte.
+By default, automatic claiming is enabled with a maximum feerate of 1 sat/vbyte.
 
 This ceiling also caps what the Spark Service Provider may take to credit a deposit [before it matures](./onchain_claims.md#claiming-before-maturity), so raising it both tolerates higher on-chain fees and allows deposits to be claimed sooner. The default is far below any such spread, so deposits wait for maturity until it is raised. That spread grows with the deposit, so a ceiling generous enough to claim a small deposit early may still leave a large one waiting.
+
+This ceiling applies to every deposit. A single deposit can be given [a ceiling of its own](./onchain_claims.md#setting-a-max-fee-for-one-deposit), which then governs it instead.
 
 More information can be found in the [Claiming on-chain deposits](./onchain_claims.md) page.
 

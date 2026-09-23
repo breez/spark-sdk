@@ -29,8 +29,8 @@ use thiserror::Error;
 use crate::{
     AssetFilter, Contact, ConversionInfo, ConversionStatus, DepositClaimError, DepositInfo,
     InstantClaimStatus, LightningAddressInfo, ListContactsRequest, ListPaymentsRequest,
-    LnurlPayInfo, LnurlWithdrawInfo, PaymentDetailsFilter, PaymentStatus, PaymentType, RefundState,
-    SparkHtlcStatus, TokenBalance, TokenMetadata, TokenTransactionType,
+    LnurlPayInfo, LnurlWithdrawInfo, MaxFee, PaymentDetailsFilter, PaymentStatus, PaymentType,
+    RefundState, SparkHtlcStatus, TokenBalance, TokenMetadata, TokenTransactionType,
     models::Payment,
     sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
 };
@@ -106,6 +106,12 @@ pub enum UpdateDepositPayload {
     RefundBroadcastState {
         refund_txid: String,
         state: RefundState,
+    },
+    /// Sets the fee ceiling standing for this deposit, which later automatic
+    /// claims run under. `None` clears it, returning the deposit to the
+    /// configured ceiling.
+    MaxClaimFee {
+        max_fee: Option<MaxFee>,
     },
 }
 

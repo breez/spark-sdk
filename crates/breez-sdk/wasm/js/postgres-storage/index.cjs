@@ -775,7 +775,7 @@ class PostgresStorage {
   async listDeposits() {
     try {
       const result = await this.pool.query(
-        "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status, refund_state FROM brz_unclaimed_deposits WHERE user_id = $1",
+        "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id, instant_claim_status, refund_state, max_claim_fee FROM brz_unclaimed_deposits WHERE user_id = $1",
         [this.identity]
       );
 
@@ -789,6 +789,7 @@ class PostgresStorage {
         refundTxId: row.refund_tx_id,
         instantClaimStatus: row.instant_claim_status || null,
         refundState: row.refund_state || null,
+        maxClaimFee: row.max_claim_fee || null,
       }));
     } catch (error) {
       throw new StorageError(
@@ -839,6 +840,18 @@ class PostgresStorage {
             txid,
             vout,
             payload.refundTxid,
+          ]
+        );
+      } else if (payload.type === "maxClaimFee") {
+        await this.pool.query(
+          `UPDATE brz_unclaimed_deposits
+           SET max_claim_fee = $1
+           WHERE user_id = $2 AND txid = $3 AND vout = $4`,
+          [
+            payload.maxFee ? JSON.stringify(payload.maxFee) : null,
+            this.identity,
+            txid,
+            vout,
           ]
         );
       } else {

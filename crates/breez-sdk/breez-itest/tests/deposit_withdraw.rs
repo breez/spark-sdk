@@ -334,9 +334,9 @@ async fn test_deposit_fee_manual_claim(
         })
         .await?;
     // A standard (mature) claim settles synchronously and returns the payment.
-    let payment = claim_resp
-        .payment
-        .expect("standard claim should return a settled payment");
+    let ClaimDepositOutcome::Settled { payment } = claim_resp.outcome else {
+        panic!("standard claim should settle: {:?}", claim_resp.outcome)
+    };
     assert!(matches!(payment.payment_type, PaymentType::Receive));
     assert!(matches!(payment.method, PaymentMethod::Deposit));
     assert!(
@@ -360,6 +360,120 @@ async fn test_deposit_fee_manual_claim(
             .iter()
             .any(|d| d.txid == txid_found && d.vout == vout),
         "Deposit should be removed after successful claim"
+    );
+
+    Ok(())
+}
+
+/// A ceiling passed to `claim_deposit` is recorded on the deposit and governs
+/// later automatic attempts, so an app can raise one deposit above the configured
+/// ceiling to have it claimed early, or lower one to hold it to maturity.
+///
+/// Asserts the storage contract rather than the claim outcome, which keeps it
+/// independent of whether the deposit matures before the claim lands.
+#[rstest]
+#[ignore]
+#[test_log::test(tokio::test)]
+async fn test_claim_deposit_records_the_max_fee(
+    #[future] bob_strict_fee_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    let mut bob = bob_strict_fee_sdk.await?;
+
+    let addr = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
+        })
+        .await?
+        .payment_request;
+
+    let faucet = RegtestFaucet::new()?;
+    let txid = faucet.fund_address(&addr, 30_000u64).await?;
+    info!("Faucet txid: {}", txid);
+
+    let deposit = sync_until_new_deposit(&bob.sdk, &mut bob.events, &txid, 180).await?;
+    let vout = deposit.vout;
+    // Read the baseline from storage: the event's DepositInfo is built from the
+    // UTXO, so its max_claim_fee is None whatever the row holds.
+    let stored = bob
+        .sdk
+        .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
+        .await?
+        .deposits
+        .into_iter()
+        .find(|d| d.txid == txid && d.vout == vout)
+        .expect("the discovered deposit should be listed");
+    assert_eq!(
+        stored.max_claim_fee, None,
+        "a newly discovered deposit runs under the configured ceiling"
+    );
+
+    // A ceiling below what either claim costs. Nothing is claimed, but the ceiling
+    // it was held to is what the deposit now stands at. Whether that comes back as
+    // a deferral or an error depends on whether the deposit has matured yet, which
+    // is a race on regtest, so this asserts only that nothing was claimed.
+    let ceiling = MaxFee::Fixed { amount: 1 };
+    let refused = bob
+        .sdk
+        .claim_deposit(ClaimDepositRequest {
+            txid: txid.clone(),
+            vout,
+            max_fee: Some(ceiling.clone()),
+        })
+        .await;
+    match &refused {
+        Ok(resp) => {
+            assert!(
+                matches!(resp.outcome, ClaimDepositOutcome::Deferred { .. }),
+                "a 1 sat ceiling cannot cover any claim: {:?}",
+                resp.outcome
+            );
+        }
+        Err(e) => info!("Claim at maturity refused as expected: {e}"),
+    }
+
+    let deposits = bob
+        .sdk
+        .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
+        .await?
+        .deposits;
+    let dep = deposits
+        .iter()
+        .find(|d| d.txid == txid && d.vout == vout)
+        .expect("deposit should still be listed");
+    assert_eq!(
+        dep.max_claim_fee,
+        Some(ceiling),
+        "the ceiling stands even though no claim was made under it"
+    );
+
+    // Claiming with no ceiling means "the wallet defaults", which retires the one
+    // standing on the deposit.
+    let cleared = bob
+        .sdk
+        .claim_deposit(ClaimDepositRequest {
+            txid: txid.clone(),
+            vout,
+            max_fee: None,
+        })
+        .await;
+    info!("Claim under the configured ceiling: {cleared:?}");
+
+    let deposits = bob
+        .sdk
+        .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
+        .await?
+        .deposits;
+    // The fixture's configured ceiling is too strict to claim this deposit, so the
+    // row is still there to assert on. Assert that rather than skipping the check
+    // when it is not, which would let the clearing go untested.
+    let dep = deposits
+        .iter()
+        .find(|d| d.txid == txid && d.vout == vout)
+        .expect("a claim refused by the strict configured ceiling leaves the deposit listed");
+    assert_eq!(
+        dep.max_claim_fee, None,
+        "claiming without a ceiling clears the one standing on the deposit"
     );
 
     Ok(())
@@ -946,12 +1060,6 @@ async fn test_manual_instant_deposit_claim(
             .await
         {
             Ok(resp) => break resp,
-            Err(e) if e.to_string().contains("No instant claim plan available") => {
-                warn!(
-                    "SKIP test_manual_instant_deposit_claim: SSP offered no fulfillment plan for the deposit"
-                );
-                return Ok(());
-            }
             // Two transient stages: the SSP has not indexed the tx yet
             // ("Transaction not found"), and it has but the UTXO is not deep
             // enough on every operator yet ("...confirmations..."). Retry only
@@ -977,18 +1085,23 @@ async fn test_manual_instant_deposit_claim(
             Err(e) => return Err(e.into()),
         }
     };
-    // Which path the claim took is decided by maturity, not by the caller, and on
-    // regtest a deposit matures at one confirmation. Winning the race to claim
-    // early is therefore not guaranteed; a claim that lands after maturity settles
-    // synchronously and returns a payment, which is correct and leaves nothing for
-    // the early-claim assertions below to check.
-    if let Some(payment) = claim_resp.payment {
-        warn!(
-            "SKIP early-claim assertions: the deposit matured before the claim landed, \
-             so it settled at maturity ({} sats)",
-            payment.amount
-        );
-        return Ok(());
+    // Which path the claim took is decided by maturity and by what the provider
+    // offers, not by the caller, and on regtest a deposit matures at one
+    // confirmation. Winning the race to claim early is therefore not guaranteed,
+    // and only a submitted early claim leaves anything for the assertions below.
+    match &claim_resp.outcome {
+        ClaimDepositOutcome::Submitted => {}
+        ClaimDepositOutcome::Settled { .. } => {
+            warn!(
+                "SKIP early-claim assertions: the deposit matured before the claim \
+                 landed, so it settled at maturity"
+            );
+            return Ok(());
+        }
+        ClaimDepositOutcome::Deferred { reason } => {
+            warn!("SKIP early-claim assertions: no early claim was made ({reason:?})");
+            return Ok(());
+        }
     }
 
     // Mark-not-delete contract. claim_deposit marks the deposit Submitted, creating

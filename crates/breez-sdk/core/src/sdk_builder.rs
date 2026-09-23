@@ -627,8 +627,10 @@ impl SdkBuilder {
             &spark_wallet,
             &storage,
             Arc::clone(&fiat_service),
+            &event_emitter,
             shutdown_sender.subscribe(),
-        );
+        )
+        .await;
 
         let stable_balance = build_stable_balance(
             &self.config,
@@ -1112,13 +1114,15 @@ async fn build_stable_balance(
 
 /// Builds the cross-chain context: provider registry + shared cached fiat
 /// service. Returns an empty registry when `config.cross_chain_config` is unset.
-fn build_cross_chain_context(
+#[allow(clippy::too_many_arguments)]
+async fn build_cross_chain_context(
     config: &Config,
     breez_server: &Arc<BreezServer>,
     http_client: &Arc<dyn platform_utils::HttpClient>,
     spark_wallet: &Arc<SparkWallet>,
     storage: &Arc<dyn crate::persist::Storage>,
     fiat_service: Arc<dyn breez_sdk_common::fiat::FiatService>,
+    event_emitter: &Arc<EventEmitter>,
     shutdown_receiver: watch::Receiver<()>,
 ) -> crate::cross_chain::CrossChainContext {
     // Cache scoped to cross-chain: providers + dispatcher share one TTL window.
@@ -1142,14 +1146,18 @@ fn build_cross_chain_context(
         );
         providers.insert(
             crate::cross_chain::CrossChainProvider::Orchestra,
-            Arc::new(crate::cross_chain::OrchestraService::new(
-                config_resolver,
-                Arc::clone(spark_wallet),
-                Arc::clone(storage),
-                Arc::clone(&cached_fiat),
-                Arc::clone(http_client),
-                shutdown_receiver,
-            )),
+            Arc::new(
+                crate::cross_chain::OrchestraService::new(
+                    config_resolver,
+                    Arc::clone(spark_wallet),
+                    Arc::clone(storage),
+                    Arc::clone(&cached_fiat),
+                    Arc::clone(http_client),
+                    Arc::clone(event_emitter),
+                    shutdown_receiver,
+                )
+                .await,
+            ),
         );
     }
 

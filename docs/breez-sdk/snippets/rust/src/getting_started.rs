@@ -91,6 +91,10 @@ impl EventListener for SdkEventListener {
                 // A payment failed. payment.details carries the method-specific
                 // context to show the user.
             }
+            SdkEvent::PaymentMetadataUpdated { payment } => {
+                // Details of a payment already reported changed, such as the
+                // conversion info of a cross-chain receive.
+            }
             SdkEvent::AutoOptimization { optimization_event } => {
                 // Background optimizer progress: started, round completed, or a
                 // terminal outcome. Manual optimize_leaves calls do not emit these.

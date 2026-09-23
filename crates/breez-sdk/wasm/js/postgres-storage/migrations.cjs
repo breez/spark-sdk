@@ -556,6 +556,14 @@ class PostgresMigrationManager {
         ],
       },
       {
+        // The fee ceiling standing for one deposit as a JSON-encoded MaxFee,
+        // overriding the configured one. NULL when the configured one applies.
+        name: "Add max claim fee to brz_unclaimed_deposits",
+        sql: [
+          `ALTER TABLE brz_unclaimed_deposits ADD COLUMN max_claim_fee JSONB`,
+        ],
+      },
+      {
         // Bolt11s settled over Spark, one table per direction, joined when a
         // payment is read: sends by the payment id, receives by a digest of the
         // Spark invoice the Bolt11 embeds, which the Spark details row carries.
