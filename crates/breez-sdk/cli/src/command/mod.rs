@@ -774,7 +774,10 @@ pub(crate) async fn execute_command(
                 response.estimated_out,
                 response.asset,
                 response.service_fee_amount,
-                response.service_fee_asset.as_deref().unwrap_or("sats"),
+                service_fee_denomination(
+                    response.service_fee_asset.as_deref(),
+                    response.service_fee_asset_decimals,
+                ),
                 response.expires_at,
             );
             Ok(true)
@@ -982,11 +985,15 @@ pub(crate) async fn execute_command(
                 fee_amount,
                 service_fee_amount,
                 ref service_fee_asset,
+                service_fee_asset_decimals,
                 source_transfer_fee_sats,
                 ..
             } = prepare_response.payment_method
             {
-                let service_fee_denom = service_fee_asset.as_deref().unwrap_or("sats");
+                let service_fee_denom = service_fee_denomination(
+                    service_fee_asset.as_deref(),
+                    service_fee_asset_decimals,
+                );
                 let denomination = if token_identifier.is_some() {
                     "token base units"
                 } else {
@@ -1504,4 +1511,13 @@ pub(crate) fn print_value<T: serde::Serialize>(value: &T) -> Result<(), serde_js
 
 fn serialize<T: serde::Serialize>(value: &T) -> Result<String, serde_json::Error> {
     serde_json::to_string_pretty(value)
+}
+
+/// Unit label for a cross-chain service fee: sats when no asset is set.
+fn service_fee_denomination(asset: Option<&str>, decimals: Option<u32>) -> String {
+    match (asset, decimals) {
+        (None, _) => "sats".to_string(),
+        (Some(asset), Some(decimals)) => format!("{asset} ({decimals} decimals)"),
+        (Some(asset), None) => asset.to_string(),
+    }
 }

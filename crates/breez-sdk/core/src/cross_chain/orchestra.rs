@@ -880,8 +880,9 @@ impl OrchestraService {
     /// Sizes the source-asset deposit with defensive headroom on top to
     /// absorb price and fee variance between the probe and the eventual
     /// quote. `apply_rounding_margin` widens that headroom for destinations
-    /// that floor delivery at a coarser unit (USDB cents). `apply_base_fee_pad`
-    /// adds `estimate.fee_amount` on top when Orchestra reports it in the
+    /// that floor delivery at a coarser unit (USDB cents).
+    /// `base_fee_pad_source_decimals` adds `estimate.fee_amount` on top,
+    /// rescaled to those source decimals, when Orchestra reports it in the
     /// source asset. The check gates the pad so a fee reported in some other
     /// denomination (e.g. destination units on a BTC-source send) is never
     /// added to a source-unit quantity.
@@ -895,7 +896,7 @@ impl OrchestraService {
         source_amount: u128,
         destination_amount: u128,
         apply_rounding_margin: bool,
-        apply_base_fee_pad: bool,
+        base_fee_pad_source_decimals: Option<u32>,
     ) -> Result<SizedDeposit, SdkError> {
         let request = EstimateRequest {
             source_chain: source_chain.to_string(),
@@ -924,12 +925,10 @@ impl OrchestraService {
         };
         let scaled =
             proportional_inflation(source_amount, destination_amount, effective_delivered)?;
-        let reported_pad =
-            if apply_base_fee_pad && estimate.fee_asset.eq_ignore_ascii_case(source_asset) {
-                parse_amount(&estimate.fee_amount, "feeAmount")?
-            } else {
-                0
-            };
+        let reported_pad = match base_fee_pad_source_decimals {
+            Some(source_decimals) => base_fee_pad(&estimate, source_asset, source_decimals)?,
+            None => 0,
+        };
         let (required_in, base_fee_pad) = pad_required_in(scaled, reported_pad);
         if base_fee_pad < reported_pad {
             warn!(
@@ -1020,6 +1019,89 @@ fn parse_amount(value: &str, field: &str) -> Result<u128, SdkError> {
         .map_err(|e| SdkError::Generic(format!("Orchestra returned invalid {field}: {e}")))
 }
 
+/// Ticker and decimals of the asset a quote's fees are denominated in.
+/// `(None, None)` means sats.
+fn fee_denomination(quote: &QuoteResponse) -> (Option<String>, Option<u32>) {
+    if quote.fee_asset.eq_ignore_ascii_case("BTC") {
+        return (None, None);
+    }
+    (
+        Some(quote.fee_asset.clone()),
+        quote.fee_asset_details.as_ref().map(|d| d.decimals),
+    )
+}
+
+/// The quote's `totalFeeAmount`, in `feeAsset` units.
+///
+/// Temporary workaround: Orchestra reports `roundingFeeAmount` in destination
+/// units when a USD-stable destination has more decimals than the fee asset
+/// (`bsc` at 18dp, `hypercore` at 8dp) and sums it into the total as-is. The
+/// rounding fee is the sub-cent remainder of flooring `estimatedOut` to cents,
+/// so a value of a cent or more that drops under a cent once rescaled is
+/// treated as destination units. The total is corrected only while it is the
+/// exact sum of its components with that raw value, so an upstream fix to
+/// either field turns this off. Anything unexpected keeps the reported total.
+fn service_fee_from_quote(
+    quote: &QuoteResponse,
+    destination_asset: &str,
+    destination_decimals: u32,
+) -> Result<u128, SdkError> {
+    let total = parse_amount(&quote.total_fee_amount, "totalFeeAmount")?;
+    Ok(
+        rescaled_rounding_total(quote, total, destination_asset, destination_decimals)
+            .unwrap_or(total),
+    )
+}
+
+fn rescaled_rounding_total(
+    quote: &QuoteResponse,
+    total: u128,
+    destination_asset: &str,
+    destination_decimals: u32,
+) -> Option<u128> {
+    let (Some(fee_asset), Some(fee_decimals)) = fee_denomination(quote) else {
+        return None;
+    };
+    if destination_decimals <= fee_decimals
+        || !super::is_usd_stable_asset(&fee_asset)
+        || !super::is_usd_stable_asset(destination_asset)
+    {
+        return None;
+    }
+    let one_cent = 10u128.checked_pow(fee_decimals.saturating_sub(2))?;
+    let rounding = quote.rounding_fee_amount.as_deref()?.parse::<u128>().ok()?;
+    let rescaled = super::rescale_decimals(rounding, destination_decimals, fee_decimals).ok()?;
+    if rounding < one_cent || rescaled >= one_cent {
+        return None;
+    }
+    if total_fee_components(quote, rounding)? != total {
+        return None;
+    }
+    warn!(
+        "Orchestra quote {}: roundingFeeAmount {rounding} is in destination units \
+         ({destination_decimals}dp), rescaling to {rescaled} {fee_asset} ({fee_decimals}dp) \
+         in totalFeeAmount {total}",
+        quote.quote_id
+    );
+    Some(total.saturating_sub(rounding).saturating_add(rescaled))
+}
+
+/// Sum of the fee components Orchestra documents as making up
+/// `totalFeeAmount`, with `rounding` in place of `roundingFeeAmount`. `None`
+/// on an unparseable component or overflow.
+fn total_fee_components(quote: &QuoteResponse, rounding: u128) -> Option<u128> {
+    let optional = |value: &Option<String>| value.as_deref().map_or(Some(0), |v| v.parse().ok());
+    [
+        quote.fee_amount.parse().ok()?,
+        rounding,
+        optional(&quote.app_fee_amount)?,
+        optional(&quote.sweep_fee_amount)?,
+        optional(&quote.network_cost_amount)?,
+    ]
+    .into_iter()
+    .try_fold(0u128, u128::checked_add)
+}
+
 /// Returns `source_amount * destination_amount / estimated_delivered`, floored
 /// at `source_amount`. Errors on zero `estimated_delivered` or overflow.
 fn proportional_inflation(
@@ -1055,6 +1137,24 @@ fn top_up_for_shortfall(
         .checked_mul(probe_in)
         .map(|scaled| scaled.div_ceil(probe_out))
         .ok_or_else(|| SdkError::Generic("Cross-chain: top-up scaling overflow".to_string()))
+}
+
+/// `estimate.fee_amount` in `source_decimals` units, or 0 when the fee is not
+/// in the source asset. A matching ticker can still differ in chain and
+/// precision (USDC on Solana at 6dp against a BSC USDC source at 18dp).
+fn base_fee_pad(
+    estimate: &EstimateResponse,
+    source_asset: &str,
+    source_decimals: u32,
+) -> Result<u128, SdkError> {
+    if !estimate.fee_asset.eq_ignore_ascii_case(source_asset) {
+        return Ok(0);
+    }
+    let fee_amount = parse_amount(&estimate.fee_amount, "feeAmount")?;
+    match &estimate.fee_asset_details {
+        Some(details) => super::rescale_decimals(fee_amount, details.decimals, source_decimals),
+        None => Ok(fee_amount),
+    }
 }
 
 /// Adds `reported_pad` to `scaled`, capping the pad at `scaled` so a bogus
@@ -1389,7 +1489,7 @@ impl CrossChainService for OrchestraService {
                         amount,
                         destination_amount,
                         false,
-                        false,
+                        None,
                     )
                     .await
                     .map_err(with_limits)?
@@ -1430,7 +1530,9 @@ impl CrossChainService for OrchestraService {
 
         let amount_in = parse_amount(&quote.amount_in, "amountIn")?;
         let estimated_out = parse_amount(&quote.estimated_out, "estimatedOut")?;
-        let service_fee_amount = parse_amount(&quote.total_fee_amount, "totalFeeAmount")?;
+        let service_fee_amount =
+            service_fee_from_quote(&quote, &route.asset, u32::from(route.decimals))?;
+        let (service_fee_asset, service_fee_asset_decimals) = fee_denomination(&quote);
 
         verify_quote_amount_in(source_amount, amount_in)?;
         if let Some(target) = destination_amount {
@@ -1456,11 +1558,8 @@ impl CrossChainService for OrchestraService {
             estimated_out,
             fee_amount,
             service_fee_amount,
-            service_fee_asset: if quote.fee_asset.eq_ignore_ascii_case("BTC") {
-                None
-            } else {
-                Some(quote.fee_asset)
-            },
+            service_fee_asset,
+            service_fee_asset_decimals,
             // Source-side Spark transfer fee is 0 today.
             source_transfer_fee_sats: 0,
             fee_mode,
@@ -1569,7 +1668,7 @@ impl CrossChainService for OrchestraService {
                         probe_source,
                         inflated_target,
                         apply_rounding_margin,
-                        true,
+                        Some(u32::from(route.decimals)),
                     )
                     .await
                     .map_err(|e| attach_route_limits(e, route, destination))?;
@@ -1623,7 +1722,9 @@ impl CrossChainService for OrchestraService {
 
         let deposit_amount = parse_amount(&quote.amount_in, "amountIn")?;
         let quote_estimated_out = parse_amount(&quote.estimated_out, "estimatedOut")?;
-        let service_fee_amount = parse_amount(&quote.total_fee_amount, "totalFeeAmount")?;
+        let service_fee_amount =
+            service_fee_from_quote(&quote, &destination_asset_symbol, destination_decimals)?;
+        let (service_fee_asset, service_fee_asset_decimals) = fee_denomination(&quote);
         let expires_at_secs = parse_rfc3339_to_unix_seconds(&quote.expires_at)?;
 
         // FeesExcluded only: reject the quote if Orchestra's delivery
@@ -1656,7 +1757,9 @@ impl CrossChainService for OrchestraService {
             token_identifier: destination_token_identifier.clone(),
             amount_in: quote.amount_in.clone(),
             expected_amount_out: expected_received_amount.to_string(),
-            fee_amount: Some(quote.total_fee_amount.clone()),
+            fee_amount: Some(service_fee_amount.to_string()),
+            fee_asset: Some(quote.fee_asset.clone()),
+            fee_asset_decimals: service_fee_asset_decimals,
             expires_at: expires_at_secs,
         };
 
@@ -1684,11 +1787,8 @@ impl CrossChainService for OrchestraService {
                 destination_asset: destination_asset_symbol,
                 token_identifier: destination_token_identifier,
                 service_fee_amount,
-                service_fee_asset: if quote.fee_asset.eq_ignore_ascii_case("BTC") {
-                    None
-                } else {
-                    Some(quote.fee_asset)
-                },
+                service_fee_asset,
+                service_fee_asset_decimals,
                 expires_at: expires_at_secs,
             },
         })
@@ -1792,6 +1892,7 @@ impl CrossChainService for OrchestraService {
             fee_amount: Some(prepared.fee_amount),
             service_fee_amount: Some(prepared.service_fee_amount),
             service_fee_asset: prepared.service_fee_asset.clone(),
+            service_fee_asset_decimals: prepared.service_fee_asset_decimals,
             read_token,
             asset_decimals: u32::from(prepared.pair.decimals),
             asset_contract: prepared.pair.contract_address.clone(),
@@ -2030,6 +2131,7 @@ fn apply_terminal_status(
         fee_amount,
         service_fee_amount,
         service_fee_asset,
+        service_fee_asset_decimals,
         read_token,
         asset_decimals,
         asset_contract,
@@ -2078,6 +2180,7 @@ fn apply_terminal_status(
             fee_amount: updated_fee_amount,
             service_fee_amount: *service_fee_amount,
             service_fee_asset: service_fee_asset.clone(),
+            service_fee_asset_decimals: *service_fee_asset_decimals,
             read_token: read_token.clone(),
             asset_decimals: *asset_decimals,
             asset_contract: asset_contract.clone(),
@@ -2159,8 +2262,9 @@ async fn attach_receive_metadata(
 /// `chain`/`asset` describe the non-Spark side (source on receive) so the UI
 /// renders symmetric to send. `order.amount_in` (actual deposit) takes
 /// precedence over quote-time `data.amount_in` when both are present. The
-/// realized fee comes from [`compute_receive_fee`], falling back to
-/// `data.fee_amount` on missing inputs.
+/// realized fee comes from [`compute_receive_fee`], falling back to the quote
+/// fee rescaled to source units when its asset is a USD stable of known
+/// decimals.
 async fn build_orchestra_receive_conversion_info(
     data: &OrchestraSwapData,
     order: &Order,
@@ -2180,10 +2284,24 @@ async fn build_orchestra_receive_conversion_info(
         .fee_amount
         .as_deref()
         .and_then(|s| s.parse::<u128>().ok());
+    // Rows without `fee_asset` label the fee with the source ticker.
+    let service_fee_asset = match data.fee_asset.as_deref() {
+        None => Some(data.source_asset.clone()),
+        Some(asset) if asset.eq_ignore_ascii_case("BTC") => None,
+        Some(asset) => Some(asset.to_string()),
+    };
+    let service_fee_asset_decimals = data.fee_asset_decimals;
+    // The quote fee is in fee-asset units. Only a USD-stable fee asset of
+    // known precision converts to source units at par.
+    let quote_fee_in_source = match (quote_fee_amount, data.fee_asset.as_deref()) {
+        (Some(fee), Some(asset)) if super::is_usd_stable_asset(asset) => service_fee_asset_decimals
+            .and_then(|decimals| super::rescale_decimals(fee, decimals, data.source_decimals).ok()),
+        _ => None,
+    };
 
     let fee_amount = compute_receive_fee(data, asset_amount_in, delivered_amount, fiat_service)
         .await
-        .or(quote_fee_amount);
+        .or(quote_fee_in_source);
 
     ConversionInfo::Orchestra {
         order_id: order.id.clone(),
@@ -2201,7 +2319,8 @@ async fn build_orchestra_receive_conversion_info(
         // Realized total fee in source-asset units.
         fee_amount,
         service_fee_amount: quote_fee_amount,
-        service_fee_asset: Some(data.source_asset.clone()),
+        service_fee_asset,
+        service_fee_asset_decimals,
         asset_decimals: data.source_decimals,
         asset_contract: data.source_contract_address.clone(),
     }
@@ -2461,6 +2580,8 @@ mod tests {
             amount_in: "100".to_string(),             // quote-time
             expected_amount_out: "50000".to_string(), // quote-time
             fee_amount: Some("250".to_string()),      // quote-time
+            fee_asset: Some("USDC".to_string()),
+            fee_asset_decimals: Some(6),
             expires_at: 1_700_000_120,
         };
         let order = Order {
@@ -2516,6 +2637,9 @@ mod tests {
                 delivered_amount,
                 external_tx_hash,
                 status,
+                fee_amount,
+                service_fee_asset,
+                service_fee_asset_decimals,
                 ..
             } => {
                 assert_eq!(order_id, "ord_xyz");
@@ -2530,6 +2654,11 @@ mod tests {
                 // Receive: the external side is the source.
                 assert_eq!(external_tx_hash.as_deref(), Some("0xeth-tx"));
                 assert_eq!(status, ConversionStatus::Completed);
+                // The fiat lookup fails, so the fee falls back to the quote's,
+                // rescaled from the fee asset (6dp) to the source (6dp).
+                assert_eq!(fee_amount, Some(250));
+                assert_eq!(service_fee_asset.as_deref(), Some("USDC"));
+                assert_eq!(service_fee_asset_decimals, Some(6));
             }
             _ => panic!("expected Orchestra variant"),
         }
@@ -2559,6 +2688,8 @@ mod tests {
             amount_in: "1050000".to_string(),
             expected_amount_out: "1000000".to_string(),
             fee_amount: Some("20000".to_string()), // quote-time estimate, superseded on Completed
+            fee_asset: Some("USDC".to_string()),
+            fee_asset_decimals: Some(6),
             expires_at: 1_700_000_120,
         };
         let mut order = Order {
@@ -3389,6 +3520,257 @@ mod tests {
         )));
     }
 
+    /// `/v1/orchestration/quote` for a $50 spark/USDB send to external USDC,
+    /// with the fee fields the SDK reads.
+    fn usdb_send_quote(
+        rounding: &str,
+        total: &str,
+        fee_asset_details: Option<serde_json::Value>,
+    ) -> QuoteResponse {
+        let mut json = serde_json::json!({
+            "quoteId": "q_1", "depositAddress": "spark1dep", "amountIn": "50000000",
+            "estimatedOut": "49850000", "feeAmount": "50000", "appFeeAmount": "49950",
+            "roundingFeeAmount": rounding, "totalFeeAmount": total, "feeAsset": "USDC",
+            "feeBps": 10, "route": ["USDB", "USDC"], "expiresAt": "2026-09-23T07:08:28.560Z",
+        });
+        if let Some(details) = fee_asset_details {
+            json["feeAssetDetails"] = details;
+        }
+        serde_json::from_value(json).unwrap()
+    }
+
+    fn solana_usdc_details() -> serde_json::Value {
+        serde_json::json!({
+            "chain": "solana", "asset": "USDC", "decimals": 6,
+            "contractAddress": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "chainId": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        })
+    }
+
+    #[test_all]
+    fn fee_denomination_maps_btc_to_sats() {
+        let mut quote = usdb_send_quote("0", "57", None);
+        quote.fee_asset = "BTC".to_string();
+        assert_eq!(fee_denomination(&quote), (None, None));
+    }
+
+    #[test_all]
+    fn fee_denomination_reads_decimals_from_fee_asset_details() {
+        let quote = usdb_send_quote("5930", "105880", Some(solana_usdc_details()));
+        assert_eq!(
+            fee_denomination(&quote),
+            (Some("USDC".to_string()), Some(6))
+        );
+        let quote = usdb_send_quote("5930", "105880", None);
+        assert_eq!(fee_denomination(&quote), (Some("USDC".to_string()), None));
+    }
+
+    #[test_all]
+    fn service_fee_rescales_rounding_reported_in_bsc_units() {
+        // Live BSC quote: 50000 + 5119000000000000 + 49950. The rounding fee is
+        // 0.005119 USDC at the destination's 18dp.
+        let quote = usdb_send_quote(
+            "5119000000000000",
+            "5119000000099950",
+            Some(solana_usdc_details()),
+        );
+        assert_eq!(service_fee_from_quote(&quote, "USDC", 18).unwrap(), 105_069);
+    }
+
+    #[test_all]
+    fn service_fee_rescales_rounding_reported_in_hypercore_units() {
+        // Live HyperCore quote: 50000 + 882300 + 49950, rounding at 8dp.
+        let quote = usdb_send_quote("882300", "982250", Some(solana_usdc_details()));
+        assert_eq!(service_fee_from_quote(&quote, "USDC", 8).unwrap(), 108_773);
+    }
+
+    #[test_all]
+    fn service_fee_keeps_total_when_rounding_is_already_in_fee_units() {
+        // A 6dp destination, and a BSC quote once the rounding fee is in
+        // `feeAsset` units: both already sum correctly.
+        let details = Some(solana_usdc_details());
+        let quote = usdb_send_quote("5930", "316577", details.clone());
+        assert_eq!(service_fee_from_quote(&quote, "USDC", 6).unwrap(), 316_577);
+        let quote = usdb_send_quote("5034", "104984", details);
+        assert_eq!(service_fee_from_quote(&quote, "USDC", 18).unwrap(), 104_984);
+    }
+
+    #[test_all]
+    fn service_fee_keeps_a_corrected_total_with_raw_rounding() {
+        // Upstream fixes `totalFeeAmount` but keeps `roundingFeeAmount` in
+        // destination units: the total no longer contains the raw value.
+        let details = Some(solana_usdc_details());
+        let quote = usdb_send_quote("882300", "108773", details.clone());
+        assert_eq!(service_fee_from_quote(&quote, "USDC", 8).unwrap(), 108_773);
+        let quote = usdb_send_quote("5119000000000000", "105069", details);
+        assert_eq!(service_fee_from_quote(&quote, "USDC", 18).unwrap(), 105_069);
+    }
+
+    #[test_all]
+    fn service_fee_rescales_rounding_alongside_other_components() {
+        let mut quote = usdb_send_quote(
+            "5119000000000000",
+            "5119000000360597",
+            Some(solana_usdc_details()),
+        );
+        quote.network_cost_amount = Some("260647".to_string());
+        assert_eq!(service_fee_from_quote(&quote, "USDC", 18).unwrap(), 365_716);
+    }
+
+    #[test_all]
+    fn service_fee_keeps_total_with_an_unknown_component() {
+        // The components don't add up to the total, so the raw rounding may
+        // not be in it.
+        let quote = usdb_send_quote(
+            "5119000000000000",
+            "5119000000360597",
+            Some(solana_usdc_details()),
+        );
+        assert_eq!(
+            service_fee_from_quote(&quote, "USDC", 18).unwrap(),
+            5_119_000_000_360_597
+        );
+    }
+
+    #[test_all]
+    fn service_fee_keeps_total_for_a_btc_destination() {
+        // Sats are not cents, so a BTC destination's rounding isn't rescaled
+        // at par even when it looks like the bug.
+        let quote = usdb_send_quote("882300", "982250", Some(solana_usdc_details()));
+        assert_eq!(service_fee_from_quote(&quote, "BTC", 8).unwrap(), 982_250);
+    }
+
+    #[test_all]
+    fn service_fee_keeps_total_on_an_unparseable_component() {
+        let details = Some(solana_usdc_details());
+        let quote = usdb_send_quote("0.0", "982250", details.clone());
+        assert_eq!(service_fee_from_quote(&quote, "USDC", 8).unwrap(), 982_250);
+        let mut quote = usdb_send_quote("882300", "982250", details);
+        quote.network_cost_amount = Some(String::new());
+        assert_eq!(service_fee_from_quote(&quote, "USDC", 8).unwrap(), 982_250);
+    }
+
+    #[test_all]
+    fn service_fee_keeps_total_without_fee_decimals_or_for_sats() {
+        let quote = usdb_send_quote("5119000000000000", "5119000000099950", None);
+        assert_eq!(
+            service_fee_from_quote(&quote, "USDC", 18).unwrap(),
+            5_119_000_000_099_950
+        );
+
+        let mut quote = usdb_send_quote("0", "57", Some(solana_usdc_details()));
+        quote.fee_asset = "BTC".to_string();
+        assert_eq!(service_fee_from_quote(&quote, "USDC", 18).unwrap(), 57);
+    }
+
+    fn receive_estimate(fee_asset_details: Option<serde_json::Value>) -> EstimateResponse {
+        let mut json = serde_json::json!({
+            "estimatedOut": "57525", "feeAmount": "49855", "feeBps": 10,
+            "totalFeeAmount": "49855", "feeAsset": "USDC", "route": ["USDC", "USDB", "BTC"],
+        });
+        if let Some(details) = fee_asset_details {
+            json["feeAssetDetails"] = details;
+        }
+        serde_json::from_value(json).unwrap()
+    }
+
+    #[test_all]
+    fn base_fee_pad_rescales_to_source_decimals() {
+        // bsc/USDC deposits are 18dp, the fee is USDC on Solana at 6dp.
+        let estimate = receive_estimate(Some(solana_usdc_details()));
+        assert_eq!(
+            base_fee_pad(&estimate, "USDC", 18).unwrap(),
+            49_855_000_000_000_000
+        );
+        assert_eq!(base_fee_pad(&estimate, "USDC", 6).unwrap(), 49_855);
+    }
+
+    #[test_all]
+    fn base_fee_pad_without_details_or_in_another_asset() {
+        let estimate = receive_estimate(None);
+        assert_eq!(base_fee_pad(&estimate, "USDC", 18).unwrap(), 49_855);
+        assert_eq!(base_fee_pad(&estimate, "USDT", 18).unwrap(), 0);
+    }
+
+    fn completed_receive_order() -> Order {
+        serde_json::from_value(serde_json::json!({
+            "id": "ord_bsc", "status": "completed", "sparkTxHash": "spark-tx-hash",
+            "createdAt": "now", "updatedAt": "now",
+        }))
+        .unwrap()
+    }
+
+    fn bsc_receive_data() -> OrchestraSwapData {
+        OrchestraSwapData {
+            source_chain: "bsc".to_string(),
+            source_asset: "USDT".to_string(),
+            source_chain_id: Some("56".to_string()),
+            source_contract_address: Some("0x55d398326f99059ff775485246999027b3197955".to_string()),
+            source_decimals: 18,
+            amount_in: "50000000000000000000".to_string(),
+            fee_amount: Some("49855".to_string()),
+            ..receive_swap_data()
+        }
+    }
+
+    #[async_test_all]
+    async fn receive_conversion_info_labels_fee_with_the_fee_asset() {
+        // The order has no `amountOut`, so the realized fee cannot be computed
+        // and the quote fee (USDC at 6dp) is rescaled to the 18dp source.
+        let info = build_orchestra_receive_conversion_info(
+            &bsc_receive_data(),
+            &completed_receive_order(),
+            &FailingFiat,
+        )
+        .await;
+        let ConversionInfo::Orchestra {
+            asset,
+            asset_decimals,
+            fee_amount,
+            service_fee_amount,
+            service_fee_asset,
+            service_fee_asset_decimals,
+            ..
+        } = info
+        else {
+            panic!("expected Orchestra variant");
+        };
+        assert_eq!(asset, "USDT");
+        assert_eq!(asset_decimals, 18);
+        assert_eq!(fee_amount, Some(49_855_000_000_000_000));
+        assert_eq!(service_fee_amount, Some(49_855));
+        assert_eq!(service_fee_asset.as_deref(), Some("USDC"));
+        assert_eq!(service_fee_asset_decimals, Some(6));
+    }
+
+    #[async_test_all]
+    async fn receive_conversion_info_for_a_row_without_the_fee_asset() {
+        let data = OrchestraSwapData {
+            fee_asset: None,
+            fee_asset_decimals: None,
+            ..bsc_receive_data()
+        };
+        let info = build_orchestra_receive_conversion_info(
+            &data,
+            &completed_receive_order(),
+            &FailingFiat,
+        )
+        .await;
+        let ConversionInfo::Orchestra {
+            fee_amount,
+            service_fee_asset,
+            service_fee_asset_decimals,
+            ..
+        } = info
+        else {
+            panic!("expected Orchestra variant");
+        };
+        // The fee's units are unknown, so it isn't reported in source units.
+        assert_eq!(fee_amount, None);
+        assert_eq!(service_fee_asset.as_deref(), Some("USDT"));
+        assert_eq!(service_fee_asset_decimals, None);
+    }
+
     fn receive_swap_data() -> OrchestraSwapData {
         OrchestraSwapData {
             quote_id: "q_xyz".to_string(),
@@ -3407,6 +3789,8 @@ mod tests {
             amount_in: "100".to_string(),
             expected_amount_out: "50000".to_string(),
             fee_amount: Some("250".to_string()),
+            fee_asset: Some("USDC".to_string()),
+            fee_asset_decimals: Some(6),
             expires_at: 1_700_000_120,
         }
     }
@@ -3573,6 +3957,7 @@ mod tests {
             fee_amount: Some(10_000),
             service_fee_amount: Some(50),
             service_fee_asset: Some("USDC".to_string()),
+            service_fee_asset_decimals: Some(6),
             read_token: Some("rt_token".to_string()),
             asset_decimals: 6,
             asset_contract: Some("0xUSDC".to_string()),
@@ -3750,6 +4135,7 @@ mod tests {
                 status,
                 service_fee_amount,
                 service_fee_asset,
+                service_fee_asset_decimals,
                 read_token,
                 asset_decimals,
                 asset_contract,
@@ -3769,6 +4155,7 @@ mod tests {
                 fee_amount: Some(10_000),
                 service_fee_amount,
                 service_fee_asset,
+                service_fee_asset_decimals,
                 read_token,
                 asset_decimals,
                 asset_contract,
@@ -4028,7 +4415,7 @@ mod tests {
 
     #[test_all]
     fn pad_required_in_zero_pad_returns_scaled_unchanged() {
-        // apply_base_fee_pad = false (send path) resolves to pad = 0 upstream.
+        // No base fee pad (the send path) resolves to pad = 0 upstream.
         let (required_in, applied) = pad_required_in(1_000_244, 0);
         assert_eq!(required_in, 1_000_244);
         assert_eq!(applied, 0);
