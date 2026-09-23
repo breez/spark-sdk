@@ -78,6 +78,8 @@ The SDK provides a default Bitcoin Chain Service implementation. If you want to 
 
 {{#tabs sdk_building:with-rest-chain-service}}
 
+Call {{#name with_rest_chain_service}} more than once to add fallback services. They are tried in the order they were added, and the SDK moves on to the next one when a service is unreachable. Once you add a service, the SDK uses only the services you added and none of its defaults.
+
 ## With Shared REST Chain Service
 
 [With REST Chain Service](#with-rest-chain-service) builds a fresh chain service inside each SDK instance. Server processes hosting many wallets at once can share a single REST chain service between every SDK, so they reuse the same pooled HTTP client (and its HTTP/2 connection pool) instead of each opening a fresh one.

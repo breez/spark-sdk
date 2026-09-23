@@ -144,7 +144,8 @@ impl SdkBuilder {
         *builder = builder.clone().with_chain_service(chain_service);
     }
 
-    /// Sets the REST chain service to be used by the SDK.
+    /// Adds a REST chain service backend to be used by the SDK. Call it more
+    /// than once to add fallbacks, tried in the order they were added.
     /// Arguments:
     /// - `url`: The base URL of the REST API.
     /// - `api_type`: The API type to be used.

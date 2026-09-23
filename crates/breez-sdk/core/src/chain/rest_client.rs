@@ -71,6 +71,7 @@ struct RestClientChainServiceInner {
     max_retries: usize,
     basic_auth: Option<BasicAuth>,
     api_type: ChainApiType,
+    total_timeout: Duration,
 }
 
 /// REST-backed [`BitcoinChainService`].
@@ -144,6 +145,7 @@ impl RestClientChainService {
                 max_retries,
                 basic_auth,
                 api_type,
+                total_timeout: TOTAL_TIMEOUT,
             }),
             // Captured here so each trait-method body can re-enter the
             // surrounding runtime even when invoked from a `UniFFI`
@@ -154,6 +156,16 @@ impl RestClientChainService {
             #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
             runtime_handle: tokio::runtime::Handle::current(),
         }
+    }
+
+    /// Caps each whole retrying call at `total_timeout` instead of the default,
+    /// so a caller with a fallback backend gives up on this one sooner.
+    #[must_use]
+    pub(crate) fn with_total_timeout(mut self, total_timeout: Duration) -> Self {
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.total_timeout = total_timeout;
+        }
+        self
     }
 
     /// Runs `work` on the captured tokio runtime (non-WASM) or inline
@@ -221,7 +233,7 @@ impl RestClientChainServiceInner {
         url: &str,
         client: &dyn HttpClient,
     ) -> Result<(String, u16), ChainServiceError> {
-        within_timeout(TOTAL_TIMEOUT, self.get_attempts(url, client)).await
+        within_timeout(self.total_timeout, self.get_attempts(url, client)).await
     }
 
     async fn get_attempts(
@@ -260,7 +272,7 @@ impl RestClientChainServiceInner {
     }
 
     async fn post(&self, url: &str, body: Option<String>) -> Result<String, ChainServiceError> {
-        within_timeout(TOTAL_TIMEOUT, self.post_attempts(url, body)).await
+        within_timeout(self.total_timeout, self.post_attempts(url, body)).await
     }
 
     async fn post_attempts(

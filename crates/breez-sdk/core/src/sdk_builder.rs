@@ -2,7 +2,7 @@
     all(target_family = "wasm", target_os = "unknown"),
     allow(clippy::arc_with_non_send_sync)
 )]
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use breez_sdk_common::breez_server::BreezServer;
 use breez_sdk_common::buy::moonpay::MoonpayProvider;
@@ -18,7 +18,7 @@ use flashnet::{FlashnetConfig, IntegratorConfig};
 use crate::{
     Credentials, EventEmitter, FiatService, FiatServiceWrapper, Network, Seed,
     chain::{
-        BitcoinChainService, ValidatingChainService,
+        BitcoinChainService, FallbackChainService, ValidatingChainService,
         rest_client::{BasicAuth, ChainApiType, RestClientChainService},
     },
     error::SdkError,
@@ -38,7 +38,7 @@ use crate::{
     },
 };
 
-/// Configuration captured by [`SdkBuilder::with_rest_chain_service`].
+/// One backend added by [`SdkBuilder::with_rest_chain_service`].
 ///
 /// Stored on the builder and resolved during `build()` so the resulting
 /// `RestClientChainService` reuses the shared HTTP client from the
@@ -108,7 +108,7 @@ pub struct SdkBuilder {
     storage: Option<Arc<dyn StorageBackend>>,
     session_store: Option<Arc<dyn crate::session_store::SessionStore>>,
     chain_service: Option<Arc<dyn BitcoinChainService>>,
-    rest_chain_service_config: Option<RestChainServiceConfig>,
+    rest_chain_service_configs: Vec<RestChainServiceConfig>,
     fiat_service: Option<Arc<dyn FiatService>>,
     lnurl_client: Option<Arc<dyn platform_utils::HttpClient>>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
@@ -135,7 +135,7 @@ impl SdkBuilder {
             storage: None,
             session_store: None,
             chain_service: None,
-            rest_chain_service_config: None,
+            rest_chain_service_configs: Vec::new(),
             fiat_service: None,
             lnurl_client: None,
             lnurl_server_client: None,
@@ -198,7 +198,7 @@ impl SdkBuilder {
             storage: None,
             session_store: None,
             chain_service: None,
-            rest_chain_service_config: None,
+            rest_chain_service_configs: Vec::new(),
             fiat_service: None,
             lnurl_client: None,
             lnurl_server_client: None,
@@ -335,14 +335,15 @@ impl SdkBuilder {
     #[must_use]
     pub fn with_chain_service(mut self, chain_service: Arc<dyn BitcoinChainService>) -> Self {
         self.chain_service = Some(chain_service);
-        self.rest_chain_service_config = None;
+        self.rest_chain_service_configs.clear();
         self
     }
 
-    /// Configures a REST chain service to be used by the SDK.
+    /// Adds a REST chain service backend to be used by the SDK.
     ///
-    /// The service is constructed during [`build()`](Self::build) so it can
-    /// reuse the shared HTTP client carried by the [`SdkContext`](crate::SdkContext).
+    /// Call it more than once to add fallbacks: backends are tried in the
+    /// order they were added, moving on to the next when one is unreachable.
+    /// Replaces any service set with [`with_chain_service`](Self::with_chain_service).
     ///
     /// Arguments:
     /// - `url`: The base URL of the REST API.
@@ -356,11 +357,12 @@ impl SdkBuilder {
         credentials: Option<Credentials>,
     ) -> Self {
         self.chain_service = None;
-        self.rest_chain_service_config = Some(RestChainServiceConfig {
-            url,
-            api_type,
-            credentials,
-        });
+        self.rest_chain_service_configs
+            .push(RestChainServiceConfig {
+                url,
+                api_type,
+                credentials,
+            });
         self
     }
 
@@ -503,7 +505,7 @@ impl SdkBuilder {
         let context = resolve_context(self.context, &self.config).await?;
         let chain_service = resolve_chain_service(
             self.chain_service,
-            self.rest_chain_service_config,
+            self.rest_chain_service_configs,
             &context,
             self.config.network,
         )?;
@@ -870,63 +872,89 @@ async fn resolve_storage(
         .await
 }
 
-/// Resolves the chain service: caller-supplied override → REST config → network
-/// default (mempool.space on mainnet, a hosted mempool instance on regtest).
-/// Signet requires an explicit override or REST configuration.
-/// Whichever backend is resolved is wrapped in a [`ValidatingChainService`],
+/// Per-backend cap on a retrying call when other backends can take over.
+const FALLBACK_BACKEND_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Resolves the chain service: caller-supplied override → REST backends →
+/// network default (mempool.space with blockstream.info as fallback on mainnet,
+/// a hosted mempool instance on regtest). Signet requires an explicit override
+/// or REST configuration. Every backend is wrapped in a [`ValidatingChainService`],
 /// so every transaction it serves is rebound to the requested txid.
 fn resolve_chain_service(
     supplied: Option<Arc<dyn BitcoinChainService>>,
-    rest_config: Option<RestChainServiceConfig>,
+    rest_configs: Vec<RestChainServiceConfig>,
     context: &SdkContext,
     network: Network,
 ) -> Result<Arc<dyn BitcoinChainService>, SdkError> {
-    let inner: Arc<dyn BitcoinChainService> = if let Some(service) = supplied {
-        service
-    } else if let Some(cfg) = rest_config {
-        Arc::new(RestClientChainService::new(
-            cfg.url,
-            network,
-            5,
-            context.http_client.clone(),
-            cfg.credentials
-                .map(|c| BasicAuth::new(c.username, c.password)),
-            cfg.api_type,
-        ))
+    if let Some(service) = supplied {
+        return Ok(Arc::new(ValidatingChainService::new(service)));
+    }
+    let rest_configs = if rest_configs.is_empty() {
+        default_rest_chain_services(network)?
     } else {
-        let inner_client: Arc<dyn platform_utils::HttpClient> = context.http_client.clone();
-        match network {
-            Network::Mainnet => Arc::new(RestClientChainService::new(
-                "https://mempool.space/api".to_string(),
-                network,
-                5,
-                inner_client,
-                None,
-                ChainApiType::MempoolSpace,
-            )),
-            Network::Signet => return Err(SdkError::InvalidInput(
-                "Signet requires an explicit chain service via with_chain_service or with_rest_chain_service".to_string(),
-            )),
-            Network::Regtest => Arc::new(RestClientChainService::new(
-                "https://regtest-mempool.us-west-2.sparkinfra.net/api".to_string(),
-                network,
-                5,
-                inner_client,
-                match (
-                    std::env::var("CHAIN_SERVICE_USERNAME"),
-                    std::env::var("CHAIN_SERVICE_PASSWORD"),
-                ) {
-                    (Ok(username), Ok(password)) => Some(BasicAuth::new(username, password)),
-                    _ => Some(BasicAuth::new(
-                        "spark-sdk".to_string(),
-                        "mCMk1JqlBNtetUNy".to_string(),
-                    )),
-                },
-                ChainApiType::MempoolSpace,
-            )),
-        }
+        rest_configs
     };
-    Ok(Arc::new(ValidatingChainService::new(inner)))
+    let has_fallback = rest_configs.len() > 1;
+    let mut backends: Vec<Arc<dyn BitcoinChainService>> = rest_configs
+        .into_iter()
+        .map(|cfg| {
+            let mut service = RestClientChainService::new(
+                cfg.url,
+                network,
+                5,
+                context.http_client.clone(),
+                cfg.credentials
+                    .map(|c| BasicAuth::new(c.username, c.password)),
+                cfg.api_type,
+            );
+            if has_fallback {
+                service = service.with_total_timeout(FALLBACK_BACKEND_TIMEOUT);
+            }
+            Arc::new(ValidatingChainService::new(Arc::new(service))) as Arc<dyn BitcoinChainService>
+        })
+        .collect();
+    match backends.pop() {
+        Some(backend) if backends.is_empty() => Ok(backend),
+        Some(backend) => {
+            backends.push(backend);
+            Ok(Arc::new(FallbackChainService::new(backends)))
+        }
+        None => Err(SdkError::Generic("No chain service configured".to_string())),
+    }
+}
+
+fn default_rest_chain_services(network: Network) -> Result<Vec<RestChainServiceConfig>, SdkError> {
+    match network {
+        Network::Mainnet => Ok(vec![
+            RestChainServiceConfig {
+                url: "https://mempool.space/api".to_string(),
+                api_type: ChainApiType::MempoolSpace,
+                credentials: None,
+            },
+            RestChainServiceConfig {
+                url: "https://blockstream.info/api".to_string(),
+                api_type: ChainApiType::Esplora,
+                credentials: None,
+            },
+        ]),
+        Network::Signet => Err(SdkError::InvalidInput(
+            "Signet requires an explicit chain service via with_chain_service or with_rest_chain_service".to_string(),
+        )),
+        Network::Regtest => {
+            let (username, password) = match (
+                std::env::var("CHAIN_SERVICE_USERNAME"),
+                std::env::var("CHAIN_SERVICE_PASSWORD"),
+            ) {
+                (Ok(username), Ok(password)) => (username, password),
+                _ => ("spark-sdk".to_string(), "mCMk1JqlBNtetUNy".to_string()),
+            };
+            Ok(vec![RestChainServiceConfig {
+                url: "https://regtest-mempool.us-west-2.sparkinfra.net/api".to_string(),
+                api_type: ChainApiType::MempoolSpace,
+                credentials: Some(Credentials { username, password }),
+            }])
+        }
+    }
 }
 
 /// Builds the full [`SparkWalletConfig`] with user-agent and SDK-level
@@ -1317,23 +1345,82 @@ mod tests {
         Arc::get_mut(&mut context).unwrap().http_client = Arc::new(SignetChainClient);
         let chain_service = super::resolve_chain_service(
             None,
-            Some(super::RestChainServiceConfig {
+            vec![super::RestChainServiceConfig {
                 url: "https://signet-chain.invalid/api".to_string(),
                 api_type: crate::ChainApiType::Esplora,
                 credentials: None,
-            }),
+            }],
             &context,
             Network::Signet,
         )
         .unwrap();
         // A caller-supplied trait implementation must also satisfy the requirement.
         let chain_service =
-            super::resolve_chain_service(Some(chain_service), None, &context, Network::Signet)
+            super::resolve_chain_service(Some(chain_service), vec![], &context, Network::Signet)
                 .unwrap();
         let fees = chain_service.recommended_fees().await.unwrap();
         assert_eq!(fees.fastest_fee, 5);
         assert_eq!(fees.half_hour_fee, 3);
         assert_eq!(fees.hour_fee, 2);
+    }
+
+    #[tokio::test]
+    async fn mainnet_default_chain_service_falls_back_to_blockstream() {
+        use platform_utils::{HttpClient, HttpError, HttpResponse};
+        use std::{collections::HashMap, sync::Arc};
+
+        /// Refuses every mempool.space request and serves blockstream.info.
+        struct BlockedMempoolClient;
+
+        #[macros::async_trait]
+        impl HttpClient for BlockedMempoolClient {
+            async fn get(
+                &self,
+                url: String,
+                _headers: Option<HashMap<String, String>>,
+            ) -> Result<HttpResponse, HttpError> {
+                if url.starts_with("https://mempool.space/") {
+                    return Err(HttpError::Status {
+                        status: 403,
+                        body: "blocked".to_string(),
+                    });
+                }
+                assert_eq!(url, "https://blockstream.info/api/fee-estimates");
+                Ok(HttpResponse {
+                    status: 200,
+                    body: r#"{"1":5.0,"3":3.0,"6":2.0,"144":1.0}"#.to_string(),
+                    headers: HashMap::new(),
+                })
+            }
+
+            async fn post(
+                &self,
+                _url: String,
+                _headers: Option<HashMap<String, String>>,
+                _body: Option<String>,
+            ) -> Result<HttpResponse, HttpError> {
+                panic!("fee estimation must not POST")
+            }
+
+            async fn delete(
+                &self,
+                _url: String,
+                _headers: Option<HashMap<String, String>>,
+                _body: Option<String>,
+            ) -> Result<HttpResponse, HttpError> {
+                panic!("fee estimation must not DELETE")
+            }
+        }
+
+        let mut context =
+            crate::new_shared_sdk_context(crate::SdkContextConfig::new(Network::Mainnet))
+                .await
+                .unwrap();
+        Arc::get_mut(&mut context).unwrap().http_client = Arc::new(BlockedMempoolClient);
+        let chain_service =
+            super::resolve_chain_service(None, vec![], &context, Network::Mainnet).unwrap();
+        let fees = chain_service.recommended_fees().await.unwrap();
+        assert_eq!(fees.fastest_fee, 5);
     }
 
     #[test]
