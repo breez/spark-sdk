@@ -95,7 +95,7 @@ async def fetch_claim_deposit_quote(sdk: BreezSdk, deposit):
         request = FetchClaimDepositQuoteRequest(txid=deposit.txid, vout=deposit.vout)
         quote = await sdk.fetch_claim_deposit_quote(request=request)
 
-        # Claiming once the deposit matures, and how many blocks that is away.
+        # The standard claim, and how many blocks away it is.
         blocks_to_wait = max(
             0, quote.mature.confirmations_required - quote.confirmations
         )
@@ -103,7 +103,7 @@ async def fetch_claim_deposit_quote(sdk: BreezSdk, deposit):
             f"Wait {blocks_to_wait} blocks and pay {quote.mature.fee_sats} sats"
         )
 
-        # Claiming earlier, when the provider offers it.
+        # An instant or expedited claim, when the provider offers one.
         if quote.instant is not None:
             blocks_to_wait = max(
                 0, quote.instant.confirmations_required - quote.confirmations

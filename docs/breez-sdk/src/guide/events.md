@@ -11,7 +11,7 @@ The SDK emits several events to provide the application with an up-to-date state
 | {{#enum SdkEvent::PaymentPending}} | {{#name Payment}} | A payment is in flight. The same payment is emitted again as succeeded or failed once it settles. |
 | {{#enum SdkEvent::PaymentFailed}} | {{#name Payment}} | A payment failed. Its {{#name details}} carry the method-specific context to show the user. |
 | {{#enum SdkEvent::PaymentMetadataUpdated}} | {{#name Payment}} | Details of a payment already reported changed, for example the conversion info of a cross-chain receive that arrived after the payment settled. |
-| {{#enum SdkEvent::NewDeposits}} | {{#name DepositInfo}} list | On-chain deposits were detected. Only deposits whose {{#name is_mature}} is true can be claimed, so show the rest as pending. |
+| {{#enum SdkEvent::NewDeposits}} | {{#name DepositInfo}} list | On-chain deposits were detected, possibly while still unconfirmed. Show them as pending until claimed: some may be credited early through an [instant or expedited claim](onchain_claims.md#instant-expedited-claims). |
 | {{#enum SdkEvent::ClaimedDeposits}} | {{#name DepositInfo}} list | Deposits were claimed into the wallet. The matching payment is emitted separately as {{#enum SdkEvent::PaymentSucceeded}}. |
 | {{#enum SdkEvent::UnclaimedDeposits}} | {{#name DepositInfo}} list | The SDK could not claim these. Read {{#name claim_error}} for the reason, then claim manually or refund. See [claiming on-chain deposits](onchain_claims.md). |
 | {{#enum SdkEvent::AutoOptimization}} | {{#name AutoOptimizationEvent}} | Progress of the background leaf optimizer. Manual {{#name optimize_leaves}} calls do not emit this. See [custom leaf optimization](optimize.md). |
@@ -31,7 +31,7 @@ what to do next.
 | --- | --- |
 | {{#name txid}}, {{#name vout}} | The on-chain output the deposit came from. |
 | {{#name amount_sats}} | Deposit value in satoshis. |
-| {{#name is_mature}} | Whether the deposit has enough confirmations to be claimed. |
+| {{#name is_mature}} | Whether the deposit has reached the standard claim depth (3 confirmations). Deposits below it can still be credited through an [instant or expedited claim](onchain_claims.md#instant-expedited-claims). |
 | {{#name claim_error}} | Why the last claim attempt failed. Set on {{#enum SdkEvent::UnclaimedDeposits}}. |
 | {{#name refund_tx}}, {{#name refund_tx_id}} | The refund transaction, once one has been created. |
 | {{#name refund_state}} | How far the refund has got towards the network. Read it through {{#name list_unclaimed_deposits}}: a refunded deposit no longer appears in these events. See [tracking a refund](onchain_claims.md#tracking-a-refund). |

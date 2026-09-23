@@ -96,13 +96,13 @@ namespace BreezSdkSnippets
             );
             var quote = await sdk.FetchClaimDepositQuote(request: request);
 
-            // Claiming once the deposit matures, and how many blocks that is away.
+            // The standard claim, and how many blocks away it is.
             var blocksToWait = quote.mature.confirmationsRequired > quote.confirmations
                 ? quote.mature.confirmationsRequired - quote.confirmations
                 : 0U;
             Console.WriteLine($"Wait {blocksToWait} blocks and pay {quote.mature.feeSats} sats");
 
-            // Claiming earlier, when the provider offers it.
+            // An instant or expedited claim, when the provider offers one.
             if (quote.instant is ClaimDepositQuote instant)
             {
                 var instantBlocksToWait = instant.confirmationsRequired > quote.confirmations
