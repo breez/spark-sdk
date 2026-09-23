@@ -524,7 +524,7 @@ suspend fun handlePay(sdk: BreezSdk, reader: LineReader, args: List<String>) {
     // Show cross-chain quote details before confirming
     val method = prepareResponse.paymentMethod
     if (method is SendPaymentMethod.CrossChainAddress) {
-        val serviceFeeDenom = method.serviceFeeAsset ?: "sats"
+        val serviceFeeDenom = serviceFeeDenomination(method.serviceFeeAsset, method.serviceFeeAssetDecimals)
         val denomination = if (tokenId != null) "token base units" else "sats"
         println(
             "Cross-chain send: ${method.amountIn} $denomination " +
@@ -1005,7 +1005,7 @@ suspend fun handlePreparePaymentLink(sdk: BreezSdk, reader: LineReader, args: Li
     println(response.url)
     println(
         "Deposit ~${response.amountSats} sats; recipient receives ~${response.estimatedOut} ${response.asset}, " +
-        "service fee ${response.serviceFeeAmount} ${response.serviceFeeAsset ?: "sats"}, " +
+        "service fee ${response.serviceFeeAmount} ${serviceFeeDenomination(response.serviceFeeAsset, response.serviceFeeAssetDecimals)}, " +
         "expires ${response.expiresAt}"
     )
 }
@@ -1368,5 +1368,13 @@ suspend fun readPaymentOptions(
         is SendPaymentMethod.CrossChainAddress -> null
 
         else -> null
+    }
+}
+
+fun serviceFeeDenomination(asset: String?, decimals: UInt?): String {
+    return when {
+        asset == null -> "sats"
+        decimals != null -> "$asset ($decimals decimals)"
+        else -> asset
     }
 }

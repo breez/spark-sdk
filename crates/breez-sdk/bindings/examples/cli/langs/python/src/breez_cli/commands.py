@@ -61,6 +61,14 @@ from breez_sdk_spark import (
 
 from breez_cli.serialization import print_value
 
+
+def _service_fee_denomination(asset, decimals):
+    if asset is None:
+        return "sats"
+    if decimals is not None:
+        return f"{asset} ({decimals} decimals)"
+    return asset
+
 # List of all top-level command names (used for REPL completion)
 COMMAND_NAMES = [
     "get-info",
@@ -426,7 +434,7 @@ async def _handle_pay(sdk, _token_issuer, session, args):
 
     if isinstance(prepare_response.payment_method, SendPaymentMethod.CROSS_CHAIN_ADDRESS):
         m = prepare_response.payment_method
-        service_fee_denom = m.service_fee_asset if m.service_fee_asset else "sats"
+        service_fee_denom = _service_fee_denomination(m.service_fee_asset, m.service_fee_asset_decimals)
         denomination = "token base units" if args.token_identifier else "sats"
         print(
             f"Cross-chain send: {m.amount_in} {denomination} "
@@ -850,11 +858,13 @@ async def _handle_prepare_payment_link(sdk, _token_issuer, session, args):
     )
     print("Open this URL in a browser to complete the purchase:")
     print(response.url)
-    service_fee_asset = response.service_fee_asset if response.service_fee_asset else "sats"
+    service_fee_denom = _service_fee_denomination(
+        response.service_fee_asset, response.service_fee_asset_decimals,
+    )
     print(
         f"Deposit ~{response.amount_sats} sats; "
         f"recipient receives ~{response.estimated_out} {response.asset}, "
-        f"service fee {response.service_fee_amount} {service_fee_asset}, "
+        f"service fee {response.service_fee_amount} {service_fee_denom}, "
         f"expires {response.expires_at}"
     )
 
