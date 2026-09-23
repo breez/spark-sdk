@@ -1,7 +1,4 @@
-<h1 id="custom-configuration">
-    <a class="header" href="#custom-configuration">Custom configuration</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.Config.html">API docs</a>
-</h1>
+# Custom configuration
 
 The SDK supports various configuration options to customize its behavior. During [initialization](./initializing.md#basic-initialization), you must provide a configuration object, which we recommend creating by modifying the default configuration. This page describes the available configuration options.
 
@@ -154,19 +151,13 @@ For server environments or applications that receive a high volume of incoming p
 
 **Recommendation**: The default value works well for most applications. Server applications handling many simultaneous incoming payments may benefit from higher values (e.g., 8-16), depending on their infrastructure capacity. End-user wallets with limited resources may reduce this to 1-2.
 
-<h2 id="stable-balance-configuration">
-    <a class="header" href="#stable-balance-configuration">Stable balance configuration</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.StableBalanceConfig.html">API docs</a>
-</h2>
+## Stable balance configuration
 
 The SDK can convert Bitcoin to a stable token on receive and vice versa on send, protecting against price volatility. Configure the available tokens, default behavior, conversion threshold, and slippage tolerance. See the [Stable balance](./stable_balance.md) guide for full details.
 
 {{#tabs config:stable-balance-config}}
 
-<h2 id="socks5-proxy">
-    <a class="header" href="#socks5-proxy">SOCKS5 proxy</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.ProxyConfig.html">API docs</a>
-</h2>
+## SOCKS5 proxy
 
 Routes the connections the SDK opens through a SOCKS5 proxy, such as a local Tor daemon. Hostnames are resolved by the proxy rather than locally, and a connection that cannot be established through it fails rather than falling back to a direct one. Unset (the default) connects directly. Not supported on WASM. See the [SOCKS5 proxy](./proxy.md) page for what is covered and which combinations are rejected.
 
@@ -174,7 +165,6 @@ Routes the connections the SDK opens through a SOCKS5 proxy, such as a local Tor
 
 <h2 id="usdc-usdt">
     <a class="header" href="#usdc-usdt">USDC/USDT</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.CrossChainConfig.html">API docs</a>
 </h2>
 
 USDC/USDT (send and receive) requires explicit opt-in: {{#name default_config}} leaves {{#name cross_chain_config}} unset. Set it to a default {{#name CrossChainConfig}} to enable the feature, or to your own to override the slippage default. The SDK only returns routes whose destination is USDC or USDT on a supported chain.

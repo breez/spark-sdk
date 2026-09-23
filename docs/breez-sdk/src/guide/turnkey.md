@@ -6,10 +6,7 @@ Turnkey is meant for [server-side deployments](server_deployments.md). Depending
 
 The SDK connects to an existing Spark wallet in your Turnkey organization or sub-organization. Creating the wallet itself is done with Turnkey directly and is out of the SDK's scope (see [Turnkey's Spark support](https://docs.turnkey.com/features/networks/spark) for creating the wallet account).
 
-<h2 id="connecting">
-    <a class="header" href="#connecting">Connecting</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/turnkey/fn.create_turnkey_signer.html">API docs</a>
-</h2>
+## Connecting
 
 Create the signers with {{#name create_turnkey_signer}} and connect with {{#name connect_with_signer}}, the same way as any [external signer](external_signer.md):
 

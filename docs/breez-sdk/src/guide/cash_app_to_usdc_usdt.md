@@ -63,4 +63,3 @@ On devices with Cash App installed the URL opens the app directly; otherwise it 
 
 - **Mainnet only.** Cash App and the cross-chain providers operate against live networks. There is no testnet equivalent.
 - **Not tracked.** The purchase is funded outside the wallet, so it produces no {{#name Payment}} row and no event. If you need delivery confirmation, observe the recipient chain directly.
-- **Orchestra routes only.** Payment links quote against Orchestra, whose orders deliver without the SDK online. A route that needs the wallet to stay online to claim before the payer's payment settles cannot back a link, so {{#name get_cross_chain_routes}} with {{#enum CrossChainRouteFilter::PaymentLink}} returns only Orchestra routes.

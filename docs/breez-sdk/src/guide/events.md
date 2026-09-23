@@ -37,17 +37,11 @@ what to do next.
 | {{#name refund_state}} | How far the refund has got towards the network. Read it through {{#name list_unclaimed_deposits}}: a refunded deposit no longer appears in these events. See [tracking a refund](onchain_claims.md#tracking-a-refund). |
 | {{#name instant_claim_status}} | State of an instant (0-conf) claim attempt. Unset when none was attempted. |
 
-<h2 id="add-event-listener">
-    <a class="header" href="#add-event-listener">Add event listener</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.add_event_listener">API docs</a>
-</h2>
+## Add event listener
 
 {{#tabs getting_started:add-event-listener}}
 
-<h2 id="remove-event-listener">
-    <a class="header" href="#remove-event-listener">Remove event listener</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.remove_event_listener">API docs</a>
-</h2>
+## Remove event listener
 
 When you no longer need to listen to events, you can remove the listener.
 

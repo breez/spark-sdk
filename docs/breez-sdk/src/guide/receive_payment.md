@@ -1,7 +1,4 @@
-<h1 id="receiving-payments">
-    <a class="header" href="#receiving-payments">Receiving payments</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.receive_payment">API docs</a>
-</h1>
+# Receiving payments
 
 Once the SDK is initialized, you can directly begin receiving payments. The SDK supports receiving via Lightning, Bitcoin, Spark, and USDC/USDT into Spark from a supported external chain.
 

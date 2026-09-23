@@ -1,4 +1,4 @@
-# USDC/USDT payments
+# Send and receive USDC/USDT
 
 The SDK can send and receive USDC and USDT between a Spark wallet and several supported external chains: Ethereum-family chains (Arbitrum, Base, and similar EVM networks), Solana, and Tron. The Spark side is either BTC sats or [USDB](./stable_balance.md), the 6-decimal USD-pegged token on Spark. Each payment runs as two legs (a Spark-side transfer and the provider-driven external delivery) reconciled onto a single {{#name Payment}} row.
 

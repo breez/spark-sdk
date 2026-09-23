@@ -38,7 +38,6 @@ By default, the SDK automatically triggers optimization after each payment (sent
 
 <h3 id="optimize-leaves-full">
     <a class="header" href="#optimize-leaves-full">Run optimization to completion</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.optimize_leaves">API docs</a>
 </h3>
 
 Call {{#name optimize_leaves}} with an {{#name OptimizeLeavesRequest}} using the default {{#enum OptimizationMode::Full}} mode to run optimization until no further work is productive. The call blocks for the duration of the run and returns an {{#name OptimizeLeavesResponse}} whose {{#name outcome}} is {{#enum OptimizationOutcome::Completed}} with the number of rounds executed. A {{#name rounds_executed}} of `0` means the wallet was already optimal at call time.
@@ -47,7 +46,6 @@ Call {{#name optimize_leaves}} with an {{#name OptimizeLeavesRequest}} using the
 
 <h3 id="optimize-leaves-single-round">
     <a class="header" href="#optimize-leaves-single-round">Run optimization one round at a time</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.optimize_leaves">API docs</a>
 </h3>
 
 To display progress or cancel between rounds, pass an {{#name OptimizeLeavesRequest}} with {{#enum OptimizationMode::SingleRound}}. Each call executes one round and the response {{#name outcome}} is {{#enum OptimizationOutcome::InProgress}} (more work remains) or {{#enum OptimizationOutcome::Completed}} (terminal — either the planner confirmed this swap finished optimization, or a {{#name rounds_executed}} of `0` indicates the wallet was already optimal). Cancel between rounds simply by stopping the loop.

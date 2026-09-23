@@ -15,19 +15,13 @@ HTLC payments use the standard payment API described in [Sending payments](send_
 
 {{#tabs htlcs:send-htlc-payment}}
 
-<h2 id="receiving-using-hodl-invoices">
-    <a class="header" href="#receiving-using-hodl-invoices">Receiving using HODL invoices</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.receive_payment">API docs</a>
-</h2>
+## Receiving using HODL invoices
 
 You can receive using HODL invoices — Lightning invoices where the payment is held until you claim it by revealing the preimage. To create one, provide a {{#name payment_hash}} when calling {{#name receive_payment}} with the {{#enum ReceivePaymentMethod::Bolt11Invoice}} payment method.
 
 {{#tabs htlcs:receive-hodl-invoice-payment}}
 
-<h2 id="listing-claimable-conditional-payments">
-    <a class="header" href="#listing-claimable-conditional-payments">Listing claimable conditional payments</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.list_payments">API docs</a>
-</h2>
+## Listing claimable conditional payments
 
 Once detected, claimable HTLC payments are immediately listed as pending in the [list of payments](/guide/list_payments.md). Additionally, a {{#enum SdkEvent::PaymentPending}} event is emitted to notify your application. See [Listening to events](/guide/events.md) for more details.
 
@@ -35,10 +29,7 @@ To list only claimable HTLC payments, you can filter by HTLC status. This works 
 
 {{#tabs htlcs:list-claimable-htlc-payments}}
 
-<h2 id="claiming-conditional-payments">
-    <a class="header" href="#claiming-conditional-payments">Claiming conditional payments</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.claim_htlc_payment">API docs</a>
-</h2>
+## Claiming conditional payments
 
 To claim an HTLC payment, provide the preimage that matches the payment hash. This works for both Spark HTLC payments and HODL invoices.
 

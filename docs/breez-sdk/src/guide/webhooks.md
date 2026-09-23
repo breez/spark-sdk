@@ -112,28 +112,19 @@ All payloads share the following common fields:
 }
 ```
 
-<h2 id="registering-a-webhook">
-    <a class="header" href="#registering-a-webhook">Registering a webhook</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.register_webhook">API docs</a>
-</h2>
+## Registering a webhook
 
 To register a webhook, provide a URL, a secret for payload verification, and the event types you want to subscribe to.
 
 {{#tabs webhooks:register-webhook}}
 
-<h2 id="unregistering-a-webhook">
-    <a class="header" href="#unregistering-a-webhook">Unregistering a webhook</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.unregister_webhook">API docs</a>
-</h2>
+## Unregistering a webhook
 
 To stop receiving notifications for a webhook, unregister it using its ID.
 
 {{#tabs webhooks:unregister-webhook}}
 
-<h2 id="listing-webhooks">
-    <a class="header" href="#listing-webhooks">Listing webhooks</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.list_webhooks">API docs</a>
-</h2>
+## Listing webhooks
 
 To retrieve all currently registered webhooks, use the list method.
 
