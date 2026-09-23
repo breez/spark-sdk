@@ -1310,29 +1310,94 @@ pub struct DepositInfo {
     pub claim_error: Option<DepositClaimError>,
     /// Unset when no instant claim has been attempted.
     pub instant_claim_status: Option<InstantClaimStatus>,
+    /// The fee ceiling standing for this deposit alone. It caps what may be paid
+    /// to claim the deposit ahead of maturity. The claim at maturity runs under
+    /// whichever is larger, this or the configured max deposit claim fee, so a
+    /// ceiling set below that one does not hold the deposit back from it. Unset
+    /// means the configured ceiling applies to both.
+    pub max_claim_fee: Option<MaxFee>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ClaimDepositRequest {
     pub txid: String,
     pub vout: u32,
-    /// Caps what the claim may cost. A deposit that has not matured is claimed
-    /// instantly when the provider's spread fits within this, so the same ceiling
-    /// governs both. Falls back to the configured max deposit claim fee.
+    /// Caps what the claim may cost, and is recorded on the deposit so later
+    /// automatic attempts are held to it too.
+    ///
+    /// Raising it above the quoted spread is what lets a deposit be claimed ahead
+    /// of maturity without further input. Lowering it below the spread keeps the
+    /// deposit from being claimed early, and does not hold back its claim at
+    /// maturity: that one runs under whichever is larger, this or the configured
+    /// max deposit claim fee.
+    ///
+    /// Unset claims under the configured max deposit claim fee and clears any
+    /// ceiling previously recorded on the deposit.
+    ///
+    /// The ceiling is recorded before the claim is attempted, so it stands even
+    /// when the attempt is then declined for exceeding it.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub max_fee: Option<MaxFee>,
+}
+
+/// Why a claim was deferred rather than made.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ClaimDeferredReason {
+    /// Claiming ahead of maturity costs more than the fee ceiling allows. Unlike a
+    /// depth that has not arrived, this does not clear on its own: the deposit is
+    /// claimed at maturity unless the ceiling is raised.
+    ///
+    /// `required_fee_sats` is what the early claim would have cost, so a caller can
+    /// offer it at that price rather than quoting again.
+    MaxFeeExceeded {
+        /// What the provider asked to credit the deposit early.
+        required_fee_sats: u64,
+        /// The ceiling it was held to.
+        max_fee_sats: u64,
+    },
+    /// The provider offers no early claim at the deposit's current depth, either
+    /// because it is too shallow for any plan or because none was offered for it.
+    /// Depth is the usual cause, and it resolves itself: the next confirmation may
+    /// well bring an early claim within reach.
+    NoEarlyClaimAvailable,
+    /// The provider refused the early claim or could not be reached, so nothing was
+    /// submitted. Unlike a depth that has not arrived, waiting for a confirmation
+    /// does not address this, and the deposit is claimed at maturity unless a later
+    /// call succeeds. `message` is what the provider or the transport reported.
+    ProviderDeclined { message: String },
+}
+
+/// What became of a claim.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ClaimDepositOutcome {
+    /// Claimed at maturity and settled, carrying the payment it produced.
+    Settled { payment: Payment },
+    /// Claimed ahead of maturity and submitted. The transfer settles
+    /// asynchronously, so no payment is returned yet: watch for it via events or
+    /// `list_payments`.
+    Submitted,
+    /// Nothing was claimed yet, and no further call is needed: any fee ceiling this
+    /// one asked for stands on the deposit, and the SDK keeps claiming it on its
+    /// own. An early claim is attempted again as the deposit gains confirmations,
+    /// so one declined for being too shallow is often claimed early a block or two
+    /// later. Failing that, the deposit is claimed at maturity.
+    ///
+    /// An ordinary outcome rather than a failure. `reason` says which of the two to
+    /// expect: a depth that has not arrived yet, or a cost the ceiling will not
+    /// cover.
+    Deferred { reason: ClaimDeferredReason },
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ClaimDepositResponse {
-    /// The settled claim payment, present when the deposit was claimed at maturity,
-    /// which completes synchronously. Absent when it was claimed before maturity,
-    /// whose transfer settles asynchronously: watch for the payment via events or
-    /// `list_payments`. Which of the two happens follows from the deposit's maturity
-    /// and the fee ceiling, not from anything the caller asks for, so treat the
-    /// payment as optional on every claim.
-    pub payment: Option<Payment>,
+    /// What the call did. Which outcome occurs follows from the deposit's maturity
+    /// and the fee ceiling, not from anything the caller asks for, so handle all
+    /// three on every claim.
+    pub outcome: ClaimDepositOutcome,
 }
 
 #[derive(Debug, Clone, Serialize)]

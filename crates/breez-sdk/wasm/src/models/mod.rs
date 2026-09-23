@@ -147,6 +147,7 @@ pub struct DepositInfo {
     pub claim_error: Option<DepositClaimError>,
     pub instant_claim_status: Option<InstantClaimStatus>,
     pub refund_state: Option<RefundState>,
+    pub max_claim_fee: Option<MaxFee>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimDepositRequest)]
@@ -156,9 +157,29 @@ pub struct ClaimDepositRequest {
     pub max_fee: Option<MaxFee>,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimDeferredReason)]
+pub enum ClaimDeferredReason {
+    MaxFeeExceeded {
+        required_fee_sats: u64,
+        max_fee_sats: u64,
+    },
+    NoEarlyClaimAvailable,
+    ProviderDeclined {
+        message: String,
+    },
+}
+
+#[allow(clippy::large_enum_variant)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimDepositOutcome)]
+pub enum ClaimDepositOutcome {
+    Settled { payment: Payment },
+    Submitted,
+    Deferred { reason: ClaimDeferredReason },
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimDepositResponse)]
 pub struct ClaimDepositResponse {
-    pub payment: Option<Payment>,
+    pub outcome: ClaimDepositOutcome,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::FetchClaimDepositQuoteRequest)]
@@ -1739,6 +1760,9 @@ pub enum UpdateDepositPayload {
     RefundBroadcastState {
         refund_txid: String,
         state: RefundState,
+    },
+    MaxClaimFee {
+        max_fee: Option<MaxFee>,
     },
 }
 

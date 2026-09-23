@@ -28,6 +28,7 @@ impl DetailedUtxo {
             refund_state: None,
             claim_error: None,
             instant_claim_status: None,
+            max_claim_fee: None,
         }
     }
 }
