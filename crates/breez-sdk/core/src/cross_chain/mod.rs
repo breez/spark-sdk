@@ -58,9 +58,10 @@ const USD_STABLE_ASSETS: &[&str] = &["USDB", "USDC", "USDT", "USDT0"];
 pub(crate) const MONITOR_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Serializes the conversion writes onto an inbound cross-chain receive. The
-/// invoice match writes a Pending conversion when the payment is seen, and
-/// the provider monitor writes the Completed one; a re-sync of the payment
-/// racing the monitor would otherwise put Pending back for good.
+/// invoice match writes a Pending conversion when the payment is seen; the
+/// provider monitor writes the Completed one and closes the receive row in
+/// the same critical section. A match racing the monitor would otherwise
+/// put Pending back for good.
 static RECEIVE_CONVERSION_WRITES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Links an inbound payment to the cross-chain receive whose Spark invoice it

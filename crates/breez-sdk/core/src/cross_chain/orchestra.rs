@@ -760,41 +760,38 @@ impl OrchestraService {
         debug!("Orchestra receive {quote_id}: order response: {order:?}");
         match order.status {
             OrderStatus::Completed => {
-                let attached = match attach_receive_metadata(
+                match attach_receive_metadata(
                     storage,
                     spark_wallet,
                     fiat_service,
+                    swap_storage,
+                    &row,
                     &data,
                     &order,
                 )
                 .await
                 {
                     Ok(ReceiveMetadataOutcome::Attached(payment_id)) => {
+                        info!("Orchestra receive {quote_id} → Completed, metadata attached");
                         emit_payment_metadata_updated(storage, event_emitter, &payment_id).await;
-                        true
                     }
                     Ok(ReceiveMetadataOutcome::Pending) => {
                         debug!(
                             "Orchestra receive {quote_id} Completed, metadata not on the \
                              payment row yet; will retry"
                         );
-                        false
+                        if is_past_receive_grace(&data) {
+                            // Out of retries. The metadata stays in the cache.
+                            warn!(
+                                "Orchestra receive {quote_id} Completed but metadata never \
+                                 reached the payment row within the grace window, closing row"
+                            );
+                            swap_storage.mark_terminal(row).await?;
+                        }
                     }
                     Err(e) => {
                         error!("Orchestra receive {quote_id} metadata attach failed: {e:?}");
-                        false
                     }
-                };
-                if attached {
-                    info!("Orchestra receive {quote_id} → Completed, metadata attached");
-                    swap_storage.mark_terminal(row).await?;
-                } else if is_past_receive_grace(&data) {
-                    // Out of retries. The metadata stays in the cache.
-                    warn!(
-                        "Orchestra receive {quote_id} Completed but metadata never reached the \
-                         payment row within the grace window, closing row"
-                    );
-                    swap_storage.mark_terminal(row).await?;
                 }
             }
             OrderStatus::Failed | OrderStatus::Refunded => {
@@ -2102,7 +2099,8 @@ fn apply_terminal_status(
 
 /// Where a receive order's `ConversionInfo` ended up.
 enum ReceiveMetadataOutcome {
-    /// Written against the inbound `Payment` row with this id.
+    /// Written against the inbound `Payment` row with this id, and the
+    /// receive row closed.
     Attached(String),
     /// Not on the row yet, and cached under the order's `sparkTxHash`: the
     /// order carries no hash, the hash did not resolve to a payment id, or
@@ -2122,10 +2120,13 @@ enum ReceiveMetadataOutcome {
 /// the cache is only reapplied for a payment the sync cursor still covers, so
 /// a lookup or write that failed on a payment already synced would otherwise
 /// strand the conversion there.
+#[allow(clippy::too_many_arguments)]
 async fn attach_receive_metadata(
     storage: &Arc<dyn Storage>,
     spark_wallet: &SparkWallet,
     fiat_service: &dyn FiatService,
+    swap_storage: &OrchestraStorageAdapter,
+    row: &crate::StoredCrossChainSwap,
     data: &OrchestraSwapData,
     order: &Order,
 ) -> Result<ReceiveMetadataOutcome, SdkError> {
@@ -2145,19 +2146,29 @@ async fn attach_receive_metadata(
     // by Orchestra's counterparty, not us.
     match resolve_payment_id(spark_tx_hash, spark_wallet, storage, false).await {
         Ok(payment_id) => {
-            let written = {
+            // The row closes under the same lock as the write: an invoice
+            // match running after this finds no open row, and one that ran
+            // before has just been overwritten.
+            let closed = {
                 let _serialized = super::RECEIVE_CONVERSION_WRITES.lock().await;
-                storage
+                match storage
                     .insert_payment_metadata(payment_id.clone(), metadata.clone())
                     .await
+                {
+                    Ok(()) => Some(swap_storage.mark_terminal(row.clone()).await),
+                    Err(e) => {
+                        warn!(
+                            "Orchestra receive {}: failed to write metadata onto payment \
+                             {payment_id} ({e}), caching it",
+                            data.quote_id
+                        );
+                        None
+                    }
+                }
             };
-            match written {
-                Ok(()) => return Ok(ReceiveMetadataOutcome::Attached(payment_id)),
-                Err(e) => warn!(
-                    "Orchestra receive {}: failed to write metadata onto payment {payment_id} \
-                     ({e}), caching it",
-                    data.quote_id
-                ),
+            if let Some(closed) = closed {
+                closed?;
+                return Ok(ReceiveMetadataOutcome::Attached(payment_id));
             }
         }
         Err(e) => debug!(
