@@ -492,6 +492,9 @@ pub struct CrossChainReceiveInfo {
     /// Ticker for `service_fee_amount`. Absent when the fee is denominated
     /// in sats.
     pub service_fee_asset: Option<String>,
+    /// Decimals of `service_fee_asset`, for formatting `service_fee_amount`.
+    /// Unset when the fee is in sats or the provider did not report them.
+    pub service_fee_asset_decimals: Option<u32>,
     /// Quote expiry as a unix timestamp in seconds.
     pub expires_at: u64,
 }
@@ -517,6 +520,8 @@ pub(crate) struct CrossChainSendPrepared {
     pub service_fee_amount: u128,
     /// Asset that the service fee is denominated in. Unset means BTC sats.
     pub service_fee_asset: Option<String>,
+    /// Decimals of `service_fee_asset`. Unset for sats or when unreported.
+    pub service_fee_asset_decimals: Option<u32>,
     /// Sats cost to the wallet of moving `amount_in` from the wallet to the
     /// provider. For Boltz: the Lightning routing fee budget for paying the
     /// hold invoice (a budget, not a central estimate — enforced as a hard
@@ -1430,6 +1435,8 @@ mod tests {
                 amount_in: "1000000".to_string(),
                 expected_amount_out: "1146".to_string(),
                 fee_amount: Some("10000".to_string()),
+                fee_asset: Some("USDC".to_string()),
+                fee_asset_decimals: Some(6),
                 expires_at: 1_700_000_120,
             };
             orchestra_storage_adapter::OrchestraStorageAdapter::new(Arc::clone(&storage))
@@ -1598,6 +1605,7 @@ mod tests {
                 fee_amount: Some(10_000),
                 service_fee_amount: Some(10_000),
                 service_fee_asset: Some("USDC".to_string()),
+                service_fee_asset_decimals: Some(6),
                 asset_decimals: 6,
                 asset_contract: Some("0xUSDC".to_string()),
             }

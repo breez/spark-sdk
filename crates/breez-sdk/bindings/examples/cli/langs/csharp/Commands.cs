@@ -720,7 +720,7 @@ public static class Commands
         // Show cross-chain quote details before confirming
         if (prepareResponse.paymentMethod is SendPaymentMethod.CrossChainAddress ccMethod)
         {
-            var serviceFeeDenom = ccMethod.serviceFeeAsset ?? "sats";
+            var serviceFeeDenom = ServiceFeeDenomination(ccMethod.serviceFeeAsset, ccMethod.serviceFeeAssetDecimals);
             var denomination = tokenIdentifier != null ? "token base units" : "sats";
             Console.WriteLine(
                 $"Cross-chain send: {ccMethod.amountIn} {denomination} " +
@@ -1229,7 +1229,7 @@ public static class Commands
 
         Console.WriteLine("Open this URL in a browser to complete the purchase:");
         Console.WriteLine(response.url);
-        var serviceFeeDenom = response.serviceFeeAsset ?? "sats";
+        var serviceFeeDenom = ServiceFeeDenomination(response.serviceFeeAsset, response.serviceFeeAssetDecimals);
         Console.WriteLine(
             $"Deposit ~{response.amountSats} sats; recipient receives ~{response.estimatedOut} {response.asset}, " +
             $"service fee {response.serviceFeeAmount} {serviceFeeDenom}, expires {response.expiresAt}");
@@ -1634,5 +1634,12 @@ public static class Commands
     {
         var hash = System.Security.Cryptography.SHA256.HashData(data);
         return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    private static string ServiceFeeDenomination(string? asset, uint? decimals)
+    {
+        if (asset == null) return "sats";
+        if (decimals != null) return $"{asset} ({decimals} decimals)";
+        return asset;
     }
 }

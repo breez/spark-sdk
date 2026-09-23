@@ -981,18 +981,21 @@ async fn run_cross_chain_evm_receive(
         .ok_or_else(|| anyhow::anyhow!("receive_payment returned no cross_chain_info"))?;
     info!(
         "Receive prepared: deposit_address={} deposit_amount={} expected_received={} \
-         service_fee_amount={} service_fee_asset={:?} expires_at={}",
+         service_fee_amount={} service_fee_asset={:?} service_fee_asset_decimals={:?} \
+         expires_at={}",
         info.deposit_address,
         info.deposit_amount,
         info.expected_received_amount,
         info.service_fee_amount,
         info.service_fee_asset,
+        info.service_fee_asset_decimals,
         info.expires_at
     );
-    // Locks the fee-wiring plumbing in place: `service_fee_amount` is
-    // Orchestra's `total_fee_amount` and is always populated on a receive
-    // quote. `service_fee_asset` is `Some(fee_asset)` unless the quote reports
-    // BTC as the fee unit, which none of these USD-stable-source routes does.
+    // Locks the fee-wiring plumbing in place: `service_fee_amount` is the
+    // quote's total fee in `service_fee_asset` units and is always populated
+    // on a receive quote. `service_fee_asset` is `Some(fee_asset)` unless the
+    // quote reports BTC as the fee unit, which none of these USD-stable-source
+    // routes does.
     assert!(
         info.service_fee_amount > 0,
         "cross-chain receive {source_asset}→{dest_label}: expected nonzero \

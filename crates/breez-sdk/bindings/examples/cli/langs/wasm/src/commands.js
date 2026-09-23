@@ -396,7 +396,7 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
       // Show cross-chain quote details before confirming
       if (prepareResponse.paymentMethod && prepareResponse.paymentMethod.type === 'crossChainAddress') {
         const pm = prepareResponse.paymentMethod
-        const serviceFeeDenom = pm.serviceFeeAsset || 'sats'
+        const serviceFeeDenom = serviceFeeDenomination(pm.serviceFeeAsset, pm.serviceFeeAssetDecimals)
         const denomination = options.tokenIdentifier ? 'token base units' : 'sats'
         console.log(
           `Cross-chain send: ${pm.amountIn} ${denomination} (~${pm.assetAmountIn} ${pm.route.asset})` +
@@ -777,7 +777,7 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
       console.log(response.url)
       console.log(
         `Deposit ~${response.amountSats} sats; recipient receives ~${response.estimatedOut} ${response.asset}, ` +
-        `service fee ${response.serviceFeeAmount} ${response.serviceFeeAsset || 'sats'}, ` +
+        `service fee ${response.serviceFeeAmount} ${serviceFeeDenomination(response.serviceFeeAsset, response.serviceFeeAssetDecimals)}, ` +
         `expires ${response.expiresAt}`
       )
     })
@@ -1145,6 +1145,12 @@ async function selectCrossChainRoute(sdk, rl, filter) {
   }
 
   return routes[choice - 1]
+}
+
+function serviceFeeDenomination(asset, decimals) {
+  if (asset == null) return 'sats'
+  if (decimals != null) return `${asset} (${decimals} decimals)`
+  return asset
 }
 
 function maybeTruncateAddress(addr) {

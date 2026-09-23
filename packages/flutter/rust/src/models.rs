@@ -605,6 +605,7 @@ pub struct _CrossChainReceiveInfo {
     pub token_identifier: Option<String>,
     pub service_fee_amount: u128,
     pub service_fee_asset: Option<String>,
+    pub service_fee_asset_decimals: Option<u32>,
     pub expires_at: u64,
 }
 
@@ -1093,6 +1094,7 @@ pub enum _SendPaymentMethod {
         fee_amount: u128,
         service_fee_amount: u128,
         service_fee_asset: Option<String>,
+        service_fee_asset_decimals: Option<u32>,
         source_transfer_fee_sats: u64,
         fee_mode: CrossChainFeeMode,
         expires_at: String,
@@ -2007,6 +2009,7 @@ pub enum _ConversionInfo {
         fee_amount: Option<u128>,
         service_fee_amount: Option<u128>,
         service_fee_asset: Option<String>,
+        service_fee_asset_decimals: Option<u32>,
         asset_decimals: u32,
         order_id: String,
         quote_id: String,
@@ -2079,6 +2082,7 @@ pub struct _PreparePaymentLinkResponse {
     pub asset: String,
     pub service_fee_amount: u128,
     pub service_fee_asset: Option<String>,
+    pub service_fee_asset_decimals: Option<u32>,
     pub expires_at: String,
 }
 

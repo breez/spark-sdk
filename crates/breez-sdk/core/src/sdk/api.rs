@@ -649,6 +649,7 @@ fn prepare_payment_link_response(
         asset: prepared.pair.asset,
         service_fee_amount: prepared.service_fee_amount,
         service_fee_asset: prepared.service_fee_asset,
+        service_fee_asset_decimals: prepared.service_fee_asset_decimals,
         expires_at: normalize_expires_at(&prepared.expires_at),
     }
 }
@@ -771,6 +772,7 @@ mod tests {
             fee_amount: 50_000,
             service_fee_amount: 47_684,
             service_fee_asset: Some("USDC".to_string()),
+            service_fee_asset_decimals: Some(6),
             source_transfer_fee_sats: 0,
             fee_mode: CrossChainFeeMode::FeesExcluded,
             expires_at: "2026-07-25T08:09:26.770Z".to_string(),
@@ -825,6 +827,7 @@ mod tests {
         // Orchestra denominates its service fee in the stablecoin.
         assert_eq!(resp.service_fee_amount, 47_684);
         assert_eq!(resp.service_fee_asset.as_deref(), Some("USDC"));
+        assert_eq!(resp.service_fee_asset_decimals, Some(6));
     }
 
     #[test_all]
@@ -838,10 +841,12 @@ mod tests {
         // Boltz denominates its service fee in sats (service_fee_asset = None).
         prepared.service_fee_amount = 17;
         prepared.service_fee_asset = None;
+        prepared.service_fee_asset_decimals = None;
         let resp = prepare_payment_link_response(prepared, "https://x".to_string(), 5000);
         assert_eq!(resp.asset, "USDC");
         assert_eq!(resp.service_fee_amount, 17);
         assert_eq!(resp.service_fee_asset, None);
+        assert_eq!(resp.service_fee_asset_decimals, None);
     }
 
     #[test_all]

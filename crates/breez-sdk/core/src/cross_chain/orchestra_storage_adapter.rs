@@ -80,8 +80,16 @@ pub(crate) struct OrchestraSwapData {
     /// Orchestra `estimatedOut` at quote time. The live `Order.amount_out` is
     /// what the receiver actually gets and is read off the poll response.
     pub expected_amount_out: String,
+    /// Quote service fee, in `fee_asset` units.
     #[serde(default)]
     pub fee_amount: Option<String>,
+    /// Quote `feeAsset` ticker as Orchestra reports it (`"BTC"` for sats).
+    /// Unset on rows written before it was stored.
+    #[serde(default)]
+    pub fee_asset: Option<String>,
+    /// Decimals of `fee_asset`. Unset when Orchestra did not report them.
+    #[serde(default)]
+    pub fee_asset_decimals: Option<u32>,
     /// Quote expiry, unix seconds. Not authoritative for the receive
     /// lifecycle: Orchestra may reprice late deposits.
     pub expires_at: u64,
@@ -219,6 +227,8 @@ mod tests {
             amount_in: "100000000".to_string(),
             expected_amount_out: "100000".to_string(),
             fee_amount: Some("500".to_string()),
+            fee_asset: Some("USDC".to_string()),
+            fee_asset_decimals: Some(6),
             expires_at: 1_700_000_120,
         }
     }
@@ -244,6 +254,8 @@ mod tests {
             amount_in: "1050000".to_string(),
             expected_amount_out: "1000000".to_string(),
             fee_amount: Some("20000".to_string()),
+            fee_asset: None,
+            fee_asset_decimals: None,
             expires_at: 1_700_000_120,
         }
     }
@@ -267,6 +279,19 @@ mod tests {
         let json = serde_json::to_string(&data).unwrap();
         let decoded: OrchestraSwapData = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, data);
+    }
+
+    /// Rows written before the fee asset was stored still decode, with it
+    /// unset.
+    #[test]
+    fn data_written_without_the_fee_asset_decodes() {
+        let mut json: serde_json::Value = serde_json::to_value(sample_data()).unwrap();
+        let obj = json.as_object_mut().unwrap();
+        obj.remove("feeAsset");
+        obj.remove("feeAssetDecimals");
+        let decoded: OrchestraSwapData = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded.fee_asset, None);
+        assert_eq!(decoded.fee_asset_decimals, None);
     }
 
     /// Forward compatibility: future fields added by the server must not
