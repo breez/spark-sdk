@@ -538,7 +538,7 @@ func handlePay(_ sdk: BreezSdk, _ args: [String]) async throws {
         }
     }
 
-    if case let .crossChainAddress(route, recipientAddress, amountIn, assetAmountIn, estimatedOut, feeAmount, serviceFeeAmount, serviceFeeAsset, sourceTransferFeeSats, _, _, _) = prepareResponse.paymentMethod {
+    if case let .crossChainAddress(route, recipientAddress, amountIn, assetAmountIn, estimatedOut, feeAmount, serviceFeeAmount, serviceFeeAsset, _, sourceTransferFeeSats, _, _, _) = prepareResponse.paymentMethod {
         let serviceFeeDenom = serviceFeeAsset ?? "sats"
         let denomination = tokenIdentifier != nil ? "token base units" : "sats"
         print("Cross-chain send: \(amountIn) \(denomination) (~\(assetAmountIn) \(route.asset)) -> ~\(estimatedOut) \(route.asset) on \(route.chain) to \(recipientAddress)")

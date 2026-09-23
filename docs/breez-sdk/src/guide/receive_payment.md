@@ -80,6 +80,8 @@ The {{#name amount}} on {{#enum ReceivePaymentMethod::CrossChain}} is in the sou
 
 The {{#name payment_request}} field carries an EIP-681 URI for EVM routes and the bare deposit address for Solana and Tron. The {{#name cross_chain_info}} block surfaces the bare deposit address, deposit amount, expected receive amount, destination denomination, and quote {{#name expires_at}}. The receiver pays no fee; the sender's deposit covers it.
 
+The provider's fee in {{#name service_fee_amount}} is in its own asset, {{#name service_fee_asset}}, which can differ from both the deposit and the destination asset. Format it with {{#name service_fee_asset_decimals}}, not the route's decimals.
+
 {{#tabs cross_chain:cross-chain-receive}}
 
 ## Event Flows

@@ -54,7 +54,7 @@ func prepareSendPaymentCrossChain(
         ))
 
     if case let .crossChainAddress(
-        _, _, amountIn, _, estimatedOut, feeAmount, _, _, _, _, expiresAt, _
+        _, _, amountIn, _, estimatedOut, feeAmount, _, _, _, _, _, expiresAt, _
     ) = prepareResponse.paymentMethod {
         print("Amount in: \(amountIn)")
         print("Estimated out: \(estimatedOut)")

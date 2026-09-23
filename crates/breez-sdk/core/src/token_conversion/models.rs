@@ -259,6 +259,10 @@ pub enum ConversionInfo {
         /// Asset the service fee is denominated in. Unset means BTC sats.
         #[serde(default)]
         service_fee_asset: Option<String>,
+        /// Decimals of `service_fee_asset`, for formatting `service_fee_amount`.
+        /// Unset when the fee is in sats or the provider did not report them.
+        #[serde(default)]
+        service_fee_asset_decimals: Option<u32>,
         /// Asset decimals (e.g. 6 for USDC).
         asset_decimals: u32,
         /// Token contract / mint address on `chain`. Unset when that side is
@@ -338,6 +342,7 @@ pub enum ConversionInfo {
 }
 
 impl fmt::Debug for ConversionInfo {
+    #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ConversionInfo::Amm {
@@ -374,6 +379,7 @@ impl fmt::Debug for ConversionInfo {
                 fee_amount,
                 service_fee_amount,
                 service_fee_asset,
+                service_fee_asset_decimals,
                 asset_decimals,
                 asset_contract,
             } => f
@@ -393,6 +399,7 @@ impl fmt::Debug for ConversionInfo {
                 .field("fee_amount", fee_amount)
                 .field("service_fee_amount", service_fee_amount)
                 .field("service_fee_asset", service_fee_asset)
+                .field("service_fee_asset_decimals", service_fee_asset_decimals)
                 .field("asset_decimals", asset_decimals)
                 .field("asset_contract", asset_contract)
                 .finish(),
@@ -616,6 +623,7 @@ mod tests {
             fee_amount,
             service_fee_amount,
             service_fee_asset,
+            service_fee_asset_decimals,
             ..
         } = &decoded
         else {
@@ -629,6 +637,7 @@ mod tests {
             "legacy `fee` key must map to `service_fee_amount`"
         );
         assert_eq!(*service_fee_asset, None);
+        assert_eq!(*service_fee_asset_decimals, None);
     }
 
     /// New writes must use the renamed `service_fee_amount` key (never the

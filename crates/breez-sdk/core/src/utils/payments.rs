@@ -676,6 +676,7 @@ mod tests {
             fee_amount: Some(500_000),
             service_fee_amount: Some(500),
             service_fee_asset: Some("USDC".to_string()),
+            service_fee_asset_decimals: Some(6),
             read_token: None,
             asset_decimals: 6,
         }
