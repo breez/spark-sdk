@@ -225,13 +225,6 @@ const TX_CONFIRM_TIMEOUT_SECS: u64 = 300;
 /// already landed. The event trails the balance by a sync pass at most.
 const RECEIVE_EVENT_TIMEOUT_SECS: u64 = 120;
 
-/// How long after PaymentSucceeded the conversion info may take to show up.
-/// The SDK polls Orchestra as soon as the inbound payment is seen, so the
-/// info normally lands within a second or two, or is already on the success
-/// event. Without that wake-up it would wait for the 30 second monitor pass,
-/// which lands past this bound on most runs, though not every one.
-const CONVERSION_INFO_LATENCY_LIMIT: Duration = Duration::from_secs(10);
-
 /// The conversion info a payment carries, whichever details variant holds it.
 fn conversion_info_of(payment: &Payment) -> Option<&ConversionInfo> {
     match payment.details.as_ref()? {
@@ -1144,53 +1137,41 @@ async fn run_cross_chain_evm_receive(
         conversion_info_of(&event_payment).is_some()
     );
 
-    // The conversion info usually lands after the payment was reported, once
-    // Orchestra confirms the order. The SDK announces that with a
-    // PaymentMetadataUpdated event, so the app never has to poll for it.
-    let (event_payment, conversion_info_latency) = if conversion_info_of(&event_payment).is_some() {
-        (event_payment, Duration::ZERO)
+    // Delivery fulfils the invoice the receive was quoted against, so the
+    // success event already names the conversion. The delivered amount and
+    // deposit hash follow in a PaymentMetadataUpdated event once Orchestra
+    // confirms the order, unless the monitor confirmed it first.
+    let Some(ConversionInfo::Orchestra { status, .. }) = conversion_info_of(&event_payment) else {
+        anyhow::bail!(
+            "cross-chain receive {source_asset}→{dest_label}: PaymentSucceeded for {} carried \
+             no Orchestra conversion info",
+            event_payment.id
+        );
+    };
+    let event_payment = if *status == ConversionStatus::Completed {
+        event_payment
     } else {
-        let waited = Instant::now();
-        let updated = wait_for_payment_metadata_updated_event(
+        wait_for_completed_conversion_event(
             &mut alice.events,
             &event_payment.id,
-            RECEIVE_EVENT_TIMEOUT_SECS,
+            SETTLE_TIMEOUT_SECS,
         )
-        .await
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "cross-chain receive {source_asset}→{dest_label}: PaymentSucceeded for {} \
-                 carried no conversion info and no PaymentMetadataUpdated followed: {e}",
-                event_payment.id
-            )
-        })?;
-        (updated, waited.elapsed())
+        .await?
     };
-    info!(
-        "Conversion info for {} available {conversion_info_latency:?} after PaymentSucceeded",
-        event_payment.id
-    );
-    assert!(
-        conversion_info_latency < CONVERSION_INFO_LATENCY_LIMIT,
-        "cross-chain receive {source_asset}→{dest_label}: conversion info took \
-         {conversion_info_latency:?} to reach payment {} (limit {CONVERSION_INFO_LATENCY_LIMIT:?})",
-        event_payment.id
-    );
-    assert!(
-        matches!(
-            conversion_info_of(&event_payment),
-            Some(ConversionInfo::Orchestra { .. })
-        ),
-        "cross-chain receive {source_asset}→{dest_label}: payment {} reported without \
-         Orchestra conversion info",
-        event_payment.id
-    );
 
     // On a receive the external side is the source, so the hash has to be the
     // deposit this test broadcast at step 7.
-    let hash =
-        wait_for_receive_external_tx_hash(&alice.sdk, &event_payment.id, SETTLE_TIMEOUT_SECS)
-            .await?;
+    let Some(ConversionInfo::Orchestra {
+        external_tx_hash: Some(hash),
+        ..
+    }) = conversion_info_of(&event_payment)
+    else {
+        anyhow::bail!(
+            "cross-chain receive {source_asset}→{dest_label}: completed conversion on {} \
+             carries no external_tx_hash",
+            event_payment.id
+        );
+    };
     assert_eq!(
         hash.to_lowercase(),
         tx_hash.to_lowercase(),
@@ -1321,40 +1302,29 @@ fn describe_conversion(info: &ConversionInfo) -> String {
     }
 }
 
-/// Poll a receive payment row until the Orchestra conversion lands on it
-/// carrying its external-chain tx hash.
-///
-/// `PaymentSucceeded` fires when the inbound Spark transfer settles, which
-/// precedes the receive poller attaching the order's metadata, so the hash has
-/// to be read off a re-read row rather than off the event.
-async fn wait_for_receive_external_tx_hash(
-    sdk: &BreezSdk,
+/// Waits for the PaymentMetadataUpdated event that carries `payment_id`'s
+/// conversion as Completed. Earlier updates on the payment are skipped.
+async fn wait_for_completed_conversion_event(
+    events: &mut tokio::sync::mpsc::Receiver<SdkEvent>,
     payment_id: &str,
     timeout_secs: u64,
-) -> Result<String> {
-    let start = Instant::now();
+) -> Result<Payment> {
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     loop {
-        let payment = sdk
-            .get_payment(GetPaymentRequest {
-                payment_id: payment_id.to_string(),
-            })
-            .await?
-            .payment;
+        let remaining = deadline.saturating_duration_since(Instant::now()).as_secs();
+        let payment =
+            wait_for_payment_metadata_updated_event(events, payment_id, remaining.max(1)).await?;
         if let Some(ConversionInfo::Orchestra {
-            external_tx_hash: Some(hash),
+            status: ConversionStatus::Completed,
             ..
         }) = conversion_info_of(&payment)
         {
-            return Ok(hash.clone());
+            return Ok(payment);
         }
-        if start.elapsed() >= Duration::from_secs(timeout_secs) {
-            anyhow::bail!(
-                "timeout after {timeout_secs}s waiting for the Orchestra external tx hash on \
-                 receive payment {payment_id}"
-            );
-        }
-        let _ = sdk.sync_wallet(SyncWalletRequest {}).await;
-        tokio::time::sleep(STATUS_POLL_INTERVAL).await;
+        info!(
+            "PaymentMetadataUpdated for {payment_id} not Completed yet: {:?}",
+            conversion_info_of(&payment).map(describe_conversion)
+        );
     }
 }
 

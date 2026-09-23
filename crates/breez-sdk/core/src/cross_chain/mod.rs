@@ -54,6 +54,36 @@ const USD_STABLE_ASSETS: &[&str] = &["USDB", "USDC", "USDT", "USDT0"];
 /// Each provider's background monitor interval.
 pub(crate) const MONITOR_INTERVAL: Duration = Duration::from_secs(30);
 
+/// Metadata for an inbound payment that fulfilled the Spark invoice of an
+/// open cross-chain receive, or `None` when it is not one. Applied before
+/// the payment's status event so the event already carries the conversion.
+pub(crate) async fn receive_metadata_for_payment(
+    storage: &Arc<dyn crate::Storage>,
+    payment: &crate::Payment,
+) -> Result<Option<crate::PaymentMetadata>, SdkError> {
+    if payment.payment_type != crate::PaymentType::Receive {
+        return Ok(None);
+    }
+    let invoice = match &payment.details {
+        Some(
+            PaymentDetails::Spark {
+                invoice_details: Some(details),
+                ..
+            }
+            | PaymentDetails::Token {
+                invoice_details: Some(details),
+                ..
+            },
+        ) => &details.invoice,
+        _ => return Ok(None),
+    };
+    let conversion_info = orchestra::receive_conversion_info_for_invoice(storage, invoice).await?;
+    Ok(conversion_info.map(|info| crate::PaymentMetadata {
+        conversion_info: Some(info),
+        ..Default::default()
+    }))
+}
+
 /// Attaches a cross-chain [`ConversionInfo`] to a freshly-converted
 /// [`Payment`]. The payment's top-level `status` is left as-is: it reflects
 /// the local Spark/Token/Lightning leg's settlement, while the cross-chain
@@ -1330,5 +1360,153 @@ mod tests {
             build_receive_payment_request(solana_addr, "tron", None, None, 1_000_000).is_err(),
             "solana address must not be accepted for tron route",
         );
+    }
+
+    #[cfg(feature = "sqlite")]
+    mod receive_matching {
+        use super::*;
+        use crate::{
+            PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, SparkInvoicePaymentDetails,
+            TokenMetadata, TokenTransactionType,
+        };
+
+        fn sqlite_storage() -> Arc<dyn crate::Storage> {
+            let mut dir = std::env::temp_dir();
+            dir.push(format!(
+                "breez-xchain-receive-match-{}",
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            Arc::new(crate::SqliteStorage::new(&dir).unwrap())
+        }
+
+        async fn storage_with_open_receive(invoice: &str) -> Arc<dyn crate::Storage> {
+            let storage = sqlite_storage();
+            let data = orchestra_storage_adapter::OrchestraSwapData {
+                quote_id: "q_match".to_string(),
+                order_id: None,
+                read_token: None,
+                recipient_address: "sp1rcv".to_string(),
+                spark_invoice: Some(invoice.to_string()),
+                source_chain: "arbitrum".to_string(),
+                source_asset: "USDC".to_string(),
+                source_chain_id: Some("42161".to_string()),
+                source_contract_address: Some("0xUSDC".to_string()),
+                source_decimals: 6,
+                destination_chain: "spark".to_string(),
+                destination_asset: "BTC".to_string(),
+                destination_decimals: 8,
+                token_identifier: None,
+                amount_in: "1000000".to_string(),
+                expected_amount_out: "1146".to_string(),
+                fee_amount: Some("10000".to_string()),
+                expires_at: 1_700_000_120,
+            };
+            orchestra_storage_adapter::OrchestraStorageAdapter::new(Arc::clone(&storage))
+                .upsert(&data)
+                .await
+                .unwrap();
+            storage
+        }
+
+        fn invoice_details(invoice: &str) -> SparkInvoicePaymentDetails {
+            SparkInvoicePaymentDetails {
+                description: None,
+                invoice: invoice.to_string(),
+            }
+        }
+
+        fn payment(payment_type: PaymentType, details: PaymentDetails) -> crate::Payment {
+            crate::Payment {
+                id: "p1".to_string(),
+                payment_type,
+                status: PaymentStatus::Completed,
+                amount: 1146,
+                fees: 0,
+                timestamp: 100,
+                method: PaymentMethod::Spark,
+                details: Some(details),
+                conversion_details: None,
+            }
+        }
+
+        fn spark_details(invoice: Option<&str>) -> PaymentDetails {
+            PaymentDetails::Spark {
+                invoice_details: invoice.map(invoice_details),
+                htlc_details: None,
+                conversion_info: None,
+            }
+        }
+
+        fn token_details(invoice: &str) -> PaymentDetails {
+            PaymentDetails::Token {
+                metadata: TokenMetadata {
+                    identifier: "btkn1usdb".to_string(),
+                    issuer_public_key: "02aa".to_string(),
+                    name: "Bitcoin USD".to_string(),
+                    ticker: "USDB".to_string(),
+                    decimals: 6,
+                    max_supply: 0,
+                    is_freezable: true,
+                },
+                tx_hash: "abcd".to_string(),
+                tx_type: TokenTransactionType::Transfer,
+                invoice_details: Some(invoice_details(invoice)),
+                conversion_info: None,
+            }
+        }
+
+        fn is_pending_orchestra(metadata: Option<&crate::PaymentMetadata>) -> bool {
+            matches!(
+                metadata,
+                Some(crate::PaymentMetadata {
+                    conversion_info: Some(ConversionInfo::Orchestra {
+                        status: crate::ConversionStatus::Pending,
+                        ..
+                    }),
+                    ..
+                })
+            )
+        }
+
+        #[tokio::test]
+        async fn spark_receive_fulfilling_an_open_invoice_gets_pending_conversion_info() {
+            let storage = storage_with_open_receive("spark1inv").await;
+            let payment = payment(PaymentType::Receive, spark_details(Some("spark1inv")));
+
+            let metadata = receive_metadata_for_payment(&storage, &payment)
+                .await
+                .unwrap();
+
+            assert!(is_pending_orchestra(metadata.as_ref()));
+        }
+
+        #[tokio::test]
+        async fn token_receive_fulfilling_an_open_invoice_gets_pending_conversion_info() {
+            let storage = storage_with_open_receive("spark1inv").await;
+            let payment = payment(PaymentType::Receive, token_details("spark1inv"));
+
+            let metadata = receive_metadata_for_payment(&storage, &payment)
+                .await
+                .unwrap();
+
+            assert!(is_pending_orchestra(metadata.as_ref()));
+        }
+
+        #[tokio::test]
+        async fn other_payments_get_nothing() {
+            let storage = storage_with_open_receive("spark1inv").await;
+
+            for payment in [
+                payment(PaymentType::Receive, spark_details(Some("spark1other"))),
+                payment(PaymentType::Receive, spark_details(None)),
+                payment(PaymentType::Send, spark_details(Some("spark1inv"))),
+            ] {
+                let metadata = receive_metadata_for_payment(&storage, &payment)
+                    .await
+                    .unwrap();
+                assert!(metadata.is_none(), "{payment:?}");
+            }
+        }
     }
 }
