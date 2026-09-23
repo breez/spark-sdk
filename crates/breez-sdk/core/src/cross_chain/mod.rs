@@ -28,7 +28,10 @@ use breez_sdk_common::fiat::FiatService;
 use serde::{Deserialize, Serialize};
 use spark_wallet::TransferId;
 
-use crate::{ConversionInfo, CrossChainAddressDetails, PaymentDetails, error::SdkError};
+use crate::{
+    ConversionInfo, CrossChainAddressDetails, PaymentDetails, error::SdkError,
+    utils::conversions::extract_conversion_info,
+};
 
 /// SDK-level bounds for cross-chain slippage.
 pub(crate) const MIN_CROSS_CHAIN_SLIPPAGE_BPS: u32 = 10;
@@ -54,15 +57,22 @@ const USD_STABLE_ASSETS: &[&str] = &["USDB", "USDC", "USDT", "USDT0"];
 /// Each provider's background monitor interval.
 pub(crate) const MONITOR_INTERVAL: Duration = Duration::from_secs(30);
 
-/// Metadata for an inbound payment that fulfilled the Spark invoice of an
-/// open cross-chain receive, or `None` when it is not one. Applied before
-/// the payment's status event so the event already carries the conversion.
-pub(crate) async fn receive_metadata_for_payment(
+/// Serializes the conversion writes onto an inbound cross-chain receive. The
+/// invoice match writes a Pending conversion when the payment is seen, and
+/// the provider monitor writes the Completed one; a re-sync of the payment
+/// racing the monitor would otherwise put Pending back for good.
+static RECEIVE_CONVERSION_WRITES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Links an inbound payment to the cross-chain receive whose Spark invoice it
+/// fulfilled, writing a Pending conversion onto it. Returns whether it did.
+/// Runs before the payment's status event so the event already carries the
+/// conversion. A payment that already carries one is left alone.
+pub(crate) async fn attach_receive_metadata_for_payment(
     storage: &Arc<dyn crate::Storage>,
     payment: &crate::Payment,
-) -> Result<Option<crate::PaymentMetadata>, SdkError> {
+) -> Result<bool, SdkError> {
     if payment.payment_type != crate::PaymentType::Receive {
-        return Ok(None);
+        return Ok(false);
     }
     let invoice = match &payment.details {
         Some(
@@ -75,13 +85,32 @@ pub(crate) async fn receive_metadata_for_payment(
                 ..
             },
         ) => &details.invoice,
-        _ => return Ok(None),
+        _ => return Ok(false),
     };
-    let conversion_info = orchestra::receive_conversion_info_for_invoice(storage, invoice).await?;
-    Ok(conversion_info.map(|info| crate::PaymentMetadata {
-        conversion_info: Some(info),
-        ..Default::default()
-    }))
+
+    let _serialized = RECEIVE_CONVERSION_WRITES.lock().await;
+    let already_attached = storage
+        .get_payment_by_id(payment.id.clone())
+        .await
+        .is_ok_and(|stored| extract_conversion_info(stored.details).is_some());
+    if already_attached {
+        return Ok(false);
+    }
+    let Some(conversion_info) =
+        orchestra::receive_conversion_info_for_invoice(storage, invoice).await?
+    else {
+        return Ok(false);
+    };
+    storage
+        .insert_payment_metadata(
+            payment.id.clone(),
+            crate::PaymentMetadata {
+                conversion_info: Some(conversion_info),
+                ..Default::default()
+            },
+        )
+        .await?;
+    Ok(true)
 }
 
 /// Attaches a cross-chain [`ConversionInfo`] to a freshly-converted
@@ -1456,41 +1485,83 @@ mod tests {
             }
         }
 
-        fn is_pending_orchestra(metadata: Option<&crate::PaymentMetadata>) -> bool {
-            matches!(
-                metadata,
-                Some(crate::PaymentMetadata {
-                    conversion_info: Some(ConversionInfo::Orchestra {
-                        status: crate::ConversionStatus::Pending,
-                        ..
-                    }),
-                    ..
-                })
-            )
+        async fn stored_conversion_status(
+            storage: &Arc<dyn crate::Storage>,
+            payment_id: &str,
+        ) -> Option<crate::ConversionStatus> {
+            let stored = storage
+                .get_payment_by_id(payment_id.to_string())
+                .await
+                .unwrap();
+            match extract_conversion_info(stored.details) {
+                Some(ConversionInfo::Orchestra { status, .. }) => Some(status),
+                _ => None,
+            }
         }
 
         #[tokio::test]
         async fn spark_receive_fulfilling_an_open_invoice_gets_pending_conversion_info() {
             let storage = storage_with_open_receive("spark1inv").await;
             let payment = payment(PaymentType::Receive, spark_details(Some("spark1inv")));
+            storage.apply_payment_update(payment.clone()).await.unwrap();
 
-            let metadata = receive_metadata_for_payment(&storage, &payment)
+            let attached = attach_receive_metadata_for_payment(&storage, &payment)
                 .await
                 .unwrap();
 
-            assert!(is_pending_orchestra(metadata.as_ref()));
+            assert!(attached);
+            assert_eq!(
+                stored_conversion_status(&storage, &payment.id).await,
+                Some(crate::ConversionStatus::Pending)
+            );
         }
 
         #[tokio::test]
         async fn token_receive_fulfilling_an_open_invoice_gets_pending_conversion_info() {
             let storage = storage_with_open_receive("spark1inv").await;
             let payment = payment(PaymentType::Receive, token_details("spark1inv"));
+            storage.apply_payment_update(payment.clone()).await.unwrap();
 
-            let metadata = receive_metadata_for_payment(&storage, &payment)
+            let attached = attach_receive_metadata_for_payment(&storage, &payment)
                 .await
                 .unwrap();
 
-            assert!(is_pending_orchestra(metadata.as_ref()));
+            assert!(attached);
+            assert_eq!(
+                stored_conversion_status(&storage, &payment.id).await,
+                Some(crate::ConversionStatus::Pending)
+            );
+        }
+
+        #[tokio::test]
+        async fn a_payment_already_carrying_a_conversion_is_left_alone() {
+            let storage = storage_with_open_receive("spark1inv").await;
+            let payment = payment(PaymentType::Receive, spark_details(Some("spark1inv")));
+            storage.apply_payment_update(payment.clone()).await.unwrap();
+            let mut completed = orchestra_receive_info_placeholder();
+            if let ConversionInfo::Orchestra { status, .. } = &mut completed {
+                *status = crate::ConversionStatus::Completed;
+            }
+            storage
+                .insert_payment_metadata(
+                    payment.id.clone(),
+                    crate::PaymentMetadata {
+                        conversion_info: Some(completed),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+
+            let attached = attach_receive_metadata_for_payment(&storage, &payment)
+                .await
+                .unwrap();
+
+            assert!(!attached);
+            assert_eq!(
+                stored_conversion_status(&storage, &payment.id).await,
+                Some(crate::ConversionStatus::Completed)
+            );
         }
 
         #[tokio::test]
@@ -1502,10 +1573,32 @@ mod tests {
                 payment(PaymentType::Receive, spark_details(None)),
                 payment(PaymentType::Send, spark_details(Some("spark1inv"))),
             ] {
-                let metadata = receive_metadata_for_payment(&storage, &payment)
+                let attached = attach_receive_metadata_for_payment(&storage, &payment)
                     .await
                     .unwrap();
-                assert!(metadata.is_none(), "{payment:?}");
+                assert!(!attached, "{payment:?}");
+            }
+        }
+
+        fn orchestra_receive_info_placeholder() -> ConversionInfo {
+            ConversionInfo::Orchestra {
+                order_id: "ord".to_string(),
+                quote_id: "q_match".to_string(),
+                read_token: None,
+                chain: "arbitrum".to_string(),
+                chain_id: Some("42161".to_string()),
+                asset: "USDC".to_string(),
+                recipient_address: "sp1rcv".to_string(),
+                asset_amount_in: Some(1_000_000),
+                estimated_out: 1146,
+                delivered_amount: Some(1146),
+                external_tx_hash: Some("0xdeposit".to_string()),
+                status: crate::ConversionStatus::Pending,
+                fee_amount: Some(10_000),
+                service_fee_amount: Some(10_000),
+                service_fee_asset: Some("USDC".to_string()),
+                asset_decimals: 6,
+                asset_contract: Some("0xUSDC".to_string()),
             }
         }
     }

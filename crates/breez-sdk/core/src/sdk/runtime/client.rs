@@ -388,24 +388,13 @@ async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
 /// the Pending event already carries the conversion. The sync path does the
 /// same for the Completed one.
 async fn attach_cross_chain_receive_metadata(sdk: &BreezSdk, payment: &Payment) {
-    match crate::cross_chain::receive_metadata_for_payment(&sdk.storage, payment).await {
-        Ok(Some(metadata)) => {
-            if let Err(e) = sdk
-                .storage
-                .insert_payment_metadata(payment.id.clone(), metadata)
-                .await
-            {
-                warn!(
-                    "Failed to attach cross-chain receive metadata to {}: {e:?}",
-                    payment.id
-                );
-            }
-        }
-        Ok(None) => {}
-        Err(e) => warn!(
-            "Failed to look up cross-chain receive for {}: {e:?}",
+    if let Err(e) =
+        crate::cross_chain::attach_receive_metadata_for_payment(&sdk.storage, payment).await
+    {
+        warn!(
+            "Failed to attach cross-chain receive metadata to {}: {e:?}",
             payment.id
-        ),
+        );
     }
 }
 

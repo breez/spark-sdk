@@ -233,13 +233,7 @@ impl SparkSyncService {
             return Ok(());
         }
 
-        if let Some(metadata) =
-            crate::cross_chain::receive_metadata_for_payment(&self.storage, payment).await?
-        {
-            self.storage
-                .insert_payment_metadata(payment.id.clone(), metadata)
-                .await?;
-        }
+        crate::cross_chain::attach_receive_metadata_for_payment(&self.storage, payment).await?;
 
         Ok(())
     }

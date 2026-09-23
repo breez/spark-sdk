@@ -1581,7 +1581,7 @@ impl CrossChainService for OrchestraService {
         };
 
         // Orchestra fulfils a Spark invoice on delivery, so quoting against
-        // one we mint here tags the inbound payment with it and ties it to
+        // one created here tags the inbound payment with it and ties it to
         // this row the moment it is seen. Amountless, since the delivered
         // amount is only known once the order settles, and without expiry,
         // since Orchestra accepts late deposits.
@@ -2144,17 +2144,22 @@ async fn attach_receive_metadata(
     // tx_inputs_are_ours = false: on receive, the inbound token tx is funded
     // by Orchestra's counterparty, not us.
     match resolve_payment_id(spark_tx_hash, spark_wallet, storage, false).await {
-        Ok(payment_id) => match storage
-            .insert_payment_metadata(payment_id.clone(), metadata.clone())
-            .await
-        {
-            Ok(()) => return Ok(ReceiveMetadataOutcome::Attached(payment_id)),
-            Err(e) => warn!(
-                "Orchestra receive {}: failed to write metadata onto payment {payment_id} ({e}), \
-                 caching it",
-                data.quote_id
-            ),
-        },
+        Ok(payment_id) => {
+            let written = {
+                let _serialized = super::RECEIVE_CONVERSION_WRITES.lock().await;
+                storage
+                    .insert_payment_metadata(payment_id.clone(), metadata.clone())
+                    .await
+            };
+            match written {
+                Ok(()) => return Ok(ReceiveMetadataOutcome::Attached(payment_id)),
+                Err(e) => warn!(
+                    "Orchestra receive {}: failed to write metadata onto payment {payment_id} \
+                     ({e}), caching it",
+                    data.quote_id
+                ),
+            }
+        }
         Err(e) => debug!(
             "Orchestra receive {}: {spark_tx_hash} did not resolve to a payment id ({e}), \
              caching metadata",
