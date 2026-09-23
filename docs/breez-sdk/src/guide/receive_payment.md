@@ -29,13 +29,13 @@ For on-chain payments you can generate a Bitcoin deposit address to receive paym
 
 On-chain deposits go through the following lifecycle:
 
-1. **Detected** — The SDK detects the deposit and emits a {{#enum SdkEvent::NewDeposits}} event. The deposit may or may not have sufficient confirmations to be claimed yet.
-2. **Sufficient confirmations** — After **3 on-chain confirmations**, the deposit has sufficient confirmations and the SDK automatically attempts to claim it.
-3. **Claimed or unclaimed** — If claiming succeeds, the funds are added to your balance. If it fails (e.g. fees too high), the deposit remains unclaimed and can be [manually claimed or refunded](/guide/onchain_claims.md).
+1. **Detected**: The SDK detects the deposit, often while it is still in the mempool, and emits a {{#enum SdkEvent::NewDeposits}} event.
+2. **Claimed automatically**: After **3 on-chain confirmations** the SDK attempts a standard claim. With a high enough [max claim fee](/guide/config.md#max-deposit-claim-fee) it can credit the deposit sooner, even before it confirms, through an [instant or expedited claim](/guide/onchain_claims.md#instant-expedited-claims).
+3. **Claimed or unclaimed**: If claiming succeeds, the funds are added to your balance. If it fails (e.g. fees too high), the deposit remains unclaimed and can be [manually claimed or refunded](/guide/onchain_claims.md).
 
 {{#tabs receive_payment:receive-payment-onchain}}
 
-To track pending deposits, use {{#name list_unclaimed_deposits}} and filter by the {{#name is_mature}} field:
+To track deposits that have not reached the standard claim depth yet, use {{#name list_unclaimed_deposits}} and filter by the {{#name is_mature}} field:
 
 {{#tabs refunding_payments:list-pending-deposits}}
 
@@ -103,7 +103,7 @@ The following events are emitted in order during the deposit lifecycle. See [Lis
 
 | Event                 | Description                                                                                                                              | UX Suggestion                                                                                               |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| **NewDeposits**       | New deposits were detected. Each deposit includes a {{#name is_mature}} field indicating whether it has enough confirmations to be claimed. | Show the deposit to the user. If it does not yet have sufficient confirmations, show it as pending.          |
+| **NewDeposits**       | New deposits were detected. Each deposit includes a {{#name is_mature}} field indicating whether it has reached the standard claim depth. | Show the deposit to the user as pending until it is claimed.          |
 | **ClaimedDeposits**   | The SDK successfully claimed confirmed deposits.                                                                                         |                                                                                                             |
 | **UnclaimedDeposits** | Claiming failed (e.g. fee exceeded the configured maximum or the UTXO could not be found).                                               | Allow the user to manually claim or refund. See [Claiming on-chain deposits](/guide/onchain_claims.md). |
 | **PaymentPending**    | The Spark transfer was detected and the claim process will start.                                                                        | Show payment as pending.                                                                                    |

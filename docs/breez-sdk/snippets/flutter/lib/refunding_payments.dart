@@ -72,14 +72,14 @@ Future<void> fetchClaimDepositQuote(BreezSdk sdk, DepositInfo deposit) async {
   );
   final quote = await sdk.fetchClaimDepositQuote(request: request);
 
-  // Claiming once the deposit matures, and how many blocks that is away.
+  // The standard claim, and how many blocks away it is.
   final confirmations = quote.confirmations;
   final matureBlocks = quote.mature.confirmationsRequired > confirmations
       ? quote.mature.confirmationsRequired - confirmations
       : 0;
   print("Wait $matureBlocks blocks and pay ${quote.mature.feeSats} sats");
 
-  // Claiming earlier, when the provider offers it.
+  // An instant or expedited claim, when the provider offers one.
   final instant = quote.instant;
   if (instant != null) {
     final instantBlocks = instant.confirmationsRequired > confirmations

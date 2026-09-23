@@ -98,11 +98,11 @@ class RefundingPayments {
             fun blocksToWait(required: UInt) =
                 if (required > quote.confirmations) required - quote.confirmations else 0u
 
-            // Claiming once the deposit matures, and how many blocks that is away.
+            // The standard claim, and how many blocks away it is.
             val matureWait = blocksToWait(quote.mature.confirmationsRequired)
             // Log.v("Breez", "Wait $matureWait blocks and pay ${quote.mature.feeSats} sats")
 
-            // Claiming earlier, when the provider offers it.
+            // An instant or expedited claim, when the provider offers one.
             quote.instant?.let { instant ->
                 val instantWait = blocksToWait(instant.confirmationsRequired)
                 // Log.v("Breez", "Or wait $instantWait blocks and pay ${instant.feeSats} sats")
