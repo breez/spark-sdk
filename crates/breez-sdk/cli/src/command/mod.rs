@@ -16,9 +16,10 @@ use breez_sdk_spark::{
     InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
     LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
     PaymentRequest, PaymentStatus, PaymentType, PrepareLnurlPayRequest, PreparePaymentLinkRequest,
-    PrepareSendBatchRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
-    ReceivePaymentRequest, RefundDepositRequest, RegisterLightningAddressRequest, SendBatchRequest,
-    SendPaymentMethod, SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
+    PrepareRecoverWatchtowerExitedFundsRequest, PrepareSendBatchRequest, PrepareSendPaymentRequest,
+    ReceivePaymentMethod, ReceivePaymentRequest, RecoverWatchtowerExitedFundsRequest,
+    RefundDepositRequest, RegisterLightningAddressRequest, SendBatchRequest, SendPaymentMethod,
+    SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
     SparkMasterIdentityPublicKey, SyncWalletRequest, TokenIssuer, TokenTransactionType,
     TransferAuthorization, UpdateUserSettingsRequest,
 };
@@ -385,6 +386,19 @@ pub enum Command {
         sat_per_vbyte: Option<u64>,
     },
     ListUnclaimedDeposits,
+    /// Recover funds the watchtower moved on-chain to an address
+    RecoverWatchtowerExitedFunds {
+        /// Destination address
+        destination: String,
+
+        /// The fee per vbyte to pay per recovery
+        #[arg(long)]
+        sat_per_vbyte: u64,
+
+        /// Only recover the funds in this output, as txid:vout. Repeatable.
+        #[arg(long = "outpoint")]
+        outpoints: Vec<String>,
+    },
     /// Buy Bitcoin using an external provider
     BuyBitcoin {
         /// Provider to use: "moonpay" (default) or "cashapp"
@@ -626,6 +640,51 @@ pub(crate) async fn execute_command(
         Command::ListUnclaimedDeposits => {
             let value = sdk
                 .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
+                .await?;
+            print_value(&value)?;
+            Ok(true)
+        }
+        Command::RecoverWatchtowerExitedFunds {
+            destination,
+            sat_per_vbyte,
+            outpoints,
+        } => {
+            let outpoints = outpoints
+                .iter()
+                .map(|outpoint| parse_outpoint(outpoint))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut prepare_response = sdk
+                .prepare_recover_watchtower_exited_funds(
+                    PrepareRecoverWatchtowerExitedFundsRequest {
+                        destination,
+                        fee_rate_sat_per_vbyte: sat_per_vbyte,
+                    },
+                )
+                .await?;
+            if !outpoints.is_empty() {
+                prepare_response
+                    .quotes
+                    .retain(|quote| outpoints.contains(&(quote.txid.clone(), quote.vout)));
+                prepare_response.total_amount_sat =
+                    prepare_response.quotes.iter().map(|q| q.amount_sat).sum();
+                prepare_response.total_fee_sat =
+                    prepare_response.quotes.iter().map(|q| q.fee_sat).sum();
+            }
+            if prepare_response.quotes.is_empty() {
+                return Err(anyhow::anyhow!("No watchtower-exited funds to recover"));
+            }
+            print_value(&prepare_response)?;
+            let line = rl
+                .readline_with_initial("Do you want to continue (y/n): ", ("y", ""))?
+                .to_lowercase();
+            if line != "y" {
+                return Err(anyhow::anyhow!("Recovery cancelled"));
+            }
+
+            let value = sdk
+                .recover_watchtower_exited_funds(RecoverWatchtowerExitedFundsRequest {
+                    prepare_response,
+                })
                 .await?;
             print_value(&value)?;
             Ok(true)
@@ -1520,4 +1579,14 @@ fn service_fee_denomination(asset: Option<&str>, decimals: Option<u32>) -> Strin
         (Some(asset), Some(decimals)) => format!("{asset} ({decimals} decimals)"),
         (Some(asset), None) => asset.to_string(),
     }
+}
+
+fn parse_outpoint(outpoint: &str) -> Result<(String, u32), anyhow::Error> {
+    let (txid, vout) = outpoint
+        .rsplit_once(':')
+        .ok_or_else(|| anyhow::anyhow!("Expected txid:vout, got {outpoint}"))?;
+    let vout = vout
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid vout in {outpoint}"))?;
+    Ok((txid.to_string(), vout))
 }

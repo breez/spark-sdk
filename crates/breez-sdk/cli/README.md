@@ -59,7 +59,7 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 
 **Payments**: `receive`, `pay`, `lnurl-pay`, `lnurl-withdraw`, `lnurl-auth`, `claim-htlc-payment`
 
-**On-chain**: `claim-deposit`, `refund-deposit`, `list-unclaimed-deposits`, `buy-bitcoin`
+**On-chain**: `claim-deposit`, `refund-deposit`, `list-unclaimed-deposits`, `recover-watchtower-exited-funds`, `buy-bitcoin`
 
 **Lightning address**: `get-lightning-address`, `register-lightning-address`, `delete-lightning-address`, `check-lightning-address-available`
 

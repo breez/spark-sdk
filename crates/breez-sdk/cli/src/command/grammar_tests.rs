@@ -475,6 +475,33 @@ fn refund_deposit() {
 }
 
 #[test]
+fn recover_watchtower_exited_funds() {
+    let Command::RecoverWatchtowerExitedFunds {
+        destination,
+        sat_per_vbyte,
+        outpoints,
+    } = parse_ok(
+        "recover-watchtower-exited-funds bcrt1qaddr --sat-per-vbyte 2 --outpoint tx1:0 --outpoint tx2:1",
+    )
+    else {
+        panic!("expected RecoverWatchtowerExitedFunds");
+    };
+    assert_eq!(destination, "bcrt1qaddr");
+    assert_eq!(sat_per_vbyte, 2);
+    assert_eq!(outpoints, vec!["tx1:0".to_string(), "tx2:1".to_string()]);
+
+    let Command::RecoverWatchtowerExitedFunds { outpoints, .. } =
+        parse_ok("recover-watchtower-exited-funds bcrt1qaddr --sat-per-vbyte 2")
+    else {
+        panic!("expected RecoverWatchtowerExitedFunds");
+    };
+    assert!(outpoints.is_empty());
+
+    parse_err("recover-watchtower-exited-funds bcrt1qaddr");
+    parse_err("recover-watchtower-exited-funds");
+}
+
+#[test]
 fn list_unclaimed_deposits() {
     assert!(matches!(
         parse_ok("list-unclaimed-deposits"),
