@@ -1407,6 +1407,9 @@ pub enum _PaymentDetails {
         tx_id: String,
         vout: u32,
     },
+    WatchtowerExitRecovery {
+        tx_id: String,
+    },
 }
 
 #[frb(mirror(TokenTransactionType))]
@@ -1452,6 +1455,7 @@ pub enum _PaymentMethod {
     Token,
     Deposit,
     Withdraw,
+    WatchtowerExitRecovery,
     Unknown,
 }
 

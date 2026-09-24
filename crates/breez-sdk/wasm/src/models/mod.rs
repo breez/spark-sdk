@@ -612,6 +612,9 @@ pub enum PaymentDetails {
         tx_id: String,
         vout: u32,
     },
+    WatchtowerExitRecovery {
+        tx_id: String,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::TokenTransactionType)]
@@ -649,6 +652,7 @@ pub enum PaymentMethod {
     Token,
     Deposit,
     Withdraw,
+    WatchtowerExitRecovery,
     Unknown,
 }
 

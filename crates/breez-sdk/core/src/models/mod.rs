@@ -198,6 +198,7 @@ pub enum PaymentMethod {
     Token,
     Deposit,
     Withdraw,
+    WatchtowerExitRecovery,
     Unknown,
 }
 
@@ -209,6 +210,7 @@ impl Display for PaymentMethod {
             PaymentMethod::Token => write!(f, "token"),
             PaymentMethod::Deposit => write!(f, "deposit"),
             PaymentMethod::Withdraw => write!(f, "withdraw"),
+            PaymentMethod::WatchtowerExitRecovery => write!(f, "watchtower_exit_recovery"),
             PaymentMethod::Unknown => write!(f, "unknown"),
         }
     }
@@ -224,6 +226,7 @@ impl FromStr for PaymentMethod {
             "token" => Ok(PaymentMethod::Token),
             "deposit" => Ok(PaymentMethod::Deposit),
             "withdraw" => Ok(PaymentMethod::Withdraw),
+            "watchtower_exit_recovery" => Ok(PaymentMethod::WatchtowerExitRecovery),
             "unknown" => Ok(PaymentMethod::Unknown),
             _ => Err(()),
         }
@@ -439,6 +442,9 @@ pub enum PaymentDetails {
     Deposit {
         tx_id: String,
         vout: u32,
+    },
+    WatchtowerExitRecovery {
+        tx_id: String,
     },
 }
 

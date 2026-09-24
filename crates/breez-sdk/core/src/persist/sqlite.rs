@@ -401,6 +401,7 @@ impl SqliteStorage {
             // The fee ceiling standing for one deposit as a JSON-encoded MaxFee,
             // overriding the configured one. NULL when the configured one applies.
             "ALTER TABLE unclaimed_deposits ADD COLUMN max_claim_fee TEXT;",
+            "ALTER TABLE payments ADD COLUMN watchtower_exit_recovery_tx_id TEXT;",
         ]
     }
 }
@@ -469,11 +470,15 @@ impl SqliteStorage {
             Some(PaymentDetails::Spark { .. }) => (None, Some(true)),
             _ => (None, None),
         };
+        let watchtower_exit_recovery_tx_id = match &payment.details {
+            Some(PaymentDetails::WatchtowerExitRecovery { tx_id }) => Some(tx_id.as_str()),
+            _ => None,
+        };
 
         // Insert or update main payment record (including detail columns atomically)
         tx.execute(
-            "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark, watchtower_exit_recovery_tx_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                 payment_type=excluded.payment_type,
                 status=excluded.status,
@@ -482,7 +487,8 @@ impl SqliteStorage {
                 timestamp=excluded.timestamp,
                 method=excluded.method,
                 withdraw_tx_id=excluded.withdraw_tx_id,
-                spark=excluded.spark",
+                spark=excluded.spark,
+                watchtower_exit_recovery_tx_id=excluded.watchtower_exit_recovery_tx_id",
             params![
                 payment.id,
                 payment.payment_type.to_string(),
@@ -493,6 +499,7 @@ impl SqliteStorage {
                 payment.method,
                 withdraw_tx_id,
                 spark,
+                watchtower_exit_recovery_tx_id,
             ],
         )?;
 
@@ -582,7 +589,10 @@ impl SqliteStorage {
                     params![payment.id, tx_id, vout],
                 )?;
             }
-            Some(PaymentDetails::Withdraw { .. }) | None => {}
+            Some(
+                PaymentDetails::Withdraw { .. } | PaymentDetails::WatchtowerExitRecovery { .. },
+            )
+            | None => {}
         }
 
         Ok(())
@@ -1636,7 +1646,7 @@ impl Storage for SqliteStorage {
 }
 
 /// Base query for payment lookups.
-/// Column indices 0-31 are used by `map_payment`, index 32 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+/// Column indices 0-31 and 33 are used by `map_payment`, index 32 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -1670,7 +1680,8 @@ const SELECT_PAYMENT_SQL: &str = "
            lrm.sender_comment AS lnurl_sender_comment,
            lrm.payment_hash AS lnurl_payment_hash,
            pm.conversion_status,
-           pm.parent_payment_id
+           pm.parent_payment_id,
+           p.watchtower_exit_recovery_tx_id
       FROM payments p
       LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
       LEFT JOIN payment_details_token t ON p.id = t.payment_id
@@ -1686,14 +1697,16 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
     let spark: Option<i32> = row.get(10)?;
     let lightning_invoice: Option<String> = row.get(11)?;
     let token_metadata: Option<String> = row.get(21)?;
+    let watchtower_exit_recovery_tx_id: Option<String> = row.get(33)?;
     let details = match (
         lightning_invoice,
         withdraw_tx_id,
         deposit_tx_id,
         spark,
         token_metadata,
+        watchtower_exit_recovery_tx_id,
     ) {
-        (Some(invoice), _, _, _, _) => {
+        (Some(invoice), _, _, _, _, _) => {
             let payment_hash: String = row.get(12)?;
             let destination_pubkey: String = row.get(13)?;
             let description: Option<String> = row.get(14)?;
@@ -1743,8 +1756,8 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
                 conversion_info,
             })
         }
-        (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
-        (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit {
+        (_, Some(tx_id), _, _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
+        (_, _, Some(tx_id), _, _, _) => Some(PaymentDetails::Deposit {
             tx_id,
             vout: row.get::<_, Option<u32>>(9)?.ok_or_else(|| {
                 rusqlite::Error::FromSqlConversionFailure(
@@ -1754,7 +1767,7 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
                 )
             })?,
         }),
-        (_, _, _, Some(_), _) => {
+        (_, _, _, Some(_), _, _) => {
             let invoice_details_str: Option<String> = row.get(25)?;
             let invoice_details = invoice_details_str
                 .map(|s| serde_json_from_str(&s, 25))
@@ -1773,7 +1786,7 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
                 conversion_info,
             })
         }
-        (_, _, _, _, Some(metadata)) => {
+        (_, _, _, _, Some(metadata), _) => {
             let tx_type: TokenTransactionType = row.get(23)?;
             let invoice_details_str: Option<String> = row.get(24)?;
             let invoice_details = invoice_details_str
@@ -1791,6 +1804,7 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
                 conversion_info,
             })
         }
+        (_, _, _, _, _, Some(tx_id)) => Some(PaymentDetails::WatchtowerExitRecovery { tx_id }),
         _ => None,
     };
     // Read conversion_status from payment_metadata (column 31)

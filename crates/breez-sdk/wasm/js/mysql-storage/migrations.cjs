@@ -607,6 +607,13 @@ class MysqlMigrationManager {
           `ALTER TABLE brz_unclaimed_deposits ADD COLUMN max_claim_fee JSON NULL`,
         ],
       },
+      {
+        // The transaction that recovered watchtower-exited funds.
+        name: "Add watchtower exit recovery tx id to brz_payments",
+        sql: [
+          `ALTER TABLE brz_payments ADD COLUMN watchtower_exit_recovery_tx_id VARCHAR(255) NULL`,
+        ],
+      },
     ];
   }
 }

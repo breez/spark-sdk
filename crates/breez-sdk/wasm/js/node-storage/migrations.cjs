@@ -521,6 +521,13 @@ class MigrationManager {
           `ALTER TABLE unclaimed_deposits ADD COLUMN max_claim_fee TEXT`,
         ],
       },
+      {
+        // The transaction that recovered watchtower-exited funds.
+        name: "Add watchtower exit recovery tx id to payments",
+        sql: [
+          `ALTER TABLE payments ADD COLUMN watchtower_exit_recovery_tx_id TEXT`,
+        ],
+      },
     ];
   }
 }

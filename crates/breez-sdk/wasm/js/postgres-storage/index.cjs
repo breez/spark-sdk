@@ -40,6 +40,7 @@ const SELECT_PAYMENT_SQL = `
            p.timestamp,
            p.method,
            p.withdraw_tx_id,
+           p.watchtower_exit_recovery_tx_id,
            pd.tx_id AS deposit_tx_id,
            pd.vout AS deposit_vout,
            p.spark,
@@ -441,10 +442,14 @@ class PostgresStorage {
     const withdrawTxId =
       payment.details?.type === "withdraw" ? payment.details.txId : null;
     const spark = payment.details?.type === "spark" ? true : null;
+    const watchtowerExitRecoveryTxId =
+      payment.details?.type === "watchtowerExitRecovery"
+        ? payment.details.txId
+        : null;
 
     await client.query(
-      `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark, watchtower_exit_recovery_tx_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        ON CONFLICT(user_id, id) DO UPDATE SET
          payment_type=EXCLUDED.payment_type,
          status=EXCLUDED.status,
@@ -453,7 +458,8 @@ class PostgresStorage {
          timestamp=EXCLUDED.timestamp,
          method=EXCLUDED.method,
          withdraw_tx_id=EXCLUDED.withdraw_tx_id,
-         spark=EXCLUDED.spark`,
+         spark=EXCLUDED.spark,
+         watchtower_exit_recovery_tx_id=EXCLUDED.watchtower_exit_recovery_tx_id`,
       [
         this.identity,
         payment.id,
@@ -465,6 +471,7 @@ class PostgresStorage {
         payment.method ? JSON.stringify(payment.method) : null,
         withdrawTxId,
         spark,
+        watchtowerExitRecoveryTxId,
       ]
     );
 
@@ -961,6 +968,11 @@ class PostgresStorage {
       details = {
         type: "withdraw",
         txId: row.withdraw_tx_id,
+      };
+    } else if (row.watchtower_exit_recovery_tx_id) {
+      details = {
+        type: "watchtowerExitRecovery",
+        txId: row.watchtower_exit_recovery_tx_id,
       };
     } else if (row.deposit_tx_id) {
       details = {

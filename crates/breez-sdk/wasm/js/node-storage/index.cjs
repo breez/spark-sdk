@@ -41,6 +41,7 @@ const SELECT_PAYMENT_SQL = `
            p.timestamp,
            p.method,
            p.withdraw_tx_id,
+           p.watchtower_exit_recovery_tx_id,
            pd.tx_id AS deposit_tx_id,
            pd.vout AS deposit_vout,
            p.spark,
@@ -387,8 +388,8 @@ class SqliteStorage {
 
   _runPaymentUpsert(payment) {
     const paymentInsert = this.db.prepare(
-      `INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark)
-       VALUES (@id, @paymentType, @status, @amount, @fees, @timestamp, @method, @withdrawTxId, @spark)
+      `INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark, watchtower_exit_recovery_tx_id)
+       VALUES (@id, @paymentType, @status, @amount, @fees, @timestamp, @method, @withdrawTxId, @spark, @watchtowerExitRecoveryTxId)
        ON CONFLICT(id) DO UPDATE SET
          payment_type=excluded.payment_type,
          status=excluded.status,
@@ -397,7 +398,8 @@ class SqliteStorage {
          timestamp=excluded.timestamp,
          method=excluded.method,
          withdraw_tx_id=excluded.withdraw_tx_id,
-         spark=excluded.spark`
+         spark=excluded.spark,
+         watchtower_exit_recovery_tx_id=excluded.watchtower_exit_recovery_tx_id`
     );
     const depositInsert = this.db.prepare(
       `INSERT INTO payment_details_deposit
@@ -450,6 +452,10 @@ class SqliteStorage {
       withdrawTxId:
         payment.details?.type === "withdraw" ? payment.details.txId : null,
       spark: payment.details?.type === "spark" ? 1 : null,
+      watchtowerExitRecoveryTxId:
+        payment.details?.type === "watchtowerExitRecovery"
+          ? payment.details.txId
+          : null,
     });
 
     if (payment.details?.type === "deposit") {
@@ -957,6 +963,11 @@ class SqliteStorage {
       details = {
         type: "withdraw",
         txId: row.withdraw_tx_id,
+      };
+    } else if (row.watchtower_exit_recovery_tx_id) {
+      details = {
+        type: "watchtowerExitRecovery",
+        txId: row.watchtower_exit_recovery_tx_id,
       };
     } else if (row.deposit_tx_id) {
       details = {
