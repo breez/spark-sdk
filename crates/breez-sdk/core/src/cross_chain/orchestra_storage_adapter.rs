@@ -46,6 +46,12 @@ pub(crate) struct OrchestraSwapData {
     pub read_token: Option<String>,
     /// Wallet's Spark address (the receive destination).
     pub recipient_address: String,
+    /// Amountless Spark invoice the provider fulfils on delivery, which ties
+    /// the inbound payment to this row. Absent on rows written before
+    /// invoice delivery was supported: those link up through the order's
+    /// `sparkTxHash` alone.
+    #[serde(default)]
+    pub spark_invoice: Option<String>,
     pub source_chain: String,
     pub source_asset: String,
     /// Source chain identifier (e.g. EVM `chainId` as a decimal string).
@@ -208,6 +214,7 @@ mod tests {
             order_id: None,
             read_token: None,
             recipient_address: "sp1...".to_string(),
+            spark_invoice: Some("spark1inv...".to_string()),
             source_chain: "base".to_string(),
             source_asset: "USDC".to_string(),
             source_chain_id: Some("8453".to_string()),
@@ -232,6 +239,7 @@ mod tests {
             order_id: Some("o_usdb".to_string()),
             read_token: Some("rt_usdb".to_string()),
             recipient_address: "sp1...".to_string(),
+            spark_invoice: None,
             source_chain: "arbitrum".to_string(),
             source_asset: "USDC".to_string(),
             source_chain_id: Some("42161".to_string()),

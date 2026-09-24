@@ -369,8 +369,11 @@ impl OrchestraService {
         spark_wallet: &Arc<SparkWallet>,
         event_emitter: &EventEmitter,
     ) -> Result<(), SdkError> {
+        // Receives carry a Pending conversion too, from the moment their
+        // invoice is matched, and are the receive monitor's to finish.
         let pending = storage
             .list_payments(StorageListPaymentsRequest {
+                type_filter: Some(vec![PaymentType::Send]),
                 payment_details_filter: Some(vec![
                     StoragePaymentDetailsFilter::Spark {
                         htlc_status: None,
@@ -757,41 +760,38 @@ impl OrchestraService {
         debug!("Orchestra receive {quote_id}: order response: {order:?}");
         match order.status {
             OrderStatus::Completed => {
-                let attached = match attach_receive_metadata(
+                match attach_receive_metadata(
                     storage,
                     spark_wallet,
                     fiat_service,
+                    swap_storage,
+                    &row,
                     &data,
                     &order,
                 )
                 .await
                 {
                     Ok(ReceiveMetadataOutcome::Attached(payment_id)) => {
+                        info!("Orchestra receive {quote_id} → Completed, metadata attached");
                         emit_payment_metadata_updated(storage, event_emitter, &payment_id).await;
-                        true
                     }
                     Ok(ReceiveMetadataOutcome::Pending) => {
                         debug!(
                             "Orchestra receive {quote_id} Completed, metadata not on the \
                              payment row yet; will retry"
                         );
-                        false
+                        if is_past_receive_grace(&data) {
+                            // Out of retries. The metadata stays in the cache.
+                            warn!(
+                                "Orchestra receive {quote_id} Completed but metadata never \
+                                 reached the payment row within the grace window, closing row"
+                            );
+                            swap_storage.mark_terminal(row).await?;
+                        }
                     }
                     Err(e) => {
                         error!("Orchestra receive {quote_id} metadata attach failed: {e:?}");
-                        false
                     }
-                };
-                if attached {
-                    info!("Orchestra receive {quote_id} → Completed, metadata attached");
-                    swap_storage.mark_terminal(row).await?;
-                } else if is_past_receive_grace(&data) {
-                    // Out of retries. The metadata stays in the cache.
-                    warn!(
-                        "Orchestra receive {quote_id} Completed but metadata never reached the \
-                         payment row within the grace window, closing row"
-                    );
-                    swap_storage.mark_terminal(row).await?;
                 }
             }
             OrderStatus::Failed | OrderStatus::Refunded => {
@@ -1676,6 +1676,16 @@ impl CrossChainService for OrchestraService {
             }
         };
 
+        // Orchestra fulfils a Spark invoice on delivery, so quoting against
+        // one created here tags the inbound payment with it and ties it to
+        // this row the moment it is seen. Amountless, since the delivered
+        // amount is only known once the order settles, and without expiry,
+        // since Orchestra accepts late deposits.
+        let spark_invoice = self
+            .spark_wallet
+            .create_spark_invoice(None, destination_token_identifier.clone(), None, None, None)
+            .await?;
+
         let request = QuoteRequest {
             // On receive the `route` describes the external side, so it maps
             // to SOURCE on the wire and Spark is the DESTINATION.
@@ -1684,7 +1694,7 @@ impl CrossChainService for OrchestraService {
             destination_chain: SOURCE_CHAIN_SPARK.to_string(),
             destination_asset: destination_asset_symbol.clone(),
             amount: source_amount.to_string(),
-            recipient_address: recipient_address.to_string(),
+            recipient_address: spark_invoice.clone(),
             // ExactIn: the deposit is fixed (caller-picked on FeesIncluded,
             // SDK-computed on FeesExcluded); Orchestra forward-computes what
             // the receiver gets net of fees.
@@ -1746,6 +1756,7 @@ impl CrossChainService for OrchestraService {
             order_id: None,
             read_token: None,
             recipient_address: recipient_address.to_string(),
+            spark_invoice: Some(spark_invoice),
             source_chain: route.chain.clone(),
             source_asset: route.asset.clone(),
             source_chain_id: route.chain_id.clone(),
@@ -2191,7 +2202,8 @@ fn apply_terminal_status(
 
 /// Where a receive order's `ConversionInfo` ended up.
 enum ReceiveMetadataOutcome {
-    /// Written against the inbound `Payment` row with this id.
+    /// Written against the inbound `Payment` row with this id, and the
+    /// receive row closed.
     Attached(String),
     /// Not on the row yet, and cached under the order's `sparkTxHash`: the
     /// order carries no hash, the hash did not resolve to a payment id, or
@@ -2211,10 +2223,13 @@ enum ReceiveMetadataOutcome {
 /// the cache is only reapplied for a payment the sync cursor still covers, so
 /// a lookup or write that failed on a payment already synced would otherwise
 /// strand the conversion there.
+#[allow(clippy::too_many_arguments)]
 async fn attach_receive_metadata(
     storage: &Arc<dyn Storage>,
     spark_wallet: &SparkWallet,
     fiat_service: &dyn FiatService,
+    swap_storage: &OrchestraStorageAdapter,
+    row: &crate::StoredCrossChainSwap,
     data: &OrchestraSwapData,
     order: &Order,
 ) -> Result<ReceiveMetadataOutcome, SdkError> {
@@ -2233,17 +2248,32 @@ async fn attach_receive_metadata(
     // tx_inputs_are_ours = false: on receive, the inbound token tx is funded
     // by Orchestra's counterparty, not us.
     match resolve_payment_id(spark_tx_hash, spark_wallet, storage, false).await {
-        Ok(payment_id) => match storage
-            .insert_payment_metadata(payment_id.clone(), metadata.clone())
-            .await
-        {
-            Ok(()) => return Ok(ReceiveMetadataOutcome::Attached(payment_id)),
-            Err(e) => warn!(
-                "Orchestra receive {}: failed to write metadata onto payment {payment_id} ({e}), \
-                 caching it",
-                data.quote_id
-            ),
-        },
+        Ok(payment_id) => {
+            // The row closes under the same lock as the write: an invoice
+            // match running after this finds no open row, and one that ran
+            // before has just been overwritten.
+            let closed = {
+                let _serialized = super::RECEIVE_CONVERSION_WRITES.lock().await;
+                match storage
+                    .insert_payment_metadata(payment_id.clone(), metadata.clone())
+                    .await
+                {
+                    Ok(()) => Some(swap_storage.mark_terminal(row.clone()).await),
+                    Err(e) => {
+                        warn!(
+                            "Orchestra receive {}: failed to write metadata onto payment \
+                             {payment_id} ({e}), caching it",
+                            data.quote_id
+                        );
+                        None
+                    }
+                }
+            };
+            if let Some(closed) = closed {
+                closed?;
+                return Ok(ReceiveMetadataOutcome::Attached(payment_id));
+            }
+        }
         Err(e) => debug!(
             "Orchestra receive {}: {spark_tx_hash} did not resolve to a payment id ({e}), \
              caching metadata",
@@ -2255,6 +2285,85 @@ async fn attach_receive_metadata(
         .await
         .map_err(|e| SdkError::Generic(format!("Failed to cache payment metadata: {e}")))?;
     Ok(ReceiveMetadataOutcome::Pending)
+}
+
+/// Conversion info for an inbound payment that fulfilled the invoice of an
+/// open receive row, or `None` when no open row carries that invoice.
+/// Pending, with quote-time amounts: the monitor fills in the delivered
+/// amount and deposit hash once Orchestra confirms the order.
+pub(crate) async fn receive_conversion_info_for_invoice(
+    storage: &Arc<dyn Storage>,
+    invoice: &str,
+) -> Result<Option<ConversionInfo>, SdkError> {
+    let rows = OrchestraStorageAdapter::new(Arc::clone(storage))
+        .list_active()
+        .await?;
+    let matched = rows
+        .into_iter()
+        .find(|(_, data)| data.spark_invoice.as_deref() == Some(invoice))
+        .map(|(_, data)| quote_time_receive_conversion_info(&data));
+    Ok(matched)
+}
+
+/// The service fee a receive row recorded at quote time, in the shape
+/// `ConversionInfo` reports it.
+struct QuoteFee {
+    /// In fee-asset units.
+    amount: Option<u128>,
+    asset: Option<String>,
+    asset_decimals: Option<u32>,
+    /// `amount` rescaled to source-asset units. Only a USD-stable fee asset
+    /// of known precision converts at par.
+    in_source_units: Option<u128>,
+}
+
+fn quote_fee(data: &OrchestraSwapData) -> QuoteFee {
+    let amount = data
+        .fee_amount
+        .as_deref()
+        .and_then(|s| s.parse::<u128>().ok());
+    // Rows without `fee_asset` label the fee with the source ticker.
+    let asset = match data.fee_asset.as_deref() {
+        None => Some(data.source_asset.clone()),
+        Some(asset) if asset.eq_ignore_ascii_case("BTC") => None,
+        Some(asset) => Some(asset.to_string()),
+    };
+    let asset_decimals = data.fee_asset_decimals;
+    let in_source_units = match (amount, data.fee_asset.as_deref()) {
+        (Some(fee), Some(asset)) if super::is_usd_stable_asset(asset) => asset_decimals
+            .and_then(|decimals| super::rescale_decimals(fee, decimals, data.source_decimals).ok()),
+        _ => None,
+    };
+    QuoteFee {
+        amount,
+        asset,
+        asset_decimals,
+        in_source_units,
+    }
+}
+
+fn quote_time_receive_conversion_info(data: &OrchestraSwapData) -> ConversionInfo {
+    let fee = quote_fee(data);
+    ConversionInfo::Orchestra {
+        order_id: data.order_id.clone().unwrap_or_default(),
+        quote_id: data.quote_id.clone(),
+        read_token: None,
+        chain: data.source_chain.clone(),
+        chain_id: data.source_chain_id.clone(),
+        asset: data.source_asset.clone(),
+        recipient_address: data.recipient_address.clone(),
+        asset_amount_in: data.amount_in.parse::<u128>().ok(),
+        estimated_out: data.expected_amount_out.parse::<u128>().unwrap_or(0),
+        delivered_amount: None,
+        external_tx_hash: None,
+        status: ConversionStatus::Pending,
+        fee_amount: fee.in_source_units,
+        service_fee_amount: fee.amount,
+        service_fee_asset: fee.asset,
+        service_fee_asset_decimals: fee.asset_decimals,
+        asset_decimals: data.source_decimals,
+        asset_contract: data.source_contract_address.clone(),
+    }
 }
 
 /// Receive-side counterpart to [`apply_terminal_status`]: pulls live bits
@@ -2280,24 +2389,12 @@ async fn build_orchestra_receive_conversion_info(
         .amount_out
         .as_deref()
         .and_then(|s| s.parse::<u128>().ok());
-    let quote_fee_amount = data
-        .fee_amount
-        .as_deref()
-        .and_then(|s| s.parse::<u128>().ok());
-    // Rows without `fee_asset` label the fee with the source ticker.
-    let service_fee_asset = match data.fee_asset.as_deref() {
-        None => Some(data.source_asset.clone()),
-        Some(asset) if asset.eq_ignore_ascii_case("BTC") => None,
-        Some(asset) => Some(asset.to_string()),
-    };
-    let service_fee_asset_decimals = data.fee_asset_decimals;
-    // The quote fee is in fee-asset units. Only a USD-stable fee asset of
-    // known precision converts to source units at par.
-    let quote_fee_in_source = match (quote_fee_amount, data.fee_asset.as_deref()) {
-        (Some(fee), Some(asset)) if super::is_usd_stable_asset(asset) => service_fee_asset_decimals
-            .and_then(|decimals| super::rescale_decimals(fee, decimals, data.source_decimals).ok()),
-        _ => None,
-    };
+    let QuoteFee {
+        amount: quote_fee_amount,
+        asset: service_fee_asset,
+        asset_decimals: service_fee_asset_decimals,
+        in_source_units: quote_fee_in_source,
+    } = quote_fee(data);
 
     let fee_amount = compute_receive_fee(data, asset_amount_in, delivered_amount, fiat_service)
         .await
@@ -2568,6 +2665,7 @@ mod tests {
             order_id: Some("ord_xyz".to_string()),
             read_token: Some("rt_xyz".to_string()),
             recipient_address: "sp1rcv".to_string(),
+            spark_invoice: None,
             source_chain: "ethereum".to_string(),
             source_asset: "USDC".to_string(),
             source_chain_id: Some("1".to_string()),
@@ -2674,6 +2772,7 @@ mod tests {
             order_id: Some("ord_usdb".to_string()),
             read_token: Some("rt_usdb".to_string()),
             recipient_address: "sp1rcv".to_string(),
+            spark_invoice: None,
             source_chain: "arbitrum".to_string(),
             source_asset: "USDC".to_string(),
             source_chain_id: Some("42161".to_string()),
@@ -3777,6 +3876,7 @@ mod tests {
             order_id: None,
             read_token: None,
             recipient_address: "sp1rcv".to_string(),
+            spark_invoice: None,
             source_chain: "ethereum".to_string(),
             source_asset: "USDC".to_string(),
             source_chain_id: Some("1".to_string()),
@@ -4661,5 +4761,87 @@ mod tests {
             .await;
 
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[test_all]
+    fn quote_time_receive_conversion_info_is_pending_with_quote_amounts() {
+        let mut data = receive_swap_data();
+        data.spark_invoice = Some("spark1inv".to_string());
+
+        let info = quote_time_receive_conversion_info(&data);
+
+        let ConversionInfo::Orchestra {
+            order_id,
+            quote_id,
+            recipient_address,
+            asset_amount_in,
+            estimated_out,
+            delivered_amount,
+            external_tx_hash,
+            status,
+            fee_amount,
+            ..
+        } = info
+        else {
+            panic!("expected Orchestra conversion info");
+        };
+        assert_eq!(order_id, "");
+        assert_eq!(quote_id, "q_xyz");
+        assert_eq!(recipient_address, "sp1rcv");
+        assert_eq!(asset_amount_in, Some(100));
+        assert_eq!(estimated_out, 50_000);
+        assert_eq!(delivered_amount, None);
+        assert_eq!(external_tx_hash, None);
+        assert_eq!(status, ConversionStatus::Pending);
+        assert_eq!(fee_amount, Some(250));
+    }
+
+    #[cfg(feature = "sqlite")]
+    fn sqlite_storage() -> Arc<dyn Storage> {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("breez-orchestra-invoice-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        Arc::new(crate::SqliteStorage::new(&dir).unwrap())
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn invoice_of_an_open_receive_row_resolves_to_its_conversion_info() {
+        let storage = sqlite_storage();
+        let adapter = OrchestraStorageAdapter::new(Arc::clone(&storage));
+        let mut data = receive_swap_data();
+        data.spark_invoice = Some("spark1inv".to_string());
+        adapter.upsert(&data).await.unwrap();
+
+        let matched = receive_conversion_info_for_invoice(&storage, "spark1inv")
+            .await
+            .unwrap();
+        assert!(matches!(
+            matched,
+            Some(ConversionInfo::Orchestra { quote_id, status: ConversionStatus::Pending, .. })
+                if quote_id == "q_xyz"
+        ));
+
+        let other = receive_conversion_info_for_invoice(&storage, "spark1other")
+            .await
+            .unwrap();
+        assert!(other.is_none());
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn invoice_of_a_closed_receive_row_does_not_match() {
+        let storage = sqlite_storage();
+        let adapter = OrchestraStorageAdapter::new(Arc::clone(&storage));
+        let mut data = receive_swap_data();
+        data.spark_invoice = Some("spark1inv".to_string());
+        adapter.upsert(&data).await.unwrap();
+        let (row, _) = adapter.list_active().await.unwrap().remove(0);
+        adapter.mark_terminal(row).await.unwrap();
+
+        let matched = receive_conversion_info_for_invoice(&storage, "spark1inv")
+            .await
+            .unwrap();
+        assert!(matched.is_none());
     }
 }
