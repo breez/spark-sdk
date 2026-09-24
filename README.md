@@ -150,8 +150,8 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] Cash App to USDC/USDT
 - [x] USDT receive support
 - [x] USDC receive support
-- [ ] Detect pending mempool deposits
-- [ ] Instant claim of on-chain deposits
+- [x] Detect pending mempool deposits
+- [x] Instant claim of on-chain deposits
 - [ ] Add additional fees via the partner portal
 - [ ] NWC
 - [ ] Bolt12
