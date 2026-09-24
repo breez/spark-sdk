@@ -137,6 +137,13 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
           // one is now out of date. Export it again.
           break
         }
+        case 'stableBalanceConversionFailed': {
+          // A stable balance conversion failed. When retryInSecs is set,
+          // the SDK retries after it.
+          const conversion = event.conversion
+          const retryInSecs = event.retryInSecs
+          break
+        }
         default: {
           // Handle any future event types
           break

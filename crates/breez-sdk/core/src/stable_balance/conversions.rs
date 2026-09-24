@@ -259,6 +259,13 @@ impl StableBalance {
         &self,
         token_identifier: &str,
     ) -> Result<bool, ConversionError> {
+        // A recovered task can name the token that is active again, in which
+        // case the deactivation it belongs to was cancelled.
+        if self.core.get_active_token_identifier().await.as_deref() == Some(token_identifier) {
+            debug!("Deactivation conversion skipped: {token_identifier} is active again");
+            return Ok(false);
+        }
+
         // Get the current token balance
         let token_balances = self.spark_wallet.get_token_balances().await?;
         let token_balance = token_balances

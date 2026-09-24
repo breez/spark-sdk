@@ -10,9 +10,10 @@
 //! ┌─────────────────────────────────────────────────────────────────────┐
 //! │                              STARTUP                                │
 //! │  1. Resolve active token (cache → config default → inactive)        │
-//! │  2. Spawn conversion worker (waits for initial sync)                │
-//! │  3. Pre-warm effective values cache (threshold, min limits)         │
-//! │  4. Recover pending conversions from previous session               │
+//! │  2. Restore pending conversions, retry delay, and any owed          │
+//! │     deactivation from the previous session                          │
+//! │  3. Spawn conversion worker (waits for initial sync)                │
+//! │  4. Pre-warm effective values cache (threshold, min limits)         │
 //! │  5. Queue cold-start auto-convert                                   │
 //! └─────────────────────────────────────────────────────────────────────┘
 //!                                   │
@@ -22,7 +23,7 @@
 //! │                                                                     │
 //! │  PaymentSucceeded ──┬─► Matches deferred transfer_id? ──► Resolve   │
 //! │                     │                                               │
-//! │                     ├─► Is receive + sats + ≥ min? ──► PerReceive   │
+//! │                     ├─► Sats receive ≥ min, no delay? ─► PerReceive │
 //! │                     │                                               │
 //! │                     └─► Otherwise ──────────────────► AutoConvert   │
 //! │                                                                     │
@@ -34,17 +35,21 @@
 //! │                          CONVERSION QUEUE                           │
 //! │                                                                     │
 //! │  Priority order:                                                    │
-//! │    1. PerReceive(payment_id)  — convert individual received sats    │
-//! │    2. Deactivation(token_id)  — convert active token back to BTC    │
-//! │    3. AutoConvert             — batch convert excess BTC balance    │
+//! │    1. PerReceive(payment_id): convert individual received sats      │
+//! │    2. Deactivation(token_id): convert active token back to BTC      │
+//! │    3. AutoConvert: batch convert excess BTC balance                 │
 //! │                                                                     │
 //! │  Rules:                                                             │
 //! │  • PerReceive deduplicates by payment_id                            │
 //! │  • AutoConvert collapses multiple triggers into one                 │
 //! │  • Deactivation overrides pending AutoConvert                       │
 //! │  • AutoConvert/Deactivation only runs when no PerReceive pending    │
-//! │    (including deferred — they may still need those sats)            │
+//! │    (including deferred: they may still need those sats)             │
 //! │  • Deferred tasks are skipped until resolved or timed out           │
+//! │  • After a failed conversion no task is handed out until the        │
+//! │    retry delay elapses: 30s, doubling to a cap of 1h. Any           │
+//! │    conversion that succeeds, including one a user's own payment     │
+//! │    drove, resets it, as does a change of active token               │
 //! └─────────────────────────────────────────────────────────────────────┘
 //!                                  │
 //!                                  ▼
@@ -56,9 +61,9 @@
 //! │    │  • Check active token, payment lock, min amount         │      │
 //! │    │  • Deterministic transfer_id for idempotency            │      │
 //! │    │  • BTC → Token conversion (amount = payment amount)     │      │
-//! │    │  • On failure → Defer (wait for other instance or       │      │
-//! │    │    timeout after 120s)                                  │      │
-//! │    │  • On success → mark Completed, emit completion event   │      │
+//! │    │  • On failure: defer (wait for other instance or        │      │
+//! │    │    timeout after 120s), delay the next task             │      │
+//! │    │  • On success: mark Completed, emit completion event    │      │
 //! │    └─────────────────────────────────────────────────────────┘      │
 //! │                                                                     │
 //! │    ┌─────────────────────────────────────────────────────────┐      │
@@ -68,7 +73,7 @@
 //! │    │  • Check for token dust (would balance be below         │      │
 //! │    │    ToBitcoin min limit?)                                │      │
 //! │    │  • BTC → Token conversion (amount = full BTC balance)   │      │
-//! │    │  • On success → emit completion event                   │      │
+//! │    │  • On success: emit completion event                    │      │
 //! │    └─────────────────────────────────────────────────────────┘      │
 //! │                                                                     │
 //! │    ┌─────────────────────────────────────────────────────────┐      │
@@ -76,10 +81,15 @@
 //! │    │  • Get token balance, check min conversion limit        │      │
 //! │    │  • Acquire exclusive auto_conversion lock               │      │
 //! │    │  • Token → BTC conversion (amount = full token balance) │      │
-//! │    │  • On success → emit completion event                   │      │
+//! │    │  • On success: emit completion event, clear the owed    │      │
+//! │    │    deactivation so a restart does not repeat it         │      │
 //! │    └─────────────────────────────────────────────────────────┘      │
 //! │                                                                     │
 //! └─────────────────────────────────────────────────────────────────────┘
+//!
+//! Every failed conversion emits [`crate::SdkEvent::StableBalanceConversionFailed`]
+//! with the delay before the next attempt, so a pair that cannot convert is
+//! visible to the app rather than only slow.
 //!
 //! # Amount Adjustments
 //!
@@ -91,11 +101,11 @@
 //! ┌─────────────────────────────────────────────────────────────────────┐
 //! │                       CONVERSION AMOUNTS                            │
 //! │                                                                     │
-//! │  AmountIn(sats)      — "convert exactly this much"                  │
+//! │  AmountIn(sats): "convert exactly this much"                        │
 //! │    Used by: PerReceive, AutoConvert, Deactivation                   │
 //! │    Slippage applied to estimated output (conservative estimate)     │
 //! │                                                                     │
-//! │  MinAmountOut(sats)  — "I need at least this much out"              │
+//! │  MinAmountOut(sats): "I need at least this much out"                │
 //! │    Used by: Send-with-conversion (Token → BTC for payments)         │
 //! │    SDK calculates required input from the pool estimate             │
 //! └─────────────────────────────────────────────────────────────────────┘
@@ -141,7 +151,7 @@ use tokio::sync::{Mutex, Notify, RwLock};
 use tracing::{debug, info, warn};
 
 use self::queue::ConversionQueue;
-pub(crate) use self::queue::PendingConversion;
+pub(crate) use self::queue::{ConversionBackoff, PendingQueue};
 
 use crate::events::{EventEmitter, EventMiddleware, SdkEvent};
 use crate::models::{
@@ -293,7 +303,7 @@ impl StableBalance {
             token_converter,
             storage: Arc::clone(&storage),
             effective_values: ExpiringCell::new(),
-            queue: ConversionQueue::new(storage),
+            queue: ConversionQueue::load(storage).await,
             synced_notify: Notify::new(),
         });
 
@@ -327,30 +337,18 @@ impl StableBalance {
     /// Pending conversions for the old token are no longer relevant: the
     /// queue is cleared and cleared per-receive tasks are marked Failed.
     pub(crate) async fn set_active_token(&self, label: Option<String>) -> Result<(), SdkError> {
-        let cleared_payment_ids = self.core.queue.clear_queue().await;
-        if !cleared_payment_ids.is_empty() {
-            info!(
-                "Cleared {} pending conversion(s) from queue due to token change",
-                cleared_payment_ids.len()
-            );
-        }
-        for payment_id in &cleared_payment_ids {
-            if let Err(e) = insert_payment_metadata_and_emit(
-                &self.core.storage,
-                &self.event_emitter,
-                payment_id.clone(),
-                PaymentMetadata {
-                    conversion_status: Some(ConversionStatus::Failed),
-                    ..Default::default()
-                },
-            )
-            .await
-            {
-                warn!("Failed to persist Failed status for cleared conversion {payment_id}: {e:?}");
-            }
-        }
+        self.core.set_active_token(label, &self.event_emitter).await
+    }
 
-        self.core.set_active_token(label).await
+    /// Clears the retry delay when a conversion outside the worker succeeded
+    /// against the token the worker converts. A different token rides a
+    /// different pool and says nothing about this one.
+    pub(crate) async fn clear_conversion_backoff_for(&self, token_identifier: Option<String>) {
+        if token_identifier.is_some()
+            && token_identifier == self.core.get_active_token_identifier().await
+        {
+            self.core.queue.clear_backoff().await;
+        }
     }
 
     /// Acquires a payment guard that suppresses auto-convert while held.
@@ -391,32 +389,75 @@ impl StableBalanceCore {
 
     /// Sets the active token by label, or deactivates stable balance if `None`.
     ///
-    /// Validates that the label exists in the configured tokens list and
-    /// caches the choice locally.
-    async fn set_active_token(&self, label: Option<String>) -> Result<(), SdkError> {
+    /// The label is validated before anything is cleared, so an unknown label
+    /// leaves the queue and its payments untouched.
+    async fn set_active_token(
+        &self,
+        label: Option<String>,
+        event_emitter: &EventEmitter,
+    ) -> Result<(), SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
 
-        let new_active = if let Some(label) = label {
-            let token = self
-                .config
-                .tokens
-                .iter()
-                .find(|t| t.label == label)
-                .ok_or_else(|| {
-                    SdkError::InvalidInput(format!(
-                        "Stable balance label '{label}' not found in configured tokens"
-                    ))
-                })?;
-            cache.save_stable_balance_active_label(&label).await?;
+        // Resolved before anything is cleared: a label that is not configured
+        // must leave the queue and its payments alone.
+        let new_token = match &label {
+            Some(label) => Some(
+                self.config
+                    .tokens
+                    .iter()
+                    .find(|t| t.label == *label)
+                    .ok_or_else(|| {
+                        SdkError::InvalidInput(format!(
+                            "Stable balance label '{label}' not found in configured tokens"
+                        ))
+                    })?,
+            ),
+            None => None,
+        };
+
+        let cleared_payment_ids = self
+            .queue
+            .clear_for_token_change(new_token.map(|t| t.token_identifier.as_str()))
+            .await;
+        if !cleared_payment_ids.is_empty() {
+            info!(
+                "Cleared {} pending conversion(s) from queue due to token change",
+                cleared_payment_ids.len()
+            );
+        }
+        for payment_id in &cleared_payment_ids {
+            if let Err(e) = insert_payment_metadata_and_emit(
+                &self.storage,
+                event_emitter,
+                payment_id.clone(),
+                PaymentMetadata {
+                    conversion_status: Some(ConversionStatus::Failed),
+                    ..Default::default()
+                },
+            )
+            .await
+            {
+                warn!("Failed to persist Failed status for cleared conversion {payment_id}: {e:?}");
+            }
+        }
+
+        // Held across the queue push and the label write. The worker's
+        // deactivation guard reads the active token, and blocking it here is
+        // what stops it observing the token as still active once the task is
+        // queued, which would cancel the conversion.
+        let mut active = self.active_token.write().await;
+
+        let new_active = if let Some(token) = new_token {
+            cache.save_stable_balance_active_label(&token.label).await?;
             Some(token.clone())
         } else {
-            // Deactivating — queue token-to-BTC conversion
-            if let Some(current_token) = self.active_token.read().await.as_ref() {
-                let token_id = current_token.token_identifier.clone();
+            if let Some(token_id) = active.as_ref().map(|t| t.token_identifier.clone()) {
                 info!("Deactivating stable balance, queuing token-to-BTC conversion");
+                // Queued and persisted before the label is cleared, so no
+                // crash can leave the label off with the conversion unqueued.
                 self.queue.push_deactivation(token_id).await;
             }
-            cache.delete_stable_balance_active_label().await?;
+            cache.save_stable_balance_deactivated().await?;
             None
         };
 
@@ -429,10 +470,14 @@ impl StableBalanceCore {
             info!("Stable balance deactivated");
         }
 
-        (*self.active_token.write().await).clone_from(&new_active);
+        active.clone_from(&new_active);
 
         // Clear cached effective values since limits may differ per token
         self.effective_values.clear().await;
+
+        // Reset the failure count so the next conversion runs at once rather
+        // than waiting out a delay the previous token built up.
+        self.queue.clear_backoff().await;
 
         // If enabling stable balance, trigger auto-convert for any existing excess
         if new_active.is_some() {
@@ -455,6 +500,8 @@ impl StableBalanceCore {
         let cache = ObjectCacheRepository::new(storage.clone());
 
         match cache.fetch_stable_balance_active_label().await {
+            // Turned off by the user, which outranks the configured default.
+            Ok(Some(cached_label)) if cached_label.is_empty() => None,
             Ok(Some(cached_label)) => {
                 // Cached label exists — validate against config
                 let token = config.tokens.iter().find(|t| t.label == cached_label);
@@ -535,6 +582,7 @@ impl StableBalanceCore {
     /// - Payment is not a token payment (i.e., it's a sats payment)
     /// - Stable balance is active
     /// - Payment amount meets the minimum conversion threshold
+    /// - No retry delay from a previous failure is running
     async fn should_trigger_per_receive(&self, payment: &Payment) -> bool {
         if payment.payment_type != PaymentType::Receive || payment.method == PaymentMethod::Token {
             return false;
@@ -542,6 +590,17 @@ impl StableBalanceCore {
 
         // Skip conversion child payments (e.g. intermediate sats from send-with-conversion)
         if payment.is_conversion_child() {
+            return false;
+        }
+
+        // While conversions are delayed after a failure, the sats go to the
+        // batch conversion instead, which waits out the delay without marking
+        // the payment pending.
+        if self.queue.retry_delay().await.is_some() {
+            debug!(
+                "Skipping per-receive for {}: conversions are delayed",
+                payment.id
+            );
             return false;
         }
 
@@ -716,5 +775,183 @@ impl EventMiddleware for StableBalanceMiddleware {
 
             _ => Some(event),
         }
+    }
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod tests {
+    use super::*;
+    use crate::persist::sqlite::SqliteStorage;
+    use crate::token_conversion::{
+        ConversionAmount, ConversionOptions, ConversionPurpose, FetchConversionLimitsRequest,
+        FetchConversionLimitsResponse, TokenConversionResponse, TokenConverter,
+    };
+    use spark_wallet::TransferId;
+
+    struct UnusedConverter;
+
+    #[macros::async_trait]
+    impl TokenConverter for UnusedConverter {
+        async fn convert(
+            &self,
+            _: Arc<EventEmitter>,
+            _: &ConversionOptions,
+            _: &ConversionPurpose,
+            _: Option<&String>,
+            _: ConversionAmount,
+            _: Option<TransferId>,
+        ) -> Result<TokenConversionResponse, ConversionError> {
+            unreachable!("the rejected path must not convert")
+        }
+
+        async fn validate(
+            &self,
+            _: Option<&ConversionOptions>,
+            _: Option<&String>,
+            _: ConversionAmount,
+        ) -> Result<Option<crate::token_conversion::ConversionEstimate>, ConversionError> {
+            Ok(None)
+        }
+
+        async fn fetch_limits(
+            &self,
+            _: &FetchConversionLimitsRequest,
+        ) -> Result<FetchConversionLimitsResponse, ConversionError> {
+            Ok(FetchConversionLimitsResponse {
+                min_from_amount: None,
+                min_to_amount: None,
+            })
+        }
+
+        async fn refund_pending(
+            &self,
+        ) -> Result<crate::RefundPendingConversionsResponse, ConversionError> {
+            Ok(crate::RefundPendingConversionsResponse::default())
+        }
+
+        async fn refund_local_pending(
+            &self,
+        ) -> Result<crate::RefundPendingConversionsResponse, ConversionError> {
+            Ok(crate::RefundPendingConversionsResponse::default())
+        }
+    }
+
+    fn usd_config(default_active_label: Option<&str>) -> StableBalanceConfig {
+        StableBalanceConfig {
+            tokens: vec![StableBalanceToken {
+                label: "USD".to_string(),
+                token_identifier: "token-usd".to_string(),
+            }],
+            default_active_label: default_active_label.map(str::to_string),
+            threshold_sats: None,
+            max_slippage_bps: None,
+        }
+    }
+
+    fn label_storage(name: &str) -> Arc<dyn Storage> {
+        let mut path = std::env::temp_dir();
+        path.push(format!("breez-test-{name}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path).unwrap();
+        Arc::new(SqliteStorage::new(&path).unwrap())
+    }
+
+    /// Turning stable balance off must survive a restart even when the config
+    /// names a default: the user's choice takes precedence.
+    #[tokio::test]
+    async fn turning_off_outlasts_the_configured_default() {
+        let storage = label_storage("off-outlasts-default");
+        ObjectCacheRepository::new(Arc::clone(&storage))
+            .save_stable_balance_deactivated()
+            .await
+            .unwrap();
+
+        let token =
+            StableBalanceCore::resolve_initial_token(&usd_config(Some("USD")), &storage).await;
+        assert!(token.is_none());
+    }
+
+    #[tokio::test]
+    async fn with_no_choice_made_the_configured_default_applies() {
+        let storage = label_storage("default-applies");
+        let token =
+            StableBalanceCore::resolve_initial_token(&usd_config(Some("USD")), &storage).await;
+        assert_eq!(token.map(|t| t.label), Some("USD".to_string()));
+    }
+
+    /// While conversions are delayed, a received payment is left to the batch
+    /// conversion instead of being queued and marked pending for the whole
+    /// delay.
+    #[tokio::test]
+    async fn a_payment_received_during_a_delay_is_not_taken_per_receive() {
+        let usd = StableBalanceToken {
+            label: "USD".to_string(),
+            token_identifier: "token-usd".to_string(),
+        };
+        let storage = label_storage("per-receive-during-delay");
+        let core = StableBalanceCore {
+            config: usd_config(Some("USD")),
+            active_token: RwLock::new(Some(usd)),
+            token_converter: Arc::new(UnusedConverter),
+            storage: Arc::clone(&storage),
+            effective_values: ExpiringCell::new(),
+            queue: ConversionQueue::new(storage),
+            synced_notify: Notify::new(),
+        };
+        let payment = Payment {
+            id: "received".to_string(),
+            payment_type: PaymentType::Receive,
+            status: crate::PaymentStatus::Completed,
+            amount: 5_000,
+            fees: 0,
+            timestamp: 1,
+            method: PaymentMethod::Spark,
+            details: None,
+            conversion_details: None,
+        };
+
+        assert!(core.should_trigger_per_receive(&payment).await);
+
+        core.queue.record_failure().await;
+        assert!(!core.should_trigger_per_receive(&payment).await);
+    }
+
+    /// A label that is not configured is rejected without draining the queue
+    /// or marking its payments failed.
+    #[tokio::test]
+    async fn an_unknown_label_leaves_the_queue_alone() {
+        let mut path = std::env::temp_dir();
+        path.push(format!("breez-test-label-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path).unwrap();
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&path).unwrap());
+
+        let core = StableBalanceCore {
+            config: StableBalanceConfig {
+                tokens: vec![StableBalanceToken {
+                    label: "USD".to_string(),
+                    token_identifier: "token-usd".to_string(),
+                }],
+                default_active_label: None,
+                threshold_sats: None,
+                max_slippage_bps: None,
+            },
+            active_token: RwLock::new(None),
+            token_converter: Arc::new(UnusedConverter),
+            storage: Arc::clone(&storage),
+            effective_values: ExpiringCell::new(),
+            queue: ConversionQueue::new(storage),
+            synced_notify: Notify::new(),
+        };
+
+        core.queue.push_per_receive("payment-1".to_string()).await;
+        assert!(
+            core.set_active_token(Some("nope".to_string()), &EventEmitter::new(false))
+                .await
+                .is_err()
+        );
+
+        assert!(
+            core.queue.next_task().await.is_some(),
+            "a rejected change must not drain the queue"
+        );
     }
 }

@@ -238,6 +238,14 @@ pub(super) async fn convert_token_send_payment_internal(
     let (conversion_response, conversion_purpose, uses_amount_in) =
         execute_pre_send_conversion(sdk, conversion_options, request).await?;
 
+    // A successful conversion proves that token's pool works, so clear the
+    // sweep's retry delay for it.
+    if let Some(stable_balance) = &sdk.stable_balance {
+        stable_balance
+            .clear_conversion_backoff_for(conversion_token_identifier(conversion_options, request))
+            .await;
+    }
+
     // Step 2: Early-link conversion children (self-transfer only)
     pre_link_conversion_children(sdk, &conversion_response, &conversion_purpose).await?;
 
@@ -371,6 +379,19 @@ async fn execute_pre_send_conversion(
             .await?;
             Ok((response, purpose, uses_amount_in))
         }
+    }
+}
+
+/// The token a send-with-conversion swaps against, whichever direction it runs.
+fn conversion_token_identifier(
+    conversion_options: &ConversionOptions,
+    request: &SendPaymentRequest,
+) -> Option<String> {
+    match &conversion_options.conversion_type {
+        ConversionType::ToBitcoin {
+            from_token_identifier,
+        } => Some(from_token_identifier.clone()),
+        ConversionType::FromBitcoin => request.prepare_response.token_identifier.clone(),
     }
 }
 

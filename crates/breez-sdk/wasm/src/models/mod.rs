@@ -90,6 +90,18 @@ pub enum SdkEvent {
         new_deposits: Vec<DepositInfo>,
     },
     UnilateralExitStateChanged,
+    StableBalanceConversionFailed {
+        conversion: StableBalanceConversionKind,
+        error: String,
+        retry_in_secs: Option<u64>,
+    },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::StableBalanceConversionKind)]
+pub enum StableBalanceConversionKind {
+    PerReceive,
+    AutoConvert,
+    Deactivation,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::AutoOptimizationEvent)]

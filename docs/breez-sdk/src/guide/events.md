@@ -17,6 +17,7 @@ The SDK emits several events to provide the application with an up-to-date state
 | {{#enum SdkEvent::AutoOptimization}} | {{#name AutoOptimizationEvent}} | Progress of the background leaf optimizer. Manual {{#name optimize_leaves}} calls do not emit this. See [custom leaf optimization](optimize.md). |
 | {{#enum SdkEvent::LightningAddressChanged}} | {{#name LightningAddressInfo}}, unset when the address was deleted | The Lightning address changed on another device. See [receiving payments using LNURL-Pay](receive_lnurl_pay.md). |
 | {{#enum SdkEvent::UnilateralExitStateChanged}} | none | An exit state exported earlier is now out of date. Export it again. See [unilateral exit](unilateral_exit.md). |
+| {{#enum SdkEvent::StableBalanceConversionFailed}} | {{#name StableBalanceConversionKind}}, {{#name error}}, {{#name retry_in_secs}} | A Stable Balance conversion failed. When {{#name retry_in_secs}} is set, the SDK retries after it. See [stable balance](stable_balance.md). |
 
 The fields of {{#name Payment}} are described in [listing payments](list_payments.md). For
 the order in which these events arrive during a receive, see

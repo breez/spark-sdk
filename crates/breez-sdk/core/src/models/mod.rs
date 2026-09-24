@@ -13,6 +13,7 @@ use core::fmt;
 use lnurl_models::RecoverLnurlPayResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use spark_wallet::bech32m_decode_token_id;
 use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
@@ -1093,6 +1094,14 @@ impl Config {
                     return Err(SdkError::InvalidInput(
                         "token_identifier must not be empty".to_string(),
                     ));
+                }
+                if bech32m_decode_token_id(&token.token_identifier, Some(self.network.into()))
+                    .is_err()
+                {
+                    return Err(SdkError::InvalidInput(format!(
+                        "token_identifier must be a bech32m token identifier for this network: {}",
+                        token.token_identifier
+                    )));
                 }
                 if !seen_labels.insert(&token.label) {
                     return Err(SdkError::InvalidInput(format!(
