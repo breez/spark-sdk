@@ -7,51 +7,63 @@ use tracing::warn;
 
 use super::{BitcoinChainService, ChainServiceError, Outspend, RecommendedFees, TxStatus, Utxo};
 
-/// How long a backend that failed while a later one succeeded is tried last.
+/// How long a backend that failed while a later one succeeded is first tried
+/// last. Doubles each time it is demoted again, up to [`MAX_DEMOTION_PERIOD`].
 #[allow(clippy::duration_suboptimal_units)]
-const DEMOTION_PERIOD: Duration = Duration::from_secs(300);
+const BASE_DEMOTION_PERIOD: Duration = Duration::from_secs(300);
+#[allow(clippy::duration_suboptimal_units)]
+const MAX_DEMOTION_PERIOD: Duration = Duration::from_secs(3600);
 
 /// Serves each call from the first backend, in priority order, that answers it.
 ///
 /// A backend that fails where a later one succeeds is demoted to the end of
-/// the order for [`DEMOTION_PERIOD`], so an unreachable backend stops costing
-/// a timeout on every call. When every backend fails the request is assumed
+/// the order for a while, so an unreachable backend stops costing a timeout on
+/// every call. A backend that answers is no longer demoted. When every backend fails the request is assumed
 /// to be at fault (e.g. an invalid transaction broadcast) and nothing is demoted.
 pub(crate) struct FallbackChainService {
     backends: Vec<Arc<dyn BitcoinChainService>>,
-    demoted_until: Mutex<Vec<Option<Instant>>>,
+    demotions: Mutex<Vec<Demotion>>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Demotion {
+    until: Option<Instant>,
+    /// Consecutive demotions without an answer in between.
+    count: u32,
 }
 
 impl FallbackChainService {
     pub(crate) fn new(backends: Vec<Arc<dyn BitcoinChainService>>) -> Self {
-        let demoted_until = Mutex::new(vec![None; backends.len()]);
+        let demotions = Mutex::new(vec![Demotion::default(); backends.len()]);
         Self {
             backends,
-            demoted_until,
+            demotions,
         }
     }
 
     /// Backend indexes in priority order, demoted ones last.
     fn attempt_order(&self) -> Vec<usize> {
         let now = Instant::now();
-        let demoted_until = self
-            .demoted_until
+        let demotions = self
+            .demotions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (healthy, demoted): (Vec<usize>, Vec<usize>) = (0..self.backends.len())
-            .partition(|&i| demoted_until[i].is_none_or(|until| until <= now));
+            .partition(|&i| demotions[i].until.is_none_or(|until| until <= now));
         healthy.into_iter().chain(demoted).collect()
     }
 
     fn record_success(&self, succeeded: usize, failed: &[usize]) {
-        let mut demoted_until = self
-            .demoted_until
+        let mut demotions = self
+            .demotions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        demoted_until[succeeded] = None;
-        let until = Instant::now().checked_add(DEMOTION_PERIOD);
+        demotions[succeeded] = Demotion::default();
+        let now = Instant::now();
         for &i in failed {
-            demoted_until[i] = until;
+            let demotion = &mut demotions[i];
+            demotion.until = now.checked_add(demotion_period(demotion.count));
+            demotion.count = demotion.count.saturating_add(1);
         }
     }
 
@@ -61,7 +73,7 @@ impl FallbackChainService {
         Fut: Future<Output = Result<T, ChainServiceError>>,
     {
         let mut failed = Vec::new();
-        let mut last_error = None;
+        let mut first_error = None;
         for i in self.attempt_order() {
             match op(self.backends[i].clone()).await {
                 Ok(value) => {
@@ -71,14 +83,25 @@ impl FallbackChainService {
                 Err(e) if should_fall_back(&e) => {
                     warn!("Chain service backend {i} failed, trying the next one: {e}");
                     failed.push(i);
-                    last_error = Some(e);
+                    // Later backends are the demoted ones, so the first error
+                    // comes from the most trusted backend.
+                    first_error.get_or_insert(e);
                 }
                 Err(e) => return Err(e),
             }
         }
-        Err(last_error
+        Err(first_error
             .unwrap_or_else(|| ChainServiceError::Generic("no chain service backends".to_string())))
     }
+}
+
+/// [`BASE_DEMOTION_PERIOD`] doubled once per earlier consecutive demotion.
+fn demotion_period(earlier_demotions: u32) -> Duration {
+    BASE_DEMOTION_PERIOD
+        .checked_mul(2u32.saturating_pow(earlier_demotions))
+        .map_or(MAX_DEMOTION_PERIOD, |period| {
+            period.min(MAX_DEMOTION_PERIOD)
+        })
 }
 
 /// `NotFound` and `InvalidAddress` are answers about the request, which
@@ -286,14 +309,14 @@ mod tests {
     }
 
     #[async_test_all]
-    async fn all_failing_returns_last_error_and_demotes_nothing() {
-        let primary = TipChainService::new(down());
-        let secondary = TipChainService::new(Err(ChainServiceError::Generic("last".into())));
+    async fn all_failing_returns_first_error_and_demotes_nothing() {
+        let primary = TipChainService::new(Err(ChainServiceError::Generic("first".into())));
+        let secondary = TipChainService::new(down());
         let service = fallback(&[&primary, &secondary]);
 
         assert!(matches!(
             service.tip_height().await,
-            Err(ChainServiceError::Generic(message)) if message == "last"
+            Err(ChainServiceError::Generic(message)) if message == "first"
         ));
         assert_eq!(service.attempt_order(), vec![0, 1]);
     }
@@ -313,8 +336,32 @@ mod tests {
         let primary = TipChainService::new(Ok(1));
         let secondary = TipChainService::new(Ok(2));
         let service = fallback(&[&primary, &secondary]);
-        service.demoted_until.lock().unwrap()[0] = Some(Instant::now());
+        service.demotions.lock().unwrap()[0].until = Some(Instant::now());
 
         assert_eq!(service.attempt_order(), vec![0, 1]);
+    }
+
+    #[test]
+    fn demotion_period_doubles_up_to_the_cap() {
+        assert_eq!(demotion_period(0), BASE_DEMOTION_PERIOD);
+        assert_eq!(demotion_period(1), BASE_DEMOTION_PERIOD * 2);
+        assert_eq!(demotion_period(2), BASE_DEMOTION_PERIOD * 4);
+        assert_eq!(demotion_period(4), MAX_DEMOTION_PERIOD);
+        assert_eq!(demotion_period(u32::MAX), MAX_DEMOTION_PERIOD);
+    }
+
+    #[async_test_all]
+    async fn repeated_demotions_count_until_an_answer() {
+        let primary = TipChainService::new(Ok(1));
+        let secondary = TipChainService::new(Ok(2));
+        let service = fallback(&[&primary, &secondary]);
+        service.record_success(1, &[0]);
+        service.record_success(1, &[0]);
+        assert_eq!(service.demotions.lock().unwrap()[0].count, 2);
+
+        service.record_success(0, &[]);
+        let demotion = service.demotions.lock().unwrap()[0];
+        assert_eq!(demotion.count, 0);
+        assert!(demotion.until.is_none());
     }
 }
