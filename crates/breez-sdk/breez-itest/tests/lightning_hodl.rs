@@ -1,20 +1,21 @@
+use std::time::Duration;
+
 use anyhow::Result;
 use breez_sdk_itest::*;
 use breez_sdk_spark::*;
 use rstest::*;
+use tokio::time::Instant;
 use tracing::info;
 
 /// Test 1: Create a Lightning HODL invoice, pay it, and claim with preimage
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_01_lightning_hodl_success(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_01_lightning_hodl_success(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_01_lightning_hodl_success ===");
 
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
 
     ensure_funded(&mut bob, 60_000).await?;
 
@@ -77,25 +78,37 @@ async fn test_01_lightning_hodl_success(
         "Payment should be pending (HODL invoice not yet claimed)"
     );
 
-    // Alice syncs and verifies the pending HODL receive.
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
-
-    let alice_pending = alice
-        .sdk
-        .list_payments(ListPaymentsRequest {
-            status_filter: Some(vec![PaymentStatus::Pending]),
-            type_filter: Some(vec![PaymentType::Receive]),
-            payment_details_filter: Some(vec![PaymentDetailsFilter::Lightning {
-                htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
-            }]),
-            ..Default::default()
-        })
-        .await?;
+    // The SSP hands Alice the leaves only once it sees the HTLC held, which can
+    // trail the payer's send going Pending.
+    let alice_pending = {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+            let pending = alice
+                .sdk
+                .list_payments(ListPaymentsRequest {
+                    status_filter: Some(vec![PaymentStatus::Pending]),
+                    type_filter: Some(vec![PaymentType::Receive]),
+                    payment_details_filter: Some(vec![PaymentDetailsFilter::Lightning {
+                        htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
+                    }]),
+                    ..Default::default()
+                })
+                .await?;
+            if !pending.payments.is_empty() {
+                break pending;
+            }
+            if Instant::now() >= deadline {
+                anyhow::bail!("No pending HODL payment found for Alice");
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    };
 
     let alice_pending_payment = alice_pending
         .payments
         .first()
-        .ok_or(anyhow::anyhow!("No pending HODL payment found for Alice"))?;
+        .expect("loop breaks only on a non-empty page");
 
     info!("Verifying Alice's pending HODL payment...");
     assert_eq!(alice_pending_payment.status, PaymentStatus::Pending);

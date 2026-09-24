@@ -9,8 +9,8 @@ use tempfile::TempDir;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-use crate::SdkInstance;
 use crate::helpers::{ChannelEventListener, apply_storage};
+use crate::{FaucetConfig, SdkInstance};
 
 /// Reads the Turnkey test-org config from the environment, returning `None`
 /// when the org or API-key variables are unset. The wallet is provisioned per
@@ -220,6 +220,7 @@ pub async fn build_sdk_with_turnkey(
         temp_dir,
         data_sync_fixture: None,
         lnurl_fixture: None,
+        faucet: FaucetConfig::default(),
         turnkey_guard,
     })
 }

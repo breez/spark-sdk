@@ -208,6 +208,8 @@ mime = "0.3.17"
 nostr = { version = "0.43.1", default-features = false, features = ["std"] }
 nostr-sdk = { version = "0.43.0", default-features = false }
 platform-utils = { path = "crates/platform-utils" }
+sspd = { path = "crates/spark-service-provider/sspd" }
+tempfile = "3"
 tokio-util = "0.7.13"
 utils = { path = "crates/utils" }
 proc-macro2 = "1.0.97"

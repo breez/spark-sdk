@@ -62,8 +62,9 @@ impl BitcoindRpc {
             .map_err(|e| anyhow::anyhow!("HTTP request failed: {e:?}"))?;
         if !response.is_success() {
             return Err(anyhow::anyhow!(
-                "bitcoind error status: {}",
-                response.status
+                "bitcoind {method} failed with status {}: {}",
+                response.status,
+                response.body
             ));
         }
         let parsed: RpcResponse<T> = response.json()?;

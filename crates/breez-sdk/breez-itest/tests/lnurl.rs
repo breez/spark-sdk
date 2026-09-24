@@ -362,10 +362,11 @@ async fn test_04_delete_lightning_address() -> Result<()> {
 /// Test LNURL payments between Alice and Bob
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_05_lnurl_payment_flow(#[future] alice_sdk: Result<SdkInstance>) -> Result<()> {
+async fn test_05_lnurl_payment_flow(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_05_lnurl_payment_flow ===");
 
-    let mut alice = alice_sdk.await?;
+    let mut alice = env.create_wallet().await?;
     let mut bob = setup_bob().await?;
 
     let username = "bobpayment";
@@ -499,10 +500,11 @@ async fn lnurl_spark_address_fixture() -> LnurlFixture {
 /// Test LNURL full balance payment - sends entire balance via LNURL
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_07_lnurl_send_all_payment(#[future] alice_sdk: Result<SdkInstance>) -> Result<()> {
+async fn test_07_lnurl_send_all_payment(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_07_lnurl_send_all_payment ===");
 
-    let mut alice = alice_sdk.await?;
+    let mut alice = env.create_wallet().await?;
     let mut bob = setup_bob().await?;
 
     let username = "bobfullbalance";
@@ -635,11 +637,12 @@ async fn test_07_lnurl_send_all_payment(#[future] alice_sdk: Result<SdkInstance>
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_08_lnurl_send_all_with_fee_overpayment(
-    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] env: Result<Environment>,
 ) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_08_lnurl_send_all_with_fee_overpayment ===");
 
-    let mut alice = alice_sdk.await?;
+    let mut alice = env.create_wallet().await?;
     let mut bob = setup_bob().await?;
 
     let username = "boboverpay";
@@ -1071,9 +1074,10 @@ async fn test_09_invoice_expiry_parameter() -> Result<()> {
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_11_lnurl_spark_address_payment(
+    #[future] env: Result<Environment>,
     #[future] lnurl_spark_address_fixture: LnurlFixture,
-    #[future] alice_sdk: Result<SdkInstance>,
 ) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_11_lnurl_spark_address_payment ===");
 
     // Setup Bob with the Spark address LNURL server
@@ -1107,7 +1111,7 @@ async fn test_11_lnurl_spark_address_payment(
     .instrument(tracing::info_span!(target: "breez_sdk_spark", "bob"))
     .await?;
 
-    let mut alice = alice_sdk.await?;
+    let mut alice = env.create_wallet().await?;
 
     let username = "bobsparkaddr";
     let description = "Bob's Spark address test Lightning address";
