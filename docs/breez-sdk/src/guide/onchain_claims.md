@@ -2,13 +2,13 @@
 
 On-chain funds do not have to wait for 3 confirmations. With instant and expedited claims, a deposit can reach the wallet's balance while it is still in the mempool, or a block or two after it confirms. The SDK detects a deposit as soon as it is in the mempool, follows it through its confirmations, and claims it on its own as soon as the cost of doing so fits the fee limits you set.
 
-A claim comes in three speeds. For the two faster ones the Spark Service Provider fronts the funds and charges an instant claim fee for doing so. The standard claim costs an ordinary on-chain fee.
+A claim comes in three speeds. For the two fastest options, the Spark Service Provider fronts the funds and charges an instant claim fee for doing so. The standard claim charges an ordinary on-chain fee.
 
-| Claim | When funds arrive | Cost | Claimed automatically when |
-|---|---|---|---|
-| Instant | At 0 confirmations, while the deposit is still in the mempool. Offered for some deposits only. | Instant claim fee | The instant claim fee fits the deposit's max fee |
-| Expedited | At 1 or 2 confirmations | Instant claim fee | The instant claim fee fits the deposit's max fee |
-| Standard | At 3 confirmations on mainnet (1 on regtest) | On-chain fee only | The on-chain fee fits the deposit's max fee |
+| Claim | Availability | When funds arrive | Cost | Claimed automatically when |
+|---|---|---|---|---|
+| Instant | Provider decides per deposit | At 0 confirmations, while the deposit is still in the mempool | Instant claim fee | The instant claim fee fits the deposit's max fee |
+| Expedited | Usually offered | At 1 or 2 confirmations | Instant claim fee | The instant claim fee fits the deposit's max fee |
+| Standard | Always | At 3 confirmations on mainnet (1 on regtest) | On-chain fee only | The on-chain fee fits the deposit's max fee |
 
 A deposit's max fee is the configured [max claim fee](#setting-a-max-claim-fee), unless the deposit has been given [a max fee of its own](#giving-one-deposit-its-own-max-fee). Its own max fee then governs the instant and expedited claims, and the standard claim runs under the larger of the two.
 
