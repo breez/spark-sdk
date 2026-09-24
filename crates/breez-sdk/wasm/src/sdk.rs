@@ -72,6 +72,14 @@ pub async fn connect_with_signing_only_signer(
     Ok(sdk)
 }
 
+/// Reads a `SparkConfig` from JSON, for a deployment that publishes its
+/// operators, service provider and certificates as a file. Set it on
+/// `Config.sparkConfig` to connect a wallet to that deployment.
+#[wasm_bindgen(js_name = "parseSparkConfig")]
+pub fn parse_spark_config(json: String) -> WasmResult<SparkConfig> {
+    Ok(breez_sdk_spark::parse_spark_config(json)?.into())
+}
+
 #[wasm_bindgen(js_name = "defaultConfig")]
 pub fn default_config(network: Network) -> Config {
     breez_sdk_spark::default_config(network.into()).into()

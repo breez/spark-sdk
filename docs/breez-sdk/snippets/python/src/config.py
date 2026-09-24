@@ -1,6 +1,7 @@
 import logging
 from breez_sdk_spark import (
     default_config,
+    parse_spark_config,
     CrossChainConfig,
     ProxyConfig,
     Network,
@@ -162,4 +163,25 @@ def configure_proxy():
         password=None,
     )
     # ANCHOR_END: config-proxy
+    logging.info(f"Config: {config}")
+
+
+def configure_local_environment():
+    # ANCHOR: local-spark-config
+    config = default_config(network=Network.REGTEST)
+
+    # The local environment writes this file when it starts
+    with open("regtest/local/data/spark-config.json", encoding="utf-8") as spark_config_file:
+        spark_config = spark_config_file.read()
+    config.spark_config = parse_spark_config(json=spark_config)
+
+    # Its SSP charges more than the default ceiling to claim a deposit
+    config.max_deposit_claim_fee = MaxFee.RATE(sat_per_vbyte=5)
+
+    # Its LNURL server serves the lightning addresses wallets register
+    config.lnurl_domain = "http://127.0.0.1:8080"
+
+    # Its data-sync service keeps this wallet's instances in step
+    config.real_time_sync_server_url = "http://127.0.0.1:8081"
+    # ANCHOR_END: local-spark-config
     logging.info(f"Config: {config}")

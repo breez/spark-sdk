@@ -152,4 +152,24 @@ class Config {
         // ANCHOR_END: config-proxy
         println("Config: $config")
     }
+
+    fun configureLocalEnvironment(sparkConfigJson: String) {
+        // ANCHOR: local-spark-config
+        val config = defaultConfig(Network.REGTEST)
+
+        // The local environment writes regtest/local/data/spark-config.json when it
+        // starts; read that file and pass its contents here
+        config.sparkConfig = parseSparkConfig(sparkConfigJson)
+
+        // Its SSP charges more than the default ceiling to claim a deposit
+        config.maxDepositClaimFee = MaxFee.Rate(5u)
+
+        // Its LNURL server serves the lightning addresses wallets register
+        config.lnurlDomain = "http://127.0.0.1:8080"
+
+        // Its data-sync service keeps this wallet's instances in step
+        config.realTimeSyncServerUrl = "http://127.0.0.1:8081"
+        // ANCHOR_END: local-spark-config
+        println("Config: $config")
+    }
 }

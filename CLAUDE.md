@@ -64,6 +64,46 @@ switch first:
 nvm use 22 || nvm install 22  # then re-run the make target
 ```
 
+## Local Regtest Environment
+
+`regtest/local/` runs the services the local itests use, for integrators rather
+than for tests: `docker compose up` (also `make local-env-up`) and, natively,
+`nix run .#local-env`. Both take the scripts in `regtest/local/scripts/`, so a
+change there reaches both. It is documented in
+`docs/breez-sdk/src/guide/testing.md`.
+
+Keep both setups in step when changing:
+
+- **A dockerfile pin** (`ARG VERSION` in `crates/spark-itest/docker/spark-so.dockerfile`
+  or `ldk-server.dockerfile`). The flake reads the pin itself, but the
+  `vendorHash` and `cargoHash` in `regtest/local/nix/packages.nix` move with it:
+  build the package, then copy the hash the failure prints.
+- **`DATA_SYNC_VERSION` in `regtest/local/.env`.** Docker builds the commit it
+  names, and `packages.nix` reads it from the same line; its `vendorHash` moves
+  with it.
+- **A git dependency in `Cargo.lock`**. `outputHashes` in `packages.nix` names
+  every git source the workspace resolves; a new or moved one needs its hash.
+- **sspd's flags, the SSP's pool shape, or a service's configuration.** They are
+  written twice, in `regtest/local/docker-compose.yml` and in
+  `regtest/local/nix/local-env.nix`.
+- **A knob in `crates/spark-itest/docker/so.config.yaml`.** Each setup edits its
+  own copy: docker in `crates/spark-itest/docker/entrypoint.sh`, nix in
+  `regtest/local/nix/operator.sh`.
+- **A published port or another setting.** Every one is an environment variable
+  with a default. Add new ones to both setups, and to the settings table in
+  `regtest/local/README.md`.
+
+What a wallet needs to connect (`spark-config.json`, the chain API, the claim
+fee ceiling) is stated in the docs. Verify a claim about what the environment
+can do before writing it there.
+
+Both still load:
+
+```bash
+docker compose -f regtest/local/docker-compose.yml config --quiet
+nix build .#local-env
+```
+
 ## Code Quality
 
 ```bash

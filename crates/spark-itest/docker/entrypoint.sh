@@ -22,39 +22,37 @@ if [ ! -f "$CONFIG_FILE" ]; then
   exit 1
 fi
 
-# Make a copy of the original config file to work with
-cp "$CONFIG_FILE" "$CONFIG_FILE.tmp"
+# Edits a copy, so a container that restarts starts again from the image's config.
+RUN_CONFIG_FILE="/data/so.config.yaml"
+cp "$CONFIG_FILE" "$RUN_CONFIG_FILE"
 
 # Update bitcoind host if provided
 if [ ! -z "$BITCOIND_HOST" ]; then
   echo "Updating bitcoind host to $BITCOIND_HOST"
-  sed -i "s|host: 127.0.0.1:8332|host: $BITCOIND_HOST|g" "$CONFIG_FILE.tmp"
+  sed -i "s|host: 127.0.0.1:8332|host: $BITCOIND_HOST|g" "$RUN_CONFIG_FILE"
 fi
 
 # Update bitcoind zmqpubrawblock if provided
 if [ ! -z "$BITCOIND_ZMQPUBRAWBLOCK" ]; then
   echo "Updating bitcoind zmqpubrawblock to $BITCOIND_ZMQPUBRAWBLOCK"
-  sed -i "s|zmqpubrawblock: tcp://127.0.0.1:28332|zmqpubrawblock: $BITCOIND_ZMQPUBRAWBLOCK|g" "$CONFIG_FILE.tmp"
+  sed -i "s|zmqpubrawblock: tcp://127.0.0.1:28332|zmqpubrawblock: $BITCOIND_ZMQPUBRAWBLOCK|g" "$RUN_CONFIG_FILE"
 fi
 
 # Update lrc20 host if provided
 if [ ! -z "$LRC20_HOST" ]; then
   echo "Updating lrc20 host to $LRC20_HOST"
-  sed -i "s|host: 127.0.0.1:18530|host: $LRC20_HOST|g" "$CONFIG_FILE.tmp"
+  sed -i "s|host: 127.0.0.1:18530|host: $LRC20_HOST|g" "$RUN_CONFIG_FILE"
 fi
 
 if [ ! -z "$DKG_MIN_AVAILABLE_KEYS" ]; then
   echo "Updating dkg min_available_keys to $DKG_MIN_AVAILABLE_KEYS"
-  sed -i "s|min_available_keys: 100|min_available_keys: $DKG_MIN_AVAILABLE_KEYS|g" "$CONFIG_FILE.tmp"
+  sed -i "s|min_available_keys: 100|min_available_keys: $DKG_MIN_AVAILABLE_KEYS|g" "$RUN_CONFIG_FILE"
 fi
 
 if [ ! -z "$DKG_BATCH_SIZE" ]; then
   echo "Updating dkg batch_size to $DKG_BATCH_SIZE"
-  sed -i "s|spark.so.dkg.batch_size: 300|spark.so.dkg.batch_size: $DKG_BATCH_SIZE|g" "$CONFIG_FILE.tmp"
+  sed -i "s|spark.so.dkg.batch_size: 300|spark.so.dkg.batch_size: $DKG_BATCH_SIZE|g" "$RUN_CONFIG_FILE"
 fi
-
-# Replace the original config file with our modified version
-mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
 
 rm -f "/data/key.txt"
 echo $SPARK_OPERATOR_KEY > /data/key.txt
@@ -66,38 +64,17 @@ echo "Starting spark-frost-signer..."
 spark-frost-signer -u /tmp/frost.sock 2>&1 | sed "s/^/[Signer] /" &
 SIGNER_PID=$!
 
-# Create a timestamp file to track when operators.json was last modified
-OPERATORS_JSON="/config/operators.json"
-OPERATORS_TIMESTAMP_FILE="/tmp/operators_timestamp"
+OPERATORS_JSON="${OPERATORS_JSON:-/config/operators.json}"
+SERVER_CERT="${SERVER_CERT:-/data/server.crt}"
+SERVER_KEY="${SERVER_KEY:-/data/server.key}"
 
-# Wait for operators.json to be created or updated
-if [ -f "$OPERATORS_JSON" ]; then
-  # Store initial timestamp if file exists
-  stat -c %Y "$OPERATORS_JSON" > "$OPERATORS_TIMESTAMP_FILE"
-else
-  # File doesn't exist yet, set timestamp to 0
-  echo "0" > "$OPERATORS_TIMESTAMP_FILE"
-fi
-
+# The file can exist before it lists the operators: their addresses may only be
+# known once every operator container runs.
 echo "Waiting for updated operators.json file..."
-while true; do
-  if [ ! -f "$OPERATORS_JSON" ]; then
-    echo "Waiting for operators.json to be created..."
-    sleep 1
-    continue
-  fi
-  
-  CURRENT_TIMESTAMP=$(stat -c %Y "$OPERATORS_JSON")
-  PREVIOUS_TIMESTAMP=$(cat "$OPERATORS_TIMESTAMP_FILE")
-  
-  if [ "$CURRENT_TIMESTAMP" -gt "$PREVIOUS_TIMESTAMP" ]; then
-    echo "operators.json has been updated, proceeding with startup"
-    break
-  fi
-  
-  echo "Waiting for operators.json to be updated..."
+until grep -q identity_public_key "$OPERATORS_JSON" 2>/dev/null; do
   sleep 1
 done
+echo "operators.json lists the operators, proceeding with startup"
 
 # Give the signer a moment to start up
 sleep 1
@@ -105,12 +82,12 @@ sleep 1
 
 echo "Starting spark operator..."
 operator \
-    -config "$CONFIG_FILE" \
+    -config "$RUN_CONFIG_FILE" \
     -index ${SPARK_OPERATOR_INDEX} \
     -key /data/key.txt \
-    -server-cert "/data/server.crt" \
-    -server-key "/data/server.key" \
-    -operators "/config/operators.json" \
+    -server-cert "$SERVER_CERT" \
+    -server-key "$SERVER_KEY" \
+    -operators "$OPERATORS_JSON" \
     -threshold ${SPARK_THRESHOLD} \
     -signer "unix:///tmp/frost.sock" \
     -port 8535 \

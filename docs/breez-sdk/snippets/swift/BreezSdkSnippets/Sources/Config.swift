@@ -1,4 +1,5 @@
 import BreezSdkSpark
+import Foundation
 
 func configureSdk() async throws {
     // ANCHOR: max-deposit-claim-fee
@@ -100,5 +101,26 @@ func configureProxy() async throws {
         password: nil
     )
     // ANCHOR_END: config-proxy
+    print("Config: \(config)")
+}
+
+func configureLocalEnvironment() throws {
+    // ANCHOR: local-spark-config
+    var config = defaultConfig(network: Network.regtest)
+
+    // The local environment writes this file when it starts
+    let sparkConfig = try String(
+        contentsOfFile: "regtest/local/data/spark-config.json", encoding: .utf8)
+    config.sparkConfig = try parseSparkConfig(json: sparkConfig)
+
+    // Its SSP charges more than the default ceiling to claim a deposit
+    config.maxDepositClaimFee = MaxFee.rate(satPerVbyte: 5)
+
+    // Its LNURL server serves the lightning addresses wallets register
+    config.lnurlDomain = "http://127.0.0.1:8080"
+
+    // Its data-sync service keeps this wallet's instances in step
+    config.realTimeSyncServerUrl = "http://127.0.0.1:8081"
+    // ANCHOR_END: local-spark-config
     print("Config: \(config)")
 }

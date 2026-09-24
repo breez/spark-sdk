@@ -1,5 +1,6 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 import 'dart:async';
+import 'dart:io';
 
 Future<void> configureMaxDepositClaimFee() async {
   // ANCHOR: max-deposit-claim-fee
@@ -147,5 +148,27 @@ Future<void> configureProxy() async {
     ),
   );
   // ANCHOR_END: config-proxy
+  print("Config: $config");
+}
+
+Future<void> configureLocalEnvironment() async {
+  // ANCHOR: local-spark-config
+  var config = defaultConfig(network: Network.regtest);
+
+  // The local environment writes this file when it starts
+  final sparkConfig =
+      await File('regtest/local/data/spark-config.json').readAsString();
+  config = config.copyWith(sparkConfig: parseSparkConfig(json: sparkConfig));
+
+  // Its SSP charges more than the default ceiling to claim a deposit
+  config = config.copyWith(
+      maxDepositClaimFee: MaxFee.rate(satPerVbyte: BigInt.from(5)));
+
+  // Its LNURL server serves the lightning addresses wallets register
+  config = config.copyWith(lnurlDomain: 'http://127.0.0.1:8080');
+
+  // Its data-sync service keeps this wallet's instances in step
+  config = config.copyWith(realTimeSyncServerUrl: 'http://127.0.0.1:8081');
+  // ANCHOR_END: local-spark-config
   print("Config: $config");
 }

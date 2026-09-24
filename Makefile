@@ -159,3 +159,34 @@ open-core-rustdocs:
 
 update-lockfiles:
 	./scripts/update-lock-files.sh
+
+# A Spark regtest environment of your own, in docker (regtest/local/).
+# `docker compose -f regtest/local/docker-compose.yml up` runs it in the
+# foreground; these targets run it in the background.
+LOCAL_ENV = docker compose -f regtest/local/docker-compose.yml
+
+# The service that reports readiness runs in the foreground here, so its
+# progress is shown as it happens and its exit code is this target's. `--wait`
+# is not used: it fails when any container exits, which that service does.
+local-env-up:
+	$(LOCAL_ENV) up --detach --build --scale ready=0
+	@$(LOCAL_ENV) run --rm -e SPARK_CONFIG_PATH=$(CURDIR)/regtest/local/data/spark-config.json ready
+
+local-env-down:
+	$(LOCAL_ENV) down
+
+# Deletes the chain and every wallet's funds with it.
+local-env-reset:
+	$(LOCAL_ENV) down --volumes
+	$(LOCAL_ENV) run --rm --no-deps -T --entrypoint sh init -c 'rm -rf /out/*'
+
+local-env-logs:
+	$(LOCAL_ENV) logs --follow
+
+# make local-env-fund ADDRESS=bcrt1... AMOUNT_SATS=100000
+local-env-fund:
+	$(LOCAL_ENV) exec -T miner /scripts/fund.sh $(ADDRESS) $(AMOUNT_SATS)
+
+# make local-env-mine BLOCKS=6
+local-env-mine:
+	$(LOCAL_ENV) exec -T miner /scripts/mine.sh $(BLOCKS)
