@@ -24,7 +24,7 @@ use crate::{
     ExternalInputParser, FiatCurrency, LnurlPayRequestDetails, LnurlWithdrawRequestDetails, Rate,
     SdkError, SparkInvoiceDetails, SuccessAction, SuccessActionProcessed,
     cross_chain::{CrossChainFeeMode, CrossChainProviderContext, CrossChainRoutePair},
-    error::DepositClaimError,
+    error::{DepositClaimError, WatchtowerExitRecoveryError},
 };
 
 /// A list of external input parsers that are used by default.
@@ -1473,6 +1473,94 @@ pub struct RefundDepositResponse {
     pub tx_hex: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct WatchtowerExitedFundsInfo {
+    pub leaf_id: String,
+    pub txid: String,
+    pub vout: u32,
+    pub amount_sat: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct WatchtowerExitRecoveryInfo {
+    pub tx_id: String,
+    pub tx_hex: String,
+    pub state: WatchtowerExitRecoveryState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum WatchtowerExitRecoveryState {
+    /// Retried on the next sync.
+    BroadcastPending {
+        last_error: Option<String>,
+    },
+    Broadcast,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PrepareRecoverWatchtowerExitedFundsRequest {
+    pub destination: String,
+    pub fee_rate_sat_per_vbyte: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PrepareRecoverWatchtowerExitedFundsResponse {
+    pub destination: String,
+    pub fee_rate_sat_per_vbyte: u64,
+    /// Remove quotes to recover only some.
+    pub quotes: Vec<WatchtowerExitRecoveryQuote>,
+    pub total_amount_sat: u64,
+    pub total_fee_sat: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct WatchtowerExitRecoveryQuote {
+    pub leaf_id: String,
+    pub txid: String,
+    pub vout: u32,
+    pub amount_sat: u64,
+    pub fee_sat: u64,
+    pub pending_recovery: Option<WatchtowerExitRecoveryInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RecoverWatchtowerExitedFundsRequest {
+    /// Only its destination, fee rate and quoted outputs are read.
+    pub prepare_response: PrepareRecoverWatchtowerExitedFundsResponse,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RecoverWatchtowerExitedFundsResponse {
+    pub recovered: Vec<WatchtowerExitRecoverySuccess>,
+    pub failed: Vec<WatchtowerExitRecoveryFailure>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct WatchtowerExitRecoverySuccess {
+    pub leaf_id: String,
+    pub txid: String,
+    pub vout: u32,
+    pub recovery: WatchtowerExitRecoveryInfo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct WatchtowerExitRecoveryFailure {
+    pub leaf_id: String,
+    pub txid: String,
+    pub vout: u32,
+    pub error: WatchtowerExitRecoveryError,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ListUnclaimedDepositsRequest {}
@@ -1642,6 +1730,15 @@ pub struct GetInfoResponse {
     pub balance_sats: u64,
     /// The balances of the tokens in the wallet keyed by the token identifier
     pub token_balances: HashMap<String, TokenBalance>,
+    /// Not part of `balance_sats`.
+    pub recoverable_funds: RecoverableFunds,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RecoverableFunds {
+    /// Excludes funds whose recovery is signed: its payment accounts for them.
+    pub watchtower_exited_sats: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

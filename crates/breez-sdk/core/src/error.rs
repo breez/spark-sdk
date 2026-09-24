@@ -391,6 +391,24 @@ impl From<SdkError> for DepositClaimError {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Error, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum WatchtowerExitRecoveryError {
+    #[error(
+        "A recovery of this output is already on the network: replacing it takes at least {required_fee_sat} sats or {required_fee_rate_sat_per_vbyte} sats/vbyte"
+    )]
+    ReplacementFeeTooLow {
+        required_fee_sat: u64,
+        required_fee_rate_sat_per_vbyte: u64,
+    },
+
+    #[error("Operators unavailable: {message}")]
+    OperatorsUnavailable { message: String },
+
+    #[error("Generic error: {message}")]
+    Generic { message: String },
+}
+
 /// Error type for signer operations
 #[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]

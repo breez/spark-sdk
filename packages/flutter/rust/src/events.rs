@@ -1,5 +1,7 @@
 use crate::frb_generated::StreamSink;
-use breez_sdk_spark::{DepositInfo, EventListener, LightningAddressInfo, Payment};
+use breez_sdk_spark::{
+    DepositInfo, EventListener, LightningAddressInfo, Payment, WatchtowerExitedFundsInfo,
+};
 pub use breez_sdk_spark::{AutoOptimizationEvent, SdkEvent};
 use flutter_rust_bridge::frb;
 
@@ -34,6 +36,9 @@ pub enum _SdkEvent {
         new_deposits: Vec<DepositInfo>,
     },
     UnilateralExitStateChanged,
+    NewWatchtowerExitedFunds {
+        new_watchtower_exited_funds: Vec<WatchtowerExitedFundsInfo>,
+    },
 }
 
 #[frb(mirror(AutoOptimizationEvent))]

@@ -38,7 +38,7 @@ pub use cross_chain::{
     CrossChainReceiveInfo, CrossChainRouteFilter, CrossChainRouteLimits, CrossChainRoutePair,
     DeliveryMethod, SparkAsset,
 };
-pub use error::{DepositClaimError, SdkError, SignerError};
+pub use error::{DepositClaimError, SdkError, SignerError, WatchtowerExitRecoveryError};
 pub use events::{AutoOptimizationEvent, EventEmitter, EventListener, SdkEvent};
 pub use issuer::*;
 pub use logger::DEFAULT_FILTER;

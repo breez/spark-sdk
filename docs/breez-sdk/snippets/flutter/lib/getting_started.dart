@@ -167,6 +167,11 @@ class BreezSdkSpark {
           // The unilateral exit state changed, so a previously exported
           // one is now out of date. Export it again.
           break;
+        case SdkEvent_NewWatchtowerExitedFunds(:final newWatchtowerExitedFunds):
+          // The watchtower moved funds on-chain, out of the balance. Recover
+          // them to an address with recoverWatchtowerExitedFunds.
+          final _ = newWatchtowerExitedFunds;
+          break;
       }
       _eventStreamController.add(sdkEvent);
     }, onError: (e) {

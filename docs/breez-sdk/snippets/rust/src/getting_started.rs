@@ -107,6 +107,12 @@ impl EventListener for SdkEventListener {
                 // The unilateral exit state changed, so a previously exported
                 // one is now out of date. Export it again.
             }
+            SdkEvent::NewWatchtowerExitedFunds {
+                new_watchtower_exited_funds,
+            } => {
+                // The watchtower moved funds on-chain, out of the balance. Recover
+                // them to an address with recover_watchtower_exited_funds.
+            }
         }
     }
 }

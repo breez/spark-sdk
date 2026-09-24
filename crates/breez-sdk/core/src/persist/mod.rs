@@ -31,6 +31,7 @@ use crate::{
     InstantClaimStatus, LightningAddressInfo, ListContactsRequest, ListPaymentsRequest,
     LnurlPayInfo, LnurlWithdrawInfo, MaxFee, PaymentDetailsFilter, PaymentStatus, PaymentType,
     RefundState, SparkHtlcStatus, TokenBalance, TokenMetadata, TokenTransactionType,
+    WatchtowerExitRecoveryState,
     models::Payment,
     sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
 };
@@ -49,6 +50,7 @@ const SPARK_PRIVATE_MODE_INITIALIZED_KEY: &str = "spark_private_mode_initialized
 pub(crate) const STABLE_BALANCE_ACTIVE_LABEL_KEY: &str = "stable_balance_active_label";
 const PENDING_CONVERSIONS_KEY: &str = "pending_conversions";
 const PENDING_LIGHTNING_SENDS_KEY: &str = "pending_lightning_sends";
+const WATCHTOWER_EXIT_KEY_PREFIX: &str = "watchtower_exit_";
 
 /// Wrapper stored in the cache that carries context about whether the value
 /// was written as part of a recovery or a client-initiated change.
@@ -720,6 +722,32 @@ impl ObjectCacheRepository {
             .await
     }
 
+    pub(crate) async fn save_watchtower_exit(
+        &self,
+        value: &CachedWatchtowerExit,
+    ) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(
+                format!("{WATCHTOWER_EXIT_KEY_PREFIX}{}", value.leaf_id),
+                serde_json::to_string(value)?,
+            )
+            .await
+    }
+
+    pub(crate) async fn fetch_watchtower_exit(
+        &self,
+        leaf_id: &str,
+    ) -> Result<Option<CachedWatchtowerExit>, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(format!("{WATCHTOWER_EXIT_KEY_PREFIX}{leaf_id}"))
+            .await?;
+        match value {
+            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            None => Ok(None),
+        }
+    }
+
     pub(crate) async fn save_tx(&self, txid: &str, value: &CachedTx) -> Result<(), StorageError> {
         self.storage
             .set_cached_item(
@@ -1039,6 +1067,29 @@ pub(crate) struct CachedSyncInfo {
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct CachedTx {
     pub(crate) raw_tx: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CachedWatchtowerExit {
+    pub(crate) leaf_id: String,
+    /// Before the watchtower's transaction took its fee.
+    pub(crate) leaf_value: u64,
+    pub(crate) txid: String,
+    pub(crate) vout: u32,
+    pub(crate) amount_sats: u64,
+    pub(crate) script_pubkey: String,
+    pub(crate) recovery: Option<CachedWatchtowerExitRecovery>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CachedWatchtowerExitRecovery {
+    pub(crate) tx_id: String,
+    pub(crate) tx_hex: String,
+    pub(crate) state: WatchtowerExitRecoveryState,
+    pub(crate) created_at: u64,
+    #[serde(default)]
+    pub(crate) is_confirmed: bool,
+    pub(crate) is_final: bool,
 }
 
 #[cfg(feature = "test-utils")]

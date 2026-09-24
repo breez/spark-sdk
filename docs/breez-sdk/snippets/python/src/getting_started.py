@@ -116,6 +116,10 @@ class SdkListener(EventListener):
             # The unilateral exit state changed, so a previously exported
             # one is now out of date. Export it again.
             pass
+        elif isinstance(event, SdkEvent.NEW_WATCHTOWER_EXITED_FUNDS):
+            # The watchtower moved funds on-chain, out of the balance. Recover
+            # them to an address with recover_watchtower_exited_funds.
+            new_watchtower_exited_funds = event.new_watchtower_exited_funds
         else:
             # Handle any future event types
             pass

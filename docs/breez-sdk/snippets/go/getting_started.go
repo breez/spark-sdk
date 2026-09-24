@@ -129,6 +129,11 @@ func (SdkListener) OnEvent(e breez_sdk_spark.SdkEvent) {
 	case breez_sdk_spark.SdkEventUnilateralExitStateChanged:
 		// The unilateral exit state changed, so a previously exported
 		// one is now out of date. Export it again.
+	case breez_sdk_spark.SdkEventNewWatchtowerExitedFunds:
+		// The watchtower moved funds on-chain, out of the balance. Recover
+		// them to an address with RecoverWatchtowerExitedFunds.
+		newWatchtowerExitedFunds := event.NewWatchtowerExitedFunds
+		_ = newWatchtowerExitedFunds
 	default:
 		// Handle any future event types
 	}

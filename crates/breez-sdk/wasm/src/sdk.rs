@@ -487,6 +487,30 @@ impl BreezSdk {
             .into())
     }
 
+    #[wasm_bindgen(js_name = "prepareRecoverWatchtowerExitedFunds")]
+    pub async fn prepare_recover_watchtower_exited_funds(
+        &self,
+        request: PrepareRecoverWatchtowerExitedFundsRequest,
+    ) -> WasmResult<PrepareRecoverWatchtowerExitedFundsResponse> {
+        Ok(self
+            .sdk
+            .prepare_recover_watchtower_exited_funds(request.into())
+            .await?
+            .into())
+    }
+
+    #[wasm_bindgen(js_name = "recoverWatchtowerExitedFunds")]
+    pub async fn recover_watchtower_exited_funds(
+        &self,
+        request: RecoverWatchtowerExitedFundsRequest,
+    ) -> WasmResult<RecoverWatchtowerExitedFundsResponse> {
+        Ok(self
+            .sdk
+            .recover_watchtower_exited_funds(request.into())
+            .await?
+            .into())
+    }
+
     #[wasm_bindgen(js_name = "checkLightningAddressAvailable")]
     pub async fn check_lightning_address_available(
         &self,

@@ -103,6 +103,10 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
       } else if (event.tag === SdkEvent_Tags.UnilateralExitStateChanged) {
         // The unilateral exit state changed, so a previously exported
         // one is now out of date. Export it again.
+      } else if (event.tag === SdkEvent_Tags.NewWatchtowerExitedFunds) {
+        // The watchtower moved funds on-chain, out of the balance. Recover
+        // them to an address with recoverWatchtowerExitedFunds.
+        const newWatchtowerExitedFunds = event.inner.newWatchtowerExitedFunds
       } else {
         // Handle any future event types
       }

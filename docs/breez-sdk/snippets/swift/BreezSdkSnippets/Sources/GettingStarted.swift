@@ -96,6 +96,10 @@ class SdkEventListener: EventListener {
             // The unilateral exit state changed, so a previously exported
             // one is now out of date. Export it again.
             break
+        case .newWatchtowerExitedFunds(let newWatchtowerExitedFunds):
+            // The watchtower moved funds on-chain, out of the balance. Recover
+            // them to an address with recoverWatchtowerExitedFunds.
+            let _ = newWatchtowerExitedFunds
         default:
             // Handle any future event types
             break

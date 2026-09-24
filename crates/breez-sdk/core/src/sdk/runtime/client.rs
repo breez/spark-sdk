@@ -11,7 +11,7 @@ use tracing::{Instrument, debug, error, info, trace, warn};
 
 use crate::utils::token::{token_transaction_to_payments, token_tx_inputs_are_ours};
 use crate::{
-    GetInfoRequest, GetInfoResponse, InstantClaimStatus, Payment,
+    GetInfoRequest, GetInfoResponse, InstantClaimStatus, Payment, RecoverableFunds,
     error::SdkError,
     events::{EventListener, SdkEvent},
     persist::{ObjectCacheRepository, UpdateDepositPayload},
@@ -119,6 +119,9 @@ impl RuntimeProfile for ClientRuntime {
             identity_pubkey: sdk.spark_wallet.get_identity_public_key().to_string(),
             balance_sats: account_info.balance_sats,
             token_balances: account_info.token_balances,
+            recoverable_funds: RecoverableFunds {
+                watchtower_exited_sats: sdk.watchtower_exited_sats().await?,
+            },
         })
     }
 

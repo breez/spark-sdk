@@ -34,6 +34,7 @@ impl BreezSdk {
             runtime: params.runtime,
             sync_coordinator: params.sync_coordinator,
             claim_guards: super::deposits::ClaimGuards::default(),
+            watchtower_exit_lock: Arc::default(),
             initial_synced_watcher,
             input_parser: params.input_parser,
             spark_private_mode_initialized: Arc::new(OnceCell::new()),

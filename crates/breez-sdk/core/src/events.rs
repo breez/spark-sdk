@@ -10,7 +10,9 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::{DepositInfo, LightningAddressInfo, Payment, sdk::RuntimeEvent};
+use crate::{
+    DepositInfo, LightningAddressInfo, Payment, WatchtowerExitedFundsInfo, sdk::RuntimeEvent,
+};
 
 /// Events emitted by the SDK
 #[allow(clippy::large_enum_variant)]
@@ -60,6 +62,10 @@ pub enum SdkEvent {
     /// Emitted when the data a unilateral exit is built from has changed, so an
     /// exit state exported earlier is out of date and should be exported again.
     UnilateralExitStateChanged,
+    /// Emitted when sync finds funds the watchtower moved on-chain, each output once.
+    NewWatchtowerExitedFunds {
+        new_watchtower_exited_funds: Vec<WatchtowerExitedFundsInfo>,
+    },
 }
 
 impl SdkEvent {
@@ -106,6 +112,15 @@ impl fmt::Display for SdkEvent {
                 write!(f, "NewDeposits[{}]", new_deposits.len())
             }
             SdkEvent::UnilateralExitStateChanged => write!(f, "UnilateralExitStateChanged"),
+            SdkEvent::NewWatchtowerExitedFunds {
+                new_watchtower_exited_funds,
+            } => {
+                write!(
+                    f,
+                    "NewWatchtowerExitedFunds[{}]",
+                    new_watchtower_exited_funds.len()
+                )
+            }
         }
     }
 }

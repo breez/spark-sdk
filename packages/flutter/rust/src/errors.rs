@@ -1,6 +1,22 @@
 pub use breez_sdk_spark::passkey::{PasskeyError, PrfProviderError};
-pub use breez_sdk_spark::{DepositClaimError, Fee, SdkError, StorageError};
+pub use breez_sdk_spark::{
+    DepositClaimError, Fee, SdkError, StorageError, WatchtowerExitRecoveryError,
+};
 use flutter_rust_bridge::frb;
+
+#[frb(mirror(WatchtowerExitRecoveryError))]
+pub enum _WatchtowerExitRecoveryError {
+    ReplacementFeeTooLow {
+        required_fee_sat: u64,
+        required_fee_rate_sat_per_vbyte: u64,
+    },
+    OperatorsUnavailable {
+        message: String,
+    },
+    Generic {
+        message: String,
+    },
+}
 
 #[frb(mirror(DepositClaimError))]
 pub enum _DepositClaimError {
