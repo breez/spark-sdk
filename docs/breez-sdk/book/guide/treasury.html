@@ -1,0 +1,611 @@
+<!DOCTYPE HTML>
+<html lang="en" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Treasury configuration - Breez SDK - Spark</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../styles.css">
+        <link rel="stylesheet" href="../theme/pagetoc.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <!--
+                  Breez SDK · Spark docs — brand header partial.
+                
+                  mdBook renders the `header` partial at the top of every page's content. The default
+                  theme ships an EMPTY header.hbs, which is why the reskin's styles.css and
+                  brand-header.js both reference `.brand-header` / #brand-controls but the file
+                  itself was never committed to the reskin branch. THIS is that missing file,
+                  reconstructed from the design mockup (design/Breez SDK Docs.dc.html) and the
+                  class names in styles.css.
+                
+                  Drop this at: docs/breez-sdk/theme/header.hbs
+                  It pairs with styles.css (.brand-header rules) and brand-header.js (which moves
+                  mdBook's theme/search/sidebar controls into #brand-controls at load time).
+                -->
+                <div id="brand-header" class="brand-header">
+                  <a class="brand-logo" href="../index.html" aria-label="Docs home">
+                    <img src="../assets/icons/logo-breez-header.svg" alt="Breez">
+                  </a>
+                  <span class="brand-sep"></span>
+                  <span class="brand-product">SDK Documentation</span>
+                  <span class="brand-badge">
+                    <img src="../assets/icons/spark_icon.svg" alt="">Spark
+                  </span>
+                
+                  <span class="brand-spacer"></span>
+                
+                  <nav class="brand-nav">
+                    <a href="https://breez.technology" target="_blank" rel="noopener">Home</a>
+                    <a href="https://github.com/breez/spark-sdk" target="_blank" rel="noopener">GitHub</a>
+                    <a href="https://t.me/breezsdk" target="_blank" rel="noopener" aria-label="Telegram">
+                      <img src="../assets/icons/telegram-icon.svg" alt="">
+                    </a>
+                  </nav>
+                
+                  <!-- brand-header.js relocates #sidebar-toggle, #theme-toggle, #theme-list and
+                       #search-toggle into this container so they read as one bar. -->
+                  <div id="brand-controls" class="brand-controls"></div>
+                
+                  <a class="brand-cta" href="https://breez.technology/request-api-key/#contact-us-form-sdk" target="_blank" rel="noopener">
+                    Request API Key
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                  </a>
+                </div>
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Breez SDK - Spark</h1>
+
+                    <div class="right-buttons">
+                        <a href="https://github.com/breez/spark-sdk" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/src/guide/treasury.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="treasury-configuration"><a class="header" href="#treasury-configuration">Treasury configuration</a></h1>
+<p>A treasury wallet is a single wallet the service itself owns, held in one long-lived SDK instance: a float, a settlement account, or the balance a backend pays out of and receives into.</p>
+<p>This is a standard deployment. Background tasks stay on and the instance stays connected, so the rest of this guide applies unchanged. Build the config with <code class="lang-fn"><span class="fn-rust">default_config</span><span class="fn-python">default_config</span><span class="fn-swift">defaultConfig</span><span class="fn-kotlin">defaultConfig</span><span class="fn-javascript">defaultConfig</span><span class="fn-react-native">defaultConfig</span><span class="fn-flutter">defaultConfig</span><span class="fn-go">DefaultConfig</span><span class="fn-csharp">DefaultConfig</span></code>, not <code class="lang-fn"><span class="fn-rust">default_server_config</span><span class="fn-python">default_server_config</span><span class="fn-swift">defaultServerConfig</span><span class="fn-kotlin">defaultServerConfig</span><span class="fn-javascript">defaultServerConfig</span><span class="fn-react-native">defaultServerConfig</span><span class="fn-flutter">defaultServerConfig</span><span class="fn-go">DefaultServerConfig</span><span class="fn-csharp">DefaultServerConfig</span></code>: that preset turns off the background tasks a treasury relies on and exists for the <a href="server_mode.html">multi-user configuration</a>.</p>
+<p>Three defaults are chosen for a mobile wallet and are worth changing:</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">// Construct the seed using a mnemonic, entropy or passkey
+let mnemonic = "&lt;mnemonic words&gt;".to_string();
+let seed = Seed::Mnemonic {
+    mnemonic,
+    passphrase: None,
+};
+
+// A treasury wallet is an ordinary long-lived SDK instance, so start from
+// default_config and keep background tasks on.
+let mut config = default_config(Network::Mainnet);
+config.api_key = Some("&lt;breez api key&gt;".to_string());
+
+// Keeps user data in step across devices that each hold their own
+// storage, which a server-side wallet has no use for.
+config.real_time_sync_server_url = None;
+
+// Stays connected, and syncs cost more with more leaves, so it can
+// afford a longer interval.
+config.sync_interval_secs = 300;
+
+// Optional: on a treasury that pays often and holds many leaves, collecting
+// unilateral exit data behind every operation adds up. Turn it off and
+// sync on a cadence of your own instead: a sync collects regardless of
+// this flag.
+config.exit_chain_auto_fetch_enabled = false;
+
+let sdk = SdkBuilder::new(config, seed)
+    .with_default_storage("./.data".to_string())
+    .build()
+    .await?;</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">// Construct the seed using a mnemonic, entropy or passkey
+let mnemonic = "&lt;mnemonic words&gt;"
+let seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
+
+// A treasury wallet is an ordinary long-lived SDK instance, so start from
+// defaultConfig and keep background tasks on.
+var config = defaultConfig(network: Network.mainnet)
+config.apiKey = "&lt;breez api key&gt;"
+
+// Keeps user data in step across devices that each hold their own
+// storage, which a server-side wallet has no use for.
+config.realTimeSyncServerUrl = nil
+
+// Stays connected, and syncs cost more with more leaves, so it can
+// afford a longer interval.
+config.syncIntervalSecs = UInt32(300)
+
+// Optional: on a treasury that pays often and holds many leaves, collecting
+// unilateral exit data behind every operation adds up. Turn it off and
+// sync on a cadence of your own instead: a sync collects regardless of
+// this flag.
+config.exitChainAutoFetchEnabled = false
+
+let builder = SdkBuilder(config: config, seed: seed)
+await builder.withDefaultStorage(storageDir: "./.data")
+let sdk = try await builder.build()
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">// Construct the seed using a mnemonic, entropy or passkey
+val mnemonic = "&lt;mnemonic words&gt;"
+val seed = Seed.Mnemonic(mnemonic, null)
+
+// A treasury wallet is an ordinary long-lived SDK instance, so start
+// from defaultConfig and keep background tasks on.
+val config = defaultConfig(Network.MAINNET)
+config.apiKey = "&lt;breez api key&gt;"
+
+// Keeps user data in step across devices that each hold their own
+// storage, which a server-side wallet has no use for.
+config.realTimeSyncServerUrl = null
+
+// Stays connected, and syncs cost more with more leaves, so it can
+// afford a longer interval.
+config.syncIntervalSecs = 300u
+
+// Optional: on a treasury that pays often and holds many leaves,
+// collecting unilateral exit data behind every operation adds up. Turn
+// it off and sync on a cadence of your own instead: a sync collects
+// regardless of this flag.
+config.exitChainAutoFetchEnabled = false
+
+try {
+    val builder = SdkBuilder(config, seed)
+    builder.withDefaultStorage("./.data")
+    val sdk = builder.build()
+} catch (e: Exception) {
+    // handle error
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">// Construct the seed using a mnemonic, entropy or passkey
+var mnemonic = "&lt;mnemonic words&gt;";
+var seed = new Seed.Mnemonic(mnemonic: mnemonic, passphrase: null);
+
+// A treasury wallet is an ordinary long-lived SDK instance, so start
+// from DefaultConfig and keep background tasks on.
+var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+{
+    apiKey = "&lt;breez api key&gt;"
+};
+
+// Keeps user data in step across devices that each hold their own
+// storage, which a server-side wallet has no use for.
+config = config with { realTimeSyncServerUrl = null };
+
+// Stays connected, and syncs cost more with more leaves, so it can
+// afford a longer interval.
+config = config with { syncIntervalSecs = 300U };
+
+// Optional: on a treasury that pays often and holds many leaves,
+// collecting unilateral exit data behind every operation adds up.
+// Turn it off and sync on a cadence of your own instead: a sync
+// collects regardless of this flag.
+config = config with { exitChainAutoFetchEnabled = false };
+
+var builder = new SdkBuilder(config: config, seed: seed);
+await builder.WithDefaultStorage(storageDir: "./.data");
+var sdk = await builder.Build();
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">// Construct the seed using a mnemonic, entropy or passkey
+const mnemonic = '&lt;mnemonic words&gt;'
+const seed: Seed = { type: 'mnemonic', mnemonic, passphrase: undefined }
+
+// A treasury wallet is an ordinary long-lived SDK instance, so start from
+// defaultConfig and keep background tasks on.
+const config = defaultConfig('mainnet')
+config.apiKey = '&lt;breez api key&gt;'
+
+// Keeps user data in step across devices that each hold their own
+// storage, which a server-side wallet has no use for.
+config.realTimeSyncServerUrl = undefined
+
+// Stays connected, and syncs cost more with more leaves, so it can
+// afford a longer interval.
+config.syncIntervalSecs = 300
+
+// Optional: on a treasury that pays often and holds many leaves, collecting
+// unilateral exit data behind every operation adds up. Turn it off and
+// sync on a cadence of your own instead: a sync collects regardless of
+// this flag.
+config.exitChainAutoFetchEnabled = false
+
+let builder = SdkBuilder.new(config, seed)
+builder = await builder.withDefaultStorage('./.data')
+const sdk = await builder.build()
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore"># Construct the seed using a mnemonic, entropy or passkey
+mnemonic = "&lt;mnemonic words&gt;"
+seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
+
+# A treasury wallet is an ordinary long-lived SDK instance, so start from
+# default_config and keep background tasks on.
+config = default_config(network=Network.MAINNET)
+config.api_key = "&lt;breez api key&gt;"
+
+# Keeps user data in step across devices that each hold their own
+# storage, which a server-side wallet has no use for.
+config.real_time_sync_server_url = None
+
+# Stays connected, and syncs cost more with more leaves, so it can
+# afford a longer interval.
+config.sync_interval_secs = 300
+
+# Optional: on a treasury that pays often and holds many leaves, collecting
+# unilateral exit data behind every operation adds up. Turn it off and
+# sync on a cadence of your own instead: a sync collects regardless of
+# this flag.
+config.exit_chain_auto_fetch_enabled = False
+
+try:
+    builder = SdkBuilder(config=config, seed=seed)
+    await builder.with_default_storage(storage_dir="./.data")
+    sdk = await builder.build()
+    return sdk
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">// Construct the seed using a mnemonic, entropy or passkey
+mnemonic := "&lt;mnemonic words&gt;"
+var seed breez_sdk_spark.Seed = breez_sdk_spark.SeedMnemonic{
+	Mnemonic:   mnemonic,
+	Passphrase: nil,
+}
+
+// A treasury wallet is an ordinary long-lived SDK instance, so start from
+// DefaultConfig and keep background tasks on.
+apiKey := "&lt;breez api key&gt;"
+config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+config.ApiKey = &amp;apiKey
+
+// Keeps user data in step across devices that each hold their own
+// storage, which a server-side wallet has no use for.
+config.RealTimeSyncServerUrl = nil
+
+// Stays connected, and syncs cost more with more leaves, so it can
+// afford a longer interval.
+config.SyncIntervalSecs = 300
+
+// Optional: on a treasury that pays often and holds many leaves, collecting
+// unilateral exit data behind every operation adds up. Turn it off and
+// sync on a cadence of your own instead: a sync collects regardless of
+// this flag.
+config.ExitChainAutoFetchEnabled = false
+
+builder := breez_sdk_spark.NewSdkBuilder(config, seed)
+builder.WithDefaultStorage("./.data")
+sdk, err := builder.Build()
+if err != nil {
+	return nil, err
+}
+</code></pre>
+</section>
+</custom-tabs>
+<h2 id="disable-real-time-sync"><a class="header" href="#disable-real-time-sync">Disable real-time sync</a></h2>
+<p>The <a href="./config.html#real-time-sync-server-url">real-time sync server</a> keeps wallet data in step across devices with separate storage. A treasury has one storage layer, so the WebSocket subscription and the upload after every change serve no purpose.</p>
+<p>Unset <code class="lang-fn"><span class="fn-rust">real_time_sync_server_url</span><span class="fn-python">real_time_sync_server_url</span><span class="fn-swift">realTimeSyncServerUrl</span><span class="fn-kotlin">realTimeSyncServerUrl</span><span class="fn-javascript">realTimeSyncServerUrl</span><span class="fn-react-native">realTimeSyncServerUrl</span><span class="fn-flutter">realTimeSyncServerUrl</span><span class="fn-go">RealTimeSyncServerUrl</span><span class="fn-csharp">RealTimeSyncServerUrl</span></code>.</p>
+<h2 id="lengthen-the-synchronization-interval"><a class="header" href="#lengthen-the-synchronization-interval">Lengthen the synchronization interval</a></h2>
+<p>The <a href="./config.html#synchronization-interval">periodic sync</a> defaults to 60 seconds. That suits a phone, whose event stream drops whenever the app is backgrounded. A treasury stays connected, and its syncs cost more because it holds more leaves.</p>
+<p>300 seconds is a reasonable starting point. A wallet that settles rarely can go longer.</p>
+<h2 id="schedule-the-unilateral-exit-data-collection"><a class="header" href="#schedule-the-unilateral-exit-data-collection">Schedule the unilateral exit data collection</a></h2>
+<p>By default the SDK collects the data a <a href="unilateral_exit.html">unilateral exit</a> needs in the background whenever the wallet gains leaves. On a treasury that pays often and holds many leaves, that is a round trip to the operators behind almost every operation.</p>
+<p>Set <code class="lang-fn"><span class="fn-rust">exit_chain_auto_fetch_enabled</span><span class="fn-python">exit_chain_auto_fetch_enabled</span><span class="fn-swift">exitChainAutoFetchEnabled</span><span class="fn-kotlin">exitChainAutoFetchEnabled</span><span class="fn-javascript">exitChainAutoFetchEnabled</span><span class="fn-react-native">exitChainAutoFetchEnabled</span><span class="fn-flutter">exitChainAutoFetchEnabled</span><span class="fn-go">ExitChainAutoFetchEnabled</span><span class="fn-csharp">ExitChainAutoFetchEnabled</span></code> to <code>false</code> to disable the automatic collection. <code class="lang-fn"><span class="fn-rust">sync_wallet</span><span class="fn-python">sync_wallet</span><span class="fn-swift">syncWallet</span><span class="fn-kotlin">syncWallet</span><span class="fn-javascript">syncWallet</span><span class="fn-react-native">syncWallet</span><span class="fn-flutter">syncWallet</span><span class="fn-go">SyncWallet</span><span class="fn-csharp">SyncWallet</span></code> collects the missing data regardless of the flag and returns once it is done, so call it on a schedule of your own:</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">// With automatic collection off, an explicit sync is what collects the data
+// a unilateral exit needs, and it waits for the collection to finish. Needs
+// the Spark operators reachable, so run it on a schedule rather than at the
+// moment an exit is needed.
+sdk.sync_wallet(SyncWalletRequest {}).await?;</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">// With automatic collection off, an explicit sync is what collects the data
+// a unilateral exit needs, and it waits for the collection to finish. Needs
+// the Spark operators reachable, so run it on a schedule rather than at the
+// moment an exit is needed.
+let _ = try await sdk.syncWallet(request: SyncWalletRequest())
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">// With automatic collection off, an explicit sync is what collects the data
+// a unilateral exit needs, and it waits for the collection to finish. Needs
+// the Spark operators reachable, so run it on a schedule rather than at the
+// moment an exit is needed.
+sdk.syncWallet(SyncWalletRequest)
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">// With automatic collection off, an explicit sync is what collects the data
+// a unilateral exit needs, and it waits for the collection to finish. Needs
+// the Spark operators reachable, so run it on a schedule rather than at the
+// moment an exit is needed.
+await sdk.SyncWallet(request: new SyncWalletRequest());
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">// With automatic collection off, an explicit sync is what collects the data
+// a unilateral exit needs, and it waits for the collection to finish. Needs
+// the Spark operators reachable, so run it on a schedule rather than at the
+// moment an exit is needed.
+await sdk.syncWallet({})
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">// With automatic collection off, an explicit sync is what collects the data
+// a unilateral exit needs, and it waits for the collection to finish. Needs
+// the Spark operators reachable, so run it on a schedule rather than at the
+// moment an exit is needed.
+await sdk.syncWallet({})
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">// With automatic collection off, an explicit sync is what collects the data
+// a unilateral exit needs, and it waits for the collection to finish. Needs
+// the Spark operators reachable, so run it on a schedule rather than at the
+// moment an exit is needed.
+await sdk.syncWallet(request: SyncWalletRequest());
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore"># With automatic collection off, an explicit sync is what collects the data
+# a unilateral exit needs, and it waits for the collection to finish. Needs
+# the Spark operators reachable, so run it on a schedule rather than at the
+# moment an exit is needed.
+await sdk.sync_wallet(request=SyncWalletRequest())
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">// With automatic collection off, an explicit sync is what collects the data
+// a unilateral exit needs, and it waits for the collection to finish. Needs
+// the Spark operators reachable, so run it on a schedule rather than at the
+// moment an exit is needed.
+_, err := sdk.SyncWallet(breez_sdk_spark.SyncWalletRequest{})
+if err != nil {
+	return err
+}
+</code></pre>
+</section>
+</custom-tabs>
+<p>Funds received between two syncs cannot be exited without the operators until the next one. Pick a schedule with a gap you can accept, and keep the default if the automatic collection is not a measurable cost.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../guide/server_mode.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../guide/client_signing.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../guide/server_mode.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../guide/client_signing.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../tabs.js"></script>
+        <script src="../theme/pagetoc.js"></script>
+        <script src="../brand-header.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
