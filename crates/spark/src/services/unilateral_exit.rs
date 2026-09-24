@@ -625,6 +625,33 @@ pub enum UnilateralExitLeafFilter {
     ProfitableOnly,
 }
 
+fn is_unilaterally_exitable(status: TreeNodeStatus) -> bool {
+    match status {
+        // A direct tx took the leaf's funds on-chain, into an output none of its
+        // own transactions spends.
+        TreeNodeStatus::WatchtowerExited | TreeNodeStatus::WatchtowerExitRecovered => false,
+        // Any other status is the operators' label for the leaf: the chain
+        // settles whether its stored transactions still exit it.
+        TreeNodeStatus::Creating
+        | TreeNodeStatus::Available
+        | TreeNodeStatus::FrozenByIssuer
+        | TreeNodeStatus::TransferLocked
+        | TreeNodeStatus::SplitLocked
+        | TreeNodeStatus::Splitted
+        | TreeNodeStatus::Aggregated
+        | TreeNodeStatus::OnChain
+        | TreeNodeStatus::Exited
+        | TreeNodeStatus::AggregateLock
+        | TreeNodeStatus::Investigation
+        | TreeNodeStatus::Lost
+        | TreeNodeStatus::Reimbursed
+        | TreeNodeStatus::RenewLocked
+        | TreeNodeStatus::ParentExited
+        | TreeNodeStatus::Consolidated
+        | TreeNodeStatus::Unknown => true,
+    }
+}
+
 /// A leaf the caller named ([`UnilateralExitLeafFilter::All`]) that can't be exited is an
 /// error; under [`UnilateralExitLeafFilter::ProfitableOnly`] it is warned and skipped.
 fn report_unexitable(
@@ -665,12 +692,14 @@ pub fn evaluate_unilateral_exit_leaf_costs(
     let mut covered_txids: HashSet<bitcoin::Txid> = HashSet::new();
 
     for (leaf_id, leaf) in &leaves {
-        // No status gate here on purpose. A leaf's status is the operators' label
-        // for it, not the state of its output: an already-exited leaf still has to
-        // be selectable so a re-run can pick up the exit where it left off, and a
-        // locked or degraded one is still perfectly exitable from its stored
-        // transactions. What can and cannot be driven is settled by the on-chain
-        // observation, which sees the real spends.
+        if !is_unilaterally_exitable(leaf.status) {
+            report_unexitable(
+                filter,
+                leaf_id,
+                &format!("a {} leaf has no unilateral exit", leaf.status),
+            )?;
+            continue;
+        }
         let Some(refund_tx) = &leaf.refund_tx else {
             report_unexitable(filter, leaf_id, "no refund transaction")?;
             continue;
@@ -1969,6 +1998,40 @@ mod tests {
             )
             .unwrap();
             assert!(sel.is_empty());
+        }
+
+        #[test_all]
+        fn evaluate_takes_only_unilaterally_exitable_statuses() {
+            for status in [
+                TreeNodeStatus::WatchtowerExited,
+                TreeNodeStatus::WatchtowerExitRecovered,
+            ] {
+                let mut node = leaf_node("leaf", 1_000_000);
+                node.status = status;
+                let id = node.id.clone();
+                let nodes: HashMap<TreeNodeId, TreeNode> =
+                    [(id.clone(), node)].into_iter().collect();
+
+                assert!(
+                    evaluate_unilateral_exit_leaf_costs(
+                        &nodes,
+                        std::slice::from_ref(&id),
+                        &cost_params(),
+                        UnilateralExitLeafFilter::All,
+                        &ExitChainState::default(),
+                    )
+                    .is_err()
+                );
+                let sel = evaluate_unilateral_exit_leaf_costs(
+                    &nodes,
+                    &[id],
+                    &cost_params(),
+                    UnilateralExitLeafFilter::ProfitableOnly,
+                    &ExitChainState::default(),
+                )
+                .unwrap();
+                assert!(sel.is_empty());
+            }
         }
 
         const DUST: u64 = 330;
